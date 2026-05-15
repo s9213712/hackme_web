@@ -119,6 +119,12 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert '"/cloud-drive/resumable-upload/start"' in drive_js
     assert "completeDriveResumableUpload" in drive_js
     assert '"resumable_uploading"' in drive_js
+    assert "function syncDriveCsrfFromCookie()" in drive_js
+    assert "async function currentDriveCsrfToken" in drive_js
+    assert 'readCookie("csrf_token")' in drive_js
+    assert 'setCsrfToken(latestCookieToken)' in drive_js
+    assert 'result.status === 403 && result.json?.error === "csrf_invalid"' in drive_js
+    assert "const retryCsrf = await currentDriveCsrfToken({ force: true });" in drive_js
     assert "if (isDriveE2eeMode(privacyMode)) return \"\";" in drive_js
     assert "if (!isDriveE2eeMode(options.privacyMode) && shouldUseDriveResumableUpload(uploadBlob))" not in drive_js
     assert "if (shouldUseDriveResumableUpload(uploadBlob))" in drive_js

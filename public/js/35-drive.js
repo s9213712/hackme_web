@@ -1650,12 +1650,25 @@ async function uploadDriveFile() {
   }
 }
 
-function xhrUploadWithProgress(url, form, csrf, onProgress) {
-  return new Promise((resolve, reject) => {
+function syncDriveCsrfFromCookie() {
+  try {
+    const latestCookieToken = readCookie("csrf_token");
+    if (latestCookieToken) setCsrfToken(latestCookieToken);
+  } catch (_) {}
+  return getCsrfToken() || "";
+}
+
+async function currentDriveCsrfToken({ force = false } = {}) {
+  const token = await fetchCsrfToken({ force });
+  return token || syncDriveCsrfFromCookie() || "";
+}
+
+async function xhrUploadWithProgress(url, form, csrf, onProgress, { retryOnCsrf = true } = {}) {
+  const sendOnce = (token) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
     xhr.withCredentials = true;
-    if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
+    if (token) xhr.setRequestHeader("X-CSRF-Token", token);
     xhr.upload.onprogress = (event) => {
       if (typeof onProgress === "function") onProgress(event);
     };
@@ -1666,16 +1679,24 @@ function xhrUploadWithProgress(url, form, csrf, onProgress) {
       } catch (err) {
         json = {};
       }
+      syncDriveCsrfFromCookie();
       resolve({ status: xhr.status, json });
     };
     xhr.onerror = () => reject(new Error("上傳連線失敗"));
     xhr.ontimeout = () => reject(new Error("上傳逾時"));
     xhr.send(form);
   });
+  const token = await currentDriveCsrfToken();
+  let result = await sendOnce(token || csrf || "");
+  if (retryOnCsrf && result.status === 403 && result.json?.error === "csrf_invalid") {
+    const retryCsrf = await currentDriveCsrfToken({ force: true });
+    if (retryCsrf) result = await sendOnce(retryCsrf);
+  }
+  return result;
 }
 
 async function driveResumableJson(path, { method = "GET", body = null, csrf = "" } = {}) {
-  const token = csrf || getCsrfToken() || await fetchCsrfToken({ force: method !== "GET" });
+  const token = await currentDriveCsrfToken() || csrf || "";
   const headers = { "X-CSRF-Token": token || "" };
   if (body) headers["Content-Type"] = "application/json";
   const res = await apiFetch(API + path, {
