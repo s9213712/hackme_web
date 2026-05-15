@@ -47,9 +47,13 @@ def test_root_points_page_is_chain_operations_console():
     assert '最近 50 筆收入 / 支出明細' in index_html
     assert 'id="economy-subtabs"' in index_html
     assert 'id="tab-economy-balance"' in index_html
+    assert 'id="tab-economy-funding-pools"' in index_html
+    assert 'id="tab-economy-all-positions"' in index_html
     assert 'id="tab-economy-positions"' in index_html
     assert 'id="tab-economy-chain"' in index_html
     assert 'id="economy-balance-page"' in index_html
+    assert 'id="economy-funding-pools-page"' in index_html
+    assert 'id="economy-all-positions-page"' in index_html
     assert 'id="economy-positions-page"' in index_html
     assert 'id="economy-chain-page"' in index_html
     economy_balance_page = index_html.split('id="economy-balance-page"', 1)[1].split('id="economy-positions-page"', 1)[0]
@@ -57,11 +61,19 @@ def test_root_points_page_is_chain_operations_console():
     economy_chain_page = index_html.split('id="economy-chain-page"', 1)[1].split('id="economy-msg"', 1)[0]
     assert 'id="economy-user-summary-grid"' in economy_balance_page
     assert 'id="economy-user-ledger-card"' in economy_balance_page
+    assert 'id="economy-root-balance-card"' in economy_balance_page
+    assert 'id="economy-root-outstanding-points"' in economy_balance_page
     assert 'id="economy-root-virtual-card"' not in economy_balance_page
     assert 'id="economy-trading-summary-card"' not in economy_balance_page
     assert 'id="economy-root-virtual-card"' in economy_positions_page
     assert 'id="economy-trading-summary-card"' in economy_positions_page
     assert 'id="economy-asset-overview-card"' in economy_positions_page
+    assert 'id="economy-root-reserve-balance"' in index_html
+    assert 'id="economy-root-funding-available"' in index_html
+    assert 'id="economy-root-lending-pool-list"' in index_html
+    assert 'id="economy-root-wallet-position-list"' in index_html
+    assert 'id="economy-root-spot-position-list"' in index_html
+    assert 'id="economy-root-margin-position-list"' in index_html
     assert 'id="economy-root-card"' in economy_chain_page
     assert 'id="economy-admin-card"' in economy_chain_page
     assert "PointsChain 私有鏈管理" in index_html
@@ -135,8 +147,16 @@ def test_root_points_page_is_chain_operations_console():
     assert 'positionsTab.style.display = positionsAvailable ? "" : "none";' in economy_js
     assert 'chainTab.textContent = rootMode ? "積分私有鏈" : "審核";' in economy_js
     assert 'if (nextPage === "positions") title.textContent = "倉位管理";' in economy_js
+    assert 'else if (nextPage === "funding-pools") title.textContent = "資金池管理";' in economy_js
+    assert 'else if (nextPage === "all-positions") title.textContent = "全用戶倉位管理";' in economy_js
     assert 'else title.textContent = nextPage === "chain" ? "積分私有鏈" : "積分餘額";' in economy_js
     assert 'fetchEconomyJson("/root/points/report")' in economy_js
+    assert 'fetchEconomyJson("/root/trading/sitewide/pools")' in economy_js
+    assert 'fetchEconomyJson("/root/trading/sitewide/user-positions")' in economy_js
+    assert 'const shouldLoadRootTrading = rootMode && ["funding-pools", "all-positions"].includes(economyActivePage);' in economy_js
+    assert "function renderEconomyRootBalanceSummary" in economy_js
+    assert "function renderEconomyRootFundingPools" in economy_js
+    assert "function renderEconomyRootAllPositions" in economy_js
     assert "startEconomyBlockCountdown" in economy_js
     assert "function canManageEconomyPoints()" in economy_js
     assert "function setEconomyRootLayout(rootMode)" in economy_js
@@ -463,6 +483,15 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "原始保證金" in trading_js
     assert "原始保證金率" in trading_js
     assert "原始保證金最低需求" in trading_js
+    assert "原始保證金點數（不含開倉費）" in trading_section
+    assert "實際預扣" in trading_js
+    assert "本欄位最多可填" in trading_js
+    assert "維持率 + 費率安全底線" in trading_js
+    assert "tradingSettlementFeePoints" in trading_js
+    assert "Math.ceil(exactFee - Number.EPSILON)" in trading_js
+    assert "const fee = tradingSettlementFeePoints(notional, feeRatePercent);" in trading_js
+    assert "const closeFee = tradingSettlementFeePoints(exitNotional, feeRatePercent);" in trading_js
+    assert "Math.ceil(notional * feeRatePercent / 100)" not in trading_js
     assert "放空價格風險" in trading_js
     assert "價格上漲會虧損並降低維持率" in trading_js
     assert "未實現盈虧" in trading_js
@@ -722,7 +751,7 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "root 可用模擬資金進行融資 / 借券" in trading_js
     assert "root 尚未開啟借貸交易，目前僅可查看此區。" in trading_js
     assert "保證金不足，至少需要" in trading_js
-    assert "可用資金不足，需要" in trading_js
+    assert "可用資金不足：開倉費需另扣" in trading_js
     assert "進階交易開倉失敗：" in trading_js
     assert "trading-margin-open-btn" in trading_js
     assert '"trading-limit-match-btn", matchTradingLimitOrders' in trading_js

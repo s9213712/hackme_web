@@ -744,6 +744,21 @@ def open_margin_position(
         if position_type == POSITION_MARGIN_LONG and collateral >= notional:
             raise ValueError(f"collateral must be lower than notional {notional} for margin long")
         principal = max(0, notional - collateral) if position_type == POSITION_MARGIN_LONG else notional
+        is_root_simulated = service._is_root_actor(actor)
+        if not is_root_simulated:
+            wallet_payload = service._wallet_payload(conn, user_id, ctx=route_ctx)
+            trial = service._ensure_trial_credit(conn, user_id)
+            available = int(wallet_payload.get("points_balance") or 0)
+            if trial:
+                available += int(trial["available_points"] or 0)
+            upfront_required = collateral + fee
+            if upfront_required > available:
+                max_collateral = max(0, available - fee)
+                raise ValueError(
+                    "margin open funds insufficient "
+                    f"required={upfront_required} available={available} "
+                    f"collateral={collateral} fee={fee} max_collateral={max_collateral}"
+                )
         borrowed_asset_symbol = service._margin_borrowed_asset_symbol(market, position_type)
         interest_interval_hours = int(borrow_settings["interest_interval_hours"] or 0)
         interest_minimum_hours = int(borrow_settings["interest_minimum_hours"] or 0)
@@ -759,7 +774,6 @@ def open_margin_position(
         )
         position_uuid = str(uuid.uuid4())
         ledger_uuids = []
-        is_root_simulated = service._is_root_actor(actor)
         if is_root_simulated:
             service._sim_delta(conn, user_id, balance_delta=-(collateral + fee), locked_delta=collateral)
             trial_fee = 0

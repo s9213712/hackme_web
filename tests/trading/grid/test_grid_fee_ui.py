@@ -20,3 +20,21 @@ def test_grid_fee_ui_shows_net_profit_break_even_and_confirmation_wiring():
     assert "feePerBuyOrder" in trading_js
     assert "confirm_thin_profit" in trading_js
     assert "利潤過薄" in trading_js
+
+
+def test_grid_preset_apply_populates_and_persists_form_fields():
+    trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+
+    assert "function tradingSetGridPresetFieldValue" in trading_js
+    assert 'tradingSetGridPresetFieldValue("trading-grid-lower-price", lower);' in trading_js
+    assert 'tradingSetGridPresetFieldValue("trading-grid-upper-price", upper);' in trading_js
+    assert 'tradingSetGridPresetFieldValue("trading-grid-count", cfg.grid_count);' in trading_js
+    assert 'tradingSetGridPresetFieldValue("trading-grid-order-amount", cfg.order_amount);' in trading_js
+    assert 'tradingSetGridPresetFieldValue("trading-grid-spacing-mode", cfg.spacing_mode);' in trading_js
+    assert 'el.dispatchEvent(new Event("input", { bubbles: true }));' in trading_js
+    assert 'el.dispatchEvent(new Event("change", { bubbles: true }));' in trading_js
+    assert 'if (shouldSave) saveTradingPersonalFormState();' in trading_js
+    assert 'if ($("trading-grid-preset")?.value) applyGridPreset({ quiet: true, save: false });' in trading_js
+    assert 'if ($("trading-grid-preset")?.value) applyGridPreset({ quiet: true });' in trading_js
+    assert "function tradingGridPresetMarket" in trading_js
+    assert "function tradingGridPresetReferencePrice" in trading_js

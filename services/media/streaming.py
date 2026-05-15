@@ -1,5 +1,6 @@
 import json
 import mimetypes
+import os
 import shutil
 import subprocess
 import tempfile
@@ -20,6 +21,8 @@ MEDIA_STREAM_STORAGE_MODE = "acl_protected_plain"
 HLS_JS_URL = "/js/hls.light.min.js?v=20260505-hlsjs"
 DEFAULT_HLS_SEGMENT_SECONDS = 4
 DEFAULT_STREAM_AUTO_PREPARE_AUDIO_MIN_BYTES = 25 * 1024 * 1024
+DEFAULT_FFMPEG_THREADS = 1
+DEFAULT_FFMPEG_TIMEOUT_SECONDS = 60 * 60
 
 
 def _now():
@@ -124,6 +127,35 @@ def _safe_float(value, default=0.0):
         return float(value)
     except Exception:
         return default
+
+
+def _safe_commit(conn):
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _bounded_env_int(name, default, *, min_value, max_value):
+    raw = os.environ.get(name)
+    try:
+        value = int(raw) if raw is not None else int(default)
+    except Exception:
+        value = int(default)
+    return max(int(min_value), min(int(max_value), value))
+
+
+def _ffmpeg_thread_count():
+    return _bounded_env_int("HACKME_MEDIA_FFMPEG_THREADS", DEFAULT_FFMPEG_THREADS, min_value=1, max_value=4)
+
+
+def _ffmpeg_timeout_seconds():
+    return _bounded_env_int(
+        "HACKME_MEDIA_FFMPEG_TIMEOUT_SECONDS",
+        DEFAULT_FFMPEG_TIMEOUT_SECONDS,
+        min_value=60,
+        max_value=24 * 60 * 60,
+    )
 
 
 def _row_dict(row):
@@ -414,6 +446,10 @@ def _run_ffmpeg_hls(source_path, *, derivative_dir, media_type, ffmpeg_bin="ffmp
     segment_pattern = str(variant_dir / "seg_%05d.m4s")
     cmd = [
         str(ffmpeg_bin),
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
         "-y",
         "-i",
         str(source_path),
@@ -421,7 +457,20 @@ def _run_ffmpeg_hls(source_path, *, derivative_dir, media_type, ffmpeg_bin="ffmp
     if media_type == "audio":
         cmd.extend(["-vn", "-c:a", "aac", "-b:a", "128k"])
     else:
-        cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-b:a", "160k"])
+        cmd.extend([
+            "-c:v",
+            "libx264",
+            "-threads",
+            str(_ffmpeg_thread_count()),
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+        ])
     cmd.extend([
         "-f",
         "hls",
@@ -439,7 +488,7 @@ def _run_ffmpeg_hls(source_path, *, derivative_dir, media_type, ffmpeg_bin="ffmp
         segment_pattern,
         str(playlist_path),
     ])
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=_ffmpeg_timeout_seconds())
     return variant_name, playlist_path, variant_dir / "init.mp4"
 
 
@@ -489,11 +538,12 @@ def prepare_stream_asset(
     started_at = _now()
     derivative_root_rel = _derivative_root_relpath(file_row["id"])
     derivative_root = resolve_storage_path(storage_root, derivative_root_rel, create_parent=True)
+    conn.execute("DELETE FROM media_stream_segments WHERE variant_id IN (SELECT id FROM media_stream_variants WHERE asset_id=?)", (int(asset["id"]),))
+    conn.execute("DELETE FROM media_stream_variants WHERE asset_id=?", (int(asset["id"]),))
+    _safe_commit(conn)
     if derivative_root.exists():
         shutil.rmtree(derivative_root)
     derivative_root.mkdir(parents=True, exist_ok=True)
-    conn.execute("DELETE FROM media_stream_segments WHERE variant_id IN (SELECT id FROM media_stream_variants WHERE asset_id=?)", (int(asset["id"]),))
-    conn.execute("DELETE FROM media_stream_variants WHERE asset_id=?", (int(asset["id"]),))
     with tempfile.TemporaryDirectory(prefix=f"hackme_stream_{file_row['id']}_") as temp_dir:
         source_path = resolve_file_storage_path(storage_root, file_row)
         prepared_source = source_path
@@ -567,10 +617,12 @@ def prepare_stream_asset(
                 duration_seconds=metadata["duration_seconds"],
             )
             _record_job(conn, asset_id=asset["id"], status="ready", started_at=started_at)
+            _safe_commit(conn)
             return serialize_stream_asset(conn, file_row["id"])
         except Exception as exc:
             asset = _set_asset_failed(conn, file_row=file_row, reason=str(exc))
             _record_job(conn, asset_id=asset["id"], status="failed", error_message=str(exc), started_at=started_at)
+            _safe_commit(conn)
             raise
 
 

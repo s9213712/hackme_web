@@ -753,7 +753,7 @@ def test_mixed_trial_and_real_points_buy_only_records_real_points_on_chain(tmp_p
     fill = dashboard["fills"][0]
     assert fill["funding_mode"] == "trial_mixed"
     assert fill["notional_points"] == 1250
-    assert fill["fee_points"] == 1
+    assert fill["fee_points"] == 2
     assert dashboard["funding"]["trial_credit"]["available_points"] == 0
     assert dashboard["funding"]["trial_credit"]["deployed_points"] == 1000
 
@@ -761,21 +761,23 @@ def test_mixed_trial_and_real_points_buy_only_records_real_points_on_chain(tmp_p
     trading_rows = [row for row in ledger_rows if row["reference_id"] == result["order"]["order_uuid"]]
     amounts_by_action = {row["action_type"]: row["amount"] for row in trading_rows}
     assert amounts_by_action == {
-        "trading_freeze": 251,
-        "trading_unfreeze": 251,
-        "trading_spot_buy": 251,
+        "trading_freeze": 252,
+        "trading_unfreeze": 252,
+        "trading_spot_buy": 252,
     }
-    assert points.get_wallet(1)["points_balance"] == 1749
+    assert points.get_wallet(1)["points_balance"] == 1748
 
 
-def test_fee_points_rounds_half_up_for_integer_point_ledger():
-    assert trading_engine_module.fee_points(100, 0.3) == 0
+def test_fee_points_ceil_positive_fractional_fee_for_integer_point_ledger():
+    assert trading_engine_module.fee_points(0, 0.3) == 0
+    assert trading_engine_module.fee_points(100, 0) == 0
+    assert trading_engine_module.fee_points(100, 0.3) == 1
     assert trading_engine_module.fee_points(167, 0.3) == 1
-    assert trading_engine_module.fee_points(334, 0.3) == 1
+    assert trading_engine_module.fee_points(334, 0.3) == 2
     assert trading_engine_module.fee_points(500, 0.3) == 2
 
 
-def test_small_spot_buy_does_not_overcharge_integer_fee(tmp_path):
+def test_small_spot_buy_charges_minimum_integer_fee_when_fee_is_positive(tmp_path):
     _, trading = _services(tmp_path)
 
     result = trading.place_order(
@@ -787,13 +789,13 @@ def test_small_spot_buy_does_not_overcharge_integer_fee(tmp_path):
     )
 
     assert result["order"]["status"] == "filled"
-    assert result["order"]["fee_points"] == 0
+    assert result["order"]["fee_points"] == 1
 
     dashboard = trading.user_dashboard(user_id=1)
     fill = dashboard["fills"][0]
     assert fill["notional_points"] == 100
-    assert fill["fee_points"] == 0
-    assert dashboard["funding"]["trial_credit"]["available_points"] == 900
+    assert fill["fee_points"] == 1
+    assert dashboard["funding"]["trial_credit"]["available_points"] == 899
 
 
 @pytest.mark.parametrize(
@@ -831,7 +833,11 @@ def test_new_points_markets_spot_orders_keep_cost_fee_and_realized_pnl_sane(tmp_
     assert position["quantity"] == quantity
     assert position["avg_cost_points"] >= float(entry_price)
     assert position["gross_cost_points"] == expected_notional
-    assert position["cost_basis_points"] == expected_notional + buy["order"]["fee_points"]
+    assert position["cost_basis_points"] == (
+        expected_notional
+        + position["estimated_buy_fee_points"]
+        + position["estimated_exit_fee_points"]
+    )
 
     trading.test_prices[market_symbol] = float(exit_price)
     sold = trading.place_order(
@@ -1034,8 +1040,8 @@ def test_dca_backtest_preserves_interval_across_segment_boundaries(tmp_path):
             "market_symbol": "BTC/POINTS",
             "strategy": "dca",
             "interval_candles": 3,
-            "order_points": 1,
-            "initial_cash_points": 5000,
+            "order_points": 2,
+            "initial_cash_points": 10000,
             "candles": candles,
         },
     )
@@ -1451,10 +1457,10 @@ def test_dca_backtest_matches_exact_math_at_full_20000_candle_limit(tmp_path):
     assert result["segmented_backtest_batches"] == 2
     assert result["trade_count"] == expected_trades == 80
     assert result["cash_points"] == 2_000
-    assert result["end_units"] == 80 * trading_engine_module.ASSET_SCALE
-    assert result["position_value_points"] == 8_000
-    assert result["final_value_points"] == 10_000
-    assert result["pnl_points"] == 0
+    assert result["end_units"] == 79.2 * trading_engine_module.ASSET_SCALE
+    assert result["position_value_points"] == 7_920
+    assert result["final_value_points"] == 9_920
+    assert result["pnl_points"] == -80
 
 
 def test_conditional_backtest_matches_exact_math_at_full_20000_candle_limit(tmp_path):
@@ -1490,12 +1496,12 @@ def test_conditional_backtest_matches_exact_math_at_full_20000_candle_limit(tmp_
     assert result["segmented_backtest_batches"] == 2
     assert result["trade_count"] == 1
     assert result["trades"][0]["price_points"] == 100
-    assert result["trades"][0]["fee_points"] == 0
+    assert result["trades"][0]["fee_points"] == 1
     assert result["cash_points"] == 0
-    assert result["end_units"] == trading_engine_module.ASSET_SCALE
-    assert result["position_value_points"] == 200
-    assert result["final_value_points"] == 200
-    assert result["pnl_points"] == 100
+    assert result["end_units"] == int(Decimal("0.99") * trading_engine_module.ASSET_SCALE)
+    assert result["position_value_points"] == 198
+    assert result["final_value_points"] == 198
+    assert result["pnl_points"] == 98
 
 
 def test_grid_backtest_matches_exact_math_at_full_20000_candle_limit(tmp_path):
@@ -1538,8 +1544,8 @@ def test_grid_backtest_matches_exact_math_at_full_20000_candle_limit(tmp_path):
     assert result["segmented_backtest_batches"] == 2
     assert result["trade_count"] == 7
     assert [row["side"] for row in result["trades"]] == ["buy", "sell", "sell", "sell", "buy", "buy", "buy"]
-    assert result["final_value_points"] == 1_073
-    assert result["pnl_points"] == 73
+    assert result["final_value_points"] == 1_065
+    assert result["pnl_points"] == 65
 
 
 def test_workflow_backtest_matches_exact_math_at_full_20000_candle_limit_without_legacy_indicator_hot_path(tmp_path):
@@ -2743,7 +2749,7 @@ def test_grid_backtest_matches_live_grid_order_lifecycle(tmp_path):
     assert result["ok"] is True
     assert result["strategy"] == "grid"
     assert result["trade_count"] == 7
-    assert result["final_value_points"] == 1073
+    assert result["final_value_points"] == 1065
     assert result["trades"][0]["index"] == 1
     assert [row["side"] for row in result["trades"]] == ["buy", "sell", "sell", "sell", "buy", "buy", "buy"]
     assert all(not (row["index"] == 0 and row["price_points"] == 100) for row in result["trades"])
@@ -3208,14 +3214,14 @@ def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
     assert position_after_sell["quantity"] == "0.06"
     assert position_after_sell["gross_cost_points"] == 300
     assert position_after_sell["current_value_points"] == 360
-    assert position_after_sell["estimated_buy_fee_points"] == 0
-    assert position_after_sell["estimated_exit_fee_points"] == 0
-    assert position_after_sell["cost_basis_points"] == 300
-    assert position_after_sell["unrealized_pnl_points"] == 60
-    assert position_after_sell["realized_pnl_points"] == 40
-    assert position_after_sell["total_fee_points"] == 1
-    assert dashboard_after_sell["spot_summary"]["realized_pnl_points"] == 40
-    assert dashboard_after_sell["fills"][0]["realized_pnl_points"] == 40
+    assert position_after_sell["estimated_buy_fee_points"] == 1
+    assert position_after_sell["estimated_exit_fee_points"] == 1
+    assert position_after_sell["cost_basis_points"] == 302
+    assert position_after_sell["unrealized_pnl_points"] == 58
+    assert position_after_sell["realized_pnl_points"] == 38
+    assert position_after_sell["total_fee_points"] == 2
+    assert dashboard_after_sell["spot_summary"]["realized_pnl_points"] == 38
+    assert dashboard_after_sell["fills"][0]["realized_pnl_points"] == 38
     assert trading.verify_state()["ok"] is True
 
 
@@ -4465,7 +4471,7 @@ def test_limit_buy_can_be_cancelled_and_unfreezes_points(tmp_path):
     )["order"]
     assert order["status"] == "open"
     assert points.get_wallet(1)["points_frozen"] == 0
-    assert order["trial_frozen_points"] == 400
+    assert order["trial_frozen_points"] == 401
 
     cancelled = trading.cancel_order(actor=_actor(), order_uuid=order["order_uuid"])
     assert cancelled["status"] == "cancelled"
@@ -4488,7 +4494,7 @@ def test_limit_order_matcher_executes_when_price_reaches_limit(tmp_path):
     )["order"]
     assert order["status"] == "open"
     assert points.get_wallet(1)["points_frozen"] == 0
-    assert order["trial_frozen_points"] == 400
+    assert order["trial_frozen_points"] == 401
 
     _set_live_price(trading, symbol="ETH/POINTS", price_points=3900)
     matched = trading.match_open_limit_orders(actor={"username": "system", "role": "system"}, limit=10)
@@ -4974,6 +4980,37 @@ def test_margin_open_rejects_when_funding_pool_is_insufficient(tmp_path):
     assert trading.verify_state()["ok"] is True
 
 
+def test_margin_open_rejects_total_upfront_cost_before_writing_ledger(tmp_path):
+    points, trading = _services(tmp_path)
+    trading.user_dashboard(user_id=1)
+    _deplete_trial_credit(trading)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1100, action_type="test_funding")
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "margin_long_financing_percent": 90,
+            "margin_maintenance_percent": 15,
+        },
+        markets=[],
+    )
+
+    with pytest.raises(ValueError, match=r"margin open funds insufficient .*required=1103 .*available=1100 .*fee=3 .*max_collateral=1097"):
+        trading.open_margin_position(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            position_type="margin_long",
+            quantity="0.4824",
+            collateral_points=1100,
+        )
+
+    wallet = points.get_wallet(1)
+    assert wallet["points_balance"] == 1100
+    assert wallet["points_frozen"] == 0
+    assert trading.user_dashboard(user_id=1)["margin_positions"] == []
+    assert trading.verify_state()["ok"] is True
+
+
 def test_margin_open_requires_buffer_so_liquidation_price_starts_beyond_entry(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
@@ -5281,8 +5318,8 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
     assert closed["position"]["status"] == "closed"
     assert closed["interest_points"] == 0
     assert closed["position"]["interest_paid_points"] == 2
-    assert closed["delta_points"] == 100
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9903
+    assert closed["delta_points"] == 99
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9905
     assert trading.verify_state()["ok"] is True
 
 
@@ -5321,7 +5358,7 @@ def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
     assert points.get_wallet(1)["points_frozen"] == 0
     notices = _notifications(trading, 1)
     assert any(row["type"] == "trading_margin_liquidated" for row in notices)
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 10001
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 10002
     assert trading.verify_state()["ok"] is True
 
 

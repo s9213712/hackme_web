@@ -5,6 +5,7 @@ from services.core.sqlite_safe import table_columns as safe_table_columns
 
 _MEMBER_LEVEL_SCHEMA_LOCK = threading.Lock()
 _MEMBER_LEVEL_SCHEMA_READY_PATHS = set()
+_MEMBER_LEVEL_USER_COLUMNS_READY_PATHS = set()
 
 MEMBER_LEVEL_ORDER = ("newbie", "normal", "trusted", "vip", "restricted", "suspended")
 SANCTION_STATUSES = {"none", "restricted", "suspended"}
@@ -214,6 +215,18 @@ def _table_cols(conn, table):
 
 
 def ensure_member_level_user_columns(conn):
+    db_path = _connection_path(conn)
+    if db_path and db_path in _MEMBER_LEVEL_USER_COLUMNS_READY_PATHS:
+        return
+    with _MEMBER_LEVEL_SCHEMA_LOCK:
+        if db_path and db_path in _MEMBER_LEVEL_USER_COLUMNS_READY_PATHS:
+            return
+        _ensure_member_level_user_columns_uncached(conn)
+        if db_path:
+            _MEMBER_LEVEL_USER_COLUMNS_READY_PATHS.add(db_path)
+
+
+def _ensure_member_level_user_columns_uncached(conn):
     cols = _table_cols(conn, "users")
     additions = (
         ("member_level", "TEXT NOT NULL DEFAULT 'normal'"),
@@ -232,10 +245,22 @@ def ensure_member_level_user_columns(conn):
     for name, ddl in additions:
         if name not in cols:
             conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
-    conn.execute("UPDATE users SET base_level=COALESCE(NULLIF(base_level, ''), NULLIF(member_level, ''), 'normal')")
-    conn.execute("UPDATE users SET effective_level=COALESCE(NULLIF(effective_level, ''), base_level, 'normal')")
+    conn.execute(
+        """
+        UPDATE users
+        SET base_level=COALESCE(NULLIF(base_level, ''), NULLIF(member_level, ''), 'normal')
+        WHERE base_level IS NULL OR base_level=''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE users
+        SET effective_level=COALESCE(NULLIF(effective_level, ''), NULLIF(base_level, ''), 'normal')
+        WHERE effective_level IS NULL OR effective_level=''
+        """
+    )
     conn.execute("UPDATE users SET sanction_status='none' WHERE sanction_status IS NULL OR sanction_status=''")
-    conn.execute("UPDATE users SET violation_score=COALESCE(violation_score, violation_count, 0)")
+    conn.execute("UPDATE users SET violation_score=COALESCE(violation_count, 0) WHERE violation_score IS NULL")
 
 
 def ensure_member_level_rules_schema(conn):

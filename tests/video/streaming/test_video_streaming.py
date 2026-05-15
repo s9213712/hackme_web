@@ -463,6 +463,65 @@ def test_prepare_stream_asset_decrypts_server_encrypted_media_before_packaging(t
     assert asset["source_mode"] == "server_encrypted"
 
 
+def test_prepare_stream_asset_releases_sqlite_writer_before_ffmpeg(tmp_path, monkeypatch):
+    db_path = tmp_path / "stream-lock.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path, timeout=1)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(conn, storage_root, file_id="lock-video", owner_user_id=1, filename="clip.mp4", mime="video/mp4")
+        conn.execute("CREATE TABLE lock_probe (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+        conn.commit()
+        row = conn.execute("SELECT * FROM uploaded_files WHERE id='lock-video'").fetchone()
+
+        monkeypatch.setattr(media_streaming, "_run_probe", lambda *args, **kwargs: _fake_probe_payload("video"))
+
+        def fake_hls(source_path, *, derivative_dir, media_type, ffmpeg_bin="ffmpeg", segment_seconds=4):
+            other = sqlite3.connect(db_path, timeout=0.1)
+            try:
+                other.execute("INSERT INTO lock_probe DEFAULT VALUES")
+                other.commit()
+            finally:
+                other.close()
+            return _fake_hls_package(source_path, derivative_dir=derivative_dir, media_type=media_type, ffmpeg_bin=ffmpeg_bin, segment_seconds=segment_seconds)
+
+        monkeypatch.setattr(media_streaming, "_run_ffmpeg_hls", fake_hls)
+
+        asset = media_streaming.prepare_stream_asset(conn, file_row=row, storage_root=storage_root, server_file_fernet=None)
+
+        assert asset["status"] == "ready"
+        assert conn.execute("SELECT COUNT(*) FROM lock_probe").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_ffmpeg_hls_limits_video_transcode_threads_and_stdin(tmp_path, monkeypatch):
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"fake-video")
+    derivative_dir = tmp_path / "derivatives"
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return media_streaming.subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setenv("HACKME_MEDIA_FFMPEG_THREADS", "1")
+    monkeypatch.setenv("HACKME_MEDIA_FFMPEG_TIMEOUT_SECONDS", "120")
+    monkeypatch.setattr(media_streaming.subprocess, "run", fake_run)
+
+    media_streaming._run_ffmpeg_hls(source, derivative_dir=derivative_dir, media_type="video", ffmpeg_bin="ffmpeg")
+
+    cmd, kwargs = calls[0]
+    assert "-nostdin" in cmd
+    assert "-hide_banner" in cmd
+    assert "-loglevel" in cmd
+    assert "-threads" in cmd
+    assert cmd[cmd.index("-threads") + 1] == "1"
+    assert kwargs["timeout"] == 120
+
+
 def test_get_stream_status_marks_e2ee_media_unavailable(tmp_path):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

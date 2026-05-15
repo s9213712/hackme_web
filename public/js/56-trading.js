@@ -275,6 +275,7 @@ function applyTradingPersonalFormState(saved = {}) {
   syncTradingOrderInputMode();
   updateTradingOrderEstimate();
   updateTradingMarginEstimate();
+  if ($("trading-grid-preset")?.value) applyGridPreset({ quiet: true, save: false });
   scheduleGridBotPreview();
 }
 
@@ -1085,6 +1086,13 @@ function tradingNumber(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function tradingSettlementFeePoints(notional, feeRatePercent) {
+  const exactFee = Number(notional || 0) * Number(feeRatePercent || 0) / 100;
+  if (!Number.isFinite(exactFee) || exactFee <= 0) return 0;
+  // Keep the preview aligned with services.trading.accounting.core.fee_points.
+  return Math.ceil(exactFee - Number.EPSILON);
+}
+
 function currentTradingPosition(marketSymbol) {
   return tradingState.positions.find((row) => row.market_symbol === marketSymbol) || null;
 }
@@ -1514,7 +1522,7 @@ function tradingLiveMarginRisk(row, market = null) {
   const feeRatePercent = tradingNumber(resolvedMarket.fee_rate_percent, 0);
   const maintenancePercent = tradingNumber(tradingState.settings?.margin_maintenance_percent, tradingNumber(fallback.maintenance_percent, 0));
   const exitNotional = quantity > 0 && currentPrice > 0 ? Math.ceil(quantity * currentPrice) : tradingNumber(fallback.exit_notional_points, 0);
-  const closeFee = Math.max(0, Math.ceil(exitNotional * feeRatePercent / 100));
+  const closeFee = tradingSettlementFeePoints(exitNotional, feeRatePercent);
   const isShort = tradingMarginPositionIsShort(row);
   const equityAfter = isShort
     ? (collateral + principal - exitNotional - interest - closeFee)
@@ -2948,8 +2956,10 @@ function updateTradingMarginEstimate() {
   const minCollateral = Math.max(baseMinCollateral, safetyMinCollateral);
   const minimumBorrowUnitPoints = 1;
   const maxLongCollateral = Math.max(0, notional - minimumBorrowUnitPoints);
-  const fee = Math.ceil(notional * feeRatePercent / 100);
+  const fee = tradingSettlementFeePoints(notional, feeRatePercent);
   const available = tradingNumber(tradingState.funding?.available_points, 0);
+  const upfrontRequired = collateral + fee;
+  const maxCollateralFromAvailable = Math.max(0, available - fee);
   const principal = positionType === "short" ? notional : Math.max(0, notional - collateral);
   const fundingPool = tradingState.fundingPool || {};
   const poolAvailable = tradingNumber(fundingPool.available_points, 0);
@@ -2977,7 +2987,11 @@ function updateTradingMarginEstimate() {
   }
   const priceLabel = riskGradePrice > 0 ? "風控級價格" : "reference 價格";
   const contextForMessage = riskGradePrice > 0 ? riskContext : tradingMarketPriceContext(market, "reference");
-  let message = `${typeLabel} · ${priceLabel} ${formatTradingPointsValue(price)} 點 · ${tradingPriceContextSummary(contextForMessage, { compact: true })} · 名目金額約 ${notional} 點 · 開倉費 ${fee} 點 · 原始保證金最低需求 ${minCollateral} 點 · 目前填寫 ${collateral} 點`;
+  const baseRuleText = positionType === "short"
+    ? `借券保證金 ${formatTradingPercent(shortCollateralRatePercent)}% 底線 ${baseMinCollateral} 點`
+    : `融資自備 ${formatTradingPercent(Math.max(0, 100 - marginLongFinancingRatePercent))}% 底線 ${baseMinCollateral} 點`;
+  const safetyRuleText = `維持率 + 費率安全底線 ${safetyMinCollateral} 點`;
+  let message = `${typeLabel} · ${priceLabel} ${formatTradingPointsValue(price)} 點 · ${tradingPriceContextSummary(contextForMessage, { compact: true })} · 名目金額約 ${notional} 點 · 開倉費 ${fee} 點 · 原始保證金最低需求 ${minCollateral} 點（${baseRuleText}；${safetyRuleText}）· 目前填寫保證金 ${collateral} 點 · 實際預扣 ${upfrontRequired} 點`;
   if (positionType === "short") {
     message = `${message}；借券放空風險：價格上漲會虧損並降低維持率；借券保證金比例 ${formatTradingPercent(shortCollateralRatePercent)}%`;
   } else {
@@ -2992,8 +3006,12 @@ function updateTradingMarginEstimate() {
   } else if (collateral < minCollateral) {
     message = `${message}；原始保證金不足，至少需要 ${minCollateral} 點。若要融資，保證金需介於 ${minCollateral}～${maxLongCollateral} 點之間。`;
     blocking = true;
-  } else if ((collateral + fee) > available) {
-    message = `${message}；可用資金不足，需要 ${collateral + fee} 點，目前可用 ${available} 點`;
+  } else if (upfrontRequired > available) {
+    if (maxCollateralFromAvailable >= minCollateral) {
+      message = `${message}；可用資金不足：開倉費需另扣 ${fee} 點，本欄位最多可填 ${maxCollateralFromAvailable} 點（可用 ${available} - 開倉費 ${fee}）。`;
+    } else {
+      message = `${message}；可用資金不足：扣除開倉費後最多只能填 ${maxCollateralFromAvailable} 點保證金，低於最低需求 ${minCollateral} 點；目前可用 ${available} 點。`;
+    }
     blocking = true;
   } else if (principal > poolAvailable && currentUser !== "root") {
     message = `${message}；資金池不足，需要借出 ${principal} 點，目前可借 ${poolAvailable} 點`;
@@ -4006,41 +4024,69 @@ const TRADING_GRID_PRESETS = {
   skyfloor_5x:     { lower_factor: 0.05, upper_factor: 5.00, grid_count: 100, order_amount: 1000, spacing_mode: "arithmetic" },
 };
 
-function applyGridPreset() {
+function tradingSetGridPresetFieldValue(id, value, { notify = true } = {}) {
+  const el = $(id);
+  if (!el) return;
+  el.value = String(value);
+  if (!notify) return;
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function tradingGridPresetMarket() {
+  const markets = Array.isArray(tradingState.markets) ? tradingState.markets : [];
+  const select = $("trading-grid-bot-market");
+  const selectedSymbol = select?.value || "";
+  const botMarkets = markets.filter((market) => market.allow_bots !== false);
+  let market = botMarkets.find((row) => row.symbol === selectedSymbol) || null;
+  if (!market) {
+    const activeMarket = selectedTradingMarket();
+    if (activeMarket && activeMarket.allow_bots !== false) market = activeMarket;
+  }
+  if (!market) market = botMarkets[0] || markets[0] || null;
+  if (select && market?.symbol && Array.from(select.options || []).some((option) => option.value === market.symbol)) {
+    select.value = market.symbol;
+  }
+  return market;
+}
+
+function tradingGridPresetReferencePrice(market) {
+  return tradingMarketPricePoints(market, "reference") || tradingMarketPricePoints(market, "risk_grade");
+}
+
+function applyGridPreset(options = {}) {
+  const opts = options && options.type ? {} : (options || {});
+  const quiet = !!opts.quiet;
+  const shouldSave = opts.save !== false;
   const select = $("trading-grid-preset");
   if (!select) return;
   const key = select.value || "";
   if (!key) return;
   const cfg = TRADING_GRID_PRESETS[key];
   if (!cfg) return;
-  const sym = $("trading-grid-bot-market")?.value || "";
-  if (!sym) {
-    tradingSetMsg("請先選擇市場再套用預設");
+  const market = tradingGridPresetMarket();
+  if (!market?.symbol) {
+    if (!quiet) tradingSetMsg("請先選擇市場再套用預設");
     return;
   }
-  const market = (tradingState.markets || []).find((m) => m.symbol === sym);
-  const refPrice = market ? tradingMarketPricePoints(market, "reference") : 0;
+  const refPrice = tradingGridPresetReferencePrice(market);
   if (!refPrice || refPrice <= 0) {
-    tradingSetMsg("該市場目前沒有可參考的市價，無法計算上下限");
+    if (!quiet) tradingSetMsg("該市場目前沒有可參考的市價，無法計算上下限");
     return;
   }
   const lower = Math.max(1, Math.round(refPrice * cfg.lower_factor));
   const upper = Math.max(lower + 1, Math.round(refPrice * cfg.upper_factor));
-  const lowerEl = $("trading-grid-lower-price");
-  const upperEl = $("trading-grid-upper-price");
-  const countEl = $("trading-grid-count");
-  const amountEl = $("trading-grid-order-amount");
-  const modeEl = $("trading-grid-spacing-mode");
-  if (lowerEl) lowerEl.value = lower;
-  if (upperEl) upperEl.value = upper;
-  if (countEl) countEl.value = cfg.grid_count;
-  if (amountEl) amountEl.value = cfg.order_amount;
+  tradingSetGridPresetFieldValue("trading-grid-lower-price", lower);
+  tradingSetGridPresetFieldValue("trading-grid-upper-price", upper);
+  tradingSetGridPresetFieldValue("trading-grid-count", cfg.grid_count);
+  tradingSetGridPresetFieldValue("trading-grid-order-amount", cfg.order_amount);
   // Each preset carries its own empirically-tuned spacing_mode; see
   // docs/archive/competition_2026-05-06/GRID_SPACING_COMPARISON.md for the
   // per-config table.
-  if (modeEl && cfg.spacing_mode) modeEl.value = cfg.spacing_mode;
+  if (cfg.spacing_mode) tradingSetGridPresetFieldValue("trading-grid-spacing-mode", cfg.spacing_mode);
+  if (shouldSave) saveTradingPersonalFormState();
   if (typeof scheduleGridBotPreview === "function") scheduleGridBotPreview();
-  tradingSetMsg(`已套用預設「${key}」（市價 ${refPrice}） — 區間 ${lower}–${upper}，間距 ${cfg.spacing_mode}`);
+  if (!quiet) tradingSetMsg(`已套用預設「${key}」（市價 ${refPrice}） — 區間 ${lower}–${upper}，間距 ${cfg.spacing_mode}`);
 }
 
 function clearGridBotPreview() {
@@ -5943,7 +5989,12 @@ function bindTradingEvents() {
   const gridSpacingMode = $("trading-grid-spacing-mode");
   if (gridSpacingMode) gridSpacingMode.addEventListener("change", scheduleGridBotPreview);
   const gridMarketSelect = $("trading-grid-bot-market");
-  if (gridMarketSelect) gridMarketSelect.addEventListener("change", scheduleGridBotPreview);
+  if (gridMarketSelect) {
+    gridMarketSelect.addEventListener("change", () => {
+      if ($("trading-grid-preset")?.value) applyGridPreset({ quiet: true });
+      else scheduleGridBotPreview();
+    });
+  }
   const gridPresetSelect = $("trading-grid-preset");
   if (gridPresetSelect) gridPresetSelect.addEventListener("change", applyGridPreset);
   document.querySelectorAll("[data-trading-bot-tab]").forEach((btn) => {

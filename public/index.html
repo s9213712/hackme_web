@@ -2075,6 +2075,8 @@
         <div class="mini-title" id="economy-page-title">PointsChain 積分錢包</div>
       <div class="tabs economy-subtabs" id="economy-subtabs" aria-label="積分系統分頁">
         <button class="tab active" id="tab-economy-balance" type="button" data-economy-page="balance">積分餘額</button>
+        <button class="tab" id="tab-economy-funding-pools" type="button" data-economy-page="funding-pools" style="display:none;">資金池管理</button>
+        <button class="tab" id="tab-economy-all-positions" type="button" data-economy-page="all-positions" style="display:none;">全用戶倉位管理</button>
         <button class="tab" id="tab-economy-positions" type="button" data-economy-page="positions">倉位管理</button>
         <button class="tab" id="tab-economy-chain" type="button" data-economy-page="chain">積分私有鏈</button>
       </div>
@@ -2093,6 +2095,21 @@
             <div><span class="drive-card-sub">累計收支</span><strong id="economy-points-earned">收入 0</strong><small id="economy-points-spent">支出 0</small></div>
             <div><span class="drive-card-sub">錢包狀態</span><strong id="economy-wallet-status">-</strong><small id="economy-public-account">-</small></div>
           </div>
+        </div>
+      </div>
+      <div class="drive-card" id="economy-root-balance-card" style="display:none;margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">root 積分總覽</div>
+            <div class="drive-card-sub">PointsChain 在外積分、帳本淨額與封塊覆蓋狀態</div>
+          </div>
+          <button class="btn" id="economy-root-balance-refresh-btn" type="button">重新整理</button>
+        </div>
+        <div class="settings-option-grid economy-wallet-grid">
+          <div><span class="drive-card-sub">在外積分</span><strong id="economy-root-outstanding-points">-</strong><small id="economy-root-outstanding-detail">不含 root -</small></div>
+          <div><span class="drive-card-sub">帳本淨額</span><strong id="economy-root-ledger-net-points">-</strong><small id="economy-root-supply-gap">差額 -</small></div>
+          <div><span class="drive-card-sub">錢包</span><strong id="economy-root-wallet-count">-</strong><small id="economy-root-wallet-detail">凍結 -</small></div>
+          <div><span class="drive-card-sub">封塊覆蓋</span><strong id="economy-root-chain-coverage">-</strong><small id="economy-root-chain-coverage-detail">未封 -</small></div>
         </div>
       </div>
       <div class="drive-card" id="economy-user-ledger-card" style="margin-top:.75rem;">
@@ -2197,6 +2214,64 @@
           <div><span class="drive-card-sub">借貸權益</span><strong id="economy-asset-margin">-</strong><small id="economy-asset-interest">利息 -</small></div>
         </div>
         <div id="economy-asset-admin-risk" class="drive-card-sub" style="display:none;margin-top:.5rem;"></div>
+      </div>
+      </div>
+      <div class="economy-subpage" id="economy-funding-pools-page">
+      <div class="drive-card" style="margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">資金池管理</div>
+            <div class="drive-card-sub">交易準備金、借貸池使用率、手續費與利息收入摘要；此頁唯讀</div>
+          </div>
+          <button class="btn" id="economy-root-funding-refresh-btn" type="button">更新</button>
+        </div>
+        <div class="settings-option-grid economy-wallet-grid">
+          <div><span class="drive-card-sub">準備金餘額</span><strong id="economy-root-reserve-balance">-</strong><small id="economy-root-reserve-updated">更新 -</small></div>
+          <div><span class="drive-card-sub">借貸池可用</span><strong id="economy-root-funding-available">-</strong><small id="economy-root-funding-outstanding">貸出 -</small></div>
+          <div><span class="drive-card-sub">使用率</span><strong id="economy-root-funding-utilization">-</strong><small id="economy-root-funding-apr">APR -</small></div>
+          <div><span class="drive-card-sub">保留收入</span><strong id="economy-root-pool-income">-</strong><small id="economy-root-pool-income-detail">fee / interest -</small></div>
+        </div>
+      </div>
+      <div class="drive-dashboard-grid" style="margin-top:.75rem;">
+        <div class="drive-card">
+          <div class="drive-card-title">借貸池收支</div>
+          <div id="economy-root-lending-pool-list" class="drive-file-list"></div>
+        </div>
+        <div class="drive-card">
+          <div class="drive-card-title">最近資金池事件</div>
+          <div id="economy-root-reserve-events-list" class="drive-file-list"></div>
+        </div>
+      </div>
+      </div>
+      <div class="economy-subpage" id="economy-all-positions-page">
+      <div class="drive-card" style="margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">全用戶倉位管理</div>
+            <div class="drive-card-sub">會員 PointsChain 錢包、現貨、借貸倉位與開放掛單；root 模擬倉位不列入</div>
+          </div>
+          <button class="btn" id="economy-root-positions-refresh-btn" type="button">更新</button>
+        </div>
+        <div class="settings-option-grid economy-wallet-grid">
+          <div><span class="drive-card-sub">會員錢包</span><strong id="economy-root-position-users">-</strong><small id="economy-root-position-wallet-total">在外 -</small></div>
+          <div><span class="drive-card-sub">現貨倉位</span><strong id="economy-root-position-spot-count">-</strong><small>非 root 會員</small></div>
+          <div><span class="drive-card-sub">借貸倉位</span><strong id="economy-root-position-margin-count">-</strong><small id="economy-root-position-margin-detail">開倉 -</small></div>
+          <div><span class="drive-card-sub">掛單</span><strong id="economy-root-position-orders">-</strong><small id="economy-root-position-orders-detail">凍結 -</small></div>
+        </div>
+      </div>
+      <div class="drive-dashboard-grid" style="margin-top:.75rem;">
+        <div class="drive-card">
+          <div class="drive-card-title">會員錢包摘要</div>
+          <div id="economy-root-wallet-position-list" class="drive-file-list"></div>
+        </div>
+        <div class="drive-card">
+          <div class="drive-card-title">現貨倉位</div>
+          <div id="economy-root-spot-position-list" class="drive-file-list"></div>
+        </div>
+      </div>
+      <div class="drive-card" style="margin-top:.75rem;">
+        <div class="drive-card-title">借貸倉位</div>
+        <div id="economy-root-margin-position-list" class="drive-file-list"></div>
       </div>
       </div>
       <div class="economy-subpage" id="economy-chain-page">
@@ -2780,7 +2855,7 @@
                 </select>
               </div>
               <div class="field"><label>數量</label><input type="number" id="trading-margin-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
-              <div class="field"><label>原始保證金點數</label><input type="number" id="trading-margin-collateral" min="1" step="1" value="100" /></div>
+              <div class="field"><label>原始保證金點數（不含開倉費）</label><input type="number" id="trading-margin-collateral" min="1" step="1" value="100" /></div>
               <div class="field"><label>停損 %（可選）</label><input type="number" id="trading-margin-stop-loss-percent" min="0" max="1000" step="0.01" placeholder="以入場價漲跌幅計算" /></div>
               <div class="field"><label>停利 %（可選）</label><input type="number" id="trading-margin-take-profit-percent" min="0" max="1000" step="0.01" placeholder="以入場價漲跌幅計算" /></div>
               <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-margin-open-btn" type="button">建立進階倉位</button></div>
