@@ -1461,11 +1461,12 @@
   function updateOpenWorldHud(api, state) {
     if (!state.hud || !state.minimap) return;
     if (state.titleCard) state.titleCard.style.display = state.status === "ready" ? "" : "none";
+    const now = performance.now();
     const mission = activeMission(state);
     const target = currentMissionTarget(state);
     const missionTime = Math.max(0, Number(state.missionState?.expiresAt || Date.now()) - Date.now());
     const mode = state.player.inVehicle ? `車輛 ${state.player.inVehicle.type}` : "步行";
-    state.hud.innerHTML = `
+    const hudHtml = `
       <div class="open-world-hud-row">
         <strong>${mission.label}</strong>
         <span>${openWorldMissionProgressText(state)}</span>
@@ -1485,8 +1486,14 @@
         <span>距離 ${Math.round(distance(state.player.x, state.player.z, target.x, target.z))}m · 干擾器 ${state.gadgetAmmo}</span>
       </div>
     `;
-    drawOpenWorldMinimap(state);
-    const now = performance.now();
+    if (state.lastHudHtml !== hudHtml) {
+      state.hud.innerHTML = hudHtml;
+      state.lastHudHtml = hudHtml;
+    }
+    if (now >= Number(state.nextMinimapAt || 0)) {
+      drawOpenWorldMinimap(state);
+      state.nextMinimapAt = now + 125;
+    }
     const statusText = `${mission.label} · ${openWorldMissionProgressText(state)} · ${mode} · 警戒 ${state.stars}`;
     if (
       state.status === "active" &&
@@ -1752,6 +1759,13 @@
   }
 
   function startOpenWorld(api) {
+    if (!window.THREE && typeof ensureThreeJsLoaded === "function") {
+      api.status("3D 引擎載入中。");
+      ensureThreeJsLoaded()
+        .then(() => startOpenWorld(api))
+        .catch(() => showOpenWorldReady(api));
+      return;
+    }
     if (!window.THREE) {
       showOpenWorldReady(api);
       return;
@@ -1822,6 +1836,7 @@
 
   window.registerHackmeLocalGameModule("open_world", {
     mount(api) {
+      let disposed = false;
       api.setTitle("都市開放世界");
       api.setSwipeMode?.("hold");
       api.setActions(`
@@ -1857,8 +1872,18 @@
         if (target.dataset.openWorldControl === "mission") cycleOpenWorldMission(api, state);
       };
       api.onKey = (event, pressed) => handleOpenWorldKey(api, event, pressed);
-      showOpenWorldReady(api);
+      const ready = () => {
+        if (!disposed) showOpenWorldReady(api);
+      };
+      if (!window.THREE && typeof ensureThreeJsLoaded === "function") {
+        api.root.innerHTML = `<div class="game-page-empty"><strong>3D 引擎載入中</strong><span>正在準備都市開放世界。</span></div>`;
+        api.status("3D 引擎載入中。");
+        ensureThreeJsLoaded().then(ready).catch(ready);
+      } else {
+        ready();
+      }
       return () => {
+        disposed = true;
         disposeOpenWorldState(api._openWorldState);
         api._openWorldState = null;
       };

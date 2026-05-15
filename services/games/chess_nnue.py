@@ -562,6 +562,36 @@ _SEARCH_PROFILES = {
         "enable_static_opening_book": False,
         "enable_special_rule_fusion": False,
     },
+    "fixed_depth_fianchetto_tail_castle_guard_v27i_depth3_no_null_mate_net30_defense": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "tail_mate_min_margin_cp": -3000,
+        "tail_mate_max_pieces": 30,
+        "tail_mate_max_nodes": 12_000,
+        "tail_mate_max_root_checks": 6,
+        "mate_two_min_margin_cp": -3000,
+        "mate_two_max_pieces": 30,
+        "enable_v27_forced_mate_defense": True,
+        "v27_forced_mate_defense_max_pieces": 30,
+        "v27_forced_mate_defense_max_depth": 7,
+        "v27_forced_mate_defense_max_nodes": 12_000,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": False,
+        "enable_special_rule_fusion": False,
+    },
     "fixed_depth_center_fianchetto": {
         "depth": 2,
         "quiescence_depth": 2,
@@ -3222,6 +3252,93 @@ def _forced_checking_mate_priority_move(
     )[0]
 
 
+def _has_bounded_opponent_forced_mate(
+    board: chess.Board,
+    *,
+    max_depth_plies: int,
+    max_pieces: int,
+    max_nodes: int,
+) -> bool:
+    return (
+        _forced_checking_mate_priority_move(
+            board,
+            max_depth_plies=max_depth_plies,
+            max_pieces=max_pieces,
+            max_legal_moves=70,
+            min_material_margin_cp=-3000,
+            max_nodes=max_nodes,
+            max_root_checks=6,
+        )
+        is not None
+    )
+
+
+def _avoid_opponent_forced_mate_net_filter(
+    board: chess.Board,
+    move: chess.Move | None,
+    *,
+    side: str,
+    score_move,
+    max_depth_plies: int = 7,
+    max_pieces: int = 30,
+    max_nodes: int = 12_000,
+) -> chess.Move | None:
+    """Avoid candidate moves that allow a bounded checking forced mate.
+
+    This is deliberately narrower than a general tactical solver: it first
+    tests only the already selected move. Alternative scanning happens only if
+    that move fails the bounded mate-net check.
+    """
+    if move is None:
+        return None
+    if len(board.piece_map()) > int(max_pieces or 30) or board.legal_moves.count() > 70:
+        return move
+    color = chess.WHITE if str(side or "white").lower() == "white" else chess.BLACK
+    after = board.copy(stack=False)
+    after.push(move)
+    if after.is_checkmate() or after.is_stalemate():
+        return move
+    if not _has_bounded_opponent_forced_mate(
+        after,
+        max_depth_plies=max_depth_plies,
+        max_pieces=max_pieces,
+        max_nodes=max_nodes,
+    ):
+        return move
+
+    chosen_score = float(score_move(move))
+    candidates: list[tuple[float, int, str, chess.Move]] = []
+    ordered = sorted(
+        [candidate for candidate in board.legal_moves if candidate != move],
+        key=lambda candidate: (float(score_move(candidate)), candidate.uci()),
+        reverse=True,
+    )[:16]
+    for candidate in ordered:
+        if _would_stalemate(board, candidate):
+            continue
+        candidate_after = board.copy(stack=False)
+        candidate_after.push(candidate)
+        if candidate_after.is_checkmate():
+            return candidate
+        if _opponent_mate_in_one_moves(candidate_after):
+            continue
+        if _has_bounded_opponent_forced_mate(
+            candidate_after,
+            max_depth_plies=max_depth_plies,
+            max_pieces=max_pieces,
+            max_nodes=max_nodes,
+        ):
+            continue
+        floor = _worst_immediate_reply_material_margin(candidate_after, color)
+        candidate_score = float(score_move(candidate))
+        if candidate_score < chosen_score - 1800.0 and floor < _material_margin_for_color(board, color) - 900:
+            continue
+        candidates.append((candidate_score, floor, candidate.uci(), candidate))
+    if not candidates:
+        return move
+    return sorted(candidates, reverse=True)[0][3]
+
+
 def _avoid_allowing_mate_in_one_filter(board: chess.Board, move: chess.Move | None, *, score_move) -> chess.Move | None:
     if move is None:
         return None
@@ -4129,6 +4246,16 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
     best_move = _opening_king_walk_filter(board, best_move, score_move=score_move)
     if bool(profile.get("enable_special_rule_fusion")):
         best_move = _special_rule_fusion_filter(board, best_move, score_move=score_move)
+    if bool(profile.get("enable_v27_forced_mate_defense")):
+        best_move = _avoid_opponent_forced_mate_net_filter(
+            board,
+            best_move,
+            side=side,
+            score_move=score_move,
+            max_depth_plies=int(profile.get("v27_forced_mate_defense_max_depth", 7)),
+            max_pieces=int(profile.get("v27_forced_mate_defense_max_pieces", 30)),
+            max_nodes=int(profile.get("v27_forced_mate_defense_max_nodes", 12_000)),
+        )
     compensation_fn = None
     if bool(model.get("_enable_center_break") or model.get("_enable_fianchetto_development")):
         compensation_fn = lambda move: (

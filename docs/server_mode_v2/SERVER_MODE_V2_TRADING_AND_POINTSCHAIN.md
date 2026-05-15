@@ -49,6 +49,25 @@ Two engines must be implemented separately:
 | `maintenance` / `incident_lockdown` | trading off (read-only for audit) |
 | `superweak` | trading + economy both off |
 
+### 1.1 Background worker scope
+
+Trading background jobs follow the same world split. A background worker is not
+allowed to bypass foreground Server Mode checks simply because it runs without a
+browser session.
+
+| Mode | Price update | Matching | Bots | TP/SL | Liquidation | Interest | Root UI |
+|---|---|---|---|---|---|---|---|
+| `production` | on | on | on | on | on | on | on |
+| `internal_test` | shadow only | shadow only | shadow only | shadow only | shadow only | shadow only | on |
+| `test` | isolated/fake | isolated/fake | off or fake | fake | fake | fake | on |
+| `dev_ready` | optional fake | off by default | off | off | off | off | root only |
+| `maintenance` | read-only | paused | paused | paused | paused | paused | root status only |
+| `incident_lockdown` | read-only | paused | paused | paused | paused | paused | root rescue only |
+| `superweak` | off | off | off | off | off | off | off |
+
+See [`TRADING_BACKGROUND_ENGINE.md`](../trading/TRADING_BACKGROUND_ENGINE.md)
+for the full worker, lease, idempotency, and root supervision design.
+
 ---
 
 ## 2. Hardwired Rule: PointsChain only in `production`
@@ -347,6 +366,8 @@ These extend the §QA Acceptance Checklist in the main mode matrix. Implementati
 | [`BLOCKCHAIN/MULTISIG_WALLETS.md`](../AGENTS/research/BLOCKCHAIN/MULTISIG_WALLETS.md) | Phase 4 multisig (only valid in production) |
 | [`BLOCKCHAIN/POINTSCHAIN_QA.md`](../AGENTS/research/BLOCKCHAIN/POINTSCHAIN_QA.md) | per-phase chain QA gate |
 | [`08_TRADING_ENGINE.md`](../08_TRADING_ENGINE.md) | trading engine user/admin facing doc |
+| [`TRADING_BACKGROUND_ENGINE.md`](../trading/TRADING_BACKGROUND_ENGINE.md) | server-owned trading lifecycle and worker design |
+| [`TRADING_BACKGROUND_QA.md`](../trading/TRADING_BACKGROUND_QA.md) | background worker QA and release gate |
 
 ---
 

@@ -155,8 +155,7 @@ async function ensureAttachmentFileOptionsLoaded({ force = false } = {}) {
     const select = $(id);
     if (select && !select.value) select.innerHTML = `<option value="">讀取雲端檔案中...</option>`;
   });
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
+  const csrf = await fetchCsrfToken();
   const res = await apiFetch(API + "/cloud-drive/files", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -683,8 +682,7 @@ function renderDriveDashboard(payload) {
 async function ensureDriveUploadQuota() {
   if (driveLatestQuota) return driveLatestQuota;
   try {
-    await fetchCsrfToken({ force: true });
-    const csrf = getCsrfToken();
+    const csrf = await fetchCsrfToken();
     const res = await apiFetch(API + "/files/security-policy", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
@@ -1026,7 +1024,7 @@ async function buildDriveE2eeShareEnvelope(fileId) {
   if (!window.crypto?.subtle) {
     throw new Error("此瀏覽器不支援建立 E2EE 分享授權。");
   }
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const csrf = getCsrfToken() || "";
   const e2ee = await fetchDriveE2eeKey(fileId, csrf);
   const passphrase = await getDriveE2eeSessionPassphrase(fileId, "請輸入此 E2EE 檔案的原始加密密碼。密碼只在瀏覽器端使用，用來建立分享下載授權。");
@@ -1263,7 +1261,7 @@ async function uploadDriveFile() {
     progress_percent: 0,
     msg: "等待上傳",
   });
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const csrf = getCsrfToken();
   const privacyMode = $("drive-upload-privacy-mode")?.value || "standard_plain";
   const form = new FormData();
@@ -1348,7 +1346,7 @@ async function loadRemoteDownloadCapabilities() {
   const status = $("drive-remote-download-status");
   const torrentButtons = [$("drive-remote-torrent-inline-btn"), $("drive-remote-torrent-btn")].filter(Boolean);
   if (!currentUser || !canAccessModule("privacy_uploads")) return;
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   try {
     const res = await apiFetch(API + "/cloud-drive/remote-download/capabilities", {
       credentials: "same-origin",
@@ -1556,7 +1554,7 @@ async function pollRemoteDownloadTask(taskId, transferId) {
     let res;
     let json = {};
     try {
-      await fetchCsrfToken({ force: true });
+      await fetchCsrfToken();
       res = await apiFetch(API + `/cloud-drive/remote-download/tasks/${encodeURIComponent(taskId)}`, {
         credentials: "same-origin",
         headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -1664,7 +1662,7 @@ function resumeRemoteDownloadTaskPolling(task) {
 }
 
 async function restoreRemoteDownloadTasks() {
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const res = await apiFetch(API + "/cloud-drive/remote-download/tasks", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" },
@@ -2150,7 +2148,7 @@ async function previewDriveFile(fileId, options = {}) {
   if (card) card.style.display = "";
   if (panel) panel.innerHTML = `<div class="drive-empty">讀取預覽中...</div>`;
   try {
-    await fetchCsrfToken({ force: true });
+    await fetchCsrfToken();
     const csrf = getCsrfToken();
     const res = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview`, {
       credentials: "same-origin",
@@ -2195,7 +2193,7 @@ async function previewDriveE2eeFile(fileId) {
   if (card) card.style.display = "";
   if (panel) panel.innerHTML = `<div class="drive-empty">等待 E2EE 密碼並在瀏覽器解密中...</div>`;
   try {
-    await fetchCsrfToken({ force: true });
+    await fetchCsrfToken();
     const csrf = getCsrfToken();
     const decrypted = await buildDriveE2eePreview(fileId, csrf);
     if (!decrypted || !panel) return;
@@ -2238,7 +2236,7 @@ async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
   updateAlbumPreviewControls();
   body.innerHTML = `<div class="drive-empty">讀取檔案中...</div>`;
   try {
-    await fetchCsrfToken({ force: true });
+    await fetchCsrfToken();
     const csrf = getCsrfToken();
     const knownFile = findKnownDriveFile(fileId);
     if (driveFileIsE2ee(knownFile)) {
@@ -2321,7 +2319,7 @@ async function editDriveTextFile(fileId) {
   if (card) card.style.display = "block";
   if (panel) panel.innerHTML = `<div class="drive-empty">讀取文字內容中...</div>`;
   try {
-    await fetchCsrfToken({ force: true });
+    await fetchCsrfToken();
     const csrf = getCsrfToken();
     const res = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview`, {
       credentials: "same-origin",
@@ -2456,8 +2454,7 @@ async function deleteContextAttachment(refId, contextType, contextId, targetId) 
 
 async function loadContextAttachments(contextType, contextId, targetId) {
   if (!contextType || !contextId || !targetId) return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
+  const csrf = await fetchCsrfToken();
   const res = await apiFetch(API + `/cloud-drive/refs?context_type=${encodeURIComponent(contextType)}&context_id=${encodeURIComponent(contextId)}`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -2487,7 +2484,7 @@ async function uploadContextAttachment({ fileInputId, contextType, contextId, gr
     input.value = "";
     return;
   }
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const csrf = getCsrfToken();
   const form = new FormData();
   form.append("file", selectedFile);
@@ -3367,11 +3364,12 @@ async function uploadStorageFolder() {
 }
 
 async function storageAction(path, method = "POST", body = null) {
-  const csrf = await fetchCsrfToken({ force: true });
+  const upperMethod = String(method || "GET").toUpperCase();
+  const csrf = await fetchCsrfToken({ force: upperMethod !== "GET" });
   const headers = { "X-CSRF-Token": csrf || "" };
   if (body) headers["Content-Type"] = "application/json";
   const options = {
-    method,
+    method: upperMethod,
     credentials: "same-origin",
     cache: "no-store",
     headers,
@@ -3440,7 +3438,7 @@ async function purgeStorageTrash() {
 }
 
 async function downloadStorageFile(id) {
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const csrf = getCsrfToken();
   const res = await apiFetch(API + `/storage/files/${encodeURIComponent(id)}/download`, {
     credentials: "same-origin",

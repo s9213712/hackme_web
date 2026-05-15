@@ -31,7 +31,13 @@
       api.setControls(["左", "上", "下", "右"].map((t) => `<button class="btn game-mini-btn" data-dir="${t}">${t}</button>`).join(""));
       const root = api.root.querySelector(".game-2048-board");
       const emptyCells = () => state.board.flatMap((row, y) => row.map((v, x) => v ? null : [x, y])).filter(Boolean);
-      const addTile = () => { const cells = emptyCells(); if (!cells.length) return; const [x, y] = cells[Math.floor(Math.random() * cells.length)]; state.board[y][x] = Math.random() > 0.9 ? 4 : 2; };
+      const addTile = () => {
+        const cells = emptyCells();
+        if (!cells.length) return;
+        const [x, y] = cells[Math.floor(Math.random() * cells.length)];
+        state.board[y][x] = Math.random() > 0.9 ? 4 : 2;
+        state.maxTile = Math.max(state.maxTile, state.board[y][x]);
+      };
       const placeObstacles = () => {
         if (state.mode !== "obstacle") return;
         [[1, 1], [2, 2]].forEach(([x, y]) => { state.board[y][x] = -1; });
@@ -56,7 +62,7 @@
       };
       const merge = (line) => {
         const values = line.filter((value) => value > 0);
-        for (let i = 0; i < values.length - 1; i += 1) if (values[i] === values[i + 1]) { values[i] *= 2; state.score += values[i]; values.splice(i + 1, 1); }
+        for (let i = 0; i < values.length - 1; i += 1) if (values[i] === values[i + 1]) { values[i] *= 2; state.score += values[i]; state.maxTile = Math.max(state.maxTile, values[i]); values.splice(i + 1, 1); }
         while (values.length < 4) values.push(0);
         return values;
       };

@@ -29,6 +29,8 @@ let tradingDashboardAutoTimer = null;
 let tradingDashboardAutoBusy = false;
 let tradingLivePriceTimer = null;
 let tradingLivePriceBusy = false;
+let tradingLivePriceAbort = null;
+let tradingReserveUserSyncTimer = null;
 let tradingTrialCountdownTimer = null;
 let tradingBtcSignalCountdownTimer = null;
 let tradingBotCountdownTimer = null;
@@ -40,6 +42,98 @@ const TRADING_WORKFLOW_STORAGE_KEY = "hackme_trading_workflow_json";
 const TRADING_PERSONAL_FORM_STORAGE_KEY = "hackme_trading_personal_form_v1";
 const TRADING_LIVE_PRICE_REFRESH_MS = 2000;
 let tradingAccountScope = "";
+
+function shouldRunTradingPolling(tab = currentModuleTab) {
+  if (!currentUser || document.hidden) return false;
+  if (tab === currentModuleTab && currentModuleTab !== "trading" && currentModuleTab !== "economy") return false;
+  return tab === "trading" || tab === "economy";
+}
+
+function shouldRunTradingFullPolling(tab = currentModuleTab) {
+  return Boolean(shouldRunTradingPolling(tab) && tab === "trading");
+}
+
+function stopTradingModuleTimers() {
+  if (tradingReferenceAutoTimer) clearInterval(tradingReferenceAutoTimer);
+  if (tradingReferenceChartAutoTimer) clearInterval(tradingReferenceChartAutoTimer);
+  if (tradingDashboardAutoTimer) clearInterval(tradingDashboardAutoTimer);
+  if (tradingLivePriceTimer) clearInterval(tradingLivePriceTimer);
+  if (tradingReserveUserSyncTimer) clearInterval(tradingReserveUserSyncTimer);
+  if (tradingTrialCountdownTimer) clearInterval(tradingTrialCountdownTimer);
+  if (tradingBtcSignalCountdownTimer) clearInterval(tradingBtcSignalCountdownTimer);
+  if (tradingLivePriceAbort) tradingLivePriceAbort.abort();
+  tradingReferenceAutoTimer = null;
+  tradingReferenceChartAutoTimer = null;
+  tradingDashboardAutoTimer = null;
+  tradingLivePriceTimer = null;
+  tradingReserveUserSyncTimer = null;
+  tradingTrialCountdownTimer = null;
+  tradingBtcSignalCountdownTimer = null;
+  tradingLivePriceAbort = null;
+}
+
+function stopTradingFullModuleTimers() {
+  if (tradingReferenceAutoTimer) clearInterval(tradingReferenceAutoTimer);
+  if (tradingReferenceChartAutoTimer) clearInterval(tradingReferenceChartAutoTimer);
+  if (tradingDashboardAutoTimer) clearInterval(tradingDashboardAutoTimer);
+  if (tradingReserveUserSyncTimer) clearInterval(tradingReserveUserSyncTimer);
+  if (tradingTrialCountdownTimer) clearInterval(tradingTrialCountdownTimer);
+  if (tradingBtcSignalCountdownTimer) clearInterval(tradingBtcSignalCountdownTimer);
+  tradingReferenceAutoTimer = null;
+  tradingReferenceChartAutoTimer = null;
+  tradingDashboardAutoTimer = null;
+  tradingReserveUserSyncTimer = null;
+  tradingTrialCountdownTimer = null;
+  tradingBtcSignalCountdownTimer = null;
+}
+
+function startTradingModuleTimers() {
+  if (!shouldRunTradingPolling()) {
+    stopTradingModuleTimers();
+    return;
+  }
+  if (shouldRunTradingFullPolling()) {
+    if (!tradingReserveUserSyncTimer) {
+      tradingReserveUserSyncTimer = setInterval(syncTradingReserveUserOptions, 1500);
+    }
+    restartTradingReferenceAutoRefresh();
+    if (!tradingDashboardAutoTimer) {
+      tradingDashboardAutoTimer = setInterval(async () => {
+        if (!shouldRunTradingFullPolling() || tradingDashboardAutoBusy) return;
+        tradingDashboardAutoBusy = true;
+        try {
+          await loadTradingDashboard();
+        } finally {
+          tradingDashboardAutoBusy = false;
+        }
+      }, 5000);
+    }
+    if (!tradingTrialCountdownTimer) {
+      tradingTrialCountdownTimer = setInterval(updateTradingTrialCountdown, 1000);
+    }
+    if (!tradingBtcSignalCountdownTimer) {
+      tradingBtcSignalCountdownTimer = setInterval(updateTradingBtcSignalMeta, 1000);
+    }
+  } else {
+    stopTradingFullModuleTimers();
+  }
+  if (!tradingLivePriceTimer) {
+    tradingLivePriceTimer = setInterval(async () => {
+      if (!shouldRunTradingPolling() || tradingLivePriceBusy) return;
+      tradingLivePriceBusy = true;
+      try {
+        await loadTradingLivePrice();
+      } finally {
+        tradingLivePriceBusy = false;
+      }
+    }, TRADING_LIVE_PRICE_REFRESH_MS);
+  }
+}
+
+function syncTradingModuleTimerLifecycle() {
+  if (shouldRunTradingPolling()) startTradingModuleTimers();
+  else stopTradingModuleTimers();
+}
 
 const TRADING_PERSONAL_FORM_FIELDS = [
   { id: "trading-market-select", value: "" },
@@ -418,7 +512,9 @@ function tradingFriendlyErrorText(text, fallback = "操作失敗") {
 }
 
 async function fetchTradingJson(url, options = {}) {
-  const { forceCsrf = true, ...requestOptions } = options || {};
+  const rawOptions = options || {};
+  const method = String(rawOptions.method || "GET").toUpperCase();
+  const { forceCsrf = method !== "GET", ...requestOptions } = rawOptions;
   await fetchCsrfToken({ force: !!forceCsrf });
   const headers = { ...(requestOptions.headers || {}), "X-CSRF-Token": getCsrfToken() || "" };
   if (requestOptions.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
@@ -2641,8 +2737,11 @@ function mergeTradingReferenceLatestPayload(currentPayload, latestPayload, maxCa
 function restartTradingReferenceAutoRefresh() {
   if (tradingReferenceAutoTimer) clearInterval(tradingReferenceAutoTimer);
   if (tradingReferenceChartAutoTimer) clearInterval(tradingReferenceChartAutoTimer);
+  tradingReferenceAutoTimer = null;
+  tradingReferenceChartAutoTimer = null;
+  if (!shouldRunTradingFullPolling()) return;
   tradingReferenceAutoTimer = setInterval(async () => {
-    if (!currentUser || currentModuleTab !== "trading" || tradingReferenceAutoBusy) return;
+    if (!shouldRunTradingFullPolling() || tradingReferenceAutoBusy) return;
     tradingReferenceAutoBusy = true;
     try {
       await loadTradingReferencePrices({ silent: true, priceOnly: true });
@@ -2651,7 +2750,7 @@ function restartTradingReferenceAutoRefresh() {
     }
   }, tradingReferenceAutoRefreshMs());
   tradingReferenceChartAutoTimer = setInterval(async () => {
-    if (!currentUser || currentModuleTab !== "trading" || tradingReferenceChartAutoBusy) return;
+    if (!shouldRunTradingFullPolling() || tradingReferenceChartAutoBusy) return;
     tradingReferenceChartAutoBusy = true;
     try {
       await loadTradingReferencePrices({ silent: true, latestOnly: true });
@@ -4748,17 +4847,25 @@ async function loadTradingDashboard() {
 }
 
 async function loadTradingLivePrice() {
-  if (!currentUser || (currentModuleTab !== "trading" && currentModuleTab !== "economy")) return;
+  if (!shouldRunTradingPolling()) return;
   const targets = tradingLivePriceTargetSymbols();
   if (!targets.length) return;
+  if (tradingLivePriceAbort) tradingLivePriceAbort.abort();
+  const controller = new AbortController();
+  tradingLivePriceAbort = controller;
   try {
     const liveMeta = tradingState.livePriceMeta || (tradingState.livePriceMeta = {});
     let selectedMeta = null;
     let updated = false;
     const selectedSymbol = selectedTradingMarket()?.symbol || "";
     for (const symbol of targets) {
+      if (controller.signal.aborted || !shouldRunTradingPolling()) return;
       try {
-        const json = await fetchTradingJson(`/trading/live-price?market=${encodeURIComponent(symbol)}`, { forceCsrf: false });
+        const json = await fetchTradingJson(`/trading/live-price?market=${encodeURIComponent(symbol)}`, {
+          forceCsrf: false,
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted || !shouldRunTradingPolling()) return;
         const nextMarket = json.market || null;
         if (!nextMarket?.symbol) continue;
         const index = tradingState.markets.findIndex((row) => row.symbol === nextMarket.symbol);
@@ -4808,7 +4915,7 @@ async function loadTradingLivePrice() {
         // Keep the last visible price for this market; partial failure should not stop other wallet markets.
       }
     }
-    if (!updated) return;
+    if (!updated || controller.signal.aborted || !shouldRunTradingPolling()) return;
     const selected = selectedTradingMarket();
     if (currentModuleTab === "trading" && selected) {
       renderTradingCurrentPrice(selected, {
@@ -4830,6 +4937,8 @@ async function loadTradingLivePrice() {
     refreshTradingWalletLiveMetrics();
   } catch (_) {
     // Keep the last visible price; the 5s dashboard refresh handles surfaced errors.
+  } finally {
+    if (tradingLivePriceAbort === controller) tradingLivePriceAbort = null;
   }
 }
 
@@ -5912,36 +6021,9 @@ function bindTradingEvents() {
   }
   const rootMarketSelect = $("trading-root-market-select");
   if (rootMarketSelect) rootMarketSelect.addEventListener("change", populateTradingRootMarketForm);
-  setInterval(syncTradingReserveUserOptions, 1500);
-  restartTradingReferenceAutoRefresh();
-  if (!tradingDashboardAutoTimer) {
-    tradingDashboardAutoTimer = setInterval(async () => {
-      if (!currentUser || currentModuleTab !== "trading" || tradingDashboardAutoBusy) return;
-      tradingDashboardAutoBusy = true;
-      try {
-        await loadTradingDashboard();
-      } finally {
-        tradingDashboardAutoBusy = false;
-      }
-    }, 5000);
-  }
-  if (!tradingLivePriceTimer) {
-    tradingLivePriceTimer = setInterval(async () => {
-      if (!currentUser || (currentModuleTab !== "trading" && currentModuleTab !== "economy") || tradingLivePriceBusy) return;
-      tradingLivePriceBusy = true;
-      try {
-        await loadTradingLivePrice();
-      } finally {
-        tradingLivePriceBusy = false;
-      }
-    }, TRADING_LIVE_PRICE_REFRESH_MS);
-  }
-  if (!tradingTrialCountdownTimer) {
-    tradingTrialCountdownTimer = setInterval(updateTradingTrialCountdown, 1000);
-  }
-  if (!tradingBtcSignalCountdownTimer) {
-    tradingBtcSignalCountdownTimer = setInterval(updateTradingBtcSignalMeta, 1000);
-  }
+  document.addEventListener("hackme:module-changed", syncTradingModuleTimerLifecycle);
+  document.addEventListener("visibilitychange", syncTradingModuleTimerLifecycle);
+  syncTradingModuleTimerLifecycle();
 }
 
 if (document.readyState === "loading") {

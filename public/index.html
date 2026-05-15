@@ -4328,6 +4328,35 @@
               <button class="btn btn-primary" type="button" id="root-trading-settings-save-btn">儲存交易所參數</button>
             </div>
             <div id="root-trading-settings-msg" style="margin-bottom:.75rem;font-size:.8rem;"></div>
+            <details class="drive-collapsible-panel settings-collapse" id="root-trading-background-panel" style="margin-bottom:.85rem;" open>
+              <summary>
+                <div>
+                  <div class="drive-card-title">Trading Background Engine</div>
+                  <div class="drive-card-sub">server-side 常駐交易作業狀態、lease、最近執行與 root 控制。</div>
+                </div>
+              </summary>
+              <div class="drive-collapsible-body">
+                <div class="admin-toolbar" style="gap:.5rem;flex-wrap:wrap;">
+                  <select id="root-trading-background-job-select" style="max-width:18rem;">
+                    <option value="">全部 jobs</option>
+                    <option value="price_refresh">price_refresh</option>
+                    <option value="order_matching">order_matching</option>
+                    <option value="take_profit_stop_loss_scan">take_profit_stop_loss_scan</option>
+                    <option value="bot_trigger_scan">bot_trigger_scan</option>
+                    <option value="margin_liquidation_scan">margin_liquidation_scan</option>
+                    <option value="interest_accrual">interest_accrual</option>
+                  </select>
+                  <button class="btn" type="button" id="root-trading-background-refresh-btn">重新整理背景引擎</button>
+                  <button class="btn" type="button" id="root-trading-background-run-once-btn">執行選取 job 一次</button>
+                  <button class="btn" type="button" id="root-trading-background-resume-btn">恢復</button>
+                  <button class="btn btn-danger" type="button" id="root-trading-background-pause-btn">暫停</button>
+                </div>
+                <div id="root-trading-background-msg" style="margin-top:.45rem;font-size:.8rem;"></div>
+                <div id="root-trading-background-summary" class="drive-file-list" style="margin-top:.55rem;"></div>
+                <div id="root-trading-background-jobs" class="drive-file-list billing-catalog-list" style="margin-top:.55rem;"></div>
+                <div id="root-trading-background-runs" class="drive-file-list billing-catalog-list" style="margin-top:.55rem;"></div>
+              </div>
+            </details>
             <details class="drive-collapsible-panel settings-collapse" id="trading-root-card" style="display:none;margin-bottom:.85rem;" open>
               <summary>
                 <div>
@@ -5690,30 +5719,10 @@
 <script src="/js/36-comfyui.js?v=20260514-comfyui-subtabs" defer></script>
 <script src="/js/36-comfyui-workflows.js?v=20260514-comfyui-subtabs" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
-<script src="/js/three.min.js?v=0.160.0" defer></script>
 <script src="/js/41-game-modules.js?v=20260514-game-user-scope" defer></script>
-<script src="/js/games/snake.js?v=20260513-game-modules" defer></script>
-<script src="/js/games/game-2048.js?v=20260513-game-modules" defer></script>
-<script src="/js/games/brick-breaker.js?v=20260513-game-modules" defer></script>
-<script src="/js/games/bullet-hell.js?v=20260513-game-modules" defer></script>
-<script src="/js/games/stickman-shooter.js?v=20260514-game-levels" defer></script>
-<script src="/js/games/open-world.js?v=20260514-open-world" defer></script>
-<script src="/js/games/board-game-shared.js?v=20260513-game-modules" defer></script>
-<script src="/js/games/reversi.js?v=20260513-game-modules" defer></script>
-<script src="/js/games/go.js?v=20260513-game-modules" defer></script>
-<script src="/js/games/gomoku.js?v=20260513-game-modules" defer></script>
-<script src="/js/games/chinese-chess.js?v=20260513-game-modules" defer></script>
-<script src="/js/games/real-tetris.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/game-view-registry.js?v=20260513-legacy-modules" defer></script>
 <script src="/js/games/chess.js?v=20260513-legacy-modules" defer></script>
-<script src="/js/games/sudoku.js?v=20260513-legacy-modules" defer></script>
-<script src="/js/games/minesweeper.js?v=20260513-legacy-modules" defer></script>
-<script src="/js/games/onea2b.js?v=20260513-legacy-modules" defer></script>
-<script src="/js/games/tetris.js?v=20260513-legacy-modules" defer></script>
-<script src="/js/games/space-shooter.js?v=20260513-legacy-modules" defer></script>
-<script src="/js/games/fps-arena.js?v=20260514-fps-stance-br" defer></script>
 <script src="/js/38-games.js?v=20260514-open-world" defer></script>
-<script src="/js/38-fps-arena.js?v=20260514-fps-stance-br" defer></script>
 <script src="/js/39-videos.js?v=20260505-hlsjs-player" defer></script>
 <script src="/js/40-auth-users.js?v=20260503-appearance-reset" defer></script>
 <script src="/js/50-admin.js?v=20260504-fusion-coverage-v1" defer></script>

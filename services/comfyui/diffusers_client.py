@@ -415,13 +415,13 @@ class DiffusersClient:
             total = max(0, int(getattr(bar, "_hackme_progress_total", 0) or 0))
             last_current = max(0, int(getattr(bar, "_hackme_progress_last_n", 0) or 0))
             last_at = float(getattr(bar, "_hackme_progress_last_at", 0.0) or 0.0)
-            previous_speed = float(getattr(bar, "_hackme_progress_speed_bps", 0.0) or 0.0)
+            previous_speed = float(getattr(bar, "_hackme_progress_speed_bytes_per_second", 0.0) or 0.0)
             delta_t = now - last_at if last_at else 0.0
             instant_speed = ((current - last_current) / delta_t) if delta_t > 0 and current >= last_current else 0.0
             speed = (previous_speed * 0.65 + instant_speed * 0.35) if previous_speed and instant_speed else (instant_speed or previous_speed)
             bar._hackme_progress_last_n = current
             bar._hackme_progress_last_at = now
-            bar._hackme_progress_speed_bps = speed
+            bar._hackme_progress_speed_bytes_per_second = speed
             ratio = (current / total) if total > 0 else 0
             percent = min(99, round(float(base_percent) + float(span_percent) * ratio, 1))
             unit = str(getattr(bar, "_hackme_progress_unit", "") or "")
@@ -469,7 +469,7 @@ class DiffusersClient:
                 self._hackme_progress_unit = unit
                 self._hackme_progress_last_n = initial
                 self._hackme_progress_last_at = time.monotonic()
-                self._hackme_progress_speed_bps = 0.0
+                self._hackme_progress_speed_bytes_per_second = 0.0
                 emit(self, force=True)
 
             def update(self, n=1):

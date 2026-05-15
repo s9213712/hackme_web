@@ -78,6 +78,8 @@ def register_trading_routes(app, deps):
     check_user_rate_limit = deps.get("check_user_rate_limit", lambda *args, **kwargs: (False, {}))
     audit = deps.get("audit", lambda *args, **kwargs: None)
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
+    get_system_settings = deps.get("get_system_settings", lambda: {})
+    get_runtime_server_mode = deps.get("get_runtime_server_mode", lambda: "production")
 
     def actor_value(actor, key, default=None):
         if not actor:
@@ -1761,6 +1763,122 @@ def register_trading_routes(app, deps):
         try:
             status = trading_service.get_root_price_fusion_status(market_symbol=market_symbol)
             return json_resp({"ok": True, "status": status})
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/background/status", methods=["GET"])
+    @require_csrf_safe
+    def root_trading_background_status():
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            limit = int(request.args.get("limit") or 20)
+        except Exception:
+            limit = 20
+        try:
+            return json_resp(trading_service.get_background_status(limit=limit))
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/background/run-once", methods=["POST"])
+    @require_csrf
+    def root_trading_background_run_once():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        job_key = str(data.get("job_key") or "").strip()
+        if not job_key:
+            return json_resp({"ok": False, "msg": "缺少 job_key"}, 400)
+        if str(data.get("confirm") or "") != "RUN_TRADING_JOB_ONCE":
+            return json_resp({"ok": False, "msg": "confirm 必須為 RUN_TRADING_JOB_ONCE"}, 400)
+        try:
+            result = trading_service.run_background_job_once(
+                job_key=job_key,
+                get_system_settings=get_system_settings,
+                get_runtime_server_mode=get_runtime_server_mode,
+                owner=f"root:{actor_value(actor, 'username', 'root')}",
+                force=True,
+            )
+            audit(
+                "TRADING_BACKGROUND_JOB_RUN_ONCE",
+                get_client_ip(),
+                user=actor_value(actor, "username", "root"),
+                success=bool(result.get("ok")),
+                ua=get_ua(),
+                detail=json.dumps({"job_key": job_key, "status": result.get("status")}, ensure_ascii=False),
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/background/pause", methods=["POST"])
+    @require_csrf
+    def root_trading_background_pause():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        reason = str(data.get("reason") or "paused_by_root").strip()[:500]
+        job_key = str(data.get("job_key") or "").strip()
+        try:
+            keys = [job_key] if job_key else [row["job_key"] for row in trading_service.get_background_status().get("jobs", [])]
+            results = [
+                trading_service.set_background_job_enabled(
+                    job_key=key,
+                    enabled=False,
+                    reason=reason,
+                    actor=actor,
+                )
+                for key in keys
+            ]
+            audit(
+                "TRADING_BACKGROUND_PAUSED",
+                get_client_ip(),
+                user=actor_value(actor, "username", "root"),
+                success=True,
+                ua=get_ua(),
+                detail=json.dumps({"job_keys": keys, "reason": reason}, ensure_ascii=False),
+            )
+            return json_resp({"ok": True, "paused": results})
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/background/resume", methods=["POST"])
+    @require_csrf
+    def root_trading_background_resume():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        job_key = str(data.get("job_key") or "").strip()
+        try:
+            keys = [job_key] if job_key else [row["job_key"] for row in trading_service.get_background_status().get("jobs", [])]
+            results = [
+                trading_service.set_background_job_enabled(
+                    job_key=key,
+                    enabled=True,
+                    reason="",
+                    actor=actor,
+                )
+                for key in keys
+            ]
+            audit(
+                "TRADING_BACKGROUND_RESUMED",
+                get_client_ip(),
+                user=actor_value(actor, "username", "root"),
+                success=True,
+                ua=get_ua(),
+                detail=json.dumps({"job_keys": keys}, ensure_ascii=False),
+            )
+            return json_resp({"ok": True, "resumed": results})
         except Exception as exc:
             return service_error(exc)
 

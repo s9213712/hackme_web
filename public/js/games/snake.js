@@ -142,26 +142,122 @@
     ctx.fill();
   }
 
-  function drawSnakeSegment(ctx, segment, index, dir) {
+  function snakeUnitVector(from, to) {
+    if (!from || !to) return [0, 0];
+    return [Math.sign(to[0] - from[0]), Math.sign(to[1] - from[1])];
+  }
+
+  function drawSnakeConnector(ctx, cx, cy, dir, fill) {
+    if (!dir[0] && !dir[1]) return;
+    ctx.fillStyle = fill;
+    if (dir[0] > 0) ctx.fillRect(cx, cy - 6, 10, 12);
+    if (dir[0] < 0) ctx.fillRect(cx - 10, cy - 6, 10, 12);
+    if (dir[1] > 0) ctx.fillRect(cx - 6, cy, 12, 10);
+    if (dir[1] < 0) ctx.fillRect(cx - 6, cy - 10, 12, 10);
+  }
+
+  function drawSnakeTail(ctx, cx, cy, dir) {
+    const angle = Math.atan2(dir[1], dir[0]);
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+    ctx.fillStyle = "#15803d";
+    ctx.beginPath();
+    ctx.moveTo(-9, 0);
+    ctx.quadraticCurveTo(-1, -7, 8, -5);
+    ctx.quadraticCurveTo(5, 0, 8, 5);
+    ctx.quadraticCurveTo(-1, 7, -9, 0);
+    ctx.fill();
+    ctx.fillStyle = "rgba(187,247,208,.28)";
+    ctx.beginPath();
+    ctx.ellipse(1, -2, 4, 1.8, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawSnakeBody(ctx, segment, snake, index, tick) {
     const [x, y] = segment;
-    if (drawSnakeImage(ctx, index ? "body" : "head", x * 20 + 2, y * 20 + 2, 16, 16, {
-      rotation: index ? 0 : Math.atan2(dir[1], dir[0]),
-      alpha: index ? 0.82 : 0.95,
-    })) return;
-    drawSnakeTile(ctx, x, y, index ? "#16a34a" : "#86efac", index ? "rgba(187,247,208,.28)" : "rgba(15,23,42,.18)");
-    if (index === 0) {
-      const cx = x * 20 + 10;
-      const cy = y * 20 + 10;
-      ctx.fillStyle = "#0f172a";
-      const eyeOffsetX = dir[0] ? dir[0] * 4 : 3;
-      const eyeOffsetY = dir[1] ? dir[1] * 4 : -3;
-      ctx.beginPath();
-      ctx.arc(cx + eyeOffsetX, cy + eyeOffsetY, 1.8, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(cx - (dir[0] ? 0 : 3), cy + (dir[1] ? 0 : -3), 1.8, 0, Math.PI * 2);
-      ctx.fill();
+    const cx = x * 20 + 10;
+    const cy = y * 20 + 10;
+    const prev = snake[index - 1];
+    const next = snake[index + 1];
+    const fill = index % 2 ? "#16a34a" : "#22c55e";
+    const toPrev = snakeUnitVector(segment, prev);
+    const toNext = snakeUnitVector(segment, next);
+    if (!next) {
+      drawSnakeTail(ctx, cx, cy, toPrev[0] || toPrev[1] ? toPrev : [1, 0]);
+      return;
     }
+    drawSnakeConnector(ctx, cx, cy, toPrev, fill);
+    drawSnakeConnector(ctx, cx, cy, toNext, fill);
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 8.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(20,83,45,.28)";
+    ctx.beginPath();
+    ctx.arc(cx, cy + 3, 5.4, 0, Math.PI);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(187,247,208,.35)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(cx - 2 + Math.sin((tick + index) / 4) * 1.3, cy - 2, 2.3, 0.15, Math.PI * 1.15);
+    ctx.stroke();
+  }
+
+  function drawSnakeHead(ctx, segment, dir, tick) {
+    const [x, y] = segment;
+    const cx = x * 20 + 10;
+    const cy = y * 20 + 10;
+    const angle = Math.atan2(dir[1], dir[0]);
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+    const headGradient = ctx.createLinearGradient(-7, -8, 10, 8);
+    headGradient.addColorStop(0, "#bbf7d0");
+    headGradient.addColorStop(0.55, "#4ade80");
+    headGradient.addColorStop(1, "#15803d");
+    ctx.fillStyle = headGradient;
+    ctx.beginPath();
+    ctx.moveTo(10, 0);
+    ctx.bezierCurveTo(6, -8.6, -7, -9, -9, -2.8);
+    ctx.quadraticCurveTo(-10, 0, -9, 2.8);
+    ctx.bezierCurveTo(-7, 9, 6, 8.6, 10, 0);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.22)";
+    ctx.beginPath();
+    ctx.ellipse(-1, -4.8, 5, 1.7, -0.18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#052e16";
+    [[3.2, -3.7], [3.2, 3.7]].forEach(([ex, ey]) => {
+      ctx.beginPath();
+      ctx.arc(ex, ey, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#dcfce7";
+      ctx.beginPath();
+      ctx.arc(ex + 0.45, ey - 0.45, 0.55, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#052e16";
+    });
+    if (tick % 28 < 12) {
+      ctx.strokeStyle = "#fb7185";
+      ctx.lineWidth = 1.4;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(9, 0);
+      ctx.lineTo(14, 0);
+      ctx.moveTo(14, 0);
+      ctx.lineTo(17, -2.4);
+      ctx.moveTo(14, 0);
+      ctx.lineTo(17, 2.4);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawSnakeSegment(ctx, snake, index, dir, tick) {
+    if (index === 0) drawSnakeHead(ctx, snake[index], dir, tick);
+    else drawSnakeBody(ctx, snake[index], snake, index, tick);
   }
 
   window.registerHackmeLocalGameModule("snake", {
@@ -182,7 +278,7 @@
         ctx.strokeStyle = "rgba(103,232,249,.34)";
         ctx.strokeRect(2 * 20 + 2, 2 * 20 + 2, 5 * 20 - 4, 3 * 20 - 4);
         state.obstacles.forEach(([x, y]) => drawSnakeRock(ctx, x, y));
-        state.snake.forEach((segment, i) => drawSnakeSegment(ctx, segment, i, state.dir));
+        for (let i = state.snake.length - 1; i >= 0; i -= 1) drawSnakeSegment(ctx, state.snake, i, state.dir, state.tick);
         drawSnakeFood(ctx, state.food);
         drawSnakePowerup(ctx, state.powerup, state.tick);
       };

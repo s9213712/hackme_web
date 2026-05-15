@@ -508,7 +508,7 @@ function renderComfyuiTemplateSelector(payload = {}, { silentReload = true } = {
 
 async function loadComfyuiSelectedTemplateDetail(presetId, { silent = false, applyDefaults = true } = {}) {
   if (!presetId) return;
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const res = await apiFetch(API + `/comfyui/workflows/${encodeURIComponent(presetId)}`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }

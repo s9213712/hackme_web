@@ -657,6 +657,59 @@ def test_points_chain_auto_seals_when_hybrid_count_threshold_is_met(tmp_path):
     assert service.verify_chain()["counts"]["unsealed_entries"] == 0
 
 
+def test_points_chain_not_due_schedule_avoids_full_verification(tmp_path):
+    service = _service(tmp_path)
+    actor = {"id": 3, "username": "root", "role": "super_admin"}
+    for idx in range(3):
+        service.record_transaction(
+            user_id=1,
+            currency_type="points",
+            direction="credit",
+            amount=1,
+            action_type=f"schedule_light_check_{idx}",
+        )
+
+    calls = 0
+
+    def counted_verify_chain():
+        nonlocal calls
+        calls += 1
+        raise AssertionError("seal_due_block should not verify the whole chain before the schedule is due")
+
+    service.verify_chain = counted_verify_chain
+    pending = service.seal_due_block(actor=actor, ledger_threshold=10)
+
+    assert pending["sealed"] is False
+    assert pending["schedule"]["unsealed_entries"] == 3
+    assert calls == 0
+
+
+def test_points_chain_root_report_reuses_single_verification(tmp_path):
+    service = _service(tmp_path)
+    service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=10,
+        action_type="root_report_single_verify",
+    )
+    original_verify_chain = service.verify_chain
+    calls = 0
+
+    def counted_verify_chain():
+        nonlocal calls
+        calls += 1
+        return original_verify_chain()
+
+    service.verify_chain = counted_verify_chain
+    report = service.root_report()
+
+    assert calls == 1
+    assert report["verification"]["ok"] is True
+    assert report["stats"]["chain"]["counts"] == report["verification"]["counts"]
+    assert report["block_schedule"]["chain_ok"] is True
+
+
 def test_points_chain_runtime_reset_clears_active_ledger_and_leaves_reset_audit(tmp_path):
     service = _service(tmp_path)
     actor = {"id": 3, "username": "root", "role": "super_admin"}

@@ -21,6 +21,36 @@ function readEconomyActivePage() {
 
 let economyActivePage = readEconomyActivePage();
 
+function shouldRunEconomyAutoRefresh() {
+  if (!currentUser || document.hidden || currentModuleTab !== "economy") return false;
+  return true;
+}
+
+function stopEconomyAutoRefresh() {
+  if (economyAutoRefreshTimer) {
+    clearInterval(economyAutoRefreshTimer);
+    economyAutoRefreshTimer = null;
+  }
+}
+
+function startEconomyAutoRefresh() {
+  if (!shouldRunEconomyAutoRefresh() || economyAutoRefreshTimer) return;
+  economyAutoRefreshTimer = setInterval(async () => {
+    if (!shouldRunEconomyAutoRefresh() || economyAutoRefreshBusy) return;
+    economyAutoRefreshBusy = true;
+    try {
+      await loadEconomyDashboard();
+    } finally {
+      economyAutoRefreshBusy = false;
+    }
+  }, 30000);
+}
+
+function syncEconomyAutoRefreshLifecycle() {
+  if (shouldRunEconomyAutoRefresh()) startEconomyAutoRefresh();
+  else stopEconomyAutoRefresh();
+}
+
 function toggleWalletCard(bodyId, btn) {
   const body = $(bodyId);
   if (!body) return;
@@ -1051,17 +1081,9 @@ function bindEconomyInlineEvents() {
     syncEconomySubpages(currentUser === "root");
   });
   syncEconomySubpages(currentUser === "root");
-  if (!economyAutoRefreshTimer) {
-    economyAutoRefreshTimer = setInterval(async () => {
-      if (!currentUser || currentModuleTab !== "economy" || economyAutoRefreshBusy) return;
-      economyAutoRefreshBusy = true;
-      try {
-        await loadEconomyDashboard();
-      } finally {
-        economyAutoRefreshBusy = false;
-      }
-    }, 30000);
-  }
+  document.addEventListener("hackme:module-changed", syncEconomyAutoRefreshLifecycle);
+  document.addEventListener("visibilitychange", syncEconomyAutoRefreshLifecycle);
+  syncEconomyAutoRefreshLifecycle();
 }
 
 if (document.readyState === "loading") {

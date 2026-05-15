@@ -1,6 +1,7 @@
 import json
 import hashlib
 import secrets
+import sqlite3
 import uuid
 from datetime import datetime
 
@@ -501,13 +502,22 @@ def create_storage_folder(conn, *, actor, path):
         return dict(existing), None
     now = _now()
     folder_id = uuid.uuid4().hex
-    conn.execute(
-        """
-        INSERT INTO storage_folders (id, owner_user_id, display_name, virtual_path, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (folder_id, owner_user_id, _display_name_from_path(folder_path), folder_path, now, now),
-    )
+    try:
+        conn.execute(
+            """
+            INSERT INTO storage_folders (id, owner_user_id, display_name, virtual_path, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (folder_id, owner_user_id, _display_name_from_path(folder_path), folder_path, now, now),
+        )
+    except sqlite3.IntegrityError:
+        existing = conn.execute(
+            "SELECT * FROM storage_folders WHERE owner_user_id=? AND virtual_path=? AND deleted_at IS NULL",
+            (owner_user_id, folder_path),
+        ).fetchone()
+        if existing:
+            return dict(existing), None
+        raise
     return dict(conn.execute("SELECT * FROM storage_folders WHERE id=?", (folder_id,)).fetchone()), None
 
 

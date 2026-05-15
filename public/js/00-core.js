@@ -36,6 +36,7 @@ const CHAT_POLL_MS = 2500;
 const DEFAULT_INACTIVITY_LOGOUT_MS = 10 * 60 * 1000;
 const IDLE_TIMEOUT_LOGOUT_STORAGE_KEY = "hackme_web.idle_timeout_logout_pending";
 const AUTH_SESSION_HINT_STORAGE_KEY = "hackme_web.auth.session_hint";
+const THREE_JS_SRC = "/js/three.min.js?v=0.160.0";
 let inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
 let inactivityTimer = null;
 let inactivityCountdownTimer = null;
@@ -50,8 +51,10 @@ let currentSettingsSection = "security";
 let serverConnectionFailures = 0;
 let serverConnectionSlowStreak = 0;
 let serverConnectionTimer = null;
+const SERVER_CONNECTION_MONITOR_MS = 15000;
 let notificationPollTimer = null;
 let notificationsOpen = false;
+const lazyScriptPromises = new Map();
 const avatarCacheBustByUserId = new Map();
 const SITE_APPEARANCE_KEYS = [
   "site_bg",
@@ -896,7 +899,7 @@ async function checkServerConnection() {
 function startServerConnectionMonitor() {
   if (serverConnectionTimer) clearInterval(serverConnectionTimer);
   checkServerConnection();
-  serverConnectionTimer = setInterval(checkServerConnection, 8000);
+  serverConnectionTimer = setInterval(checkServerConnection, SERVER_CONNECTION_MONITOR_MS);
 }
 
 function getCsrfToken() { return _csrfToken; }
@@ -934,6 +937,36 @@ window.addEventListener("storage", (event) => {
 });
 
 let _csrfTokenRequest = null;
+
+function loadHackmeScriptOnce(src) {
+  const target = String(src || "").trim();
+  if (!target) return Promise.reject(new Error("missing script src"));
+  if (lazyScriptPromises.has(target)) return lazyScriptPromises.get(target);
+  const existing = Array.from(document.scripts || []).find((script) => script.getAttribute("src") === target);
+  if (existing?.dataset.loaded === "1") return Promise.resolve(existing);
+  const promise = new Promise((resolve, reject) => {
+    const script = existing || document.createElement("script");
+    script.src = target;
+    script.defer = true;
+    script.addEventListener("load", () => {
+      script.dataset.loaded = "1";
+      resolve(script);
+    }, { once: true });
+    script.addEventListener("error", () => reject(new Error(`failed to load ${target}`)), { once: true });
+    if (!existing) document.head.appendChild(script);
+  }).catch((err) => {
+    lazyScriptPromises.delete(target);
+    throw err;
+  });
+  lazyScriptPromises.set(target, promise);
+  return promise;
+}
+
+async function ensureThreeJsLoaded() {
+  if (window.THREE) return window.THREE;
+  await loadHackmeScriptOnce(THREE_JS_SRC);
+  return window.THREE || null;
+}
 
 function markIdleTimeoutLogoutPending() {
   try { localStorage.setItem(IDLE_TIMEOUT_LOGOUT_STORAGE_KEY, String(Date.now())); } catch (_) {}
@@ -1156,13 +1189,29 @@ function stopChatPoll() {
   }
 }
 
+function shouldRunChatPoll() {
+  return Boolean(currentUser && selectedChatRoomId && currentModuleTab === "chat" && !document.hidden);
+}
+
 function startChatPoll() {
   stopChatPoll();
-  if (!selectedChatRoomId) return;
+  if (!shouldRunChatPoll()) return;
   chatPollTimer = setInterval(() => {
+    if (!shouldRunChatPoll()) {
+      stopChatPoll();
+      return;
+    }
     loadChatMessages(selectedChatRoomId, true);
   }, CHAT_POLL_MS);
 }
+
+function syncChatPollLifecycle() {
+  if (shouldRunChatPoll()) startChatPoll();
+  else stopChatPoll();
+}
+
+document.addEventListener("hackme:module-changed", syncChatPollLifecycle);
+document.addEventListener("visibilitychange", syncChatPollLifecycle);
 
 function formatChatTime(ts) {
   if (!ts) return "";
@@ -1548,19 +1597,8 @@ function setAuthState(json, showLoginHero = false) {
     return;
   }
 
-  if (currentRole === "manager" || currentRole === "super_admin") {
-    loadUsers();
-    if (currentRole === "super_admin" && canAccessModule("appeals")) {
-      loadAdminAppeals();
-    }
-  }
   if (typeof startNotificationPoll === "function") startNotificationPoll();
-  if (canAccessModule("chat")) {
-    loadChatRooms();
-  }
-  if (currentRole !== "super_admin" && canAccessModule("appeals")) {
-    loadUserAppeals();
-  }
+  if (typeof ensureGameMultiplayerInvitePolling === "function") ensureGameMultiplayerInvitePolling();
   let requestedModuleParam = "";
   try {
     requestedModuleParam = new URLSearchParams(location.search || "").get("module") || "";
@@ -1589,9 +1627,6 @@ function setAuthState(json, showLoginHero = false) {
                       : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat");
   switchModuleTab(initialModule);
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
-  if (typeof refreshComfyuiStatus === "function" && canAccessModule("comfyui")) {
-    refreshComfyuiStatus({ switchAway: true });
-  }
   resetInactivityTimer();
 }
 
@@ -1620,6 +1655,9 @@ function resetAuthState() {
   stopInactivityTimer();
   stopChatPoll();
   if (typeof stopNotificationPoll === "function") stopNotificationPoll();
+  if (typeof stopGameMultiplayerInvitePolling === "function") stopGameMultiplayerInvitePolling();
+  if (typeof stopTradingModuleTimers === "function") stopTradingModuleTimers();
+  if (typeof stopEconomyAutoRefresh === "function") stopEconomyAutoRefresh();
   if (typeof clearDriveE2eeSessionPassphrases === "function") clearDriveE2eeSessionPassphrases();
   hideUserEditDialog();
   const welcomeMsg = $("welcome-msg");

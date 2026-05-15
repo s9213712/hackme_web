@@ -50,6 +50,7 @@ operator guidance.
 - Chess model files: [games/references/chess_model_files.md](games/references/chess_model_files.md)
 - Chess training pipeline: [games/references/chess_training_pipeline.md](games/references/chess_training_pipeline.md)
 - Trading risk-grade prices: [trading/TRADING_RISK_PRICE.md](trading/TRADING_RISK_PRICE.md)
+- Trading background engine: [trading/TRADING_BACKGROUND_ENGINE.md](trading/TRADING_BACKGROUND_ENGINE.md)
 - BTC_trade integration: [trading/BTC_TRADE_INTEGRATION.md](trading/BTC_TRADE_INTEGRATION.md)
 - Video streaming architecture: [video/VIDEO_STREAMING_ARCHITECTURE.md](video/VIDEO_STREAMING_ARCHITECTURE.md)
 - Encryption runtime boundary: [ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md](ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md)

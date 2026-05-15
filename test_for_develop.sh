@@ -854,6 +854,7 @@ fi
 export HACKME_DEV_TRADING_ALLOW_CONSERVATIVE_MARKET_ORDERS=1
 export HACKME_DEV_TRADING_ALLOW_UNREADY_MARKETS=1
 export HACKME_DEV_TRADING_DISABLE_PRICE_CONFIDENCE_GATES=1
+export HACKME_DEV_TRADING_ALLOW_QA_LIVE_PRICE_PROVIDER=1
 if [[ -z "${HTML_LEARNING_GIT_REPO_DIR:-}" ]]; then
   if git -C "$DEFAULT_GIT_REPO_DIR" rev-parse HEAD >/dev/null 2>&1; then
     export HTML_LEARNING_GIT_REPO_DIR="$DEFAULT_GIT_REPO_DIR"
@@ -1034,8 +1035,8 @@ try:
     server.ensure_trading_schema(conn)
     now = datetime.now().isoformat()
     selected_server_mode = os.environ.get("HACKME_DEV_SERVER_MODE", "dev_ready").strip() or "dev_ready"
-    try:
-        changed = conn.execute(
+    def apply_selected_server_mode(mode_conn):
+        changed = mode_conn.execute(
             """
             UPDATE server_modes
             SET previous_mode=CASE WHEN current_mode<>? THEN current_mode ELSE previous_mode END,
@@ -1063,7 +1064,7 @@ try:
             ),
         ).rowcount
         if not changed:
-            conn.execute(
+            mode_conn.execute(
                 """
                 INSERT INTO server_modes
                     (id, current_mode, previous_mode, active_snapshot_id, checkpoint_id,
@@ -1079,6 +1080,14 @@ try:
                     json.dumps({"source": "test_for_develop.sh", "security_enabled": security_enabled}, ensure_ascii=True, sort_keys=True),
                 ),
             )
+    try:
+        apply_selected_server_mode(conn)
+        control_conn = server.get_control_db()
+        try:
+            apply_selected_server_mode(control_conn)
+            control_conn.commit()
+        finally:
+            control_conn.close()
     except Exception:
         pass
     conn.execute("DELETE FROM ip_blocks")
@@ -1195,7 +1204,7 @@ SERVER_URL="$(wait_for_server_url || true)"
 say "[dev-tmp] repo copy: $COPY_ROOT"
 say "[dev-tmp] runtime:   $RUNTIME_ROOT"
 say "[dev-tmp] pid:       $SERVER_PID"
-if [[ -n "$SERVER_URL" && "$BTC_TRADE_AUTOSTART" == "1" ]]; then
+if [[ -n "$SERVER_URL" ]]; then
   say "[dev-tmp] url:       $SERVER_URL"
 else
   say "[dev-tmp] url:       startup pending; inspect logs"
@@ -1211,7 +1220,7 @@ say "[dev-tmp] log:       $LOG_CAPTURE"
 #   - re-run when /tmp/BTC_trade already has the required scripts: skips
 #     clone/install and goes straight to update_data → retrain → predict.
 # This is intentionally fire-and-forget so test_for_develop.sh exits fast.
-if [[ -n "$SERVER_URL" ]]; then
+if [[ -n "$SERVER_URL" && "$BTC_TRADE_AUTOSTART" == "1" ]]; then
   BTC_LOG="$RUNTIME_ROOT/logs/btc_trade_autostart.log"
   (
     set +e

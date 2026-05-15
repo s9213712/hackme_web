@@ -249,14 +249,15 @@ function updateFpsArenaHud() {
   const hud = $("fps-arena-hud");
   if (!hud) return;
   if (!fpsArenaState) {
-    hud.textContent = "尚未開始";
+    if (hud.textContent !== "尚未開始") hud.textContent = "尚未開始";
     return;
   }
   const state = fpsArenaState;
+  const now = performance.now();
   const elapsed = Math.max(0, Date.now() - state.startedAt);
   const remaining = Math.max(0, state.durationMs - elapsed);
   const accuracy = state.shots > 0 ? Math.round((state.hits / state.shots) * 100) : 0;
-  hud.innerHTML = [
+  const hudHtml = [
     `<span>${sanitize(state.level?.label || "第 1 關")}</span>`,
     `<span>${sanitize(fpsArenaModeLabel(state.mode))}</span>`,
     `<span>分數 ${Number(state.score || 0).toLocaleString()}</span>`,
@@ -272,6 +273,11 @@ function updateFpsArenaHud() {
     state.mode === "bomb" ? `<span>拆彈 ${Math.min(100, Math.round(state.defuseProgress || 0))}%</span>` : "",
     state.multiplayer ? `<span>${state.mode === "pvp" ? "PvP" : "Co-op"} ${sanitize(state.multiplayer.peer?.username || "同步中")}</span>` : "",
   ].join("");
+  if (hudHtml !== state.lastHudHtml && now >= Number(state.nextHudDomAt || 0)) {
+    hud.innerHTML = hudHtml;
+    state.lastHudHtml = hudHtml;
+    state.nextHudDomAt = now + 100;
+  }
 }
 
 function updateFpsArenaStatus(prefix = "") {
@@ -1417,7 +1423,14 @@ function renderFpsArenaBoard() {
   if (typeof THREE === "undefined") {
     stage.querySelectorAll("canvas").forEach((canvas) => canvas.remove());
     const hud = $("fps-arena-hud");
-    if (hud) hud.textContent = "Three.js 載入失敗，無法啟動 3D 模式";
+    if (hud) hud.textContent = "3D 引擎載入中";
+    if (typeof ensureThreeJsLoaded === "function") {
+      ensureThreeJsLoaded()
+        .then(() => renderFpsArenaBoard())
+        .catch(() => { if (hud) hud.textContent = "Three.js 載入失敗，無法啟動 3D 模式"; });
+    } else if (hud) {
+      hud.textContent = "Three.js 載入失敗，無法啟動 3D 模式";
+    }
     return;
   }
   if (!fpsArenaState) {
@@ -1427,7 +1440,22 @@ function renderFpsArenaBoard() {
   }
 }
 
-function startFpsArenaGame() {
+async function startFpsArenaGame() {
+  if (typeof THREE === "undefined" && typeof ensureThreeJsLoaded === "function") {
+    updateFpsArenaStatus("3D 引擎載入中。");
+    try {
+      await ensureThreeJsLoaded();
+    } catch (_) {
+      setGameMsg("Three.js 載入失敗，無法啟動 3D 模式", false);
+      updateFpsArenaStatus("3D 引擎載入失敗。");
+      return;
+    }
+  }
+  if (typeof THREE === "undefined") {
+    setGameMsg("Three.js 尚未載入，無法啟動 3D 模式", false);
+    updateFpsArenaStatus("3D 引擎尚未載入。");
+    return;
+  }
   disposeFpsArenaScene();
   const mode = fpsArenaMode();
   const multiplayerMode = mode === "coop" || mode === "pvp";

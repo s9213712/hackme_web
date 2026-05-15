@@ -464,13 +464,29 @@ def list_grid_bots(service, *, actor):
     conn = service.get_db()
     try:
         service.ensure_schema(conn)
-        bots = []
-        for row in conn.execute("SELECT * FROM trading_grid_bots WHERE user_id=? ORDER BY id DESC LIMIT 50", (user_id,)).fetchall():
-            orders = conn.execute(
-                "SELECT * FROM trading_grid_orders WHERE grid_bot_id=? ORDER BY level_index ASC, id ASC",
-                (row["id"],),
-            ).fetchall()
-            bots.append(service._grid_bot_payload(row, [dict(o) for o in orders]))
+        bot_rows = conn.execute(
+            "SELECT * FROM trading_grid_bots WHERE user_id=? ORDER BY id DESC LIMIT 50",
+            (user_id,),
+        ).fetchall()
+        if not bot_rows:
+            return {"ok": True, "bots": []}
+        bot_ids = [int(row["id"]) for row in bot_rows]
+        placeholders = ",".join("?" for _ in bot_ids)
+        order_rows = conn.execute(
+            f"""
+            SELECT * FROM trading_grid_orders
+            WHERE grid_bot_id IN ({placeholders})
+            ORDER BY grid_bot_id ASC, level_index ASC, id ASC
+            """,
+            bot_ids,
+        ).fetchall()
+        orders_by_bot = {bot_id: [] for bot_id in bot_ids}
+        for order in order_rows:
+            orders_by_bot.setdefault(int(order["grid_bot_id"]), []).append(dict(order))
+        bots = [
+            service._grid_bot_payload(row, orders_by_bot.get(int(row["id"]), []))
+            for row in bot_rows
+        ]
         return {"ok": True, "bots": bots}
     finally:
         conn.close()

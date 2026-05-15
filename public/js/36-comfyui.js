@@ -1234,7 +1234,7 @@ function renderComfyuiImagePickerList() {
 }
 
 async function loadComfyuiImagePickerCandidates() {
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const res = await apiFetch(API + "/comfyui/input-image-candidates", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -2223,7 +2223,7 @@ async function loadComfyuiAlbums({ force = false } = {}) {
     const json = typeof storageAction === "function"
       ? await storageAction("/storage/albums", "GET")
       : await (async () => {
-          await fetchCsrfToken({ force: true });
+          await fetchCsrfToken();
           const res = await apiFetch(API + "/storage/albums", {
             credentials: "same-origin",
             headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -2303,7 +2303,7 @@ async function loadComfyuiHistory() {
   if (!currentUser || !canAccessModule("comfyui")) return [];
   const status = $("comfyui-history-status");
   if (status) status.textContent = "正在讀取 ComfyUI 歷史紀錄...";
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const res = await apiFetch(API + "/comfyui/history", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -2527,7 +2527,7 @@ async function loadComfyuiModels() {
   if (status) status.textContent = "連線 ComfyUI 中...";
   setComfyuiMessage("");
   try {
-    await fetchCsrfToken({ force: true });
+    await fetchCsrfToken();
     const res = await apiFetch(API + "/comfyui/models" + comfyuiRequestQuery(), {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -2580,7 +2580,7 @@ async function refreshComfyuiStatus({ switchAway = true } = {}) {
   const status = $("comfyui-status");
   if (status) status.textContent = "檢測 ComfyUI 伺服器中...";
   try {
-    await fetchCsrfToken({ force: true });
+    await fetchCsrfToken();
     const res = await apiFetch(API + "/comfyui/status" + comfyuiRequestQuery(), {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": getCsrfToken() || "" }

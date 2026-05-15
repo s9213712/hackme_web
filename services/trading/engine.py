@@ -106,6 +106,13 @@ from services.trading.admin import (
     update_market as update_market_helper,
     update_root_settings as update_root_settings_helper,
 )
+from services.trading.background_engine import (
+    ensure_background_schema as ensure_background_schema_helper,
+    get_background_status as get_background_status_helper,
+    run_background_job_once as run_background_job_once_helper,
+    run_due_background_jobs as run_due_background_jobs_helper,
+    set_background_job_enabled as set_background_job_enabled_helper,
+)
 from services.trading.margin import (
     accrue_margin_interest as accrue_margin_interest_helper,
     add_margin_collateral as add_margin_collateral_helper,
@@ -2259,6 +2266,55 @@ class TradingEngineService:
 
     def get_bot_audit_dashboard(self, *, limit=100):
         return get_bot_audit_dashboard_helper(self, limit=limit)
+
+    def ensure_background_schema(self, conn=None):
+        return ensure_background_schema_helper(self, conn)
+
+    def get_background_status(self, *, limit=20):
+        return get_background_status_helper(self, limit=limit)
+
+    def run_background_job_once(
+        self,
+        *,
+        job_key,
+        get_system_settings=None,
+        get_runtime_server_mode=None,
+        owner=None,
+        force=False,
+    ):
+        return run_background_job_once_helper(
+            self,
+            job_key=job_key,
+            get_system_settings=get_system_settings,
+            get_runtime_server_mode=get_runtime_server_mode,
+            owner=owner,
+            force=force,
+        )
+
+    def run_due_background_jobs(
+        self,
+        *,
+        get_system_settings=None,
+        get_runtime_server_mode=None,
+        owner=None,
+        job_keys=None,
+    ):
+        return run_due_background_jobs_helper(
+            self,
+            get_system_settings=get_system_settings,
+            get_runtime_server_mode=get_runtime_server_mode,
+            owner=owner,
+            job_keys=job_keys,
+        )
+
+    def set_background_job_enabled(self, *, job_key, enabled, reason="", actor=None):
+        return set_background_job_enabled_helper(
+            self,
+            job_key=job_key,
+            enabled=enabled,
+            reason=reason,
+            actor=actor,
+        )
 
     def root_report(self):
         return root_report_helper(self)

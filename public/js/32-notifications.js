@@ -56,8 +56,7 @@ function renderNotifications(items, unreadCount) {
 
 async function loadNotifications() {
   if (!currentUser) return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
+  const csrf = await fetchCsrfToken();
   try {
     const res = await apiFetch(API + "/notifications?limit=20", {
       credentials: "same-origin",

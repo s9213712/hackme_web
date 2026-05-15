@@ -49,6 +49,9 @@ python3 server.py
 | Server Mode v2 | [server_mode_v2/README.md](server_mode_v2/README.md) |
 | Agent QA / research | [AGENTS/README.md](AGENTS/README.md) |
 
+Trading 背景常駐引擎設計入口：
+[trading/TRADING_BACKGROUND_ENGINE.md](trading/TRADING_BACKGROUND_ENGINE.md)。
+
 ## 深層參考
 
 - [For_developer.md](For_developer.md)

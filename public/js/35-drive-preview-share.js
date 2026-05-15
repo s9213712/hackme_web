@@ -141,8 +141,7 @@ async function loadAlbumGallery() {
   if (!currentUser || !canAccessModule("privacy_uploads")) return;
   const msg = $("album-gallery-msg");
   try {
-    await fetchCsrfToken({ force: true });
-    const csrf = getCsrfToken();
+    const csrf = await fetchCsrfToken();
     const res = await apiFetch(API + "/storage/albums", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
@@ -378,4 +377,3 @@ async function purchaseStorageUpgrade() {
     if (button) button.disabled = false;
   }
 }
-
