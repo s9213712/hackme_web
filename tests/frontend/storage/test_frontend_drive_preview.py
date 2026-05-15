@@ -119,6 +119,10 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert '"/cloud-drive/resumable-upload/start"' in drive_js
     assert "completeDriveResumableUpload" in drive_js
     assert '"resumable_uploading"' in drive_js
+    assert "if (isDriveE2eeMode(privacyMode)) return \"\";" in drive_js
+    assert "if (!isDriveE2eeMode(options.privacyMode) && shouldUseDriveResumableUpload(uploadBlob))" not in drive_js
+    assert "if (shouldUseDriveResumableUpload(uploadBlob))" in drive_js
+    assert "progressTotalBytes = Math.max(0, progressTotalBytes + uploadDisplayBytes - fileSize);" in drive_js
     assert "async function ensureDriveUploadQuota()" in drive_js
     assert "function driveUploadQuotaError" in drive_js
     assert "async function preflightDriveUploadSize" in drive_js

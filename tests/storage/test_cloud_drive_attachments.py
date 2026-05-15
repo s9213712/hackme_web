@@ -439,6 +439,70 @@ def test_resumable_server_encrypted_upload_finishes_through_existing_encryption_
         conn.close()
 
 
+def test_storage_resumable_e2ee_upload_preserves_folder_entry_and_key(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    chunk_size = 256 * 1024
+    payload = (b"cipher" * 1024) + b"-folder-e2ee"
+    started = client.post(
+        "/api/cloud-drive/resumable-upload/start",
+        json={
+            "target": "storage",
+            "filename": "secret.txt",
+            "mime_type": "application/octet-stream",
+            "total_bytes": len(payload),
+            "chunk_size": chunk_size,
+            "privacy_mode": "e2ee",
+            "virtual_path": "/vault/sub/secret.txt",
+            "display_name": "vault/sub/secret.txt",
+            "encrypted_metadata": '{"nonce":"meta","ciphertext":"sealed-metadata"}',
+            "encrypted_file_key": '{"wrapped_by":"browser_passphrase_pbkdf2_v2","ciphertext":"sealed-key"}',
+            "wrapped_by": "browser_passphrase_pbkdf2_v2",
+            "ciphertext_sha256": "0" * 64,
+            "encryption_algorithm": "AES-GCM",
+            "encryption_version": "browser-passphrase-v2",
+            "nonce": "nonce",
+        },
+    )
+    assert started.status_code == 200
+    session_id = started.get_json()["session"]["session_id"]
+
+    for index, start in enumerate(range(0, len(payload), chunk_size)):
+        chunk = payload[start : start + chunk_size]
+        assert client.post(
+            f"/api/cloud-drive/resumable-upload/{session_id}/chunks/{index}",
+            data={"chunk": (io.BytesIO(chunk), f"part{index}")},
+            content_type="multipart/form-data",
+        ).status_code == 200
+
+    completed = client.post(f"/api/cloud-drive/resumable-upload/{session_id}/complete")
+    assert completed.status_code == 200
+    body = completed.get_json()
+    storage_file = body["storage_file"]
+    file_id = body["file"]["file_id"]
+    assert storage_file["virtual_path"] == "/vault/sub/secret.txt"
+    assert storage_file["display_name"] == "vault/sub/secret.txt"
+    assert client.get(f"/api/storage/files/{storage_file['id']}/download").data == payload
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+        key = conn.execute("SELECT * FROM encrypted_file_keys WHERE file_id=?", (file_id,)).fetchone()
+        assert row["privacy_mode"] == "e2ee"
+        assert row["original_filename_encrypted"] == '{"nonce":"meta","ciphertext":"sealed-metadata"}'
+        assert row["mime_type_plain_for_public"] is None
+        assert key["wrapped_by"] == "browser_passphrase_pbkdf2_v2"
+        assert key["encrypted_file_key"] == '{"wrapped_by":"browser_passphrase_pbkdf2_v2","ciphertext":"sealed-key"}'
+    finally:
+        conn.close()
+
+
 def test_storage_file_e2ee_upload_failure_returns_client_error(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"

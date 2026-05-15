@@ -3804,6 +3804,7 @@ async function uploadStorageFolder() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   let uploadedBytes = 0;
+  let progressTotalBytes = totalBytes;
   let okCount = 0;
   const failures = [];
   for (const file of files) {
@@ -3812,8 +3813,8 @@ async function uploadStorageFolder() {
     const fileSize = Number(file.size || 0);
     updateDriveTransferRow(transferId, {
       loaded_bytes: uploadedBytes,
-      total_bytes: totalBytes,
-      progress_percent: totalBytes > 0 ? (uploadedBytes / totalBytes) * 100 : null,
+      total_bytes: progressTotalBytes,
+      progress_percent: progressTotalBytes > 0 ? (uploadedBytes / progressTotalBytes) * 100 : null,
       msg: `上傳中：${relativePath || file.name}`,
     });
     const form = new FormData();
@@ -3821,12 +3822,13 @@ async function uploadStorageFolder() {
     let uploadFilename = file.name || "upload.bin";
     let uploadMimeType = file.type || "application/octet-stream";
     let uploadFields = {};
+    let uploadDisplayBytes = fileSize;
     try {
       if (isDriveE2eeMode(options.privacyMode)) {
         updateDriveTransferRow(transferId, {
           loaded_bytes: uploadedBytes,
-          total_bytes: totalBytes,
-          progress_percent: totalBytes > 0 ? (uploadedBytes / totalBytes) * 100 : null,
+          total_bytes: progressTotalBytes,
+          progress_percent: progressTotalBytes > 0 ? (uploadedBytes / progressTotalBytes) * 100 : null,
           phase: "encrypting",
           msg: `瀏覽器端加密中：${relativePath || file.name}`,
         });
@@ -3837,10 +3839,12 @@ async function uploadStorageFolder() {
         uploadFilename = encrypted.filename;
         uploadMimeType = encrypted.blob.type || "application/octet-stream";
         uploadFields = driveEncryptedUploadFields(encrypted);
+        uploadDisplayBytes = Number(uploadBlob.size || 0);
+        progressTotalBytes = Math.max(0, progressTotalBytes + uploadDisplayBytes - fileSize);
         updateDriveTransferRow(transferId, {
           loaded_bytes: uploadedBytes,
-          total_bytes: totalBytes,
-          progress_percent: totalBytes > 0 ? (uploadedBytes / totalBytes) * 100 : null,
+          total_bytes: progressTotalBytes,
+          progress_percent: progressTotalBytes > 0 ? (uploadedBytes / progressTotalBytes) * 100 : null,
           phase: "uploading",
           msg: `加密完成，開始上傳：${relativePath || file.name}`,
         });
@@ -3851,7 +3855,7 @@ async function uploadStorageFolder() {
       continue;
     }
     try {
-      if (!isDriveE2eeMode(options.privacyMode) && shouldUseDriveResumableUpload(uploadBlob)) {
+      if (shouldUseDriveResumableUpload(uploadBlob)) {
         await uploadDriveBlobResumable({
           blob: uploadBlob,
           sourceFile: file,
@@ -3865,7 +3869,7 @@ async function uploadStorageFolder() {
           transferId,
           csrf,
           aggregateBaseBytes: uploadedBytes,
-          aggregateTotalBytes: totalBytes,
+          aggregateTotalBytes: progressTotalBytes,
           label: relativePath || file.name,
         });
         okCount += 1;
@@ -3875,12 +3879,12 @@ async function uploadStorageFolder() {
         form.append("privacy_mode", options.privacyMode);
         form.append("virtual_path", virtualPath);
       const { status, json } = await xhrUploadWithProgress(API + "/storage/files", form, csrf, (event) => {
-        const currentLoaded = event.lengthComputable ? Math.min(fileSize, event.loaded || 0) : 0;
+        const currentLoaded = event.lengthComputable ? Math.min(uploadDisplayBytes, event.loaded || 0) : 0;
         const aggregateLoaded = uploadedBytes + currentLoaded;
         updateDriveTransferRow(transferId, {
           loaded_bytes: aggregateLoaded,
-          total_bytes: totalBytes,
-          progress_percent: totalBytes > 0 ? (aggregateLoaded / totalBytes) * 100 : null,
+          total_bytes: progressTotalBytes,
+          progress_percent: progressTotalBytes > 0 ? (aggregateLoaded / progressTotalBytes) * 100 : null,
           phase: event.lengthComputable && event.loaded >= event.total ? "server_processing" : "uploading",
           msg: event.lengthComputable
             ? (event.loaded >= event.total ? `${drivePostUploadProcessingMessage(options.privacyMode)}：${relativePath || file.name}` : `上傳中：${relativePath || file.name}`)
@@ -3896,13 +3900,13 @@ async function uploadStorageFolder() {
     } catch (err) {
       failures.push(`${relativePath || file.name}: ${err.message || "上傳失敗"}`);
     }
-    uploadedBytes += Number(file.size || 0);
+    uploadedBytes += uploadDisplayBytes;
   }
   updateDriveTransferRow(transferId, {
     status: failures.length ? "failed" : "completed",
     phase: failures.length ? "failed" : "completed",
     loaded_bytes: uploadedBytes,
-    total_bytes: totalBytes,
+    total_bytes: progressTotalBytes,
     progress_percent: 100,
     msg: failures.length ? `完成 ${okCount}/${files.length}，失敗 ${failures.length}` : `已上傳 ${okCount} 個檔案`,
   });
