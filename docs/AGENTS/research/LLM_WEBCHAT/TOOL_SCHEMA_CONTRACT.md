@@ -1,6 +1,6 @@
-# Tool Schema Contract
+# Tool Schema Interface Spec
 
-## Contract
+## Required Shape
 
 Every registered tool must define:
 

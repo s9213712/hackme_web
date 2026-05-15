@@ -448,13 +448,17 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/root/trading/btc-trade/setup` | root | clone / update / install |
 | POST | `/api/root/trading/btc-trade/start` | root | 一鍵啟動預測 |
 | GET | `/api/root/trading/btc-trade/start-status` | root | 背景 job 狀態 |
+| GET | `/api/root/trading/background/status` | root | 交易背景 worker 狀態、job、lease、近期 run |
+| POST | `/api/root/trading/background/run-once` | root | 指定 job 單次執行，需 `RUN_TRADING_JOB_ONCE` 確認 |
+| POST | `/api/root/trading/background/pause` | root | 暫停全部或指定交易背景 job |
+| POST | `/api/root/trading/background/resume` | root | 恢復全部或指定交易背景 job |
 | POST | `/api/root/trading/liquidations/scan` | root | 手動掃清算 |
 | POST | `/api/root/trading/orders/match` | root | 手動撮合 |
 | GET/PUT | `/api/root/trading/markets/<symbol>` | root | root 市場設定 / 手動價 |
 | POST | `/api/root/trading/reserve/allocate` | root | 撥資金池 |
 | POST | `/api/root/trading/simulated-balance/reset` | root | 重置 root 模擬資金 |
-| GET | `/api/root/trading/contracts` | root | root 合約模擬列表 |
-| POST | `/api/root/trading/contracts/<position_uuid>/close` | root | root 合約平倉 |
+| GET | `/api/root/trading/contracts` | root | root 衍生品模擬列表；路徑名稱保留相容性 |
+| POST | `/api/root/trading/contracts/<position_uuid>/close` | root | root 衍生品模擬平倉；路徑名稱保留相容性 |
 | GET | `/api/root/trading/verify` | root | 交易對帳 |
 
 ### ComfyUI

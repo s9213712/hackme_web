@@ -44,7 +44,7 @@ agent:
 | `services/llm/lmstudio.py` | LM Studio OpenAI-compatible adapter |
 | `services/llm/router.py` | Select provider from config and request override |
 
-## Adapter Contract
+## Adapter Response Shape
 
 Every provider should return a normalized response:
 

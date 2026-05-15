@@ -37,7 +37,7 @@ invent its own Discord queue summary.
 
 Required before draft or preview actions:
 
-- tool schema contract supports dry-run/preview
+- tool schema shape supports dry-run/preview
 - each write-capable tool has explicit `read_only=false`
 - write tools are disabled by default in production
 - audit records expected changes and payload hash

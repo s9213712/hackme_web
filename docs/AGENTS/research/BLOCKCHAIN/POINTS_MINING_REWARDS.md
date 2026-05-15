@@ -716,7 +716,7 @@ CREATE TABLE points_reward_payouts (
 | Claim 詳情頁 | status / **公式 breakdown 完整顯示** / 預計到帳時間 |
 | Payout 紀錄 | 連 explorer 顯示 ledger event 與 chain block |
 | Trust 詳情 | verified/fp/duplicate count + 規則說明 + 變動歷史 |
-| 黃燈一鍵提 bug | 從 [TRADING_BOT_AUDIT.md](../trading/TRADING_BOT_AUDIT.md) 整合 |
+| 黃燈一鍵提 bug | 從 [TRADING_BOT_AUDIT.md](../../../trading/TRADING_BOT_AUDIT.md) 整合 |
 
 ### 19.2 後台
 
@@ -885,8 +885,8 @@ mining payout 不寫 ledger_v2 + chain_block
 - [x] [MULTISIG_WALLETS.md](MULTISIG_WALLETS.md) — action_type list 加 mining_* 5 項
 - [x] [POINTS_TRANSFER_API.md](POINTS_TRANSFER_API.md) — 不變（mining 不走 transfer 路徑）
 - [x] [../README.md](../../README.md) — 加 mining feature 摘要
-- [x] [../03_ADMIN_GUIDE.md](../03_ADMIN_GUIDE.md) — 加 mining 審核流程段
-- [x] [../trading/TRADING_BOT_AUDIT.md](../trading/TRADING_BOT_AUDIT.md) — 黃燈整合段落
+- [x] [../03_ADMIN_GUIDE.md](../../../03_ADMIN_GUIDE.md) — 加 mining 審核流程段
+- [x] [../trading/TRADING_BOT_AUDIT.md](../../../trading/TRADING_BOT_AUDIT.md) — 黃燈整合段落
 
 ---
 

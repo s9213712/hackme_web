@@ -35,7 +35,7 @@ Core conclusion:
 | [DISCORD_AUDIT_EVENT_CONTRACT.md](DISCORD_AUDIT_EVENT_CONTRACT.md) | Discord audit event names and required fields |
 | [DISCORD_SYNC_STATE_MACHINE.md](DISCORD_SYNC_STATE_MACHINE.md) | Binding, event, job, mapping, and DM consent lifecycles |
 | [DISCORD_SYNC_PRIVACY_BOUNDARY.md](DISCORD_SYNC_PRIVACY_BOUNDARY.md) | Data classes, DM privacy, E2EE/attachment boundaries, retention |
-| [DISCORD_SYNC_RATE_LIMITS.md](DISCORD_SYNC_RATE_LIMITS.md) | Retry, bucket, global pause, and worker queue contract |
+| [DISCORD_SYNC_RATE_LIMITS.md](DISCORD_SYNC_RATE_LIMITS.md) | Retry, bucket, global pause, and worker queue behavior |
 | [DISCORD_POLICY_REFERENCES.md](DISCORD_POLICY_REFERENCES.md) | Official Discord policy/API constraints to verify before implementation |
 | [DISCORD_SYNC_API_UI.md](DISCORD_SYNC_API_UI.md) | Proposed root/admin/user APIs and UI |
 | [DISCORD_SYNC_QA.md](DISCORD_SYNC_QA.md) | Unit, integration, security, and manual smoke tests |

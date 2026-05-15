@@ -40,3 +40,4 @@
 - JSON/JSONL 證據不刪除，只依用途分層。
 - 被淘汰的實驗放入 `evidence/exp5/rejected/` 或 `archive/`，仍保留檢討價值。
 - 新增報告優先放 `reports/`；新增長期操作文件優先放 `references/`；新增可機讀證據優先放 `evidence/`。
+- `archive/chess_debug/pvp_pipeline/` 是 PvP replay pipeline 歷史文件的 canonical 位置；上層同名舊入口只保留短轉址頁。

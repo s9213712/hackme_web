@@ -47,10 +47,15 @@ python3 server.py
 | Games / AI | [games/README.md](games/README.md) |
 | Video | [video/README.md](video/README.md) |
 | Server Mode v2 | [server_mode_v2/README.md](server_mode_v2/README.md) |
-| Agent QA / research | [AGENTS/README.md](AGENTS/README.md) |
+| Agent QA | [AGENTS/README.md](AGENTS/README.md) |
+| Agent research / 未來規格 | [AGENTS/research/README.md](AGENTS/research/README.md) |
 
 Trading 背景常駐引擎設計入口：
 [trading/TRADING_BACKGROUND_ENGINE.md](trading/TRADING_BACKGROUND_ENGINE.md)。
+
+部署判讀原則：日常部署以 numbered guides、domain `README.md` 與 API reference
+為準；`archive/`、`evidence/`、一次性報告是歷史證據；`AGENTS/research/` 是未來規格，
+除非同一功能也在正式操作文件中標為已實作，否則不要把它當成可直接上線的功能。
 
 ## 深層參考
 

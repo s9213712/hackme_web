@@ -107,7 +107,7 @@ Cases:
 1. Every tool call has audit log.
 2. High-risk action has confirmation audit.
 3. Audit does not store cleartext password, token, or private key.
-4. Audit event names match the AI audit event contract.
+4. Audit event names match the AI audit event spec.
 5. Tool version, policy version, plan ID, action ID, input hash, and output hash
    are recorded for tool actions.
 

@@ -23,8 +23,10 @@
   - 交易系統專用深度 QA 任務書
 - `TRADING_QA_REGRESSION_MATRIX.md`
   - 交易系統固定必跑的 reject-path / adversarial / accounting 回歸矩陣
-- `research/`
+- [research/](research/README.md)
   - agent-facing long-form research and future-work specs, including PointsChain v2, LLM WebChat / Agent platform control, Discord sync, and semi-autonomous AI-managed web
+- [skills/hackme-web-qa/SKILL.md](skills/hackme-web-qa/SKILL.md)
+  - project mirror of the QA skill used by agents; keep it synchronized with the Codex skill copy when changing QA workflow rules
 
 ## 維護原則
 

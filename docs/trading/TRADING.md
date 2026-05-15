@@ -18,16 +18,16 @@ submit commands, but it must not be the only trigger for price refresh, order
 matching, bot scans, TP/SL triggers, liquidation, interest accrual, or sitewide
 risk snapshots.
 
-The Phase 0 design for this requirement is split into:
+The current base worker and the remaining reporting design are split into:
 
 - [TRADING_BACKGROUND_ENGINE.md](TRADING_BACKGROUND_ENGINE.md)
 - [TRADING_SITEWIDE_MANAGEMENT.md](TRADING_SITEWIDE_MANAGEMENT.md)
 - [TRADING_LENDING_POOL_REPORTS.md](TRADING_LENDING_POOL_REPORTS.md)
 - [TRADING_BACKGROUND_QA.md](TRADING_BACKGROUND_QA.md)
 
-Until those phases are implemented, any trading behavior that only progresses
-because a browser is open should be treated as an architecture gap, not a
-feature contract.
+If any trading behavior only progresses because a browser is open, treat that
+as an architecture gap. The expected behavior is simple: server jobs own the
+trading lifecycle; the browser only observes state and submits commands.
 
 ## Current Scope
 
@@ -55,7 +55,7 @@ Enabled in this line:
 
 Not enabled for normal users in this stage:
 
-- Futures contracts.
+- Futures / derivative trading.
 - PVP matching.
 - Real external settlement.
 
@@ -72,7 +72,7 @@ Root uses a separate simulated trading balance:
 
 - Initial root simulated trading balance: `10000 POINTS`.
 - Root can reset this simulated balance from the trading UI.
-- Root spot/contract simulation does not write to PointsChain and does not
+- Root spot / derivatives simulation does not write to PointsChain and does not
   affect account points.
 
 The trading funding pool is conservative:

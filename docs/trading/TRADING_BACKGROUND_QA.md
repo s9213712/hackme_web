@@ -1,7 +1,9 @@
 # Trading Background Engine QA Gate
 
-Status: Phase 0 release-gate design. These checks become mandatory before
-enabling server-owned trading lifecycle in production.
+Status: release-gate checklist for the implemented base worker and the staged
+sitewide reporting work. The base worker is present, so the early checks now
+apply to every deployment candidate; the later snapshot/report checks remain
+mandatory before exposing the full root sitewide reporting tabs in production.
 
 ## Goal
 
@@ -60,7 +62,7 @@ background engine works while browsers are closed.
 
 ## Phase Gates
 
-### Phase 1 - fake jobs
+### Phase 1 - base worker jobs
 
 Must prove:
 
@@ -71,6 +73,8 @@ Must prove:
 - pause/resume state
 - root run-once confirmation
 - no job runs in `superweak`
+- price refresh, order matching, TP/SL scan, bot trigger scan, liquidation scan,
+  and interest accrual all run through server-owned jobs
 
 ### Phase 2 - server-side price refresh
 
@@ -185,4 +189,3 @@ New implementation work should add targeted tests for:
 - worker restart replay safety
 - snapshot restore replay safety
 - double-worker race behavior
-

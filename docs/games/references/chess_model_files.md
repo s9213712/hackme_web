@@ -143,7 +143,7 @@ model paths.
 
 If you want an external program to train a compatible `exp2` or `exp3` model:
 
-1. Reproduce the same `49`-dimension feature extractor contract used by the app.
+1. Reproduce the same `49`-dimension feature extractor shape used by the app.
 2. Train your weights offline in any framework you want.
 3. Export the final weights into the exact JSON shape above.
 4. Write the file into the corresponding runtime model path before starting the server, or replace it while the server is stopped.

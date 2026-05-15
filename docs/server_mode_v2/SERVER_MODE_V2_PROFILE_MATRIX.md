@@ -279,7 +279,7 @@ State-changing tester APIs still use the normal CSRF protection.
 
 ## Per-Mechanism Enforcement
 
-Server Mode v2 operates as a contract between the central mode profile and each individual mechanism. **Mode-driven enforcement is per-mechanism, not centralized in a single dispatch dict.**
+Server Mode v2 uses an explicit behavior boundary between the central mode profile and each individual mechanism. **Mode-driven enforcement is per-mechanism, not centralized in a single dispatch dict.**
 
 `services/snapshots/schema.py:243` `BUILTIN_SECURITY_PROFILES` carries the **settings-driven** signals (e.g. `audit_chain_enabled`, `integrity_guard_enabled`, `rate_limit_violation_enabled`, `feature_*_enabled`, `maintenance_mode`, `allow_register`, `browser_only_mode_enabled`, `captcha_mode`). These flow through `system_settings` and are read by each mechanism module on demand.
 

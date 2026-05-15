@@ -43,7 +43,7 @@
 - [x] `pytest -q tests/test_trading_engine.py tests/test_points_chain.py` 100% 綠
 - [x] `tests/test_release_policy.py` 含 needle test 100% 綠
 - [x] isolated QA replay 與 final isolated live API review 100% 綠
-- [x] Bot audit dashboard 落地（[`docs/trading/TRADING_BOT_AUDIT.md`](../trading/TRADING_BOT_AUDIT.md) 已升級反映現況）
+- [x] Bot audit dashboard 落地（[`docs/trading/TRADING_BOT_AUDIT.md`](../../../trading/TRADING_BOT_AUDIT.md) 已升級反映現況）
 
 ---
 
@@ -491,5 +491,5 @@ Required fixes
 - [POINTS_WALLET_ADDRESSING.md](POINTS_WALLET_ADDRESSING.md)
 - [POINTS_TRANSFER_API.md](POINTS_TRANSFER_API.md)
 - [MULTISIG_WALLETS.md](MULTISIG_WALLETS.md)
-- [AGENTS/QA_MISSION_FOR_AGENTS.md](../AGENTS/QA_MISSION_FOR_AGENTS.md) — 整站 QA runbook
-- [AGENTS/TRADING_SYSTEM_QA_FOR_AGENTS.md](../AGENTS/TRADING_SYSTEM_QA_FOR_AGENTS.md) — 交易 QA
+- [AGENTS/QA_MISSION_FOR_AGENTS.md](../../QA_MISSION_FOR_AGENTS.md) — 整站 QA runbook
+- [AGENTS/TRADING_SYSTEM_QA_FOR_AGENTS.md](../../TRADING_SYSTEM_QA_FOR_AGENTS.md) — 交易 QA

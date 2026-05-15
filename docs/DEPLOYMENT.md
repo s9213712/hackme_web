@@ -114,7 +114,7 @@ runs config/CI safety checks, runs `git diff --check`, runs the plaintext secret
 scanner, runs `gitleaks` and `node --check` when those tools are installed, and
 runs a focused pytest set. The default mode is fast and does not start the
 server. Use `--full` when you need the isolated `/tmp` server smoke, API
-contract, snapshot/restore, Server Mode, PointsChain, and log-chain checks.
+behavior, snapshot/restore, Server Mode, PointsChain, and log-chain checks.
 
 `--ci` is a non-interactive/sanitized execution mode; it does not automatically
 enable heavyweight checks. Optional cleanup flags list their deletion plan first

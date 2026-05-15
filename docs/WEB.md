@@ -369,12 +369,12 @@ Trading funds are separated by account type:
 
 - Normal users trade with the POINTS they actually own in their PointsChain
   wallet.
-- `root` can use spot and contract simulation with a separate simulated trading
+- `root` can use spot and derivatives simulation with a separate simulated trading
   balance. It starts at 10000 POINTS and does not write to PointsChain or mutate
   the root account wallet.
 - Root can reset this simulated trading balance back to 10000 POINTS from the
   exchange control panel.
-- Contract/futures functionality is root-only at this stage. Root can open and
+- Futures / derivatives simulation is root-only at this stage. Root can open and
   close simulated long/short positions; non-root users can only use spot.
 - Borrow trading is experimental and root-controlled. When enabled, the server
   records margin collateral freezes in PointsChain, shows account-level

@@ -1,4 +1,4 @@
-# AI Management API Contract
+# AI Management API Behavior Spec
 
 AI Management APIs live under the existing AI namespace.
 

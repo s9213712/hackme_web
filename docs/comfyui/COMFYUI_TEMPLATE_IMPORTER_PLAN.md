@@ -415,7 +415,7 @@ def remap_load_image_to_cloud_file(
         # 預設只接受 scan_status="clean"。"skipped" 必須由 root 透過站內設定明確
         # 開啟 (`security.upload_scan_skip_allowed=true`) 才視為合法 — 防止未掃描
         # 圖片透過 LoadImage 餵進 ComfyUI（同於 services/security/upload_security.py
-        # 的整體掃描契約）。
+        # 的整體掃描規則）。
         allowed_scan_statuses = {"clean"}
         if upload_scan_skip_allowed():
             allowed_scan_statuses.add("skipped")
@@ -1265,7 +1265,7 @@ public/js/
 
 - `GET /api/comfyui/workflows/<id>/export` 永遠回 *原生 workflow.json*，**不含** manifest.json。
 - 想要連 manifest 一起拿走 → `?include_manifest=1`，回傳 zip（`workflow.json` + `manifest.json` + `README.md`）。
-- export 後的 workflow.json 可送進 ComfyUI API queue 執行；UI editor layout 還原**不在保證範圍**。這是 §18.2 「workflow.json 是 ComfyUI API queue 的」的可驗證契約。
+- export 後的 workflow.json 可送進 ComfyUI API queue 執行；UI editor layout 還原**不在保證範圍**。這是 §18.2 「workflow.json 是 ComfyUI API queue 的」的可驗證行為規則。
 
 ---
 

@@ -60,8 +60,8 @@ AI cannot:
 | [AI_MANAGEMENT_SCHEMA.md](AI_MANAGEMENT_SCHEMA.md) | Dashboard, recommendation, evidence, risk-card, and note tables |
 | [AI_MANAGEMENT_ACTION_POLICY.md](AI_MANAGEMENT_ACTION_POLICY.md) | Action classes, blocked operations, and confirmation boundary |
 | [AI_MANAGEMENT_EVIDENCE_MODEL.md](AI_MANAGEMENT_EVIDENCE_MODEL.md) | Evidence fields, sensitivity, redaction, and TTL rules |
-| [AI_MANAGEMENT_TOOL_CATALOG.md](AI_MANAGEMENT_TOOL_CATALOG.md) | Read-only V1 tool catalog using LLM_WEBCHAT tool contract |
-| [AI_MANAGEMENT_API_CONTRACT.md](AI_MANAGEMENT_API_CONTRACT.md) | `/api/ai/management/*` API contract |
+| [AI_MANAGEMENT_TOOL_CATALOG.md](AI_MANAGEMENT_TOOL_CATALOG.md) | Read-only V1 tool catalog using the LLM_WEBCHAT tool schema shape |
+| [AI_MANAGEMENT_API_CONTRACT.md](AI_MANAGEMENT_API_CONTRACT.md) | `/api/ai/management/*` API behavior spec |
 | [AI_MANAGEMENT_DOMAIN_PLAYBOOKS.md](AI_MANAGEMENT_DOMAIN_PLAYBOOKS.md) | Domain-specific V1 allowed/blocked actions |
 | [TEST_AND_ACCEPTANCE.md](TEST_AND_ACCEPTANCE.md) | QA, security, e2e, and acceptance gates |
 | [SCAFFOLD_MANIFEST.md](SCAFFOLD_MANIFEST.md) | Files that can be pre-created when implementation starts |

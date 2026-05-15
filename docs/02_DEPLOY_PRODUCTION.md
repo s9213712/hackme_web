@@ -16,6 +16,8 @@
 4. 決定是否由反向代理處理 HTTPS。
 5. 建立上線前 snapshot。
 6. 跑功能 smoke、權限 pentest、壓力測試與必要的 production gate。
+7. 做文件新鮮度檢查：確認 README / API reference / Trading / Server Mode /
+   QA 文件描述的是目前 code，而不是研究草案或歷史報告。
 
 ### 重要部署決策
 
@@ -127,6 +129,26 @@ python3 scripts/security/gate/on_live_reports_make.py --base-url https://<host> 
 [11_QA_TESTING.md](11_QA_TESTING.md) 的「Production Gate 13 份報告對照表」。
 部署者上線前若要確認報告應該生成在哪裡、哪些是動態腳本、哪些是固定 pytest
 回歸，請以那張表為準。
+
+### 文件新鮮度檢查
+
+部署者只應把下列文件當成現行操作依據：
+
+- numbered guides：`00`、`01`、`02`、`03`、`05`、`06`、`08`、`09`、`11`、`12`
+- domain `README.md`
+- [API_REFERENCE.md](API_REFERENCE.md)
+- [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md)
+- [security/PRODUCTION_SIGNOFF_CHECKLIST.md](security/PRODUCTION_SIGNOFF_CHECKLIST.md)
+
+判讀規則：
+
+- `archive/`、`evidence/`、舊 QA 報告只保留歷史脈絡，不是 deployment runbook。
+- `AGENTS/research/` 是未來規格；除非同一功能也在正式操作文件中標成已實作，
+  否則不要把它當成可上線功能。
+- 文件若寫 `planned`、`staged`、`design`、`proposal`，部署時只能當待辦，不可
+  當成已可操作能力。
+- API 表若和 route handler 不一致，以上線前實際 route / smoke / API reference
+  同步修正為 release blocker。
 
 ## 原理
 

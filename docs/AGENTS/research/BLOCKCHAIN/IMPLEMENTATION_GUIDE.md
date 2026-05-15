@@ -135,8 +135,8 @@ Phase 0 = PointsChain v2 鏈化前的清債項目。歷史完整證據請查 Git
 | 2 | [POINTSCHAIN_WHITEPAPER.md](POINTSCHAIN_WHITEPAPER.md) | 知道對 user 我們承諾了什麼 |
 | 3 | [POINTSCHAIN_ENGINEERING.md](POINTSCHAIN_ENGINEERING.md) | 知道 8 個 phase / schema / API / 對既有系統影響 |
 | 4 | [POINTSCHAIN_QA.md](POINTSCHAIN_QA.md) | 知道每個 phase 的出口 gate 與紅線 |
-| 5 | [../AGENTS/RULES_FOR_AGENTS.md](../AGENTS/RULES_FOR_AGENTS.md) | 知道全專案工作原則（文件 / 測試 / 手機版 / 伺服器端運算） |
-| 6 | [../AGENTS/QA_MISSION_FOR_AGENTS.md](../AGENTS/QA_MISSION_FOR_AGENTS.md) | 知道隔離測試流程 |
+| 5 | [../AGENTS/RULES_FOR_AGENTS.md](../../RULES_FOR_AGENTS.md) | 知道全專案工作原則（文件 / 測試 / 手機版 / 伺服器端運算） |
+| 6 | [../AGENTS/QA_MISSION_FOR_AGENTS.md](../../QA_MISSION_FOR_AGENTS.md) | 知道隔離測試流程 |
 | 7 | 對應你動的 phase 文件 | 詳細規格 |
 
 對應 phase 的 detail 文件：

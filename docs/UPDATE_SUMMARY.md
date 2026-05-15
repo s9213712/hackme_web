@@ -66,7 +66,7 @@ Release ID: `2026.05.13-157`
   `game_matches_old` table.
 - **#184 trading conservative-price guard gaps** —
   `_assert_price_meta_allows_high_risk_use` now runs at every previously
-  unguarded entry point: root contract open/close (`services/trading/funding.py`),
+  unguarded entry point: root derivatives open/close (`services/trading/funding.py`),
   grid bot create/scan (`services/trading/grid.py`), trial-credit forced sell
   (`services/trading/trial_credit.py`), bot trigger
   (`services/trading/bots/service.py`), market/limit order open + match
@@ -80,7 +80,7 @@ Release ID: `2026.05.13-157`
   and `trading.simulated_slippage_*` defaults.
 - **#186 cached-fallback caller-side policy** —
   `_assert_price_meta_allows_high_risk_use` now distinguishes hard-block
-  sources (`manual_root` always, `*_cached` for grid/margin/contract/
+  sources (`manual_root` always, `*_cached` for grid/margin/derivatives/
   trial-credit/bot usages) from caller-side allow paths (`market order`,
   `immediately executable limit order`, `limit order match` may use cached
   fallback when the operator opts into it via meta and the
@@ -198,7 +198,7 @@ Release ID: `2026.05.13-157`
 ## 2026.05.06-145
 
 - Trading workflow benchmark generation now preserves a stable frontend
-  contract: the default `1h` benchmark run writes to
+  data shape: the default `1h` benchmark run writes to
   `workflows/trading_bot/benchmarks/workflow_template_benchmarks.json`, while
   non-canonical interval or relative-threshold variants write to suffixed
   auxiliary files. The frontend reads the canonical report through
@@ -206,7 +206,7 @@ Release ID: `2026.05.13-157`
   asset.
 - The shipped workflow benchmark asset now carries explicit `interval` and
   `use_relative_thresholds` metadata so the trading UI can label benchmark
-  data correctly and tests can validate the asset contract directly.
+  data correctly and tests can validate the asset shape directly.
 - Added dedicated regression coverage for backtest-capacity projection,
   first-boot capacity probe recording, and the canonical workflow benchmark
   asset schema instead of relying only on broad trading/backtest integration
@@ -266,7 +266,7 @@ Release ID: `2026.05.13-157`
   tokens.
 - `docs/examples/server_mode_v2/05_stress_smv2.sh` no longer burns the full
   burst after the first blocked tester-token response; it now exits the rate
-  limit probe as soon as the contract is proven and shortens the per-request
+  limit probe as soon as the expected block behavior is proven and shortens the per-request
   timeout, eliminating the prior full-smoke timeout on script 05.
 
 ## 2026.05.05-141
@@ -349,7 +349,7 @@ Release ID: `2026.05.13-157`
   instead of hardcoding `trading_margin_positions`.
 - Internal-test margin opens now populate `tester_user_id` when writing shadow
   rows, so `test_shadow_margin_positions` inserts follow the shadow schema
-  contract instead of failing or silently drifting back toward production-only
+  shape instead of failing or silently drifting back toward production-only
   assumptions.
 - Internal-test margin collateral and fee ledger writes now pass the active
   trading context into `_ledger(...)`, ensuring chain-backed shadow margin opens

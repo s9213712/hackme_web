@@ -1,6 +1,6 @@
 # AI Management Tool Catalog
 
-AI Management uses LLM_WEBCHAT tool schema contract. It does not define a
+AI Management uses the LLM_WEBCHAT tool schema shape. It does not define a
 separate tool format.
 
 ## V1 Read-only Tools
@@ -25,7 +25,7 @@ discord_sync.get_queue_summary
 discord_sync.get_dead_letter_summary
 ```
 
-## Tool Contract
+## Tool Metadata Shape
 
 Each tool must define:
 

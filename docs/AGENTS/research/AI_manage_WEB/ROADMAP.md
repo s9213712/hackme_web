@@ -11,7 +11,7 @@ Goal:
 - define current repo boundaries
 - define dependency gates
 - define evidence model
-- define schema, action policy, API contract, and domain playbooks
+- define schema, action policy, API behavior, and domain playbooks
 
 Exit gate:
 

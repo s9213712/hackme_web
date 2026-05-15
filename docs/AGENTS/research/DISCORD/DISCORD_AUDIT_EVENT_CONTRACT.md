@@ -1,4 +1,4 @@
-# Discord Audit Event Contract
+# Discord Audit Event Spec
 
 Discord Sync audit must be useful for incident review without leaking secrets or
 private message plaintext.

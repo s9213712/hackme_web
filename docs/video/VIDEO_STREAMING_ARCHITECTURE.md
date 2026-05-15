@@ -358,7 +358,7 @@ Approved product paths should be:
 2. or let the user explicitly create a separate streamable derivative under a
    different privacy mode
 
-This preserves the E2EE contract.
+This preserves the E2EE behavior boundary.
 
 ## Frontend Strategy
 

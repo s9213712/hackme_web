@@ -23,10 +23,10 @@ The first version must stay conservative:
 | [CURRENT_REPO_RECONCILIATION.md](CURRENT_REPO_RECONCILIATION.md) | Avoid route/API/frontend naming conflicts with existing chat |
 | [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | Phase 1-20 execution plan and MVP order |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, proposed modules, and file scaffold |
-| [LLM_ADAPTERS.md](LLM_ADAPTERS.md) | Ollama / LM Studio adapter contract and config |
+| [LLM_ADAPTERS.md](LLM_ADAPTERS.md) | Ollama / LM Studio adapter response shape and config |
 | [AGENT_API.md](AGENT_API.md) | WebChat and Agent HTTP API proposal |
 | [TOOL_POLICY.md](TOOL_POLICY.md) | Tool registry, risk levels, allowed tools, and policy rules |
-| [TOOL_SCHEMA_CONTRACT.md](TOOL_SCHEMA_CONTRACT.md) | Tool input/output schema contract and sensitive read-only risks |
+| [TOOL_SCHEMA_CONTRACT.md](TOOL_SCHEMA_CONTRACT.md) | Tool input/output schema shape and sensitive read-only risks |
 | [DATA_BOUNDARY.md](DATA_BOUNDARY.md) | Data classification for what can be sent to LLM providers |
 | [PROVIDER_SECURITY.md](PROVIDER_SECURITY.md) | Provider URL, SSRF, model allowlist, and tool-call safety |
 | [AI_AGENT_SCHEMA.md](AI_AGENT_SCHEMA.md) | Proposed chat, plan, action, confirmation, and memory tables |

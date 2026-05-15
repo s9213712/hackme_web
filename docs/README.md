@@ -28,7 +28,7 @@ operator guidance.
 | Deploy | [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md), [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md), [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md) | [DEPLOYMENT.md](DEPLOYMENT.md), [RELEASE_LAYOUT.md](RELEASE_LAYOUT.md), [REPOSITORY_STRUCTURE.md](REPOSITORY_STRUCTURE.md) |
 | Admin | [03_ADMIN_GUIDE.md](03_ADMIN_GUIDE.md), [06_SECURITY_MODEL.md](06_SECURITY_MODEL.md), [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md) | [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md), [security/PRE_RELEASE_CHECKLIST.md](security/PRE_RELEASE_CHECKLIST.md), [security/PRODUCTION_SIGNOFF_CHECKLIST.md](security/PRODUCTION_SIGNOFF_CHECKLIST.md) |
 | Developer | [For_developer.md](For_developer.md), [API_REFERENCE.md](API_REFERENCE.md), [WEB.md](WEB.md) | [architecture/DATABASE_LAYOUT.md](architecture/DATABASE_LAYOUT.md), [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md) |
-| Security / QA | [11_QA_TESTING.md](11_QA_TESTING.md), [security/QA_ARCHITECTURE.md](security/QA_ARCHITECTURE.md), [SECURITY.md](SECURITY.md) | [security/FUNCTIONAL_SMOKE.md](security/FUNCTIONAL_SMOKE.md), [security/FUNCTIONAL_PERMISSION_PENTEST.md](security/FUNCTIONAL_PERMISSION_PENTEST.md), [security/PENTEST.md](security/PENTEST.md), [security/TRADING_STRESS_PENTEST.md](security/TRADING_STRESS_PENTEST.md) |
+| Security / QA | [11_QA_TESTING.md](11_QA_TESTING.md), [security/QA_ARCHITECTURE.md](security/QA_ARCHITECTURE.md), [SECURITY.md](SECURITY.md) | [security/FUNCTIONAL_SMOKE.md](security/FUNCTIONAL_SMOKE.md), [security/FUNCTIONAL_PERMISSION_PENTEST.md](security/FUNCTIONAL_PERMISSION_PENTEST.md), [security/PENTEST.md](security/PENTEST.md), [security/TRADING_STRESS_PENTEST.md](security/TRADING_STRESS_PENTEST.md), [security/secrets_scanning.md](security/secrets_scanning.md) |
 | Release | [UPDATE_SUMMARY.md](UPDATE_SUMMARY.md), [BRANCHING_AND_RELEASE.md](BRANCHING_AND_RELEASE.md) | [ARCHIVE_INDEX.md](ARCHIVE_INDEX.md), [archive/README.md](archive/README.md) |
 
 ## Domain Indexes
@@ -36,6 +36,7 @@ operator guidance.
 | Domain | Entry |
 |---|---|
 | Agents / QA missions | [AGENTS/README.md](AGENTS/README.md) |
+| Agent research / future specs | [AGENTS/research/README.md](AGENTS/research/README.md) |
 | ComfyUI | [comfyui/README.md](comfyui/README.md) |
 | Games / board AI / chess experiments | [games/README.md](games/README.md) |
 | Runtime and encryption boundaries | [ops_boundaries/README.md](ops_boundaries/README.md) |
@@ -70,3 +71,10 @@ operator guidance.
 - Long-lived feature references belong in the relevant domain folder.
 - One-off reports, old QA output, and retired experiments belong in [ARCHIVE_INDEX.md](ARCHIVE_INDEX.md).
 - Do not add new top-level docs unless they are cross-cutting entry points.
+
+## Deployment Reading Rules
+
+- Use numbered guides and domain `README.md` files for deployment decisions.
+- Treat `archive/`, `evidence/`, and one-off reports as history, not current operator guidance.
+- Treat `AGENTS/research/` as future-work specification unless the referenced feature also appears in the numbered guides or API reference as implemented.
+- When a feature document has both implemented and planned sections, deploy only the implemented surface and keep planned endpoints behind feature flags or release gates.

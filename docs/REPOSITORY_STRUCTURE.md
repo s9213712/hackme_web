@@ -135,7 +135,7 @@ These scripts now live in clearer subtrees:
 `tests/` is large because it mixes four different roles:
 
 - API/service regression
-- frontend contract checks
+- frontend interface checks
 - script/CLI checks
 - smoke / pentest / release gates
 

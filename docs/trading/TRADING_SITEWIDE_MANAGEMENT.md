@@ -1,8 +1,10 @@
 # Root Sitewide Trading Management
 
-Status: Phase 0 design requirement for the root trading UI. This page depends
-on the background engine and sitewide snapshots described in
-[TRADING_BACKGROUND_ENGINE.md](TRADING_BACKGROUND_ENGINE.md).
+Status: background-engine health controls are partially implemented; the full
+sitewide management tab is still staged. Root can already inspect background
+job status and run audited pause / resume / run-once actions. Order, bot,
+TP/SL, and margin-risk drilldowns still need snapshot-backed pages before they
+are suitable for production operations.
 
 ## Location
 
@@ -208,9 +210,18 @@ Do not provide a direct "edit user position" shortcut. Any manual intervention
 must be a separate admin action with explicit confirmation, audit logging, and
 service-layer settlement semantics.
 
-## Proposed APIs
+## Implemented Background APIs
 
-Sitewide trading management:
+- `GET /api/root/trading/background/status`
+- `POST /api/root/trading/background/pause`
+- `POST /api/root/trading/background/resume`
+- `POST /api/root/trading/background/run-once`
+
+## Planned Sitewide APIs
+
+These routes describe the intended drilldown surface. Do not document them as
+available to operators until the matching route handlers and snapshot tables
+exist.
 
 - `GET /api/root/trading/sitewide/summary`
 - `GET /api/root/trading/sitewide/orders`
@@ -219,12 +230,6 @@ Sitewide trading management:
 - `GET /api/root/trading/sitewide/margin-risk`
 - `GET /api/root/trading/sitewide/user/<user_id>`
 
-Background engine APIs:
-
-- `GET /api/root/trading/background/status`
-- `POST /api/root/trading/background/pause`
-- `POST /api/root/trading/background/resume`
-- `POST /api/root/trading/background/run-once`
 - `GET /api/root/trading/background/jobs`
 - `GET /api/root/trading/background/audit`
 
@@ -251,4 +256,3 @@ queries when root opens a drilldown table or exports a report.
 - no bypass of Server Mode v2 routing
 - no production data writes in `internal_test`
 - no high-risk operations when risk-grade price is unusable
-

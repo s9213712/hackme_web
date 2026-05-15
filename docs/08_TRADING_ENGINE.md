@@ -103,7 +103,11 @@ Server Mode v2 暫停或限制。
 `idempotency_key`、job run id、audit record 與 Server Mode scope。worker
 重啟或重試不得造成重複成交、重複收息或重複清算。
 
-Phase 0 設計文件：
+目前背景 worker 基礎已落地：server 啟動時會啟動 trading background worker，
+並提供 root status / pause / resume / run-once API。全站快照報表與完整 drilldown UI
+仍屬 staged work，部署時不可把未落地的 planned API 當成已可操作功能。
+
+背景引擎與報表文件：
 
 - [Trading Background Engine](trading/TRADING_BACKGROUND_ENGINE.md)
 - [Root Sitewide Trading Management](trading/TRADING_SITEWIDE_MANAGEMENT.md)
@@ -112,11 +116,12 @@ Phase 0 設計文件：
 
 ## Root Sitewide Trading Management
 
-root 交易所頁應新增「全站交易管理」分頁，用於查看全站 background engine 健康度、
+root 交易所頁已具備背景 engine 健康度與受控 job 操作入口；完整「全站交易管理」
+分頁仍應補齊，用於查看全站
 價格刷新、掛單撮合、所有用戶 bot 運作、止盈止損觸發、借貸清算、風控異常與全站
 用戶借貸交易整戶維持率。
 
-root 交易所頁也應新增「借貸交易池收支」分頁，用於查看全站手續費收入、借貸利息收入、
+root 交易所頁也應補上「借貸交易池收支」分頁，用於查看全站手續費收入、借貸利息收入、
 借貸池貸出 / 可用 / 使用率、清算回收、壞帳、micropoints carry 與各用戶維持率分布。
 
 root UI 只能監督、稽核、暫停、恢復與觸發受控 job，不得直接修改使用者 wallet、

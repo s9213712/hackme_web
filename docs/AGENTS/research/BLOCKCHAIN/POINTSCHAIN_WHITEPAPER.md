@@ -486,7 +486,7 @@ reward ≥ 1000 一律 multisig（無論 severity）。
 | 多簽錢包 | [MULTISIG_WALLETS.md](MULTISIG_WALLETS.md) |
 | QA Mining / 貢獻獎勵（Phase 7） | [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md) |
 | QA / Release Gate | [POINTSCHAIN_QA.md](POINTSCHAIN_QA.md) |
-| 既有 PointsChain 概念（v1） | [07_POINTSCHAIN.md](../07_POINTSCHAIN.md) |
+| 既有 PointsChain 概念（v1） | [07_POINTSCHAIN.md](../../../07_POINTSCHAIN.md) |
 | 鏈化前的清債（Phase 0） | 摘要見 [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)，歷史 evidence 必要時查 Git history |
 
 ---

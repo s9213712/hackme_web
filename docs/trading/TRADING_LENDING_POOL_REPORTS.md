@@ -1,8 +1,11 @@
 # Trading Lending Pool Reports
 
-Status: Phase 0 design requirement for root lending-pool reporting. This
-document complements [TRADING_BACKGROUND_ENGINE.md](TRADING_BACKGROUND_ENGINE.md)
-and [TRADING_SITEWIDE_MANAGEMENT.md](TRADING_SITEWIDE_MANAGEMENT.md).
+Status: staged reporting design. Background interest and liquidation jobs have
+server-side ownership, but this root reporting tab still needs snapshot tables,
+daily rollups, and reconciliation views before it is an operator-ready
+production page. This document complements
+[TRADING_BACKGROUND_ENGINE.md](TRADING_BACKGROUND_ENGINE.md) and
+[TRADING_SITEWIDE_MANAGEMENT.md](TRADING_SITEWIDE_MANAGEMENT.md).
 
 ## Location
 
@@ -171,7 +174,7 @@ User detail drilldown:
 No direct "root edit position" action belongs on this page. Any intervention
 must route through a separate audited admin action and settlement service.
 
-## Proposed APIs
+## Planned APIs
 
 Lending pool reports:
 
@@ -236,4 +239,3 @@ Required reconciliation:
 - liquidation recovery lacks a risk-grade price snapshot
 - root UI recomputes full sitewide risk synchronously on every page load and
   becomes a performance bottleneck
-

@@ -1,8 +1,10 @@
 # Trading Background Engine
 
-Status: Phase 0 design requirement. This document is normative for the next
-trading architecture pass, but it does not claim the worker is fully
-implemented yet.
+Status: base worker implemented, sitewide reporting still staged. The current
+code starts a server-owned trading background worker, creates job / lease / run
+tables, exposes root status / pause / resume / run-once APIs, and runs the
+first job set through existing trading services. The wider root sitewide
+snapshot reports remain staged work.
 
 ## Core Rule
 
@@ -36,7 +38,7 @@ The frontend trading page must not be the only trigger for:
 
 The first server-side worker can run in-process for the Flask single-node
 deployment. It should still be designed as an idempotent scheduler so a future
-queue or multi-process worker can reuse the same contracts.
+queue or multi-process worker can reuse the same job metadata and retry rules.
 
 Recommended modules:
 
@@ -46,7 +48,7 @@ Recommended modules:
 - `services/trading/settlement.py`
 - `services/trading/sitewide_reports.py`
 
-Minimum job set:
+Implemented first job set:
 
 | Job | Purpose | Suggested cadence |
 |---|---|---:|
@@ -56,6 +58,11 @@ Minimum job set:
 | `bot_trigger_scan` | trigger DCA, grid, workflow, BTC_trade bridge bots | 10-30s |
 | `margin_liquidation_scan` | scan cross-margin risk and liquidate when required | 10-30s |
 | `interest_accrual` | accrue borrow interest and micropoints carry | 1h |
+
+Planned next job families:
+
+| Job | Purpose | Suggested cadence |
+|---|---|---:|
 | `funding_or_fee_settlement` | settle fees, pool income, and funding side effects | 30-60s or event-driven |
 | `risk_snapshot_refresh` | publish root-visible risk snapshots | 30-60s |
 | `sitewide_metrics_refresh` | publish root-visible sitewide metrics | 30-60s |
@@ -121,7 +128,7 @@ CREATE TABLE trading_background_locks (
 );
 ```
 
-Execution contract:
+Execution sequence:
 
 1. Attempt to acquire the job lease.
 2. If the lease exists and has not expired, skip the run.
@@ -152,7 +159,7 @@ The `internal_test` rule is strict: tester activity must route to
 silently write production wallets, production orders, production positions, or
 PointsChain.
 
-## Safety Contract
+## Safety Requirements
 
 The background worker is not a second trading engine. It must call existing
 safety services and must not write around them.
@@ -182,7 +189,7 @@ Required before high-risk writes:
 Reference prices may remain available for display while risk-grade operations
 are paused.
 
-## Proposed APIs
+## Implemented API Surface
 
 Background engine status:
 
@@ -190,10 +197,11 @@ Background engine status:
 - `POST /api/root/trading/background/pause`
 - `POST /api/root/trading/background/resume`
 - `POST /api/root/trading/background/run-once`
-- `GET /api/root/trading/background/jobs`
-- `GET /api/root/trading/background/audit`
 
-`run-once` must be root-only and require explicit confirmation:
+These routes are root-only, CSRF protected where state changes, and audit
+root-triggered state changes.
+
+`run-once` requires explicit confirmation:
 
 ```json
 {
@@ -202,17 +210,31 @@ Background engine status:
 }
 ```
 
+## Planned API Surface
+
+The following routes are still planning targets for deeper drilldown pages and
+should not be treated as deployed endpoints until the implementation lands:
+
+- `GET /api/root/trading/background/jobs`
+- `GET /api/root/trading/background/audit`
+
 Sitewide root dashboards and lending pool reports are specified in:
 
 - [TRADING_SITEWIDE_MANAGEMENT.md](TRADING_SITEWIDE_MANAGEMENT.md)
 - [TRADING_LENDING_POOL_REPORTS.md](TRADING_LENDING_POOL_REPORTS.md)
 
-## Proposed Tables
+## Implemented Tables
 
-Minimum scheduler and snapshot tables:
+Scheduler and lease tables:
 
 - `trading_background_jobs`
+- `trading_background_locks`
 - `trading_background_job_runs`
+
+## Planned Snapshot Tables
+
+Snapshot and rollup tables still needed for full sitewide reporting:
+
 - `trading_price_snapshots`
 - `trading_sitewide_risk_snapshots`
 - `trading_lending_pool_snapshots`
@@ -227,8 +249,6 @@ Daily rollup/report tables:
 
 The most important first tables are:
 
-- `trading_background_jobs`
-- `trading_background_job_runs`
 - `trading_margin_account_snapshots`
 - `trading_lending_pool_snapshots`
 
@@ -237,7 +257,7 @@ orders, positions, interest, and pool income on every request.
 
 ## Implementation Phases
 
-Phase 0 - docs hardening:
+Phase 0 - docs hardening: done.
 
 - this file
 - [TRADING_SITEWIDE_MANAGEMENT.md](TRADING_SITEWIDE_MANAGEMENT.md)
@@ -245,32 +265,32 @@ Phase 0 - docs hardening:
 - [TRADING_BACKGROUND_QA.md](TRADING_BACKGROUND_QA.md)
 - links from `08_TRADING_ENGINE.md`, `TRADING.md`, and Server Mode v2 docs
 
-Phase 1 - background status and fake jobs:
+Phase 1 - background status and server-owned base jobs: implemented.
 
 - job table
 - lease lock
 - run log
-- fake `price_refresh`, `order_matching`, `bot_scan`, `interest_accrual`
+- server-owned `price_refresh`, `order_matching`, `take_profit_stop_loss_scan`,
+  `bot_trigger_scan`, `margin_liquidation_scan`, and `interest_accrual`
+- root status / pause / resume / run-once routes
 
-Phase 2 - server-side price refresh:
+Phase 2 - root reporting hardening:
 
-- move canonical price refresh cadence out of frontend polling
-- root background status page
+- snapshot tables for margin accounts and lending pools
+- sitewide order / bot / TP-SL / risk drilldowns
+- background job audit drilldown
 
 Phase 3 - matching and TP/SL:
 
-- call existing order matching and TP/SL services
-- add idempotency and job-run audit
+- continue hardening idempotency and job-run audit for matching and TP/SL edge cases
 
 Phase 4 - bot scan / trigger:
 
-- move DCA, grid, workflow, and BTC_trade bridge scans to server worker
+- expand bot runtime status snapshots and root drilldowns
 
 Phase 5 - lending interest and liquidation:
 
-- server-owned interest accrual
-- server-owned cross-margin risk scan
-- liquidation scan with idempotency and fail-closed price rules
+- reconcile interest accrual, liquidation, and lending pool income at sitewide scale
 
 Phase 6 - root UI:
 
@@ -296,4 +316,3 @@ The following are release blockers:
 - `internal_test` background jobs write production tables or PointsChain
 - `maintenance`, `incident_lockdown`, or `superweak` jobs mutate trading state
 - a high-risk background operation uses stale/degraded/cached prices
-

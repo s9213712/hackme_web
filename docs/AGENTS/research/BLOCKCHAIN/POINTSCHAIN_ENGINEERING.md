@@ -57,7 +57,7 @@ Phase 7  QA Mining  ~3-4 週  公式 reward + multisig + signer 排除 + trust s
 | BB std=0 邊界修正 | [#131](https://github.com/s9213712/hackme_web/issues/131) | S | ✅ **RESOLVED 2026-05-04** — `bb_std=0` 不產生穿越訊號；`bb_position` 改嚴格 `>` / `<`；`test_workflow_backtest_does_not_false_trigger_bollinger_on_flat_sequence` PASS |
 | 30s polling gap 緩解 | [#122](https://github.com/s9213712/hackme_web/issues/122) | M | ✅ **RESOLVED 2026-05-04** — scan window 改看 high/low、`last_scan_at` 只在成功 scan 後更新、full pytest + live API 驗證通過 |
 | NaN qty 例外字串外洩 (PB-1) | TBD | XS | ✅ **RESOLVED 2026-05-04** — service 層擋 non-finite + route 端訊息白名單化；`test_trading_order_invalid_decimal_is_sanitized_for_user` PASS |
-| Bot audit dashboard 落地 | follow-up | M | ✅ **RESOLVED 2026-05-04** — root-only 稽核 dashboard、scheduler、未稽核守門、bug-report 整合都已上線（[`docs/trading/TRADING_BOT_AUDIT.md`](../trading/TRADING_BOT_AUDIT.md) 「目前範圍」表升級）|
+| Bot audit dashboard 落地 | follow-up | M | ✅ **RESOLVED 2026-05-04** — root-only 稽核 dashboard、scheduler、未稽核守門、bug-report 整合都已上線（[`docs/trading/TRADING_BOT_AUDIT.md`](../../../trading/TRADING_BOT_AUDIT.md) 「目前範圍」表升級）|
 
 **Phase 0 出口 gate**：原先的 blocker / recommend / low issues 都已收斂，isolated live API 驗證與 full pytest 全綠。
 目前狀態是 **ALLOW PHASE 1 CANDIDATE**；root 若批准動工，可依 `IMPLEMENTATION_GUIDE.md` 開 `04.blockchain` 分支。

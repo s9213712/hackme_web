@@ -178,5 +178,5 @@ separate jobs:
 - PointsChain backup/restore repairs economy ledger state independently and
   rebuilds wallets from ledger replay
 
-See [Runtime Reset And Recovery](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md) for the exact
+See [Runtime Reset And Recovery](../../ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md) for the exact
 scope boundaries.

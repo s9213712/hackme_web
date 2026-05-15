@@ -1,7 +1,7 @@
 # QA And Security Architecture
 
-This document is a governance contract for QA/security tooling. It is not only
-a map of the current scripts; it defines rules that should block future
+This document is the governance rulebook for QA/security tooling. It is not
+only a map of the current scripts; it defines rules that should block future
 tooling sprawl.
 
 ## Canonical Sources
@@ -74,7 +74,7 @@ A new QA/security script is acceptable only when all of these are true:
 Reviewers should block a new QA/security script that does not meet these rules,
 even if the script itself works.
 
-## Production Gate Script Contract
+## Production Gate Script Requirements
 
 Every production-gate usable script must define:
 
@@ -93,7 +93,7 @@ focused checks in all wording.
 ## Functional Smoke Phase Catalog
 
 `run_functional_smoke.sh` is large enough that every phase needs an explicit
-contract. When adding checks, place them in the matching phase or update this
+input/output expectation. When adding checks, place them in the matching phase or update this
 catalog in the same change.
 
 | Phase | Inputs | Outputs | Shared env/state | Cleanup responsibility |

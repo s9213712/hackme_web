@@ -633,7 +633,10 @@ Root/admin trading APIs:
 - `POST /api/root/trading/liquidations/scan`
 - `POST /api/root/trading/reserve/allocate`
 - `POST /api/root/trading/simulated-balance/reset`
-- root contract simulation endpoints under `/api/root/trading/contracts`
+- root derivative-simulation endpoints under `/api/root/trading/contracts`
+  - The route name is kept for backward compatibility; user-facing docs should
+    describe this as root-only derivative simulation, not a legal or financial
+    agreement.
 
 Trading API notes:
 
@@ -893,7 +896,7 @@ release-document synchronization, generated/runtime file checks, local
 workstation path leak checks, config safety, CI portability checks,
 `git diff --check`, plaintext secret scanning, optional `gitleaks`, optional
 `node --check`, and focused pytest. It does not start the server by default.
-Use `--full` for isolated `/tmp` server startup, smoke tests, API contract,
+Use `--full` for isolated `/tmp` server startup, smoke tests, API behavior,
 snapshot/restore, Server Mode, PointsChain, and log-chain checks. `--ci` makes
 the run non-interactive and sanitized; it does not imply `--full`.
 

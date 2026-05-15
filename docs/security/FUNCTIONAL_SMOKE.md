@@ -2,7 +2,7 @@
 
 For the higher-level validation map, read [../11_QA_TESTING.md](../11_QA_TESTING.md)
 first. This file documents the exact `run_functional_smoke.sh` behavior and options.
-For the governance rules, validation naming contract, and phase input/output
+For the governance rules, validation naming, and phase input/output
 catalog, read [QA_ARCHITECTURE.md](QA_ARCHITECTURE.md).
 
 `scripts/security/pentest/run_functional_smoke.sh` 是本專案的功能回歸測試腳本。它和
