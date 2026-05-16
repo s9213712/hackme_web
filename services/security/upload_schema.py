@@ -255,9 +255,26 @@ def ensure_upload_security_schema(conn):
     with _UPLOAD_SCHEMA_LOCK:
         if db_path and db_path in _UPLOAD_SCHEMA_READY_PATHS:
             return
-        _ensure_upload_security_schema_uncached(conn)
-        if db_path:
+        was_valid = _upload_schema_cache_valid(conn) if db_path else False
+        if db_path and was_valid and not getattr(conn, "in_transaction", False):
             _UPLOAD_SCHEMA_READY_PATHS.add(db_path)
+            return
+        _ensure_upload_security_schema_uncached(conn)
+
+
+def _upload_schema_cache_valid(conn):
+    try:
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_drive_security_policies'"
+        ).fetchone()
+        if not table:
+            return False
+        row = conn.execute(
+            "SELECT 1 FROM cloud_drive_security_policies WHERE scope='default'"
+        ).fetchone()
+        return row is not None
+    except Exception:
+        return False
 
 
 def _connection_path(conn):
