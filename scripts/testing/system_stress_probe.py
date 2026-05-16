@@ -1,0 +1,786 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import os
+import random
+import ssl
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
+from statistics import median
+from typing import Any
+
+import requests
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.testing.db_stress_probe import ResourceMonitor  # noqa: E402
+
+
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def utc_now() -> str:
+    return datetime.utcnow().replace(microsecond=0).isoformat()
+
+
+def percentile(sorted_values: list[float], pct: float) -> float:
+    if not sorted_values:
+        return 0.0
+    idx = min(len(sorted_values) - 1, int(len(sorted_values) * pct))
+    return float(sorted_values[idx])
+
+
+def make_tiny_png() -> bytes:
+    return bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c6360000002000100ffff03000006000557bfabcc0000000049454e44ae426082"
+    )
+
+
+def make_tiny_mp4(path: Path) -> bool:
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=160x90:d=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=1",
+                "-shortest",
+                "-pix_fmt",
+                "yuv420p",
+                str(path),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+            check=True,
+        )
+        return path.exists() and path.stat().st_size > 0
+    except Exception:
+        return False
+
+
+class Stats:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.latencies: dict[str, list[float]] = defaultdict(list)
+        self.statuses: dict[str, Counter] = defaultdict(Counter)
+        self.errors: list[dict[str, Any]] = []
+        self.samples: list[dict[str, Any]] = []
+        self.bytes_received = 0
+
+    def record(self, name: str, *, status: int = 0, elapsed_ms: float = 0.0, ok: bool = False, error: str = "", bytes_received: int = 0) -> None:
+        with self._lock:
+            self.latencies[name].append(float(elapsed_ms))
+            self.statuses[name][str(status)] += 1
+            self.bytes_received += int(bytes_received or 0)
+            if error or not ok:
+                self.errors.append(
+                    {
+                        "op": name,
+                        "status": status,
+                        "elapsed_ms": round(float(elapsed_ms), 3),
+                        "error": str(error or "")[:400],
+                    }
+                )
+
+    def add_sample(self, sample: dict[str, Any]) -> None:
+        with self._lock:
+            self.samples.append(dict(sample))
+
+    def summary(self) -> dict[str, Any]:
+        op_summary: dict[str, Any] = {}
+        total = 0
+        failed = 0
+        all_latencies: list[float] = []
+        for name, values in sorted(self.latencies.items()):
+            values = sorted(float(v) for v in values)
+            count = len(values)
+            total += count
+            all_latencies.extend(values)
+            status_counter = self.statuses.get(name, Counter())
+            op_failed = sum(
+                count_value
+                for status, count_value in status_counter.items()
+                if status == "0" or status.startswith("5")
+            )
+            failed += op_failed
+            op_summary[name] = {
+                "count": count,
+                "status": dict(sorted(status_counter.items())),
+                "p50_ms": round(float(median(values)), 3) if values else 0.0,
+                "p95_ms": round(percentile(values, 0.95), 3),
+                "p99_ms": round(percentile(values, 0.99), 3),
+                "max_ms": round(values[-1], 3) if values else 0.0,
+                "transport_or_5xx_failures": op_failed,
+            }
+        all_latencies = sorted(all_latencies)
+        return {
+            "total_ops": total,
+            "transport_or_5xx_failures": failed,
+            "transport_or_5xx_failure_rate": round((failed / total) if total else 0.0, 6),
+            "bytes_received": self.bytes_received,
+            "overall_latency": {
+                "p50_ms": round(float(median(all_latencies)), 3) if all_latencies else 0.0,
+                "p95_ms": round(percentile(all_latencies, 0.95), 3),
+                "p99_ms": round(percentile(all_latencies, 0.99), 3),
+                "max_ms": round(all_latencies[-1], 3) if all_latencies else 0.0,
+            },
+            "ops": op_summary,
+            "sample_errors": self.errors[:100],
+        }
+
+
+class Client:
+    def __init__(self, base_url: str, username: str, password: str, *, timeout: float = 20.0):
+        self.base_url = base_url.rstrip("/")
+        self.username = username
+        self.password = password
+        self.timeout = float(timeout)
+        self.session = requests.Session()
+        self.session.verify = False
+        self.csrf = ""
+        self.lock = threading.Lock()
+
+    def refresh_csrf(self) -> bool:
+        res = self.session.get(f"{self.base_url}/api/csrf-token", timeout=self.timeout)
+        if res.status_code >= 400:
+            return False
+        try:
+            self.csrf = str(res.json().get("csrf_token") or "")
+        except Exception:
+            self.csrf = ""
+        return bool(self.csrf)
+
+    def login(self) -> dict[str, Any]:
+        started = time.perf_counter()
+        try:
+            self.refresh_csrf()
+            res = self.session.post(
+                f"{self.base_url}/api/login",
+                json={"username": self.username, "password": self.password},
+                headers={"X-CSRF-Token": self.csrf},
+                timeout=self.timeout,
+            )
+            self.refresh_csrf()
+            return self.capture("login", res, started=started, expected={200})
+        except Exception as exc:
+            return {"ok": False, "status": 0, "error": f"{exc.__class__.__name__}: {exc}", "elapsed_ms": (time.perf_counter() - started) * 1000}
+
+    def clone_auth_from(self, other: "Client") -> None:
+        self.session.cookies.update(other.session.cookies)
+        self.csrf = other.csrf
+
+    def capture(self, name: str, res: requests.Response, *, started: float, expected: set[int] | None = None) -> dict[str, Any]:
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        expected = expected or {200}
+        body_sample = ""
+        try:
+            body_sample = res.text[:240]
+        except Exception:
+            body_sample = ""
+        return {
+            "op": name,
+            "ok": res.status_code in expected,
+            "status": int(res.status_code),
+            "elapsed_ms": elapsed_ms,
+            "bytes": len(res.content or b""),
+            "error": "" if res.status_code in expected else body_sample,
+        }
+
+    def request(
+        self,
+        name: str,
+        method: str,
+        path: str,
+        *,
+        expected: set[int] | None = None,
+        retry_csrf: bool = True,
+        **kwargs,
+    ) -> dict[str, Any]:
+        method = method.upper()
+        expected = expected or {200}
+        with self.lock:
+            started = time.perf_counter()
+            try:
+                headers = dict(kwargs.pop("headers", {}) or {})
+                if method in UNSAFE_METHODS:
+                    if not self.csrf:
+                        self.refresh_csrf()
+                    headers.setdefault("X-CSRF-Token", self.csrf)
+                res = self.session.request(
+                    method,
+                    f"{self.base_url}{path}",
+                    headers=headers,
+                    timeout=self.timeout,
+                    **kwargs,
+                )
+                if retry_csrf and method in UNSAFE_METHODS and res.status_code in {400, 403}:
+                    text = res.text[:300].lower()
+                    if "csrf" in text:
+                        self.refresh_csrf()
+                        headers["X-CSRF-Token"] = self.csrf
+                        started = time.perf_counter()
+                        res = self.session.request(
+                            method,
+                            f"{self.base_url}{path}",
+                            headers=headers,
+                            timeout=self.timeout,
+                            **kwargs,
+                        )
+                return self.capture(name, res, started=started, expected=expected)
+            except Exception as exc:
+                return {
+                    "op": name,
+                    "ok": False,
+                    "status": 0,
+                    "elapsed_ms": (time.perf_counter() - started) * 1000.0,
+                    "bytes": 0,
+                    "error": f"{exc.__class__.__name__}: {str(exc)[:300]}",
+                }
+
+
+class OperationBudget:
+    def __init__(self, limits: dict[str, int]):
+        self._limits = {str(k): int(v) for k, v in limits.items()}
+        self._counts: Counter = Counter()
+        self._lock = threading.Lock()
+
+    def claim(self, key: str) -> bool:
+        key = str(key)
+        limit = self._limits.get(key)
+        if limit is None or limit < 0:
+            return True
+        with self._lock:
+            if self._counts[key] >= limit:
+                return False
+            self._counts[key] += 1
+            return True
+
+    def counts(self) -> dict[str, int]:
+        with self._lock:
+            return dict(self._counts)
+
+
+def db_paths_from_runtime(runtime_root: str) -> dict[str, Path]:
+    if not runtime_root:
+        return {}
+    root = Path(runtime_root)
+    candidates = [
+        root / "runtime" / "database",
+        root / "hackme_web" / "runtime" / "database",
+        root / "database",
+    ]
+    for base in candidates:
+        if (base / "database.db").exists() or base.exists():
+            return {
+                "main": base / "database.db",
+                "auth": base / "auth.db",
+                "audit": base / "audit.db",
+                "control": base / "control.db",
+            }
+    return {}
+
+
+def parse_pids(value: str) -> list[int]:
+    pids = []
+    for item in str(value or "").replace(",", " ").split():
+        try:
+            pids.append(int(item))
+        except Exception:
+            pass
+    return pids
+
+
+def setup_seed(client: Client, artifact_dir: Path) -> dict[str, Any]:
+    seed: dict[str, Any] = {"started_at": utc_now(), "errors": []}
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    text_payload = b"stress fixture\n" * 16
+    png_payload = make_tiny_png()
+
+    def remember(name: str, result: dict[str, Any]) -> None:
+        seed[name] = {k: result.get(k) for k in ("ok", "status", "elapsed_ms", "error")}
+
+    result = client.request(
+        "seed_drive_upload",
+        "POST",
+        "/api/cloud-drive/upload",
+        files={"file": ("seed.txt", io.BytesIO(text_payload), "text/plain")},
+        data={"privacy_mode": "standard_plain", "display_name": "seed.txt", "virtual_path": "/Stress/seed.txt"},
+        expected={200},
+    )
+    remember("drive_upload", result)
+    if result.get("ok"):
+        try:
+            body = client.session.get(f"{client.base_url}/api/cloud-drive/files", timeout=client.timeout).json()
+            files = body.get("files") or body.get("items") or []
+            if isinstance(files, list) and files:
+                first = files[0]
+                seed["file_id"] = first.get("file_id") or first.get("id")
+        except Exception as exc:
+            seed["errors"].append(f"drive file lookup failed: {exc}")
+
+    result = client.request(
+        "seed_png_upload",
+        "POST",
+        "/api/cloud-drive/upload",
+        files={"file": ("seed.png", io.BytesIO(png_payload), "image/png")},
+        data={"privacy_mode": "standard_plain", "display_name": "seed.png", "virtual_path": "/Stress/seed.png"},
+        expected={200},
+    )
+    remember("png_upload", result)
+
+    mp4_path = artifact_dir / "seed.mp4"
+    if make_tiny_mp4(mp4_path):
+        with mp4_path.open("rb") as fh:
+            result = client.request(
+                "seed_video_upload",
+                "POST",
+                "/api/videos/upload",
+                files={"video": ("seed.mp4", fh, "video/mp4")},
+                data={"title": "stress seed video", "visibility": "unlisted", "share_password": "StressVideo123!"},
+                expected={200, 400, 409, 500},
+            )
+        remember("video_upload", result)
+        if result.get("status") == 200:
+            try:
+                body = client.session.get(f"{client.base_url}/api/videos/manage", timeout=client.timeout).json()
+                videos = body.get("videos") or []
+                if videos:
+                    seed["video_id"] = videos[0].get("id")
+            except Exception as exc:
+                seed["errors"].append(f"video lookup failed: {exc}")
+    else:
+        seed["errors"].append("ffmpeg unavailable; video seed skipped")
+
+    result = client.request(
+        "seed_chat_room",
+        "POST",
+        "/api/chat/rooms",
+        json={"name": f"stress-room-{int(time.time())}", "room_type": "group", "allow_anonymous": True},
+        expected={200, 201, 400, 403, 409},
+    )
+    remember("chat_room", result)
+    try:
+        rooms = client.session.get(f"{client.base_url}/api/chat/rooms", timeout=client.timeout).json().get("rooms") or []
+        if rooms:
+            seed["room_id"] = rooms[0].get("id")
+    except Exception as exc:
+        seed["errors"].append(f"chat room lookup failed: {exc}")
+
+    return seed
+
+
+def choose_operation(rng: random.Random, weighted_ops: list[tuple[str, int]]) -> str:
+    total = sum(weight for _name, weight in weighted_ops)
+    needle = rng.randint(1, max(1, total))
+    seen = 0
+    for name, weight in weighted_ops:
+        seen += weight
+        if needle <= seen:
+            return name
+    return weighted_ops[-1][0]
+
+
+def run_operation(name: str, client: Client, seed: dict[str, Any], budget: OperationBudget, logical_user_id: int) -> dict[str, Any]:
+    unique = f"{logical_user_id}-{time.time_ns()}"
+    if name == "version":
+        return client.request(name, "GET", "/api/version", expected={200})
+    if name == "me":
+        return client.request(name, "GET", "/api/me", expected={200})
+    if name == "notifications":
+        return client.request(name, "GET", "/api/notifications/unread-count", expected={200, 401, 403})
+    if name == "jobs":
+        return client.request(name, "GET", "/api/jobs", expected={200})
+    if name == "drive_list":
+        return client.request(name, "GET", "/api/cloud-drive/files", expected={200})
+    if name == "drive_upload":
+        if not budget.claim("drive_upload"):
+            return client.request("drive_upload_fallback_list", "GET", "/api/cloud-drive/files", expected={200})
+        return client.request(
+            name,
+            "POST",
+            "/api/cloud-drive/upload",
+            files={"file": (f"stress-{unique}.txt", io.BytesIO(b"x" * 2048), "text/plain")},
+            data={"privacy_mode": "standard_plain", "display_name": f"stress-{unique}.txt", "virtual_path": f"/Stress/{unique}.txt"},
+            expected={200, 400, 409, 413, 429},
+        )
+    if name == "drive_download":
+        file_id = seed.get("file_id")
+        if not file_id:
+            return client.request("drive_download_no_seed", "GET", "/api/cloud-drive/files", expected={200})
+        return client.request(name, "GET", f"/api/cloud-drive/files/{file_id}/download", expected={200, 403, 404})
+    if name == "resumable_start":
+        if not budget.claim("resumable_start"):
+            return client.request("resumable_list", "GET", "/api/cloud-drive/resumable-upload/sessions", expected={200})
+        return client.request(
+            name,
+            "POST",
+            "/api/cloud-drive/resumable-upload/start",
+            json={"filename": f"chunk-{unique}.bin", "total_bytes": 4096, "chunk_size": 4096, "privacy_mode": "standard_plain"},
+            expected={200, 400, 409, 413, 429},
+        )
+    if name == "video_list":
+        return client.request(name, "GET", "/api/videos", expected={200})
+    if name == "video_playback":
+        video_id = seed.get("video_id")
+        if not video_id:
+            return client.request("video_playback_no_seed", "GET", "/api/videos", expected={200})
+        return client.request(name, "GET", f"/api/videos/{video_id}/playback", expected={200, 403, 404, 409})
+    if name == "hls_master":
+        video_id = seed.get("video_id")
+        if not video_id:
+            return client.request("hls_no_seed", "GET", "/api/videos", expected={200})
+        return client.request(name, "GET", f"/api/videos/{video_id}/hls/master.m3u8", expected={200, 403, 404, 409})
+    if name == "share_manage":
+        return client.request(name, "GET", "/api/shares", expected={200, 403})
+    if name == "hf_status":
+        return client.request(name, "GET", "/api/comfyui/status", expected={200, 401, 403, 503})
+    if name == "hf_quote":
+        return client.request(
+            name,
+            "POST",
+            "/api/comfyui/billing-quote",
+            json={"prompt": "stress test", "backend": "diffusers", "huggingface_model_repo": "hf-internal-testing/tiny-stable-diffusion-pipe", "skip_asset_validation": True},
+            expected={200, 400, 409, 503},
+        )
+    if name == "hf_generate":
+        if not budget.claim("hf_generate"):
+            return client.request("hf_generate_fallback_status", "GET", "/api/comfyui/status", expected={200, 401, 403, 503})
+        return client.request(
+            name,
+            "POST",
+            "/api/comfyui/generate",
+            json={
+                "prompt": "stress test",
+                "backend": "diffusers",
+                "huggingface_model_repo": "hf-internal-testing/tiny-stable-diffusion-pipe",
+                "width": 64,
+                "height": 64,
+                "steps": 1,
+                "batch_size": 1,
+                "confirm_billing": True,
+                "timeout_seconds": 1,
+            },
+            expected={200, 400, 409, 429, 503},
+        )
+    if name == "remote_direct_reject":
+        if not budget.claim("remote_direct_reject"):
+            return client.request("remote_capabilities", "GET", "/api/cloud-drive/remote-download/capabilities", expected={200, 403, 404})
+        return client.request(
+            name,
+            "POST",
+            "/api/cloud-drive/remote-download/tasks",
+            json={"url": "http://127.0.0.1:1/blocked", "download_mode": "direct"},
+            expected={400, 403, 404, 409, 429},
+        )
+    if name == "bt_reject":
+        if not budget.claim("bt_reject"):
+            return client.request("remote_capabilities", "GET", "/api/cloud-drive/remote-download/capabilities", expected={200, 403, 404})
+        return client.request(
+            name,
+            "POST",
+            "/api/cloud-drive/remote-download/tasks",
+            json={"url": "magnet:?xt=urn:btih:" + "a" * 40 + "&tr=http://127.0.0.1/announce", "download_mode": "bt"},
+            expected={400, 403, 404, 409, 429},
+        )
+    if name == "trading_markets":
+        return client.request(name, "GET", "/api/trading/markets", expected={200, 403, 503})
+    if name == "trading_dashboard":
+        return client.request(name, "GET", "/api/trading/dashboard", expected={200, 403, 503})
+    if name == "trading_grid_preview":
+        return client.request(
+            name,
+            "POST",
+            "/api/trading/grid/preview",
+            json={"market_symbol": "BTC/POINTS", "lower_price_points": 70000, "upper_price_points": 80000, "grid_count": 3, "order_amount_points": 100},
+            expected={200, 400, 403, 409, 503},
+        )
+    if name == "games_catalog":
+        return client.request(name, "GET", "/api/games/catalog", expected={200, 403})
+    if name == "chess_leaderboard":
+        return client.request(name, "GET", "/api/games/chess/leaderboard", expected={200, 403})
+    if name == "community_boards":
+        return client.request(name, "GET", "/api/community/boards", expected={200, 403})
+    if name == "community_bad_thread":
+        if not budget.claim("community_bad_thread"):
+            return client.request("community_boards", "GET", "/api/community/boards", expected={200, 403})
+        return client.request(
+            name,
+            "POST",
+            "/api/community/boards/999999/threads",
+            json={"title": "", "content": ""},
+            expected={400, 403, 404, 429},
+        )
+    if name == "chat_rooms":
+        return client.request(name, "GET", "/api/chat/rooms", expected={200, 403})
+    if name == "chat_bad_message":
+        if not budget.claim("chat_bad_message"):
+            return client.request("chat_rooms", "GET", "/api/chat/rooms", expected={200, 403})
+        return client.request(name, "POST", "/api/chat/rooms/999999/messages", json={"content": "stress"}, expected={400, 403, 404, 429})
+    if name == "bad_login":
+        if not budget.claim("bad_login"):
+            return client.request("version", "GET", "/api/version", expected={200})
+        temp = Client(client.base_url, f"bad-{unique}", "wrong", timeout=client.timeout)
+        return temp.login()
+    return client.request("version", "GET", "/api/version", expected={200})
+
+
+def qos_monitor(base_url: str, stats: Stats, stop: threading.Event, interval: float) -> None:
+    session = requests.Session()
+    session.verify = False
+    while not stop.wait(max(0.2, float(interval))):
+        started = time.perf_counter()
+        try:
+            res = session.get(f"{base_url.rstrip()}/api/version", timeout=5)
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            stats.record("qos_version", status=res.status_code, elapsed_ms=elapsed_ms, ok=res.status_code == 200, bytes_received=len(res.content or b""))
+            stats.add_sample({"ts": time.time(), "qos_status": res.status_code, "qos_elapsed_ms": round(elapsed_ms, 3)})
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            stats.record("qos_version", status=0, elapsed_ms=elapsed_ms, ok=False, error=f"{exc.__class__.__name__}: {exc}")
+            stats.add_sample({"ts": time.time(), "qos_status": 0, "qos_elapsed_ms": round(elapsed_ms, 3), "error": str(exc)[:200]})
+
+
+def build_weighted_ops() -> list[tuple[str, int]]:
+    return [
+        ("version", 10),
+        ("me", 10),
+        ("notifications", 5),
+        ("jobs", 5),
+        ("drive_list", 8),
+        ("drive_upload", 2),
+        ("drive_download", 5),
+        ("resumable_start", 1),
+        ("video_list", 5),
+        ("video_playback", 2),
+        ("hls_master", 2),
+        ("share_manage", 2),
+        ("hf_status", 3),
+        ("hf_quote", 2),
+        ("hf_generate", 1),
+        ("remote_direct_reject", 1),
+        ("bt_reject", 1),
+        ("trading_markets", 5),
+        ("trading_dashboard", 5),
+        ("trading_grid_preview", 2),
+        ("games_catalog", 4),
+        ("chess_leaderboard", 3),
+        ("community_boards", 5),
+        ("community_bad_thread", 1),
+        ("chat_rooms", 5),
+        ("chat_bad_message", 1),
+        ("bad_login", 1),
+    ]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base-url", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--runtime-root", default="")
+    parser.add_argument("--server-pids", default="")
+    parser.add_argument("--logical-users", type=int, default=10000)
+    parser.add_argument("--ops", type=int, default=10000)
+    parser.add_argument("--concurrency", type=int, default=512)
+    parser.add_argument("--session-pool", type=int, default=256)
+    parser.add_argument("--timeout", type=float, default=20.0)
+    parser.add_argument("--qos-interval", type=float, default=1.0)
+    parser.add_argument("--resource-interval", type=float, default=1.0)
+    parser.add_argument("--root-password", default="root")
+    parser.add_argument("--test-password", default="test")
+    parser.add_argument("--accounts", default="test:test,test2:test2,test3:test3")
+    parser.add_argument("--session-mode", choices=["clone", "login"], default="clone")
+    parser.add_argument("--max-drive-uploads", type=int, default=200)
+    parser.add_argument("--max-resumable-starts", type=int, default=150)
+    parser.add_argument("--max-hf-generates", type=int, default=20)
+    parser.add_argument("--max-remote-rejects", type=int, default=250)
+    parser.add_argument("--max-bt-rejects", type=int, default=250)
+    parser.add_argument("--max-bad-logins", type=int, default=100)
+    parser.add_argument("--max-bad-community", type=int, default=150)
+    parser.add_argument("--max-bad-chat", type=int, default=150)
+    args = parser.parse_args()
+
+    requests.packages.urllib3.disable_warnings()
+    try:
+        ssl._create_default_https_context = ssl._create_unverified_context
+    except Exception:
+        pass
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_dir = out_path.parent / "system_stress_artifacts"
+
+    accounts: list[tuple[str, str]] = []
+    for spec in str(args.accounts or "").split(","):
+        if not spec.strip() or ":" not in spec:
+            continue
+        username, password = spec.split(":", 1)
+        accounts.append((username.strip(), password.strip()))
+    if not accounts:
+        accounts = [("test", args.test_password)]
+
+    seed_client = Client(args.base_url, accounts[0][0], accounts[0][1], timeout=args.timeout)
+    seed_login = seed_client.login()
+    seed = setup_seed(seed_client, artifact_dir) if seed_login.get("ok") else {"errors": ["seed login failed"], "login": seed_login}
+
+    clients: list[Client] = []
+    login_stats = Stats()
+    login_started = time.perf_counter()
+
+    def make_client(idx: int) -> Client:
+        username, password = accounts[idx % len(accounts)]
+        client = Client(args.base_url, username, password, timeout=args.timeout)
+        if args.session_mode == "clone" and seed_login.get("ok"):
+            client.clone_auth_from(seed_client)
+            result = {"ok": True, "status": 200, "elapsed_ms": 0.0, "error": ""}
+        else:
+            result = client.login()
+        login_stats.record("login", status=result.get("status", 0), elapsed_ms=result.get("elapsed_ms", 0.0), ok=bool(result.get("ok")), error=result.get("error", ""))
+        if not result.get("ok"):
+            client.csrf = ""
+        return client
+
+    with ThreadPoolExecutor(max_workers=min(max(1, args.session_pool), 128)) as pool:
+        for client in pool.map(make_client, range(max(1, int(args.session_pool)))):
+            if client.csrf:
+                clients.append(client)
+    login_elapsed_seconds = time.perf_counter() - login_started
+
+    if not clients:
+        payload = {
+            "ok": False,
+            "error": "no authenticated stress clients could be created",
+            "seed": seed,
+            "login_summary": login_stats.summary(),
+        }
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 2
+
+    stats = Stats()
+    stop_qos = threading.Event()
+    qos_thread = threading.Thread(target=qos_monitor, args=(args.base_url, stats, stop_qos, args.qos_interval), daemon=True)
+    qos_thread.start()
+
+    db_paths = db_paths_from_runtime(args.runtime_root)
+    monitor = None
+    resource_summary = {}
+    if db_paths:
+        monitor = ResourceMonitor(
+            runtime_root=Path(args.runtime_root),
+            paths=db_paths,
+            interval=float(args.resource_interval),
+            pids=parse_pids(args.server_pids),
+        )
+        monitor.start()
+
+    budget = OperationBudget(
+        {
+            "drive_upload": args.max_drive_uploads,
+            "resumable_start": args.max_resumable_starts,
+            "hf_generate": args.max_hf_generates,
+            "remote_direct_reject": args.max_remote_rejects,
+            "bt_reject": args.max_bt_rejects,
+            "bad_login": args.max_bad_logins,
+            "community_bad_thread": args.max_bad_community,
+            "chat_bad_message": args.max_bad_chat,
+        }
+    )
+    weighted_ops = build_weighted_ops()
+    total_ops = max(1, int(args.ops or args.logical_users))
+    concurrency = max(1, int(args.concurrency))
+    start_event = threading.Event()
+
+    def task(task_id: int) -> None:
+        rng = random.Random((task_id + 1) * 7919)
+        client = clients[task_id % len(clients)]
+        start_event.wait()
+        op = choose_operation(rng, weighted_ops)
+        result = run_operation(op, client, seed, budget, task_id)
+        stats.record(
+            result.get("op") or op,
+            status=int(result.get("status") or 0),
+            elapsed_ms=float(result.get("elapsed_ms") or 0.0),
+            ok=bool(result.get("ok")),
+            error=str(result.get("error") or ""),
+            bytes_received=int(result.get("bytes") or 0),
+        )
+
+    started_at = utc_now()
+    started = time.perf_counter()
+    try:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = [pool.submit(task, idx) for idx in range(total_ops)]
+            start_event.set()
+            for _future in as_completed(futures):
+                pass
+    finally:
+        stop_qos.set()
+        qos_thread.join(timeout=3)
+        if monitor:
+            resource_summary = monitor.stop()
+
+    elapsed_seconds = time.perf_counter() - started
+    summary = stats.summary()
+    qos = summary.get("ops", {}).get("qos_version", {})
+    degraded_reasons = []
+    if summary["transport_or_5xx_failure_rate"] > 0.01:
+        degraded_reasons.append("transport_or_5xx_failure_rate_gt_1_percent")
+    if summary["overall_latency"]["p95_ms"] > 1500:
+        degraded_reasons.append("overall_p95_gt_1500ms")
+    if summary["overall_latency"]["p99_ms"] > 5000:
+        degraded_reasons.append("overall_p99_gt_5000ms")
+    if qos and (qos.get("p95_ms") or 0) > 1000:
+        degraded_reasons.append("qos_version_p95_gt_1000ms")
+    if resource_summary.get("mem_available_min_mb") is not None and float(resource_summary.get("mem_available_min_mb") or 0) < 512:
+        degraded_reasons.append("available_memory_below_512mb")
+
+    payload = {
+        "ok": not degraded_reasons and summary["transport_or_5xx_failures"] == 0,
+        "degraded": bool(degraded_reasons),
+        "degraded_reasons": degraded_reasons,
+        "started_at": started_at,
+        "finished_at": utc_now(),
+        "base_url": args.base_url,
+        "logical_users": int(args.logical_users),
+        "total_ops_requested": total_ops,
+        "concurrency": concurrency,
+        "session_pool_requested": int(args.session_pool),
+        "session_pool_created": len(clients),
+        "session_mode": args.session_mode,
+        "elapsed_seconds": round(elapsed_seconds, 3),
+        "throughput_ops_per_second": round(total_ops / elapsed_seconds, 2) if elapsed_seconds > 0 else 0.0,
+        "seed": seed,
+        "login_elapsed_seconds": round(login_elapsed_seconds, 3),
+        "login_summary": login_stats.summary(),
+        "budget_counts": budget.counts(),
+        "summary": summary,
+        "resource_monitor": resource_summary,
+        "qos_samples": stats.samples[-60:],
+    }
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if payload["ok"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
