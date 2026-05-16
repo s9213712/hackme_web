@@ -7,8 +7,8 @@ from datetime import datetime
 from pathlib import Path
 import json
 import os
-import sqlite3
 
+from services.core.sqlite_hardening import connect_sqlite
 from services.games.chess import (
     initial_board,
     move_to_uci,
@@ -113,12 +113,7 @@ def bundled_chess_engine_db_path() -> Path:
 def _open_store_conn(db_path):
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=15)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA busy_timeout = 15000")
-    except Exception:
-        pass
+    conn = connect_sqlite(str(path), timeout=15, row_factory=True, foreign_keys=True, wal=True)
     ensure_chess_engine_schema(conn)
     return conn
 

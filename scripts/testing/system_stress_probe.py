@@ -84,23 +84,43 @@ class Stats:
         self.latencies: dict[str, list[float]] = defaultdict(list)
         self.statuses: dict[str, Counter] = defaultdict(Counter)
         self.errors: list[dict[str, Any]] = []
+        self.error_buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self.samples: list[dict[str, Any]] = []
         self.bytes_received = 0
 
     def record(self, name: str, *, status: int = 0, elapsed_ms: float = 0.0, ok: bool = False, error: str = "", bytes_received: int = 0) -> None:
+        error_sample = {
+            "op": name,
+            "status": status,
+            "elapsed_ms": round(float(elapsed_ms), 3),
+            "error": str(error or "")[:400],
+        }
         with self._lock:
             self.latencies[name].append(float(elapsed_ms))
             self.statuses[name][str(status)] += 1
             self.bytes_received += int(bytes_received or 0)
             if error or not ok:
-                self.errors.append(
-                    {
-                        "op": name,
-                        "status": status,
-                        "elapsed_ms": round(float(elapsed_ms), 3),
-                        "error": str(error or "")[:400],
-                    }
-                )
+                self.errors.append(error_sample)
+            bucket = self._error_bucket(status=status, ok=ok, error=error)
+            if bucket and len(self.error_buckets[bucket]) < 20:
+                self.error_buckets[bucket].append(error_sample)
+
+    @staticmethod
+    def _error_bucket(*, status: int, ok: bool, error: str) -> str:
+        if int(status or 0) == 503:
+            return "server_busy_503_samples"
+        if int(status or 0) >= 500:
+            return "http_5xx_samples"
+        if int(status or 0) == 0:
+            lowered = str(error or "").lower()
+            if "timeout" in lowered:
+                return "timeout_samples"
+            if any(marker in lowered for marker in ("connection", "reset", "refused", "remote disconnected")):
+                return "connection_error_samples"
+            return "transport_error_samples"
+        if not ok:
+            return "unexpected_status_samples"
+        return ""
 
     def add_sample(self, sample: dict[str, Any]) -> None:
         with self._lock:
@@ -110,6 +130,9 @@ class Stats:
         op_summary: dict[str, Any] = {}
         total = 0
         failed = 0
+        hard_failed = 0
+        server_busy = 0
+        accepted = 0
         all_latencies: list[float] = []
         for name, values in sorted(self.latencies.items()):
             values = sorted(float(v) for v in values)
@@ -122,7 +145,16 @@ class Stats:
                 for status, count_value in status_counter.items()
                 if status == "0" or status.startswith("5")
             )
+            op_server_busy = int(status_counter.get("503", 0))
+            op_hard_failed = sum(
+                count_value
+                for status, count_value in status_counter.items()
+                if status == "0" or (status.startswith("5") and status != "503")
+            )
             failed += op_failed
+            hard_failed += op_hard_failed
+            server_busy += op_server_busy
+            accepted += max(0, count - op_server_busy - op_hard_failed)
             op_summary[name] = {
                 "count": count,
                 "status": dict(sorted(status_counter.items())),
@@ -131,12 +163,19 @@ class Stats:
                 "p99_ms": round(percentile(values, 0.99), 3),
                 "max_ms": round(values[-1], 3) if values else 0.0,
                 "transport_or_5xx_failures": op_failed,
+                "hard_failures_excluding_503": op_hard_failed,
+                "server_busy_503": op_server_busy,
             }
         all_latencies = sorted(all_latencies)
         return {
             "total_ops": total,
+            "accepted_ops_excluding_server_busy_and_hard_failure": accepted,
             "transport_or_5xx_failures": failed,
             "transport_or_5xx_failure_rate": round((failed / total) if total else 0.0, 6),
+            "hard_failures_excluding_503": hard_failed,
+            "hard_failure_rate_excluding_503": round((hard_failed / total) if total else 0.0, 6),
+            "server_busy_503": server_busy,
+            "server_busy_503_rate": round((server_busy / total) if total else 0.0, 6),
             "bytes_received": self.bytes_received,
             "overall_latency": {
                 "p50_ms": round(float(median(all_latencies)), 3) if all_latencies else 0.0,
@@ -146,6 +185,7 @@ class Stats:
             },
             "ops": op_summary,
             "sample_errors": self.errors[:100],
+            "sample_error_buckets": {key: list(value) for key, value in sorted(self.error_buckets.items())},
         }
 
 
@@ -609,6 +649,7 @@ def main() -> int:
     parser.add_argument("--test-password", default="test")
     parser.add_argument("--accounts", default="test:test,test2:test2,test3:test3")
     parser.add_argument("--session-mode", choices=["clone", "login"], default="clone")
+    parser.add_argument("--allow-server-busy", action="store_true", help="Treat HTTP 503 server_busy as controlled degradation instead of a hard failure")
     parser.add_argument("--max-drive-uploads", type=int, default=200)
     parser.add_argument("--max-resumable-starts", type=int, default=150)
     parser.add_argument("--max-hf-generates", type=int, default=20)
@@ -743,8 +784,13 @@ def main() -> int:
     summary = stats.summary()
     qos = summary.get("ops", {}).get("qos_version", {})
     degraded_reasons = []
-    if summary["transport_or_5xx_failure_rate"] > 0.01:
-        degraded_reasons.append("transport_or_5xx_failure_rate_gt_1_percent")
+    failure_rate_key = "hard_failure_rate_excluding_503" if args.allow_server_busy else "transport_or_5xx_failure_rate"
+    if summary.get(failure_rate_key, 0) > 0.01:
+        degraded_reasons.append(
+            "hard_failure_excluding_503_rate_gt_1_percent"
+            if args.allow_server_busy
+            else "transport_or_5xx_failure_rate_gt_1_percent"
+        )
     if summary["overall_latency"]["p95_ms"] > 1500:
         degraded_reasons.append("overall_p95_gt_1500ms")
     if summary["overall_latency"]["p99_ms"] > 5000:
@@ -753,9 +799,17 @@ def main() -> int:
         degraded_reasons.append("qos_version_p95_gt_1000ms")
     if resource_summary.get("mem_available_min_mb") is not None and float(resource_summary.get("mem_available_min_mb") or 0) < 512:
         degraded_reasons.append("available_memory_below_512mb")
+    hard_failure_count = int(summary.get("hard_failures_excluding_503", 0) or 0)
+    transport_failure_count = int(summary.get("transport_or_5xx_failures", 0) or 0)
+    summary_total_ops = int(summary.get("total_ops", total_ops) or total_ops)
+    accepted_ops = int(summary.get("accepted_ops_excluding_server_busy_and_hard_failure", 0) or 0)
+    server_busy_ops = int(summary.get("server_busy_503", 0) or 0)
+    total_ops_per_second = round(summary_total_ops / elapsed_seconds, 2) if elapsed_seconds > 0 else 0.0
+    accepted_ops_per_second = round(accepted_ops / elapsed_seconds, 2) if elapsed_seconds > 0 else 0.0
+    server_busy_ops_per_second = round(server_busy_ops / elapsed_seconds, 2) if elapsed_seconds > 0 else 0.0
 
     payload = {
-        "ok": not degraded_reasons and summary["transport_or_5xx_failures"] == 0,
+        "ok": not degraded_reasons if args.allow_server_busy else (not degraded_reasons and transport_failure_count == 0),
         "degraded": bool(degraded_reasons),
         "degraded_reasons": degraded_reasons,
         "started_at": started_at,
@@ -767,8 +821,13 @@ def main() -> int:
         "session_pool_requested": int(args.session_pool),
         "session_pool_created": len(clients),
         "session_mode": args.session_mode,
+        "allow_server_busy": bool(args.allow_server_busy),
         "elapsed_seconds": round(elapsed_seconds, 3),
-        "throughput_ops_per_second": round(total_ops / elapsed_seconds, 2) if elapsed_seconds > 0 else 0.0,
+        "throughput_ops_per_second": total_ops_per_second,
+        "total_ops_per_second": total_ops_per_second,
+        "accepted_ops_per_second": accepted_ops_per_second,
+        "server_busy_ops_per_second": server_busy_ops_per_second,
+        "hard_failure_rate": summary.get("hard_failure_rate_excluding_503", 0),
         "seed": seed,
         "login_elapsed_seconds": round(login_elapsed_seconds, 3),
         "login_summary": login_stats.summary(),

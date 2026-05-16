@@ -28,6 +28,7 @@ def build_runtime_services(*, config, deps):
     configure_auth_service(
         get_db=deps["get_db"],
         get_auth_db=deps.get("get_auth_db", deps["get_db"]),
+        get_readonly_auth_db=deps.get("get_readonly_auth_db"),
         get_user_by_username=deps["get_user_by_username"],
         fernet=deps["fernet"],
         get_client_ip=deps["get_client_ip"],

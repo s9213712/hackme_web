@@ -189,6 +189,7 @@ from services.server.database import (
     get_auth_db as get_auth_db_helper,
     get_control_db as get_control_db_helper,
     get_db as get_db_helper,
+    get_readonly_auth_db as get_readonly_auth_db_helper,
     get_user_by_username as get_user_by_username_helper,
 )
 from services.server.container import build_runtime_services
@@ -219,6 +220,7 @@ from services.server.request_guards import (
     protect_sensitive_static_page as protect_sensitive_static_page_helper,
     root_ip_is_allowed as root_ip_is_allowed_helper,
 )
+from services.server.backpressure import install_backpressure, is_health_fast_lane_path
 from services.server.bind import effective_server_bind, effective_server_ssl
 from services.server_mode.context import attach_to_g as smv2_attach_ctx, current_ctx as smv2_current_ctx
 from services.platform.db_mode_triggers import register_app_mode_function as smv2_register_app_mode
@@ -249,6 +251,8 @@ SERVER_VERSION = APP_RELEASE_ID
 
 RUNTIME_DIR = _env_path("HACKME_RUNTIME_DIR", default_runtime_root())
 RUNTIME_DIR = os.path.abspath(RUNTIME_DIR)
+os.environ.setdefault("HACKME_RUNTIME_DIR", RUNTIME_DIR)
+os.environ.setdefault("HACKME_JOB_PROGRESS_BACKEND", "auto")
 RUNTIME_SECRETS_DIR = _env_path("HTML_LEARNING_RUNTIME_SECRETS_DIR", RUNTIME_DIR)
 RUNTIME_SECRETS_DIR = os.path.abspath(RUNTIME_SECRETS_DIR)
 
@@ -629,6 +633,10 @@ def get_auth_db():
     return get_auth_db_helper(AUTH_DB_PATH)
 
 
+def get_readonly_auth_db():
+    return get_readonly_auth_db_helper(AUTH_DB_PATH)
+
+
 def get_control_db():
     return get_control_db_helper(CONTROL_DB_PATH)
 
@@ -727,8 +735,7 @@ def _migrate_control_tables_if_needed():
     finally:
         control_conn.close()
     try:
-        main_conn = sqlite3.connect(DB_PATH, timeout=15)
-        main_conn.row_factory = sqlite3.Row
+        main_conn = get_db_helper(DB_PATH)
     except Exception:
         return
     try:
@@ -770,8 +777,7 @@ def _migrate_control_tables_if_needed():
     finally:
         control_conn.close()
     try:
-        main_conn = sqlite3.connect(DB_PATH, timeout=15)
-        main_conn.row_factory = sqlite3.Row
+        main_conn = get_db_helper(DB_PATH)
     except Exception:
         return
     try:
@@ -819,8 +825,7 @@ def _migrate_control_tables_if_needed():
     finally:
         auth_conn.close()
     try:
-        main_conn = sqlite3.connect(DB_PATH, timeout=15)
-        main_conn.row_factory = sqlite3.Row
+        main_conn = get_db_helper(DB_PATH)
         table_exists = main_conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='secure_audit' LIMIT 1"
         ).fetchone()
@@ -999,6 +1004,7 @@ _runtime_services = build_runtime_services(
     deps={
         "get_db": get_db,
         "get_auth_db": get_auth_db,
+        "get_readonly_auth_db": get_readonly_auth_db,
         "get_audit_db": get_audit_db,
         "get_control_db": get_control_db,
         "get_user_by_username": get_user_by_username,
@@ -1061,6 +1067,7 @@ talisman = Talisman(app,
         "style-src":   "'self' 'unsafe-inline'",
         "img-src":     "'self' data: blob:",
         "media-src":   "'self' blob:",
+        "worker-src":  "'self' blob:",
         "frame-src":   "'self' blob:",
         "font-src":    "'self'",
         "connect-src": "'self'",
@@ -1152,7 +1159,7 @@ def attach_smv2_ctx():
     tester namespace before any write path runs. Requests without a
     tester token stay cheap: the reader exits before any DB work.
     """
-    if request.method == "OPTIONS":
+    if request.method == "OPTIONS" or is_health_fast_lane_path(request.path):
         return None
     smv2_attach_ctx(
         mode_reader=get_runtime_server_mode,
@@ -1160,6 +1167,23 @@ def attach_smv2_ctx():
         actor_role_reader=tester_token_actor_role_from_request,
     )
     return None
+
+
+def is_root_backpressure_priority_request():
+    token = request.cookies.get("session_token")
+    if not token:
+        return False
+    try:
+        return db_get_user_from_token(token) == "root"
+    except Exception:
+        return False
+
+
+install_backpressure(
+    app,
+    settings_provider=refresh_system_settings,
+    root_priority_detector=is_root_backpressure_priority_request,
+)
 
 
 @app.before_request
@@ -1187,6 +1211,8 @@ def protect_sensitive_static_pages():
 # ── CORS (tightly scoped — no wildcard) ────────────────────────────────────────
 @app.before_request
 def enforce_root_ip_whitelist():
+    if is_health_fast_lane_path(request.path):
+        return None
     return enforce_root_ip_whitelist_helper(
         request,
         get_system_settings=get_system_settings,
@@ -1201,6 +1227,8 @@ def enforce_root_ip_whitelist():
 
 @app.before_request
 def enforce_browser_only_mode():
+    if is_health_fast_lane_path(request.path):
+        return None
     return enforce_browser_only_mode_helper(
         request,
         get_system_settings=get_system_settings,
@@ -1221,6 +1249,8 @@ def restrict_cors():
         # Only allow same-origin
         if origin and origin != request.host_url.rstrip("/"):
             return ("", 204)
+    if is_health_fast_lane_path(request.path):
+        return None
     return enforce_mode_restrictions_helper(
         request,
         get_system_settings=get_system_settings,
@@ -1240,6 +1270,8 @@ def restrict_cors():
 
 @app.before_request
 def enforce_feature_flags():
+    if is_health_fast_lane_path(request.path):
+        return None
     return enforce_feature_flags_helper(
         request,
         feature_gate_for_path_func=feature_gate_for_path,
@@ -1254,6 +1286,8 @@ def enforce_feature_flags():
 
 @app.before_request
 def enforce_required_password_change():
+    if is_health_fast_lane_path(request.path):
+        return None
     return enforce_required_password_change_helper(
         request,
         get_current_user_ctx=get_current_user_ctx,

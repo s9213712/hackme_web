@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
 import uuid
 from datetime import datetime
+
+from services.core.progress_backend import (
+    DEFAULT_PROGRESS_TTL_SECONDS,
+    get_progress_backend,
+    progress_backend_status,
+)
 
 
 JOB_STATUSES = {
@@ -18,6 +27,60 @@ JOB_STATUSES = {
 }
 
 TERMINAL_JOB_STATUSES = {"succeeded", "failed", "cancelled", "expired"}
+_JOB_PROGRESS_NAMESPACE = "job_center:jobs"
+_JOB_PROGRESS_EVENT_NAMESPACE = "job_center:events"
+_JOB_PROGRESS_FLUSH_STATE = {}
+_JOB_PROGRESS_EVENT_FLUSH_STATE = {}
+_JOB_PROGRESS_LOCK = threading.RLock()
+_JOB_CENTER_SCHEMA_READY = set()
+_JOB_CENTER_SCHEMA_LOCK = threading.RLock()
+
+
+def _env_bool(name, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "y", "t"}
+
+
+def _env_float(name, default, *, minimum=0.0, maximum=3600.0):
+    try:
+        value = float(str(os.environ.get(name, default)).strip())
+    except Exception:
+        value = float(default)
+    return max(float(minimum), min(float(maximum), value))
+
+
+def _progress_buffer_enabled():
+    return _env_bool("HACKME_JOB_PROGRESS_BUFFER_ENABLED", True)
+
+
+def _progress_flush_interval_seconds():
+    return _env_float("HACKME_JOB_PROGRESS_FLUSH_INTERVAL_SECONDS", 1.5, minimum=0.0, maximum=60.0)
+
+
+def _progress_event_flush_interval_seconds():
+    return _env_float("HACKME_JOB_PROGRESS_EVENT_FLUSH_INTERVAL_SECONDS", 5.0, minimum=0.0, maximum=300.0)
+
+
+def job_progress_buffer_status():
+    payload = progress_backend_status()
+    payload.update(
+        {
+            "enabled": _progress_buffer_enabled(),
+            "flush_interval_seconds": _progress_flush_interval_seconds(),
+            "event_flush_interval_seconds": _progress_event_flush_interval_seconds(),
+        }
+    )
+    return payload
+
+
+def reset_job_progress_buffer_for_tests():
+    with _JOB_PROGRESS_LOCK:
+        _JOB_PROGRESS_FLUSH_STATE.clear()
+        _JOB_PROGRESS_EVENT_FLUSH_STATE.clear()
+    with _JOB_CENTER_SCHEMA_LOCK:
+        _JOB_CENTER_SCHEMA_READY.clear()
 
 
 def _job_notification_payload(job):
@@ -122,6 +185,14 @@ def _json(data):
     return json.dumps(data or {}, ensure_ascii=False, sort_keys=True)
 
 
+def _json_load(raw):
+    try:
+        value = json.loads(raw) if raw else {}
+    except Exception:
+        value = {}
+    return value if isinstance(value, dict) else {}
+
+
 def _safe_int(value, default=0):
     try:
         return int(value)
@@ -129,7 +200,207 @@ def _safe_int(value, default=0):
         return default
 
 
+def _progress_ttl_seconds():
+    return max(
+        60,
+        _safe_int(os.environ.get("HACKME_JOB_PROGRESS_CACHE_TTL_SECONDS"), DEFAULT_PROGRESS_TTL_SECONDS),
+    )
+
+
+def _normalize_progress(value):
+    return max(0, min(100, _safe_int(value, 0)))
+
+
+def _event_is_terminal(event_type, progress_percent=None):
+    event_type = str(event_type or "").strip().lower()
+    if event_type in {"created", "completed", "succeeded", "failed", "cancelled", "expired", "retry_requested"}:
+        return True
+    return progress_percent is not None and _normalize_progress(progress_percent) >= 100
+
+
+def _cache_put(namespace, key, payload):
+    if not _progress_buffer_enabled():
+        return False
+    try:
+        return get_progress_backend().put(namespace, str(key), payload or {}, ttl_seconds=_progress_ttl_seconds())
+    except Exception:
+        return False
+
+
+def _cache_get(namespace, key):
+    if not _progress_buffer_enabled():
+        return None
+    try:
+        return get_progress_backend().get(namespace, str(key))
+    except Exception:
+        return None
+
+
+def _cache_delete(namespace, key):
+    try:
+        return get_progress_backend().delete(namespace, str(key))
+    except Exception:
+        return False
+
+
+def _deserialize_cached_job_payload(payload):
+    if not isinstance(payload, dict):
+        return None
+    job_uuid = str(payload.get("job_uuid") or "").strip()
+    if not job_uuid:
+        return None
+    data = dict(payload)
+    data["progress_percent"] = _normalize_progress(data.get("progress_percent", 0))
+    data["retry_count"] = _safe_int(data.get("retry_count"), 0)
+    data["max_retries"] = _safe_int(data.get("max_retries"), 0)
+    data["cancellable"] = bool(data.get("cancellable"))
+    data.setdefault("result", {})
+    data.setdefault("metadata", {})
+    return data
+
+
+def _cached_job(job_uuid):
+    return _deserialize_cached_job_payload(_cache_get(_JOB_PROGRESS_NAMESPACE, str(job_uuid)))
+
+
+def _merge_cached_job(job):
+    if not job:
+        return job
+    if str(job.get("status") or "") in TERMINAL_JOB_STATUSES:
+        return job
+    cached = _cached_job(job.get("job_uuid"))
+    if not cached:
+        return job
+    merged = dict(job)
+    merged.update(cached)
+    return merged
+
+
+def _cache_job_snapshot(snapshot):
+    snapshot = _deserialize_cached_job_payload(snapshot)
+    if not snapshot:
+        return False
+    return _cache_put(_JOB_PROGRESS_NAMESPACE, snapshot["job_uuid"], snapshot)
+
+
+def _delete_cached_job(job_uuid):
+    _cache_delete(_JOB_PROGRESS_NAMESPACE, str(job_uuid))
+    _cache_delete(_JOB_PROGRESS_EVENT_NAMESPACE, str(job_uuid))
+
+
+def _cached_event(job_uuid):
+    payload = _cache_get(_JOB_PROGRESS_EVENT_NAMESPACE, str(job_uuid))
+    return dict(payload) if isinstance(payload, dict) else None
+
+
+def _cache_event(job_uuid, event):
+    if not isinstance(event, dict):
+        return False
+    return _cache_put(_JOB_PROGRESS_EVENT_NAMESPACE, str(job_uuid), event)
+
+
+def _mark_job_progress_flushed(job_uuid):
+    with _JOB_PROGRESS_LOCK:
+        _JOB_PROGRESS_FLUSH_STATE[str(job_uuid)] = time.monotonic()
+
+
+def _mark_job_event_flushed(job_uuid):
+    with _JOB_PROGRESS_LOCK:
+        _JOB_PROGRESS_EVENT_FLUSH_STATE[str(job_uuid)] = time.monotonic()
+
+
+def _job_progress_flush_due(job_uuid):
+    interval = _progress_flush_interval_seconds()
+    if interval <= 0:
+        return True
+    with _JOB_PROGRESS_LOCK:
+        last = _JOB_PROGRESS_FLUSH_STATE.get(str(job_uuid))
+    return last is None or (time.monotonic() - float(last)) >= interval
+
+
+def _job_event_flush_due(job_uuid):
+    interval = _progress_event_flush_interval_seconds()
+    if interval <= 0:
+        return True
+    with _JOB_PROGRESS_LOCK:
+        last = _JOB_PROGRESS_EVENT_FLUSH_STATE.get(str(job_uuid))
+    return last is None or (time.monotonic() - float(last)) >= interval
+
+
+def _snapshot_from_update(previous, normalized_updates):
+    if not previous:
+        return None
+    snapshot = dict(previous)
+    for key, value in normalized_updates.items():
+        if key == "metadata_json":
+            snapshot["metadata"] = _json_load(value)
+            continue
+        if key == "result_json":
+            snapshot["result"] = _json_load(value)
+            continue
+        if key == "progress_percent":
+            snapshot[key] = _normalize_progress(value)
+            continue
+        if key == "cancellable":
+            snapshot[key] = bool(value)
+            continue
+        snapshot[key] = value
+    snapshot["updated_at"] = utc_now()
+    return snapshot
+
+
+def _update_should_write_db(job_uuid, previous, normalized_updates, *, defer_progress=False, flush=False):
+    if flush or not defer_progress or not _progress_buffer_enabled():
+        return True
+    if not normalized_updates:
+        return True
+    next_status = normalized_updates.get("status")
+    if next_status in TERMINAL_JOB_STATUSES:
+        return True
+    if normalized_updates.get("finished_at") or normalized_updates.get("cancel_requested_at"):
+        return True
+    if normalized_updates.get("error_code") or normalized_updates.get("error_message") or normalized_updates.get("error_stage"):
+        return True
+    if normalized_updates.get("result_json") not in (None, "", "{}"):
+        return True
+    previous_status = str((previous or {}).get("status") or "")
+    if next_status and previous_status and str(next_status) != previous_status:
+        return True
+    if not any(key in normalized_updates for key in ("status", "progress_percent", "stage", "stage_detail", "metadata_json", "started_at", "cancellable")):
+        return True
+    return _job_progress_flush_due(job_uuid)
+
+
+def _schema_cache_key(conn):
+    try:
+        rows = conn.execute("PRAGMA database_list").fetchall()
+        for row in rows:
+            try:
+                name = row["name"]
+                file_path = row["file"]
+            except Exception:
+                name = row[1]
+                file_path = row[2]
+            if name == "main" and file_path:
+                return f"path:{file_path}"
+    except Exception:
+        pass
+    return f"conn:{id(conn)}"
+
+
 def ensure_job_center_schema(conn):
+    cache_key = _schema_cache_key(conn)
+    if cache_key in _JOB_CENTER_SCHEMA_READY:
+        return
+    with _JOB_CENTER_SCHEMA_LOCK:
+        if cache_key in _JOB_CENTER_SCHEMA_READY:
+            return
+        _ensure_job_center_schema_uncached(conn)
+        _JOB_CENTER_SCHEMA_READY.add(cache_key)
+
+
+def _ensure_job_center_schema_uncached(conn):
+    was_in_transaction = bool(getattr(conn, "in_transaction", False))
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS job_center_jobs (
@@ -204,6 +475,11 @@ def ensure_job_center_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_job_center_status_updated ON job_center_jobs(status, updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_job_center_source ON job_center_jobs(source_module, source_ref)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_job_center_events_job ON job_center_events(job_uuid, created_at)")
+    if not was_in_transaction:
+        try:
+            conn.commit()
+        except Exception:
+            pass
 
 
 def serialize_job(row):
@@ -214,10 +490,7 @@ def serialize_job(row):
     data["cancellable"] = bool(data.get("cancellable"))
     for key in ("result_json", "metadata_json"):
         raw = data.get(key)
-        try:
-            data[key.replace("_json", "")] = json.loads(raw) if raw else {}
-        except Exception:
-            data[key.replace("_json", "")] = {}
+        data[key.replace("_json", "")] = _json_load(raw)
         data.pop(key, None)
     return data
 
@@ -288,29 +561,54 @@ def create_job(
         ),
     )
     add_job_event(conn, job_uuid, event_type="created", stage=stage or status, message="任務已建立", progress_percent=progress_percent)
+    _mark_job_progress_flushed(job_uuid)
+    _delete_cached_job(job_uuid)
     return get_job(conn, job_uuid)
 
 
-def add_job_event(conn, job_uuid, *, event_type, stage=None, message="", progress_percent=None, payload=None):
+def add_job_event(conn, job_uuid, *, event_type, stage=None, message="", progress_percent=None, payload=None, defer_progress=False, flush=False):
     ensure_job_center_schema(conn)
+    event_type_value = str(event_type or "event")[:80]
+    progress_value = None if progress_percent is None else _normalize_progress(progress_percent)
+    event_payload = {
+        "job_uuid": str(job_uuid),
+        "event_type": event_type_value,
+        "stage": str(stage or "")[:80] or None,
+        "message": str(message or "")[:1000],
+        "progress_percent": progress_value,
+        "payload": payload or {},
+        "created_at": utc_now(),
+    }
+    if (
+        defer_progress
+        and _progress_buffer_enabled()
+        and not flush
+        and not _event_is_terminal(event_type_value, progress_value)
+        and not _job_event_flush_due(job_uuid)
+    ):
+        _cache_event(job_uuid, event_payload)
+        return False
     conn.execute(
         """
         INSERT INTO job_center_events (job_uuid, event_type, stage, message, progress_percent, payload_json, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            str(job_uuid),
-            str(event_type or "event")[:80],
-            str(stage or "")[:80] or None,
-            str(message or "")[:1000],
-            None if progress_percent is None else max(0, min(100, _safe_int(progress_percent, 0))),
-            _json(payload),
-            utc_now(),
+            event_payload["job_uuid"],
+            event_payload["event_type"],
+            event_payload["stage"],
+            event_payload["message"],
+            event_payload["progress_percent"],
+            _json(event_payload["payload"]),
+            event_payload["created_at"],
         ),
     )
+    _mark_job_event_flushed(job_uuid)
+    _cache_delete(_JOB_PROGRESS_EVENT_NAMESPACE, str(job_uuid))
+    return True
 
 
-def update_job(conn, job_uuid, **updates):
+def update_job(conn, job_uuid, *, defer_progress=False, flush=False, **updates):
     ensure_job_center_schema(conn)
     previous = get_job(conn, job_uuid)
     allowed = {
@@ -332,33 +630,56 @@ def update_job(conn, job_uuid, **updates):
     }
     fields = []
     values = []
+    normalized_updates = {}
     for key, value in updates.items():
         if key not in allowed:
             continue
         if key == "status" and value not in JOB_STATUSES:
             continue
         if key == "progress_percent":
-            value = max(0, min(100, _safe_int(value, 0)))
+            value = _normalize_progress(value)
         if key in {"result_json", "metadata_json"} and not isinstance(value, str):
             value = _json(value)
+        normalized_updates[key] = value
         fields.append(f"{key}=?")
         values.append(value)
     if not fields:
+        return previous
+    if not _update_should_write_db(
+        job_uuid,
+        previous,
+        normalized_updates,
+        defer_progress=defer_progress,
+        flush=flush,
+    ):
+        snapshot = _snapshot_from_update(previous, normalized_updates)
+        if snapshot:
+            _cache_job_snapshot(snapshot)
+            return snapshot
         return previous
     fields.append("updated_at=?")
     values.append(utc_now())
     values.append(str(job_uuid))
     conn.execute(f"UPDATE job_center_jobs SET {', '.join(fields)} WHERE job_uuid=?", tuple(values))
-    updated = get_job(conn, job_uuid)
+    updated = _get_job_from_db(conn, job_uuid)
     _maybe_create_terminal_notification(
         conn,
         updated,
         previous_status=previous.get("status") if previous else None,
     )
+    _mark_job_progress_flushed(job_uuid)
+    if updated and updated.get("status") in TERMINAL_JOB_STATUSES:
+        _delete_cached_job(job_uuid)
+    elif updated:
+        _cache_job_snapshot(updated)
     return updated
 
 
 def get_job(conn, job_uuid):
+    return _merge_cached_job(_get_job_from_db(conn, job_uuid))
+
+
+def _get_job_from_db(conn, job_uuid):
     ensure_job_center_schema(conn)
     row = conn.execute("SELECT * FROM job_center_jobs WHERE job_uuid=?", (str(job_uuid),)).fetchone()
     return serialize_job(row) if row else None
@@ -370,7 +691,7 @@ def get_job_by_source(conn, source_module, source_ref):
         "SELECT * FROM job_center_jobs WHERE source_module=? AND source_ref=? ORDER BY id DESC LIMIT 1",
         (str(source_module), str(source_ref)),
     ).fetchone()
-    return serialize_job(row) if row else None
+    return _merge_cached_job(serialize_job(row)) if row else None
 
 
 def list_jobs(conn, *, user_id=None, include_all=False, status=None, limit=50):
@@ -388,7 +709,7 @@ def list_jobs(conn, *, user_id=None, include_all=False, status=None, limit=50):
         f"SELECT * FROM job_center_jobs {sql_where} ORDER BY updated_at DESC, id DESC LIMIT ?",
         tuple(params + [max(1, min(200, _safe_int(limit, 50)))]),
     ).fetchall()
-    return [serialize_job(row) for row in rows]
+    return [_merge_cached_job(serialize_job(row)) for row in rows]
 
 
 def list_job_events(conn, job_uuid, *, limit=100):
@@ -402,7 +723,11 @@ def list_job_events(conn, job_uuid, *, limit=100):
         """,
         (str(job_uuid), max(1, min(500, _safe_int(limit, 100)))),
     ).fetchall()
-    return [serialize_event(row) for row in rows]
+    events = [serialize_event(row) for row in rows]
+    cached = _cached_event(job_uuid)
+    if cached:
+        events.append(cached)
+    return events
 
 
 def request_cancel(conn, job_uuid):

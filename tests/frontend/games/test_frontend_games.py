@@ -73,8 +73,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'value="experiment 4:pv"' in index_html
     assert 'value="experiment 5:nnue"' in index_html
     assert 'value="stockfish"' not in index_html
-    assert 'value="experiment 2:nn"' not in index_html
-    assert "實驗 2：NN 小型神經網路" not in index_html
+    assert 'value="experiment 2:nn"' in index_html
+    assert "實驗 2：NN 評估" in index_html
     assert "實驗 3：DL 語義平衡學習" in index_html
     assert "實驗 4：Policy/Value + MCTS" in index_html
     assert "實驗 5：NNUE + AlphaBeta/PVS" in index_html

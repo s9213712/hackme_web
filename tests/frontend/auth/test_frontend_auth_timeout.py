@@ -75,11 +75,11 @@ def test_internal_test_login_token_is_hidden_outside_internal_test_mode():
     auth = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
 
     assert 'id="li-internal-test-token-field" style="display:none;"' in index
-    assert 'siteConfig.server_mode === "internal_test"' in core
+    assert '["test", "internal_test"].includes(siteConfig.server_mode)' in core
     assert "input.disabled = !showInternalTestToken;" in core
     assert "if (!showInternalTestToken) input.value = \"\";" in core
     assert "isInternalTestLoginMode() ? ($(\"li-internal-test-token\")?.value || \"\") : \"\"" in auth
-    assert "if (internalTestToken) loginPayload.internal_test_token = internalTestToken;" in auth
+    assert "if (devLoginToken) loginPayload.login_token = devLoginToken;" in auth
 
 
 def test_login_recovery_uses_human_facing_verification_wording():

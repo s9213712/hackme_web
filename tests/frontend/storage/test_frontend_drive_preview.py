@@ -52,6 +52,7 @@ def test_cloud_drive_preview_ui_is_wired():
     assert 'preview.category === "image"' in drive_js
     assert '"img-src":     "\'self\' data: blob:"' in server_py
     assert '"media-src":   "\'self\' blob:"' in server_py
+    assert '"worker-src":  "\'self\' blob:"' in server_py
     assert '"frame-src":   "\'self\' blob:"' in server_py
     assert '"object-src":  "\'none\'"' in server_py
     styles_css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")

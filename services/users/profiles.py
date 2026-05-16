@@ -11,6 +11,7 @@ APPEARANCE_COLOR_KEYS = (
     "site_text",
     "site_muted",
 )
+APPEARANCE_THEME_MODES = {"custom", "light", "dark"}
 APPEARANCE_LAYOUT_MODES = {"centered", "wide"}
 APPEARANCE_DENSITIES = {"comfortable", "compact"}
 APPEARANCE_RADIUS_VALUES = {8, 12, 18, 24}
@@ -121,6 +122,9 @@ def rotate_friend_code(conn, user_id):
 def sanitize_appearance_settings(data):
     data = data if isinstance(data, dict) else {}
     out = {}
+    theme_mode = str(data.get("site_theme_mode") or "").strip().lower()
+    if theme_mode in APPEARANCE_THEME_MODES:
+        out["site_theme_mode"] = theme_mode
     for key in APPEARANCE_COLOR_KEYS:
         color = _clean_color(data.get(key))
         if color:

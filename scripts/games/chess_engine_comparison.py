@@ -65,9 +65,14 @@ SCORE_LOSS = -4
 # Engines under test. Keys are the routes-level difficulty strings
 # accepted by ``choose_computer_move``.
 ENGINE_DIFFICULTIES = [
-    "normal",
-    "hard",
-    "experiment",
+    # Exp0 = 2-ply material minimax (renamed from "hard"). Backend
+    # dispatcher resolves "experiment 0:minimax2ply" → the legacy
+    # heuristic code, so passing the new string runs the same engine.
+    "experiment 0:minimax2ply",
+    # Exp1 = engine search + learning store (renamed from
+    # "experiment"). The dispatcher accepts the new name and falls
+    # through to the legacy ``choose_experiment_move`` body.
+    "experiment 1:search",
     "experiment 2:nn",
     "experiment 3:dl",
     "experiment 4:pv",

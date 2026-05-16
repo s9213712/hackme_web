@@ -416,6 +416,7 @@ def register_file_routes(app, deps):
             metadata = _remote_download_job_metadata(task)
             existing = get_platform_job_by_source(conn, source_module, source_ref)
             now = datetime.now().replace(microsecond=0).isoformat()
+            defer_progress = not force_event and status not in {"succeeded", "failed", "cancelled", "expired"}
             if not existing:
                 job = create_platform_job(
                     conn,
@@ -448,6 +449,7 @@ def register_file_routes(app, deps):
                     cancellable=status in {"queued", "running", "paused"},
                     started_at=existing.get("started_at") or (now if status == "running" else None),
                     finished_at=now if status in {"succeeded", "failed", "cancelled"} else None,
+                    defer_progress=defer_progress,
                 )
             if force_event or status in {"succeeded", "failed", "cancelled"}:
                 event_type = {
@@ -464,6 +466,7 @@ def register_file_routes(app, deps):
                     message=stage_detail or task.get("error") or "遠端下載任務狀態更新",
                     progress_percent=percent,
                     payload=metadata,
+                    defer_progress=defer_progress,
                 )
             conn.commit()
             return job
@@ -1071,6 +1074,7 @@ def register_file_routes(app, deps):
             if result is not None:
                 metadata["result"] = result
             if existing:
+                defer_progress = job_status not in {"succeeded", "failed", "cancelled", "expired"}
                 job = update_platform_job(
                     conn,
                     existing["job_uuid"],
@@ -1083,6 +1087,7 @@ def register_file_routes(app, deps):
                     result_json=result or {},
                     metadata_json=metadata,
                     finished_at=datetime.now().replace(microsecond=0).isoformat() if job_status in {"succeeded", "failed"} else None,
+                    defer_progress=defer_progress,
                 )
                 add_platform_job_event(
                     conn,
@@ -1092,6 +1097,7 @@ def register_file_routes(app, deps):
                     message=detail or error_message or "分段上傳狀態更新",
                     progress_percent=percent,
                     payload=metadata,
+                    defer_progress=defer_progress,
                 )
                 return job
             return create_platform_job(

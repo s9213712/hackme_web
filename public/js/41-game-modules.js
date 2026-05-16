@@ -353,13 +353,17 @@
       hard: "約初中級；會避開被白吃並優先製造將軍。",
     },
     chess: {
-      normal: "約 Elo 600-800；優先吃子/將軍。",
-      hard: "約 Elo 800-1000；會避免一手送子。",
-      experiment: "實驗搜尋/學習；強度不穩定。",
-      "experiment 3:dl": "DL 語義平衡實驗；偏研究模型。",
-      "experiment 4:pv": "Policy/Value + MCTS 實驗；有候選策略。",
+      "experiment 0:minimax2ply": "2 層物質 minimax；先看自己這步物質再看對手最佳回應。",
+      "experiment 1:search": "引擎搜尋 + 對局學習；舊名 experiment。",
+      "experiment 2:nn": "NN 評估；auto-retrain 斷開，僅紀錄不再線上更新。",
+      "experiment 3:dl": "DL 語義平衡實驗；偏研究模型。auto-retrain 斷開。",
+      "experiment 4:pv": "Policy/Value + MCTS 實驗；有候選策略。auto-retrain 斷開。",
       "experiment 5:nnue": "NNUE + AlphaBeta/PVS；目前最有潛力但仍需實戰 gate。",
       "experiment 6:neuralnet": "Neural Network (Exp6)；3 層 NNUE-style 真實神經網路 + 增量累加器，需訓練後才有實戰強度。",
+      // legacy labels for old DB rows
+      normal: "舊版「普通」(legacy)。",
+      hard: "舊版「困難」(legacy)，現為 experiment 0:minimax2ply。",
+      experiment: "舊版「實驗」(legacy)，現為 experiment 1:search。",
       stockfish: "Stockfish 本機外部引擎；只在 server 偵測到本機 binary 時顯示。",
     },
   };

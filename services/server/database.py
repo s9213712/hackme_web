@@ -3,103 +3,24 @@
 from __future__ import annotations
 
 import re
-import sqlite3
 import threading
 from datetime import datetime
 
-
-_SQLITE_WRITE_LOCK = threading.RLock()
-
-
-def _sql_starts_with(sql, prefixes):
-    head = str(sql or "").lstrip().lower()
-    return any(head.startswith(prefix) for prefix in prefixes)
-
-
-def _sql_may_write(sql):
-    return _sql_starts_with(
-        sql,
-        (
-            "insert ",
-            "update ",
-            "delete ",
-            "replace ",
-            "create ",
-            "drop ",
-            "alter ",
-            "reindex ",
-            "vacuum",
-            "attach ",
-            "detach ",
-            "begin immediate",
-            "begin exclusive",
-            "pragma journal_mode",
-            "pragma wal_checkpoint",
-        ),
-    )
-
-
-class SerializedWriteConnection(sqlite3.Connection):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._hackme_write_lock_held = False
-
-    def _acquire_write_lock_for(self, sql):
-        if _sql_may_write(sql) and not self._hackme_write_lock_held:
-            _SQLITE_WRITE_LOCK.acquire()
-            self._hackme_write_lock_held = True
-
-    def _release_write_lock(self):
-        if self._hackme_write_lock_held:
-            self._hackme_write_lock_held = False
-            _SQLITE_WRITE_LOCK.release()
-
-    def execute(self, sql, parameters=(), /):
-        self._acquire_write_lock_for(sql)
-        return super().execute(sql, parameters)
-
-    def executemany(self, sql, parameters, /):
-        self._acquire_write_lock_for(sql)
-        return super().executemany(sql, parameters)
-
-    def executescript(self, sql_script, /):
-        self._acquire_write_lock_for(sql_script)
-        return super().executescript(sql_script)
-
-    def commit(self):
-        try:
-            return super().commit()
-        finally:
-            self._release_write_lock()
-
-    def rollback(self):
-        try:
-            return super().rollback()
-        finally:
-            self._release_write_lock()
-
-    def close(self):
-        try:
-            return super().close()
-        finally:
-            self._release_write_lock()
+from services.core.sqlite_hardening import connect_sqlite, connect_sqlite_readonly
 
 
 def _open_sqlite(db_path, *, register_app_mode=None):
-    conn = sqlite3.connect(db_path, timeout=15, factory=SerializedWriteConnection)
-    conn.row_factory = sqlite3.Row
+    conn = connect_sqlite(db_path, timeout=15, row_factory=True, foreign_keys=True, wal=True)
     try:
-        path = str(db_path)
-        if path not in _WAL_READY_DB_PATHS:
-            with _ENSURE_LOCK:
-                if path not in _WAL_READY_DB_PATHS:
-                    conn.execute("PRAGMA journal_mode = WAL")
-                    _WAL_READY_DB_PATHS.add(path)
-        conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 15000")
+        if register_app_mode is not None:
+            register_app_mode(conn)
     except Exception:
         pass
+    return conn
+
+
+def _open_sqlite_readonly(db_path, *, register_app_mode=None):
+    conn = connect_sqlite_readonly(db_path, timeout=15, row_factory=True, foreign_keys=True)
     try:
         if register_app_mode is not None:
             register_app_mode(conn)
@@ -140,6 +61,22 @@ def ensure_audit_db_schema(conn):
 def get_db(db_path, *, register_app_mode=None):
     conn = _open_sqlite(db_path, register_app_mode=register_app_mode)
     return conn
+
+
+def get_readonly_db(db_path, *, register_app_mode=None):
+    return _open_sqlite_readonly(db_path, register_app_mode=register_app_mode)
+
+
+def get_readonly_auth_db(db_path):
+    return _open_sqlite_readonly(db_path)
+
+
+def get_readonly_audit_db(db_path):
+    return _open_sqlite_readonly(db_path)
+
+
+def get_readonly_control_db(db_path):
+    return _open_sqlite_readonly(db_path)
 
 
 def get_audit_db(db_path):
@@ -438,5 +375,4 @@ def activate_emergency_lockdown(
 _ENSURED_AUTH_DB_PATHS: set[str] = set()
 _ENSURED_AUDIT_DB_PATHS: set[str] = set()
 _ENSURED_CONTROL_DB_PATHS: set[str] = set()
-_WAL_READY_DB_PATHS: set[str] = set()
 _ENSURE_LOCK = threading.Lock()

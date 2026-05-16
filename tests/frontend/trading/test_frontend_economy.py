@@ -981,6 +981,9 @@ def test_trading_live_price_polling_uses_two_second_timer_and_health_badges():
     assert "function tradingLiveMarginFreeMarginPoints()" in trading_js
     assert "function tradingDisplayedMarginSummary(summary = null, rows = null)" in trading_js
     assert "function setTradingPriceTooltip(el, text, detail = \"\")" in trading_js
+    assert "function updateTradingReferenceTooltipFromTouch(event)" in trading_js
+    assert 'referenceChart.addEventListener("pointermove", updateTradingReferenceTooltip)' in trading_js
+    assert 'referenceChart.addEventListener("touchstart", updateTradingReferenceTooltipFromTouch' in trading_js
     assert "current_price_degraded_short" in trading_js
     assert 'tradingWarningText("current_price_healthy_short")' in trading_js
     assert "tradingState.state = state;" in trading_js
@@ -995,6 +998,7 @@ def test_trading_live_price_polling_uses_two_second_timer_and_health_badges():
     assert ".trading-price-tooltip::after" in styles
     assert ".trading-price-tooltip:hover::after" in styles
     assert ".trading-reference-panel-primary .trading-reference-chart" in styles
+    assert "touch-action: manipulation;" in styles
     assert ".trading-signal-light[data-state=\"ok\"]" in styles
     assert ".trading-signal-panel:hover .trading-readiness-grid" in styles
     assert ".trading-signal-panel:focus-within .trading-readiness-grid" in styles

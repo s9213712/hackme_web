@@ -3,6 +3,7 @@ import html
 import mimetypes
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -172,14 +173,30 @@ def register_video_routes(app, deps):
         share_session_id = str(share_session_id or "").strip()
         if not share_session_id:
             return text
+        uri_attr_pattern = re.compile(r"URI=([\"'])([^\"']+)\1")
+
+        def with_share_session(url):
+            raw = str(url or "")
+            if not raw or "share_session=" in raw or raw.startswith("data:"):
+                return raw
+            separator = "&" if "?" in raw else "?"
+            return f"{raw}{separator}share_session={share_session_id}"
+
+        def replace_uri_attr(match):
+            quote = match.group(1)
+            url = match.group(2)
+            return f"URI={quote}{with_share_session(url)}{quote}"
+
         lines = []
         for line in str(text or "").splitlines():
             stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
+            if not stripped:
                 lines.append(line)
                 continue
-            separator = "&" if "?" in stripped else "?"
-            lines.append(f"{line}{separator}share_session={share_session_id}")
+            if stripped.startswith("#"):
+                lines.append(uri_attr_pattern.sub(replace_uri_attr, line))
+                continue
+            lines.append(with_share_session(line))
         return "\n".join(lines) + ("\n" if str(text or "").endswith("\n") else "")
 
     def _send_hls_master_manifest(path, *, share_session_id=""):
@@ -265,7 +282,8 @@ def register_video_routes(app, deps):
                 if error_message:
                     updates["error_message"] = error_message
                     updates["error_stage"] = stage
-                job = update_platform_job(conn, existing["job_uuid"], **updates)
+                defer_progress = status not in {"succeeded", "failed", "cancelled", "expired"}
+                job = update_platform_job(conn, existing["job_uuid"], defer_progress=defer_progress, **updates)
                 add_platform_job_event(
                     conn,
                     job["job_uuid"],
@@ -274,6 +292,7 @@ def register_video_routes(app, deps):
                     message=stage_detail or error_message or "HLS 任務狀態更新",
                     progress_percent=progress_percent,
                     payload=metadata,
+                    defer_progress=defer_progress,
                 )
                 return job
             return create_platform_job(
@@ -882,6 +901,14 @@ def register_video_routes(app, deps):
             }
             return payload
         payload = stream_playback_payload(conn, file_row=row, video_id=video_id)
+        if shared_token:
+            shared_base = f"/api/videos/shared/{shared_token}"
+            if payload.get("fallback_url"):
+                payload["fallback_url"] = f"{shared_base}/stream"
+            if payload.get("stream_url"):
+                payload["stream_url"] = f"{shared_base}/stream"
+            if payload.get("master_url"):
+                payload["master_url"] = f"{shared_base}/hls/master.m3u8"
         payload["high_performance_streaming"] = payload.get("mode") == "hls"
         return payload
 

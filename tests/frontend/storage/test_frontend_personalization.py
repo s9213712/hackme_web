@@ -18,6 +18,12 @@ def test_personal_appearance_editor_and_routes_are_wired():
     assert "/js/40-auth-users.js?v=20260503-appearance-reset" in index_html
     assert 'id="edit-user-appearance-section" style="display:none;"' in index_html
     assert 'id="edit-user-appearance-preset"' in index_html
+    assert 'id="theme-quick-toggle"' in index_html
+    assert 'id="edit-user-theme-mode"' in index_html
+    assert 'id="s-site-theme-mode"' in index_html
+    assert '<option value="daylight">Daylight</option>' in index_html
+    assert '<option value="ocean">Ocean Console</option>' in index_html
+    assert '<option value="terminal">Terminal</option>' in index_html
     assert 'id="edit-user-appearance-reset"' in index_html
     assert '視窗底部的「恢復全站預設」' in index_html
     assert 'id="edit-user-appearance-status"' in index_html
@@ -38,11 +44,21 @@ def test_personal_appearance_editor_and_routes_are_wired():
     assert 'id="s-feature-personalization-enabled"' in index_html
     assert "let globalSiteConfig = {};" in core_js
     assert "let userSiteAppearanceConfig = {};" in core_js
+    assert '"site_theme_mode",' in core_js
+    assert 'const SITE_THEME_MODE_PALETTES = {' in core_js
+    assert 'function getUserAppearanceConfig()' in core_js
+    assert 'function getEffectiveSiteThemeMode()' in core_js
+    assert 'document.body.dataset.themeMode = themeMode;' in core_js
     assert 'const SITE_FONT_FAMILY_MAP = {' in core_js
     assert 'const SITE_SIDEBAR_WIDTH_MAP = {' in core_js
     assert 'function clearUserAppearanceConfig()' in core_js
     assert 'applySiteConfig(json.appearance_settings, { scope: "user" })' in core_js
     assert 'const USER_APPEARANCE_PRESETS = {' in auth_js
+    assert 'site_theme_mode: "light"' in auth_js
+    assert 'function toggleUserThemeModeQuickly()' in auth_js
+    assert 'function applyUserThemeModeSelection()' in auth_js
+    assert 'const USER_APPEARANCE_THEME_PALETTES = {' in auth_js
+    assert 'USER_APPEARANCE_THEME_NEUTRAL_KEYS.forEach((key) => delete nextAppearance[key]);' in auth_js
     assert 'function userAppearanceFeatureEnabled()' in auth_js
     assert 'function setUserAppearanceEditorDisabled(disabled)' in auth_js
     assert 'if (resetBtn) resetBtn.style.display = "none";' in auth_js
@@ -55,4 +71,5 @@ def test_personal_appearance_editor_and_routes_are_wired():
     assert 'get_profile_appearance(conn, ctx["id"])' in public_py
     assert '"require_csrf_safe": require_csrf_safe,' in (ROOT / "server.py").read_text(encoding="utf-8")
     assert 'if ($("s-site-radius-px")) $("s-site-radius-px").value = String(s.site_radius_px || 12);' in admin_js
+    assert 'if ($("s-site-theme-mode")) $("s-site-theme-mode").value = s.site_theme_mode || "dark";' in admin_js
     assert 'if ($("s-site-font-family")) $("s-site-font-family").value = s.site_font_family || "system";' in admin_js

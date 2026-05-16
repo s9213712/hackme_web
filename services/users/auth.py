@@ -15,30 +15,6 @@ from flask import current_app, has_request_context, jsonify, make_response, requ
 
 from services.security.events import record_security_event
 
-SESSION_TTL = 3600 * 4
-CSRF_TOKEN_TTL = SESSION_TTL
-SESSION_IDLE_TIMEOUT = 10 * 60
-SESSION_LAST_SEEN_REFRESH_INTERVAL = 20
-MIN_DELAY = 0.25
-MAX_DELAY = 0.90
-CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-
-_STATE = {
-    "get_db": None,
-    "get_auth_db": None,
-    "get_user_by_username": None,
-    "fernet": None,
-    "get_client_ip": None,
-    "session_ttl": SESSION_TTL,
-    "csrf_token_ttl": CSRF_TOKEN_TTL,
-    "session_idle_timeout": SESSION_IDLE_TIMEOUT,
-    "tester_token_user_lookup": None,
-    "get_runtime_server_mode": None,
-}
-
-_hasher = argon2.PasswordHasher(time_cost=3, memory_cost=65536,
-                                parallelism=4, hash_len=32, salt_len=16)
-
 
 def _env_int(name, default, *, minimum=1, maximum=64):
     try:
@@ -56,6 +32,45 @@ def _env_float(name, default, *, minimum=0.1, maximum=120.0):
     return max(float(minimum), min(float(maximum), value))
 
 
+SESSION_TTL = 3600 * 4
+CSRF_TOKEN_TTL = SESSION_TTL
+SESSION_IDLE_TIMEOUT = 10 * 60
+SESSION_LAST_SEEN_REFRESH_INTERVAL = _env_int(
+    "HTML_LEARNING_SESSION_LAST_SEEN_REFRESH_INTERVAL",
+    20,
+    minimum=1,
+    maximum=3600,
+)
+SESSION_LAST_SEEN_REFRESH_JITTER_SECONDS = _env_int(
+    "HTML_LEARNING_SESSION_LAST_SEEN_REFRESH_JITTER_SECONDS",
+    20,
+    minimum=0,
+    maximum=3600,
+)
+MIN_DELAY = 0.25
+MAX_DELAY = 0.90
+CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+_STATE = {
+    "get_db": None,
+    "get_auth_db": None,
+    "get_readonly_auth_db": None,
+    "get_user_by_username": None,
+    "fernet": None,
+    "get_client_ip": None,
+    "session_ttl": SESSION_TTL,
+    "csrf_token_ttl": CSRF_TOKEN_TTL,
+    "session_idle_timeout": SESSION_IDLE_TIMEOUT,
+    "session_last_seen_refresh_interval": SESSION_LAST_SEEN_REFRESH_INTERVAL,
+    "session_last_seen_refresh_jitter_seconds": SESSION_LAST_SEEN_REFRESH_JITTER_SECONDS,
+    "tester_token_user_lookup": None,
+    "get_runtime_server_mode": None,
+}
+
+_hasher = argon2.PasswordHasher(time_cost=3, memory_cost=65536,
+                                parallelism=4, hash_len=32, salt_len=16)
+
+
 _ARGON2_VERIFY_CONCURRENCY = _env_int(
     "HTML_LEARNING_ARGON2_VERIFY_CONCURRENCY",
     min(4, os.cpu_count() or 1),
@@ -71,6 +86,8 @@ _ARGON2_VERIFY_TIMEOUT_SECONDS = _env_float(
 _ARGON2_VERIFY_SEMAPHORE = threading.BoundedSemaphore(_ARGON2_VERIFY_CONCURRENCY)
 _SESSION_COLUMNS_CACHE = {"columns": None}
 _SESSION_COLUMNS_LOCK = threading.RLock()
+_SESSION_TOUCH_CACHE: dict[int, float] = {}
+_SESSION_TOUCH_LOCK = threading.RLock()
 
 
 def _is_sqlite_locked_error(exc):
@@ -81,29 +98,37 @@ def configure_auth_service(
     *,
     get_db,
     get_auth_db=None,
+    get_readonly_auth_db=None,
     get_user_by_username,
     fernet,
     get_client_ip=None,
     session_ttl=SESSION_TTL,
     csrf_token_ttl=CSRF_TOKEN_TTL,
     session_idle_timeout=SESSION_IDLE_TIMEOUT,
+    session_last_seen_refresh_interval=SESSION_LAST_SEEN_REFRESH_INTERVAL,
+    session_last_seen_refresh_jitter_seconds=SESSION_LAST_SEEN_REFRESH_JITTER_SECONDS,
     tester_token_user_lookup=None,
     get_runtime_server_mode=None,
 ):
     _STATE.update({
         "get_db": get_db,
         "get_auth_db": get_auth_db or get_db,
+        "get_readonly_auth_db": get_readonly_auth_db,
         "get_user_by_username": get_user_by_username,
         "fernet": fernet,
         "get_client_ip": get_client_ip,
         "session_ttl": session_ttl,
         "csrf_token_ttl": csrf_token_ttl,
         "session_idle_timeout": session_idle_timeout,
+        "session_last_seen_refresh_interval": session_last_seen_refresh_interval,
+        "session_last_seen_refresh_jitter_seconds": session_last_seen_refresh_jitter_seconds,
         "tester_token_user_lookup": tester_token_user_lookup,
         "get_runtime_server_mode": get_runtime_server_mode,
     })
     with _SESSION_COLUMNS_LOCK:
         _SESSION_COLUMNS_CACHE["columns"] = None
+    with _SESSION_TOUCH_LOCK:
+        _SESSION_TOUCH_CACHE.clear()
 
 
 def _is_superweak_csrf_bypass():
@@ -181,6 +206,11 @@ def _auth_db():
     return getter()
 
 
+def _auth_read_db():
+    getter = _STATE.get("get_readonly_auth_db") or _STATE.get("get_auth_db") or _STATE.get("get_db")
+    return getter()
+
+
 def _auth_write(operation, *, attempts=5, delay_seconds=0.1):
     last_exc = None
     for attempt in range(max(1, int(attempts))):
@@ -218,6 +248,34 @@ def _session_columns(auth_conn):
     with _SESSION_COLUMNS_LOCK:
         _SESSION_COLUMNS_CACHE["columns"] = columns
     return columns
+
+
+def _session_last_seen_refresh_threshold(session_id):
+    base = max(1, int(_STATE.get("session_last_seen_refresh_interval") or SESSION_LAST_SEEN_REFRESH_INTERVAL))
+    jitter = max(0, int(_STATE.get("session_last_seen_refresh_jitter_seconds") or 0))
+    try:
+        sid = int(session_id or 0)
+    except Exception:
+        sid = 0
+    return base + (sid % (jitter + 1) if jitter else 0)
+
+
+def _claim_session_touch(session_id, now_ts, threshold_seconds):
+    try:
+        sid = int(session_id)
+    except Exception:
+        return True
+    with _SESSION_TOUCH_LOCK:
+        previous = float(_SESSION_TOUCH_CACHE.get(sid, 0.0) or 0.0)
+        if previous and (float(now_ts) - previous) < max(1, int(threshold_seconds)):
+            return False
+        _SESSION_TOUCH_CACHE[sid] = float(now_ts)
+        if len(_SESSION_TOUCH_CACHE) > 10000:
+            cutoff = float(now_ts) - max(60, int(threshold_seconds) * 4)
+            for key, value in list(_SESSION_TOUCH_CACHE.items())[:2000]:
+                if float(value or 0.0) < cutoff:
+                    _SESSION_TOUCH_CACHE.pop(key, None)
+        return True
 
 
 def record_login_attempt(*, user_id, ip_address, user_agent, success, attempted_at):
@@ -680,7 +738,7 @@ def db_clean_expired_sessions():
 
 
 def db_get_user_from_token(token):
-    auth_conn = _auth_db()
+    auth_conn = _auth_read_db()
     try:
         now = datetime.now()
         now_iso = now.isoformat()
@@ -714,13 +772,12 @@ def db_get_user_from_token(token):
             main_conn.close()
         if int(row["session_epoch"] or 0) < current_epoch:
             try:
-                auth_conn.execute(
+                _auth_write(lambda conn: conn.execute(
                     "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
                     (now_iso, row["id"])
-                )
-                auth_conn.commit()
+                ))
             except sqlite3.OperationalError:
-                auth_conn.rollback()
+                pass
             record_security_event("session_revoked", "-", target_user=username, detail="security_epoch_rotated")
             return None
 
@@ -735,13 +792,12 @@ def db_get_user_from_token(token):
             )
             if strict_ip_binding:
                 try:
-                    auth_conn.execute(
+                    _auth_write(lambda conn: conn.execute(
                         "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
                         (now_iso, row["id"])
-                    )
-                    auth_conn.commit()
+                    ))
                 except sqlite3.OperationalError:
-                    auth_conn.rollback()
+                    pass
                 record_security_event("session_revoked", current_ip, target_user=username, detail=f"strict_ip_binding stored={stored_ip}")
                 return None
 
@@ -764,22 +820,21 @@ def db_get_user_from_token(token):
                 idle_seconds = 0
             if idle_seconds > int(_STATE["session_idle_timeout"]):
                 try:
-                    auth_conn.execute(
+                    _auth_write(lambda conn: conn.execute(
                         "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
                         (now_iso, row["id"])
-                    )
-                    auth_conn.commit()
+                    ))
                 except sqlite3.OperationalError:
-                    auth_conn.rollback()
+                    pass
                 record_security_event("session_revoked", "-", target_user=username, detail="idle_timeout")
                 return None
 
-        if idle_seconds >= SESSION_LAST_SEEN_REFRESH_INTERVAL:
+        refresh_threshold = _session_last_seen_refresh_threshold(row["id"])
+        if idle_seconds >= refresh_threshold and _claim_session_touch(row["id"], now.timestamp(), refresh_threshold):
             try:
-                auth_conn.execute("UPDATE sessions SET last_seen=? WHERE id=?", (now_iso, row["id"]))
-                auth_conn.commit()
+                _auth_write(lambda conn: conn.execute("UPDATE sessions SET last_seen=? WHERE id=?", (now_iso, row["id"])))
             except sqlite3.OperationalError:
-                auth_conn.rollback()
+                pass
         if has_request_context():
             allowed_features = []
             try:

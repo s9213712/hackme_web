@@ -51,6 +51,7 @@ def register_user_routes(app, deps):
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_auth_db = deps.get("get_auth_db", deps["get_db"])
+    get_readonly_auth_db = deps.get("get_readonly_auth_db", get_auth_db)
     get_db = deps["get_db"]
     get_system_settings = deps.get("get_system_settings", lambda: {})
     get_ua = deps["get_ua"]
@@ -820,7 +821,7 @@ def register_user_routes(app, deps):
 
         token_hash = current_session_hash()
         now = datetime.now().isoformat()
-        conn = get_auth_db()
+        conn = get_readonly_auth_db()
         try:
             rows = conn.execute(
                 "SELECT id, token_hash, ip_address, user_agent, device_info, ip_country, expires_at, is_revoked, revoked_at, last_seen, created_at "
@@ -945,7 +946,7 @@ def register_user_routes(app, deps):
                     f"FROM users{where} ORDER BY id ASC",
                     params,
                 ).fetchall()
-                auth_conn = get_auth_db()
+                auth_conn = get_readonly_auth_db()
                 try:
                     sessions_by_user = active_session_map(auth_conn)
                 finally:

@@ -27,6 +27,10 @@ interrupts must not keep the main Flask request waiting for the full operation.
 - Job Center progress writes are throttled by
   `COMFYUI_JOB_PROGRESS_DB_THROTTLE_SECONDS` (`2` seconds by default) to reduce
   DB churn while progress is unchanged.
+- Platform-level Job Center progress now also goes through
+  `services/core/progress_backend.py`: latest `running` progress is coalesced in
+  the progress backend and periodically checkpointed to SQLite, while terminal
+  states still write DB immediately.
 
 ## Deployment Guidance
 

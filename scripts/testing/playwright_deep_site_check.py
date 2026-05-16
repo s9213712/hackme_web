@@ -899,7 +899,9 @@ def check_video_share_journey(rec: Recorder, page) -> dict[str, Any]:
     video_path.write_bytes(video_bytes)
     try:
         switch_module(page, "videos")
-        page.locator("#video-publish-panel").evaluate("el => { el.open = true; }")
+        if page.locator("#video-publish-panel[hidden]").count():
+            page.click("#video-publish-open-btn")
+            page.wait_for_selector("#video-publish-panel:not([hidden])", timeout=3000)
         page.set_input_files("#video-upload-file", str(video_path))
         page.fill("#video-publish-title", "Playwright QA 影音")
         page.fill("#video-publish-description", "全站巡檢透過前端直接上傳的最小測試影音。")

@@ -10,12 +10,16 @@ O(input_dim * hidden_dim) per move.
 
 Architecture::
 
-    input:    768-dim one-hot piece-square features
-              (12 piece types × 64 squares; exactly one feature is 1
-              per piece on the board, all others 0)
-    layer 1:  768 -> 256  (clipped ReLU, clip to [0, 127])
+    input:    774-dim multi-hot board features
+              (768 piece-square one-hots + 6 state bits:
+               side-to-move, 4× castling rights, en-passant flag)
+    layer 1:  774 -> 256  (clipped ReLU, clip to [0, 127])
     layer 2:  256 -> 32   (clipped ReLU)
     layer 3:  32 -> 1     (linear, scaled to centipawns)
+
+The v4 state bits (audit fix #2) make the encoding move-asymmetric so
+the network can learn tempo, castling-related king safety, and ep
+tactics that 768-only piece-square encoding can't express.
 
 Three upgrade paths the architecture is designed to enable
 incrementally:
@@ -60,7 +64,26 @@ import numpy as np
 
 
 # Architecture constants.
-INPUT_DIM = 768  # 12 piece types × 64 squares.
+# v4 input layout (774 = 768 + 6):
+#   indices 0..767      — piece-square (12 piece types × 64 squares)
+#   index 768           — side-to-move = WHITE (1.0 if white to move)
+#   index 769           — castling right: white kingside
+#   index 770           — castling right: white queenside
+#   index 771           — castling right: black kingside
+#   index 772           — castling right: black queenside
+#   index 773           — en-passant square exists
+# Adding these bits (audit fix #2) lets the network learn move-dependent
+# features that 768-only piece-square encoding can't express (tempo,
+# castling-related king safety, ep tactics).
+INPUT_DIM = 774
+PIECE_FEATURE_DIM = 768
+STATE_FEATURE_OFFSET = 768
+IDX_STM_WHITE = 768
+IDX_CASTLE_WK = 769
+IDX_CASTLE_WQ = 770
+IDX_CASTLE_BK = 771
+IDX_CASTLE_BQ = 772
+IDX_EP_EXISTS = 773
 HIDDEN_1_DIM = 256
 HIDDEN_2_DIM = 32
 OUTPUT_DIM = 1
@@ -91,13 +114,35 @@ def feature_index(square: int, piece: chess.Piece) -> int:
     return _piece_index(piece) * 64 + int(square)
 
 
+def _state_feature_indices(board: chess.Board) -> list[int]:
+    """v4 audit fix #2: return indices for the 6 state bits (stm,
+    castling rights × 4, ep flag)."""
+    out: list[int] = []
+    if board.turn == chess.WHITE:
+        out.append(IDX_STM_WHITE)
+    if board.has_kingside_castling_rights(chess.WHITE):
+        out.append(IDX_CASTLE_WK)
+    if board.has_queenside_castling_rights(chess.WHITE):
+        out.append(IDX_CASTLE_WQ)
+    if board.has_kingside_castling_rights(chess.BLACK):
+        out.append(IDX_CASTLE_BK)
+    if board.has_queenside_castling_rights(chess.BLACK):
+        out.append(IDX_CASTLE_BQ)
+    if board.ep_square is not None:
+        out.append(IDX_EP_EXISTS)
+    return out
+
+
 def active_features(board: chess.Board) -> list[int]:
-    """Return the list of active feature indices for ``board``."""
-    return [feature_index(sq, p) for sq, p in board.piece_map().items()]
+    """Return the list of active feature indices for ``board`` —
+    piece-square one-hots plus the v4 state bits."""
+    feats = [feature_index(sq, p) for sq, p in board.piece_map().items()]
+    feats.extend(_state_feature_indices(board))
+    return feats
 
 
 def board_to_features(board: chess.Board) -> np.ndarray:
-    """Encode ``board`` as a 768-dim float32 one-hot vector."""
+    """Encode ``board`` as an INPUT_DIM-dim float32 one-hot vector."""
     x = np.zeros(INPUT_DIM, dtype=np.float32)
     for idx in active_features(board):
         x[idx] = 1.0
@@ -160,19 +205,170 @@ def save_weights(path: str | Path, weights: NeuralWeights) -> None:
     )
 
 
+# v6 residual-eval baseline. The NN learns to predict the deviation
+# from a material-balance baseline rather than absolute cp. This
+# frees the 200K-parameter network from re-learning that a queen is
+# worth more than a pawn — material is now encoded explicitly — and
+# lets it spend its capacity on positional patterns (king safety,
+# pawn structure, mobility) that need actual learning.
+#
+# Decisions:
+# - Use the standard cp piece values. King has value 0 here (its
+#   loss is represented separately by mate / stalemate handling).
+# - Bishop slightly > knight (Stockfish convention).
+# - Compute from white's perspective so it composes cleanly with
+#   the existing white-then-flip cp output path.
+PIECE_VALUES_CP: dict[int, int] = {
+    chess.PAWN: 100,
+    chess.KNIGHT: 320,
+    chess.BISHOP: 330,
+    chess.ROOK: 500,
+    chess.QUEEN: 900,
+    chess.KING: 0,
+}
+
+
+def material_balance_cp_white(board: chess.Board) -> float:
+    """Return white's material advantage in centipawns. Positive =
+    white is up material, negative = black is up. King = 0 (its loss
+    is handled by the mate / stalemate branches of ``evaluate_board``).
+    """
+    total = 0
+    for _sq, piece in board.piece_map().items():
+        v = PIECE_VALUES_CP[piece.piece_type]
+        total += v if piece.color == chess.WHITE else -v
+    return float(total)
+
+
+# v6.2: piece-square tables. Pure material eval was too "flat" — many
+# distinct positions evaluate equal, so depth-2 alpha-beta tie-breaks
+# arbitrarily and plays poorly. PSTs add per-square positional value
+# (knights centralized, pawns advanced toward promotion, king tucked
+# in opening / centralized endgame) which gives the search clear
+# rankings. Values follow the chess-programming-wiki / Sunfish-style
+# tables — well-established baselines, not tuned for this project.
+#
+# Tables are indexed [rank_from_white_perspective][file], where rank 0
+# is white's 1st rank (back row), rank 7 is white's 8th rank. For
+# black pieces the rank is mirrored. The square value is added to
+# the side's material score.
+_PST_PAWN = (
+    (  0,  0,  0,  0,  0,  0,  0,  0),
+    (  5, 10, 10,-20,-20, 10, 10,  5),
+    (  5, -5,-10,  0,  0,-10, -5,  5),
+    (  0,  0,  0, 20, 20,  0,  0,  0),
+    (  5,  5, 10, 25, 25, 10,  5,  5),
+    ( 10, 10, 20, 30, 30, 20, 10, 10),
+    ( 50, 50, 50, 50, 50, 50, 50, 50),
+    (  0,  0,  0,  0,  0,  0,  0,  0),
+)
+_PST_KNIGHT = (
+    (-50,-40,-30,-30,-30,-30,-40,-50),
+    (-40,-20,  0,  5,  5,  0,-20,-40),
+    (-30,  5, 10, 15, 15, 10,  5,-30),
+    (-30,  0, 15, 20, 20, 15,  0,-30),
+    (-30,  5, 15, 20, 20, 15,  5,-30),
+    (-30,  0, 10, 15, 15, 10,  0,-30),
+    (-40,-20,  0,  0,  0,  0,-20,-40),
+    (-50,-40,-30,-30,-30,-30,-40,-50),
+)
+_PST_BISHOP = (
+    (-20,-10,-10,-10,-10,-10,-10,-20),
+    (-10,  5,  0,  0,  0,  0,  5,-10),
+    (-10, 10, 10, 10, 10, 10, 10,-10),
+    (-10,  0, 10, 10, 10, 10,  0,-10),
+    (-10,  5,  5, 10, 10,  5,  5,-10),
+    (-10,  0,  5, 10, 10,  5,  0,-10),
+    (-10,  0,  0,  0,  0,  0,  0,-10),
+    (-20,-10,-10,-10,-10,-10,-10,-20),
+)
+_PST_ROOK = (
+    (  0,  0,  0,  5,  5,  0,  0,  0),
+    ( -5,  0,  0,  0,  0,  0,  0, -5),
+    ( -5,  0,  0,  0,  0,  0,  0, -5),
+    ( -5,  0,  0,  0,  0,  0,  0, -5),
+    ( -5,  0,  0,  0,  0,  0,  0, -5),
+    ( -5,  0,  0,  0,  0,  0,  0, -5),
+    (  5, 10, 10, 10, 10, 10, 10,  5),
+    (  0,  0,  0,  0,  0,  0,  0,  0),
+)
+_PST_QUEEN = (
+    (-20,-10,-10, -5, -5,-10,-10,-20),
+    (-10,  0,  5,  0,  0,  0,  0,-10),
+    (-10,  5,  5,  5,  5,  5,  0,-10),
+    (  0,  0,  5,  5,  5,  5,  0, -5),
+    ( -5,  0,  5,  5,  5,  5,  0, -5),
+    (-10,  0,  5,  5,  5,  5,  0,-10),
+    (-10,  0,  0,  0,  0,  0,  0,-10),
+    (-20,-10,-10, -5, -5,-10,-10,-20),
+)
+# Middlegame king PST — king tucked behind pawns on h-file / g-file
+# is safest. The endgame variant centralizes the king. We use one
+# table (midgame) for simplicity; this is the dominant phase the
+# staged-test schedule covers.
+_PST_KING = (
+    ( 20, 30, 10,  0,  0, 10, 30, 20),
+    ( 20, 20,  0,  0,  0,  0, 20, 20),
+    (-10,-20,-20,-20,-20,-20,-20,-10),
+    (-20,-30,-30,-40,-40,-30,-30,-20),
+    (-30,-40,-40,-50,-50,-40,-40,-30),
+    (-30,-40,-40,-50,-50,-40,-40,-30),
+    (-30,-40,-40,-50,-50,-40,-40,-30),
+    (-30,-40,-40,-50,-50,-40,-40,-30),
+)
+_PST_BY_PIECE = {
+    chess.PAWN: _PST_PAWN,
+    chess.KNIGHT: _PST_KNIGHT,
+    chess.BISHOP: _PST_BISHOP,
+    chess.ROOK: _PST_ROOK,
+    chess.QUEEN: _PST_QUEEN,
+    chess.KING: _PST_KING,
+}
+
+
+def piece_square_value_cp_white(board: chess.Board) -> float:
+    """Sum the PST contribution from white's perspective. White pieces
+    look up the PST directly; black pieces are mirrored vertically (we
+    look up the same PST at the rank-flipped square) and subtracted.
+    """
+    total = 0
+    for sq, piece in board.piece_map().items():
+        table = _PST_BY_PIECE[piece.piece_type]
+        rank = chess.square_rank(sq)
+        file_ = chess.square_file(sq)
+        if piece.color == chess.WHITE:
+            total += table[rank][file_]
+        else:
+            total -= table[7 - rank][file_]
+    return float(total)
+
+
+def static_baseline_cp_white(board: chess.Board) -> float:
+    """Composite hand-coded eval baseline = material + piece-square.
+    Provides positional differentiation without needing NN learning.
+    """
+    return material_balance_cp_white(board) + piece_square_value_cp_white(board)
+
+
 def evaluate_features(
     features: np.ndarray,
     weights: NeuralWeights,
     *,
     side_to_move: chess.Color,
+    material_baseline_cp: float = 0.0,
 ) -> int:
     """Full forward pass on a 768-dim feature vector. Returns integer
     centipawn evaluation from ``side_to_move``'s perspective.
+
+    v6: the NN output is treated as a RESIDUAL on top of
+    ``material_baseline_cp`` (already from white's perspective).
+    Callers that don't want the residual interpretation pass 0.0
+    (backwards-compatible default).
     """
     h1 = _clipped_relu(features @ weights.W1 + weights.b1)
     h2 = _clipped_relu(h1 @ weights.W2 + weights.b2)
     o = h2 @ weights.W3 + weights.b3
-    cp_white = float(o[0]) * EVAL_SCALE + weights.side_to_move_bias_cp
+    cp_white = float(o[0]) * EVAL_SCALE + weights.side_to_move_bias_cp + material_baseline_cp
     cp = cp_white if side_to_move == chess.WHITE else -cp_white
     return int(cp)
 
@@ -181,13 +377,23 @@ def evaluate_board(board: chess.Board, weights: NeuralWeights) -> int:
     """Full-recompute forward pass on a ``chess.Board``. Returns cp
     from ``board.turn``'s perspective so the value can be plugged
     directly into the negamax search.
+
+    v6.2: composes static baseline (material + PST) + NN residual.
+    The static baseline gives the search clear positional rankings
+    even when the NN output is zero (which it is for our current
+    snapshot — training a small NN to predict useful residuals at
+    our data scale degraded performance vs the baseline alone).
     """
     if board.is_game_over():
         if board.is_checkmate():
             return -1_000_000  # mate-on-the-board penalty from our side.
         return 0  # stalemate / draw by rule.
     x = board_to_features(board)
-    return evaluate_features(x, weights, side_to_move=board.turn)
+    return evaluate_features(
+        x, weights,
+        side_to_move=board.turn,
+        material_baseline_cp=static_baseline_cp_white(board),
+    )
 
 
 class IncrementalAccumulator:
@@ -231,8 +437,8 @@ class IncrementalAccumulator:
         """Rebuild the accumulator from scratch for ``board``. Call
         before a fresh search to drop any leftover state."""
         acc = self._b1.copy()
-        for sq, piece in board.piece_map().items():
-            acc += self._W1[feature_index(sq, piece)]
+        for idx in active_features(board):
+            acc += self._W1[idx]
         self._acc_stack = [acc]
 
     def stack_depth(self) -> int:
@@ -262,6 +468,16 @@ class IncrementalAccumulator:
 
         ``board`` is the position BEFORE the move (so piece lookup
         uses the move's source square correctly).
+
+        NOTE (v4): only piece-square features are updated incrementally.
+        State bits (side-to-move, castling rights, en-passant flag) are
+        NOT touched here. Callers that need accurate state-bit features
+        in the accumulator must ``reset(board)`` after pushing/popping
+        on ``board``. The runtime inference path uses ``NeuralEvaluator``
+        (full recompute), which always sees correct state bits. This
+        gap is acceptable for now; a future C extension that wants
+        true NNUE-style incremental updates should also handle state
+        bits per move (cheap: 1-3 entries flip).
         """
         moving = board.piece_at(move.from_square)
         if moving is None:
@@ -295,12 +511,19 @@ class IncrementalAccumulator:
                 self._remove_piece(rook_from, rook)
                 self._add_piece(rook_to, rook)
 
-    def output(self, side_to_move: chess.Color) -> int:
-        """Run L2 + L3 over the current accumulator and return cp."""
+    def output(self, side_to_move: chess.Color, *, board: chess.Board | None = None) -> int:
+        """Run L2 + L3 over the current accumulator and return cp.
+
+        v6: pass ``board`` to apply the material-balance baseline that
+        ``evaluate_board`` adds. Callers without ``board`` get the raw
+        residual-only output (legacy behaviour) — not equivalent to
+        ``evaluate_board`` but kept for backwards compat.
+        """
         h1 = _clipped_relu(self._acc_stack[-1])
         h2 = _clipped_relu(h1 @ self._W2 + self._b2)
         o = h2 @ self._W3 + self._b3
-        cp_white = float(o[0]) * EVAL_SCALE + self._weights.side_to_move_bias_cp
+        material_cp = material_balance_cp_white(board) if board is not None else 0.0
+        cp_white = float(o[0]) * EVAL_SCALE + self._weights.side_to_move_bias_cp + material_cp
         cp = cp_white if side_to_move == chess.WHITE else -cp_white
         return int(cp)
 

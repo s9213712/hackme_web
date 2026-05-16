@@ -9,6 +9,7 @@ from services.platform.settings_metadata import (
     SETTING_DETAILS,
     setting_groups_payload,
 )
+from services.server.backpressure import apply_backpressure_settings, backpressure_status
 from services.security.captcha import normalize_captcha_mode
 from services.storage.global_capacity import parse_global_capacity_limit_mb
 from services.storage.paths import validate_storage_root
@@ -132,6 +133,33 @@ def register_system_admin_settings_routes(app, ctx):
             raise ValueError(f"未知的功能範圍：{', '.join(unknown)}")
         return normalized
 
+    def normalize_backpressure_updates(data):
+        if "server_backpressure_mode" in data:
+            mode = str(data.get("server_backpressure_mode") or "auto").strip().lower()
+            if mode not in {"auto", "manual", "off"}:
+                return "server_backpressure_mode 必須是 auto、manual 或 off"
+            data["server_backpressure_mode"] = mode
+        int_ranges = {
+            "server_backpressure_thread_capacity": (0, 256),
+            "server_backpressure_normal_limit": (0, 2048),
+            "server_backpressure_heavy_limit": (0, 256),
+            "server_backpressure_root_limit": (0, 64),
+            "server_backpressure_fast_lane_reserved": (0, 64),
+            "server_backpressure_retry_after_seconds": (1, 60),
+            "server_backpressure_refresh_seconds": (1, 60),
+        }
+        for key, (minimum, maximum) in int_ranges.items():
+            if key not in data:
+                continue
+            try:
+                value = int(data.get(key))
+            except Exception:
+                return f"{key} 必須是 {minimum}-{maximum} 的整數"
+            if value < minimum or value > maximum:
+                return f"{key} 必須是 {minimum}-{maximum} 的整數"
+            data[key] = value
+        return ""
+
     @app.route("/api/admin/settings", methods=["GET","PUT"])
     @require_csrf_safe
     def admin_settings():
@@ -153,6 +181,7 @@ def register_system_admin_settings_routes(app, ctx):
                 ),
                 "server_ssl": server_ssl_payload(settings),
                 "cloud_drive_storage": cloud_drive_storage_payload(settings),
+                "backpressure": backpressure_status(app),
             })
 
         try:
@@ -314,6 +343,9 @@ def register_system_admin_settings_routes(app, ctx):
             if reset_mode not in {"admin_review", "email_token"}:
                 return json_resp({"ok":False,"msg":"password_reset_mode 必須是 admin_review 或 email_token"}), 400
             data["password_reset_mode"] = reset_mode
+        backpressure_error = normalize_backpressure_updates(data)
+        if backpressure_error:
+            return json_resp({"ok":False,"msg":backpressure_error}), 400
         if "max_manager_seats" in data:
             seats = parse_int_in_range(data.get("max_manager_seats"), 0, 1000)
             if seats is None:
@@ -384,6 +416,7 @@ def register_system_admin_settings_routes(app, ctx):
             raise
         if not settings:
             return json_resp({"ok":False,"msg":"沒有可寫入的設定欄位"}), 400
+        backpressure_state = apply_backpressure_settings(app, get_system_settings())
 
         audit_settings_changed("SETTINGS_CHANGED", actor, before_settings, settings, scope="system_settings")
         return json_resp({
@@ -397,6 +430,79 @@ def register_system_admin_settings_routes(app, ctx):
             ),
             "server_ssl": server_ssl_payload(get_system_settings()),
             "cloud_drive_storage": cloud_drive_storage_payload(get_system_settings()),
+            "backpressure": backpressure_status(app) if backpressure_state else {},
+        })
+
+    @app.route("/api/root/backpressure", methods=["GET", "PUT", "POST"])
+    @require_csrf_safe
+    def root_backpressure_settings():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if request.method == "GET":
+            settings = get_system_settings()
+            return json_resp({
+                "ok": True,
+                "settings": {
+                    key: settings.get(key)
+                    for key in (
+                        "server_backpressure_enabled",
+                        "server_backpressure_mode",
+                        "server_backpressure_thread_capacity",
+                        "server_backpressure_normal_limit",
+                        "server_backpressure_heavy_limit",
+                        "server_backpressure_root_priority_enabled",
+                        "server_backpressure_root_limit",
+                        "server_backpressure_fast_lane_reserved",
+                        "server_backpressure_retry_after_seconds",
+                        "server_backpressure_refresh_seconds",
+                    )
+                },
+                "backpressure": backpressure_status(app),
+            })
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"請求 JSON 格式錯誤"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"請求內容格式錯誤"}), 400
+        allowed = {
+            "server_backpressure_enabled",
+            "server_backpressure_mode",
+            "server_backpressure_thread_capacity",
+            "server_backpressure_normal_limit",
+            "server_backpressure_heavy_limit",
+            "server_backpressure_root_priority_enabled",
+            "server_backpressure_root_limit",
+            "server_backpressure_fast_lane_reserved",
+            "server_backpressure_retry_after_seconds",
+            "server_backpressure_refresh_seconds",
+        }
+        updates = {key: data[key] for key in allowed if key in data}
+        if not updates:
+            return json_resp({"ok":False,"msg":"沒有可更新的 backpressure 參數"}), 400
+        if "server_backpressure_enabled" in updates:
+            parsed = parse_strict_bool(updates.get("server_backpressure_enabled"))
+            if parsed is None:
+                return json_resp({"ok":False,"msg":"server_backpressure_enabled 必須是布林值"}), 400
+            updates["server_backpressure_enabled"] = parsed
+        if "server_backpressure_root_priority_enabled" in updates:
+            parsed = parse_strict_bool(updates.get("server_backpressure_root_priority_enabled"))
+            if parsed is None:
+                return json_resp({"ok":False,"msg":"server_backpressure_root_priority_enabled 必須是布林值"}), 400
+            updates["server_backpressure_root_priority_enabled"] = parsed
+        backpressure_error = normalize_backpressure_updates(updates)
+        if backpressure_error:
+            return json_resp({"ok":False,"msg":backpressure_error}), 400
+        before_settings = dict(get_system_settings())
+        settings = save_settings(updates)
+        apply_backpressure_settings(app, get_system_settings())
+        audit_settings_changed("BACKPRESSURE_SETTINGS_CHANGED", actor, before_settings, settings, scope="system_settings")
+        return json_resp({
+            "ok": True,
+            "msg": "Backpressure 參數已更新並即時套用",
+            "settings": public_settings_payload(get_system_settings()),
+            "backpressure": backpressure_status(app),
         })
 
     @app.route("/api/admin/settings/metadata", methods=["GET"])

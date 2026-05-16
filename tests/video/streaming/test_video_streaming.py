@@ -15,6 +15,7 @@ import routes.videos as video_routes
 import scripts.media.hls_prepare_worker as hls_prepare_worker
 from services.media.e2ee_streaming import _normalize_manifest, resolve_e2ee_chunk_response
 from services.media import streaming as media_streaming
+from services.job_center import get_job_by_source
 from routes.videos import register_video_routes
 from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
 from services.system.audit import audit as runtime_audit
@@ -624,6 +625,68 @@ def test_video_playback_and_hls_routes_use_ready_stream_asset(tmp_path, monkeypa
     assert segment.mimetype == "video/mp4"
 
 
+def test_shared_standard_video_playback_uses_shared_hls_and_stream_urls(tmp_path, monkeypatch):
+    db_path = tmp_path / "shared-video-stream.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(conn, storage_root, file_id="shared-video-1", owner_user_id=1, filename="movie.mp4", mime="video/mp4")
+        video = publish_video(
+            conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="shared-video-1",
+            title="Shared Movie",
+            visibility="unlisted",
+            share_password="SharePass123",
+        )
+        row = conn.execute("SELECT * FROM uploaded_files WHERE id='shared-video-1'").fetchone()
+        monkeypatch.setattr(media_streaming, "_run_probe", lambda *args, **kwargs: _fake_probe_payload("video"))
+        monkeypatch.setattr(media_streaming, "_run_ffmpeg_hls", _fake_hls_package)
+        media_streaming.prepare_stream_asset(conn, file_row=row, storage_root=storage_root, server_file_fernet=fernet)
+        conn.commit()
+        token = video["share_url"].rsplit("/", 1)[-1]
+    finally:
+        conn.close()
+
+    viewer = _build_app(db_path, storage_root, fernet, current_user=None).test_client()
+    unlocked = viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"})
+    assert unlocked.status_code == 200
+    share_session = _share_session_query(unlocked)
+
+    playback = viewer.get(f"/api/videos/shared/{token}/playback{share_session}")
+    assert playback.status_code == 200
+    payload = playback.get_json()
+    assert payload["mode"] == "hls"
+    assert payload["master_url"].startswith(f"/api/videos/shared/{token}/hls/master.m3u8")
+    assert payload["stream_url"].startswith(f"/api/videos/shared/{token}/stream")
+    assert payload["fallback_url"].startswith(f"/api/videos/shared/{token}/stream")
+    assert f"/api/videos/{video['id']}/" not in payload["master_url"]
+    assert f"/api/videos/{video['id']}/" not in payload["stream_url"]
+
+    master = viewer.get(payload["master_url"])
+    assert master.status_code == 200
+    assert master.mimetype == "application/vnd.apple.mpegurl"
+    assert f"source/playlist.m3u8{share_session}" in master.get_data(as_text=True)
+
+    playlist = viewer.get(f"/api/videos/shared/{token}/hls/source/playlist.m3u8{share_session}")
+    assert playlist.status_code == 200
+    playlist_text = playlist.get_data(as_text=True)
+    assert f'URI="init.mp4{share_session}"' in playlist_text
+    assert f"seg_00001.m4s{share_session}" in playlist_text
+
+    init_segment = viewer.get(f"/api/videos/shared/{token}/hls/source/init.mp4{share_session}")
+    assert init_segment.status_code == 200
+    assert init_segment.mimetype == "video/mp4"
+
+    stream = viewer.get(payload["stream_url"])
+    assert stream.status_code == 200
+    assert stream.mimetype == "video/mp4"
+
+
 def test_media_prepare_stream_route_requires_owner(tmp_path, monkeypatch):
     db_path = tmp_path / "prepare-route.db"
     storage_root = tmp_path / "storage"
@@ -737,12 +800,7 @@ def test_video_publish_auto_prepares_stream_asset_without_blocking_publish(tmp_p
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        job = conn.execute(
-            """
-            SELECT * FROM job_center_jobs
-            WHERE source_module='media_hls_prepare' AND source_ref='media_stream:video-1'
-            """,
-        ).fetchone()
+        job = get_job_by_source(conn, "media_hls_prepare", "media_stream:video-1")
         assert job is not None
         assert job["owner_user_id"] == 1
         assert job["status"] == "running"

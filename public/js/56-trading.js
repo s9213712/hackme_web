@@ -2790,6 +2790,11 @@ function updateTradingReferenceTooltip(event) {
   tooltip.style.top = `${top}px`;
 }
 
+function updateTradingReferenceTooltipFromTouch(event) {
+  const touch = event?.touches?.[0] || event?.changedTouches?.[0];
+  if (touch) updateTradingReferenceTooltip(touch);
+}
+
 function tradingReferenceAutoRefreshMs() {
   return 1000;
 }
@@ -6250,6 +6255,13 @@ function bindTradingEvents() {
   if (referenceChart) {
     referenceChart.addEventListener("mousemove", updateTradingReferenceTooltip);
     referenceChart.addEventListener("mouseleave", hideTradingReferenceTooltip);
+    referenceChart.addEventListener("pointermove", updateTradingReferenceTooltip);
+    referenceChart.addEventListener("pointerleave", hideTradingReferenceTooltip);
+    referenceChart.addEventListener("pointercancel", hideTradingReferenceTooltip);
+    referenceChart.addEventListener("touchstart", updateTradingReferenceTooltipFromTouch, { passive: true });
+    referenceChart.addEventListener("touchmove", updateTradingReferenceTooltipFromTouch, { passive: true });
+    referenceChart.addEventListener("touchend", hideTradingReferenceTooltip);
+    referenceChart.addEventListener("touchcancel", hideTradingReferenceTooltip);
   }
   const rootMarketSelect = $("trading-root-market-select");
   if (rootMarketSelect) rootMarketSelect.addEventListener("change", populateTradingRootMarketForm);

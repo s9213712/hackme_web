@@ -23,6 +23,7 @@ def test_user_profile_appearance_roundtrip_and_reset():
     actor = {"id": 1, "username": "alice"}
 
     saved = update_profile_appearance(conn, actor=actor, data={
+        "site_theme_mode": "light",
         "site_font_family": "serif",
         "site_background_style": "aurora",
         "site_panel_style": "solid",
@@ -45,6 +46,7 @@ def test_user_profile_appearance_roundtrip_and_reset():
     conn.commit()
 
     assert saved == {
+        "site_theme_mode": "light",
         "site_font_family": "serif",
         "site_background_style": "aurora",
         "site_panel_style": "solid",

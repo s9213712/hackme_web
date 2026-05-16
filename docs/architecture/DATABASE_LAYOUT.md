@@ -12,6 +12,53 @@
 4. `runtime/database/control.db`
 5. `runtime/games/models/chess_experiment.db`
 
+## 2026-05-16 DB lock hardening
+
+目前 SQLite 仍是單機部署的主要資料庫，因此這輪先處理兩個最容易造成
+`database is locked` / 500 的來源：
+
+- 所有主要 runtime DB helper 改走 hardened SQLite connection：啟用 WAL、
+  `busy_timeout`、同一 process 內依 DB path 序列化寫入，並對 transient lock
+  做短 retry。runtime PRAGMA 也加入 `cache_size`、`mmap_size`、
+  `journal_size_limit`、`wal_autocheckpoint`，讓小型單機部署可依硬體調整。
+- 主要 runtime DB helper 另提供 readonly connection。列表、狀態頁與
+  session 查詢應優先使用 readonly helper，只有實際更新資料時才開寫入連線。
+- Job Center 的高頻 progress update 不再每次都直接寫 DB。`running`
+  進度會先寫到 progress backend，依固定間隔回寫 DB；`succeeded`、`failed`、
+  `cancelled`、`expired` 與 audit/notification 仍即時落 DB。
+- Auth session `last_seen` 不再每次 request 都刷新。預設採間隔與 jitter
+  合併寫入，避免大量登入用戶同時輪詢時把 `auth.db` 寫入 queue 打滿。
+
+Progress backend 目前由 `services/core/progress_backend.py` 提供介面：
+
+| Backend | 用途 |
+|---|---|
+| `memory` | 單 process 開發與測試用 |
+| `file` | 無 Redis 時的跨 process 最新進度快取，預設放在 `runtime/job_progress_cache` |
+| `redis` | 未來正式 queue / 多 worker 的共享進度快取 |
+| `auto` | 有 Redis URL 時用 Redis，否則用 file backend |
+
+Server 啟動時預設 `HACKME_JOB_PROGRESS_BACKEND=auto`。Redis 不是必備依賴；
+未安裝或未設定時，HLS worker、ComfyUI、BT/direct link、resumable upload 等
+長任務仍可使用 file backend 同步最新進度，DB 只保存 checkpoint / final state。
+
+可調整的環境變數：
+
+- `HACKME_SQLITE_BUSY_TIMEOUT_MS`
+- `HACKME_SQLITE_LOCK_RETRY_ATTEMPTS`
+- `HACKME_SQLITE_LOCK_RETRY_BASE_SLEEP`
+- `HACKME_SQLITE_CACHE_SIZE_KB`
+- `HACKME_SQLITE_MMAP_SIZE_BYTES`
+- `HACKME_SQLITE_JOURNAL_SIZE_LIMIT_BYTES`
+- `HACKME_SQLITE_WAL_AUTOCHECKPOINT_PAGES`
+- `HACKME_JOB_PROGRESS_BACKEND`
+- `HACKME_REDIS_URL` / `REDIS_URL`
+- `HACKME_PROGRESS_CACHE_DIR`
+- `HACKME_JOB_PROGRESS_FLUSH_INTERVAL_SECONDS`
+- `HACKME_JOB_PROGRESS_EVENT_FLUSH_INTERVAL_SECONDS`
+- `HTML_LEARNING_SESSION_LAST_SEEN_REFRESH_INTERVAL`
+- `HTML_LEARNING_SESSION_LAST_SEEN_REFRESH_JITTER_SECONDS`
+
 ## 1. `runtime/database/database.db`
 
 主業務 DB，負責大多數網站功能。
@@ -70,6 +117,16 @@ Auth hot-path 專用 DB。
 - `/api/session/idle-timeout`
 - `/api/account/sessions*`
 - captcha challenge / verify
+
+### 2026-05-16 session read/write split
+
+`db_get_user_from_token()` 現在優先用 readonly auth connection 讀取 session。
+只有遇到 security epoch 旋轉、strict IP binding 撤銷、idle timeout 撤銷或
+`last_seen` 到達刷新間隔時，才短暫開啟寫入連線。
+
+帳號安全頁與 root/manager 用戶列表需要讀 session 狀態時，也應優先走
+readonly auth helper。這個做法不能消除 SQLite 單寫入者限制，但可以降低
+普通 GET / 狀態頁 / 後台列表對寫入 queue 的壓力。
 
 ## 3. `runtime/database/audit.db`
 

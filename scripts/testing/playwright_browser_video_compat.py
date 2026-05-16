@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+"""Cross-browser video/share preview compatibility probe.
+
+Starts an isolated hackme_web runtime, publishes a tiny MP4 once, then verifies
+the shared video page and playback descriptor in Chromium, Firefox, and WebKit.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.testing.playwright_deep_site_check import (  # noqa: E402
+    Recorder,
+    enable_required_features,
+    fetch_json,
+    fetch_text,
+    free_port,
+    generate_tiny_mp4,
+    login,
+    mkdirs,
+    start_server,
+    switch_module,
+    utc_stamp,
+    wait_for_server,
+)
+
+
+SHARE_PASSWORD = "BrowserShare123!"
+
+
+def attach_error_handlers(page, bucket: list[dict[str, str]], browser_name: str) -> None:
+    seen: set[str] = set()
+
+    def add(kind: str, text: str) -> None:
+        compact = str(text or "").replace("\n", " ")[:500]
+        if not compact:
+            return
+        # MediaSource/HLS engines can emit non-fatal warnings; keep them in the
+        # artifact, but de-duplicate so one browser does not drown the report.
+        key = f"{browser_name}:{kind}:{compact}"
+        if key in seen or len(bucket) >= 200:
+            return
+        seen.add(key)
+        bucket.append({"browser": browser_name, "type": kind, "text": compact})
+
+    page.on("console", lambda msg: add(f"console.{msg.type}", msg.text))
+    page.on("pageerror", lambda exc: add("pageerror", str(exc)))
+
+
+def publish_video_fixture(page, base_url: str, runtime_root: Path) -> dict[str, Any]:
+    video_path = runtime_root / "reports" / "qa" / f"browser_compat_{int(time.time() * 1000)}.mp4"
+    video_path.parent.mkdir(parents=True, exist_ok=True)
+    video_path.write_bytes(generate_tiny_mp4())
+    try:
+        login(page, base_url)
+        enable_required_features(page, base_url)
+        switch_module(page, "videos")
+        page.evaluate(
+            """() => {
+                if (typeof switchModuleTab === 'function') switchModuleTab('videos');
+                const module = document.querySelector('#module-videos');
+                if (module) {
+                    module.hidden = false;
+                    module.removeAttribute('hidden');
+                    module.style.display = 'block';
+                }
+                const panel = document.querySelector('#video-publish-panel');
+                if (panel) {
+                    panel.hidden = false;
+                    panel.removeAttribute('hidden');
+                    panel.style.display = 'block';
+                }
+                const toggle = document.querySelector('#video-publish-open-btn');
+                if (toggle) toggle.setAttribute('aria-expanded', 'true');
+            }"""
+        )
+        page.wait_for_selector("#video-upload-file", timeout=5000)
+        page.set_input_files("#video-upload-file", str(video_path))
+        page.fill("#video-publish-title", "Browser Compat QA 影音")
+        page.fill("#video-publish-description", "跨瀏覽器影音預覽測試 fixture。")
+        page.select_option("#video-publish-visibility", "unlisted")
+        page.fill("#video-share-password", SHARE_PASSWORD)
+        page.fill("#video-share-max-views", "0")
+        with page.expect_response(
+            lambda response: "/api/videos/upload" in response.url and response.request.method == "POST",
+            timeout=120000,
+        ) as upload_info:
+            page.click("#video-publish-btn")
+        upload_response = upload_info.value
+        upload_json = upload_response.json()
+        if upload_response.status < 200 or upload_response.status >= 300 or not upload_json.get("ok"):
+            raise RuntimeError(f"video upload failed: status={upload_response.status} body={upload_json}")
+        page.wait_for_selector("#video-upload-progress:not([hidden])", timeout=5000)
+        page.wait_for_function(
+            """() => {
+                const msg = document.querySelector('#video-msg')?.textContent || '';
+                const status = document.querySelector('#video-upload-progress-status')?.textContent || '';
+                const percent = document.querySelector('#video-upload-progress-percent')?.textContent || '';
+                return /影音已發布/.test(msg) || /處理完成/.test(status) || percent.trim() === '100%';
+            }""",
+            timeout=60000,
+        )
+        latest = upload_json.get("video") or {}
+        video_id = int(latest.get("id") or 0)
+        if video_id <= 0:
+            raise RuntimeError(f"video upload response missing id: {upload_json}")
+        detail = fetch_json(page, "GET", f"/api/videos/{video_id}")
+        video = (detail.get("body") or {}).get("video") or {}
+        share_url = str(video.get("share_url") or latest.get("share_url") or "").strip()
+        if not share_url:
+            raise RuntimeError(f"video share_url missing: detail={detail} upload={upload_json}")
+        playback = fetch_json(page, "GET", f"/api/videos/{video_id}/playback")
+        master = {"status": 0, "text": ""}
+        master_url = str((playback.get("body") or {}).get("master_url") or "")
+        if master_url:
+            master = fetch_text(page, master_url)
+        return {
+            "video_id": video_id,
+            "share_url": share_url,
+            "playback": playback,
+            "master": master,
+            "latest": latest,
+        }
+    finally:
+        try:
+            video_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def browser_kind(playwright, name: str):
+    if name == "chromium":
+        return playwright.chromium
+    if name == "firefox":
+        return playwright.firefox
+    if name == "webkit":
+        return playwright.webkit
+    raise ValueError(f"unsupported browser: {name}")
+
+
+def inspect_media_page(page) -> dict[str, Any]:
+    return page.evaluate(
+        """() => {
+            const player = document.querySelector('#shared-player');
+            const host = document.querySelector('#player-host');
+            const msg = document.querySelector('#msg')?.textContent || '';
+            const title = document.querySelector('#title')?.textContent || '';
+            const formHidden = document.querySelector('#share-password-form')?.classList.contains('hidden');
+            const rect = player ? player.getBoundingClientRect() : null;
+            return {
+                title,
+                msg,
+                formHidden,
+                hostHidden: host ? host.classList.contains('hidden') : true,
+                playerTag: player ? player.tagName.toLowerCase() : '',
+                playerSrc: player ? (player.currentSrc || player.src || '') : '',
+                networkState: player ? player.networkState : null,
+                readyState: player ? player.readyState : null,
+                width: rect ? Math.round(rect.width) : 0,
+                height: rect ? Math.round(rect.height) : 0,
+                hlsScriptLoaded: !!document.querySelector('script[data-shared-hls-js="1"]'),
+                hlsGlobal: typeof window.Hls === 'function',
+            };
+        }"""
+    )
+
+
+def check_shared_video_browser(browser_type, *, browser_name: str, base_url: str, share_url: str, headed: bool, mobile: bool) -> dict[str, Any]:
+    errors: list[dict[str, str]] = []
+    viewport = {"width": 390, "height": 844} if mobile else {"width": 1366, "height": 768}
+    browser = browser_type.launch(headless=not headed)
+    context = browser.new_context(ignore_https_errors=True, viewport=viewport)
+    page = context.new_page()
+    attach_error_handlers(page, errors, browser_name + ("_mobile" if mobile else "_desktop"))
+    label = browser_name + ("_mobile" if mobile else "_desktop")
+    result: dict[str, Any] = {"browser": browser_name, "viewport": "mobile" if mobile else "desktop", "ok": False, "errors": errors}
+    try:
+        target = base_url + share_url if share_url.startswith("/") else share_url
+        page.goto(target, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_selector("#share-password-form:not(.hidden), #player-host:not(.hidden)", timeout=15000)
+        share_session_id = ""
+        if page.locator("#share-password-form:not(.hidden)").count():
+            page.fill("#share-password", SHARE_PASSWORD)
+            with page.expect_response(
+                lambda response: f"/api/videos/shared/" in response.url
+                and response.url.endswith("/unlock")
+                and response.request.method == "POST",
+                timeout=30000,
+            ) as unlock_info:
+                page.locator("#share-password-form button[type=submit]").click()
+            unlock_json = unlock_info.value.json()
+            share_session_id = str(unlock_json.get("share_session_id") or "")
+        page.wait_for_selector("#player-host:not(.hidden) #shared-player", timeout=30000)
+        page.wait_for_timeout(1400)
+        media = inspect_media_page(page)
+        playback = page.evaluate(
+            """async explicitShareSession => {
+                const token = JSON.parse(document.querySelector('#share-token')?.textContent || '""');
+                const player = document.querySelector('#shared-player');
+                const playerSrc = player ? (player.currentSrc || player.src || '') : '';
+                let shareSession = explicitShareSession || '';
+                try {
+                    shareSession = shareSession || new URL(playerSrc, window.location.origin).searchParams.get('share_session') || '';
+                } catch (err) {}
+                const suffix = shareSession ? `?share_session=${encodeURIComponent(shareSession)}` : '';
+                const res = await fetch(`/api/videos/shared/${encodeURIComponent(token)}/playback${suffix}`, {credentials: 'same-origin'});
+                const text = await res.text();
+                let body = null;
+                try { body = JSON.parse(text); } catch (err) { body = {raw: text.slice(0, 300)}; }
+                return {status: res.status, ok: res.ok, body};
+            }""",
+            share_session_id,
+        )
+        master = {"status": 0, "text": ""}
+        master_url = str((playback.get("body") or {}).get("master_url") or "")
+        if master_url:
+            master = page.evaluate(
+                """async url => {
+                    const res = await fetch(url, {credentials: 'same-origin'});
+                    const text = await res.text();
+                    return {status: res.status, ok: res.ok, text: text.slice(0, 1000), contentType: res.headers.get('content-type') || ''};
+                }""",
+                master_url,
+            )
+        fatal_errors = [
+            item
+            for item in errors
+            if item["type"] == "pageerror" or ("Failed to load resource: the server responded with a status of 5" in item["text"])
+        ]
+        ok = (
+            playback["status"] == 200
+            and (playback.get("body") or {}).get("mode") in {"hls", "direct", "e2ee_stream_v2", "e2ee_direct"}
+            and media["playerTag"] in {"video", "audio"}
+            and media["width"] > 0
+            and media["height"] > 0
+            and media["hostHidden"] is False
+            and not fatal_errors
+            and (not master_url or (master.get("status") == 200 and "avc1." in master.get("text", "")))
+        )
+        result.update({"ok": bool(ok), "media": media, "playback": playback, "master": master, "fatal_errors": fatal_errors})
+        return result
+    except Exception as exc:
+        result.update({"ok": False, "exception": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc()})
+        return result
+    finally:
+        context.close()
+        browser.close()
+
+
+def write_outputs(runtime_root: Path, payload: dict[str, Any]) -> tuple[Path, Path]:
+    out_dir = runtime_root / "reports" / "qa"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = out_dir / "browser_video_compat.json"
+    md_path = out_dir / "browser_video_compat.md"
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    lines = [
+        "# Browser Video Compatibility",
+        "",
+        f"- Base URL: `{payload.get('base_url')}`",
+        f"- Runtime root: `{payload.get('runtime_root')}`",
+        f"- Video ID: `{(payload.get('fixture') or {}).get('video_id')}`",
+        f"- OK: `{payload.get('ok')}`",
+        "",
+        "## Browsers",
+        "",
+    ]
+    for item in payload.get("checks") or []:
+        mark = "PASS" if item.get("ok") else "FAIL"
+        media = item.get("media") or {}
+        playback = (item.get("playback") or {}).get("body") or {}
+        lines.append(
+            f"- `{mark}` {item.get('browser')} {item.get('viewport')}: "
+            f"mode={playback.get('mode')}, player={media.get('playerTag')}, "
+            f"size={media.get('width')}x{media.get('height')}, msg={str(media.get('msg') or '')[:100]}"
+        )
+        if item.get("exception"):
+            lines.append(f"  - exception: `{item.get('exception')}`")
+        if item.get("fatal_errors"):
+            lines.append(f"  - fatal errors: `{len(item.get('fatal_errors') or [])}`")
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return json_path, md_path
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--runtime-root", default="")
+    parser.add_argument("--keep-server", action="store_true")
+    parser.add_argument("--headed", action="store_true")
+    parser.add_argument("--browsers", default="chromium,firefox,webkit")
+    parser.add_argument("--skip-mobile", action="store_true")
+    args = parser.parse_args()
+
+    stamp = utc_stamp()
+    runtime_root = Path(args.runtime_root).resolve() if args.runtime_root else Path("/tmp") / f"hackme_web_browser_video_{stamp}"
+    mkdirs(runtime_root)
+    port = free_port()
+    server = start_server(runtime_root, port)
+    base_url = ""
+    payload: dict[str, Any] = {
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "runtime_root": str(runtime_root),
+        "checks": [],
+    }
+    try:
+        base_url = wait_for_server(port)
+        payload["base_url"] = base_url
+        with sync_playwright() as p:
+            setup_browser = p.chromium.launch(headless=not args.headed)
+            setup_context = setup_browser.new_context(ignore_https_errors=True, viewport={"width": 1366, "height": 768})
+            setup_page = setup_context.new_page()
+            fixture = publish_video_fixture(setup_page, base_url, runtime_root)
+            setup_context.close()
+            setup_browser.close()
+            payload["fixture"] = fixture
+            share_url = str(fixture.get("share_url") or "")
+            if not share_url:
+                raise RuntimeError(f"fixture did not produce share_url: {fixture}")
+            browser_names = [item.strip().lower() for item in args.browsers.split(",") if item.strip()]
+            for name in browser_names:
+                btype = browser_kind(p, name)
+                for mobile in ([False] if args.skip_mobile else [False, True]):
+                    result = check_shared_video_browser(
+                        btype,
+                        browser_name=name,
+                        base_url=base_url,
+                        share_url=share_url,
+                        headed=args.headed,
+                        mobile=mobile,
+                    )
+                    payload["checks"].append(result)
+                    mark = "PASS" if result.get("ok") else "FAIL"
+                    print(f"[{mark}] {name} {'mobile' if mobile else 'desktop'}", flush=True)
+    finally:
+        payload["finished_at"] = datetime.now(timezone.utc).isoformat()
+        payload["ok"] = bool(payload.get("checks")) and all(item.get("ok") for item in payload.get("checks", []))
+        json_path, md_path = write_outputs(runtime_root, payload)
+        print(json.dumps({"ok": payload["ok"], "json": str(json_path), "md": str(md_path), "base_url": base_url}, ensure_ascii=False), flush=True)
+        if server.poll() is None and not args.keep_server:
+            server.terminate()
+            try:
+                server.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                server.kill()
+    return 0 if payload.get("ok") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

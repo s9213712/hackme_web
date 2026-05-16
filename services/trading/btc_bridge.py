@@ -1,7 +1,6 @@
 import csv
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import time
@@ -9,6 +8,8 @@ import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from services.core.sqlite_hardening import connect_sqlite
 
 
 ASSET_SCALE = 100_000_000
@@ -1035,11 +1036,7 @@ class BtcTradeBridge:
         os.replace(tmp, self.state_path)
 
     def get_db(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=15000")
-        return conn
+        return connect_sqlite(self.db_path, timeout=15, row_factory=True, foreign_keys=True, wal=True)
 
     def _chain_seed(self):
         with open(self.chain_seed_path, encoding="utf-8") as fh:

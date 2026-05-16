@@ -19,6 +19,9 @@ FEATURE_MODE="${HACKME_DEV_FEATURE_MODE:-all}"
 FEATURE_LIST="${HACKME_DEV_FEATURES:-}"
 DEV_TOKEN_FEATURES="${HACKME_DEV_TOKEN_FEATURES:-${HACKME_DEV_INTERNAL_TEST_TOKEN_FEATURES:-}}"
 DEV_TOKEN_TTL_MINUTES="${HACKME_DEV_TOKEN_TTL_MINUTES:-1440}"
+DEV_TOKEN_USER="${HACKME_DEV_TOKEN_USER:-test}"
+DEV_TOKEN_PASSWORD="${HACKME_DEV_TOKEN_PASSWORD:-}"
+DEV_TOKEN_ROLE="${HACKME_DEV_TOKEN_ROLE:-user}"
 FEATURE_MODE_SET=0
 SECURITY_SETTINGS_ENABLED="${HACKME_DEV_SECURITY_ENABLED:-0}"
 SERVER_MODE="${HACKME_DEV_SERVER_MODE:-dev_ready}"
@@ -26,6 +29,15 @@ EXTRA_ACCOUNTS="${HACKME_DEV_EXTRA_ACCOUNTS:-}"
 PORT_CONFLICT_ACTION="${HACKME_DEV_PORT_CONFLICT_ACTION:-}"
 BTC_TRADE_AUTOSTART="${HACKME_DEV_BTC_TRADE_AUTOSTART:-0}"
 BACKTEST_PROBE_ON_STARTUP="${HACKME_DEV_BACKTEST_PROBE_ON_STARTUP:-0}"
+SERVER_RUNNER="${HACKME_DEV_SERVER_RUNNER:-flask}"
+GUNICORN_WORKERS="${HACKME_DEV_GUNICORN_WORKERS:-auto}"
+GUNICORN_THREADS="${HACKME_DEV_GUNICORN_THREADS:-auto}"
+GUNICORN_TIMEOUT="${HACKME_DEV_GUNICORN_TIMEOUT:-20}"
+GUNICORN_GRACEFUL_TIMEOUT="${HACKME_DEV_GUNICORN_GRACEFUL_TIMEOUT:-10}"
+GUNICORN_KEEP_ALIVE="${HACKME_DEV_GUNICORN_KEEP_ALIVE:-2}"
+GUNICORN_BACKLOG="${HACKME_DEV_GUNICORN_BACKLOG:-64}"
+GUNICORN_MAX_REQUESTS="${HACKME_DEV_GUNICORN_MAX_REQUESTS:-1000}"
+GUNICORN_MAX_REQUESTS_JITTER="${HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER:-200}"
 DRY_RUN=0
 
 usage() {
@@ -55,8 +67,9 @@ Options:
   --port PORT              Default: 5000; prompts if occupied in interactive mode
   --feature-mode MODE      all, defaults, or custom. Default: all
   --features LIST          Comma-separated feature_* keys for custom mode
-  --token-features LIST    Comma-separated feature_* keys allowed by generated
-                           test/internal-test dev tokens. Empty means no extra
+  --token-features LIST    Comma-separated feature_* keys, short feature names,
+                           or interactive list numbers allowed by generated
+                           test/internal-test dev tokens. Empty/0 means no extra
                            token-level feature restriction.
   --internal-test-token-features LIST
                            Comma-separated feature_* keys allowed by the
@@ -64,6 +77,13 @@ Options:
                            --token-features.
   --token-ttl-minutes N    TTL for generated test/internal-test tokens.
                            Default: 1440
+  --token-user USERNAME    Account bound to generated test/internal-test tokens.
+                           Default: test
+  --token-password VALUE   Password to set when creating/updating --token-user.
+                           Blank keeps existing users unchanged and auto-generates
+                           a password only when the token user does not exist.
+  --token-role ROLE        Role for a newly created/updated token account.
+                           user, manager, or super_admin. Default: user
   --security VALUE         on/off. Default: off for dev-friendly runtime
   --server-mode MODE       dev_ready, internal_test, test, preprod, production,
                            superweak, maintenance, or incident_lockdown
@@ -76,6 +96,11 @@ Options:
   --backtest-probe-on-startup
                            Run the first-boot trading backtest capacity probe
                            in this temporary runtime
+  --server-runner RUNNER    flask or gunicorn. Default: flask
+  --gunicorn-workers N      Default: auto when --server-runner gunicorn
+  --gunicorn-threads N      Default: auto when --server-runner gunicorn
+  --gunicorn-timeout N      Default: 20 seconds
+  --gunicorn-backlog N      Default: 64
   --dry-run                Print resolved config and exit before copying/starting
   --run-root PATH          Use a fixed /tmp run root instead of auto-generating one
   --in-place, --no-copy    Launch from the current repo; runtime still uses run-root
@@ -144,6 +169,70 @@ normalize_server_mode() {
   esac
 }
 
+normalize_server_runner() {
+  SERVER_RUNNER="${SERVER_RUNNER,,}"
+  case "$SERVER_RUNNER" in
+    flask|werkzeug)
+      SERVER_RUNNER="flask"
+      ;;
+    gunicorn|wsgi)
+      SERVER_RUNNER="gunicorn"
+      ;;
+    *)
+      die "server runner must be flask or gunicorn: $SERVER_RUNNER"
+      ;;
+  esac
+}
+
+resolve_auto_gunicorn_settings() {
+  if [[ "$SERVER_RUNNER" != "gunicorn" ]]; then
+    return 0
+  fi
+  if [[ "${GUNICORN_WORKERS,,}" != "auto" && "${GUNICORN_THREADS,,}" != "auto" ]]; then
+    return 0
+  fi
+  local resolved
+  resolved="$(python3 - "$GUNICORN_WORKERS" "$GUNICORN_THREADS" <<'PY'
+import os
+import sys
+
+raw_workers = str(sys.argv[1] or "auto").strip().lower()
+raw_threads = str(sys.argv[2] or "auto").strip().lower()
+cpu = max(1, os.cpu_count() or 1)
+try:
+    mem_mb = int(os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / (1024 * 1024))
+except Exception:
+    mem_mb = 0
+
+def auto_workers():
+    if cpu <= 2 or (mem_mb and mem_mb < 2048):
+        return 1
+    if cpu >= 16 and (not mem_mb or mem_mb >= 16384):
+        return 3
+    return 2
+
+def auto_threads():
+    if mem_mb and mem_mb < 2048:
+        return 6
+    if cpu <= 2 or (mem_mb and mem_mb < 4096):
+        return 8
+    if cpu <= 4:
+        return 10
+    if cpu >= 8 and (not mem_mb or mem_mb >= 16384):
+        return 16
+    return 12
+
+workers = auto_workers() if raw_workers in {"", "auto", "dynamic"} else int(raw_workers)
+threads = auto_threads() if raw_threads in {"", "auto", "dynamic"} else int(raw_threads)
+workers = max(1, min(8, workers))
+threads = max(2, min(64, threads))
+print(f"{workers} {threads}")
+PY
+)"
+  GUNICORN_WORKERS="${resolved%% *}"
+  GUNICORN_THREADS="${resolved##* }"
+}
+
 normalize_port_conflict_action() {
   PORT_CONFLICT_ACTION="${PORT_CONFLICT_ACTION,,}"
   if [[ -z "$PORT_CONFLICT_ACTION" ]]; then
@@ -171,6 +260,10 @@ normalize_port_conflict_action() {
 normalize_runtime_options() {
   normalize_feature_mode
   normalize_server_mode
+  normalize_token_feature_selection "$DEV_TOKEN_FEATURES" || die "invalid generated dev token feature selection: $DEV_TOKEN_FEATURES"
+  DEV_TOKEN_FEATURES="$NORMALIZED_DEV_TOKEN_FEATURES"
+  normalize_server_runner
+  resolve_auto_gunicorn_settings
   normalize_port_conflict_action
   normalize_yes_no_value "$IN_PLACE" "in-place"
   IN_PLACE="$NORMALIZED_YES_NO"
@@ -208,8 +301,19 @@ print_resolved_config() {
   say "  features:            ${FEATURE_LIST:-<none>}"
   say "  token_features:      ${DEV_TOKEN_FEATURES:-<unrestricted>}"
   say "  token_ttl_minutes:   $DEV_TOKEN_TTL_MINUTES"
+  say "  token_user:          $DEV_TOKEN_USER"
+  say "  token_role:          $DEV_TOKEN_ROLE"
+  if [[ -n "$DEV_TOKEN_PASSWORD" ]]; then
+    say "  token_password:      <configured>"
+  else
+    say "  token_password:      <keep existing / auto-generate for new user>"
+  fi
   say "  security_enabled:    $SECURITY_SETTINGS_ENABLED"
   say "  server_mode:         $SERVER_MODE"
+  say "  server_runner:       $SERVER_RUNNER"
+  if [[ "$SERVER_RUNNER" == "gunicorn" ]]; then
+    say "  gunicorn:            workers=$GUNICORN_WORKERS threads=$GUNICORN_THREADS timeout=$GUNICORN_TIMEOUT backlog=$GUNICORN_BACKLOG"
+  fi
   if [[ -n "$EXTRA_ACCOUNTS" ]]; then
     say "  extra_accounts:      <configured>"
   else
@@ -323,6 +427,101 @@ prompt_feature_settings() {
   done
 }
 
+print_known_feature_keys() {
+  PYTHONPATH="$SOURCE_ROOT" python3 - <<'PY' 2>/dev/null || true
+try:
+    from services.platform.settings import FEATURE_FLAG_KEYS
+    from services.platform.settings_metadata import setting_detail
+except Exception:
+    raise SystemExit(0)
+
+print("Available generated dev token feature keys:")
+for index, key in enumerate(FEATURE_FLAG_KEYS, 1):
+    detail = setting_detail(key)
+    label = str(detail.get("label") or key).strip()
+    print(f"  {index:2d}) {key}: {label}")
+PY
+}
+
+normalize_token_feature_selection() {
+  local raw_value="$1"
+  local normalized
+  if ! normalized="$(PYTHONPATH="$SOURCE_ROOT" python3 - "$raw_value" <<'PY'
+import re
+import sys
+
+raw_value = str(sys.argv[1] or "").strip()
+try:
+    from services.platform.settings import FEATURE_FLAG_KEYS
+except Exception as exc:
+    print(f"feature catalog unavailable: {exc}", file=sys.stderr)
+    raise SystemExit(2)
+
+feature_keys = list(FEATURE_FLAG_KEYS)
+feature_key_set = set(feature_keys)
+if not raw_value or raw_value.lower() in {"all", "*", "unrestricted", "none", "0"}:
+    print("")
+    raise SystemExit(0)
+
+allowed = []
+unknown = []
+for item in re.split(r"[\s,，]+", raw_value):
+    key = item.strip()
+    if not key:
+        continue
+    if key.isdigit():
+        index = int(key)
+        if 1 <= index <= len(feature_keys):
+            key = feature_keys[index - 1]
+        else:
+            unknown.append(item)
+            continue
+    else:
+        if not key.startswith("feature_"):
+            key = f"feature_{key}"
+        if key not in feature_key_set and not key.endswith("_enabled"):
+            maybe_enabled = f"{key}_enabled"
+            if maybe_enabled in feature_key_set:
+                key = maybe_enabled
+    if key not in feature_key_set:
+        unknown.append(item)
+        continue
+    if key not in allowed:
+        allowed.append(key)
+
+if unknown:
+    print(f"unknown feature choice(s): {', '.join(unknown)}", file=sys.stderr)
+    raise SystemExit(2)
+print(",".join(allowed))
+PY
+)"; then
+    return 1
+  fi
+  NORMALIZED_DEV_TOKEN_FEATURES="$normalized"
+  return 0
+}
+
+prompt_token_feature_scope() {
+  local answer
+  say "Generated dev token allowed feature scope:"
+  say "   0) unrestricted token scope (default; no token-level feature restriction)"
+  print_known_feature_keys
+  say "Enter comma-separated numbers or feature keys. Examples: 1,5,feature_trading_enabled or chat,videos."
+  while true; do
+    prompt_value "Generated dev token allowed feature choices" "$DEV_TOKEN_FEATURES" answer
+    if normalize_token_feature_selection "$answer"; then
+      DEV_TOKEN_FEATURES="$NORMALIZED_DEV_TOKEN_FEATURES"
+      if [[ -z "$DEV_TOKEN_FEATURES" ]]; then
+        say "Generated dev token feature scope: unrestricted"
+      else
+        say "Generated dev token feature scope: $DEV_TOKEN_FEATURES"
+      fi
+      return 0
+    fi
+    say "Please choose listed numbers, feature_* keys, short names like chat/videos, or 0 for unrestricted."
+  done
+}
+
 prompt_server_mode() {
   local choice
   normalize_server_mode
@@ -426,7 +625,10 @@ prompt_runtime_config() {
   prompt_server_mode
   if [[ "$SERVER_MODE" == "test" || "$SERVER_MODE" == "internal_test" ]]; then
     prompt_value "Generated dev token TTL minutes" "$DEV_TOKEN_TTL_MINUTES" DEV_TOKEN_TTL_MINUTES
-    prompt_value "Generated dev token allowed feature keys (blank = unrestricted)" "$DEV_TOKEN_FEATURES" DEV_TOKEN_FEATURES
+    prompt_token_feature_scope
+    prompt_value "Generated dev token account username" "$DEV_TOKEN_USER" DEV_TOKEN_USER
+    prompt_value "Password for generated token account (blank = keep existing or auto-generate new account)" "$DEV_TOKEN_PASSWORD" DEV_TOKEN_PASSWORD
+    prompt_value "Role for generated token account (user/manager/super_admin)" "$DEV_TOKEN_ROLE" DEV_TOKEN_ROLE
   fi
   prompt_yes_no "Skip dependency install / reuse existing environment" "$SKIP_INSTALL" SKIP_INSTALL
   prompt_yes_no "Run server in foreground" "$FOREGROUND" FOREGROUND
@@ -474,12 +676,18 @@ copy_repo() {
 }
 
 python_has_runtime_dependencies() {
-  python3 - <<'PY' >/dev/null 2>&1
+  python3 - <<'PY' >/dev/null 2>&1 || return 1
 import argon2
 import cryptography
 import flask
 import flask_talisman
 PY
+  if [[ "${SERVER_RUNNER:-flask}" == "gunicorn" ]]; then
+    python3 - <<'PY' >/dev/null 2>&1 || return 1
+import gunicorn
+PY
+  fi
+  return 0
 }
 
 resolve_python() {
@@ -546,6 +754,30 @@ except Exception as exc:
 tokens = payload.get("tokens") if isinstance(payload, dict) else {}
 if not isinstance(tokens, dict):
     raise SystemExit(0)
+token_user = payload.get("token_user") if isinstance(payload, dict) else {}
+if isinstance(token_user, dict) and token_user.get("username"):
+    created_text = "created" if token_user.get("created") else "existing"
+    print(f"[dev-tmp] token user: {token_user.get('username')} ({created_text}, role={token_user.get('role') or 'user'})")
+    if token_user.get("password"):
+        print(f"[dev-tmp]   password={token_user.get('password')}")
+feature_scope = payload.get("token_feature_scope") or "unknown"
+allowed_keys = payload.get("allowed_feature_keys") or []
+print(f"[dev-tmp] token feature scope: {feature_scope}")
+if allowed_keys:
+    print(f"[dev-tmp] token allowed feature keys: {', '.join(str(item) for item in allowed_keys)}")
+feature_catalog = payload.get("available_feature_keys") or []
+if feature_catalog:
+    print("[dev-tmp] available feature keys:")
+    for item in feature_catalog:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if not key:
+            continue
+        label = str(item.get("label") or key).strip()
+        enabled = "on" if item.get("enabled") else "off"
+        allowed = "allowed" if item.get("allowed_by_token") else "blocked"
+        print(f"[dev-tmp]   {key} [{enabled}/{allowed}] - {label}")
 for name, info in tokens.items():
     if not isinstance(info, dict):
         continue
@@ -801,6 +1033,18 @@ while [[ $# -gt 0 ]]; do
       DEV_TOKEN_TTL_MINUTES="${2:?missing token ttl minutes}"
       shift 2
       ;;
+    --token-user)
+      DEV_TOKEN_USER="${2:?missing token username}"
+      shift 2
+      ;;
+    --token-password)
+      DEV_TOKEN_PASSWORD="${2:?missing token password}"
+      shift 2
+      ;;
+    --token-role)
+      DEV_TOKEN_ROLE="${2:?missing token role}"
+      shift 2
+      ;;
     --security)
       SECURITY_SETTINGS_ENABLED="${2:?missing security value}"
       shift 2
@@ -840,6 +1084,42 @@ while [[ $# -gt 0 ]]; do
     --backtest-probe-on-startup)
       BACKTEST_PROBE_ON_STARTUP=1
       shift
+      ;;
+    --server-runner)
+      SERVER_RUNNER="${2:?missing server runner}"
+      shift 2
+      ;;
+    --gunicorn-workers)
+      GUNICORN_WORKERS="${2:?missing gunicorn worker count}"
+      shift 2
+      ;;
+    --gunicorn-threads)
+      GUNICORN_THREADS="${2:?missing gunicorn thread count}"
+      shift 2
+      ;;
+    --gunicorn-timeout)
+      GUNICORN_TIMEOUT="${2:?missing gunicorn timeout}"
+      shift 2
+      ;;
+    --gunicorn-graceful-timeout)
+      GUNICORN_GRACEFUL_TIMEOUT="${2:?missing gunicorn graceful timeout}"
+      shift 2
+      ;;
+    --gunicorn-keep-alive)
+      GUNICORN_KEEP_ALIVE="${2:?missing gunicorn keep-alive}"
+      shift 2
+      ;;
+    --gunicorn-backlog)
+      GUNICORN_BACKLOG="${2:?missing gunicorn backlog}"
+      shift 2
+      ;;
+    --gunicorn-max-requests)
+      GUNICORN_MAX_REQUESTS="${2:?missing gunicorn max requests}"
+      shift 2
+      ;;
+    --gunicorn-max-requests-jitter)
+      GUNICORN_MAX_REQUESTS_JITTER="${2:?missing gunicorn max requests jitter}"
+      shift 2
       ;;
     --dry-run)
       DRY_RUN=1
@@ -956,6 +1236,9 @@ export HACKME_DEV_FEATURES="$FEATURE_LIST"
 export HACKME_DEV_IN_PLACE="$IN_PLACE"
 export HACKME_DEV_TOKEN_FEATURES="$DEV_TOKEN_FEATURES"
 export HACKME_DEV_TOKEN_TTL_MINUTES="$DEV_TOKEN_TTL_MINUTES"
+export HACKME_DEV_TOKEN_USER="$DEV_TOKEN_USER"
+export HACKME_DEV_TOKEN_PASSWORD="$DEV_TOKEN_PASSWORD"
+export HACKME_DEV_TOKEN_ROLE="$DEV_TOKEN_ROLE"
 export HACKME_DEV_INTERNAL_TEST_TOKEN_FEATURES="$DEV_TOKEN_FEATURES"
 export HACKME_DEV_TOKENS_FILE="$RUNTIME_ROOT/dev_tokens.json"
 export HACKME_DEV_SECURITY_ENABLED="$SECURITY_SETTINGS_ENABLED"
@@ -965,6 +1248,20 @@ export HACKME_DEV_BTC_TRADE_AUTOSTART="$BTC_TRADE_AUTOSTART"
 export HACKME_DEV_BACKTEST_PROBE_ON_STARTUP="$BACKTEST_PROBE_ON_STARTUP"
 export HTML_LEARNING_TRADING_BACKTEST_PROBE_ON_STARTUP="$BACKTEST_PROBE_ON_STARTUP"
 export HACKME_DEV_DEFAULT_ACCOUNT_PASSWORDS="$DEFAULT_ACCOUNT_PASSWORDS"
+export HACKME_DEV_SERVER_RUNNER="$SERVER_RUNNER"
+export HACKME_DEV_GUNICORN_WORKERS="$GUNICORN_WORKERS"
+export HACKME_DEV_GUNICORN_THREADS="$GUNICORN_THREADS"
+export HACKME_DEV_GUNICORN_TIMEOUT="$GUNICORN_TIMEOUT"
+export HTML_LEARNING_BACKPRESSURE_ENABLED="${HTML_LEARNING_BACKPRESSURE_ENABLED:-1}"
+if [[ "$SERVER_RUNNER" == "gunicorn" ]]; then
+  export HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY="${HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY:-$GUNICORN_THREADS}"
+else
+  export HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY="${HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY:-auto}"
+fi
+export HTML_LEARNING_BACKPRESSURE_NORMAL_LIMIT="${HTML_LEARNING_BACKPRESSURE_NORMAL_LIMIT:-auto}"
+export HTML_LEARNING_BACKPRESSURE_HEAVY_LIMIT="${HTML_LEARNING_BACKPRESSURE_HEAVY_LIMIT:-auto}"
+export HTML_LEARNING_BACKPRESSURE_FAST_LANE_RESERVED="${HTML_LEARNING_BACKPRESSURE_FAST_LANE_RESERVED:-auto}"
+export HTML_LEARNING_BACKPRESSURE_RETRY_AFTER_SECONDS="${HTML_LEARNING_BACKPRESSURE_RETRY_AFTER_SECONDS:-2}"
 if [[ "$SECURITY_SETTINGS_ENABLED" == "1" ]]; then
   export HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_POLICY=0
 else
@@ -990,12 +1287,17 @@ HACKME_RUNTIME_OUTPUT_CAPTURE=0 "$PYTHON_BIN" - <<'PY'
 from datetime import datetime, timedelta
 import json
 import os
+import secrets
 import server
 from services.security.access_controls import (
     generate_internal_test_token,
     hash_internal_test_token,
     maintenance_bypass_expires_at,
 )
+try:
+    from services.platform.settings_metadata import setting_detail
+except Exception:
+    setting_detail = None
 
 server.init_db(
     ensure_secure_audit_columns=server.ensure_secure_audit_columns,
@@ -1007,6 +1309,7 @@ server.init_db(
     ensure_official_chat_room=server.ensure_official_chat_room,
     hash_password=server.hash_password,
 )
+server.ensure_local_tls_files(server.CERT_FILE, server.KEY_FILE)
 
 feature_keys = [
     key
@@ -1056,12 +1359,31 @@ def normalize_token_feature_scope(raw_value):
     return allowed
 
 
+def feature_label(key):
+    if setting_detail is not None:
+        try:
+            detail = setting_detail(key)
+            label = str(detail.get("label") or "").strip()
+            if label:
+                return label
+        except Exception:
+            pass
+    return key.removeprefix("feature_").removesuffix("_enabled").replace("_", " ")
+
+
 def dev_token_ttl_minutes():
     try:
         ttl = int(str(os.environ.get("HACKME_DEV_TOKEN_TTL_MINUTES", "1440")).strip())
     except Exception:
         ttl = 1440
     return max(5, min(ttl, 30 * 24 * 60))
+
+
+def normalize_token_role(raw_value):
+    role = str(raw_value or "user").strip() or "user"
+    if role not in {"user", "manager", "super_admin"}:
+        raise SystemExit(f"invalid generated token account role: {role}")
+    return role
 
 
 selected_features = {
@@ -1191,6 +1513,40 @@ def ensure_extra_account(conn, username, password, role, now):
         "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
         (user_id, server.hash_password(password), now),
     )
+
+
+def ensure_dev_token_account(conn, now):
+    username = str(os.environ.get("HACKME_DEV_TOKEN_USER", "test") or "test").strip()
+    if not username:
+        raise SystemExit("generated token account username cannot be blank")
+    role = normalize_token_role(os.environ.get("HACKME_DEV_TOKEN_ROLE", "user"))
+    configured_password = str(os.environ.get("HACKME_DEV_TOKEN_PASSWORD", "") or "")
+    password_to_report = ""
+    created = False
+    updated_password = False
+
+    row = conn.execute("SELECT id, username, role FROM users WHERE username=? LIMIT 1", (username,)).fetchone()
+    if row:
+        if configured_password:
+            ensure_extra_account(conn, username, configured_password, role, now)
+            updated_password = True
+            password_to_report = configured_password
+    else:
+        password = configured_password or secrets.token_urlsafe(12)
+        ensure_extra_account(conn, username, password, role, now)
+        created = True
+        password_to_report = password
+
+    row = conn.execute("SELECT id, username, role FROM users WHERE username=? LIMIT 1", (username,)).fetchone()
+    if not row:
+        raise SystemExit(f"generated token account could not be created: {username}")
+    return row, {
+        "username": str(row["username"] or username),
+        "role": str(row["role"] or role),
+        "created": created,
+        "password_updated": updated_password,
+        "password": password_to_report,
+    }
 
 
 conn = server.get_db()
@@ -1360,17 +1716,31 @@ dev_tokens_payload = {
 if selected_server_mode in {"test", "internal_test"} and dev_tokens_path:
     ttl_minutes = dev_token_ttl_minutes()
     token_features = normalize_token_feature_scope(os.environ.get("HACKME_DEV_TOKEN_FEATURES", ""))
+    effective_feature_values = dict(server.DEFAULT_SETTINGS)
+    effective_feature_values.update(feature_updates)
+    dev_tokens_payload["token_feature_scope"] = "unrestricted" if not token_features else "restricted"
+    dev_tokens_payload["allowed_feature_keys"] = token_features
+    dev_tokens_payload["available_feature_keys"] = [
+        {
+            "key": key,
+            "label": feature_label(key),
+            "enabled": bool(effective_feature_values.get(key, False)),
+            "allowed_by_token": (not token_features or key in token_features),
+        }
+        for key in feature_keys
+    ]
     token_user = None
+    token_user_info = {}
     conn = server.get_db()
     try:
-        token_user = conn.execute(
-            "SELECT id, username FROM users WHERE username='test' LIMIT 1"
-        ).fetchone()
+        token_user, token_user_info = ensure_dev_token_account(conn, datetime.now().isoformat())
+        conn.commit()
     finally:
         conn.close()
+    dev_tokens_payload["token_user"] = token_user_info
     if token_user:
         user_id = int(token_user["id"])
-        username = str(token_user["username"] or "test")
+        username = str(token_user["username"] or token_user_info.get("username") or "test")
         if selected_server_mode == "internal_test":
             login_token = generate_internal_test_token()
             login_expires_at = maintenance_bypass_expires_at(ttl_minutes)
@@ -1388,7 +1758,7 @@ if selected_server_mode in {"test", "internal_test"} and dev_tokens_path:
                 "expires_at": login_expires_at,
                 "ttl_minutes": ttl_minutes,
                 "allowed_features": token_features,
-                "usage": "login as the bound test user in internal_test mode via internal_test_token/login_token/X-Internal-Test-Token",
+                "usage": "login as the bound user in internal_test mode with username + internal_test_token/login_token/X-Internal-Test-Token; password may be blank",
             }
         if hasattr(server, "server_mode_service"):
             tester_expires_at = (datetime.now() + timedelta(minutes=ttl_minutes)).replace(microsecond=0).isoformat()
@@ -1412,12 +1782,12 @@ if selected_server_mode in {"test", "internal_test"} and dev_tokens_path:
                     "expires_at": tester_result.get("expires_at") or tester_expires_at,
                     "ttl_minutes": ttl_minutes,
                     "allowed_features": token_features,
-                    "usage": "X-Tester-Token for test/internal_test scoped API probes",
+                    "usage": "login as the bound user in test/internal_test mode with username + tester_token/login_token/X-Tester-Token; password may be blank",
                 }
             else:
                 dev_tokens_payload["warnings"].append(f"tester token generation failed: {tester_result.get('msg') or tester_result}")
     else:
-        dev_tokens_payload["warnings"].append("test user was not found; no dev token generated")
+        dev_tokens_payload["warnings"].append("generated token account was not found; no dev token generated")
     os.makedirs(os.path.dirname(dev_tokens_path) or ".", exist_ok=True)
     tmp_path = f"{dev_tokens_path}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as fh:
@@ -1437,12 +1807,47 @@ if [[ "$FOREGROUND" == "1" ]]; then
     say "[dev-tmp] repo copy: $COPY_ROOT"
   fi
   say "[dev-tmp] runtime:   $RUNTIME_ROOT"
-  say "[dev-tmp] mode:      foreground server.py"
+  say "[dev-tmp] mode:      foreground $SERVER_RUNNER"
   print_generated_dev_tokens
+  if [[ "$SERVER_RUNNER" == "gunicorn" ]]; then
+    exec "$PYTHON_BIN" -m gunicorn "server:app" \
+      --bind "${HOST}:${PORT}" \
+      --worker-class gthread \
+      --workers "$GUNICORN_WORKERS" \
+      --threads "$GUNICORN_THREADS" \
+      --timeout "$GUNICORN_TIMEOUT" \
+      --graceful-timeout "$GUNICORN_GRACEFUL_TIMEOUT" \
+      --keep-alive "$GUNICORN_KEEP_ALIVE" \
+      --backlog "$GUNICORN_BACKLOG" \
+      --max-requests "$GUNICORN_MAX_REQUESTS" \
+      --max-requests-jitter "$GUNICORN_MAX_REQUESTS_JITTER" \
+      --certfile "$RUNTIME_ROOT/cert.pem" \
+      --keyfile "$RUNTIME_ROOT/key.pem" \
+      --access-logfile - \
+      --error-logfile -
+  fi
   exec "$PYTHON_BIN" server.py
 fi
 
-setsid "$PYTHON_BIN" server.py >"$LOG_CAPTURE" 2>&1 < /dev/null &
+if [[ "$SERVER_RUNNER" == "gunicorn" ]]; then
+  setsid "$PYTHON_BIN" -m gunicorn "server:app" \
+    --bind "${HOST}:${PORT}" \
+    --worker-class gthread \
+    --workers "$GUNICORN_WORKERS" \
+    --threads "$GUNICORN_THREADS" \
+    --timeout "$GUNICORN_TIMEOUT" \
+    --graceful-timeout "$GUNICORN_GRACEFUL_TIMEOUT" \
+    --keep-alive "$GUNICORN_KEEP_ALIVE" \
+    --backlog "$GUNICORN_BACKLOG" \
+    --max-requests "$GUNICORN_MAX_REQUESTS" \
+    --max-requests-jitter "$GUNICORN_MAX_REQUESTS_JITTER" \
+    --certfile "$RUNTIME_ROOT/cert.pem" \
+    --keyfile "$RUNTIME_ROOT/key.pem" \
+    --access-logfile - \
+    --error-logfile - >"$LOG_CAPTURE" 2>&1 < /dev/null &
+else
+  setsid "$PYTHON_BIN" server.py >"$LOG_CAPTURE" 2>&1 < /dev/null &
+fi
 SERVER_PID="$!"
 printf '%s\n' "$SERVER_PID" > "$PID_FILE"
 
@@ -1455,6 +1860,7 @@ else
 fi
 say "[dev-tmp] runtime:   $RUNTIME_ROOT"
 say "[dev-tmp] pid:       $SERVER_PID"
+say "[dev-tmp] runner:    $SERVER_RUNNER"
 if [[ -n "$SERVER_URL" ]]; then
   say "[dev-tmp] url:       $SERVER_URL"
 else

@@ -32,8 +32,8 @@ async function doLogin() {
   if (loginRequestBusy) return;
   const user = sanitize($("li-user").value.trim());
   const pw   = $("li-pw").value;
-  const internalTestToken = isInternalTestLoginMode() ? ($("li-internal-test-token")?.value || "") : "";
-  if (!user || !pw) { flash($("li-msg"), "請填寫帳號與密碼", false); return; }
+  const devLoginToken = isInternalTestLoginMode() ? ($("li-internal-test-token")?.value || "") : "";
+  if (!user || (!pw && !devLoginToken)) { flash($("li-msg"), "請填寫帳號與密碼，或輸入 root 提供的測試 token", false); return; }
 
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
@@ -47,7 +47,7 @@ async function doLogin() {
 
   try {
     const loginPayload = { username: user, password: pw, csrf_token: csrf };
-    if (internalTestToken) loginPayload.internal_test_token = internalTestToken;
+    if (devLoginToken) loginPayload.login_token = devLoginToken;
     const res = await apiFetch(API + "/login", {
       method: "POST",
       credentials: "same-origin",
@@ -136,6 +136,7 @@ function showRegisterError(message, field = "", { focus = true } = {}) {
 }
 
 const USER_APPEARANCE_FIELD_MAP = {
+  site_theme_mode: "edit-user-theme-mode",
   site_font_family: "edit-user-site-font-family",
   site_background_style: "edit-user-site-background-style",
   site_panel_style: "edit-user-site-panel-style",
@@ -154,6 +155,7 @@ const USER_APPEARANCE_FIELD_MAP = {
 };
 const USER_APPEARANCE_PRESETS = {
   midnight: {
+    site_theme_mode: "dark",
     site_font_family: "system",
     site_background_style: "aurora",
     site_panel_style: "glass",
@@ -163,14 +165,33 @@ const USER_APPEARANCE_PRESETS = {
     site_accent: "#6c63ff",
     site_accent2: "#00d4aa",
     site_text: "#e0e0f0",
-    site_muted: "#8888aa",
+    site_muted: "#a8b5d4",
     site_layout_mode: "centered",
     site_density: "comfortable",
     site_radius_px: 12,
     site_font_scale: 1,
     site_content_width: 1380,
   },
+  daylight: {
+    site_theme_mode: "light",
+    site_font_family: "system",
+    site_background_style: "flat",
+    site_panel_style: "solid",
+    site_sidebar_width: "standard",
+    site_bg: "#f5f7fb",
+    site_surface: "#ffffff",
+    site_accent: "#335cff",
+    site_accent2: "#15886f",
+    site_text: "#202636",
+    site_muted: "#5f6b82",
+    site_layout_mode: "centered",
+    site_density: "comfortable",
+    site_radius_px: 8,
+    site_font_scale: 1,
+    site_content_width: 1380,
+  },
   sunset: {
+    site_theme_mode: "dark",
     site_font_family: "rounded",
     site_background_style: "aurora",
     site_panel_style: "glass",
@@ -188,6 +209,7 @@ const USER_APPEARANCE_PRESETS = {
     site_content_width: 1600,
   },
   forest: {
+    site_theme_mode: "dark",
     site_font_family: "system",
     site_background_style: "grid",
     site_panel_style: "matte",
@@ -205,6 +227,7 @@ const USER_APPEARANCE_PRESETS = {
     site_content_width: 1380,
   },
   paper: {
+    site_theme_mode: "light",
     site_font_family: "serif",
     site_background_style: "flat",
     site_panel_style: "solid",
@@ -220,6 +243,57 @@ const USER_APPEARANCE_PRESETS = {
     site_radius_px: 8,
     site_font_scale: 1,
     site_content_width: 1180,
+  },
+  ocean: {
+    site_theme_mode: "dark",
+    site_font_family: "system",
+    site_background_style: "aurora",
+    site_panel_style: "matte",
+    site_sidebar_width: "wide",
+    site_bg: "#071821",
+    site_surface: "#102c38",
+    site_accent: "#38bdf8",
+    site_accent2: "#34d399",
+    site_text: "#eef9ff",
+    site_muted: "#9dc8d6",
+    site_layout_mode: "wide",
+    site_density: "comfortable",
+    site_radius_px: 12,
+    site_font_scale: 1,
+    site_content_width: 1600,
+  },
+  terminal: {
+    site_theme_mode: "dark",
+    site_font_family: "mono",
+    site_background_style: "grid",
+    site_panel_style: "solid",
+    site_sidebar_width: "compact",
+    site_bg: "#070a0d",
+    site_surface: "#10151a",
+    site_accent: "#58ff96",
+    site_accent2: "#38bdf8",
+    site_text: "#d8ffe4",
+    site_muted: "#87aa91",
+    site_layout_mode: "wide",
+    site_density: "compact",
+    site_radius_px: 8,
+    site_font_scale: 0.95,
+    site_content_width: 1380,
+  },
+};
+const USER_APPEARANCE_THEME_NEUTRAL_KEYS = ["site_bg", "site_surface", "site_text", "site_muted"];
+const USER_APPEARANCE_THEME_PALETTES = {
+  dark: {
+    site_bg: "#0f0f1a",
+    site_surface: "#1a1a2e",
+    site_text: "#e0e0f0",
+    site_muted: "#a8b5d4",
+  },
+  light: {
+    site_bg: "#f5f7fb",
+    site_surface: "#ffffff",
+    site_text: "#202636",
+    site_muted: "#5f6b82",
   },
 };
 let editingUserOriginalAppearance = {};
@@ -263,6 +337,7 @@ function populateUserAppearanceEditor(settings = {}) {
 
 function collectUserAppearanceSettingsFromEditor() {
   return {
+    site_theme_mode: $("edit-user-theme-mode")?.value || "custom",
     site_font_family: $("edit-user-site-font-family")?.value || "system",
     site_background_style: $("edit-user-site-background-style")?.value || "flat",
     site_panel_style: $("edit-user-site-panel-style")?.value || "glass",
@@ -279,6 +354,59 @@ function collectUserAppearanceSettingsFromEditor() {
     site_font_scale: Number($("edit-user-site-font-scale")?.value || 1) || 1,
     site_content_width: parseInt($("edit-user-site-content-width")?.value || "1380", 10) || 1380,
   };
+}
+
+function userQuickThemeTargetMode() {
+  const mode = typeof getEffectiveSiteThemeMode === "function"
+    ? getEffectiveSiteThemeMode()
+    : (siteConfig?.site_theme_mode || "dark");
+  return mode === "light" ? "dark" : "light";
+}
+
+function updateThemeQuickToggleUi() {
+  const button = $("theme-quick-toggle");
+  if (!button) return;
+  const target = userQuickThemeTargetMode();
+  const label = target === "light" ? "切換淺色模式" : "切換夜色模式";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.dataset.nextThemeMode = target;
+  const icon = button.querySelector("[data-theme-toggle-icon]");
+  if (icon) icon.textContent = target === "light" ? "☀" : "☾";
+}
+
+async function toggleUserThemeModeQuickly() {
+  if (!currentUser) return;
+  if (!userAppearanceFeatureEnabled()) {
+    flash($("msg"), "目前 root 已暫停個人外觀覆寫。", false);
+    return;
+  }
+  const button = $("theme-quick-toggle");
+  const target = button?.dataset.nextThemeMode || userQuickThemeTargetMode();
+  const current = typeof getUserAppearanceConfig === "function" ? getUserAppearanceConfig() : {};
+  const nextAppearance = { ...current, site_theme_mode: target };
+  USER_APPEARANCE_THEME_NEUTRAL_KEYS.forEach((key) => delete nextAppearance[key]);
+  if (button) button.disabled = true;
+  try {
+    await fetchCsrfToken({ force: true });
+    const res = await apiFetch(API + "/me/appearance", {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+      body: JSON.stringify(nextAppearance),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || "外觀切換失敗");
+    editingUserOriginalAppearance = json.appearance_settings || nextAppearance;
+    if (typeof applySiteConfig === "function") applySiteConfig(editingUserOriginalAppearance, { scope: "user" });
+    populateUserAppearanceEditor(editingUserOriginalAppearance);
+    updateThemeQuickToggleUi();
+    flash($("msg"), target === "light" ? "已切換淺色模式" : "已切換夜色模式", true);
+  } catch (err) {
+    flash($("msg"), err.message || "外觀切換失敗", false);
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function setUserAppearanceEditorDisabled(disabled) {
@@ -353,6 +481,16 @@ function markUserAppearanceEditorChanged() {
   const preset = $("edit-user-appearance-preset");
   if (preset) preset.value = "custom";
   previewUserAppearanceEditor();
+}
+
+function applyUserThemeModeSelection() {
+  if (!userAppearanceEditorVisible() || !userAppearanceFeatureEnabled()) return;
+  const mode = $("edit-user-theme-mode")?.value || "custom";
+  const palette = USER_APPEARANCE_THEME_PALETTES[mode];
+  if (palette) {
+    USER_APPEARANCE_THEME_NEUTRAL_KEYS.forEach((key) => setUserAppearanceFieldValue(key, palette[key]));
+  }
+  markUserAppearanceEditorChanged();
 }
 
 function applyUserAppearancePresetSelection() {

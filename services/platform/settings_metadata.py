@@ -103,6 +103,23 @@ SETTING_GROUPS = (
         ),
     },
     {
+        "key": "server_performance",
+        "title": "Server 效能 / Backpressure",
+        "description": "依硬體資源自動推算請求容量，或由 root 手動覆寫 normal/heavy/root priority/fast-lane 保留量。",
+        "settings": (
+            "server_backpressure_enabled",
+            "server_backpressure_mode",
+            "server_backpressure_thread_capacity",
+            "server_backpressure_normal_limit",
+            "server_backpressure_heavy_limit",
+            "server_backpressure_root_priority_enabled",
+            "server_backpressure_root_limit",
+            "server_backpressure_fast_lane_reserved",
+            "server_backpressure_retry_after_seconds",
+            "server_backpressure_refresh_seconds",
+        ),
+    },
+    {
         "key": "cloud_drive",
         "title": "雲端硬碟",
         "description": "Storage root、容量上限、傳輸速率分級。",
@@ -188,6 +205,50 @@ SETTING_GROUPS = (
 
 
 SETTING_DETAILS = {
+    "site_theme_mode": {
+        "label": "站點快速色系",
+        "description": "全站預設的淺色 / 夜色 / 自訂色盤模式；使用者仍可在個人外觀中覆寫自己的畫面。",
+    },
+    "server_backpressure_enabled": {
+        "label": "Backpressure 啟用",
+        "description": "超載時快速回 503 server_busy，避免主 server 無界接受請求直到下線。",
+    },
+    "server_backpressure_mode": {
+        "label": "Backpressure 模式",
+        "description": "auto 依硬體與 worker threads 推算；manual 由 root 指定 normal/heavy/root/fast-lane；off 關閉。",
+    },
+    "server_backpressure_thread_capacity": {
+        "label": "每 worker thread 容量",
+        "description": "0 代表自動偵測；gunicorn gthread 建議填每個 worker 的 threads 數。",
+    },
+    "server_backpressure_normal_limit": {
+        "label": "普通請求上限",
+        "description": "manual 模式下每 worker 同時允許的普通請求數；0 代表自動。",
+    },
+    "server_backpressure_heavy_limit": {
+        "label": "重型請求上限",
+        "description": "manual 模式下每 worker 同時允許的上傳、下載、HLS、生圖等重型請求數；0 代表自動。",
+    },
+    "server_backpressure_root_priority_enabled": {
+        "label": "Root 優先管理通道",
+        "description": "流量高峰時，已驗證 root 的 root/admin API 使用獨立有界 gate，避免營運管理被一般流量或重型任務卡住。",
+    },
+    "server_backpressure_root_limit": {
+        "label": "Root 優先請求上限",
+        "description": "每 worker 同時允許的 root/admin 管理請求數；0 代表自動。此值也可在 auto 模式下覆寫。",
+    },
+    "server_backpressure_fast_lane_reserved": {
+        "label": "Fast lane 保留量",
+        "description": "manual 模式下每 worker 保留給健康檢查、狀態頁與快速拒絕的 thread 數；0 代表自動。",
+    },
+    "server_backpressure_retry_after_seconds": {
+        "label": "忙碌重試秒數",
+        "description": "server_busy 503 的 Retry-After 秒數。",
+    },
+    "server_backpressure_refresh_seconds": {
+        "label": "跨 worker 設定刷新秒數",
+        "description": "gunicorn 多 worker 下，每個 worker 重新讀取 root Backpressure 設定的最長間隔。",
+    },
     "audit_chain_enabled": {
         "label": "Audit Chain 簽章鏈",
         "description": "啟用後 audit log 會用前一筆 hash 串成 Merkle 鏈，竄改會被偵測。",

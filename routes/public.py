@@ -22,6 +22,7 @@ from services.users.recovery import (
     queue_mail,
 )
 from services.security.captcha import create_captcha_challenge, normalize_captcha_mode, verify_captcha_response
+from services.server.backpressure import backpressure_status
 from services.users.profiles import clear_profile_appearance, get_profile_appearance, update_profile_appearance
 
 
@@ -177,7 +178,9 @@ def register_public_routes(app, deps):
         token = (
             str(data.get("internal_test_token") or "").strip()
             or str(data.get("login_token") or "").strip()
+            or str(data.get("tester_token") or "").strip()
             or request.headers.get("X-Internal-Test-Token", "").strip()
+            or request.headers.get("X-Tester-Token", "").strip()
         )
         if tester_token_login_allowed(conn, token, user_id):
             return {"ok": True, "scope": "tester_token", "allowed_features": []}
@@ -427,6 +430,49 @@ def register_public_routes(app, deps):
             "maintenance_mode": bool(maintenance_mode),
         })
 
+    @app.route("/livez", methods=["GET"])
+    @app.route("/api/livez", methods=["GET"])
+    @app.route("/healthz", methods=["GET"])
+    @app.route("/api/healthz", methods=["GET"])
+    def livez():
+        return json_resp({
+            "ok": True,
+            "status": "live",
+            "app": SERVER_APP_NAME,
+            "release_id": SERVER_RELEASE_ID,
+            "started_at": SERVER_STARTED_AT,
+        })
+
+    @app.route("/readyz", methods=["GET"])
+    @app.route("/api/readyz", methods=["GET"])
+    def readyz():
+        started = time.perf_counter()
+        db_ok = False
+        db_error = ""
+        try:
+            with get_db() as conn:
+                conn.execute("SELECT 1").fetchone()
+            db_ok = True
+        except Exception as exc:
+            db_error = str(exc)[:160]
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+        payload = {
+            "ok": db_ok,
+            "status": "ready" if db_ok else "not_ready",
+            "app": SERVER_APP_NAME,
+            "release_id": SERVER_RELEASE_ID,
+            "started_at": SERVER_STARTED_AT,
+            "checks": {
+                "db": {
+                    "ok": db_ok,
+                    "elapsed_ms": elapsed_ms,
+                    "error": db_error,
+                },
+            },
+            "backpressure": backpressure_status(app),
+        }
+        return json_resp(payload), (200 if db_ok else 503)
+
     @app.route("/api/password-strength", methods=["POST"])
     def password_strength():
         ip = get_client_ip()
@@ -616,9 +662,17 @@ def register_public_routes(app, deps):
 
         username = (data.get("username","") if isinstance(data.get("username"), str) else "").strip()
         password = data.get("password","") if isinstance(data.get("password"), str) else ""
+        login_token_value = (
+            str(data.get("internal_test_token") or "").strip()
+            or str(data.get("login_token") or "").strip()
+            or str(data.get("tester_token") or "").strip()
+            or request.headers.get("X-Internal-Test-Token", "").strip()
+            or request.headers.get("X-Tester-Token", "").strip()
+        )
+        has_login_token = bool(login_token_value)
 
         # Generic blank check — same message regardless of which field
-        if not username or not password:
+        if not username or (not password and not has_login_token):
             record_login_failure(ip, username, ua=ua, detail="blank_field")
             timing_delay()
             return json_resp({"ok":False,"msg":"請填寫帳號與密碼"}), 400
@@ -643,7 +697,7 @@ def register_public_routes(app, deps):
                     pw_hash = pw_row["password_hash"]
 
             # Perform verify with constant-ish delay regardless of user existence
-            if pw_hash:
+            if pw_hash and password:
                 verified = verify_password(pw_hash, password)
             else:
                 # Fake hash work — user doesn't exist, still burn same CPU time
@@ -651,7 +705,7 @@ def register_public_routes(app, deps):
                 fake_salt = base64.urlsafe_b64encode(b"fakesaltPASSSalt0").decode()[:22]
                 fake_hsh  = base64.urlsafe_b64encode(b"f" * 32).decode()[:43]
                 try:
-                    verify_password(f"$argon2id$v=19$m=65536,t=3,p=4${fake_salt}${fake_hsh}", password)
+                    verify_password(f"$argon2id$v=19$m=65536,t=3,p=4${fake_salt}${fake_hsh}", password or "token-login-padding")
                 except argon2.exceptions.VerifyMismatchError:
                     pass  # expected — always fails
                 verified = False
@@ -661,6 +715,12 @@ def register_public_routes(app, deps):
 
             now = datetime.now().isoformat()
             account_security_enabled = is_feature_enabled("feature_account_security_enabled")
+            mode = current_server_mode(conn)
+            token_authz = {"ok": False, "scope": "", "allowed_features": []}
+            if user_row and has_login_token and mode in {"test", "internal_test"}:
+                token_authz = internal_test_login_authorization(conn, settings, data, user_row["id"])
+                if token_authz.get("ok"):
+                    verified = True
             if verified:
                 if account_security_enabled and user_row["locked_until"]:
                     try:
@@ -686,7 +746,10 @@ def register_public_routes(app, deps):
                     return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
                 internal_test_auth_scope = ""
                 internal_test_allowed_features = []
-                if current_server_mode(conn) == "internal_test" and user_row["username"] != "root":
+                if token_authz.get("ok"):
+                    internal_test_auth_scope = str(token_authz.get("scope") or "")
+                    internal_test_allowed_features = list(token_authz.get("allowed_features") or [])
+                if mode == "internal_test" and user_row["username"] != "root" and not token_authz.get("ok"):
                     internal_test_authz = internal_test_login_authorization(conn, settings, data, user_row["id"])
                     if not internal_test_authz.get("ok"):
                         if callable(record_login_attempt):

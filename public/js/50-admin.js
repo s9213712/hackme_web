@@ -35,6 +35,7 @@ const DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS = {
 let suppressNextSettingsStatusClear = false;
 let currentServerMode = "dev_ready";
 let settingsStatusAutoClearTimer = null;
+let backpressureTrafficPollTimer = null;
 
 function parseCloudDriveTransferLimits(raw) {
   if (!raw) return { ...DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS };
@@ -97,6 +98,7 @@ function collectCloudDriveTransferLimits() {
 function switchServerTab(tab) {
   currentServerTab = tab;
   if (tab !== "security") stopServerOutputPoll();
+  if (tab !== "settings") stopBackpressureTrafficPoll();
   ["security", "audit", "health", "integrity", "launch-check", "settings", "env"].forEach((name) => {
     const sec = $("sec-server-" + name);
     if (sec) sec.classList.toggle("active", name === tab);
@@ -116,6 +118,7 @@ function switchServerTab(tab) {
   if (tab === "launch-check") loadLaunchCheck();
   if (tab === "settings") {
     loadSettings();
+    startBackpressureTrafficPoll();
     loadServerMode();
     loadServerUpdateStatus(false);
   }
@@ -4093,6 +4096,126 @@ function updateCaptchaModeFields() {
   if (input) input.disabled = !showTurnstile;
 }
 
+function updateBackpressureModeFields() {
+  const mode = $("s-server-backpressure-mode")?.value || "auto";
+  const manual = mode === "manual";
+  ["s-server-backpressure-normal-limit", "s-server-backpressure-heavy-limit", "s-server-backpressure-fast-lane-reserved"].forEach((id) => {
+    const input = $(id);
+    if (!input) return;
+    input.disabled = !manual;
+    input.closest(".field")?.classList.toggle("muted", !manual);
+  });
+}
+
+function renderBackpressureStatus(backpressure) {
+  const status = $("server-backpressure-status");
+  if (!status) return;
+  if (!backpressure || typeof backpressure !== "object") {
+    status.textContent = "尚未取得目前 backpressure 狀態。";
+    renderBackpressureTrafficChart(null);
+    return;
+  }
+  const normal = backpressure.normal || {};
+  const heavy = backpressure.heavy || {};
+  const root = backpressure.root || {};
+  const sources = backpressure.limit_sources || {};
+  status.textContent = [
+    `目前 PID ${backpressure.pid || "-"}，${backpressure.process_local ? "每個 worker 各自統計" : "全域統計"}`,
+    `threads ${backpressure.thread_capacity ?? "-"}，fast lane 保留 ${backpressure.fast_lane_reserved ?? "-"}`,
+    `normal ${normal.active || 0}/${normal.limit || 0} rejected ${normal.rejected || 0} (${sources.normal || "auto"})`,
+    `heavy ${heavy.active || 0}/${heavy.limit || 0} rejected ${heavy.rejected || 0} (${sources.heavy || "auto"})`,
+    `root ${root.active || 0}/${root.limit || 0} rejected ${root.rejected || 0} (${sources.root || "auto"})`,
+  ].join("；");
+  renderBackpressureTrafficChart(backpressure);
+}
+
+function trafficPolyline(points, key, maxValue, width, height, padX, padY) {
+  if (!Array.isArray(points) || points.length < 2) return "";
+  const span = Math.max(1, points.length - 1);
+  const innerW = width - padX * 2;
+  const innerH = height - padY * 2;
+  return points.map((point, index) => {
+    const x = padX + (innerW * index / span);
+    const y = height - padY - (innerH * Math.max(0, Number(point?.[key] || 0)) / Math.max(1, maxValue));
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+}
+
+function renderBackpressureTrafficChart(backpressure) {
+  const chart = $("server-backpressure-chart");
+  if (!chart) return;
+  const traffic = backpressure?.traffic || {};
+  const points = Array.isArray(traffic.points) ? traffic.points : [];
+  if (!points.length) {
+    chart.innerHTML = '<div class="traffic-chart-empty">尚未取得近期流量資料</div>';
+    return;
+  }
+  const totals = traffic.totals || {};
+  const maxValue = Math.max(1, ...points.map((point) => Math.max(
+    Number(point.total || 0),
+    Number(point.accepted || 0),
+    Number(point.rejected || 0),
+    Number(point.root || 0)
+  )));
+  const width = 640;
+  const height = 150;
+  const padX = 18;
+  const padY = 14;
+  const totalLine = trafficPolyline(points, "total", maxValue, width, height, padX, padY);
+  const acceptedLine = trafficPolyline(points, "accepted", maxValue, width, height, padX, padY);
+  const rejectedLine = trafficPolyline(points, "rejected", maxValue, width, height, padX, padY);
+  const rootLine = trafficPolyline(points, "root", maxValue, width, height, padX, padY);
+  const nowLabel = points[points.length - 1]?.label || "";
+  const firstLabel = points[0]?.label || "";
+  chart.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+      <line x1="${padX}" y1="${height - padY}" x2="${width - padX}" y2="${height - padY}" stroke="rgba(160,170,190,.28)" stroke-width="1" />
+      <line x1="${padX}" y1="${padY}" x2="${padX}" y2="${height - padY}" stroke="rgba(160,170,190,.22)" stroke-width="1" />
+      <line x1="${padX}" y1="${padY}" x2="${width - padX}" y2="${padY}" stroke="rgba(160,170,190,.12)" stroke-width="1" />
+      <polyline points="${totalLine}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke" opacity=".72" />
+      <polyline points="${acceptedLine}" fill="none" stroke="var(--accent2)" stroke-width="2.5" vector-effect="non-scaling-stroke" />
+      <polyline points="${rejectedLine}" fill="none" stroke="var(--danger)" stroke-width="2.5" vector-effect="non-scaling-stroke" />
+      <polyline points="${rootLine}" fill="none" stroke="var(--warning)" stroke-width="2.25" vector-effect="non-scaling-stroke" />
+      <text x="${padX}" y="${height - 2}" fill="var(--muted)" font-size="10">${sanitize(firstLabel)}</text>
+      <text x="${width - padX}" y="${height - 2}" fill="var(--muted)" font-size="10" text-anchor="end">${sanitize(nowLabel)}</text>
+      <text x="${width - padX}" y="${padY + 9}" fill="var(--muted)" font-size="10" text-anchor="end">max ${maxValue}/s</text>
+    </svg>
+    <div class="traffic-chart-legend">
+      <span class="traffic-chart-total">總請求 ${Number(totals.total || 0)}</span>
+      <span class="traffic-chart-accepted">接受 ${Number(totals.accepted || 0)}</span>
+      <span class="traffic-chart-rejected">高峰拒絕 ${Number(totals.rejected || 0)}</span>
+      <span class="traffic-chart-root">Root 管理 ${Number(totals.root || 0)}</span>
+      <span>PID ${sanitize(String(backpressure?.pid || "-"))} · ${Number(traffic.window_seconds || 0)} 秒視窗</span>
+    </div>
+  `;
+}
+
+function stopBackpressureTrafficPoll() {
+  if (backpressureTrafficPollTimer) {
+    clearInterval(backpressureTrafficPollTimer);
+    backpressureTrafficPollTimer = null;
+  }
+}
+
+function startBackpressureTrafficPoll() {
+  stopBackpressureTrafficPoll();
+  if (currentUser !== "root") return;
+  backpressureTrafficPollTimer = setInterval(refreshBackpressureTraffic, 4000);
+}
+
+async function refreshBackpressureTraffic() {
+  if (currentUser !== "root" || currentServerTab !== "settings" || document.hidden) return;
+  try {
+    const csrf = await fetchCsrfToken();
+    const res = await apiFetch(API + "/root/backpressure", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (json.ok) renderBackpressureStatus(json.backpressure);
+  } catch (_) {}
+}
+
 async function loadSettings() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
@@ -4108,6 +4231,7 @@ async function loadSettings() {
   const s = json.settings || {};
   const bind = json.server_bind || {};
   const ssl = json.server_ssl || {};
+  renderBackpressureStatus(json.backpressure);
   if ($("s-maintenance-mode")) $("s-maintenance-mode").checked = !!s.maintenance_mode;
   if ($("s-audit-chain-enabled")) $("s-audit-chain-enabled").checked = !!s.audit_chain_enabled;
   if ($("s-ip-blocking-enabled")) $("s-ip-blocking-enabled").checked = !!s.ip_blocking_enabled;
@@ -4134,6 +4258,17 @@ async function loadSettings() {
   if ($("s-server-ssl-enabled")) $("s-server-ssl-enabled").checked = !!s.server_ssl_enabled;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
+  if ($("s-server-backpressure-enabled")) $("s-server-backpressure-enabled").checked = s.server_backpressure_enabled !== false;
+  if ($("s-server-backpressure-mode")) $("s-server-backpressure-mode").value = s.server_backpressure_mode || "auto";
+  if ($("s-server-backpressure-thread-capacity")) $("s-server-backpressure-thread-capacity").value = Number(s.server_backpressure_thread_capacity || 0);
+  if ($("s-server-backpressure-normal-limit")) $("s-server-backpressure-normal-limit").value = Number(s.server_backpressure_normal_limit || 0);
+  if ($("s-server-backpressure-heavy-limit")) $("s-server-backpressure-heavy-limit").value = Number(s.server_backpressure_heavy_limit || 0);
+  if ($("s-server-backpressure-root-priority-enabled")) $("s-server-backpressure-root-priority-enabled").checked = s.server_backpressure_root_priority_enabled !== false;
+  if ($("s-server-backpressure-root-limit")) $("s-server-backpressure-root-limit").value = Number(s.server_backpressure_root_limit || 0);
+  if ($("s-server-backpressure-fast-lane-reserved")) $("s-server-backpressure-fast-lane-reserved").value = Number(s.server_backpressure_fast_lane_reserved || 0);
+  if ($("s-server-backpressure-retry-after-seconds")) $("s-server-backpressure-retry-after-seconds").value = Number(s.server_backpressure_retry_after_seconds || 2);
+  if ($("s-server-backpressure-refresh-seconds")) $("s-server-backpressure-refresh-seconds").value = Number(s.server_backpressure_refresh_seconds || 2);
+  updateBackpressureModeFields();
   if ($("s-comfyui-connection-mode")) $("s-comfyui-connection-mode").value = s.comfyui_connection_mode || "remote";
   if ($("s-comfyui-remote-api-url")) $("s-comfyui-remote-api-url").value = s.comfyui_remote_api_url || "";
   if ($("s-comfyui-base-dir")) $("s-comfyui-base-dir").value = s.comfyui_base_dir || "";
@@ -4210,6 +4345,7 @@ async function loadSettings() {
   if ($("s-video-tip-fee-percent")) $("s-video-tip-fee-percent").value = s.video_tip_fee_percent ?? 5;
   if ($("s-video-tip-min-points")) $("s-video-tip-min-points").value = s.video_tip_min_points ?? 1;
   if ($("s-site-bg")) $("s-site-bg").value = s.site_bg || "#0f0f1a";
+  if ($("s-site-theme-mode")) $("s-site-theme-mode").value = s.site_theme_mode || "dark";
   if ($("s-site-surface")) $("s-site-surface").value = s.site_surface || "#1a1a2e";
   if ($("s-site-accent")) $("s-site-accent").value = s.site_accent || "#6c63ff";
   if ($("s-site-accent2")) $("s-site-accent2").value = s.site_accent2 || "#00d4aa";
@@ -5863,6 +5999,16 @@ async function saveSettings() {
     server_ssl_enabled: $("s-server-ssl-enabled") ? !!$("s-server-ssl-enabled").checked : true,
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
+    server_backpressure_enabled: $("s-server-backpressure-enabled") ? !!$("s-server-backpressure-enabled").checked : true,
+    server_backpressure_mode: $("s-server-backpressure-mode")?.value || "auto",
+    server_backpressure_thread_capacity: parseInt($("s-server-backpressure-thread-capacity")?.value || "0", 10) || 0,
+    server_backpressure_normal_limit: parseInt($("s-server-backpressure-normal-limit")?.value || "0", 10) || 0,
+    server_backpressure_heavy_limit: parseInt($("s-server-backpressure-heavy-limit")?.value || "0", 10) || 0,
+    server_backpressure_root_priority_enabled: $("s-server-backpressure-root-priority-enabled") ? !!$("s-server-backpressure-root-priority-enabled").checked : true,
+    server_backpressure_root_limit: parseInt($("s-server-backpressure-root-limit")?.value || "0", 10) || 0,
+    server_backpressure_fast_lane_reserved: parseInt($("s-server-backpressure-fast-lane-reserved")?.value || "0", 10) || 0,
+    server_backpressure_retry_after_seconds: parseInt($("s-server-backpressure-retry-after-seconds")?.value || "2", 10) || 2,
+    server_backpressure_refresh_seconds: parseInt($("s-server-backpressure-refresh-seconds")?.value || "2", 10) || 2,
     comfyui_connection_mode: comfyuiMode,
     comfyui_remote_api_url: ($("s-comfyui-remote-api-url")?.value || "").trim(),
     comfyui_base_dir: ($("s-comfyui-base-dir")?.value || "").trim(),
@@ -5900,6 +6046,7 @@ async function saveSettings() {
     module_videos_min_role: $("s-module-videos-min-role")?.value || "user",
     video_tip_fee_percent: Number($("s-video-tip-fee-percent")?.value || 5),
     video_tip_min_points: parseInt($("s-video-tip-min-points")?.value || "1"),
+    site_theme_mode: $("s-site-theme-mode")?.value || "dark",
     site_bg: $("s-site-bg")?.value || "#0f0f1a",
     site_surface: $("s-site-surface")?.value || "#1a1a2e",
     site_accent: $("s-site-accent")?.value || "#6c63ff",
@@ -5930,6 +6077,7 @@ async function saveSettings() {
   const bind = json.server_bind || {};
   const ssl = json.server_ssl || {};
   const driveStorage = json.cloud_drive_storage || {};
+  renderBackpressureStatus(json.backpressure);
   const restartParts = [];
   if (bind.restart_required) restartParts.push("listen IP/port");
   if (ssl.restart_required) restartParts.push("HTTPS 開關");

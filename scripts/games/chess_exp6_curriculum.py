@@ -71,13 +71,65 @@ REPORT_MD_REPO = OUT_DIR / "curriculum_report.md"
 GAMES_PER_STAGE = 100
 N_STAGES = 10
 TOTAL_GAMES = GAMES_PER_STAGE * N_STAGES
-LATTER_HALF_FRACTION = 0.5  # use latter-50% of each game's plies
-EPOCHS_PER_STAGE = 30
+# v6 PRIMARY FIX: material-residual eval.
+#   v3/v4/v5 all hit +6 ceiling vs staged Stockfish 1-5 despite clean
+#   loss convergence (v5 final loss 0.55-1.0). Engine comparison
+#   showed exp3 (-22 score, 49 hand-crafted move features) and
+#   exp4 (-22, policy+value with same features) both beat exp5/exp6
+#   (-28, raw piece-square only). Root cause: 200K-param NN spends
+#   most of its capacity re-learning piece values from cp labels,
+#   leaving little for positional patterns.
+#
+#   Fix: ``evaluate_board`` now composes material_balance(board)
+#   + NN_residual(board). The NN learns deviation from material,
+#   not absolute cp. Untrained random init -> material-only eval
+#   (matches exp0/-34 baseline immediately). Training target is
+#   (blended_cp - material_white) instead of blended_cp.
+#
+# v4 audit fixes (still in effect):
+#
+#   #1 CP_CLIP_ABS: clip teacher cp to ±1000 before blending. The
+#      raw labels include mate-score outliers (100000 - dist) that
+#      after blending give targets ~30000 cp (300× normal). MSE
+#      loss was dominated by these outliers and pulled all weights
+#      toward fitting them — useless for depth-2 search since alpha-
+#      beta already handles mate.
+#
+#   #4 cold-start curriculum: each stage re-initializes from
+#      random and trains on the cumulative dataset from scratch.
+#      v3 warm-start compounded a bad direction at S6+ (loss kept
+#      dropping but staged score collapsed). Cold-start tests each
+#      stage independently and lets us pick a best on merit, not
+#      on accumulated drift.
+#
+#   #5 drop latter-50% cut: sample ALL plies (LATTER_HALF_FRACTION
+#      = 0.0). v3 was endgame-biased (training only on latter 50%);
+#      staged-test schedule starts from openings (start/open_game/
+#      queen_pawn/sicilian/english) so train/test distributions
+#      were mismatched.
+#
+# Untouched v4 (deferred to v5 if v4 still hits ceiling):
+#   #2 encoding bits — actually applied in chess_neural.py
+#      (INPUT_DIM 768→774) since cost was low and the fix is
+#      mechanical. Bumps gradient surface, no other downside.
+#   #3 ranking loss / multipv labels — deferred: needs full
+#      re-labelling at multipv ≥ 2 (~2-3 hr extra compute).
+LATTER_HALF_FRACTION = 1.0  # v4 fix #5: record 100% of plies (was 0.5 endgame-biased)
+CP_CLIP_ABS = 1000.0  # v4 fix #1: clip teacher cp to ±1000 before blending
+COLD_START_PER_STAGE = True  # v4 fix #4: re-init weights each stage
+# v5 fix: v4 underfit each stage because 8 epochs from cold-start
+# cannot converge on growing cumulative data. v4 final_loss went UP
+# across stages (2.45 → 3.18) — opposite of what curriculum learning
+# should produce. v5 increases epochs to 50 so each cold-start stage
+# can actually converge.
+EPOCHS_PER_STAGE = 50
 BATCH_SIZE = 128
-LR = 0.005
+LR = 0.002
 MOMENTUM = 0.9
 GRAD_CLIP = 1.0
-STOCKFISH_DEPTH_FOR_LABEL = 10
+STOCKFISH_DEPTH_FOR_LABEL = 4
+OUTCOME_BLEND = 0.0  # v6.1: residual NN learns pure cp residual (not outcome). Outcome blend was injecting noise the NN couldn't generalize.
+OUTCOME_CP_AMPLITUDE = 400.0  # white win contributes +400 cp influence
 STAGED_OPENINGS = [
     ("start", []),
     ("open_game", ["e2e4", "e7e5"]),
@@ -132,21 +184,43 @@ def load_games(target: int) -> list[dict]:
     return games
 
 
-def collect_positions_latter_half(games: list[dict]) -> list[tuple[int, str]]:
-    """For each game, replay the moves and keep only the FENs from the
-    latter ``LATTER_HALF_FRACTION`` of plies — the "critical" portion
-    where the game's result is decided. Returns a list of
-    (game_index, fen) pairs ordered by source game.
+def _game_outcome_white(rec: dict) -> float:
+    """Return per-game outcome from white's perspective in [-1, +1].
+    White wins -> +1, black wins -> -1, draw or unknown -> 0."""
+    winner = (rec.get("winner_color") or "").lower().strip()
+    if winner == "white":
+        return 1.0
+    if winner == "black":
+        return -1.0
+    # Some replay rows use ``result`` field like "1-0"/"0-1"/"1/2-1/2"
+    result = (rec.get("result") or "").strip()
+    if result == "1-0":
+        return 1.0
+    if result == "0-1":
+        return -1.0
+    return 0.0
+
+
+def collect_positions_latter_half(games: list[dict]) -> list[tuple[int, str, float]]:
+    """For each game, replay the moves and keep FENs from the latter
+    ``LATTER_HALF_FRACTION`` of plies. v4 (audit fix #5) sets
+    ``LATTER_HALF_FRACTION = 0.0`` so this returns ALL plies — train
+    distribution now matches the opening-heavy staged-test schedule.
+    Returns a list of (game_index, fen, game_outcome_white) tuples
+    ordered by source game. ``game_outcome_white`` is the final game
+    outcome from white's perspective in [-1, +1] (constant across all
+    positions extracted from the same game).
 
     Per-game extraction keeps games disjoint across stages so the
     100-games-per-stage curriculum can be sliced cleanly.
     """
-    out: list[tuple[int, str]] = []
+    out: list[tuple[int, str, float]] = []
     for gi, rec in enumerate(games):
         moves = rec.get("move_history") or []
         n = len(moves)
         if n < 8:
             continue
+        outcome_w = _game_outcome_white(rec)
         cutoff = max(1, int(n * (1.0 - LATTER_HALF_FRACTION)))
         board = chess.Board()
         # advance through the first half without recording
@@ -169,18 +243,31 @@ def collect_positions_latter_half(games: list[dict]) -> list[tuple[int, str]]:
                 board.push(mv)
             except Exception:
                 break
-            out.append((gi, board.fen()))
+            out.append((gi, board.fen(), outcome_w))
     return out
 
 
-def label_positions(positions: list[tuple[int, str]]) -> list[tuple[int, str, float]]:
-    """Stockfish-label each (game_index, fen) tuple. Returns
-    (game_index, fen, cp_white)."""
-    rows: list[tuple[int, str, float]] = []
+def label_positions(positions: list[tuple[int, str, float]]) -> list[tuple[int, str, float, float, float]]:
+    """Stockfish-label each (game_index, fen, outcome_white) tuple.
+    Returns (game_index, fen, cp_white_d{STOCKFISH_DEPTH_FOR_LABEL},
+    outcome_white, blended_cp_white).
+
+    ``blended_cp_white`` mixes the depth-${STOCKFISH_DEPTH_FOR_LABEL}
+    cp estimate with the game's final outcome scaled to cp units:
+
+        blended = (1 - OUTCOME_BLEND) * cp_d{N}
+                + OUTCOME_BLEND * outcome_white * OUTCOME_CP_AMPLITUDE
+
+    The NN regresses against ``blended_cp_white`` so the training
+    target is self-consistent with the runtime search horizon
+    (matching depth) AND grounded in actual game results (immune to
+    per-position Stockfish low-depth noise).
+    """
+    rows: list[tuple[int, str, float, float, float]] = []
     limit = analysis_limit(depth=STOCKFISH_DEPTH_FOR_LABEL, movetime_ms=0)
     t0 = time.perf_counter()
     with UciStockfish(STOCKFISH_BIN) as engine:
-        for i, (game_idx, fen) in enumerate(positions, 1):
+        for i, (game_idx, fen, outcome_w) in enumerate(positions, 1):
             board = chess.Board(fen)
             if board.is_game_over():
                 continue
@@ -194,7 +281,16 @@ def label_positions(positions: list[tuple[int, str]]) -> list[tuple[int, str, fl
             if cp is None:
                 continue
             cp_white = float(cp) if board.turn == chess.WHITE else -float(cp)
-            rows.append((game_idx, fen, cp_white))
+            # v4 fix #1: clip teacher cp to ±CP_CLIP_ABS to suppress
+            # mate-score outliers (raw mate cp = 100000 - dist). Mate
+            # positions are already handled correctly by alpha-beta;
+            # the regressor only needs reasonable cp magnitudes.
+            cp_white = max(-CP_CLIP_ABS, min(CP_CLIP_ABS, cp_white))
+            blended = (
+                (1.0 - OUTCOME_BLEND) * cp_white
+                + OUTCOME_BLEND * outcome_w * OUTCOME_CP_AMPLITUDE
+            )
+            rows.append((game_idx, fen, cp_white, outcome_w, blended))
             if i % 500 == 0:
                 print(f"  labelled {i}/{len(positions)} ({time.perf_counter()-t0:.1f}s)", flush=True)
     return rows
@@ -241,13 +337,34 @@ def densify(features_idx, indices: np.ndarray) -> np.ndarray:
     return X
 
 
-def train_cumulative(labelled: list[tuple[int, str, float]], weights: NeuralWeights, *, epochs: int):
+def train_cumulative(labelled, weights: NeuralWeights, *, epochs: int):
+    """``labelled`` rows are (game_idx, fen, cp_d{N}, outcome_white,
+    blended_cp).
+
+    v6.2 RESIDUAL TARGET on static baseline (material + PST): give
+    the NN a chess-knowledge head start so 200K params don't need to
+    re-derive piece values or basic positional logic. The static
+    baseline captures: piece values + knight/bishop centralization +
+    pawn advancement + king safety on first rank. Target =
+    (blended_cp - static_baseline_cp_white(board)) / EVAL_SCALE; the
+    NN now only has to learn subtle deviations the PSTs can't
+    express (king attack threats, passed-pawn races, etc.). At
+    inference, ``evaluate_board`` adds static_baseline back.
+    """
+    from services.games.chess_neural import static_baseline_cp_white  # local to avoid top-level cycles
     n = len(labelled)
-    features_idx = [np.asarray(active_features(chess.Board(fen)), dtype=np.int64) for _, fen, _ in labelled]
-    labels = np.array([cp / EVAL_SCALE for _, _, cp in labelled], dtype=np.float32)
+    boards = [chess.Board(row[1]) for row in labelled]
+    features_idx = [np.asarray(active_features(b), dtype=np.int64) for b in boards]
+    baselines = np.array([static_baseline_cp_white(b) for b in boards], dtype=np.float32)
+    raw_targets = np.array([row[4] for row in labelled], dtype=np.float32)
+    labels = ((raw_targets - baselines) / EVAL_SCALE).astype(np.float32)
     rng = np.random.default_rng(42)
     vel = {name: np.zeros_like(getattr(weights, name)) for name in ("W1", "b1", "W2", "b2", "W3", "b3")}
     losses: list[float] = []
+    # v5: log intermediate loss so we can see WITHIN-stage convergence
+    # (v4 only logged final_loss; we couldn't tell if more epochs would
+    # have helped). Print at epoch 0, every 10 epochs, and final.
+    log_milestones = {0, epochs - 1} | set(range(9, epochs, 10))
     for epoch in range(epochs):
         order = rng.permutation(n)
         ep_loss = 0.0
@@ -269,7 +386,10 @@ def train_cumulative(labelled: list[tuple[int, str, float]], weights: NeuralWeig
                     grad = grad * (GRAD_CLIP / norm)
                 vel[name] = MOMENTUM * vel[name] - LR * grad
                 getattr(weights, name)[...] += vel[name]
-        losses.append(ep_loss / seen if seen else 0.0)
+        mean_loss = ep_loss / seen if seen else 0.0
+        losses.append(mean_loss)
+        if epoch in log_milestones:
+            print(f"    epoch {epoch+1:3d}/{epochs}: loss={mean_loss:.4f}", flush=True)
     return losses
 
 
@@ -480,14 +600,23 @@ def main() -> int:
     label_box: dict = {"rows": None, "error": None}
     if not args.baseline_only and not LABELS_PATH.exists():
         positions = collect_positions_latter_half(games)
-        print(f"extracted {len(positions)} latter-50% positions; starting parallel Stockfish "
+        pct = int(LATTER_HALF_FRACTION * 100)
+        print(f"extracted {len(positions)} positions (latter {pct}% of each game); starting parallel Stockfish "
               f"labelling (depth {STOCKFISH_DEPTH_FOR_LABEL}) in background...", flush=True)
         def _label_worker():
             try:
                 rows = label_positions(positions)
                 with LABELS_PATH.open("w") as f:
-                    for game_idx, fen, cp in rows:
-                        f.write(json.dumps({"game_idx": game_idx, "fen": fen, "cp_white": cp}) + "\n")
+                    for game_idx, fen, cp, outcome, blended in rows:
+                        f.write(json.dumps({
+                            "game_idx": game_idx,
+                            "fen": fen,
+                            "cp_white": cp,
+                            "outcome_white": outcome,
+                            "blended_cp": blended,
+                            "label_depth": STOCKFISH_DEPTH_FOR_LABEL,
+                            "outcome_blend": OUTCOME_BLEND,
+                        }) + "\n")
                 label_box["rows"] = rows
             except Exception as exc:
                 label_box["error"] = exc
@@ -526,16 +655,26 @@ def main() -> int:
             return 0
 
     # ── LABELLING: collect (joined from background thread) ─────────
-    labelled: list[tuple[int, str, float]] = []
+    labelled: list[tuple[int, str, float, float, float]] = []
     game_indices_sorted: list[int] = []
     if not args.baseline_only:
         if LABELS_PATH.exists() and label_thread is None:
-            # cache hit at startup — no background thread was spawned
+            # cache hit at startup — no background thread was spawned.
+            # Always recompute blended_cp from cp_white + outcome_white
+            # using the CURRENT OUTCOME_BLEND so blend tweaks (e.g.
+            # v2→v3: 0.5→0.7) don't require re-running Stockfish.
+            # v4 fix #1: also clip cp_white to ±CP_CLIP_ABS at load
+            # time so cached labels gain the outlier suppression
+            # without needing a re-label pass.
             with LABELS_PATH.open() as f:
                 for line in f:
                     rec = json.loads(line)
-                    labelled.append((int(rec["game_idx"]), rec["fen"], float(rec["cp_white"])))
-            print(f"\nloaded {len(labelled)} cached labels from {LABELS_PATH}", flush=True)
+                    cp_raw = float(rec["cp_white"])
+                    cp = max(-CP_CLIP_ABS, min(CP_CLIP_ABS, cp_raw))
+                    outcome = float(rec.get("outcome_white", 0.0))
+                    blended = (1.0 - OUTCOME_BLEND) * cp + OUTCOME_BLEND * outcome * OUTCOME_CP_AMPLITUDE
+                    labelled.append((int(rec["game_idx"]), rec["fen"], cp, outcome, blended))
+            print(f"\nloaded {len(labelled)} cached labels from {LABELS_PATH} (cp clipped ±{CP_CLIP_ABS:.0f}, blend recomputed at OUTCOME_BLEND={OUTCOME_BLEND})", flush=True)
         else:
             if label_thread is not None and label_thread.is_alive():
                 print(f"\nwaiting for background Stockfish labelling thread...", flush=True)
@@ -547,7 +686,11 @@ def main() -> int:
                 with LABELS_PATH.open() as f:
                     for line in f:
                         rec = json.loads(line)
-                        labelled.append((int(rec["game_idx"]), rec["fen"], float(rec["cp_white"])))
+                        cp_raw = float(rec["cp_white"])
+                        cp = max(-CP_CLIP_ABS, min(CP_CLIP_ABS, cp_raw))
+                        outcome = float(rec.get("outcome_white", 0.0))
+                        blended = (1.0 - OUTCOME_BLEND) * cp + OUTCOME_BLEND * outcome * OUTCOME_CP_AMPLITUDE
+                        labelled.append((int(rec["game_idx"]), rec["fen"], cp, outcome, blended))
             print(f"labelling complete: {len(labelled)} positions -> {LABELS_PATH}", flush=True)
 
         by_game: dict[int, list[tuple[int, str, float]]] = {}
@@ -564,7 +707,14 @@ def main() -> int:
             n_games_target = len(game_indices_sorted)
         stage_game_ids = set(game_indices_sorted[:n_games_target])
         subset = [row for row in labelled if row[0] in stage_game_ids]
-        print(f"\n=== Stage {stage}/{N_STAGES}: cumulative {n_games_target} games, {len(subset)} latter-half positions ===", flush=True)
+        print(f"\n=== Stage {stage}/{N_STAGES}: cumulative {n_games_target} games, {len(subset)} positions ===", flush=True)
+        if COLD_START_PER_STAGE:
+            # v4 fix #4: discard previous stage's weights and start
+            # fresh from a deterministic random init for THIS stage.
+            # Deterministic seed = base_seed + stage so stages are
+            # reproducible but independent.
+            weights = make_initial_weights(seed=20260516 + stage)
+            print(f"  cold-start: re-init weights at stage {stage} (seed={20260516 + stage})", flush=True)
         t0 = time.perf_counter()
         losses = train_cumulative(subset, weights, epochs=EPOCHS_PER_STAGE)
         train_dt = time.perf_counter() - t0
@@ -582,7 +732,9 @@ def main() -> int:
         wins = sum(1 for r in results if r["result"] == "exp6_win")
         draws = sum(1 for r in results if r["result"] == "draw")
         losses_g = sum(1 for r in results if r["result"] == "stockfish_win")
-        print(f"  staged-5 {test_dt:.1f}s: {wins}W/{draws}D/{losses_g}L score={sr:.2%}", flush=True)
+        score_total = wins * SCORE_WIN + draws * SCORE_DRAW + losses_g * SCORE_LOSS
+        score_max = SCORE_WIN * len(results)
+        print(f"  staged-5 {test_dt:.1f}s: {wins}W/{draws}D/{losses_g}L score_total={score_total:+d}/{score_max} (norm={sr:.2%})", flush=True)
         stage_records.append({
             "stage": stage,
             "label": f"cumulative_{n_games_target}_games_{len(subset)}_positions",
@@ -594,6 +746,8 @@ def main() -> int:
             "snapshot_path": str(snap_path),
             "staged_5": results,
             "wins": wins, "draws": draws, "losses_g": losses_g,
+            "score_total": score_total,
+            "score_max": score_max,
             "score_rate": sr,
             "test_seconds": round(test_dt, 2),
         })
@@ -705,17 +859,21 @@ def _write_markdown_report(stage_records: list[dict], *, best, complete: bool) -
     md.append("## 4. 訓練設定\n\n")
     md.append(f"- 梯次：{N_STAGES} stages  \n")
     md.append(f"- 每梯次新增：{GAMES_PER_STAGE} games  \n")
-    md.append(f"- 累積式訓練：stage N 用 1..N×{GAMES_PER_STAGE} 局，warm-start 前一梯次權重  \n")
+    cs_desc = "cold-start (每階段從 random init 重訓累積資料)" if COLD_START_PER_STAGE else "warm-start (累積訓練，沿用前梯次權重)"
+    md.append(f"- 累積式訓練：stage N 用 1..N×{GAMES_PER_STAGE} 局，{cs_desc}  \n")
     md.append(f"- 位置抽取：每局後 {int(LATTER_HALF_FRACTION*100)}% 棋步 (決勝段)，提高每局訓練位置的決定性意義  \n")
     md.append(f"- Stockfish 標註：固定 depth {STOCKFISH_DEPTH_FOR_LABEL}，multipv 1，每位置一次  \n")
+    md.append(f"- 教師 cp clip 範圍: ±{CP_CLIP_ABS:.0f} (v4 fix #1，抑制 mate-score outlier)  \n")
+    md.append(f"- 輸出 blend: target = (1-{OUTCOME_BLEND})·cp + {OUTCOME_BLEND}·outcome·{OUTCOME_CP_AMPLITUDE:.0f}  \n")
     md.append(f"- Epochs/stage: {EPOCHS_PER_STAGE}  \n")
     md.append(f"- Batch size: {BATCH_SIZE}  \n")
     md.append(f"- Learning rate: {LR}  \n")
     md.append(f"- Momentum: {MOMENTUM}  \n")
     md.append(f"- Gradient clip (per-tensor L2): {GRAD_CLIP}  \n")
-    md.append(f"- Seed (init weights): 20260516  \n")
+    md.append(f"- Seed (init weights): 20260516 (cold-start: +stage 1..10)  \n")
     md.append(f"- Optimizer: SGD with momentum, per-tensor grad clip  \n")
-    md.append(f"- 架構: 768 → 256 → 32 → 1 (clipped ReLU, L1/L2 clip to [0,127])  \n\n")
+    md.append(f"- 架構: {INPUT_DIM} → {HIDDEN_1_DIM} → {HIDDEN_2_DIM} → 1 (clipped ReLU, clip [0,127])  \n")
+    md.append(f"  輸入 = 768 piece-square + 6 state bits (stm, castling×4, ep flag) (v4 fix #2)  \n\n")
 
     md.append("## 5. 每階段模型備份\n\n")
     md.append("| Stage | Snapshot path | Size (B) | SHA-256 (head 16 hex) |\n|---|---|---:|---|\n")

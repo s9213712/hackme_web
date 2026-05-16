@@ -58,6 +58,7 @@ let notificationsOpen = false;
 const lazyScriptPromises = new Map();
 const avatarCacheBustByUserId = new Map();
 const SITE_APPEARANCE_KEYS = [
+  "site_theme_mode",
   "site_bg",
   "site_surface",
   "site_accent",
@@ -85,12 +86,29 @@ const SITE_SIDEBAR_WIDTH_MAP = {
   standard: { expanded: 244, collapsed: 68 },
   wide: { expanded: 288, collapsed: 76 },
 };
+const SITE_THEME_MODE_PALETTES = {
+  dark: {
+    site_bg: "#0f0f1a",
+    site_surface: "#1a1a2e",
+    site_text: "#e0e0f0",
+    site_muted: "#a8b5d4",
+  },
+  light: {
+    site_bg: "#f5f7fb",
+    site_surface: "#ffffff",
+    site_text: "#202636",
+    site_muted: "#5f6b82",
+  },
+  custom: {},
+};
 const APP_TOAST_LIMIT = 4;
 const ACTION_FEEDBACK_DURATION_MS = { ok: 1600, info: 900, err: 3000 };
 const INLINE_MESSAGE_DURATION_MS = { ok: 2200, info: 1200, err: 4200 };
 const TOAST_DURATION_MS = { ok: 2400, info: 1600, err: 4200 };
 let lastAppToastSignature = "";
 let lastAppToastAt = 0;
+let lastServerBusyToastAt = 0;
+const SERVER_BUSY_USER_MESSAGE = "目前是流量高峰，伺服器正在保護服務品質。請稍候再試。";
 
 function clientRoleRank(role) {
   if (role === "super_admin") return 3;
@@ -674,7 +692,7 @@ function formatInactivityTimeoutLabel() {
 }
 
 function isInternalTestLoginMode() {
-  return siteConfig && siteConfig.server_mode === "internal_test";
+  return siteConfig && ["test", "internal_test"].includes(siteConfig.server_mode);
 }
 
 function updateLoginModeFields() {
@@ -750,8 +768,28 @@ function extractSiteAppearanceConfig(config) {
   return out;
 }
 
+function normalizeSiteThemeMode(value, fallback = "dark") {
+  const raw = String(value || "").trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(SITE_THEME_MODE_PALETTES, raw) ? raw : fallback;
+}
+
+function getUserAppearanceConfig() {
+  return { ...userSiteAppearanceConfig };
+}
+
+function getEffectiveSiteThemeMode() {
+  const globalMode = normalizeSiteThemeMode(globalSiteConfig.site_theme_mode, "dark");
+  return normalizeSiteThemeMode(userSiteAppearanceConfig.site_theme_mode, globalMode);
+}
+
 function renderEffectiveSiteConfig() {
-  siteConfig = { ...globalSiteConfig, ...userSiteAppearanceConfig };
+  const themeMode = getEffectiveSiteThemeMode();
+  siteConfig = {
+    ...globalSiteConfig,
+    ...(SITE_THEME_MODE_PALETTES[themeMode] || {}),
+    ...userSiteAppearanceConfig,
+    site_theme_mode: themeMode,
+  };
   updateLoginModeFields();
   updateLoginAutofillPolicy();
   const root = document.documentElement;
@@ -785,11 +823,13 @@ function renderEffectiveSiteConfig() {
   const density = typeof siteConfig.site_density === "string" ? siteConfig.site_density : "comfortable";
   const backgroundStyle = typeof siteConfig.site_background_style === "string" ? siteConfig.site_background_style : "flat";
   const panelStyle = typeof siteConfig.site_panel_style === "string" ? siteConfig.site_panel_style : "glass";
+  document.body.dataset.themeMode = themeMode;
   document.body.dataset.layoutMode = layoutMode;
   document.body.dataset.density = density;
   document.body.dataset.backgroundStyle = backgroundStyle;
   document.body.dataset.panelStyle = panelStyle;
   document.body.dataset.sidebarWidth = sidebarWidthKey;
+  if (typeof updateThemeQuickToggleUi === "function") updateThemeQuickToggleUi();
   if (typeof updateRecoveryModeUi === "function") updateRecoveryModeUi();
 }
 
@@ -1047,9 +1087,15 @@ async function apiFetch(url, options = {}, retryOnCsrf = true) {
   const response = await fetch(url, opts);
   const latestCookieToken = readCookie("csrf_token");
   if (latestCookieToken) setCsrfToken(latestCookieToken);
-  if (response.status !== 403 || !retryOnCsrf) return response;
+  if (response.status !== 403 || !retryOnCsrf) {
+    await notifyServerBusyResponse(response);
+    return response;
+  }
   const payload = await response.clone().json().catch(() => ({}));
-  if (!payload || payload.error !== "csrf_invalid") return response;
+  if (!payload || payload.error !== "csrf_invalid") {
+    await notifyServerBusyResponse(response, payload);
+    return response;
+  }
   const refreshed = await fetchCsrfToken({ force: true });
   if (!refreshed) return response;
   const retryHeaders = new Headers(options.headers || {});
@@ -1058,6 +1104,21 @@ async function apiFetch(url, options = {}, retryOnCsrf = true) {
   const retryCookieToken = readCookie("csrf_token");
   if (retryCookieToken) setCsrfToken(retryCookieToken);
   return retried;
+}
+
+async function notifyServerBusyResponse(response, payload = null) {
+  if (!response || response.status !== 503) return;
+  let body = payload;
+  if (!body) body = await response.clone().json().catch(() => ({}));
+  const isServerBusy = response.headers?.get?.("X-Hackme-Backpressure") || body?.error === "server_busy";
+  if (!isServerBusy) return;
+  const retryAfter = Number(body.retry_after_seconds || response.headers?.get?.("Retry-After") || 0);
+  const suffix = retryAfter > 0 ? `約 ${retryAfter} 秒後再試。` : "請稍候再試。";
+  const message = body.user_message || body.message || body.msg || `${SERVER_BUSY_USER_MESSAGE}${suffix}`;
+  const now = Date.now();
+  if (now - lastServerBusyToastAt < 6000) return;
+  lastServerBusyToastAt = now;
+  showAppToast(String(message || SERVER_BUSY_USER_MESSAGE), false, { duration: 5200 });
 }
 
 function flash(el, text, ok) {

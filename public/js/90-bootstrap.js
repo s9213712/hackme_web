@@ -434,6 +434,8 @@ function bindUiEvents() {
   if (editSaveBtn)   editSaveBtn.addEventListener("click", submitEditUser);
   if (editCancelBtn) editCancelBtn.addEventListener("click", hideUserEditDialog);
   if (avatarUploadBtn) avatarUploadBtn.addEventListener("click", uploadUserAvatar);
+  if ($("theme-quick-toggle")) $("theme-quick-toggle").addEventListener("click", toggleUserThemeModeQuickly);
+  if ($("edit-user-theme-mode")) $("edit-user-theme-mode").addEventListener("change", applyUserThemeModeSelection);
   if ($("edit-user-appearance-preset")) $("edit-user-appearance-preset").addEventListener("change", applyUserAppearancePresetSelection);
   if ($("edit-user-appearance-reset")) $("edit-user-appearance-reset").addEventListener("click", resetUserAppearanceEditorToGlobal);
   Object.values(typeof USER_APPEARANCE_FIELD_MAP === "object" ? USER_APPEARANCE_FIELD_MAP : {}).forEach((id) => {
@@ -518,6 +520,7 @@ function bindUiEvents() {
   if (comfyuiTestConnectionBtn) comfyuiTestConnectionBtn.addEventListener("click", testComfyuiConnection);
   if ($("s-captcha-mode")) $("s-captcha-mode").addEventListener("change", updateCaptchaModeFields);
   if ($("s-comfyui-connection-mode")) $("s-comfyui-connection-mode").addEventListener("change", updateComfyuiConnectionModeFields);
+  if ($("s-server-backpressure-mode")) $("s-server-backpressure-mode").addEventListener("change", updateBackpressureModeFields);
   if (typeof bindSettingsAssistants === "function") bindSettingsAssistants();
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
   if (rootCatalogNew) rootCatalogNew.addEventListener("click", clearRootCatalogForm);
@@ -598,6 +601,10 @@ function bindUiEvents() {
 }
 
 $("li-pw").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doLogin();
+});
+const loginTokenInput = $("li-internal-test-token");
+if (loginTokenInput) loginTokenInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") doLogin();
 });
 $("reg-pw").addEventListener("keydown", (e) => {

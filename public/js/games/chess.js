@@ -153,14 +153,15 @@ function renderChessPracticeDifficultyOptions(games) {
         { key: "experiment 5:nnue", label: "實驗 5：NNUE + AlphaBeta/PVS" },
         { key: "experiment 6:neuralnet", label: "實驗 6：Neural Network" },
       ];
-  const current = select.value || "normal";
+  const current = select.value || "experiment 0:minimax2ply";
   select.innerHTML = rows.map((row) => {
     const key = String(row?.key || "normal");
     const label = String(row?.label || gameDifficultyLabel(key));
     return `<option value="${sanitize(key)}">${sanitize(gameDifficultyOptionDescription(key) || label)}</option>`;
   }).join("");
   const allowed = new Set(rows.map((row) => String(row?.key || "")));
-  select.value = allowed.has(current) ? current : (allowed.has("normal") ? "normal" : String(rows[0]?.key || "normal"));
+  const fallback = allowed.has("experiment 0:minimax2ply") ? "experiment 0:minimax2ply" : String(rows[0]?.key || "experiment 0:minimax2ply");
+  select.value = allowed.has(current) ? current : fallback;
   bindChessPracticeDifficultyUi();
   updateChessStockfishDepthControl();
 }
@@ -230,9 +231,14 @@ function gameDifficultyLabel(difficulty) {
   if (difficulty === "experiment 5:nnue") return "實驗 5：NNUE + AlphaBeta/PVS";
   if (difficulty === "experiment 4:pv") return "實驗 4：Policy/Value + MCTS";
   if (difficulty === "experiment 3:dl") return "實驗 3：DL 語義平衡";
-  if (difficulty === "experiment") return "實驗";
-  if (difficulty === "hard") return "困難";
-  return "普通";
+  if (difficulty === "experiment 2:nn") return "實驗 2：NN 評估";
+  if (difficulty === "experiment 1:search") return "實驗 1：引擎搜尋 + 對局學習";
+  if (difficulty === "experiment 0:minimax2ply") return "實驗 0：2 層物質 minimax";
+  // Legacy labels (old DB rows)
+  if (difficulty === "experiment") return "實驗 1（legacy）";
+  if (difficulty === "hard") return "實驗 0（legacy）";
+  if (difficulty === "normal") return "普通（legacy）";
+  return difficulty || "普通";
 }
 
 function gameOpponentColor(color) {

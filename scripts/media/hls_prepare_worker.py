@@ -122,7 +122,8 @@ def _sync_hls_platform_job(
             if error_message:
                 updates["error_message"] = error_message
                 updates["error_stage"] = stage
-            job = update_job(conn, existing["job_uuid"], **updates)
+            defer_progress = status not in {"succeeded", "failed", "cancelled", "expired"}
+            job = update_job(conn, existing["job_uuid"], defer_progress=defer_progress, **updates)
             add_job_event(
                 conn,
                 job["job_uuid"],
@@ -131,6 +132,7 @@ def _sync_hls_platform_job(
                 message=stage_detail or error_message or "HLS 任務狀態更新",
                 progress_percent=progress_percent,
                 payload=metadata,
+                defer_progress=defer_progress,
             )
             return job
         return create_job(

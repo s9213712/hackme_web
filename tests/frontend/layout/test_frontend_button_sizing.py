@@ -89,6 +89,15 @@ def test_chat_action_buttons_meet_wcag_touch_target_size():
     assert "outline: 2px solid var(--accent);" in focus
 
 
+def test_root_quick_settings_button_meets_touch_target_size():
+    css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    root_settings = _block(css, ".root-module-settings-btn {")
+    assert "width: 2.75rem;" in root_settings
+    assert "height: 2.75rem;" in root_settings
+    assert "min-width: 2.75rem;" in root_settings
+    assert "min-height: 2.75rem;" in root_settings
+
+
 def test_muted_color_passes_wcag_aa_contrast_on_dark_bg():
     """Issue #168 regression — --muted #8888aa on --bg #0f0f1a was
     contrast 4.0:1, below WCAG AA's 4.5:1 for small text.

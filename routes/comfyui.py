@@ -1607,8 +1607,16 @@ def register_comfyui_routes(app, deps):
                     if updated.get("error"):
                         payload["error_message"] = str(updated.get("error") or "")[:1000]
                         payload["error_stage"] = "comfyui"
-                    update_platform_job(conn, platform_job["job_uuid"], **payload)
-                    add_job_event(conn, platform_job["job_uuid"], event_type="updated", stage=payload.get("stage"), message=payload.get("error_message") or "ComfyUI 任務狀態更新")
+                    defer_progress = next_status not in {"succeeded", "failed", "cancelled", "expired"}
+                    update_platform_job(conn, platform_job["job_uuid"], defer_progress=defer_progress, **payload)
+                    add_job_event(
+                        conn,
+                        platform_job["job_uuid"],
+                        event_type="updated",
+                        stage=payload.get("stage"),
+                        message=payload.get("error_message") or "ComfyUI 任務狀態更新",
+                        defer_progress=defer_progress,
+                    )
                     conn.commit()
             finally:
                 conn.close()
@@ -1661,8 +1669,25 @@ def register_comfyui_routes(app, deps):
                     percent = int(float(progress_data.get("percent") or 0))
                     stage = str(progress_data.get("phase") or "running")[:80]
                     detail = str(progress_data.get("detail") or "")[:1000]
-                    update_platform_job(conn, platform_job["job_uuid"], status="running", progress_percent=percent, stage=stage, stage_detail=detail)
-                    add_job_event(conn, platform_job["job_uuid"], event_type="progress", stage=stage, message=detail, progress_percent=percent, payload=progress_data)
+                    update_platform_job(
+                        conn,
+                        platform_job["job_uuid"],
+                        status="running",
+                        progress_percent=percent,
+                        stage=stage,
+                        stage_detail=detail,
+                        defer_progress=True,
+                    )
+                    add_job_event(
+                        conn,
+                        platform_job["job_uuid"],
+                        event_type="progress",
+                        stage=stage,
+                        message=detail,
+                        progress_percent=percent,
+                        payload=progress_data,
+                        defer_progress=True,
+                    )
                     conn.commit()
             finally:
                 conn.close()
