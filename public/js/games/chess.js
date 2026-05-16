@@ -129,8 +129,12 @@ function gameDifficultyOptionDescription(difficulty) {
   if (normalizedDifficulty === "experiment 5:nnue") return `實驗 5：NNUE + AlphaBeta/PVS${suffix}`;
   if (normalizedDifficulty === "experiment 4:pv") return `實驗 4：Policy/Value + MCTS${suffix}`;
   if (normalizedDifficulty === "experiment 3:dl") return `實驗 3：DL 語義平衡學習${suffix}`;
-  if (normalizedDifficulty === "experiment") return `實驗：引擎搜尋 + 對局學習${suffix}`;
-  if (normalizedDifficulty === "hard") return `困難：避免明顯送子${suffix}`;
+  if (normalizedDifficulty === "experiment 2:nn") return `實驗 2：NN 評估${suffix}`;
+  if (normalizedDifficulty === "experiment 1:search") return `實驗 1：引擎搜尋 + 對局學習${suffix}`;
+  if (normalizedDifficulty === "experiment 0:minimax2ply") return `實驗 0：2 層物質 minimax${suffix}`;
+  // Legacy DB rows (kept for old games)
+  if (normalizedDifficulty === "experiment") return `實驗 1：引擎搜尋 + 對局學習（legacy）${suffix}`;
+  if (normalizedDifficulty === "hard") return `實驗 0：2 層物質 minimax（legacy）${suffix}`;
   return `普通：優先吃子與將軍${suffix}`;
 }
 
@@ -141,9 +145,9 @@ function renderChessPracticeDifficultyOptions(games) {
   const rows = Array.isArray(chessGame?.computer_difficulties) && chessGame.computer_difficulties.length
     ? chessGame.computer_difficulties
     : [
-        { key: "normal", label: "普通" },
-        { key: "hard", label: "困難" },
-        { key: "experiment", label: "實驗" },
+        { key: "experiment 0:minimax2ply", label: "實驗 0：2 層物質 minimax" },
+        { key: "experiment 1:search", label: "實驗 1：引擎搜尋 + 對局學習" },
+        { key: "experiment 2:nn", label: "實驗 2：NN 評估" },
         { key: "experiment 3:dl", label: "實驗 3：DL 語義平衡" },
         { key: "experiment 4:pv", label: "實驗 4：Policy/Value + MCTS" },
         { key: "experiment 5:nnue", label: "實驗 5：NNUE + AlphaBeta/PVS" },
