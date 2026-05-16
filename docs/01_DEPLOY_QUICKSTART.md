@@ -90,7 +90,8 @@ done
 ## 原理
 
 - `python3 server.py --doctor` 會先檢查 runtime 目錄是否存在且可寫，不會靜默補建。
-- `./test_for_develop.sh` 會把 repo 複製到 `/tmp`，並關掉妨礙開發的安全限制。
+- `./test_for_develop.sh` 會把運行伺服器需要的原始碼複製到 `/tmp`，並關掉妨礙開發的安全限制。
+  它不應複製大型 docs、reports、archive、cache、runtime 產物；若 `/tmp` 很快滿，先檢查是否有舊版腳本或殘留測試副本。
 - 正式部署的 env、runtime、依賴與權限仍應由部署者自己明確準備。
 - `BT/magnet` 遠端下載需要 `aria2c`，upload malware 掃描若要啟用則需
   `clamscan` 或 `clamdscan`；完整依賴請看

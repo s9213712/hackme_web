@@ -99,6 +99,22 @@ python3 scripts/admin/root_recovery.py --prompt-password
 - 你中途已登出
 - 或前端仍是舊快取
 
+### TRB-DRIVE-004 重新整理後分段上傳沒有繼續
+
+這通常是瀏覽器檔案權限限制，不是伺服器遺失任務。任務中心應顯示未完成
+resumable upload session，但你需要重新選擇同一個本機檔案，系統才能補送缺少的 chunk。
+
+### TRB-DRIVE-005 分享連結提示缺少 E2EE 片段金鑰
+
+strict E2EE 分享的解密片段在 URL `#...` fragment 內，伺服器看不到也不能復原。
+重新按複製連結，確認完整連結包含 `#` 後面的片段；若仍不完整，只能重新產生分享。
+
+### TRB-DRIVE-006 BT / direct link 下載看起來停住
+
+先看任務中心的速度、phase、可用度與 pause/cancel 狀態。BT timeout 是 idle-progress
+timeout，不是固定總時間；若速度持續為 0，先檢查 tracker 是否被安全策略阻擋、aria2c 是否可用、
+以及是否有其他高可用度任務正在佔用 worker。
+
 ## E. Video / E2EE / HLS
 
 ### TRB-VIDEO-001 影片無法預覽 / 播放
@@ -118,6 +134,11 @@ python3 scripts/admin/root_recovery.py --prompt-password
 3. `正在瀏覽器端解密影音`
 
 若你只看到單句 `讀取中`，多半是前端快取未更新。
+
+### TRB-VIDEO-003 上傳者看到影音處理中，但公開列表找不到影片
+
+這是預期設計：HLS 或 E2EE streaming 衍生檔準備完成前，不應把影片長時間放在公開列表顯示
+`準備中`。先到任務中心或通知看處理狀態；完成後會通知上傳者。
 
 ## F. ComfyUI / Civitai
 
@@ -143,6 +164,12 @@ python3 scripts/admin/root_recovery.py --prompt-password
 
 若 log 裡仍是後端先回 `ComfyUI 產圖逾時`，再檢查模型大小、顯卡負載與
 ComfyUI 服務本身狀態。
+
+### TRB-AI-004 ComfyUI 一產圖整站變慢
+
+優先看 Security Center 的 CPU / GPU / VRAM / RAM 資源看板。小 VRAM 主機若載入大模型，
+可能因 VRAM offload、CPU RAM 與磁碟 I/O 變慢。部署上應優先使用遠端 ComfyUI 或外部
+ComfyUI process；不要把 Diffusers in-process 打開給一般服務。
 
 ## G. PointsChain / Wallet / Ledger
 
@@ -188,6 +215,18 @@ ComfyUI 服務本身狀態。
 - 目前價格是不是 degraded / fallback
 - Bot 是否仍處於 `未稽核`
 - 若牽涉 BTC_trade，外部 repo 狀態是否完整
+
+### TRB-TRADING-004 root 交易報表或資金池頁回 `503`
+
+新版 root report / sitewide pools / all-user positions 應讀背景 snapshot，不在 root request
+裡現場重算。`503` 通常代表 background worker 尚未產生 snapshot、被暫停，或目前 server mode
+讓交易背景作業 paused。先看 root trading background status，再決定是否 enqueue run-once。
+
+### TRB-TRADING-005 小額手續費或借貸利息看起來太高
+
+目前規則是先累積小數殘值，只有現貨賣出、機器人停止、借貸結算或清算時才轉整數 POINT，
+且有小數就進位。若每次預估、每小時計息或每個 grid 小步都直接進位，應視為 bug。
+借貸交易手續費要用完整名目金額計算，不是只用使用者保證金。
 
 ## I. Snapshot / Restore / Reset
 

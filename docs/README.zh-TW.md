@@ -43,6 +43,7 @@ python3 server.py
 | PointsChain | [07_POINTSCHAIN.md](07_POINTSCHAIN.md) |
 | Trading | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [trading/README.md](trading/README.md) |
 | Snapshot / Reset / Restore | [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [ops_boundaries/README.md](ops_boundaries/README.md) |
+| 個人主頁 / 好友系統 | [social/USER_PROFILES_AND_FRIENDS.md](social/USER_PROFILES_AND_FRIENDS.md) |
 | ComfyUI | [comfyui/README.md](comfyui/README.md) |
 | Games / AI | [games/README.md](games/README.md) |
 | Video | [video/README.md](video/README.md) |
@@ -52,6 +53,9 @@ python3 server.py
 
 Trading 背景常駐引擎設計入口：
 [trading/TRADING_BACKGROUND_ENGINE.md](trading/TRADING_BACKGROUND_ENGINE.md)。
+
+個人主頁、好友代碼、指定對象權限與 PM / private group 好友限制入口：
+[social/USER_PROFILES_AND_FRIENDS.md](social/USER_PROFILES_AND_FRIENDS.md)。
 
 部署判讀原則：日常部署以 numbered guides、domain `README.md` 與 API reference
 為準；`archive/`、`evidence/`、一次性報告是歷史證據；`AGENTS/research/` 是未來規格，

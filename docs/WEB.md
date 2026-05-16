@@ -34,10 +34,46 @@ Users can create or join chat rooms, send messages, refresh room state, attach
 cloud-drive files, and report inappropriate messages. Chat actions are still
 checked against member-level permissions.
 
+The create-room controls are intentionally button-opened so the full form does
+not permanently occupy the chat page. Official rooms anonymize regular users
+for regular viewers and hide member counts from non-root/non-manager accounts;
+root appears as `root`, managers appear as numbered official managers, and
+root/manager views can still see the original sender for moderation. Normal
+group rooms can optionally allow anonymous participation; joining users then
+choose whether to speak anonymously. PM rooms do not support anonymity.
+
 ### Direct Messages
 
 The DM page provides one-to-one station-mail style messaging, unread tracking,
 message soft-delete, and user blocking.
+
+### Personal Profiles and Friends
+
+The main sidebar includes a personal profile panel for public profile data,
+friend requests, and friend-code joins. The remaining social-layer requirement
+is to make every visible user identity link to a personal profile. Entry points
+include comment owners, forum authors, video owners, leaderboards, game records,
+chat rows, and notifications.
+
+Profiles should show public user information, friendship status, and the next
+available action: send a friend request, accept/reject an incoming request, or
+open friend-only actions when the relationship is already accepted.
+
+The current chat friend table and APIs are the compatibility base. The first
+profile/friends phase now uses the same `user_friends` relationship store from
+the main sidebar "Profile" panel instead of creating a second relationship
+store. Friend-only interactions must be checked server-side:
+
+- non-friends cannot send PMs or create private group chats
+- game invites and direct strict-E2EE file-key sharing still need the same
+  backend friend-gate before they are considered complete
+- friend-code joins create an accepted relationship without a second approval
+- root and manager can view all profiles and may PM non-friends for management
+  purposes, but they still appear in friend lists and must be sorted to the top
+  with a clear official/admin marker
+
+The formal requirement is tracked in
+[USER_PROFILES_AND_FRIENDS.md](social/USER_PROFILES_AND_FRIENDS.md).
 
 ### Announcements
 
@@ -62,14 +98,19 @@ for board maintainers.
 Cloud Drive supports:
 
 - local uploads with visible progress
+- resumable/chunk uploads with task-center recovery after reload; users must
+  reselect the same local file because browser file handles are not persisted
 - privacy-mode selection with human-readable labels
-- quota and scan-policy status
+- a separate capacity-management subpage with water-level usage display, quota,
+  scan-policy status, and capacity upgrade controls
 - image, media, PDF, text, and archive previews when policy allows
 - text-file editing for safe owner-owned text files
 - file delete and download actions
 - logical folders, move/organize flow, trash, restore, and purge
 - album creation and album viewing
-- share links for storage files
+- share links for storage files, including browser preview when enabled
+- remote direct-link / BT downloads with speed, progress, availability hints,
+  and pause/resume/cancel controls in the task center
 
 Privacy / encryption modes are deliberately explicit because not every mode is
 end-to-end encrypted:
@@ -107,8 +148,17 @@ BT/magnet/`.torrent` downloads require `aria2c` on the server. Downloaded files
 are saved through the same quota, scan, privacy-mode, and logical-folder
 pipeline as normal uploads. BT transfers run in an external worker process by
 default; the Flask server only tracks progress and stores the completed file.
+The task center exposes current speed and control actions. When more than one
+remote task is queued, the scheduler can prefer higher-availability BT work
+instead of starting every low-quality task at once.
 `timeout_seconds` is treated as an idle timeout for BT, so active downloads are
 not stopped just because they run longer than the initial timeout window.
+
+Share Management lives under the Management area and is the canonical editor
+for file, album, and video share links. Copy-link actions should show a visible
+"copied" confirmation below the button. For strict E2EE shares, users must copy
+the complete URL including the `#` fragment key; the server cannot recover a
+missing fragment.
 
 Root can configure per-member-level Cloud Drive transfer controls under
 `伺服器設定 -> 雲端硬碟 -> 階級傳輸限速`:
@@ -126,7 +176,10 @@ upload QoS, deploy an nginx or reverse-proxy limit in front of the app.
 ### Albums
 
 Albums have their own page for gallery-style browsing. Albums are backed by the
-storage file manager and do not duplicate physical cloud-drive files.
+storage file manager and do not duplicate physical cloud-drive files. Album
+photo grids should behave like a continuous photo stream: no permanent preview
+/ download buttons on every photo, slight hover enlargement, full-page preview
+on click, and left/right navigation between neighboring photos.
 
 Set album visibility to `不列出，持連結可看` to generate an album share URL.
 Open the album detail or preview panel and use the `複製` button next to
@@ -139,13 +192,21 @@ out of band with the recipient.
 The `影音` page publishes videos already stored in Cloud Drive. It does not
 upload to a separate filesystem.
 
-The current page behavior described here is still Video Platform v1. The formal
-future HLS / segmented streaming design for large media is documented in
+The current page behavior described here is Video Platform v1 with HLS and
+strict E2EE streaming extensions. The formal HLS / segmented streaming design
+for large media is documented in
 [VIDEO_STREAMING_ARCHITECTURE.md](video/VIDEO_STREAMING_ARCHITECTURE.md).
 
 - owner selects one of their own Cloud Drive video files
+- publish controls open after the user presses the publish action; they should
+  not be reintroduced as a permanently visible card
 - visibility can be public, unlisted, or private
 - playback uses `/api/videos/<id>/stream`, not a raw storage path
+- prepared HLS videos appear only after the derivative is ready; while
+  processing, the uploader gets a processing notice and completion notification
+- the video list supports search
+- "My videos" share actions should hand off to Share Management so share
+  options can be edited in one place
 - users can like, comment, and tip
 - tips are recorded through PointsChain
 
@@ -191,6 +252,11 @@ Root can configure ComfyUI in two modes from server settings:
   presses that button. If another user already started the shared ComfyUI backend,
   later users can use it directly. Root also sees a `Stop ComfyUI` button when
   the shared local process is already available.
+- Diffusers in-process mode is disabled by default because it loads model
+  weights inside the Flask server process and can consume large RAM/VRAM/CPU.
+  Use local or remote ComfyUI as the deployment path. Only set
+  `HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS=1` in a controlled single-user
+  experiment where main-process resource risk is acceptable.
 - In the root settings page, token-like fields are now mode-aware: the
   `Turnstile site key` only appears when CAPTCHA mode is `turnstile`, and the
   `Civitai API Key` only appears when ComfyUI is in local mode.
@@ -222,6 +288,10 @@ Root can configure ComfyUI in two modes from server settings:
 - While a long ComfyUI task is running, the frontend idle auto-logout countdown
   is paused so the session does not expire mid-task. That currently includes
   local startup polling, async generation, and root's local-model download job.
+- ComfyUI generation is always a background job. The main request returns a
+  `job_id` immediately, and backend status / interrupt / generation calls use
+  bounded timeouts so a slow model load does not make Flask wait synchronously.
+  See [COMFYUI_PERFORMANCE_HARDENING.md](comfyui/COMFYUI_PERFORMANCE_HARDENING.md).
 
 The reference Linux/WSL startup script template is
 `scripts/comfyui/comfyui_run_in_linux.template.sh`. Copy it into a ComfyUI portable
@@ -293,6 +363,7 @@ Root-facing security and operations pages are grouped under Security Center:
 - custom security profiles
 - snapshot / restore / reset controls
 - system environment summary
+- system resource board with cached CPU / GPU / VRAM / RAM gauges
 
 The PointsChain operations panel includes a root-only one-click abnormal-chain
 handler. It is intended for safe-mode recovery: the button verifies the chain,
@@ -308,11 +379,14 @@ API symbols remain `BTC/POINTS`, `ETH/POINTS`, `XRP/POINTS`, `BNB/POINTS`, and
 settlement uses the local PointsChain ledger, while root spot settlement uses a
 separate simulated trading balance. POINTS are treated as USDT-equivalent in the
 trading UI (`1 POINT = 1 USDT`) so market prices match the public quote unit.
-BTC/ETH spot execution uses backend public live prices. The provider fallback
-chain is Binance, OKX, Coinbase Exchange, Kraken, Gemini, Bitstamp, CoinGecko,
-then last-good cache within the configured staleness window. The backend applies
-the market jump threshold after live history exists and fails closed when no
-fresh or trusted cached price is available.
+BTC/ETH spot execution defaults to Binance public live prices so small servers
+do not fetch multi-exchange order books on every normal refresh. If the primary
+API is unavailable, execution falls back to fused weighted price using the
+remaining healthy providers, then last-good cache within the configured
+staleness window. Root can intentionally switch the primary source to fused
+weighted price for larger deployments. The backend applies the market jump
+threshold after live history exists and fails closed when no fresh or trusted
+cached price is available.
 
 The exchange page also shows public candlestick charts for supported display
 markets such as BTC/USDT, ETH/USDT, XRP/USDT, BNB/USDT, and PAXG/USDT. The
@@ -331,11 +405,10 @@ before execution:
 - If public providers are unavailable, live-price execution can temporarily use
   the recent last-good price within the configured staleness window. After that
   it fails closed with a clear error.
-- A future weighted-price mode should aggregate multiple fresh providers,
-  discard stale/outlier prices, and halt trading when provider agreement is too
-  weak. That is the intended extreme-market protection path beyond simple
-  priority fallback.
-- Open limit orders are scanned by the trading maintenance worker and are
+- Fused weighted price aggregates multiple fresh providers, discards stale /
+  outlier prices, and can halt higher-risk trading when provider agreement is
+  too weak. Keep it as fallback by default on resource-constrained hosts.
+- Open limit orders are scanned by the trading background worker and are
   filled when the current execution price reaches the limit.
 - Spot trading bots are owned by the user. The exchange page separates DCA bots,
   grid bots, workflow strategy bots, backtest analysis, and execution records.
@@ -349,13 +422,17 @@ before execution:
   TRUE/FALSE branches, nested AND/OR/NOT logic nodes, cooldown/control nodes,
   branch priority, and sequential action steps. Backtests use the same DCA,
   grid, or workflow configuration and never place orders or mutate ledger
-  state. Bot execution is manually scanned from the exchange page in this
-  version to avoid unattended runaway trading.
+  state. Production bot execution should be driven by the server-side trading
+  background engine, with manual scan actions kept as controlled diagnostics.
 - Spot positions expose backend-calculated cost basis, current value,
   unrealized PnL, realized PnL, and cumulative fees. Cost basis includes the
   remaining spot cost, an estimated entry fee, and the estimated exit fee at the
   current market price. Realized PnL is recorded on each sell fill and is
   replay-verified by the trading state checker.
+- Fee and interest accrual preserve decimal carry until a real settlement
+  boundary. Integer POINT rounding occurs on spot sell, bot stop, lending
+  settlement, or liquidation, and any positive fractional remainder rounds up.
+  Margin open/close fees are based on full notional exposure.
 - See [Trading System And Bots](trading/TRADING.md) for the full trading, bot,
   workflow editor, backtest, and validation guide.
 

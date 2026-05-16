@@ -15,6 +15,8 @@ Related technical references:
 
 - [ENCRYPTION_RUNTIME_BOUNDARY.md](ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md)
 - [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md)
+- [ASYNC_JOB_QUEUE_FEASIBILITY.md](architecture/ASYNC_JOB_QUEUE_FEASIBILITY.md)
+- [USER_PROFILES_AND_FRIENDS.md](social/USER_PROFILES_AND_FRIENDS.md)
 
 ## Release and Schema
 
@@ -50,6 +52,18 @@ Root account note:
 
 - `root` is intentionally excluded from the public password-reset flow.
 - Offline recovery must go through `scripts/admin/root_recovery.py`.
+
+Social / friends note:
+
+- `user_friends` is the current compatibility base for friend relationships.
+- The sitewide profile / friends API reuses that model instead of creating a
+  second relationship store.
+- PM and private-group chat targeting now enforce accepted friendship or an
+  explicit root / manager exception on the backend. Hiding buttons in the UI is
+  not a security boundary.
+- Game invites and direct strict-E2EE file-key sharing are still documented
+  follow-up gaps: they must be patched to call the same target-context service
+  before being treated as fully friend-gated.
 
 Trading registry note:
 
@@ -143,6 +157,10 @@ platform center Playwright acceptance:
 
 `server.py` 不再接 `--host` / `--port` CLI 參數。若要改 bind，請使用
 `HTML_LEARNING_HOST` / `HTML_LEARNING_PORT` 或 `test_for_develop.sh --port ...`。
+
+`test_for_develop.sh` 應只複製運行伺服器與開發測試必要的 source subset 到
+`/tmp`。大型 `docs/`、一次性 `reports/`、archive、cache 與 runtime 產物不應被帶進
+臨時副本，否則多開幾次 isolated server 會很快填滿 `/tmp` 並拖慢測試。
 
 `test_for_develop.sh` 目前除了放寬登入 / session / audit / integrity 保護，
 也會把 trading market registry 切成開發可測狀態：
@@ -295,6 +313,17 @@ that asset needs custom handling.
 - `POST /api/chat/rooms/{room_id}/messages`
 - message delete/report flows through chat and reports routes
 
+Chat targeting notes:
+
+- `POST /api/chat/rooms` may include `allow_anonymous` for normal group rooms.
+- `anonymous` / `anonymous_enabled` only applies when the room allows anonymous
+  and the room is not a one-to-one PM.
+- Official chat rooms anonymize regular users for regular viewers; root and
+  manager sessions can still see the original sender for moderation.
+- PM and private group targets must go through `services.users.friends`
+  context checks; root / manager PM to non-friends is allowed for management
+  use, but that exception must not leak into normal user flows.
+
 ### Notifications and Reports
 
 - `GET /api/notifications`
@@ -323,6 +352,7 @@ reads.
 - `POST /api/jobs/{job_uuid}/retry`
 - `GET /api/shares?limit=120`
 - `GET /api/shares?limit=120&all=1`
+- `PUT /api/shares/{type}/{id}`
 - `POST /api/shares/{type}/{id}/revoke`
 - `GET /api/shares/{type}/{id}/access-events`
 - `GET /api/trading/asset-overview`
@@ -331,10 +361,12 @@ reads.
 Job Center rows expose `status`, `stage`, `stage_detail`, `progress_percent`,
 `source_module`, `job_type`, `error_stage`, and `error_message`; frontend cancel
 actions must show a confirmation prompt. Share management supports `file`,
-`album`, and `video` share types and must not render external `share_url` values
-as trusted copy targets. Trading Asset Overview is display-only and includes
-spot plus margin / lending equity and accrued interest; frontend failures must
-write a visible error to the economy panel instead of failing silently.
+`album`, and `video` share types, including edit flows for password, expiry,
+view limits, targeted user, and browser-preview permission. It must not render
+external `share_url` values as trusted copy targets. Trading Asset Overview is
+display-only and includes spot plus margin / lending equity and accrued
+interest; frontend failures must write a visible error to the economy panel
+instead of failing silently.
 
 ### Appeals and Violations
 
@@ -403,7 +435,20 @@ Remote download APIs:
 - `GET /api/cloud-drive/remote-download/capabilities`
 - `POST /api/cloud-drive/remote-download/tasks`
 - `POST /api/cloud-drive/remote-download/torrent-tasks`
+- `GET /api/cloud-drive/remote-download/tasks`
 - `GET /api/cloud-drive/remote-download/tasks/{task_id}`
+- `POST /api/cloud-drive/remote-download/tasks/{task_id}/pause`
+- `POST /api/cloud-drive/remote-download/tasks/{task_id}/resume`
+- `POST /api/cloud-drive/remote-download/tasks/{task_id}/cancel`
+
+Resumable upload APIs:
+
+- `POST /api/cloud-drive/resumable-upload/start`
+- `GET /api/cloud-drive/resumable-upload/sessions`
+- `GET /api/cloud-drive/resumable-upload/{session_id}/status`
+- `POST /api/cloud-drive/resumable-upload/{session_id}/chunks/{chunk_index}`
+- `POST /api/cloud-drive/resumable-upload/{session_id}/complete`
+- `DELETE /api/cloud-drive/resumable-upload/{session_id}`
 
 BT/magnet/`.torrent` support depends on `aria2c`.
 BT transfers run in `scripts/storage/remote_download_worker.py` by default.
@@ -412,6 +457,10 @@ The task timeout is an idle-progress timeout, not a hard wall-clock limit; set
 `HACKME_ARIA2_BT_STOP_TIMEOUT_SECONDS`, or
 `HACKME_BT_PROGRESS_INTERVAL_SECONDS` when deploying under different network
 or resource constraints.
+
+Resumable upload state is server-side, but browser file handles are not. After
+a page reload, the task center can show the unfinished session and should ask
+the user to reselect the same local file before sending missing chunks.
 
 Server-encrypted preview/download note:
 
@@ -500,6 +549,12 @@ Streaming notes:
 - unlisted strict `e2ee` videos now expose a share-management panel in the
   main video detail page, but the server still rejects `raw_file_key`,
   `e2ee_password`, and `vk`; only wrapped share envelopes are accepted
+- HLS preparation is represented as a background job and should run through the
+  external worker path. Do not decode or package long media inside the main
+  Flask request handler.
+- Video publish controls are intentionally hidden until the user presses the
+  publish action; frontend changes should not reintroduce a permanently visible
+  publish form.
 
 ### ComfyUI
 
@@ -529,8 +584,13 @@ Streaming notes:
 
 ComfyUI notes:
 
-- `POST /api/comfyui/generate` can return an async job payload; the frontend
-  polls `/api/comfyui/jobs/{job_id}` for progress and final result.
+- `POST /api/comfyui/generate` always returns an async job payload; the main
+  request does not wait for model loading or generation. The frontend polls
+  `/api/comfyui/jobs/{job_id}` for progress and final result.
+- ComfyUI backend calls have bounded timeouts. Tune
+  `COMFYUI_GENERATION_TIMEOUT_SECONDS`, `COMFYUI_BACKEND_REQUEST_TIMEOUT_SECONDS`,
+  `COMFYUI_STATUS_TIMEOUT_SECONDS`, and `COMFYUI_INTERRUPT_TIMEOUT_SECONDS`
+  instead of adding synchronous waits to request handlers.
 - Each selected LoRA keeps its own `strength_model` and `strength_clip` values
   in the frontend draft and sends them back in the generation payload.
 - Advanced generation modes now include `img2img`, `inpaint`, `outpaint`, and
@@ -577,6 +637,11 @@ ComfyUI notes:
   in that mode because the server cannot push models into a remote ComfyUI host
   through the standard API.
 - Frontend idle auto-logout is suspended while a ComfyUI generation is active.
+- In-process Diffusers generation remains an opt-in risk path guarded by
+  `HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS=1`. Production-like deployments
+  should use remote ComfyUI or the external ComfyUI process, with bounded
+  status/generate/interrupt timeouts. See
+  [COMFYUI_PERFORMANCE_HARDENING.md](comfyui/COMFYUI_PERFORMANCE_HARDENING.md).
 
 ### PointsChain
 
@@ -635,9 +700,11 @@ User trading APIs:
 
 Root/admin trading APIs:
 
-- `GET /api/admin/trading/report`
-- `GET /api/root/trading/sitewide/pools`
-- `GET /api/root/trading/sitewide/user-positions`
+- `GET /api/admin/trading/report` reads the latest root report snapshot; it
+  returns 503 until `sitewide_metrics_refresh` has produced one.
+- `GET /api/root/trading/sitewide/pools` reads the latest root pool snapshot.
+- `GET /api/root/trading/sitewide/user-positions` reads the latest root
+  user-position snapshot.
 - `GET /api/root/trading/settings`
 - `GET /api/root/trading/price-fusion-status`
 - `POST /api/root/trading/settings`
@@ -659,6 +726,10 @@ Trading API notes:
 - Trading uses `1 POINT = 1 USDT`.
 - User funds must flow through PointsChain. Do not directly update wallet
   balances for trading.
+- Root `POST /api/root/trading/background/run-once` is enqueue-only. It returns
+  `202 Accepted` with a `queue_uuid`; the background worker later claims the
+  queue item and writes job/snapshot metadata. Do not put heavy trading report
+  work back into root request handlers.
 - `GET /api/trading/live-price` and `GET /api/root/trading/price-fusion-status`
   now expose canonical websocket transport state (`connected`, `fallback`,
   `stale`, `degraded`, `confidence`, `provider_count`, `last_update_at`,
@@ -666,7 +737,12 @@ Trading API notes:
   only; do not bypass `reference price` / `risk-grade price` semantics.
 - Percent API fields use human percent values directly: `0.3` means `0.3%`,
   `15` means `15%`.
-- Root trading settings now default `price_source` to `fused_weighted`.
+- Root trading settings now default `price_source` to `binance_public_api`.
+  `fused_weighted` remains available as the root-selected source and as the
+  automatic fallback when the primary public API is unavailable.
+  The default Binance path must stay single-source and must not fetch fused
+  order books while the primary API is healthy; this keeps small-server
+  deployments responsive.
   `price_fusion_mode` accepts `auto_depth` or `manual_weights`, and
   `price_fusion_manual_weights` is a per-provider map for
   `binance_public_api / okx_public_api / coinbase_exchange / kraken_public_api / gemini_public_api / bitstamp_public_api`.
@@ -683,6 +759,11 @@ Trading API notes:
   initial sell levels are placed.
 - Backtests can accept frontend-supplied candles or fetch Binance historical
   K-lines from `start_time`, `end_time`, and `timeframe`.
+- Trading fee and interest accrual paths should preserve decimal carry until a
+  real settlement boundary. Integer POINT rounding belongs at spot sell, bot
+  stop, lending settlement, and liquidation, where any positive fractional
+  remainder is rounded up. Margin open/close fees are charged on notional
+  exposure, not only on user collateral.
 
 Detailed usage is documented in [TRADING.md](trading/TRADING.md).
 
@@ -729,6 +810,10 @@ Rejected findings remain explicit operator decisions and are not auto-approved.
 The `/api/admin/server-mode*` routes remain only as compatibility wrappers for
 older scripts; the root UI and current Server Mode v2 control plane use
 `/api/root/server-mode*`.
+
+`GET /api/admin/security-center` also returns cached `resource_usage` for the
+system resource board. Keep the cache/lock behavior when extending the board;
+polling this endpoint must not spawn a fresh GPU probe for every click.
 
 ## Server Modes and Snapshot Rules
 

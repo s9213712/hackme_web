@@ -349,12 +349,35 @@ python3 scripts/on_live_reports/snapshot_restore.py
   - strict `e2ee` PDF 若無法內嵌，是否保留「新分頁開啟 PDF」備援
   - 壓縮檔預覽是否為結構化清單而不是單段文字
   - 同一次登入 session 內再開第二個 E2EE 檔案時，是否會先嘗試最近成功密碼，而不是每次都直接跳出詢問
+  - 檔案管理與容量管理是否分頁清楚，容量狀態是否用水位式視覺，不再使用電池隱喻
+  - resumable/chunk upload 重新整理後是否在任務中心保留 session，並提醒使用者重新選擇同一檔案後繼續
+  - BT/direct link 是否同時可排隊，任務中心是否顯示速度、可用度、pause/resume/cancel，且多個 BT 時優先跑可用度較高者
+  - 分享連結複製後是否在按鈕下方顯示已完成複製；分享頁是否可在允許 preview 時直接瀏覽器預覽
+  - 分享管理每筆 file / album / video 分享是否都有編輯按鈕，且可更新分享密碼、到期、次數、預覽與指定使用者
+  - 指定使用者分享時，一般使用者是否只能看到好友，root / manager 在站務 context 是否可看到全站用戶且好友置頂
+  - 相簿是否為連續照片流，hover 放大、點選全頁、左右切換都可用，手機版不可整排擠爆
 - 確認功能新增後，同步更新 smoke / pentest / QA runbook / troubleshooting
+- 若本次改到個人面板 / 好友 / 指定對象，至少補：
+  - 個人面板是否顯示好友代碼，重新產生後舊代碼失效，複製後有已複製提示
+  - 透過好友代碼加入是否直接 accepted，錯誤代碼 / 已是好友 / 加自己都有明確訊息
+  - 一般帳號的 PM / private group 指定對象只列好友，直接打 API 邀請非好友仍被拒絕
+  - root / manager 為管理目的可 PM 非好友，但這個例外不應自動套到雲端硬碟分享或遊戲邀請
+  - 目前仍待補的遊戲邀請與直接 strict-E2EE 檔案金鑰分享 friend-gate 必須列為缺口追蹤，不可在報告寫成已完成
+- 若本次改到聊天室匿名，至少補：
+  - 官方聊天室對一般帳號是否匿名、不顯示人數；root 顯示 `root`、manager 顯示編號管理員且標示官方
+  - root / manager 是否能看到原發言者，一般帳號是否看不到
+  - 一般群建立者是否可決定允不允許匿名，加入者是否可選匿名
+  - 匿名時頭像與顯示名稱是否都匿名；一對一 PM 是否沒有匿名選項
+  - `建立聊天室` 表單是否只在按下按鈕後展開，不再常駐成大卡片
 - 若本次改到安全中心的 root 測試面板，至少補：
   - 滲透 / 越權 / 全功能 / 壓力四張卡是否都有獨立按鈕、進度條、最近任務狀態與詳細 log
   - `GET /api/root/security-tests` 與各自的 `POST /api/root/security-tests/*` 是否仍維持 root-only
   - 越權測試是否真的走 `functional_permission_pentest.py`，而不是只是 UI 多一顆按鈕
   - 任務清單刷新時，四張卡是否只更新對應 kind 的最新 job，不會互相覆蓋
+- 若本次改到系統資源看板，至少補：
+  - CPU / GPU / VRAM / RAM 是否以半弧形 gauges 顯示，GPU 不存在時是否明確顯示 unavailable
+  - 連續刷新是否命中短暫快取，不會每次點擊都重新啟動 GPU probe 或 `nvidia-smi`
+  - 手機版 gauges 是否可讀，不互相重疊
 - 若本次改到帳號復原 / 密碼流程，至少補：
   - 一般使用者 `password reset request/confirm` 仍可正常運作
   - `root` 不可再透過 web `忘記密碼`、email token 或審核流程重設
@@ -388,7 +411,15 @@ python3 scripts/on_live_reports/snapshot_restore.py
   - 一鍵重跑是否會保留 seed / CFG / steps / LoRA / ControlNet 上下文；匯出 JSON 不得含本機絕對路徑或 server storage path
   - 手機版 workflow workbench 是否仍可閱讀 preset 清單、依賴狀態、官方標記與主要操作按鈕
   - 若要做 live smoke，可額外跑 `python3 scripts/comfyui/feature_probe.py --base-url https://127.0.0.1:PORT --username root --password ... --insecure --json-out /tmp/comfyui_probe.json`，確認 status、model list、txt2img、img2img、inpaint、outpaint、upscale、history rerun 全都真的能通；ControlNet 若缺模型 / node，應回 `expected_unavailable` 或明確錯誤，而不是卡死
+  - 小 VRAM / 大模型載入時是否只讓 ComfyUI job 慢，不可讓主 Flask request 同步等待到 timeout 或整站下線
+  - Diffusers in-process mode 未明確設定 `HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS=1` 時是否被拒絕，避免模型載入主程序
+  - remote ComfyUI / local external process 的 status、interrupt、generate 是否都有 bounded timeout
 - 若本次改到影音串流 / E2EE 分享，至少補：
+  - 發布影音欄位是否按下發布按鈕後才展開，不再常駐成卡片
+  - 影音列表搜尋是否可用，空結果與錯誤都有人性化提示
+  - HLS 準備完成前是否不在一般影音列表一直顯示準備中；上傳者是否看到處理提示，完成後收到通知
+  - HLS 準備是否走外部 worker / job，不可在主 request 裡同步 ffmpeg 解碼
+  - 我的影音按分享後是否跳到分享管理並帶入該影片，讓使用者繼續設定分享選項
   - Safari 是否仍走原生 HLS，而不是被 `hls.js` 蓋掉
   - 桌機 Chrome / Firefox / Edge 是否能載入同源 `hls.js` 並播放 prepared HLS
   - `hls.js` 初始化或 fatal error 時，是否會自動退回 direct `/stream` 並顯示人性化錯誤
@@ -459,6 +490,8 @@ python3 scripts/on_live_reports/snapshot_restore.py
 - 若本次改到借貸利息 / backtest 上限，至少補：
   - 現貨 fee 預設 `0.10%`、Grid fee 預設為 spot fee 的 `75%`（25% 折扣）時，
     spot / grid / backtest / 預估 UI 是否全部一致
+  - 手續費與利息是否先累積小數殘值，只有現貨賣出、機器人停止、借貸結算或清算時才轉整數 POINT 並無條件進位
+  - 借貸交易的 open / close fee 是否以名目金額計算，例如保證金 100、借 400 時按 500 計費
   - 若本次改到交易市場定義或 provider 對應，至少補 `tests/test_trading_markets.py`
     與 `tests/test_trading_reference_prices.py`，確認 market catalog、display alias、
     live/reference provider id 與 route normalization 都一致
@@ -501,6 +534,11 @@ python3 scripts/on_live_reports/snapshot_restore.py
   - `full tick [100,80,120]` 與 `sampled [100,120]` 是否仍會出現 stop-loss / liquidation 漏觸發
   - `wallet=0 + trial_credit_only` 與小本金利息案例是否仍維持正確帳務
   - `scripts/trading/probes/backtest_20000_probe.py` 的 Grid 20k case、single-candle reject、outlier skip、flat Bollinger guard 是否都與目前引擎一致
+  - Grid Bot 建立時是否凍結底倉、掛單用 POINTS / 現貨與預留手續費，使用者不能手動賣掉 bot 正在使用的底倉
+  - Grid Bot 停止時是否詢問保留底倉或賣出，並正確釋放未用資金與結算費用
+  - Workflow bot 預算增減是否只釋放 free budget，不可低於已凍結、待成交、未結費用與風控保留
+  - root `run-once` 是否回 202 enqueue，不可把重報表或交易 job 放回 root request 同步執行
+  - root sitewide report / 資金池 / 全用戶倉位是否讀 snapshot；沒有 snapshot 時回 503，而不是現場重算到卡住
   - 詳細清單見 `docs/AGENTS/TRADING_QA_REGRESSION_MATRIX.md`
 - 若本次改到站點外觀 / 個人外觀，至少補：
   - root 改全站預設後，未登入與一般使用者是否都先看到新預設

@@ -37,14 +37,18 @@
 - 前端報價與圖表是參考值，最終執行價格由後端重抓與驗證
 - 現貨交易 fee 預設為 `0.10%`；Grid-trade 預設不是半價，而是套用
   `25%` 折扣後的現貨 fee
-- 預設 live 價格來源是多交易所融合價格；系統會抓多家交易所掛單簿中價，
-  以深度加權平均生成執行參考價。root 也可改成手動權重，API 失效時會用剩餘健康來源自動補位；
+- 預設 live 價格來源是 Binance 公開 API，小型部署的常態路徑不抓多交易所 order book，以降低交易頁輪詢延遲；若主要來源失效才退到多交易所融合價格。
+  root 也可主動改成融合價格，此時系統會抓多家交易所掛單簿中價，以深度加權平均生成執行參考價。
+  預設只要 1 個健康來源即可交易；root 可提高門檻或改成手動權重，API 失效時會用剩餘健康來源自動補位；
   root 設定頁另有即時比例 dashboard，可直接看到各來源當下的 normalized weight、
   被排除來源，以及是否已降級成保守模式
 - 使用者交易資金走 PointsChain
 - root 有獨立模擬餘額，不污染正式點數
-- POINTS 帳本仍是整數制；交易手續費自 `2026.05.03-063` 起改用 `Decimal`
-  計算後四捨五入到最近整點，避免舊版小額單一律 `ceil` 造成系統性超收
+- POINTS 帳本仍是整數制；交易手續費與借貸利息自 `2026.05.03-063` 之後走
+  `Decimal` / micropoints 累積，不在每次預估或每小時 accrual 直接進位。
+  只有現貨賣出、機器人停止、借貸結算或清算等真正結算點才轉成整數 POINT，
+  且不足 1 點或有小數時無條件進位。借貸交易本身的開 / 平倉手續費以完整名目金額計算，
+  例如用 100 保證金借 400 買入時，以 500 名目金額計 fee
 - 借貸利率已拆成兩組 root 可調設定：
   - `BTC / ETH = 8% APR`
   - `USDT / POINTS = 10% APR`
@@ -82,10 +86,13 @@
   `services/trading/trading_engine.py` 仍保留 `MAX_BACKTEST_CANDLES = 20_000` 作為
   fallback，但實際 cap 透過 `trading_service.get_max_backtest_candles()` 取出。
   Root 可改的範圍是 `1,000 – 10,000,000`。
-- **首次啟動會自動量測本機回測上限**：
-  `services/server/startup.py:measure_backtest_capacity_if_needed` 在
-  daemon thread 跑一輪 15 種 bot 的 probe（3 基本 + 12 system workflow），
-  取最慢者作為「本機在 60 秒內可跑的根數」，自動填入 `backtest_max_candles`。
+- **回測上限量測仍是 first-boot only**：
+  `services/server/startup.py:measure_backtest_capacity_if_needed` 可跑一輪 15 種 bot
+  的 probe（3 基本 + 12 system workflow），取最慢者作為「本機在 60 秒內可跑的根數」。
+  同一個持久化 DB 只會在 `trading.backtest_capacity_measured_at` 尚未寫入時量測一次；
+  後續重啟會直接跳過。`test_for_develop.sh` 這種每次建立全新暫存 DB 的 QA runtime
+  預設不跑這個 probe，避免每次開臨時 server 都短時間吃滿 CPU；需要量測時加
+  `--backtest-probe-on-startup`。
   方法/原理/實測結果見 [`BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md`](trading/BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md)。
 
 ## Trading Background Engine
@@ -104,8 +111,11 @@ Server Mode v2 暫停或限制。
 重啟或重試不得造成重複成交、重複收息或重複清算。
 
 目前背景 worker 基礎已落地：server 啟動時會啟動 trading background worker，
-並提供 root status / pause / resume / run-once API。全站快照報表與完整 drilldown UI
-仍屬 staged work，部署時不可把未落地的 planned API 當成已可操作功能。
+並提供 root status / pause / resume API；root `run-once` 會排進背景佇列並立即
+回 `202 Accepted`。root 交易報表、資金池摘要與全用戶倉位摘要已改讀
+`trading_root_snapshots`，沒有快照時回 503 等待背景 job，不再於 root request
+內臨時計算。完整 order / bot / TP-SL / risk drilldown UI 仍屬 staged work，
+部署時不可把未落地的 planned API 當成已可操作功能。
 
 背景引擎與報表文件：
 
@@ -116,10 +126,10 @@ Server Mode v2 暫停或限制。
 
 ## Root Sitewide Trading Management
 
-root 交易所頁已具備背景 engine 健康度與受控 job 操作入口；完整「全站交易管理」
-分頁仍應補齊，用於查看全站
-價格刷新、掛單撮合、所有用戶 bot 運作、止盈止損觸發、借貸清算、風控異常與全站
-用戶借貸交易整戶維持率。
+root 交易所頁已具備背景 engine 健康度與受控 job 操作入口；root 報表與積分錢包的
+資金池 / 全用戶倉位摘要應讀背景快照。完整「全站交易管理」分頁仍應補齊，用於查看
+全站價格刷新、掛單撮合、所有用戶 bot 運作、止盈止損觸發、借貸清算、風控異常與
+全站用戶借貸交易整戶維持率。
 
 root 交易所頁也應補上「借貸交易池收支」分頁，用於查看全站手續費收入、借貸利息收入、
 借貸池貸出 / 可用 / 使用率、清算回收、壞帳、micropoints carry 與各用戶維持率分布。
@@ -137,8 +147,8 @@ PointsChain、倉位或清算結果。
   系統會先退到單一公開 ticker，再退到最後健康快取，並在 root dashboard /
   audit event 標示 `價格來源降級`
 - 小額交易顯示成 0 或精度怪異：
-  應視為嚴重缺陷，不是純 UI 問題。先確認目前 release 的整數 POINT fee
-  rounding 規則，並用同一套規則手算。
+  應視為嚴重缺陷，不是純 UI 問題。先確認目前 release 是否把 fee / interest
+  小數先累積到 settlement boundary，而不是每次預估都直接進位或四捨五入。
 - 你以為 Grid 仍是舊版半價 fee：
   不是。現在預設是現貨 fee 的 `75%`，也就是 `25%` 折扣；若你手算還在用
   `0.5x`，結果一定會偏差
@@ -182,7 +192,7 @@ PointsChain、倉位或清算結果。
   且紅 / 黃 / 綠燈判定和後端 API 一致
 - 驗證 `BTC / ETH 8% APR`、`USDT / POINTS 10% APR` 是否會依借入資產正確套用
 - 驗證每 `1` 小時計息、不足 `1` 小時以 `1` 小時計，且前台顯示 `累積利息` /
-  `下一次計息`
+  `下一次計息`；利息小數先累積，只有借貸結算或清算時才轉整數 POINT 並進位
 - 小本金借貸利息 carry 驗證，例如 `principal=50, daily_rate=1%, 24h -> interest_points=0, carry=0.5`
 - 驗證現貨與借貸成交後，`volume_stats` / root report `volume_summary` 是否同步增加
 - 融合價格自動權重 / 手動權重 / API 故障補位驗證

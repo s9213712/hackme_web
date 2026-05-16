@@ -128,6 +128,32 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | DELETE | `/api/chat/friends/<friend_user_id>` | logged-in | 移除好友 |
 | GET | `/api/audit` | logged-in | 個人可見 audit |
 
+聊天匿名與指定對象補充：
+
+- `POST /api/chat/rooms` 可帶 `allow_anonymous`；只有非一對一 / 非 private PM 的聊天室可啟用。
+- `POST /api/chat/rooms` 與 `POST /api/chat/rooms/<room_id>/join` 可帶 `anonymous` / `anonymous_enabled`，前提是聊天室允許匿名。
+- 官方聊天群對一般使用者固定匿名展示；root / manager 仍可為治理目的看到原發言者。
+- 一般使用者建立 PM / private group 時，後端會檢查對方是否為好友；root / manager 為管理目的有 PM 例外。
+
+全站個人主頁 / 好友 API：`routes/chat.py` 的好友 API 仍是聊天頁相容入口；一般好友管理入口已移到主側欄的「個人面板」。
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET | `/api/users/<user_id>/profile` | logged-in | 查看個人主頁 |
+| GET | `/api/users/me/profile` | logged-in | 查看自己的個人面板資料與好友代碼 |
+| PUT | `/api/users/me/profile` | logged-in | 更新自己的顯示名稱、簡介、簽名、所在地、網站與公開範圍 |
+| POST | `/api/users/me/friend-code/rotate` | logged-in | 重新產生好友代碼 |
+| GET | `/api/users/target-options?context=pm` | logged-in | 指定對象候選清單；一般使用者依 context 只回好友，root / manager 在站務 context 可看全站 |
+| GET | `/api/friends` | logged-in | 好友列表；root / manager 置頂 |
+| GET | `/api/friends/requests` | logged-in | 收到與送出的好友申請 |
+| POST | `/api/friends/request` | logged-in | 透過個人主頁送出好友申請 |
+| POST | `/api/friends/requests/<request_id>/accept` | logged-in | 同意好友申請 |
+| POST | `/api/friends/requests/<request_id>/reject` | logged-in | 拒絕好友申請 |
+| POST | `/api/friends/add-by-code` | logged-in | 用好友代碼直接建立好友 |
+| DELETE | `/api/friends/<user_id>` | logged-in | 移除好友 |
+
+完整需求見 [USER_PROFILES_AND_FRIENDS.md](social/USER_PROFILES_AND_FRIENDS.md)。
+
 ### Community / Forum / Announcements
 
 來源：`routes/community.py`
@@ -191,6 +217,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/jobs/<job_uuid>/cancel` | owner / manager | 要求取消任務 |
 | POST | `/api/jobs/<job_uuid>/retry` | owner / manager | 重試 failed / cancelled / retry_wait 任務 |
 | GET | `/api/shares` | logged-in | 分享連結列表，manager 可用 `all=1` |
+| PUT | `/api/shares/<type>/<id>` | owner / manager | 編輯 file / album / video 分享選項，例如密碼、到期、次數、指定用戶、是否允許預覽 |
 | POST | `/api/shares/<type>/<id>/revoke` | owner / manager | 撤銷 file / album / video 分享 |
 | GET | `/api/shares/<type>/<id>/access-events` | owner / manager | 分享建立、存取、到期、撤銷事件 |
 | GET | `/api/trading/asset-overview` | logged-in | 交易資產總覽 |
@@ -225,11 +252,24 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET/POST | `/api/storage/share-links` | logged-in | 建立分享 |
 | POST | `/api/storage/share-links/<link_id>/revoke` | logged-in | 撤銷分享 |
 | GET | `/api/storage/shared/<token>/download` | anonymous | 共享下載 |
+| GET | `/api/storage/shared/<token>` | anonymous | 共享檔案 landing metadata |
+| GET | `/api/storage/shared/<token>/preview` | anonymous | 共享檔案預覽 metadata；需分享設定允許 preview |
+| GET | `/api/storage/shared/<token>/preview/content` | anonymous | 共享檔案瀏覽器預覽內容；strict E2EE 只回密文或 metadata |
 | GET | `/api/storage/shared/albums/<token>` | anonymous | 共享相簿 |
 | GET | `/api/storage/shared/albums/<token>/files/<file_id>/download` | anonymous | 共享相簿檔案下載 |
+| GET | `/api/cloud-drive/remote-download/capabilities` | logged-in | 遠端下載能力，例如 aria2 / BT 可用狀態 |
 | GET/POST | `/api/cloud-drive/remote-download/tasks` | logged-in | 遠端下載任務 |
 | GET/DELETE | `/api/cloud-drive/remote-download/tasks/<task_id>` | logged-in | 單一遠端下載任務 |
-| GET/POST | `/api/cloud-drive/remote-download/torrent-tasks` | logged-in | BT 任務 |
+| POST | `/api/cloud-drive/remote-download/tasks/<task_id>/pause` | logged-in | 暫停遠端下載任務 |
+| POST | `/api/cloud-drive/remote-download/tasks/<task_id>/resume` | logged-in | 恢復遠端下載任務 |
+| POST | `/api/cloud-drive/remote-download/tasks/<task_id>/cancel` | logged-in | 取消遠端下載任務 |
+| POST | `/api/cloud-drive/remote-download/torrent-tasks` | logged-in | 上傳 `.torrent` 建立 BT 任務 |
+| POST | `/api/cloud-drive/resumable-upload/start` | logged-in | 建立 resumable/chunk upload session |
+| GET | `/api/cloud-drive/resumable-upload/sessions` | logged-in | 列出自己的未完成分段上傳 session |
+| GET | `/api/cloud-drive/resumable-upload/<session_id>/status` | logged-in | 分段上傳 session 狀態 |
+| POST | `/api/cloud-drive/resumable-upload/<session_id>/chunks/<chunk_index>` | logged-in | 上傳指定 chunk |
+| POST | `/api/cloud-drive/resumable-upload/<session_id>/complete` | logged-in | 完成分段上傳並保存到雲端硬碟 |
+| DELETE | `/api/cloud-drive/resumable-upload/<session_id>` | logged-in | 取消分段上傳 session |
 | GET/POST | `/api/cloud-drive/refs` | logged-in | 雲端引用 |
 | DELETE | `/api/cloud-drive/refs/<ref_id>` | logged-in | 刪除引用 |
 | GET | `/api/cloud-drive/files/<file_id>/preview` | logged-in | 預覽 metadata |
@@ -411,6 +451,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/trading/bots/backtest` | logged-in | 回測 |
 | GET/PUT/DELETE | `/api/trading/bots/<bot_uuid>` | logged-in | 單一 bot |
 | POST | `/api/trading/bots/<bot_uuid>/increase-runs` | logged-in | 增加 runs |
+| POST | `/api/trading/bots/<bot_uuid>/budget` | logged-in | 調整 workflow bot 預算；不得低於已凍結、未結費用與風控保留 |
 | POST | `/api/trading/bots/scan` | logged-in | 手動掃 bot |
 | POST | `/api/trading/grid/preview` | logged-in | Grid 預估毛利/淨利/風險燈號 |
 | GET/POST | `/api/trading/grid-bots` | logged-in | Grid bot 列表 / 建立 |
@@ -420,9 +461,10 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/trading/margin/open` | logged-in | 開借貸單 |
 | POST | `/api/trading/margin/<position_uuid>/close` | logged-in | 平倉 |
 | POST | `/api/trading/margin/<position_uuid>/collateral` | logged-in | 補保證金 |
-| GET | `/api/admin/trading/report` | root | 交易報表 |
-| GET | `/api/root/trading/sitewide/pools` | root | root 積分錢包資金池唯讀摘要 |
-| GET | `/api/root/trading/sitewide/user-positions` | root | root 積分錢包全用戶倉位唯讀摘要 |
+| POST | `/api/trading/margin/<position_uuid>/collateral/withdraw` | logged-in | 取回可釋放保證金；後端重新計算維持率 |
+| GET | `/api/admin/trading/report` | root | 交易報表快照；無快照時回 503 |
+| GET | `/api/root/trading/sitewide/pools` | root | root 積分錢包資金池唯讀快照；無快照時回 503 |
+| GET | `/api/root/trading/sitewide/user-positions` | root | root 積分錢包全用戶倉位唯讀快照；無快照時回 503 |
 | GET/PUT | `/api/root/trading/settings` | root | root 交易設定 |
 | GET | `/api/admin/trading/markets` | root | 交易市場 registry 列表 |
 | POST | `/api/admin/trading/markets` | root | 新增交易市場 |
@@ -451,7 +493,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/root/trading/btc-trade/start` | root | 一鍵啟動預測 |
 | GET | `/api/root/trading/btc-trade/start-status` | root | 背景 job 狀態 |
 | GET | `/api/root/trading/background/status` | root | 交易背景 worker 狀態、job、lease、近期 run |
-| POST | `/api/root/trading/background/run-once` | root | 指定 job 單次執行，需 `RUN_TRADING_JOB_ONCE` 確認 |
+| POST | `/api/root/trading/background/run-once` | root | enqueue 指定 job 單次執行並立即回 202，需 `RUN_TRADING_JOB_ONCE` 確認 |
 | POST | `/api/root/trading/background/pause` | root | 暫停全部或指定交易背景 job |
 | POST | `/api/root/trading/background/resume` | root | 恢復全部或指定交易背景 job |
 | POST | `/api/root/trading/liquidations/scan` | root | 手動掃清算 |
@@ -473,8 +515,8 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/comfyui/start` | logged-in | 啟動本地 ComfyUI |
 | GET | `/api/comfyui/models` | logged-in | 模型 / LoRA / embedding / VAE / generation mode / ControlNet / upscale model 列表 |
 | POST | `/api/comfyui/billing-quote` | logged-in | 扣點預估 |
-| POST | `/api/comfyui/generate` | logged-in | 生成圖片 |
-| GET | `/api/comfyui/jobs/<job_id>` | logged-in | job 狀態 |
+| POST | `/api/comfyui/generate` | logged-in | 建立背景產圖 job，立即回傳 `job_id` |
+| GET | `/api/comfyui/jobs/<job_id>` | logged-in | job 狀態、進度與完成結果；後端無回應時會標記 `backend_unresponsive` |
 | GET | `/api/comfyui/history` | logged-in | 取得近期生成歷史 |
 | POST | `/api/comfyui/history/<history_id>/rerun` | logged-in | 依歷史設定重跑 |
 | GET | `/api/comfyui/workflows` | logged-in | 取得可讀 workflow preset 列表 |
@@ -599,6 +641,8 @@ Workflow preset 補充：
   - `signature = hmac_sha256:<hex>`
   - `key_version`
   伺服器會重算 hash 並驗簽；未通過者不會計入 production gate。
+- `/api/admin/security-center` 會回 `resource_usage`，供系統資源看板顯示
+  CPU、GPU、VRAM、RAM 半弧形 gauges；後端對資源採樣有短暫快取與鎖，避免頻繁刷新重複啟動 GPU probe。
 
 ### Bug Reports
 

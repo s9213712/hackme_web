@@ -17,6 +17,10 @@
 ### root
 
 - 可查看 root report / audit
+- root report 會統計目前在外積分、root-held points、ledger 淨額、供給差異、
+  未封塊 ledger 數與 sealed coverage，作為未來全站區塊鏈化的供給口徑基礎
+- root 積分錢包頁應提供唯讀的資金池管理與全用戶倉位管理摘要，讓部署者能對照交易資金池、
+  借貸倉位與 PointsChain 供給，不直接在頁面改用戶倉位
 - 可 seal chain、verify chain、建立 backup、執行 recovery
 - 可在 safe mode 下使用 one-click anomaly handler
 
@@ -26,6 +30,7 @@
 - `points_wallets` 是從 ledger replay 出來的結果，不是最終可信來源
 - video tip、admin adjustment、trading settle 都應寫入 PointsChain
 - 恢復時重建 wallet，不信任舊 wallet snapshot 自己就是正確答案
+- 全站供給相關 dashboard 應讀 ledger / report / snapshot 口徑，不應在前端自行加總後當作可信總量
 
 ## 失敗情境與提示
 
@@ -42,6 +47,8 @@
 
 - wallet / ledger / adjust / seal / verify / backup / recovery
 - 影片打賞與交易後的 ledger 對帳
+- root report 的目前在外積分、ledger 淨額與 wallet replay 對帳
+- root 積分錢包資金池 / 全用戶倉位唯讀摘要與交易快照對帳
 - restore 後的 wallet rebuild
 - 極小額、多次累加、精度與手續費驗算
 

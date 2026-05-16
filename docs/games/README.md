@@ -9,6 +9,7 @@
 | 黑白棋 / 圍棋 / 五子棋 AI 與棋力量化 | [references/BOARD_AI_BENCHMARK.md](references/BOARD_AI_BENCHMARK.md) | 要跑三棋 AI benchmark、看 Elo、檢查 skill suite、安裝 KataGo、規劃後續強化 |
 | 西洋棋模型檔與 runtime/bundled 邊界 | [references/chess_model_files.md](references/chess_model_files.md) | 要理解 exp3/exp4/exp5 模型檔、warm-start、promotion artifact |
 | 西洋棋訓練與 replay pipeline | [references/chess_training_pipeline.md](references/chess_training_pipeline.md) | 要跑 replay prepare、seed train、self-play、promotion pipeline |
+| 西洋棋實驗任務與 queue 架構 | [../architecture/ASYNC_JOB_QUEUE_FEASIBILITY.md](../architecture/ASYNC_JOB_QUEUE_FEASIBILITY.md) | 要評估 Redis、RQ/Celery、RabbitMQ 或 Java service 是否適合 Exp5 長任務 |
 | Exp5 暫停交接與重啟 | [reports/2026-05-15_exp5_v28_pause_and_restart_handoff.md](reports/2026-05-15_exp5_v28_pause_and_restart_handoff.md), [references/exp5_restart_playbook.md](references/exp5_restart_playbook.md) | 要從目前最強 V28e baseline 安全重啟實驗、跑快篩、避免洩題 |
 | Exp5 最新補充參考 | [references/2026-05-13_exp5_nnue_fix.md](references/2026-05-13_exp5_nnue_fix.md), [references/2026-05-13_exp5_conversion_fix.md](references/2026-05-13_exp5_conversion_fix.md), [references/2026-05-13_exp5_phase1_engine_upgrade.md](references/2026-05-13_exp5_phase1_engine_upgrade.md), [references/2026-05-13_exp5_model_snapshot_and_high_engine_plan.md](references/2026-05-13_exp5_model_snapshot_and_high_engine_plan.md) | 要追 Exp5 模型修補、轉換、phase 1 engine upgrade 與 high-engine plan |
 | 西洋棋 debug / engine roadmap | [archive/chess_debug/README.md](archive/chess_debug/README.md) | 要追 exp3/exp4/exp5 歷史與目前治理結論 |
@@ -61,6 +62,10 @@ python3 scripts/games/setup_katago.py
 
 西洋棋仍保留獨立的 match/practice/replay/training/promotion pipeline。不要把三棋 benchmark 或後續三棋神經網路訓練直接塞進西洋棋 `self_play_training.py`；兩邊的模型、報告、promotion gate 要分開。
 
+使用者端練習局可選本機 `Stockfish（本機）` 難度，但只有在後端偵測到可用 UCI binary 時才會出現。前端只有選到 Stockfish 時才顯示 depth 欄位；後端會把 `stockfish_depth` 正規化並限制在 `1` 到 `20`，預設仍由 Stockfish teacher 設定決定。一般內建難度與 exp3 / exp4 / exp5 / exp6 不顯示這個 depth 欄位。
+
+Exp6 是新的 lightweight neural-network chess engine path，實作在 `services/games/chess_exp6.py`，和 exp3 / exp4 一樣屬於可訓練模型，但目前定位偏向輕量 NumPy CPU inference 與獨立模型檔，不取代 exp5 NNUE / search profile pipeline。PGN/replay 下載與 teacher audit 產出的乾淨訓練資料可以接到 exp6 訓練，但要和 exp3 / exp4 / exp5 的 promotion artifact 分開標記，避免不同模型家族互相覆蓋 baseline。
+
 目前 Exp5 棋力實驗已暫停在 V28e。重啟時請先讀
 [reports/2026-05-15_exp5_v28_pause_and_restart_handoff.md](reports/2026-05-15_exp5_v28_pause_and_restart_handoff.md)
 與 [references/exp5_restart_playbook.md](references/exp5_restart_playbook.md)，先跑 Blockfish
@@ -96,5 +101,7 @@ PV、source game id、chosen/source move 或逐題答案。
 - 三棋測試：`tests/games/test_board_ai.py`、`tests/games/test_board_arena.py`
 - 真實版俄羅斯方塊：`public/js/games/real-tetris.js`
 - 西洋棋仍使用 `services/games/chess*.py`、`scripts/games/chess_*.py`、`docs/games/references/chess_*.md`
+- playable Stockfish depth：`routes/games.py::normalize_stockfish_depth`、`services/games/chess_stockfish_teacher.py`
+- Exp6 neural engine：`services/games/chess_exp6.py`、`tests/games/test_chess_neural.py`
 
 新增三棋 AI 強化前，先更新 [references/BOARD_AI_BENCHMARK.md](references/BOARD_AI_BENCHMARK.md) 的量化規則與 promotion gate，避免只改演算法但沒有可比較的棋力證據。

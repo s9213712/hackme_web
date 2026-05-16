@@ -4,5 +4,16 @@ Use this folder for ComfyUI operator-only material. The main admin route still
 starts from [03_ADMIN_GUIDE.md](../03_ADMIN_GUIDE.md) and [WEB.md](../WEB.md).
 
 - [COMFYUI_ADMIN.md](COMFYUI_ADMIN.md): root/admin-only ComfyUI and Civitai operations
+- [COMFYUI_PERFORMANCE_HARDENING.md](COMFYUI_PERFORMANCE_HARDENING.md): async generation, bounded backend timeouts, stale job handling, and small-VRAM deployment guidance
 - [COMFYUI_WORKFLOW_LAYOUT_BUILDER.md](COMFYUI_WORKFLOW_LAYOUT_BUILDER.md): user guide for custom workflow layouts, import/export, version metadata, and dependency errors
 - [COMFYUI_TEMPLATE_IMPORTER_PLAN.md](COMFYUI_TEMPLATE_IMPORTER_PLAN.md): staged design for stricter workflow import, manifest derivation, and run gates
+
+Deployment note:
+
+- Production-like deployments should keep generation in remote ComfyUI or an
+  external ComfyUI process. In-process Diffusers is guarded by
+  `HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS=1` and should be treated as a
+  deliberate local experiment because it can load large models into the Flask
+  process and consume RAM / VRAM / CPU.
+- On small VRAM hosts, prefer smaller checkpoints and Linux-native model
+  storage instead of loading frequently used models from slow mounted paths.
