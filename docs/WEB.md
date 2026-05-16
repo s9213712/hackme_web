@@ -148,9 +148,11 @@ BT/magnet/`.torrent` downloads require `aria2c` on the server. Downloaded files
 are saved through the same quota, scan, privacy-mode, and logical-folder
 pipeline as normal uploads. BT transfers run in an external worker process by
 default; the Flask server only tracks progress and stores the completed file.
-The task center exposes current speed and control actions. When more than one
-remote task is queued, the scheduler can prefer higher-availability BT work
-instead of starting every low-quality task at once.
+The task center lazy-loads and polls real progress only while the user is on
+the task-center page. It exposes current speed and control actions without
+running a global always-on frontend poll. When more than one remote task is
+queued, the scheduler can prefer higher-availability BT work instead of
+starting every low-quality task at once.
 `timeout_seconds` is treated as an idle timeout for BT, so active downloads are
 not stopped just because they run longer than the initial timeout window.
 

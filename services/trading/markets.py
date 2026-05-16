@@ -400,7 +400,7 @@ def validate_market_provider_mapping_payload(payload, *, existing=None):
 
 def probe_market_registry_on_conn(service, conn, registry_row):
     settings = service._settings_payload(conn)
-    min_provider_count = max(2, int(settings.get("price_fusion_min_provider_count") or DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT))
+    min_provider_count = max(1, int(settings.get("price_fusion_min_provider_count") or DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT))
     mappings = [
         market_provider_mapping_payload(row)
         for row in service._market_provider_mappings(conn, registry_row["symbol"], include_disabled=True)

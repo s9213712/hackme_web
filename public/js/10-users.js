@@ -139,8 +139,9 @@ function renderUsers() {
       editBtn.classList.add("action-edit-user");
       actionButtons.push(editBtn);
     }
-    // PM button: any logged-in user can PM anyone except self
-    if (!isSelf) {
+    const canAdministrativePm = currentRole === "manager" || currentRole === "super_admin";
+    // Normal users can PM accepted friends; managers/root may PM from account management for governance work.
+    if (!isSelf && (u.is_friend || canAdministrativePm)) {
       const pmBtn = document.createElement("button");
       pmBtn.className = "btn";
       pmBtn.type = "button";
@@ -196,6 +197,10 @@ function renderUsers() {
     tr.appendChild(onlineCell);
     const usernameCell = document.createElement("td");
     usernameCell.innerHTML = userIdentityMarkup(u.id, u.username || "", u.nickname || "", "user-table-identity", u.avatar_file_id || "");
+    const relationBadges = [];
+    if (u.is_friend) relationBadges.push('<span class="profile-official-badge">好友</span>');
+    if (u.is_official) relationBadges.push('<span class="profile-official-badge">官方/管理者</span>');
+    if (relationBadges.length) usernameCell.insertAdjacentHTML("beforeend", `<div class="user-target-badges">${relationBadges.join("")}</div>`);
     tr.appendChild(usernameCell);
     appendTextCell(u.nickname || "");
     appendTextCell(u.real_name || "");

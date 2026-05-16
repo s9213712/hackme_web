@@ -218,6 +218,7 @@
       </div>
       <nav class="tabs sidebar-nav" id="module-main-tabs">
         <button class="tab active" id="tab-module-chat">聊天</button>
+        <button class="tab" id="tab-module-profile">個人面板</button>
         <button class="tab" id="tab-module-announcements">公告</button>
         <button class="tab" id="tab-module-community">討論區</button>
         <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
@@ -234,7 +235,7 @@
         <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
       </nav>
       <div class="sidebar-footer" id="sidebar-footer">
-        <div class="sidebar-user-card">
+        <div class="sidebar-user-card" id="sidebar-user-card" role="button" tabindex="0" aria-label="開啟個人面板">
           <span class="sidebar-user-avatar" id="sidebar-user-avatar">-</span>
           <span class="sidebar-user-meta">
             <span class="sidebar-label sidebar-user-name" id="sidebar-current-user">未登入</span>
@@ -262,20 +263,73 @@
     <div class="admin-tools" id="chat-section" style="margin-top: .95rem; text-align: left;">
       <div class="mini-title">💬 即時聊天室</div>
       <div class="chat-toolbar">
-        <div class="chat-room-create">
-          <input type="text" id="chat-room-target-user" placeholder="快速私聊對象（帳號，可留空）" maxlength="32" />
-          <input type="text" id="chat-room-name" placeholder="聊天室名稱（最多 48 字）" maxlength="48" />
-          <input type="text" id="chat-room-invite-users" placeholder="建立時加入成員（逗號分隔）" maxlength="240" />
-          <input type="password" id="chat-room-password" placeholder="加入密碼（可留空）" maxlength="128" />
-          <button class="btn btn-primary" id="chat-create-room-btn" type="button">建立聊天室</button>
+        <div class="chat-room-create-entry">
+          <button class="btn btn-primary" id="chat-create-room-toggle-btn" type="button" aria-expanded="false" aria-controls="chat-room-create-panel">建立聊天室</button>
         </div>
-        <div class="chat-room-join">
-          <input type="number" id="chat-join-room-id" placeholder="聊天室 ID" min="1" />
-          <input type="password" id="chat-join-password" placeholder="聊天室密碼（若有）" maxlength="128" />
-          <button class="btn" id="chat-join-room-btn" type="button">加入聊天室</button>
+        <div class="chat-room-create-entry">
+          <button class="btn" id="chat-join-room-open-btn" type="button" aria-expanded="false" aria-controls="chat-room-join-panel">加入聊天室</button>
         </div>
         <div class="chat-refresh-wrap">
           <button class="btn" id="chat-room-refresh-btn" type="button">重新整理聊天室</button>
+        </div>
+      </div>
+      <div id="chat-room-create-panel" hidden class="user-edit-overlay chat-room-dialog" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="chat-room-create-title">
+        <div class="user-edit-modal chat-room-dialog-modal">
+          <div class="drive-card-heading">
+            <div>
+              <div class="mini-title" id="chat-room-create-title">建立聊天室</div>
+            </div>
+            <button class="btn" id="chat-create-room-close-btn" type="button">關閉</button>
+          </div>
+          <div class="chat-room-dialog-fields">
+            <div class="field">
+              <label>快速私聊對象</label>
+              <input type="text" id="chat-room-target-user" placeholder="帳號，可留空" maxlength="32" />
+            </div>
+            <div class="field">
+              <label>聊天室名稱</label>
+              <input type="text" id="chat-room-name" placeholder="最多 48 字" maxlength="48" />
+            </div>
+            <div class="field">
+              <label>建立時加入成員</label>
+              <input type="text" id="chat-room-invite-users" placeholder="帳號，逗號分隔" maxlength="240" />
+            </div>
+            <div class="field">
+              <label>加入密碼</label>
+              <input type="password" id="chat-room-password" placeholder="可留空" maxlength="128" />
+            </div>
+            <label class="chat-room-option"><input type="checkbox" id="chat-room-allow-anonymous" /> 允許匿名</label>
+            <label class="chat-room-option"><input type="checkbox" id="chat-room-use-anonymous" /> 我在此群匿名</label>
+          </div>
+          <div class="drive-file-actions chat-room-dialog-actions">
+            <button class="btn btn-primary" id="chat-create-room-btn" type="button">建立聊天室</button>
+            <button class="btn" id="chat-create-room-cancel-btn" type="button">取消</button>
+          </div>
+        </div>
+      </div>
+      <div id="chat-room-join-panel" hidden class="user-edit-overlay chat-room-dialog" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="chat-room-join-title">
+        <div class="user-edit-modal chat-room-dialog-modal">
+          <div class="drive-card-heading">
+            <div>
+              <div class="mini-title" id="chat-room-join-title">加入聊天室</div>
+            </div>
+            <button class="btn" id="chat-join-room-close-btn" type="button">關閉</button>
+          </div>
+          <div class="chat-room-dialog-fields">
+            <div class="field">
+              <label>聊天室 ID</label>
+              <input type="number" id="chat-join-room-id" placeholder="例如 12" min="1" />
+            </div>
+            <div class="field">
+              <label>聊天室密碼</label>
+              <input type="password" id="chat-join-password" placeholder="若有密碼才需填寫" maxlength="128" />
+            </div>
+            <label class="chat-room-option"><input type="checkbox" id="chat-join-anonymous" /> 若允許，以匿名加入</label>
+          </div>
+          <div class="drive-file-actions chat-room-dialog-actions">
+            <button class="btn btn-primary" id="chat-join-room-btn" type="button">加入聊天室</button>
+            <button class="btn" id="chat-join-room-cancel-btn" type="button">取消</button>
+          </div>
         </div>
       </div>
 
@@ -336,6 +390,120 @@
           </details>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-profile">
+    <div class="admin-tools profile-panel" style="margin-top:.95rem;text-align:left;">
+      <div class="section-head">
+        <div>
+          <h2>個人面板</h2>
+          <p>管理自己的主頁、資料與好友。</p>
+        </div>
+        <button class="btn" id="profile-refresh-btn" type="button">重新整理</button>
+      </div>
+      <div class="profile-tabs" role="tablist" aria-label="個人面板分頁">
+        <button class="btn btn-primary" type="button" data-profile-tab="home" aria-selected="true">我的主頁</button>
+        <button class="btn" type="button" data-profile-tab="edit" aria-selected="false">編輯資料</button>
+        <button class="btn" type="button" data-profile-tab="friends" aria-selected="false">好友</button>
+      </div>
+      <div id="profile-msg" class="msg" aria-live="polite"></div>
+
+      <section class="profile-pane active" id="profile-pane-home">
+        <div class="profile-summary">
+          <div class="profile-avatar-large" id="profile-home-avatar">-</div>
+          <div class="profile-summary-main">
+            <h3 id="profile-home-name">-</h3>
+            <p id="profile-home-meta">-</p>
+            <p class="profile-bio" id="profile-home-bio">尚未填寫個人簡介。</p>
+            <p class="drive-card-sub" id="profile-home-signature"></p>
+          </div>
+        </div>
+        <div class="settings-option-grid profile-stats-grid">
+          <div><span class="drive-card-sub">好友狀態</span><strong id="profile-home-friend-status">本人</strong></div>
+          <div><span class="drive-card-sub">主頁可見性</span><strong id="profile-home-visibility">public</strong></div>
+          <div><span class="drive-card-sub">我的好友代碼</span><strong id="profile-home-friend-code">-</strong></div>
+        </div>
+      </section>
+
+      <section class="profile-pane" id="profile-pane-edit">
+        <div class="settings-option-grid">
+          <label class="field">
+            <span>顯示名稱</span>
+            <input type="text" id="profile-edit-display-name" maxlength="80" />
+          </label>
+          <label class="field">
+            <span>所在地</span>
+            <input type="text" id="profile-edit-location" maxlength="120" />
+          </label>
+          <label class="field">
+            <span>網站</span>
+            <input type="url" id="profile-edit-website" maxlength="240" />
+          </label>
+          <label class="field">
+            <span>主頁可見性</span>
+            <select id="profile-edit-visibility">
+              <option value="public">公開</option>
+              <option value="friends">好友</option>
+              <option value="private">私人</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span>個人簡介</span>
+          <textarea id="profile-edit-bio" rows="4" maxlength="1000"></textarea>
+        </label>
+        <label class="field">
+          <span>簽名</span>
+          <input type="text" id="profile-edit-signature" maxlength="180" />
+        </label>
+        <div class="profile-code-row">
+          <input type="text" id="profile-friend-code" readonly aria-label="好友代碼" />
+          <button class="btn" id="profile-copy-code-btn" type="button">複製好友代碼</button>
+          <button class="btn" id="profile-rotate-code-btn" type="button">重新產生</button>
+        </div>
+        <div class="drive-file-actions" style="justify-content:flex-start;">
+          <button class="btn btn-primary" id="profile-save-btn" type="button">儲存資料</button>
+          <button class="btn" id="profile-edit-account-btn" type="button">帳號設定</button>
+        </div>
+      </section>
+
+      <section class="profile-pane" id="profile-pane-friends">
+        <div class="settings-option-grid">
+          <label class="field">
+            <span>用好友代碼加入</span>
+            <input type="text" id="profile-add-code-input" autocomplete="off" />
+          </label>
+          <div class="field">
+            <span>&nbsp;</span>
+            <button class="btn btn-primary" id="profile-add-code-btn" type="button">加入好友</button>
+          </div>
+          <label class="field">
+            <span>送出好友申請</span>
+            <input type="text" id="profile-request-user-input" list="target-options-personal" placeholder="好友 username 或 user id" autocomplete="off" />
+          </label>
+          <div class="field">
+            <span>&nbsp;</span>
+            <button class="btn" id="profile-request-user-btn" type="button">送出申請</button>
+          </div>
+        </div>
+        <div class="drive-card-sub">指定對象清單：一般用戶限好友；root/admin 管理用途可見全站用戶，好友會排在前列並標註。</div>
+        <div class="profile-friend-columns">
+          <section>
+            <h3>好友</h3>
+            <div class="profile-friend-list" id="profile-friend-list"></div>
+          </section>
+          <section>
+            <h3>收到的申請</h3>
+            <div class="profile-friend-list" id="profile-incoming-list"></div>
+          </section>
+          <section>
+            <h3>送出的申請</h3>
+            <div class="profile-friend-list" id="profile-outgoing-list"></div>
+          </section>
+        </div>
+      </section>
+      <datalist id="target-options-personal"></datalist>
     </div>
   </div>
 
@@ -932,7 +1100,7 @@
         </div>
         <div class="drive-file-actions">
           <button class="btn" id="video-refresh-btn" type="button">刷新</button>
-          <button class="btn btn-primary" id="video-publish-open-btn" type="button">發布影音</button>
+          <button class="btn btn-primary" id="video-publish-open-btn" type="button" aria-expanded="false" aria-controls="video-publish-panel">發布影音</button>
         </div>
       </div>
       <div id="video-browse-view">
@@ -942,13 +1110,16 @@
           <button class="btn" id="video-search-clear" type="button">清除</button>
         </form>
         <div id="video-search-status" class="drive-card-sub video-search-status"></div>
-        <details class="drive-collapsible-panel" id="video-publish-panel">
-          <summary>
-            <span>
-              <span class="drive-card-title">發布雲端硬碟影音</span>
-              <span class="drive-card-sub">只會使用 cloud_file_id 串接，不公開 storage path。</span>
-            </span>
-          </summary>
+        <section class="drive-collapsible-panel video-publish-panel" id="video-publish-panel" hidden aria-label="發布影音">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">發布影音</div>
+              <div class="drive-card-sub">可直接上傳影音，或選擇雲端硬碟影音發布；只會使用 cloud_file_id 串接，不公開 storage path。</div>
+            </div>
+            <div class="drive-file-actions">
+              <button class="btn" id="video-publish-cancel-btn" type="button">取消</button>
+            </div>
+          </div>
           <div class="drive-collapsible-body">
             <div class="settings-option-grid video-publish-grid">
               <div class="field" style="grid-column:1/-1;">
@@ -1021,7 +1192,7 @@
               </div>
             </div>
           </div>
-        </details>
+        </section>
         <div class="drive-card-heading video-sort-bar" style="margin-top:1rem;">
           <div class="drive-file-actions">
             <button class="btn btn-sm" type="button" data-video-sort="new">最新</button>
@@ -1102,6 +1273,7 @@
                 <option value="experiment 3:dl">實驗 3：DL 語義平衡學習</option>
                 <option value="experiment 4:pv">實驗 4：Policy/Value + MCTS</option>
                 <option value="experiment 5:nnue">實驗 5：NNUE + AlphaBeta/PVS</option>
+                <option value="experiment 6:neuralnet">實驗 6：Neural Network</option>
               </select>
             </div>
             <div class="field" id="game-practice-stockfish-depth-field" hidden>
@@ -1456,6 +1628,7 @@
                     <option value="experiment 3:dl">實驗 3：DL 語義平衡</option>
                     <option value="experiment 4:pv">實驗 4：Policy/Value + MCTS</option>
                     <option value="experiment 5:nnue">實驗 5：NNUE + AlphaBeta/PVS</option>
+                    <option value="experiment 6:neuralnet">實驗 6：Neural Network</option>
                   </select>
                 </div>
                 <div class="field">
@@ -4308,6 +4481,14 @@
               </select>
             </div>
             <div class="field">
+              <label>個人面板最低可用角色</label>
+              <select id="s-module-profile-min-role">
+                <option value="user">一般用戶</option>
+                <option value="manager">管理者</option>
+                <option value="super_admin">最高管理者</option>
+              </select>
+            </div>
+            <div class="field">
               <label>討論區最低可用角色</label>
               <select id="s-module-community-min-role">
                 <option value="user">一般用戶</option>
@@ -5853,6 +6034,7 @@
 <script src="/js/55-economy.js?v=20260515-root-bot-positions" defer></script>
 <script src="/js/56-trading.js?v=20260515-grid-inventory-locks" defer></script>
 <script src="/js/57-platform-centers.js?v=20260515-video-share-center" defer></script>
+<script src="/js/58-profile-friends.js?v=20260516-profile-friends" defer></script>
 <script src="/js/90-bootstrap.js?v=20260505-civitai-search" defer></script>
 </body>
 </html>

@@ -57,7 +57,7 @@ let comfyuiImagePickerState = {
   history: [],
   cloudDrive: [],
 };
-const COMFYUI_GENERATION_TIMEOUT_SECONDS = 0;
+const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;
 const COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800;
 const COMFYUI_QUEUE_MAX_TIMEOUT_SECONDS = 21600;
 const COMFYUI_MAX_LORAS = 8;
@@ -209,6 +209,13 @@ function comfyuiPaidApiStatusText(payload = {}) {
     ? `，credits ${paid.credit_balance}`
     : "，官方 credits 請至 ComfyUI UI 的 Settings / Credits 查看";
   return `；付費/API nodes 可用${creditText}；ComfyUI credits 不是本站積分`;
+}
+
+function comfyuiStorageWarningText(payload = {}) {
+  const warnings = Array.isArray(payload.storage_warnings) ? payload.storage_warnings : [];
+  const warning = warnings.find((item) => item && item.code === "windows_mount_model_storage") || warnings[0];
+  if (!warning) return "";
+  return `；儲存路徑警告：${warning.message || "模型位於較慢掛載路徑，建議移到 Linux native storage"}`;
 }
 
 function comfyuiConnectionModeLabel(mode = comfyuiConnectionMode) {
@@ -1414,7 +1421,7 @@ function startComfyuiProgress(timeoutSeconds = COMFYUI_GENERATION_TIMEOUT_SECOND
     running: true,
     percent: 0,
     label: "已送出產圖請求",
-    detail: hasLimit ? `已等待 00:00 / 上限 ${formatComfyuiDuration(timeoutSeconds)}` : "已等待 00:00（不設等待上限）"
+    detail: hasLimit ? `已等待 00:00 / 上限 ${formatComfyuiDuration(timeoutSeconds)}` : "已等待 00:00 / 上限由後端工作控制"
   });
 }
 
@@ -1427,6 +1434,7 @@ function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERAT
   else if (phase === "downloading") label = "下載 Hugging Face 模型";
   else if (phase === "loading") label = comfyuiConnectionMode === "diffusers" ? "載入 Diffusers 模型" : "載入模型";
   else if (phase === "running") label = comfyuiConnectionMode === "diffusers" ? "Diffusers 推論中" : "ComfyUI 執行中";
+  else if (phase === "backend_unresponsive") label = "ComfyUI 後端無回應";
   else if (phase === "completed") label = "圖片已完成";
   else if (phase === "error") label = "產圖失敗";
   const queueText = progress.queue_remaining !== null && progress.queue_remaining !== undefined
@@ -1448,7 +1456,7 @@ function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERAT
   const hasLimit = Number(timeoutSeconds) > 0;
   const waitText = hasLimit
     ? `；已等待 ${formatComfyuiDuration(elapsed)} / 上限 ${formatComfyuiDuration(timeoutSeconds)}`
-    : `；已等待 ${formatComfyuiDuration(elapsed)}（不設等待上限）`;
+    : `；已等待 ${formatComfyuiDuration(elapsed)} / 上限由後端工作控制`;
   const detail = `${baseDetail}${queueText}${nodeText}${stepText}${fileText}${byteText}${speedText}${waitText}`;
   setComfyuiProgress({
     visible: true,
@@ -2559,7 +2567,7 @@ async function loadComfyuiModels() {
     loadComfyuiHistory().catch(() => {});
     loadComfyuiWorkflowPresets().catch(() => {});
     setComfyuiTabAvailability(true);
-    if (status) status.textContent = `已連線 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}，模型 ${Number((json.models || []).length)} 個，LoRA ${Number((json.loras || []).length)} 個，Embedding ${Number((json.embeddings || []).length)} 個，VAE ${Number((json.vaes || []).length)} 個${comfyuiPaidApiStatusText(json)}`;
+    if (status) status.textContent = `已連線 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}，模型 ${Number((json.models || []).length)} 個，LoRA ${Number((json.loras || []).length)} 個，Embedding ${Number((json.embeddings || []).length)} 個，VAE ${Number((json.vaes || []).length)} 個${comfyuiPaidApiStatusText(json)}${comfyuiStorageWarningText(json)}`;
   } catch (err) {
     comfyuiModelsLoaded = false;
     comfyuiLoraDetails = {};
@@ -2594,7 +2602,7 @@ async function refreshComfyuiStatus({ switchAway = true } = {}) {
     comfyuiLocalRuntimeActive = comfyuiConnectionMode === "local" && (available || starting || !!json.local_runtime);
     applyComfyuiRuntimeLimits(json);
     const detail = available
-      ? `已偵測 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}${comfyuiPaidApiStatusText(json)}`
+      ? `已偵測 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}${comfyuiPaidApiStatusText(json)}${comfyuiStorageWarningText(json)}`
       : (json.msg || `找不到 ${json.comfyui_url || "ComfyUI"} 伺服器`);
     setComfyuiTabAvailability(available, detail);
     if (available) stopComfyuiLocalStartPolling();

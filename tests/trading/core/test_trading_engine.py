@@ -3602,6 +3602,91 @@ def test_live_price_provider_allows_market_order_when_public_fallback_chain_is_u
     assert market["symbol"] == "ETH/POINTS"
 
 
+def test_default_binance_price_source_does_not_fetch_fusion_orderbooks(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    _stamp_all_markets_boot_ready(trading)
+
+    def binance_price(_symbol, *, settings=None, with_meta=False, conn=None):
+        meta = {
+            "transport": "http_polling",
+            "connected": False,
+            "fallback": False,
+            "stale": False,
+            "degraded": False,
+            "confidence": "medium",
+            "provider_count": 1,
+            "last_update_at": trading_engine_module._now(),
+            "exclusion_reason": "",
+            "latency_ms": 10.0,
+        }
+        return (5100.0, meta) if with_meta else 5100.0
+
+    def fused_should_not_run(*_args, **_kwargs):
+        pytest.fail("default Binance source must not fetch fused order books while Binance is healthy")
+
+    monkeypatch.setattr(trading, "_fetch_binance_price_points", binance_price)
+    monkeypatch.setattr(trading, "_fetch_weighted_fused_price_points", fused_should_not_run)
+
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        market = trading._market(conn, "ETH/POINTS")
+        price, source, meta = trading._current_market_price_points(conn, market, with_meta=True, high_risk=True)
+    finally:
+        conn.close()
+
+    assert price == 5100.0
+    assert source == "binance_public_api"
+    assert meta["risk_grade_usable"] is True, json.dumps(meta, ensure_ascii=False, sort_keys=True, indent=2)
+    assert meta["risk_grade_provider_count"] == 1
+
+
+def test_binance_failure_uses_fused_fallback_with_one_healthy_provider(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(
+        actor=root,
+        settings={
+            "price_source": "binance_public_api",
+            "price_fusion_min_provider_count": 1,
+            "price_fusion_trade_min_provider_count": 1,
+            "price_stream_ws_enabled": False,
+        },
+        markets=[],
+    )
+    _stamp_all_markets_boot_ready(trading)
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError("provider unavailable")
+
+    monkeypatch.setattr(trading, "_fetch_binance_price_points", unavailable)
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", unavailable)
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol, **_kwargs: _depth_snapshot(trading, "okx_public_api", 3, price=5100.0))
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", unavailable)
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", unavailable)
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", unavailable)
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", unavailable)
+
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        market = trading._market(conn, "ETH/POINTS")
+        price, source, meta = trading._current_market_price_points(conn, market, with_meta=True, high_risk=True)
+    finally:
+        conn.close()
+
+    assert price == pytest.approx(5102.55, abs=0.01)
+    assert source == "fused_weighted"
+    assert meta["risk_grade_usable"] is True, json.dumps(meta, ensure_ascii=False, sort_keys=True, indent=2)
+    assert meta["risk_grade_provider_count"] == 1
+    assert meta["high_risk_blocked"] is False
+    assert any(item.get("code") == "primary_price_source_failed_fused_fallback" for item in meta["warnings"])
+
+
 def test_live_price_fusion_auto_depth_weights_surviving_exchanges(tmp_path, monkeypatch):
     get_db = _db(tmp_path)
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
@@ -3642,7 +3727,7 @@ def test_live_price_fusion_auto_depth_weights_surviving_exchanges(tmp_path, monk
     assert updated["price_source"] == "fused_weighted"
 
 
-def test_root_trading_settings_default_to_fused_weighted_auto_depth(tmp_path):
+def test_root_trading_settings_default_to_binance_with_fused_fallback_controls(tmp_path):
     get_db = _db(tmp_path)
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
     trading = TradingEngineService(get_db=get_db, points_service=points)
@@ -3650,14 +3735,15 @@ def test_root_trading_settings_default_to_fused_weighted_auto_depth(tmp_path):
     settings = trading.get_root_settings()["settings"]
     markets = trading.list_markets()
 
-    assert settings["price_source"] == "fused_weighted"
+    assert settings["price_source"] == "binance_public_api"
     assert settings["price_fusion_mode"] == "auto_depth"
     assert settings["price_fusion_live_markets"] == ["BTC/POINTS", "ETH/POINTS", "XRP/POINTS", "BNB/POINTS", "PAXG/POINTS"]
     assert settings["price_fusion_depth_band_percent"] == 1.0
     assert settings["price_fusion_depth_levels"] == 100
     assert settings["price_fusion_min_orderbook_coverage_percent"] == 0.5
     assert settings["price_fusion_max_single_provider_weight_percent"] == 40.0
-    assert settings["price_fusion_min_provider_count"] == 3
+    assert settings["price_fusion_min_provider_count"] == 1
+    assert settings["price_fusion_trade_min_provider_count"] == 1
     assert settings["price_fusion_manual_weights"] == {
         "binance_public_api": 40.0,
         "okx_public_api": 25.0,

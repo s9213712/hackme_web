@@ -3,8 +3,12 @@ from datetime import datetime
 from flask import request
 
 from services.media.videos import ensure_video_schema
+from services.media.videos import ensure_video_share_link
 from services.share_access_events import ensure_share_access_event_schema, list_share_access_events
+from services.storage.albums import ensure_album_share_link
 from services.storage.catalog import ensure_storage_album_schema
+from services.storage.catalog import _normalize_storage_share_max_views, _normalize_storage_share_scope
+from services.users.friends import assert_can_target_user
 
 
 def register_share_management_routes(app, deps):
@@ -216,6 +220,116 @@ def register_share_management_routes(app, deps):
             })
         return sorted(events, key=lambda item: str(item.get("created_at") or ""), reverse=True)
 
+    def request_json():
+        data = request.get_json(silent=True) or {}
+        return data if isinstance(data, dict) else {}
+
+    def truthy(value):
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def optional_text(data, key, default=""):
+        if key not in data:
+            return default
+        value = str(data.get(key) or "").strip()
+        return value or None
+
+    def share_payload_for_type(share_type, row):
+        if not row:
+            return None
+        if share_type == "file":
+            return storage_share_payload(row)
+        if share_type == "album":
+            return album_share_payload(row)
+        if share_type == "video":
+            return video_share_payload(row)
+        return None
+
+    def update_file_share(conn, actor, row, data):
+        access_scope = _normalize_storage_share_scope(data.get("access_scope", row["access_scope"] or "link"))
+        required_user_id = None
+        if access_scope == "account":
+            target_row = None
+            raw_user_id = data.get("required_user_id")
+            raw_username = str(data.get("required_username") or data.get("required_account") or "").strip()
+            if raw_user_id not in (None, ""):
+                try:
+                    required_user_id = int(raw_user_id)
+                except Exception as exc:
+                    raise ValueError("指定帳戶格式錯誤") from exc
+                target_row = conn.execute("SELECT id, username FROM users WHERE id=? LIMIT 1", (required_user_id,)).fetchone()
+            elif raw_username:
+                target_row = conn.execute("SELECT id, username FROM users WHERE username=? LIMIT 1", (raw_username,)).fetchone()
+            else:
+                try:
+                    required_user_id = int(row["required_user_id"] or 0)
+                except Exception:
+                    required_user_id = 0
+                if required_user_id:
+                    target_row = conn.execute("SELECT id, username FROM users WHERE id=? LIMIT 1", (required_user_id,)).fetchone()
+            if not target_row:
+                raise ValueError("找不到指定帳戶")
+            allowed, deny_msg = assert_can_target_user(conn, actor, target_row["id"], context="cloud_drive_share")
+            if not allowed:
+                raise PermissionError(deny_msg)
+            required_user_id = int(target_row["id"])
+        expires_at = optional_text(data, "expires_at", row["expires_at"])
+        max_views = _normalize_storage_share_max_views(data.get("max_views", row["max_views"]))
+        can_preview = truthy(data.get("can_preview", row["can_preview"]))
+        can_download = truthy(data.get("can_download", row["can_download"]))
+        if not can_preview and not can_download:
+            raise ValueError("分享至少要允許預覽或下載其中一項")
+        conn.execute(
+            """
+            UPDATE storage_share_links
+            SET can_preview=?, can_download=?, access_scope=?, required_user_id=?, expires_at=?, max_views=?
+            WHERE id=?
+            """,
+            (
+                1 if can_preview else 0,
+                1 if can_download else 0,
+                access_scope,
+                required_user_id,
+                expires_at,
+                max_views,
+                row["id"],
+            ),
+        )
+        return conn.execute("SELECT * FROM storage_share_links WHERE id=?", (row["id"],)).fetchone()
+
+    def update_album_share(conn, actor, row, data):
+        password_provided = "share_password" in data
+        clear_password = truthy(data.get("clear_password"))
+        link, msg = ensure_album_share_link(
+            conn,
+            actor=actor,
+            album_id=row["album_id"],
+            password=str(data.get("share_password") or ""),
+            password_provided=password_provided,
+            clear_password=clear_password,
+        )
+        if msg:
+            raise ValueError(msg)
+        return conn.execute("SELECT * FROM album_share_links WHERE id=?", (link["id"] if link else row["id"],)).fetchone()
+
+    def update_video_share(conn, actor, row, data):
+        password = data.get("share_password") if ("share_password" in data or truthy(data.get("clear_password"))) else None
+        if truthy(data.get("clear_password")):
+            password = ""
+        share_link, msg = ensure_video_share_link(
+            conn,
+            actor=actor,
+            video_id=row["video_id"],
+            password=password,
+            expires_at=data["expires_at"] if "expires_at" in data else None,
+            max_views=data["max_views"] if "max_views" in data else None,
+            regenerate=False,
+        )
+        if msg:
+            raise ValueError(msg)
+        return conn.execute("SELECT * FROM video_share_links WHERE id=?", (share_link["id"] if share_link else row["id"],)).fetchone()
+
     @app.route("/api/shares", methods=["GET"])
     @require_csrf_safe
     def shares_list():
@@ -308,6 +422,43 @@ def register_share_management_routes(app, deps):
             conn.commit()
             audit("SHARE_LINK_REVOKED", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"type={share_type},id={share_id}")
             return json_resp({"ok": True, "msg": "分享連結已撤銷"})
+        finally:
+            conn.close()
+
+    @app.route("/api/shares/<share_type>/<share_id>", methods=["PUT"])
+    @require_csrf
+    def share_update(share_type, share_id):
+        actor, err, status_code = actor_or_401()
+        if err:
+            return err, status_code
+        share_type = str(share_type or "").strip().lower()
+        if share_type not in share_table_map():
+            return json_resp({"ok": False, "msg": "分享類型錯誤"}), 400
+        data = request_json()
+        conn = get_db()
+        try:
+            ensure_share_tables(conn)
+            row, _table, _id_col = get_share_row(conn, share_type, share_id)
+            err, status_code = require_share_access(actor, row)
+            if err:
+                return err, status_code
+            try:
+                if share_type == "file":
+                    updated = update_file_share(conn, actor, row, data)
+                elif share_type == "album":
+                    updated = update_album_share(conn, actor, row, data)
+                else:
+                    updated = update_video_share(conn, actor, row, data)
+            except PermissionError as exc:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": str(exc) or "不可更新分享設定"}), 403
+            except ValueError as exc:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": str(exc) or "分享設定格式錯誤"}), 400
+            conn.commit()
+            audit("SHARE_LINK_UPDATED", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"type={share_type},id={share_id}")
+            payload = share_payload_for_type(share_type, updated)
+            return json_resp({"ok": True, "msg": "分享設定已更新", "share": payload})
         finally:
             conn.close()
 

@@ -72,7 +72,7 @@
 - 一句話說明：提供上傳、分享、預覽、隱私模式、資料夾、垃圾桶與相簿。
 - 設計目的：集中處理檔案、權限、加密模式與媒體功能的共同基礎。
 - 使用方法：Cloud Drive 分成檔案管理與容量管理分頁；容量狀態用水位式視覺而不是電池隱喻。上傳可走 resumable/chunk upload；重新整理後任務中心會顯示未完成 session，使用者需重新選擇同一檔案才能繼續補 chunk。BT / direct link 下載也進任務中心，顯示速度、進度、可用度提示，並提供暫停 / 恢復 / 取消。分享連結可下載也可在瀏覽器預覽，複製連結後按鈕下方會顯示已完成複製；分享管理已移到「管理」並可編輯分享選項。相簿改成連續照片流，hover 可放大，點選進全頁檢視並用左右按鈕切換。
-- 原理：不同隱私模式決定 server 能否掃描 / 預覽 / 解密，並影響影片等上層模組。strict E2EE 仍以瀏覽器端解密為主；server_encrypted 大檔同步處理受上限保護，完整背景化仍需後續 pipeline。
+- 原理：不同隱私模式決定 server 能否掃描 / 預覽 / 解密，並影響影片等上層模組。strict E2EE 仍以瀏覽器端解密為主；server_encrypted 新上傳一律使用 chunked server-side encryption，下載與媒體 inline content 逐段解密，避免主伺服器一次載入完整檔案；舊的單檔 Fernet 格式只保留讀取相容。
 - 失敗情境與提示：配額不足、加密模式不支援某些預覽、權限不足、檔案被 quarantine、重整後未重選原始檔、分享連結缺少 E2EE fragment key；strict E2EE PDF 若內嵌檢視器失敗，畫面會保留新分頁開啟備援；E2EE 檔案則會先嘗試本次 session 最近成功的密碼，不會每次都強制重新輸入。
 - 測試方式：一般上傳、分段上傳重整 / 續傳、預覽、分享管理編輯、指定好友分享、BT/direct link 併發與 pause/resume/cancel、刪除、恢復、相簿操作、E2EE / server_encrypted 邊界。
 - 相關文件連結：[04_USER_GUIDE.md](04_USER_GUIDE.md), [WEB.md](WEB.md), [12_TROUBLESHOOTING.md](12_TROUBLESHOOTING.md)
@@ -118,7 +118,7 @@
   album / video 分享、到期、次數、密碼狀態、存取紀錄、撤銷與編輯分享選項；Trading Asset Overview
   會顯示可用點數、鎖定點數、現貨市值、借貸 / 融資倉位權益、累積利息與低信心價格數。
 - 原理：一般使用者只看自己的 `/api/jobs` 與 `/api/shares`；manager / root 可讀
-  `/api/admin/jobs` 與 `all=1` 分享列表。分段上傳、BT/direct link、HLS 準備、E2EE streaming v2、ComfyUI 與交易背景 enqueue 都應進任務中心或對應背景狀態，不應靠頁面常駐輪詢來維持工作生命週期。交易總覽只做顯示，不取代交易結算；價格信心是風險提示，不再阻擋積分交易。
+  `/api/admin/jobs` 與 `all=1` 分享列表。分段上傳、BT/direct link、HLS 準備、E2EE streaming v2、ComfyUI 與交易背景 enqueue 都應進任務中心或對應背景狀態；任務中心只有在使用者進入頁面時 lazy-load 並輪詢實際進度，不靠全站常駐前端輪詢來維持工作生命週期。交易總覽只做顯示，不取代交易結算；價格信心是風險提示，不再阻擋積分交易。
 - 失敗情境與提示：ComfyUI 或外部工作失敗會顯示 `stage`、`stage_detail` 與錯誤訊息；
   Trading Asset Overview API 失敗會在經濟頁顯示錯誤；分享撤銷或到期後，分享頁應顯示
   結束訊息，底層 API 則拒絕繼續取資料。

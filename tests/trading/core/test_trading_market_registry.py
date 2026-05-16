@@ -316,9 +316,10 @@ def test_non_root_cannot_manage_market_registry_via_route(tmp_path, actor, expec
     assert response.get_json()["ok"] is False
 
 
-def test_market_registry_rejects_risk_grade_enable_without_enough_depth_providers(tmp_path):
+def test_market_registry_rejects_risk_grade_enable_when_root_raises_provider_threshold(tmp_path):
     _get_db, _points, trading = _services(tmp_path)
     root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_fusion_min_provider_count": 2}, markets=[])
     created = trading.create_market_registry(actor=root, payload={
         "symbol": "SOL/POINTS",
         "base_asset": "SOL",

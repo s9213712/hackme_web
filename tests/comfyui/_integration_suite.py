@@ -411,6 +411,32 @@ def _actor():
     }
 
 
+def _await_comfyui_job(client, started_response, *, expected_status="completed", attempts=100):
+    assert started_response.status_code == 200, started_response.get_json()
+    started_body = started_response.get_json()
+    assert started_body["ok"] is True
+    assert started_body["async"] is True
+    job_id = started_body["job"]["job_id"]
+    final_body = None
+    for _ in range(attempts):
+        polled = client.get(f"/api/comfyui/jobs/{job_id}")
+        assert polled.status_code == 200
+        final_body = polled.get_json()
+        status = final_body["job"]["status"]
+        if status == expected_status:
+            return final_body["job"]
+        if status in {"completed", "error"} and status != expected_status:
+            pytest.fail(f"ComfyUI job ended with {status}: {final_body['job'].get('error')}")
+        time.sleep(0.05)
+    pytest.fail(f"ComfyUI job did not reach {expected_status}: {final_body}")
+
+
+def _await_comfyui_result(client, started_response, *, attempts=100):
+    job = _await_comfyui_job(client, started_response, expected_status="completed", attempts=attempts)
+    assert job["result"]
+    return job["result"]
+
+
 def _generate_preview(client):
     generated = client.post(
         "/api/comfyui/generate",
@@ -428,8 +454,7 @@ def _generate_preview(client):
             "confirm_billing": True,
         },
     )
-    assert generated.status_code == 200
-    return generated.get_json()["image"]
+    return _await_comfyui_result(client, generated)["image"]
 
 
 class OfflineComfyUIClient:
@@ -780,14 +805,14 @@ def test_comfyui_models_and_generate_routes(tmp_path):
         },
     )
     assert generated.status_code == 200
-    body = generated.get_json()
+    body = _await_comfyui_result(client, generated)
     assert body["image"]["prompt_id"] == "prompt-1"
     assert body["image"]["data_url"].startswith("data:image/png;base64,")
     assert body["image"]["seed"] == 123
     assert body["image"]["batch_size"] == 1
     assert len(body["images"]) == 1
     assert body["images"][0]["image_ref"]["filename"] == "hackme_web_00001_.png"
-    assert FakeComfyUIClient.last_timeout_seconds == 0
+    assert FakeComfyUIClient.last_timeout_seconds == 1800
     assert FakeComfyUIClient.last_params["loras"] == [{"name": "detail.safetensors", "strength_model": 0.8, "strength_clip": 0.7}]
     assert FakeComfyUIClient.last_params["vae"] == "sdxl_vae.safetensors"
 
@@ -828,8 +853,7 @@ def test_comfyui_img2img_controlnet_generate_uploads_assets_and_records_history(
         content_type="multipart/form-data",
     )
     assert generated.status_code == 200
-    body = generated.get_json()
-    assert body["ok"] is True
+    body = _await_comfyui_result(client, generated)
     assert body["history_id"] > 0
     assert FakeComfyUIClient.last_params["generation_mode"] == "img2img"
     assert FakeComfyUIClient.last_params["source_image_ref"]["filename"] == "source.png"
@@ -960,7 +984,7 @@ def test_comfyui_history_rerun_reuses_saved_assets(tmp_path):
         content_type="multipart/form-data",
     )
     assert generated.status_code == 200
-    history_id = generated.get_json()["history_id"]
+    history_id = _await_comfyui_result(client, generated)["history_id"]
     FakeComfyUIClient.uploaded_images = []
 
     rerun = client.post(f"/api/comfyui/history/{history_id}/rerun", json={})
@@ -1386,6 +1410,7 @@ def test_comfyui_image_preview_returns_uploaded_asset_preview(tmp_path):
         content_type="multipart/form-data",
     )
     assert generated.status_code == 200
+    _await_comfyui_result(client, generated)
 
     history = client.get("/api/comfyui/history").get_json()["history"][0]
     source_ref = history["input_assets"]["source_image_ref"]
@@ -1713,7 +1738,7 @@ def test_comfyui_batch_limit_is_root_configurable(tmp_path):
         },
     )
     assert generated.status_code == 200
-    body = generated.get_json()
+    body = _await_comfyui_result(client, generated)
     assert body["image"]["batch_size"] == 3
     assert len(body["images"]) == 3
     assert body["images"][2]["image_ref"]["filename"] == "hackme_web_00003_.png"
@@ -1761,6 +1786,7 @@ def test_comfyui_default_dimensions_are_root_configurable(tmp_path):
     assert status.get_json()["default_width"] == 768
     assert status.get_json()["default_height"] == 1024
     assert generated.status_code == 200
+    _await_comfyui_result(client, generated)
     assert FakeComfyUIClient.last_params["width"] == 768
     assert FakeComfyUIClient.last_params["height"] == 1024
 
@@ -1778,7 +1804,8 @@ def test_comfyui_generation_failure_does_not_charge_points(tmp_path):
         json={"model": "dream.safetensors", "prompt": "this will fail", "seed": 123, "confirm_billing": True},
     )
 
-    assert generated.status_code == 503
+    job = _await_comfyui_job(client, generated, expected_status="error")
+    assert "ComfyUI 產圖失敗" in job["error"]
     assert points.spends == []
     assert points.balance == 100
 
@@ -1914,7 +1941,7 @@ def test_comfyui_generation_does_not_charge_root(tmp_path):
     )
 
     assert generated.status_code == 200
-    body = generated.get_json()
+    body = _await_comfyui_result(client, generated)
     assert body["billing"] == {"charged": False, "exempt": "root"}
     assert points.spends == []
 
@@ -2078,6 +2105,7 @@ def test_comfyui_generate_normalizes_embedding_shortcut_syntax(tmp_path):
     )
 
     assert generated.status_code == 200
+    _await_comfyui_result(client, generated)
     assert FakeComfyUIClient.last_params["prompt"] == "portrait, embedding:badhandv4.pt"
     assert FakeComfyUIClient.last_params["negative_prompt"] == "embedding:easynegative.safetensors"
 
@@ -2116,6 +2144,26 @@ def test_comfyui_status_reports_offline_backend(tmp_path):
     assert body["ok"] is True
     assert body["available"] is False
     assert body["comfyui_url"] == "http://fake-offline"
+
+
+def test_comfyui_status_warns_when_models_are_on_windows_mount(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={"comfyui_base_dir": "/mnt/d/share/ComfyUI_windows_portable"},
+    ).test_client()
+
+    status = client.get("/api/comfyui/status")
+
+    assert status.status_code == 200
+    warnings = status.get_json()["storage_warnings"]
+    assert warnings
+    assert warnings[0]["code"] == "windows_mount_model_storage"
+    assert "/mnt/d/share/ComfyUI_windows_portable" in warnings[0]["path"]
 
 
 def test_root_can_test_unsaved_comfyui_endpoint(tmp_path):
@@ -2178,9 +2226,7 @@ def test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes(t
     )
 
     assert generated.status_code == 200, generated.get_json()
-    payload = generated.get_json()
-    assert payload["ok"] is True
-    assert payload["backend_scope"] == "primary"
+    payload = _await_comfyui_result(client, generated)
     assert payload["image"]["image_ref"]["filename"] == "hackme_web_diffusers.png"
     assert FakeDiffusersBackendClient.last_params["model"] == "dhead/waiIllustriousSDXL_v150"
 
@@ -2216,7 +2262,7 @@ def test_comfyui_diffusers_mode_allows_generation_page_repo_override(tmp_path):
     )
 
     assert generated.status_code == 200, generated.get_json()
-    assert generated.get_json()["ok"] is True
+    _await_comfyui_result(client, generated)
     assert FakeDiffusersBackendClient.last_params["model"] == "hf-internal-testing/tiny-sdxl-pipe"
     assert FakeDiffusersBackendClient.last_params["diffusers_model_repo"] == "hf-internal-testing/tiny-sdxl-pipe"
 
@@ -4356,8 +4402,9 @@ def test_comfyui_frontend_is_wired():
     assert '目前是 Diffusers 模式：後端會直接載入 Hugging Face repo 生圖' in comfyui_js
     assert "function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds)" in comfyui_js
     assert "function pollComfyuiModelDownloadJob(jobId)" in comfyui_js
-    assert "const COMFYUI_GENERATION_TIMEOUT_SECONDS = 0;" in comfyui_js
-    assert "不設等待上限" in comfyui_js
+    assert "function comfyuiStorageWarningText(payload = {})" in comfyui_js
+    assert "const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;" in comfyui_js
+    assert "上限由後端工作控制" in comfyui_js
     assert "const COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800;" in comfyui_js
     assert "function extendComfyuiDeadlineForQueue(deadline, startedAt)" in comfyui_js
     assert "function setComfyuiModelDownloadProgress" in comfyui_js

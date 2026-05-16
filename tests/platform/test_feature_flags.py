@@ -1,12 +1,14 @@
 import json
 import sqlite3
 import pytest
+from types import SimpleNamespace
 
 from flask import Flask, jsonify, make_response
 
 from routes.files import register_file_routes
 from routes.system_admin import register_system_admin_routes
 from services.platform import settings
+from services.server.request_guards import enforce_feature_flags
 from services.users.member_levels import ensure_member_level_rules_schema
 from services.security.upload_security import ensure_upload_security_schema
 from server import feature_gate_for_path
@@ -78,6 +80,53 @@ def test_feature_gate_maps_existing_modules():
     assert feature_gate_for_path("/api/games/chess/practice") == "feature_games_enabled"
     assert feature_gate_for_path("/api/root/games/chess/weekly-rewards/award") == "feature_games_enabled"
     assert feature_gate_for_path("/api/admin/settings") is None
+
+
+def test_internal_test_token_scope_blocks_enabled_feature_outside_scope():
+    events = []
+    request_obj = SimpleNamespace(method="GET", path="/api/files/quota", cookies={"session_token": "scoped"})
+
+    response = enforce_feature_flags(
+        request_obj,
+        feature_gate_for_path_func=lambda path: "feature_privacy_uploads_enabled",
+        is_feature_enabled=lambda key: True,
+        get_current_user_ctx=lambda: {
+            "username": "test",
+            "auth_scope": "internal_test_token",
+            "allowed_features": ["feature_chat_enabled"],
+        },
+        record_security_event=lambda *args, **kwargs: events.append((args, kwargs)),
+        get_client_ip=lambda: "127.0.0.1",
+        build_feature_disabled_payload=lambda feature: {"feature": feature},
+        json_resp=lambda payload, status=200: payload,
+    )
+
+    assert response is not None
+    payload, status = response
+    assert status == 403
+    assert payload["feature"] == "feature_privacy_uploads_enabled"
+    assert events[0][0][0] == "permission_denied"
+
+
+def test_internal_test_token_scope_allows_enabled_feature_inside_scope():
+    request_obj = SimpleNamespace(method="GET", path="/api/chat/rooms", cookies={"session_token": "scoped"})
+
+    response = enforce_feature_flags(
+        request_obj,
+        feature_gate_for_path_func=lambda path: "feature_chat_enabled",
+        is_feature_enabled=lambda key: True,
+        get_current_user_ctx=lambda: {
+            "username": "test",
+            "auth_scope": "internal_test_token",
+            "allowed_features": ["feature_chat_enabled"],
+        },
+        record_security_event=lambda *args, **kwargs: None,
+        get_client_ip=lambda: "127.0.0.1",
+        build_feature_disabled_payload=lambda feature: {"feature": feature},
+        json_resp=lambda payload, status=200: payload,
+    )
+
+    assert response is None
 
 
 def test_notifications_remain_enabled_after_management_only_reset():

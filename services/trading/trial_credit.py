@@ -31,29 +31,30 @@ def ensure_trial_credit(service, conn, user_id, *, actor=None, allow_reclaim=Tru
     now = _now()
     if not row:
         expires_at = trial_credit_expires_at(now, days_valid=service.TRIAL_CREDIT_DAYS)
-        conn.execute(
+        cursor = conn.execute(
             """
-            INSERT INTO trading_trial_credits (
+            INSERT OR IGNORE INTO trading_trial_credits (
                 user_id, initial_points, available_points, locked_points, deployed_points,
                 status, activated_at, expires_at, updated_at
             ) VALUES (?, ?, ?, 0, 0, 'active', ?, ?, ?)
             """,
             (user_id, service.TRIAL_CREDIT_INITIAL_POINTS, service.TRIAL_CREDIT_INITIAL_POINTS, now, expires_at, now),
         )
-        service._audit_event(
-            conn,
-            "TRADING_TRIAL_CREDIT_GRANTED",
-            "exchange trial credit granted as system loan",
-            actor=actor or service._system_actor(),
-            target_user_id=user_id,
-            severity="info",
-            metadata={
-                "loan_type": "exchange_trial_credit",
-                "amount_points": service.TRIAL_CREDIT_INITIAL_POINTS,
-                "expires_at": expires_at,
-                "reclaim_policy": "principal_only; user keeps realized profit",
-            },
-        )
+        if cursor.rowcount > 0:
+            service._audit_event(
+                conn,
+                "TRADING_TRIAL_CREDIT_GRANTED",
+                "exchange trial credit granted as system loan",
+                actor=actor or service._system_actor(),
+                target_user_id=user_id,
+                severity="info",
+                metadata={
+                    "loan_type": "exchange_trial_credit",
+                    "amount_points": service.TRIAL_CREDIT_INITIAL_POINTS,
+                    "expires_at": expires_at,
+                    "reclaim_policy": "principal_only; user keeps realized profit",
+                },
+            )
         row = service._trial_credit_row(conn, user_id)
     if allow_reclaim and row and row["status"] == "active":
         try:

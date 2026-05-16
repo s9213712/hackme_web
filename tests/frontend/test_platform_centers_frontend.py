@@ -29,13 +29,22 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'switchModuleTab("jobs")' in admin_js or 'normTab === "jobs"' in admin_js
     assert 'modShares.classList.toggle("active", normTab === "shares")' in admin_js
     assert 'mShares.classList.toggle("active", normTab === "shares")' in admin_js
-    assert 'loadJobCenter()' in platform_js
+    assert 'function loadJobCenter' in platform_js
+    assert 'function startJobCenterPolling' in platform_js
+    assert 'JOB_CENTER_POLL_INTERVAL_MS = 3000' in platform_js
+    assert 'hydrateJobCenterLiveProgress' in platform_js
+    assert 'document.addEventListener("hackme:module-changed"' in platform_js
     assert 'loadDriveTaskCenterJobs({ csrf })' in platform_js
     assert 'mergePlatformJobCenterJobs([...jobs, ...driveJobs])' in platform_js
+    assert 'isLowSignalJobCenterNoise' in platform_js
+    assert '已隱藏 ${summary.hiddenCount} 筆即時完成雜訊' in platform_js
     assert 'loadShareCenter()' in platform_js
     assert 'loadVideoManageCenter()' in platform_js
     assert 'function renderVideoManageCenter' in platform_js
     assert '/videos/manage?limit=120' in platform_js
+    assert 'data-video-manage-share-open="${sanitize(id)}"' in platform_js
+    assert 'async function openManagedVideoShareSettings(videoId)' in platform_js
+    assert '已切到分享管理，請在這裡調整分享選項。' in platform_js
     assert '/boost' in platform_js
     assert 'data-video-manage-save' in platform_js
     assert 'data-video-manage-delete' in platform_js
@@ -58,6 +67,11 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'function formatShareCenterCountdown(ms)' in platform_js
     assert '倒數計時：${formatShareCenterCountdown' in platform_js
     assert 'data-share-countdown-until' in platform_js
+    assert 'data-share-edit="${sanitize(key)}"' in platform_js
+    assert 'data-share-edit-save="${sanitize(key)}"' in platform_js
+    assert 'async function saveShareCenterOptions(key)' in platform_js
+    assert 'method: "PUT"' in platform_js
+    assert '/shares/${encodeURIComponent(share.share_type)}/${encodeURIComponent(share.id)}' in platform_js
     assert 'scheduleShareCenterCountdowns()' in platform_js
     assert 'setInterval(updateShareCenterCountdowns, 1000)' in platform_js
     assert 'currentUser === "root"' in platform_js
@@ -77,4 +91,5 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'function loadDriveTaskCenterJobs' in drive_js
     assert 'driveRemoteTaskToJobCenterJob' in drive_js
     assert 'driveTransferToJobCenterJob' in drive_js
+    assert 'live_status_source: "遠端下載"' in drive_js
     assert 'source_ref: json.file?.file_id ? `cloud_file:${json.file.file_id}` : ""' in drive_js

@@ -391,7 +391,7 @@ function tradingPriceDegradePolicy(riskContext, kind = "market") {
   const safe = riskContext && typeof riskContext === "object" ? riskContext : {};
   const warningLanguage = tradingWarningLanguage();
   const priceConfidenceOnlyWarns = settings.disable_price_confidence_gates !== false;
-  const tradeMinProviders = Math.max(1, Number(settings.price_fusion_trade_min_provider_count || 2));
+  const tradeMinProviders = Math.max(1, Number(settings.price_fusion_trade_min_provider_count || 1));
   const providerCount = Math.max(
     0,
     Number.isFinite(Number(safe.provider_count))
@@ -468,8 +468,6 @@ function tradingSetMsg(text, ok = true) {
     economySetMsg(text, ok);
     return;
   }
-  showActionFeedback(tradingActiveActionButton || document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
 }
 
 function tradingErrorText(json, fallback = "操作失敗") {

@@ -20,7 +20,7 @@ def test_global_ui_polish_feedback_is_wired():
     assert "function announceInlineMessage" in core_js
     assert "function installUiInteractionFeedback" in core_js
     assert "function animateActiveModule" in core_js
-    assert "announceInlineMessage(text, ok);" in core_js
+    assert "if (!options.skipToast) announceInlineMessage(message, ok);" in core_js
     assert "installUiInteractionFeedback();" in core_js
     assert 'closest?.(".btn, .tab, .icon-action-btn, .game-catalog-card' in core_js
     assert "function ensureRootModuleSettingsButtons()" in root_quick_settings_js
@@ -46,6 +46,23 @@ def test_global_ui_polish_feedback_is_wired():
     assert ".btn.loading" in styles_css
     assert ".field:focus-within label" in styles_css
     assert "prefers-reduced-motion: reduce" in styles_css
+
+
+def test_status_messages_do_not_create_duplicate_button_feedback():
+    core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
+    js_files = list((ROOT / "public" / "js").rglob("*.js"))
+    all_js = "\n".join(path.read_text(encoding="utf-8") for path in js_files)
+
+    flash_body = core_js.split("function flash(el, text, ok) {", 1)[1].split("\n}\n\nfunction uiPrefersReducedMotion", 1)[0]
+    assert "showActionFeedback" not in flash_body
+    assert "announceInlineMessage" not in flash_body
+    assert 'el.setAttribute("role", ok ? "status" : "alert");' in flash_body
+    assert "showActionFeedback(document.activeElement" not in all_js
+    assert "showActionFeedback(tradingActiveActionButton" not in all_js
+    assert "announceInlineMessage(text, ok);" not in all_js
+
+    assert "function showCopyLinkFeedback" in core_js
+    assert 'showCopyLinkFeedback(button, "已完成複製", true)' in all_js
 
 
 def test_privileged_surfaces_are_hidden_in_initial_markup_and_revealed_by_role():

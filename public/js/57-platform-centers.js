@@ -35,6 +35,13 @@ function platformSeverityClass(status) {
 
 let shareCenterCountdownTimer = null;
 let shareCenterActiveTab = "links";
+let shareCenterEditingKey = "";
+let shareCenterLatestShares = [];
+let jobCenterPollTimer = null;
+let jobCenterLoadPromise = null;
+const JOB_CENTER_POLL_INTERVAL_MS = 3000;
+const JOB_CENTER_LIVE_SYNC_LIMIT = 12;
+const JOB_CENTER_ACTIVE_STATUSES = new Set(["queued", "running", "waiting_external", "paused", "retry_wait"]);
 
 function formatPlatformCenterNumber(value) {
   return new Intl.NumberFormat("zh-TW").format(Number(value || 0));
@@ -51,22 +58,80 @@ function platformJobCenterMergeKey(job = {}) {
   return String(job.job_uuid || "").trim();
 }
 
+function platformJobCenterLivePriority(job = {}) {
+  return job.live_progress || job.live_status_source || job.metadata?.live_progress ? 1 : 0;
+}
+
 function mergePlatformJobCenterJobs(jobs = []) {
   const byKey = new Map();
   jobs.filter(Boolean).forEach((job) => {
     const key = platformJobCenterMergeKey(job);
     if (!key) return;
     const existing = byKey.get(key);
+    const currentLive = platformJobCenterLivePriority(job);
+    const existingLive = existing ? platformJobCenterLivePriority(existing) : 0;
     const currentTs = Date.parse(job.updated_at || job.created_at || "") || 0;
     const existingTs = existing ? (Date.parse(existing.updated_at || existing.created_at || "") || 0) : -1;
-    if (!existing || currentTs >= existingTs) {
+    if (!existing || currentLive > existingLive || (currentLive === existingLive && currentTs >= existingTs)) {
       byKey.set(key, job);
     }
   });
   return Array.from(byKey.values()).sort((a, b) => {
+    const aActive = JOB_CENTER_ACTIVE_STATUSES.has(String(a.status || "")) ? 1 : 0;
+    const bActive = JOB_CENTER_ACTIVE_STATUSES.has(String(b.status || "")) ? 1 : 0;
+    if (aActive !== bActive) return bActive - aActive;
     const at = Date.parse(a.updated_at || a.created_at || "") || 0;
     const bt = Date.parse(b.updated_at || b.created_at || "") || 0;
     return bt - at;
+  });
+}
+
+function isJobCenterActive() {
+  return currentModuleTab === "jobs" || $("module-jobs")?.classList.contains("active");
+}
+
+function isJobCenterActiveJob(job = {}) {
+  return JOB_CENTER_ACTIVE_STATUSES.has(String(job.status || ""));
+}
+
+function canFetchOwnerScopedLiveJob(job = {}) {
+  const ownerId = job.owner_user_id;
+  if (ownerId === null || ownerId === undefined || ownerId === "") return true;
+  return String(ownerId) === String(currentUserId || "");
+}
+
+function isLowSignalJobCenterNoise(job = {}) {
+  const status = String(job.status || "");
+  const source = String(job.source_module || "");
+  const type = String(job.job_type || "");
+  if (status !== "succeeded") return false;
+  if (source === "cloud_drive_upload" && type === "cloud_drive.upload") return true;
+  return false;
+}
+
+function summarizeJobCenterJobs(jobs = []) {
+  const hidden = jobs.filter(isLowSignalJobCenterNoise);
+  const visible = jobs.filter((job) => !isLowSignalJobCenterNoise(job));
+  return {
+    visible,
+    hiddenCount: hidden.length,
+    activeCount: visible.filter(isJobCenterActiveJob).length,
+  };
+}
+
+function markMissingLiveSourceJobs(jobs = [], liveKeys = new Set()) {
+  return jobs.map((job) => {
+    const source = String(job.source_module || "");
+    if (!["cloud_drive_remote_download", "cloud_drive_resumable_upload"].includes(source)) return job;
+    if (!isJobCenterActiveJob(job) || liveKeys.has(platformJobCenterMergeKey(job))) return job;
+    return {
+      ...job,
+      status: job.status === "paused" ? "paused" : "waiting_external",
+      stage: "progress_unavailable",
+      stage_detail: "任務中心目前沒有取得即時來源回報；可能是伺服器重啟、瀏覽器尚未重選檔案，或外部 worker 正在恢復。",
+      live_progress: false,
+      live_status_source: "",
+    };
   });
 }
 
@@ -123,7 +188,7 @@ function scheduleShareCenterCountdowns() {
   }
 }
 
-function renderJobCenterJobs(jobs = []) {
+function renderJobCenterJobs(jobs = [], { hiddenCount = 0 } = {}) {
   const list = $("job-center-list");
   if (!list) return;
   const running = jobs.filter((j) => ["queued", "running", "waiting_external", "retry_wait"].includes(j.status)).length;
@@ -133,12 +198,19 @@ function renderJobCenterJobs(jobs = []) {
   if ($("job-center-failed-count")) $("job-center-failed-count").textContent = String(failed);
   if ($("job-center-done-count")) $("job-center-done-count").textContent = String(done);
   if (!jobs.length) {
-    list.innerHTML = '<p style="color:var(--muted);">目前沒有任務紀錄。</p>';
+    const hiddenNote = hiddenCount ? `已隱藏 ${hiddenCount} 筆已完成的即時上傳。` : "目前沒有任務紀錄。";
+    list.innerHTML = `<p style="color:var(--muted);">${sanitize(hiddenNote)}</p>`;
     return;
   }
-  list.innerHTML = jobs.map((job) => {
+  const hiddenNote = hiddenCount
+    ? `<div class="drive-card-sub" style="margin-bottom:.55rem;">已隱藏 ${hiddenCount} 筆已完成的即時上傳，任務中心優先顯示仍在處理、失敗或需要操作的任務。</div>`
+    : "";
+  list.innerHTML = hiddenNote + jobs.map((job) => {
     const percent = Math.max(0, Math.min(100, Number(job.progress_percent || 0)));
     const cls = platformSeverityClass(job.status);
+    const live = job.live_status_source
+      ? `<span class="badge info">同步中：${sanitize(job.live_status_source)}</span>`
+      : "";
     const err = job.error_message
       ? `<div class="drive-card-sub" style="color:#ffb74d;">${sanitize(job.error_stage || job.stage || "error")}：${sanitize(job.error_message)}</div>`
       : "";
@@ -171,6 +243,7 @@ function renderJobCenterJobs(jobs = []) {
           ${err}
         </div>
         <div class="drive-file-actions">
+          ${live}
           <span class="badge ${cls}">${sanitize(platformStatusLabel(job.status))} · ${percent}%</span>
           ${pause}
           ${resume}
@@ -195,15 +268,123 @@ function renderJobCenterJobs(jobs = []) {
   });
 }
 
-async function loadJobCenter() {
+function mapComfyJobStatusToPlatform(status) {
+  const value = String(status || "");
+  if (["completed", "succeeded", "success"].includes(value)) return "succeeded";
+  if (["error", "failed"].includes(value)) return "failed";
+  if (value === "cancelled") return "cancelled";
+  if (value === "queued") return "queued";
+  return "running";
+}
+
+function mergeComfyJobLiveProgress(job = {}, liveJob = {}) {
+  const progress = liveJob.progress || {};
+  const status = mapComfyJobStatusToPlatform(liveJob.status);
+  const percent = Number(progress.percent);
+  return {
+    ...job,
+    status,
+    progress_percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : job.progress_percent,
+    stage: progress.phase || liveJob.status || job.stage,
+    stage_detail: progress.detail || liveJob.error || job.stage_detail || "",
+    error_message: status === "failed" ? (liveJob.error || job.error_message || "ComfyUI 任務失敗") : "",
+    error_stage: status === "failed" ? (progress.phase || job.error_stage || "error") : "",
+    result: liveJob.result || job.result,
+    metadata: {
+      ...(job.metadata || {}),
+      comfyui_job_id: liveJob.job_id || job.metadata?.comfyui_job_id || job.source_ref,
+      live_progress: true,
+      live_progress_updated_at: progress.updated_at || "",
+      backend_unresponsive: Boolean(progress.backend_unresponsive),
+    },
+    live_progress: true,
+    live_status_source: progress.backend_unresponsive ? "ComfyUI 無回應" : "ComfyUI",
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function mapMediaStreamStatusToPlatform(status) {
+  const value = String(status || "");
+  if (value === "ready") return "succeeded";
+  if (["failed", "unavailable"].includes(value)) return "failed";
+  if (value === "processing") return "running";
+  return "queued";
+}
+
+function mergeMediaStreamLiveProgress(job = {}, asset = {}) {
+  const status = mapMediaStreamStatusToPlatform(asset.status);
+  const detail = asset.error_message
+    || (status === "succeeded" ? "HLS 已可播放" : status === "running" ? "HLS 外部轉檔仍在處理" : "等待 HLS 處理");
+  return {
+    ...job,
+    status,
+    progress_percent: status === "succeeded" || status === "failed" ? 100 : Math.max(Number(job.progress_percent || 0), status === "running" ? 20 : 5),
+    stage: asset.status || job.stage,
+    stage_detail: detail,
+    error_message: status === "failed" ? detail : "",
+    error_stage: status === "failed" ? (asset.status || "failed") : "",
+    metadata: {
+      ...(job.metadata || {}),
+      live_progress: true,
+      stream_status: asset.status || "",
+      variants_count: Array.isArray(asset.variants) ? asset.variants.length : 0,
+    },
+    live_progress: true,
+    live_status_source: "HLS",
+    updated_at: asset.updated_at || new Date().toISOString(),
+  };
+}
+
+async function hydrateJobCenterLiveProgress(jobs = [], { csrf = "" } = {}) {
+  const liveJobs = [...jobs];
+  const activeIndexes = liveJobs
+    .map((job, index) => ({ job, index }))
+    .filter(({ job }) => isJobCenterActiveJob(job))
+    .slice(0, JOB_CENTER_LIVE_SYNC_LIMIT);
+  for (const { job, index } of activeIndexes) {
+    try {
+      if (!canFetchOwnerScopedLiveJob(job)) continue;
+      if (job.source_module === "comfyui") {
+        const jobId = job.metadata?.comfyui_job_id || job.source_ref || "";
+        if (!jobId) continue;
+        const res = await apiFetch(API + `/comfyui/jobs/${encodeURIComponent(jobId)}`, {
+          credentials: "same-origin",
+          headers: { "X-CSRF-Token": csrf || "" },
+        });
+        const json = await res.json().catch(() => ({}));
+        if (res.ok && json.ok && json.job) {
+          liveJobs[index] = mergeComfyJobLiveProgress(job, json.job);
+        }
+      } else if (job.source_module === "media_hls_prepare") {
+        const fileId = job.metadata?.file_id || String(job.source_ref || "").replace(/^media_stream:/, "");
+        if (!fileId) continue;
+        const res = await apiFetch(API + `/media/${encodeURIComponent(fileId)}/stream-status`, {
+          credentials: "same-origin",
+          headers: { "X-CSRF-Token": csrf || "" },
+        });
+        const json = await res.json().catch(() => ({}));
+        if (res.ok && json.ok && json.asset) {
+          liveJobs[index] = mergeMediaStreamLiveProgress(job, json.asset);
+        }
+      }
+    } catch (_) {
+      // Live source sync is best-effort. The persisted Job Center row is still rendered.
+    }
+  }
+  return liveJobs;
+}
+
+async function loadJobCenter(options = {}) {
+  const quiet = Boolean(options.quiet);
   if (!currentUser) return;
-  platformCenterSetMsg("job-center-msg", "正在讀取任務中心...", true);
-  await fetchCsrfToken({ force: true });
+  if (jobCenterLoadPromise) return jobCenterLoadPromise;
+  if (!quiet) platformCenterSetMsg("job-center-msg", "正在同步任務實際進度...", true);
+  await fetchCsrfToken({ force: !quiet });
   const csrf = getCsrfToken();
-  try {
+  jobCenterLoadPromise = (async () => {
     const endpoint = currentUser === "root"
-      ? API + "/admin/jobs?limit=80"
-      : API + "/jobs?limit=80";
+      ? API + "/admin/jobs?limit=80&sync=1"
+      : API + "/jobs?limit=80&sync=1";
     const res = await apiFetch(endpoint, {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
@@ -215,16 +396,63 @@ async function loadJobCenter() {
       return;
     }
     let jobs = Array.isArray(json.jobs) ? json.jobs : [];
+    let liveDriveKeys = new Set();
     if (typeof loadDriveTaskCenterJobs === "function") {
       const driveJobs = await loadDriveTaskCenterJobs({ csrf });
+      liveDriveKeys = new Set(driveJobs.map(platformJobCenterMergeKey).filter(Boolean));
       jobs = mergePlatformJobCenterJobs([...jobs, ...driveJobs]);
     }
-    renderJobCenterJobs(jobs);
-    platformCenterSetMsg("job-center-msg", `已載入 ${jobs.length} 筆任務`, true);
+    jobs = markMissingLiveSourceJobs(jobs, liveDriveKeys);
+    jobs = mergePlatformJobCenterJobs(await hydrateJobCenterLiveProgress(jobs, { csrf }));
+    const summary = summarizeJobCenterJobs(jobs);
+    renderJobCenterJobs(summary.visible, { hiddenCount: summary.hiddenCount });
+    const time = new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const hiddenText = summary.hiddenCount ? `，已隱藏 ${summary.hiddenCount} 筆即時完成雜訊` : "";
+    platformCenterSetMsg("job-center-msg", `已同步 ${summary.visible.length} 筆任務，進行中 ${summary.activeCount} 筆${hiddenText} · ${time}`, true);
+    return summary;
+  })();
+  try {
+    return await jobCenterLoadPromise;
   } catch (_) {
     platformCenterSetMsg("job-center-msg", "任務中心讀取失敗，請稍後再試。", false);
+    return null;
+  } finally {
+    jobCenterLoadPromise = null;
   }
 }
+
+function stopJobCenterPolling() {
+  if (!jobCenterPollTimer) return;
+  clearInterval(jobCenterPollTimer);
+  jobCenterPollTimer = null;
+}
+
+function startJobCenterPolling({ immediate = true, force = false } = {}) {
+  if (!currentUser || !isJobCenterActive()) {
+    stopJobCenterPolling();
+    return;
+  }
+  const alreadyPolling = Boolean(jobCenterPollTimer);
+  if (immediate && (!alreadyPolling || force)) loadJobCenter({ quiet: false });
+  if (alreadyPolling) return;
+  jobCenterPollTimer = setInterval(() => {
+    if (!currentUser || !isJobCenterActive() || document.hidden) {
+      stopJobCenterPolling();
+      return;
+    }
+    loadJobCenter({ quiet: true });
+  }, JOB_CENTER_POLL_INTERVAL_MS);
+}
+
+document.addEventListener("hackme:module-changed", (event) => {
+  if (event.detail?.current === "jobs") startJobCenterPolling({ immediate: true });
+  else stopJobCenterPolling();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopJobCenterPolling();
+  else if (isJobCenterActive()) startJobCenterPolling({ immediate: true });
+});
 
 async function updateJobCenterJob(jobUuid, action) {
   if (!jobUuid || !["cancel", "retry"].includes(action)) return;
@@ -340,7 +568,76 @@ function renderShareCenterEventsPanel(bodyHtml = "", { bad = false } = {}) {
   return panel;
 }
 
+function shareCenterItemKey(share = {}) {
+  return `${share.share_type || ""}:${share.id || ""}`;
+}
+
+function shareCenterDateTimeLocal(value) {
+  return sanitize(String(value || "").slice(0, 16));
+}
+
+function renderShareCenterEditForm(share = {}) {
+  const key = shareCenterItemKey(share);
+  const type = String(share.share_type || "");
+  const commonFields = (type === "file" || type === "video")
+    ? `
+      <label class="field">
+        <span>到期時間</span>
+        <input type="datetime-local" data-share-edit-expires value="${shareCenterDateTimeLocal(share.expires_at)}" />
+      </label>
+      <label class="field">
+        <span>最大存取次數</span>
+        <input type="number" min="0" max="1000000" step="1" data-share-edit-max-views value="${sanitize(String(share.max_views || 0))}" />
+      </label>
+    `
+    : "";
+  const fileFields = type === "file"
+    ? `
+      <label class="field">
+        <span>分享範圍</span>
+        <select data-share-edit-scope>
+          <option value="link" ${share.access_scope === "account" ? "" : "selected"}>知道連結即可存取</option>
+          <option value="account" ${share.access_scope === "account" ? "selected" : ""}>指定帳戶</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>指定帳戶</span>
+        <input type="text" data-share-edit-account value="${sanitize(share.required_username || share.required_user_id || "")}" placeholder="好友 username 或 user id" />
+      </label>
+      <label class="field checkbox-field"><input type="checkbox" data-share-edit-can-preview ${share.can_preview ? "checked" : ""} /> 允許瀏覽器預覽</label>
+      <label class="field checkbox-field"><input type="checkbox" data-share-edit-can-download ${share.can_download ? "checked" : ""} /> 允許下載</label>
+    `
+    : "";
+  const passwordFields = (type === "album" || type === "video")
+    ? `
+      <label class="field">
+        <span>分享密碼</span>
+        <input type="password" autocomplete="new-password" data-share-edit-password placeholder="${share.password_required ? "留空代表不變更" : "可選"}" />
+      </label>
+      <label class="field checkbox-field"><input type="checkbox" data-share-edit-clear-password /> 清除分享密碼</label>
+    `
+    : "";
+  return `
+    <div class="share-center-edit-form" data-share-edit-key="${sanitize(key)}">
+      <div class="settings-option-grid">
+        ${fileFields}
+        ${passwordFields}
+        ${commonFields}
+      </div>
+      <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.6rem;">
+        <button class="btn btn-primary" type="button" data-share-edit-save="${sanitize(key)}">儲存分享選項</button>
+        <button class="btn" type="button" data-share-edit-cancel>取消</button>
+      </div>
+    </div>
+  `;
+}
+
+function rerenderShareCenter() {
+  renderShareCenter(shareCenterLatestShares);
+}
+
 function renderShareCenter(shares = []) {
+  shareCenterLatestShares = Array.isArray(shares) ? shares : [];
   const list = $("share-center-list");
   if (!list) return;
   const active = shares.filter((s) => s.status === "active").length;
@@ -356,11 +653,15 @@ function renderShareCenter(shares = []) {
     return;
   }
   list.innerHTML = shares.map((share) => {
+    const key = shareCenterItemKey(share);
     const status = share.status === "expired" ? "expired_share" : share.status;
     const link = shareCenterLinkUrl(share);
     const url = link.url;
     const missingFragment = link.missingFragment;
     const copy = url ? `<button class="btn" type="button" data-share-copy="${sanitize(url)}" data-share-missing-fragment="${missingFragment ? "1" : "0"}">複製</button>` : "";
+    const edit = share.status === "active"
+      ? `<button class="btn" type="button" data-share-edit="${sanitize(key)}">編輯</button>`
+      : "";
     const events = `<button class="btn" type="button" data-share-events-type="${sanitize(share.share_type)}" data-share-events-id="${sanitize(share.id)}">紀錄</button>`;
     const revoke = share.status === "active"
       ? `<button class="btn btn-danger" type="button" data-share-revoke-type="${sanitize(share.share_type)}" data-share-revoke-id="${sanitize(share.id)}">撤銷</button>`
@@ -383,10 +684,12 @@ function renderShareCenter(shares = []) {
         </div>
         <div class="drive-file-actions">
           <span class="badge ${platformSeverityClass(status)}">${sanitize(platformStatusLabel(status))}</span>
+          ${edit}
           ${copy}
           ${events}
           ${revoke}
         </div>
+        ${shareCenterEditingKey === key ? renderShareCenterEditForm(share) : ""}
       </div>
     `;
   }).join("");
@@ -395,15 +698,34 @@ function renderShareCenter(shares = []) {
       const url = btn.dataset.shareCopy || "";
       if (btn.dataset.shareMissingFragment === "1") {
         platformCenterSetMsg("share-center-msg", "分享連結缺少 E2EE 片段金鑰，請重新產生分享連結後再複製。", false);
+        if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(btn, "缺少 E2EE 片段金鑰", false);
         return;
       }
       try {
         await navigator.clipboard.writeText(url);
         platformCenterSetMsg("share-center-msg", "連結已複製", true);
+        if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(btn, "已完成複製", true);
       } catch (_) {
+        if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(btn, "請在彈出視窗複製完整連結", false);
         window.prompt("分享連結", url);
       }
     });
+  });
+  list.querySelectorAll("[data-share-edit]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      shareCenterEditingKey = btn.dataset.shareEdit || "";
+      closeShareCenterEvents();
+      rerenderShareCenter();
+    });
+  });
+  list.querySelectorAll("[data-share-edit-cancel]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      shareCenterEditingKey = "";
+      rerenderShareCenter();
+    });
+  });
+  list.querySelectorAll("[data-share-edit-save]").forEach((btn) => {
+    btn.addEventListener("click", () => saveShareCenterOptions(btn.dataset.shareEditSave || ""));
   });
   list.querySelectorAll("[data-share-revoke-id]").forEach((btn) => {
     btn.addEventListener("click", () => revokeShareCenterLink(btn.dataset.shareRevokeType || "", btn.dataset.shareRevokeId || ""));
@@ -412,6 +734,53 @@ function renderShareCenter(shares = []) {
     btn.addEventListener("click", () => loadShareCenterEvents(btn.dataset.shareEventsType || "", btn.dataset.shareEventsId || ""));
   });
   scheduleShareCenterCountdowns();
+}
+
+async function saveShareCenterOptions(key) {
+  const share = shareCenterLatestShares.find((item) => shareCenterItemKey(item) === key);
+  const form = Array.from(document.querySelectorAll("[data-share-edit-key]")).find((node) => node.dataset.shareEditKey === key);
+  if (!share || !form) return;
+  const payload = {};
+  if (share.share_type === "file") {
+    payload.access_scope = form.querySelector("[data-share-edit-scope]")?.value || "link";
+    const account = (form.querySelector("[data-share-edit-account]")?.value || "").trim();
+    if (payload.access_scope === "account") {
+      if (/^\d+$/.test(account)) payload.required_user_id = Number(account);
+      else payload.required_username = account;
+    }
+    payload.can_preview = !!form.querySelector("[data-share-edit-can-preview]")?.checked;
+    payload.can_download = !!form.querySelector("[data-share-edit-can-download]")?.checked;
+  }
+  if (share.share_type === "album" || share.share_type === "video") {
+    const password = form.querySelector("[data-share-edit-password]")?.value || "";
+    const clearPassword = !!form.querySelector("[data-share-edit-clear-password]")?.checked;
+    if (password || clearPassword) payload.share_password = clearPassword ? "" : password;
+    payload.clear_password = clearPassword;
+  }
+  if (share.share_type === "file" || share.share_type === "video") {
+    payload.expires_at = form.querySelector("[data-share-edit-expires]")?.value || "";
+    payload.max_views = form.querySelector("[data-share-edit-max-views]")?.value || "0";
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + `/shares/${encodeURIComponent(share.share_type)}/${encodeURIComponent(share.id)}`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrf || ""
+      },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || "分享設定更新失敗");
+    platformCenterSetMsg("share-center-msg", "分享選項已更新", true);
+    shareCenterEditingKey = "";
+    await loadShareCenterLinks();
+  } catch (err) {
+    platformCenterSetMsg("share-center-msg", err?.message || "分享設定更新失敗", false);
+  }
 }
 
 async function loadShareCenter() {
@@ -627,25 +996,8 @@ function renderVideoManageCenter(payload = {}) {
           <div class="video-manage-share-box">
             <div class="drive-card-sub">分享狀態：${sanitize(shareState)}</div>
             ${shareUrl ? `<div class="drive-card-sub drive-share-link">${sanitize(shareUrl)}</div>` : `<div class="drive-card-sub">尚未產生影音分享連結。</div>`}
-            <div class="video-share-manage-grid">
-              <label>
-                <span class="drive-card-sub">分享密碼</span>
-                <input type="password" autocomplete="new-password" placeholder="${video.share_password_required ? "留空代表不變更" : "可選"}" data-video-manage-share-password ${shareDisabled ? "disabled" : ""} />
-              </label>
-              <label>
-                <span class="drive-card-sub">到期時間</span>
-                <input type="datetime-local" value="${sanitize(String(video.share_expires_at || video.share_link?.expires_at || "").slice(0, 16))}" data-video-manage-share-expires ${shareDisabled ? "disabled" : ""} />
-              </label>
-              <label>
-                <span class="drive-card-sub">最大觀看次數</span>
-                <input type="number" min="0" step="1" value="${sanitize(String(video.share_max_views || video.share_link?.max_views || 0))}" data-video-manage-share-max-views ${shareDisabled ? "disabled" : ""} />
-              </label>
-            </div>
             <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.5rem;">
-              <button class="btn btn-sm" type="button" data-video-manage-share-save="${sanitize(id)}" ${shareDisabled ? "disabled" : ""}>${shareUrl ? "更新分享" : "產生分享連結"}</button>
-              <button class="btn btn-sm" type="button" data-video-manage-share-copy="${sanitize(id)}" ${shareUrl ? "" : "disabled"}>複製連結</button>
-              <button class="btn btn-sm" type="button" data-video-manage-share-regenerate="${sanitize(id)}" ${shareDisabled ? "disabled" : ""}>重新產生</button>
-              <button class="btn btn-sm btn-danger" type="button" data-video-manage-share-revoke="${sanitize(id)}" ${shareUrl ? "" : "disabled"}>撤銷分享</button>
+              <button class="btn btn-sm btn-primary" type="button" data-video-manage-share-open="${sanitize(id)}" ${shareDisabled ? "disabled" : ""}>分享設定</button>
             </div>
           </div>
           <div class="drive-card-sub">建立 ${sanitize(formatChatTime(video.created_at || ""))} · 更新 ${sanitize(formatChatTime(video.updated_at || ""))} · 來源 ${sanitize(video.cloud_filename || video.cloud_file_id || "-")}</div>
@@ -668,17 +1020,8 @@ function renderVideoManageCenter(payload = {}) {
   list.querySelectorAll("[data-video-manage-links]").forEach((btn) => {
     btn.addEventListener("click", () => setShareCenterTab("links"));
   });
-  list.querySelectorAll("[data-video-manage-share-save]").forEach((btn) => {
-    btn.addEventListener("click", () => saveManagedVideoShareSettings(btn.dataset.videoManageShareSave || ""));
-  });
-  list.querySelectorAll("[data-video-manage-share-regenerate]").forEach((btn) => {
-    btn.addEventListener("click", () => saveManagedVideoShareSettings(btn.dataset.videoManageShareRegenerate || "", { regenerate: true }));
-  });
-  list.querySelectorAll("[data-video-manage-share-copy]").forEach((btn) => {
-    btn.addEventListener("click", () => copyManagedVideoShareLink(btn.dataset.videoManageShareCopy || ""));
-  });
-  list.querySelectorAll("[data-video-manage-share-revoke]").forEach((btn) => {
-    btn.addEventListener("click", () => revokeManagedVideoShareLink(btn.dataset.videoManageShareRevoke || ""));
+  list.querySelectorAll("[data-video-manage-share-open]").forEach((btn) => {
+    btn.addEventListener("click", () => openManagedVideoShareSettings(btn.dataset.videoManageShareOpen || ""));
   });
   list.querySelectorAll("[data-video-manage-save]").forEach((btn) => {
     btn.addEventListener("click", () => saveManagedVideo(btn.dataset.videoManageSave || ""));
@@ -804,18 +1147,49 @@ async function saveManagedVideoShareSettings(videoId, { regenerate = false } = {
   }
 }
 
+async function openManagedVideoShareSettings(videoId) {
+  if (!videoId) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + `/videos/${encodeURIComponent(videoId)}/share-link`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrf || ""
+      },
+      body: JSON.stringify({})
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || "影音分享連結建立失敗");
+    const shareId = json.share_link?.id || json.video?.share_link?.id || "";
+    if (shareId) shareCenterEditingKey = `video:${shareId}`;
+    if (typeof switchModuleTab === "function") switchModuleTab("shares");
+    setShareCenterTab("links", { load: false });
+    await loadShareCenterLinks();
+    platformCenterSetMsg("share-center-msg", "已切到分享管理，請在這裡調整分享選項。", true);
+  } catch (err) {
+    platformCenterSetMsg("video-manage-msg", err?.message || "影音分享連結建立失敗", false);
+  }
+}
+
 async function copyManagedVideoShareLink(videoId) {
   const row = videoManageRow(videoId);
   if (!row) return;
+  const button = row.querySelector("[data-video-manage-share-copy]");
   const text = row.querySelector(".drive-share-link")?.textContent?.trim() || "";
   if (!text) {
     platformCenterSetMsg("video-manage-msg", "尚未產生分享連結", false);
+    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "尚未產生分享連結", false);
     return;
   }
   try {
     await navigator.clipboard.writeText(text);
     platformCenterSetMsg("video-manage-msg", "影音分享連結已複製", true);
+    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "已完成複製", true);
   } catch (_) {
+    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "請在彈出視窗複製完整連結", false);
     window.prompt("影音分享連結", text);
   }
 }

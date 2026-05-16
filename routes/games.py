@@ -44,6 +44,11 @@ from services.games.chess_nnue import (
     EXP5_PRODUCTION_SEARCH_PROFILE,
     choose_experiment_nnue_move,
 )
+from services.games.chess_exp6 import (
+    EXPERIMENT_NEURAL_DIFFICULTY,
+    EXP6_DEFAULT_SEARCH_PROFILE,
+    choose_experiment_neural_move,
+)
 from services.games.chess_nn import (
     EXPERIMENT_NN_DIFFICULTY,
     choose_experiment_nn_move,
@@ -112,17 +117,31 @@ MULTIPLAYER_MODES_BY_GAME = {
 SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'open_world', 'bullet_hell', 'stickman_shooter', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku', 'chinese_chess'"
 WEEKLY_REWARDS = (300, 200, 100)
 DAILY_CHALLENGE_REWARD_POINTS = 25
+# New chess difficulty naming. ``experiment 0:minimax2ply`` is the
+# renamed ``hard`` (2-ply material minimax); ``experiment 1:search``
+# is the renamed ``experiment`` (engine search + learning store).
+# The renames are pure relabelling — the dispatcher maps the new
+# strings to the existing engine code, and legacy DB rows still
+# selecting ``normal`` / ``hard`` / ``experiment`` keep playing.
+EXP0_HEURISTIC_DIFFICULTY = "experiment 0:minimax2ply"
+EXP1_SEARCH_DIFFICULTY = "experiment 1:search"
 BASE_COMPUTER_DIFFICULTIES = {
-    "normal",
-    "hard",
-    EXPERIMENT_DIFFICULTY,
+    EXP0_HEURISTIC_DIFFICULTY,
+    EXP1_SEARCH_DIFFICULTY,
+    EXPERIMENT_NN_DIFFICULTY,
     EXPERIMENT_DL_DIFFICULTY,
     EXPERIMENT_PV_DIFFICULTY,
     EXPERIMENT_NNUE_DIFFICULTY,
+    EXPERIMENT_NEURAL_DIFFICULTY,
 }
 COMPUTER_DIFFICULTIES = set(BASE_COMPUTER_DIFFICULTIES)
-STORED_COMPUTER_DIFFICULTIES = set(BASE_COMPUTER_DIFFICULTIES) | {STOCKFISH_DIFFICULTY}
-LEGACY_COMPUTER_DIFFICULTIES = {EXPERIMENT_NN_DIFFICULTY}
+# Legacy strings kept in STORED so old game_matches rows continue to
+# play and round-trip without a destructive migration.
+LEGACY_CHESS_DIFFICULTIES = {"normal", "hard", EXPERIMENT_DIFFICULTY}
+STORED_COMPUTER_DIFFICULTIES = (
+    set(BASE_COMPUTER_DIFFICULTIES) | {STOCKFISH_DIFFICULTY} | LEGACY_CHESS_DIFFICULTIES
+)
+LEGACY_COMPUTER_DIFFICULTIES: set[str] = set()
 MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard", "master"}
 PIECE_VALUES = {
     "p": 100,
@@ -186,10 +205,21 @@ def load_computer_config(row):
     return data if isinstance(data, dict) else {}
 
 
+_LEGACY_DIFFICULTY_ALIASES = {
+    # Legacy chess difficulty strings → canonical new strings. Only
+    # applied on input from frontend; existing DB rows holding the
+    # legacy strings (``normal`` / ``hard`` / ``experiment``) still
+    # round-trip via STORED_COMPUTER_DIFFICULTIES + handled in dispatch.
+    "hard": EXP0_HEURISTIC_DIFFICULTY,
+    EXPERIMENT_DIFFICULTY: EXP1_SEARCH_DIFFICULTY,
+}
+
+
 def normalize_computer_difficulty(value):
-    difficulty = str(value or "normal").strip().lower()
+    difficulty = str(value or "").strip().lower()
     if difficulty == "easy":
         difficulty = "normal"
+    difficulty = _LEGACY_DIFFICULTY_ALIASES.get(difficulty, difficulty)
     allowed = set(BASE_COMPUTER_DIFFICULTIES)
     if stockfish_available():
         allowed.add(STOCKFISH_DIFFICULTY)
@@ -205,12 +235,13 @@ def normalize_stored_computer_difficulty(value):
 
 def computer_difficulty_options():
     rows = [
-        {"key": "normal", "label": "普通"},
-        {"key": "hard", "label": "困難"},
-        {"key": EXPERIMENT_DIFFICULTY, "label": "實驗"},
-        {"key": EXPERIMENT_DL_DIFFICULTY, "label": "實驗 3：DL 語義平衡"},
-        {"key": EXPERIMENT_PV_DIFFICULTY, "label": "實驗 4：Policy/Value + MCTS"},
+        {"key": EXP0_HEURISTIC_DIFFICULTY, "label": "實驗 0：2 層物質 minimax"},
+        {"key": EXP1_SEARCH_DIFFICULTY, "label": "實驗 1：引擎搜尋 + 對局學習"},
+        {"key": EXPERIMENT_NN_DIFFICULTY, "label": "實驗 2：NN 評估（autoretrain disconnected）"},
+        {"key": EXPERIMENT_DL_DIFFICULTY, "label": "實驗 3：DL 語義平衡（autoretrain disconnected）"},
+        {"key": EXPERIMENT_PV_DIFFICULTY, "label": "實驗 4：Policy/Value + MCTS（autoretrain disconnected）"},
         {"key": EXPERIMENT_NNUE_DIFFICULTY, "label": "實驗 5：NNUE + AlphaBeta/PVS"},
+        {"key": EXPERIMENT_NEURAL_DIFFICULTY, "label": "實驗 6：Neural Network"},
     ]
     if stockfish_available():
         rows.append({
@@ -292,6 +323,13 @@ def choose_computer_move(board, side, difficulty="normal", learning_store=None, 
         move = choose_experiment_nnue_move(board_payload, side, search_profile=EXP5_PRODUCTION_SEARCH_PROFILE)
         if move:
             return move
+    if difficulty == EXPERIMENT_NEURAL_DIFFICULTY:
+        board_payload = dict(board or {})
+        if isinstance(move_history, list):
+            board_payload["__move_history__"] = move_history
+        move = choose_experiment_neural_move(board_payload, side, search_profile=EXP6_DEFAULT_SEARCH_PROFILE)
+        if move:
+            return move
     # P2: try the static opening book first so engines without a built-in
     # opening repertoire stop playing offbeat first moves like ``a5``. The
     # book covers ~60 standard positions, returns ``None`` past book, and
@@ -303,8 +341,13 @@ def choose_computer_move(board, side, difficulty="normal", learning_store=None, 
             book_pick = None
         if book_pick:
             return book_pick
-    if difficulty == EXPERIMENT_DIFFICULTY:
-        move = choose_experiment_move(board, side, store=learning_store, difficulty=difficulty, search_profile="fast")
+    # exp1 = renamed legacy "experiment". Map back to the same engine.
+    if difficulty in (EXPERIMENT_DIFFICULTY, EXP1_SEARCH_DIFFICULTY):
+        move = choose_experiment_move(
+            board, side, store=learning_store,
+            difficulty=EXPERIMENT_DIFFICULTY,  # internal engine still uses "experiment"
+            search_profile="fast",
+        )
         if move:
             return move
     if difficulty == EXPERIMENT_NN_DIFFICULTY:
@@ -322,7 +365,12 @@ def choose_computer_move(board, side, difficulty="normal", learning_store=None, 
             move = choose_experiment_pv_move(board, side, search_profile="fast", decision_mode="mcts")
         if move:
             return move
-    return _choose_heuristic_move(board, side, difficulty)
+    # exp0 = renamed legacy "hard" (2-ply material minimax). The
+    # heuristic dispatcher takes the legacy difficulty string.
+    heuristic_difficulty = difficulty
+    if difficulty == EXP0_HEURISTIC_DIFFICULTY:
+        heuristic_difficulty = "hard"
+    return _choose_heuristic_move(board, side, heuristic_difficulty)
 
 
 def load_board(row):
@@ -369,7 +417,7 @@ def game_schema_sql():
         CHECK (status IN ('active', 'finished', 'cancelled')),
         CHECK (current_turn IN ('white', 'black')),
         CHECK (human_side IN ('white', 'black')),
-        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue', 'stockfish'))
+        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 0:minimax2ply', 'experiment 1:search', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue', 'experiment 6:neuralnet', 'stockfish'))
     );
     CREATE TABLE IF NOT EXISTS game_invites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -572,7 +620,7 @@ def rebuild_game_matches_table(conn):
                 CHECK (status IN ('active', 'finished', 'cancelled')),
                 CHECK (current_turn IN ('white', 'black')),
                 CHECK (human_side IN ('white', 'black')),
-                CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue', 'stockfish'))
+                CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 0:minimax2ply', 'experiment 1:search', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue', 'experiment 6:neuralnet', 'stockfish'))
             )
             """
         )
@@ -655,6 +703,9 @@ def ensure_game_schema(conn):
         or "experiment 3:dl" not in match_sql
         or "experiment 4:pv" not in match_sql
         or "experiment 5:nnue" not in match_sql
+        or "experiment 6:neuralnet" not in match_sql
+        or "experiment 0:minimax2ply" not in match_sql
+        or "experiment 1:search" not in match_sql
         or "stockfish" not in match_sql
     ):
         rebuild_game_matches_table(conn)

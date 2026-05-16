@@ -147,3 +147,72 @@ def test_share_management_is_owner_scoped_even_for_manager(tmp_path):
         assert video_row["revoked_at"] is None
     finally:
         conn.close()
+
+
+def test_share_management_can_update_file_share_options(tmp_path):
+    db_path = tmp_path / "shares-update.db"
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    app = Flask(__name__)
+    app.testing = True
+    register_share_management_routes(app, {
+        "audit": lambda *args, **kwargs: None,
+        "get_client_ip": lambda: "127.0.0.1",
+        "get_current_user_ctx": lambda: {"id": 1, "username": "alice", "role": "user"},
+        "get_db": get_db,
+        "get_ua": lambda: "test-agent",
+        "json_resp": _json_resp,
+        "parse_positive_int": lambda value, default=100, min_value=1, max_value=200: default,
+        "require_csrf": _passthrough,
+        "require_csrf_safe": _passthrough,
+        "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
+    })
+
+    conn = get_db()
+    try:
+        ensure_storage_album_schema(conn)
+        ensure_video_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO storage_share_links (
+                id, storage_file_id, file_id, owner_user_id, token, token_hash,
+                can_download, can_preview, access_scope, max_views, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("share-1", "storage-file-1", "upload-1", 1, "token-1", "token-hash-1", 1, 1, "link", 0, "2026-05-11T01:00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = app.test_client().put(
+        "/api/shares/file/share-1",
+        json={
+            "can_preview": False,
+            "can_download": True,
+            "access_scope": "link",
+            "expires_at": "2026-06-01T12:00",
+            "max_views": 7,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["ok"] is True
+    assert body["share"]["can_preview"] is False
+    assert body["share"]["can_download"] is True
+    assert body["share"]["expires_at"] == "2026-06-01T12:00"
+    assert body["share"]["max_views"] == 7
+
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM storage_share_links WHERE id='share-1'").fetchone()
+        assert row["can_preview"] == 0
+        assert row["can_download"] == 1
+        assert row["max_views"] == 7
+    finally:
+        conn.close()

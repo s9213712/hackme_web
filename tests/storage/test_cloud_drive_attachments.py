@@ -20,6 +20,7 @@ from services.storage.cloud_drive import (
 from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage.storage_albums import ensure_storage_album_schema
 from services.security.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
+from services.users.friends import ensure_social_schema
 
 
 @pytest.fixture(autouse=True)
@@ -111,6 +112,13 @@ def _init_db(db_path):
     ensure_upload_security_schema(conn)
     ensure_cloud_drive_attachment_schema(conn)
     ensure_storage_album_schema(conn)
+    ensure_social_schema(conn)
+    conn.execute(
+        """
+        INSERT INTO user_friends (user_id, friend_user_id, status, requested_by, created_at, updated_at)
+        VALUES (1, 2, 'accepted', 1, '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+        """
+    )
     update_cloud_drive_security_policy(conn, {"scanner_enabled": False})
     conn.commit()
     conn.close()
@@ -446,7 +454,7 @@ def test_storage_resumable_upload_creates_storage_file_entry(tmp_path):
     assert client.get(f"/api/storage/files/{storage_file['id']}/download").data == payload
 
 
-def test_resumable_server_encrypted_upload_finishes_through_existing_encryption_path(tmp_path):
+def test_resumable_server_encrypted_upload_finishes_through_chunked_encryption_path(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
@@ -485,6 +493,7 @@ def test_resumable_server_encrypted_upload_finishes_through_existing_encryption_
         row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
         stored = storage_root / row["storage_path"]
         assert row["privacy_mode"] == "server_encrypted"
+        assert row["encryption_version"] == "server-side-chunked-v1"
         assert stored.read_bytes() != payload
         assert decrypt_server_encrypted_bytes(stored, fernet) == payload
     finally:
@@ -620,6 +629,7 @@ def test_server_encrypted_upload_stores_ciphertext_but_downloads_plaintext(tmp_p
     row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
     conn.close()
     assert row["privacy_mode"] == "server_encrypted"
+    assert row["encryption_version"] == "server-side-chunked-v1"
     stored = storage_root / row["storage_path"]
     assert stored.read_bytes() != b"secret note"
 
@@ -632,28 +642,48 @@ def test_server_encrypted_upload_stores_ciphertext_but_downloads_plaintext(tmp_p
     assert download.data == b"secret note"
 
 
-def test_server_encrypted_large_upload_rejected_before_inline_encrypt(tmp_path, monkeypatch):
+def test_server_encrypted_upload_always_uses_chunked_encryption(tmp_path, monkeypatch):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
-    monkeypatch.setenv("HACKME_SERVER_ENCRYPTED_INLINE_MAX_BYTES", "8")
+    monkeypatch.setenv("HACKME_SERVER_ENCRYPTED_CHUNK_BYTES", "4")
+    fernet = Fernet(Fernet.generate_key())
     actor_box = {"actor": _actor(1, "alice")}
-    client = _build_app(db_path, storage_root, actor_box).test_client()
+    client = _build_app(db_path, storage_root, actor_box, server_file_fernet=fernet).test_client()
+    payload = b"too-large"
 
     res = client.post(
         "/api/cloud-drive/upload",
-        data={"file": (io.BytesIO(b"too-large"), "large.bin"), "privacy_mode": "server_encrypted"},
+        data={"file": (io.BytesIO(payload), "large.bin"), "privacy_mode": "server_encrypted"},
         content_type="multipart/form-data",
     )
 
-    assert res.status_code == 400
+    assert res.status_code == 200
     body = res.get_json()
-    assert body["ok"] is False
-    assert "伺服器端加密目前只允許" in body["msg"]
+    file_id = body["file"]["file_id"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+        stored = storage_root / row["storage_path"]
+        assert row["privacy_mode"] == "server_encrypted"
+        assert row["encryption_version"] == "server-side-chunked-v1"
+        assert stored.read_bytes() != payload
+        assert decrypt_server_encrypted_bytes(stored, fernet) == payload
+    finally:
+        conn.close()
+
+    download = client.get(f"/api/cloud-drive/files/{file_id}/download")
+    assert download.status_code == 200
+    assert download.data == payload
+    ranged = client.get(f"/api/cloud-drive/files/{file_id}/download", headers={"Range": "bytes=4-8"})
+    assert ranged.status_code == 206
+    assert ranged.headers["Content-Range"] == "bytes 4-8/9"
+    assert ranged.data == b"large"
 
 
-def test_server_encrypted_upload_scans_in_memory_plaintext_not_final_storage_path(tmp_path, monkeypatch):
+def test_server_encrypted_upload_scans_plaintext_temp_not_final_storage_path(tmp_path, monkeypatch):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
@@ -673,7 +703,6 @@ def test_server_encrypted_upload_scans_in_memory_plaintext_not_final_storage_pat
         assert os.path.exists(file_path)
         with open(file_path, "rb") as handle:
             assert handle.read() == b"secret note"
-        assert str(file_path).startswith("/proc/self/fd/")
         assert final_path.exists() is False
         return {"scan_status": "clean", "risk_level": "low", "results": []}
 
@@ -694,6 +723,7 @@ def test_server_encrypted_upload_scans_in_memory_plaintext_not_final_storage_pat
     row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (body["file"]["file_id"],)).fetchone()
     conn.close()
     stored = storage_root / row["storage_path"]
+    assert row["encryption_version"] == "server-side-chunked-v1"
     assert stored.read_bytes() != b"secret note"
 
 
@@ -1470,21 +1500,35 @@ def test_storage_share_link_download_and_revoke(tmp_path):
     assert share_link["token"]
     assert share_link["share_url"] == f"/shared/files/{share_link['token']}"
     assert share_link["download_url"] == f"/api/storage/shared/{share_link['token']}/download"
+    assert share_link["preview_url"] == f"/api/storage/shared/{share_link['token']}/preview"
+    assert share_link["preview_content_url"] == f"/api/storage/shared/{share_link['token']}/preview/content"
+    assert share_link["can_preview"] == 1
 
     listed = client.get("/api/storage/share-links").get_json()["share_links"]
     assert listed[0]["id"] == share_link["id"]
     assert "token" not in listed[0]
     assert listed[0]["share_url"] == share_link["share_url"]
+    assert listed[0]["preview_url"] == share_link["preview_url"]
 
     page = client.get(share_link["share_url"])
     assert page.status_code == 200
     assert b"/js/shared-file.js" in page.data
+    assert b"shared-file-preview-btn" in page.data
 
     meta = client.get(f"/api/storage/shared/{share_link['token']}")
     assert meta.status_code == 200
     file_meta = meta.get_json()["file"]
     assert file_meta["display_name"] == "shared.txt"
     assert file_meta["download_url"] == share_link["download_url"]
+    assert file_meta["preview_url"] == share_link["preview_url"]
+    assert file_meta["preview_content_url"] == share_link["preview_content_url"]
+    assert file_meta["can_preview"] is True
+
+    preview = client.get(f"/api/storage/shared/{share_link['token']}/preview")
+    assert preview.status_code == 200
+    preview_json = preview.get_json()["preview"]
+    assert preview_json["render_mode"] == "text"
+    assert "shared data" in preview_json["text"]
 
     actor_box["actor"] = _actor(3, "mallory")
     downloaded = client.get(f"/api/storage/shared/{share_link['token']}/download")
@@ -1542,6 +1586,34 @@ def test_storage_share_link_account_scope_and_view_limit(tmp_path):
 
     exhausted = client.get(f"/api/storage/shared/{share_link['token']}/download")
     assert exhausted.status_code == 410
+
+
+def test_storage_share_link_account_scope_rejects_non_friend_target(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"mallory blocked"), "blocked.txt"),
+            "virtual_path": "blocked.txt",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    storage_file_id = uploaded.get_json()["storage_file"]["id"]
+
+    blocked = client.post(
+        "/api/storage/share-links",
+        json={"storage_file_id": storage_file_id, "access_scope": "account", "required_username": "mallory"},
+    )
+
+    assert blocked.status_code == 403
+    assert "好友" in blocked.get_json()["msg"]
 
 
 def test_storage_share_link_e2ee_requires_browser_envelope(tmp_path):
@@ -2191,6 +2263,9 @@ def test_cloud_drive_refs_requires_private_context_membership(tmp_path):
         json={"file_id": file_id, "context_type": "dm", "context_id": "1", "grant_user_ids": [2]},
     )
     assert attached.status_code == 200
+    owner_refs = client.get("/api/cloud-drive/refs?context_type=dm&context_id=1")
+    assert owner_refs.status_code == 200
+    assert owner_refs.get_json()["refs"][0]["can_remove"] is True
 
     actor_box["actor"] = _actor(3, "mallory")
     denied = client.get("/api/cloud-drive/refs?context_type=dm&context_id=1")
@@ -2200,6 +2275,7 @@ def test_cloud_drive_refs_requires_private_context_membership(tmp_path):
     allowed = client.get("/api/cloud-drive/refs?context_type=dm&context_id=1")
     assert allowed.status_code == 200
     assert allowed.get_json()["refs"][0]["file_id"] == file_id
+    assert allowed.get_json()["refs"][0]["can_remove"] is False
 
 
 def test_announcement_attachment_requires_root_approval_before_visible(tmp_path):

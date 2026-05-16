@@ -5,6 +5,7 @@ from flask import Flask, jsonify
 
 from routes.chat import register_chat_routes
 from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
+from services.users.friends import ensure_social_schema
 
 
 def _role_rank(role):
@@ -165,6 +166,11 @@ def _message_row(db_path, message_id):
     return dict(row) if row else None
 
 
+def _message_content(db_path, message_id):
+    row = _message_row(db_path, message_id)
+    return row["content"] if row else None
+
+
 def _message_count(db_path):
     conn = sqlite3.connect(db_path)
     count = conn.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0]
@@ -207,9 +213,29 @@ def _seed_uploaded_file(db_path, file_id="file-1", owner_user_id=3):
     conn.close()
 
 
+def _accept_friendship(db_path, user_id, friend_user_id, requested_by=None):
+    a, b = sorted([int(user_id), int(friend_user_id)])
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        ensure_social_schema(conn)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO user_friends (
+                user_id, friend_user_id, status, requested_by, created_at, updated_at
+            ) VALUES (?, ?, 'accepted', ?, '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+            """,
+            (a, b, int(requested_by or user_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def test_group_chat_create_invite_password_join_and_export(tmp_path):
     db_path = tmp_path / "chat.db"
     _seed_chat_db(db_path)
+    _accept_friendship(db_path, 3, 4)
     actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
     client = _build_app(db_path, actor_box).test_client()
 
@@ -329,6 +355,7 @@ def test_chat_report_does_not_reveal_inaccessible_message_existence(tmp_path):
 def test_chat_room_invite_creates_notification(tmp_path):
     db_path = tmp_path / "chat.db"
     _seed_chat_db(db_path)
+    _accept_friendship(db_path, 3, 4)
     actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
     client = _build_app(db_path, actor_box).test_client()
 
@@ -472,6 +499,101 @@ def test_chat_rooms_marks_official_room_for_frontend(tmp_path):
     assert official["is_official"] is True
 
 
+def test_official_chat_anonymizes_members_for_regular_users_but_not_managers(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    rooms = client.get("/api/chat/rooms").get_json()["rooms"]
+    official_room = next(room for room in rooms if room["id"] == 1)
+    user_messages = client.get("/api/chat/rooms/1/messages").get_json()["messages"]
+    alice_message = next(msg for msg in user_messages if msg["content"] == "alice message")
+    admin_message = next(msg for msg in user_messages if msg["content"] == "admin message")
+    root_message = next(msg for msg in user_messages if msg["content"] == "root message")
+
+    assert official_room["hide_member_count"] is True
+    assert official_room["member_count"] is None
+    assert alice_message["sender"] == "alice"
+    assert alice_message["sender_original"] == ""
+    assert alice_message["sender_id"] == 3
+    assert admin_message["sender"] == "管理員1"
+    assert admin_message["sender_is_official"] is True
+    assert admin_message["sender_original"] == ""
+    assert admin_message["sender_id"] is None
+    assert admin_message["sender_avatar_file_id"] == ""
+    assert root_message["sender"] == "root"
+    assert root_message["sender_is_official"] is True
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    bob_messages = client.get("/api/chat/rooms/1/messages").get_json()["messages"]
+    bob_view = next(msg for msg in bob_messages if msg["content"] == "alice message")
+    assert bob_view["sender"] == "匿名1"
+    assert bob_view["sender_original"] == ""
+    assert bob_view["sender_id"] is None
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
+    manager_messages = client.get("/api/chat/rooms/1/messages").get_json()["messages"]
+    manager_view = next(msg for msg in manager_messages if msg["content"] == "admin message")
+    user_view = next(msg for msg in manager_messages if msg["content"] == "alice message")
+
+    assert manager_view["sender"] == "管理員1"
+    assert manager_view["sender_original"] == "admin"
+    assert user_view["sender"] == "匿名1"
+    assert user_view["sender_original"] == "alice"
+
+
+def test_group_chat_anonymous_is_room_opt_in_and_pm_ignores_it(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    created = client.post(
+        "/api/chat/rooms",
+        json={"name": "anon group", "join_password": "room-pass", "allow_anonymous": True, "anonymous": True},
+    )
+    room_id = created.get_json()["room"]["id"]
+    assert created.get_json()["room"]["allow_anonymous"] is True
+    assert created.get_json()["room"]["anonymous_enabled"] is True
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user", "member_level": "normal"}
+    joined = client.post(f"/api/chat/rooms/{room_id}/join", json={"password": "room-pass", "anonymous": True})
+    sent = client.post(f"/api/chat/rooms/{room_id}/messages", json={"content": "bob anonymous"})
+    assert joined.status_code == 200
+    assert sent.status_code == 200
+    self_messages = client.get(f"/api/chat/rooms/{room_id}/messages").get_json()["messages"]
+    self_view = next(msg for msg in self_messages if msg["content"] == "bob anonymous")
+    assert self_view["sender"] == "bob"
+    assert self_view["sender_original"] == ""
+    assert self_view["sender_id"] == 4
+
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}
+    regular_messages = client.get(f"/api/chat/rooms/{room_id}/messages").get_json()["messages"]
+    bob_message = next(msg for msg in regular_messages if msg["content"] == "bob anonymous")
+    assert bob_message["sender"] == "匿名2"
+    assert bob_message["sender_original"] == ""
+    assert bob_message["sender_id"] is None
+    assert bob_message["sender_avatar_file_id"] == ""
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager", "member_level": "normal"}
+    manager_join = client.post(f"/api/chat/rooms/{room_id}/join", json={"password": "room-pass"})
+    manager_messages = client.get(f"/api/chat/rooms/{room_id}/messages").get_json()["messages"]
+    manager_view = next(msg for msg in manager_messages if msg["content"] == "bob anonymous")
+    assert manager_join.status_code == 200
+    assert manager_view["sender"] == "匿名2"
+    assert manager_view["sender_original"] == "bob"
+
+    pm = client.post(
+        "/api/chat/rooms",
+        json={"name": None, "target_user": "alice", "allow_anonymous": True, "anonymous": True},
+    )
+    assert pm.status_code == 200
+    assert pm.get_json()["room"]["is_private"] == 1
+    assert pm.get_json()["room"]["allow_anonymous"] is False
+    assert pm.get_json()["room"]["anonymous_enabled"] is False
+
+
 def test_member_cannot_delete_someone_else_chat_room(tmp_path):
     db_path = tmp_path / "chat.db"
     _seed_chat_db(db_path)
@@ -562,6 +684,94 @@ def test_member_cannot_recall_own_message_after_five_minutes(tmp_path):
     assert _message_revoked_state(db_path, 5)[0] == 0
 
 
+def test_member_can_edit_own_text_message_within_five_minutes(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    recent = (datetime.now() - timedelta(minutes=2)).isoformat()
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO chat_messages (id, room_id, sender_id, content, is_blocked, blocked_reason, created_at) VALUES (5, 1, 3, 'recent typo', 0, NULL, ?)",
+        (recent,),
+    )
+    conn.commit()
+    conn.close()
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.put("/api/chat/messages/5", json={"content": "recent fixed"})
+    messages = client.get("/api/chat/rooms/1/messages")
+
+    assert res.status_code == 200
+    assert res.get_json()["msg"] == "訊息已更新"
+    row = _message_row(db_path, 5)
+    assert row["content"] == "recent fixed"
+    assert row["original_content"] == "recent typo"
+    assert row["edit_count"] == 1
+    rendered = [m for m in messages.get_json()["messages"] if m["id"] == 5][0]
+    assert rendered["content"] == "recent fixed"
+    assert rendered["edited_at"]
+    assert rendered["edit_count"] == 1
+
+
+def test_member_cannot_edit_own_message_after_five_minutes(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    old = (datetime.now() - timedelta(minutes=6)).isoformat()
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO chat_messages (id, room_id, sender_id, content, is_blocked, blocked_reason, created_at) VALUES (5, 1, 3, 'old', 0, NULL, ?)",
+        (old,),
+    )
+    conn.commit()
+    conn.close()
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.put("/api/chat/messages/5", json={"content": "old edited"})
+
+    assert res.status_code == 403
+    assert "5 分鐘" in res.get_json()["msg"]
+    assert _message_content(db_path, 5) == "old"
+
+
+def test_pending_message_report_blocks_sender_edit_and_recall(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    recent = (datetime.now() - timedelta(minutes=2)).isoformat()
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO chat_messages (id, room_id, sender_id, content, is_blocked, blocked_reason, created_at) VALUES (5, 1, 3, 'reported text', 0, NULL, ?)",
+        (recent,),
+    )
+    conn.commit()
+    conn.close()
+    actor_box = {"actor": {"id": 4, "username": "bob", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    reported = client.post("/api/chat/messages/5/report", json={"reason": "違規"})
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user"}
+    edited = client.put("/api/chat/messages/5", json={"content": "try to hide"})
+    recalled = client.delete("/api/chat/messages/5")
+    messages = client.get("/api/chat/rooms/1/messages")
+
+    assert reported.status_code == 200
+    assert edited.status_code == 409
+    assert recalled.status_code == 409
+    assert "待審核檢舉" in edited.get_json()["msg"]
+    assert _message_content(db_path, 5) == "reported text"
+    assert _message_revoked_state(db_path, 5)[0] == 0
+    conn = sqlite3.connect(db_path)
+    try:
+        snapshot = conn.execute("SELECT content_snapshot FROM chat_message_reports WHERE message_id=5").fetchone()[0]
+    finally:
+        conn.close()
+    assert snapshot == "reported text"
+    rendered = [m for m in messages.get_json()["messages"] if m["id"] == 5][0]
+    assert rendered["can_edit"] is False
+    assert rendered["can_recall"] is False
+    assert rendered["mutation_locked"] is True
+
+
 def test_member_can_send_chat_sticker(tmp_path):
     db_path = tmp_path / "chat.db"
     _seed_chat_db(db_path)
@@ -594,6 +804,14 @@ def test_member_can_send_chat_message_with_attachment(tmp_path):
     assert rendered["attachments"][0]["file_id"] == "file-1"
     assert rendered["attachments"][0]["original_filename_plain_for_public"] == "chat-note.txt"
     assert rendered["attachments"][0]["can_download"] is True
+    assert rendered["attachments"][0]["can_remove"] is False
+    assert "owner_user_id" not in rendered["attachments"][0]
+    assert "attached_by" not in rendered["attachments"][0]
+
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user"}
+    owner_messages = client.get("/api/chat/rooms/1/messages")
+    owner_rendered = [m for m in owner_messages.get_json()["messages"] if m["id"] == message_id][0]
+    assert owner_rendered["attachments"][0]["can_remove"] is True
 
 
 def test_private_chat_room_can_be_created_without_name_when_target_user_is_set(tmp_path):
@@ -610,6 +828,32 @@ def test_private_chat_room_can_be_created_without_name_when_target_user_is_set(t
     assert payload["room"]["is_private"] == 1
     assert payload["room"]["target_username"] == "alice"
     assert payload["room"]["name"] == "PM: alice | root"
+
+
+def test_manager_can_pm_non_friend_for_management_purpose(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager", "member_level": "normal"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.post("/api/chat/rooms", json={"name": None, "target_user": "alice"})
+
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["room"]["is_private"] == 1
+    assert payload["room"]["target_username"] == "alice"
+
+
+def test_private_chat_room_target_requires_friendship(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.post("/api/chat/rooms", json={"name": None, "target_user": "bob"})
+
+    assert res.status_code == 403
+    assert "好友" in res.get_json()["msg"]
 
 
 def test_member_can_send_attachment_only_chat_message(tmp_path):

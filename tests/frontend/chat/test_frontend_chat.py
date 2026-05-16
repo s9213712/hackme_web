@@ -34,14 +34,20 @@ def test_chat_room_delete_ui_is_wired():
     assert "chat-room-delete-btn" in core_js
     assert "deleteChatRoom(r.id)" in core_js
     assert "data-recall-message" in core_js
+    assert "data-edit-message" in core_js
+    assert "chat-edited-label" in core_js
     assert "chat-sticker" in core_js
     assert "chat-message-image-preview" in core_js
+    assert "function canRemoveContextAttachment(ref)" in core_js
+    assert "const removeButton = canRemoveContextAttachment(file)" in core_js
     assert 'data-drive-action="delete-context-attachment"' in core_js
     assert 'data-context-type="chat_message"' in core_js
     assert 'data-target-id="chat-messages"' in core_js
     assert "function canDeleteChatRoom(room)" in chat_js
     assert "room.is_official" in chat_js
     assert "async function deleteChatRoom(roomId)" in chat_js
+    assert "async function editChatMessage(messageId)" in chat_js
+    assert 'method: "PUT"' in chat_js
     assert "async function sendChatSticker(stickerKey)" in chat_js
     assert "async function addChatFriend()" in chat_js
     assert "async function loadChatFriends()" in chat_js
@@ -62,6 +68,8 @@ def test_chat_room_delete_ui_is_wired():
     assert "if (!selectedFileId) return;" in drive_js
     assert 'apiFetch(API + `/chat/rooms/${encodeURIComponent(roomId)}`' in chat_js
     assert ".chat-room-delete-btn" in css
+    assert ".chat-edit-btn" in css
+    assert ".chat-edited-label" in css
     assert ".chat-sticker-bar" in css
     assert ".chat-sticker-bar .chat-sticker-btn" in css
     assert ".chat-friend-panel" in css

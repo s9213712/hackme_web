@@ -25,11 +25,34 @@ def test_dm_ui_removed_and_chat_group_controls_are_wired():
 
     assert 'id="chat-room-invite-users"' in index_html
     assert 'id="chat-room-password"' in index_html
+    assert 'id="chat-room-allow-anonymous"' in index_html
+    assert 'id="chat-room-use-anonymous"' in index_html
+    assert 'id="chat-create-room-toggle-btn"' in index_html
+    assert 'id="chat-room-create-panel" hidden' in index_html
+    assert 'id="chat-create-room-cancel-btn"' in index_html
+    assert 'class="user-edit-overlay chat-room-dialog"' in index_html
+    assert 'id="chat-join-room-open-btn"' in index_html
+    assert 'id="chat-room-join-panel" hidden' in index_html
     assert 'id="chat-join-password"' in index_html
+    assert 'id="chat-join-anonymous"' in index_html
+    assert 'id="chat-join-room-cancel-btn"' in index_html
     assert 'id="chat-room-invite-btn"' in index_html
     assert 'id="chat-room-export-btn"' in index_html
     assert "function inviteChatRoomMembers()" in chat_js
     assert "function exportChatRoom()" in chat_js
+    assert "function toggleChatCreatePanel()" in chat_js
+    assert "function toggleChatJoinPanel()" in chat_js
+    assert "setChatCreatePanelVisible(false)" in chat_js
+    assert "setChatJoinPanelVisible(false)" in chat_js
+    assert "allow_anonymous: allowAnonymous" in chat_js
+    assert "anonymous" in chat_js
+    assert "r.hide_member_count" in core_js
+    assert "m.sender_original" in core_js
+    assert "chat-official-badge" in core_js
+    assert "chatCreateToggleBtn.addEventListener" in bootstrap_js
+    assert "chatCreateCancelBtn.addEventListener" in bootstrap_js
+    assert "chatJoinOpenBtn.addEventListener" in bootstrap_js
+    assert "chatJoinCancelBtn.addEventListener" in bootstrap_js
     assert "inviteChatRoomMembers" in bootstrap_js
     assert "exportChatRoom" in bootstrap_js
     assert "openPmWithUser(u.username)" in users_js

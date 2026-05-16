@@ -125,6 +125,7 @@ function gameDifficultyOptionDescription(difficulty) {
   const strength = window.HACKME_GAME_AI_STRENGTH?.chess?.[normalizedDifficulty] || window.HACKME_GAME_AI_STRENGTH?.chess?.[difficulty];
   const suffix = strength ? `｜${strength}` : "";
   if (normalizedDifficulty === "stockfish") return `Stockfish（本機外部引擎）${suffix}`;
+  if (normalizedDifficulty === "experiment 6:neuralnet") return `實驗 6：Neural Network${suffix}`;
   if (normalizedDifficulty === "experiment 5:nnue") return `實驗 5：NNUE + AlphaBeta/PVS${suffix}`;
   if (normalizedDifficulty === "experiment 4:pv") return `實驗 4：Policy/Value + MCTS${suffix}`;
   if (normalizedDifficulty === "experiment 3:dl") return `實驗 3：DL 語義平衡學習${suffix}`;
@@ -146,6 +147,7 @@ function renderChessPracticeDifficultyOptions(games) {
         { key: "experiment 3:dl", label: "實驗 3：DL 語義平衡" },
         { key: "experiment 4:pv", label: "實驗 4：Policy/Value + MCTS" },
         { key: "experiment 5:nnue", label: "實驗 5：NNUE + AlphaBeta/PVS" },
+        { key: "experiment 6:neuralnet", label: "實驗 6：Neural Network" },
       ];
   const current = select.value || "normal";
   select.innerHTML = rows.map((row) => {
@@ -220,6 +222,7 @@ function gameMatchLabel(match) {
 
 function gameDifficultyLabel(difficulty) {
   if (difficulty === "stockfish") return "Stockfish（本機）";
+  if (difficulty === "experiment 6:neuralnet") return "實驗 6：Neural Network";
   if (difficulty === "experiment 5:nnue") return "實驗 5：NNUE + AlphaBeta/PVS";
   if (difficulty === "experiment 4:pv") return "實驗 4：Policy/Value + MCTS";
   if (difficulty === "experiment 3:dl") return "實驗 3：DL 語義平衡";

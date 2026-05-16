@@ -75,11 +75,14 @@ let driveStorageUpgradeCanPurchase = false;
 let driveStorageUpgradeMessage = "";
 let driveRemoteDownloadCapabilities = { direct: true, bt_magnet: false, bt_file: false };
 let driveLatestQuota = null;
+let driveDashboardInFlight = null;
+let driveDashboardLoadedAt = 0;
 const driveRemotePollingTaskIds = new Set();
 const DRIVE_TRANSFER_COMPLETED_VISIBLE_MS = 6000;
 const DRIVE_TRANSFER_FAILED_VISIBLE_MS = 15000;
 const DRIVE_TASK_CENTER_LOCAL_MAX = 80;
 const DRIVE_REMOTE_STATUS_RETRY_LIMIT = 12;
+const DRIVE_DASHBOARD_LAZY_REFRESH_MS = 10000;
 const DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
 const DRIVE_RESUMABLE_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
 const DRIVE_RESUMABLE_UPLOAD_STORAGE_PREFIX = "hackme_web.resumable_upload.";
@@ -1088,6 +1091,8 @@ function driveTransferToJobCenterJob(item = {}) {
     source_module: sourceModule,
     source_ref: sourceRef,
     status,
+    live_progress: true,
+    live_status_source: "Drive",
     progress_percent: percent === null ? (status === "succeeded" || status === "failed" || status === "cancelled" ? 100 : 0) : Math.round(percent),
     stage: item.phase || item.status || status,
     stage_detail: [item.msg || "", bytes, speed].filter(Boolean).join(" · "),
@@ -1096,6 +1101,7 @@ function driveTransferToJobCenterJob(item = {}) {
     cancellable: (isRemote || isResumable) && ["queued", "running", "paused"].includes(status),
     metadata: {
       local_transfer: true,
+      live_progress: true,
       transfer_id: item.id,
       task_id: item.task_id || "",
       session_id: item.session_id || "",
@@ -1124,6 +1130,8 @@ function driveResumableSessionToJobCenterJob(session = {}) {
     source_module: "cloud_drive_resumable_upload",
     source_ref: sourceRef,
     status,
+    live_progress: true,
+    live_status_source: "分段上傳",
     progress_percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : (status === "succeeded" || status === "failed" || status === "cancelled" ? 100 : 0),
     stage: session.status || transferStatus,
     stage_detail: [driveResumableSessionStatusMessage(session, transferStatus), bytes].filter(Boolean).join(" · "),
@@ -1132,6 +1140,7 @@ function driveResumableSessionToJobCenterJob(session = {}) {
     cancellable: ["queued", "running", "paused"].includes(status),
     metadata: {
       session_id: session.session_id || "",
+      live_progress: true,
       filename: session.filename || "",
       loaded_bytes: session.received_bytes,
       total_bytes: session.total_bytes,
@@ -1161,18 +1170,23 @@ function driveRemoteTaskToJobCenterJob(task = {}) {
     source_module: "cloud_drive_remote_download",
     source_ref: `remote_download:${task.id || ""}`,
     status,
+    live_progress: true,
+    live_status_source: "遠端下載",
     progress_percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : (status === "succeeded" || status === "failed" || status === "cancelled" ? 100 : 0),
     stage: task.phase || task.status || status,
-    stage_detail: [task.msg || task.error || "", bytes, speed].filter(Boolean).join(" · "),
+    stage_detail: [task.msg || task.error || "", task.availability_hint ? `可用度 ${task.availability_score || 0} · ${task.availability_hint}` : "", bytes, speed].filter(Boolean).join(" · "),
     error_message: status === "failed" ? (task.error || task.msg || "遠端下載失敗") : "",
     error_stage: status === "failed" ? (task.phase || "failed") : "",
     cancellable: ["queued", "running", "paused"].includes(status),
     metadata: {
       task_id: task.id,
+      live_progress: true,
       source_type: task.source_type,
       loaded_bytes: task.loaded_bytes,
       total_bytes: task.total_bytes,
       speed_bytes_per_sec: task.speed_bytes_per_sec,
+      availability_score: task.availability_score,
+      availability_hint: task.availability_hint,
     },
     created_at: task.created_at || task.updated_at || new Date().toISOString(),
     updated_at: task.updated_at || task.created_at || new Date().toISOString(),
@@ -1605,6 +1619,9 @@ function setDriveShareCopyStatus(text, ok = true, button = null) {
       delete button.dataset.copyResetTimer;
     }, DRIVE_SHARE_COPY_RESET_MS);
     button.dataset.copyResetTimer = String(timer);
+    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "已完成複製", true);
+  } else if (button && text) {
+    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, text, ok);
   }
 }
 
@@ -1682,7 +1699,7 @@ async function createDriveShareLink() {
     }
     if (msg) flash(msg, "分享連結已建立", true);
   } catch (err) {
-    if (msg) flash(msg.message || "分享連結建立失敗", false);
+    if (msg) flash(msg, err?.message || "分享連結建立失敗", false);
   }
 }
 
@@ -2409,6 +2426,8 @@ function applyRemoteDownloadTaskToTransfer(task) {
     total_bytes: task.total_bytes,
     progress_percent: task.progress_percent,
     speed_bytes_per_sec: task.speed_bytes_per_sec,
+    availability_score: task.availability_score,
+    availability_hint: task.availability_hint,
     msg: task.msg || "",
   });
   return transferId;
@@ -2517,9 +2536,14 @@ async function loadDriveResumableUploadSessions({ csrf = "" } = {}) {
 
 async function restoreResumableUploadSessions() {
   const sessions = await loadDriveResumableUploadSessions({ csrf: getCsrfToken() || "" });
+  let waitingResumeCount = 0;
   sessions.forEach((session) => {
     applyResumableUploadSessionToTransfer(session);
+    if (driveResumableSessionTransferStatus(session) === "waiting_resume") waitingResumeCount += 1;
   });
+  if (waitingResumeCount > 0) {
+    flash($("drive-msg"), `有 ${waitingResumeCount} 個分段上傳等待續傳，請重新選擇同一檔案接續上傳。`, true);
+  }
 }
 
 async function restoreRemoteDownloadTasks() {
@@ -3295,6 +3319,12 @@ function renderContextAttachmentRefs(targetId, refs) {
   list.innerHTML = refs.map((ref) => {
     const name = ref.original_filename_plain_for_public || ref.file_id || "download.bin";
     const warn = driveFileNeedsWarning(ref);
+    const canRemove = typeof canRemoveContextAttachment === "function"
+      ? canRemoveContextAttachment(ref)
+      : !!(ref && (ref.can_remove === true || ref.can_remove === 1 || ref.can_remove === "1" || ref.can_remove === "true"));
+    const removeButton = canRemove
+      ? `<button class="btn btn-danger" type="button" data-drive-action="delete-context-attachment" data-ref-id="${sanitize(ref.id)}" data-context-type="${sanitize(ref.context_type || "")}" data-context-id="${sanitize(ref.context_id || "")}" data-target-id="${sanitize(targetId)}">移除附件</button>`
+      : "";
     const imagePreview = driveFileIsImage(ref)
       ? `<button class="chat-message-image-preview" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(ref.file_id)}" data-name="${sanitize(name)}"><img src="${sanitize(drivePreviewContentUrl(ref.file_id))}" alt="${sanitize(name)}" loading="lazy" /></button>`
       : "";
@@ -3308,7 +3338,7 @@ function renderContextAttachmentRefs(targetId, refs) {
         <div class="drive-file-actions">
           <button class="btn" type="button" data-drive-action="preview" data-file-id="${sanitize(ref.file_id)}">預覽</button>
           <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" data-drive-action="download" data-file-id="${sanitize(ref.file_id)}" data-warn="${warn ? "1" : "0"}">下載</button>
-          <button class="btn btn-danger" type="button" data-drive-action="delete-context-attachment" data-ref-id="${sanitize(ref.id)}" data-context-type="${sanitize(ref.context_type || "")}" data-context-id="${sanitize(ref.context_id || "")}" data-target-id="${sanitize(targetId)}">移除附件</button>
+          ${removeButton}
         </div>
       </div>
     `;
@@ -3744,9 +3774,44 @@ function updateAlbumTargetSelect(albums) {
   select.innerHTML = `<option value="">選擇相簿</option>${liveAlbums.map((album) => `
     <option value="${sanitize(album.id)}">${sanitize(album.title || album.id)}（${albumVisibilityLabel(album.visibility)}）</option>
   `).join("")}`;
-  if (previous && liveAlbums.some((album) => album.id === previous)) {
-    select.value = previous;
+  const nextValue = previous && liveAlbums.some((album) => album.id === previous)
+    ? previous
+    : (liveAlbums[0]?.id || "");
+  select.value = nextValue;
+  renderAlbumPickerCards(liveAlbums, nextValue);
+}
+
+function renderAlbumPickerCards(albums, selectedId = "") {
+  const grid = $("album-picker-card-grid");
+  if (!grid) return;
+  const rows = Array.isArray(albums) ? albums : [];
+  if (!rows.length) {
+    grid.innerHTML = `<div class="drive-empty">目前沒有可選擇的相簿</div>`;
+    return;
   }
+  grid.innerHTML = rows.map((album) => {
+    const id = String(album.id || "");
+    const selected = id === String(selectedId || "");
+    const title = album.title || album.id || "未命名相簿";
+    const count = Number(album.file_count || album.files?.length || 0);
+    return `
+      <button class="album-picker-card${selected ? " selected" : ""}" type="button" role="radio" aria-checked="${selected ? "true" : "false"}" data-album-picker-card="1" data-album-id="${sanitize(id)}">
+        <span class="album-picker-card-title">${sanitize(title)}</span>
+        <span class="album-picker-card-meta">${sanitize(albumVisibilityLabel(album.visibility))} · ${count} 個檔案</span>
+      </button>
+    `;
+  }).join("");
+}
+
+function setAlbumPickerSelection(albumId) {
+  const value = String(albumId || "");
+  const select = $("album-picker-select");
+  if (select) select.value = value;
+  document.querySelectorAll("[data-album-picker-card]").forEach((card) => {
+    const selected = String(card.dataset.albumId || "") === value;
+    card.classList.toggle("selected", selected);
+    card.setAttribute("aria-checked", selected ? "true" : "false");
+  });
 }
 
 function storageFolderRowPathFromEventTarget(target) {
@@ -4437,8 +4502,7 @@ async function chooseAlbumForFile(fileLabel = "") {
   if (label) label.textContent = fileLabel ? `將「${fileLabel}」加入` : "選擇要加入的相簿";
   const msg = $("album-picker-msg");
   if (msg) msg.textContent = "";
-  const select = $("album-picker-select");
-  if (select) select.value = selectedAlbumId && albums.some((album) => album.id === selectedAlbumId) ? selectedAlbumId : albums[0].id;
+  setAlbumPickerSelection(selectedAlbumId && albums.some((album) => album.id === selectedAlbumId) ? selectedAlbumId : albums[0].id);
   const overlay = $("album-picker-overlay");
   if (overlay) overlay.classList.add("show");
   return new Promise((resolve) => {
@@ -4566,6 +4630,12 @@ document.addEventListener("click", (event) => {
     closeStorageUpgradePanel();
     return;
   }
+  const pickerCard = event.target?.closest?.("[data-album-picker-card]");
+  if (pickerCard) {
+    event.preventDefault();
+    setAlbumPickerSelection(pickerCard.dataset.albumId || "");
+    return;
+  }
   const pickerConfirm = event.target?.closest?.("#album-picker-confirm");
   if (pickerConfirm) {
     event.preventDefault();
@@ -4656,7 +4726,7 @@ document.addEventListener("click", (event) => {
     if (action === "purge-storage-trash") return purgeStorageTrash();
     if (action === "select-storage-folder") return selectStorageFolderForMove(path);
     if (action === "open-album") return openAlbum(albumId);
-    if (action === "copy-album-share-link") return copyAlbumShareUrl(shareUrl);
+    if (action === "copy-album-share-link") return copyAlbumShareUrl(shareUrl, { button });
     if (action === "delete-album") return deleteAlbum(albumId);
     if (action === "close-album-detail") return closeAlbumDetail();
     if (action === "save-album-detail") return saveAlbumDetail();

@@ -23,9 +23,11 @@
 
 1. **量測單一基準**：不假設「某個策略」具代表性，而是把所有支援的 bot 類別都跑一遍。
 2. **取最差為準**：root 設的 cap 必須 ≤ 最慢 bot 的 capacity，否則任一範本選用 max cap 都會超時。
-3. **首次啟動才量測**：避免每次 boot 都消耗 ~30-45s。後續啟動讀取已存的量測值。
-4. **不阻塞啟動**：在 daemon thread 跑，伺服器啟動流程不等它完成。
-5. **保留 root override**：如果 root 已手動設過 cap，後續 probe 不會覆蓋。
+3. **同一個持久化 DB 只在初次啟動量測**：`trading.backtest_capacity_measured_at` 有值後，後續重啟直接跳過。
+4. **暫存 QA runtime 預設不跑**：`test_for_develop.sh` 每次建立新的 `/tmp` DB，對該 DB 來說永遠像 first boot；因此 dev 腳本預設關閉，避免每次開測試 server 都短時間吃滿 CPU。
+5. **需要部署硬體量測時明確啟用**：dev 腳本可加 `--backtest-probe-on-startup`；一般啟動可用 `HTML_LEARNING_TRADING_BACKTEST_PROBE_ON_STARTUP=1` 強制允許，或設為 `0` 明確停用。
+6. **不阻塞啟動**：在 daemon thread 跑，伺服器啟動流程不等它完成。
+7. **保留 root override**：如果 root 已手動設過 cap，後續 probe 不會覆蓋。
 
 ### 1.3 量測對象（15 種）
 
@@ -74,6 +76,7 @@ capacity_max = floor(budget_seconds / (elapsed[fastest]    / 20K))
 |---|---|---|
 | `trading.backtest_max_candles` | root 可改的實際 cap | 1,000 – 10,000,000，預設 20,000 |
 | `trading.backtest_capacity_time_budget_seconds` | 量測秒數預算 | 5 – 600，預設 60 |
+| `HTML_LEARNING_TRADING_BACKTEST_PROBE_ON_STARTUP` | 啟動後是否允許 first-boot 量測 | 一般 server 未設定時允許 first-boot；`test_for_develop.sh` 預設設為 `0` |
 | `trading.backtest_measured_capacity` | 量測到的最差 capacity | 唯讀 |
 | `trading.backtest_measured_capacity_max` | 量測到的最佳 capacity | 唯讀 |
 | `trading.backtest_capacity_measured_at` | 量測時間戳 | 唯讀 |
@@ -118,7 +121,7 @@ per-strategy 時序（由快到慢）：
 ### 1.8 相關檔案
 
 - `services/trading/backtest_capacity.py` — probe 主邏輯
-- `services/server/startup.py:measure_backtest_capacity_if_needed` — 啟動鉤子
+- `services/server/startup.py:measure_backtest_capacity_if_needed` — first-boot 量測鉤子
 - `services/trading/trading_engine.py` — `get_max_backtest_candles()` / `record_backtest_capacity_measurement()` / `_settings_payload()`
 - `public/js/50-admin.js` — 前端輸入框 + hint 顯示
 

@@ -1,8 +1,9 @@
+import json
 import re
 
 from flask import request
 
-from services.platform.settings import DangerousChangeBlocked, enforce_dangerous_confirm
+from services.platform.settings import DangerousChangeBlocked, FEATURE_FLAG_KEYS, enforce_dangerous_confirm
 from services.platform.settings_metadata import (
     DANGEROUS_SETTINGS,
     SETTING_DETAILS,
@@ -98,6 +99,38 @@ def register_system_admin_settings_routes(app, ctx):
         payload["comfyui_huggingface_api_token"] = ""
         payload["comfyui_huggingface_api_token_configured"] = bool(huggingface_token)
         return payload
+
+    def normalize_internal_test_token_features(value):
+        if value in (None, "", []):
+            return []
+        if isinstance(value, str):
+            raw_items = re.split(r"[\s,]+", value)
+        elif isinstance(value, (list, tuple, set)):
+            raw_items = value
+        else:
+            raise ValueError("allowed_features 必須是陣列或逗號分隔字串")
+
+        normalized = []
+        unknown = []
+        feature_flags = set(FEATURE_FLAG_KEYS)
+        for item in raw_items:
+            key = str(item or "").strip()
+            if not key:
+                continue
+            if not key.startswith("feature_"):
+                key = f"feature_{key}"
+            if key not in feature_flags and not key.endswith("_enabled"):
+                enabled_key = f"{key}_enabled"
+                if enabled_key in feature_flags:
+                    key = enabled_key
+            if key not in feature_flags:
+                unknown.append(key)
+                continue
+            if key not in normalized:
+                normalized.append(key)
+        if unknown:
+            raise ValueError(f"未知的功能範圍：{', '.join(unknown)}")
+        return normalized
 
     @app.route("/api/admin/settings", methods=["GET","PUT"])
     @require_csrf_safe
@@ -281,6 +314,20 @@ def register_system_admin_settings_routes(app, ctx):
             if reset_mode not in {"admin_review", "email_token"}:
                 return json_resp({"ok":False,"msg":"password_reset_mode 必須是 admin_review 或 email_token"}), 400
             data["password_reset_mode"] = reset_mode
+        if "max_manager_seats" in data:
+            seats = parse_int_in_range(data.get("max_manager_seats"), 0, 1000)
+            if seats is None:
+                return json_resp({"ok":False,"msg":"max_manager_seats 必須是 0-1000"}), 400
+            data["max_manager_seats"] = seats
+        if "points_admin_weekly_salary_weekday" in data:
+            weekday = parse_int_in_range(data.get("points_admin_weekly_salary_weekday"), 1, 7)
+            if weekday is None:
+                return json_resp({"ok":False,"msg":"points_admin_weekly_salary_weekday 必須是 1-7"}), 400
+            data["points_admin_weekly_salary_weekday"] = weekday
+        if "points_admin_weekly_salary_time" in data:
+            if not is_hhmm(data.get("points_admin_weekly_salary_time")):
+                return json_resp({"ok":False,"msg":"points_admin_weekly_salary_time 必須是 HH:MM"}), 400
+            data["points_admin_weekly_salary_time"] = str(data.get("points_admin_weekly_salary_time")).strip()
         if "captcha_ttl_seconds" in data:
             try:
                 ttl_seconds = int(data.get("captcha_ttl_seconds"))
@@ -479,6 +526,7 @@ def register_system_admin_settings_routes(app, ctx):
             updates["internal_test_login_token_expires_at"] = ""
             updates["internal_test_login_token_user_id"] = 0
             updates["internal_test_login_token_username"] = ""
+            updates["internal_test_login_token_allowed_features_json"] = "[]"
         if not updates:
             return json_resp({"ok":False,"msg":"沒有可寫入的存取控制設定"}), 400
         saved = save_settings(updates)
@@ -569,6 +617,10 @@ def register_system_admin_settings_routes(app, ctx):
             conn.close()
         if not resolved_user:
             return json_resp({"ok":False,"msg":"請指定存在的綁定帳號（target_user_id 或 target_username）"}), 400
+        try:
+            allowed_features = normalize_internal_test_token_features(data.get("allowed_features"))
+        except ValueError as exc:
+            return json_resp({"ok":False,"msg":str(exc)}), 400
         issued_value = generate_internal_test_token()
         expires_at = maintenance_bypass_expires_at(ttl_minutes)
         before_settings = get_system_settings()
@@ -577,6 +629,7 @@ def register_system_admin_settings_routes(app, ctx):
             "internal_test_login_token_expires_at": expires_at,
             "internal_test_login_token_user_id": int(resolved_user["id"]),
             "internal_test_login_token_username": str(resolved_user["username"] or "").strip(),
+            "internal_test_login_token_allowed_features_json": json.dumps(allowed_features, ensure_ascii=True, sort_keys=True),
         })
         audit_settings_changed(
             "INTERNAL_TEST_TOKEN_ROTATED",
@@ -584,7 +637,13 @@ def register_system_admin_settings_routes(app, ctx):
             before_settings,
             saved,
             scope="internal_test_token",
-            extra={"ttl_minutes": ttl_minutes, "expires_at": expires_at, "target_user_id": int(resolved_user["id"]), "target_username": str(resolved_user["username"] or "").strip()},
+            extra={
+                "ttl_minutes": ttl_minutes,
+                "expires_at": expires_at,
+                "target_user_id": int(resolved_user["id"]),
+                "target_username": str(resolved_user["username"] or "").strip(),
+                "allowed_features": allowed_features,
+            },
         )
         return json_resp({
             "ok": True,
@@ -594,6 +653,7 @@ def register_system_admin_settings_routes(app, ctx):
             "ttl_minutes": ttl_minutes,
             "target_user_id": int(resolved_user["id"]),
             "target_username": str(resolved_user["username"] or "").strip(),
+            "allowed_features": allowed_features,
             "access_controls": access_control_settings_payload(get_system_settings()),
         })
 

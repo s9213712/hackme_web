@@ -107,6 +107,32 @@ def test_public_auth_flows_force_refresh_public_csrf_tokens():
     assert "fetchCsrfToken({ force: false });" not in auth
 
 
+def test_login_can_return_to_account_scoped_share_pages_only():
+    auth = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
+    shared_file_js = (ROOT / "public" / "js" / "shared-file.js").read_text(encoding="utf-8")
+
+    assert "function safeLoginReturnToPath()" in auth
+    assert 'new URLSearchParams(window.location.search || "").get("return_to")' in auth
+    assert 'raw.startsWith("//")' in auth
+    assert 'raw.includes("\\\\")' in auth
+    assert "target.origin !== window.location.origin" in auth
+    assert 'target.pathname.startsWith("/shared/")' in auth
+    assert "function redirectToLoginReturnToIfNeeded(loginJson = {})" in auth
+    assert "if (loginJson?.must_change_password) return false;" in auth
+    assert "window.location.assign(returnTo);" in auth
+    assert "if (redirectToLoginReturnToIfNeeded(json)) return;" in auth
+    assert 'link.href = `/?return_to=${encodeURIComponent(returnTo)}`;' in shared_file_js
+
+
+def test_login_submit_is_guarded_against_double_requests():
+    auth = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
+
+    assert "let loginRequestBusy = false;" in auth
+    assert "async function doLogin() {\n  if (loginRequestBusy) return;" in auth
+    assert "loginRequestBusy = true;" in auth
+    assert "loginRequestBusy = false;" in auth
+
+
 def test_login_autofill_block_and_notification_mute_settings_are_wired():
     index = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     core = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")

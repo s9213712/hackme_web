@@ -14,7 +14,22 @@ from services.users.recovery import (
     list_password_reset_review_requests,
     mark_password_reset_review_request,
 )
-from services.users.profiles import ensure_user_profile_schema, get_profile_appearance
+from services.users.friends import (
+    accept_friend_by_code,
+    accepted_friend_ids,
+    create_friend_request,
+    get_profile_payload,
+    list_targetable_users,
+    list_friend_state,
+    remove_friend,
+    review_friend_request,
+)
+from services.users.profiles import (
+    ensure_user_profile_schema,
+    get_profile_appearance,
+    rotate_friend_code,
+    update_profile,
+)
 
 
 def register_user_routes(app, deps):
@@ -37,6 +52,7 @@ def register_user_routes(app, deps):
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_auth_db = deps.get("get_auth_db", deps["get_db"])
     get_db = deps["get_db"]
+    get_system_settings = deps.get("get_system_settings", lambda: {})
     get_ua = deps["get_ua"]
     hash_password = deps["hash_password"]
     hash_token = deps["hash_token"]
@@ -64,6 +80,14 @@ def register_user_routes(app, deps):
         if not isinstance(name, str) or "\x00" in name:
             raise ValueError("invalid SQL identifier")
         return '"' + name.replace('"', '""') + '"'
+
+    def manager_seat_limit():
+        try:
+            settings = get_system_settings() or {}
+            value = int(settings.get("max_manager_seats", MAX_MANAGERS))
+        except Exception:
+            value = int(MAX_MANAGERS)
+        return max(0, min(value, 1000))
 
     def ensure_user_delete_dependency_tables(conn):
         """Repair legacy DBs with optional FK parents missing before user delete."""
@@ -577,6 +601,214 @@ def register_user_routes(app, deps):
         if "updated_at" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN updated_at TEXT")
 
+    @app.route("/api/users/me/profile", methods=["GET", "PUT"], strict_slashes=False)
+    @require_csrf_by_method
+    def api_me_profile():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            if request.method == "PUT":
+                data = request.get_json(silent=True) or {}
+                if not isinstance(data, dict):
+                    return json_resp({"ok":False,"msg":"請求內容格式錯誤"}), 400
+                profile, error = update_profile(conn, actor=actor, data=data)
+                if error:
+                    return json_resp({"ok":False,"msg":error}), 400
+                conn.commit()
+                audit("USER_PROFILE_UPDATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                      detail=f"user_id={actor['id']}")
+                payload = get_profile_payload(conn, target_user_id=actor["id"], viewer=actor) or profile
+                return json_resp({"ok":True,"profile":payload,"msg":"個人資料已更新"})
+            payload = get_profile_payload(conn, target_user_id=actor["id"], viewer=actor)
+            if not payload:
+                return json_resp({"ok":False,"msg":"找不到個人資料"}), 404
+            conn.commit()
+            return json_resp({"ok":True,"profile":payload})
+        finally:
+            conn.close()
+
+    @app.route("/api/users/<int:user_id>/profile", methods=["GET"], strict_slashes=False)
+    @require_csrf_safe
+    def api_user_profile(user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            payload = get_profile_payload(conn, target_user_id=user_id, viewer=actor)
+            if not payload:
+                return json_resp({"ok":False,"msg":"找不到使用者"}), 404
+            conn.commit()
+            return json_resp({"ok":True,"profile":payload})
+        finally:
+            conn.close()
+
+    @app.route("/api/users/me/friend-code/rotate", methods=["POST"], strict_slashes=False)
+    @require_csrf
+    def api_rotate_friend_code():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            code = rotate_friend_code(conn, actor["id"])
+            conn.commit()
+            audit("USER_FRIEND_CODE_ROTATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"user_id={actor['id']}")
+            return json_resp({"ok":True,"friend_code":code,"msg":"好友代碼已重新產生"})
+        finally:
+            conn.close()
+
+    @app.route("/api/friends", methods=["GET"], strict_slashes=False)
+    @require_csrf_safe
+    def api_friends():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            state = list_friend_state(conn, actor)
+            return json_resp({"ok":True, **state})
+        finally:
+            conn.close()
+
+    @app.route("/api/users/target-options", methods=["GET"], strict_slashes=False)
+    @require_csrf_safe
+    def api_user_target_options():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            users = list_targetable_users(
+                conn,
+                actor,
+                context=request.args.get("context") or "personal",
+                query=request.args.get("q") or "",
+                limit=request.args.get("limit") or 80,
+            )
+            conn.commit()
+            return json_resp({"ok":True,"users":users})
+        finally:
+            conn.close()
+
+    @app.route("/api/friends/requests", methods=["GET"], strict_slashes=False)
+    @require_csrf_safe
+    def api_friend_requests():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            state = list_friend_state(conn, actor)
+            return json_resp({"ok":True,"incoming":state["incoming"],"outgoing":state["outgoing"]})
+        finally:
+            conn.close()
+
+    @app.route("/api/friends/request", methods=["POST"], strict_slashes=False)
+    @require_csrf
+    def api_friend_request():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"請求內容格式錯誤"}), 400
+        username = normalize_text(data.get("username"))
+        target_user_id = data.get("user_id")
+        if not username and not target_user_id:
+            return json_resp({"ok":False,"msg":"請指定使用者"}), 400
+        if target_user_id:
+            try:
+                target_user_id = int(target_user_id)
+            except (TypeError, ValueError):
+                return json_resp({"ok":False,"msg":"使用者 ID 格式錯誤"}), 400
+        conn = get_db()
+        try:
+            result, msg, status = create_friend_request(
+                conn,
+                actor,
+                target_user_id=target_user_id if target_user_id else None,
+                username=username if username else None,
+            )
+            if status < 400:
+                conn.commit()
+                target = (result or {}).get("target") or {}
+                audit("FRIEND_REQUESTED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                      detail=f"target_user_id={target.get('id')},status={(result or {}).get('status')}")
+                return json_resp({"ok":True,"msg":msg,"request":result})
+            return json_resp({"ok":False,"msg":msg}), status
+        finally:
+            conn.close()
+
+    @app.route("/api/friends/requests/<int:request_id>/accept", methods=["POST"], strict_slashes=False)
+    @require_csrf
+    def api_friend_request_accept(request_id):
+        return _review_friend_request_api(request_id, "accept")
+
+    @app.route("/api/friends/requests/<int:request_id>/reject", methods=["POST"], strict_slashes=False)
+    @require_csrf
+    def api_friend_request_reject(request_id):
+        return _review_friend_request_api(request_id, "reject")
+
+    def _review_friend_request_api(request_id, decision):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            result, msg, status = review_friend_request(conn, actor, request_id=request_id, decision=decision)
+            if status < 400:
+                conn.commit()
+                audit("FRIEND_REQUEST_REVIEWED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                      detail=f"request_id={request_id},decision={decision}")
+                return json_resp({"ok":True,"msg":msg,"request":result})
+            return json_resp({"ok":False,"msg":msg}), status
+        finally:
+            conn.close()
+
+    @app.route("/api/friends/add-by-code", methods=["POST"], strict_slashes=False)
+    @require_csrf
+    def api_friend_add_by_code():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"請求內容格式錯誤"}), 400
+        conn = get_db()
+        try:
+            result, msg, status = accept_friend_by_code(conn, actor, friend_code=data.get("friend_code"))
+            if status < 400:
+                conn.commit()
+                target = (result or {}).get("target") or {}
+                audit("FRIEND_ADDED_BY_CODE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                      detail=f"target_user_id={target.get('id')}")
+                return json_resp({"ok":True,"msg":msg,"request":result})
+            return json_resp({"ok":False,"msg":msg}), status
+        finally:
+            conn.close()
+
+    @app.route("/api/friends/<int:friend_user_id>", methods=["DELETE"], strict_slashes=False)
+    @require_csrf
+    def api_friend_remove(friend_user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            ok, msg, status = remove_friend(conn, actor, friend_user_id=friend_user_id)
+            if ok:
+                conn.commit()
+                audit("FRIEND_REMOVED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                      detail=f"friend_user_id={friend_user_id}")
+                return json_resp({"ok":True,"msg":msg})
+            return json_resp({"ok":False,"msg":msg}), status
+        finally:
+            conn.close()
+
     @app.route("/api/account/sessions", methods=["GET"])
     @require_csrf_safe
     def account_sessions():
@@ -718,15 +950,25 @@ def register_user_routes(app, deps):
                     sessions_by_user = active_session_map(auth_conn)
                 finally:
                     auth_conn.close()
+                friend_ids = accepted_friend_ids(conn, actor["id"])
                 data = []
                 for r in rows:
                     item = user_public_payload(r, include_sensitive=False)
+                    item["is_friend"] = bool(int(r["id"]) in friend_ids)
+                    item["is_official"] = bool(item.get("username") == "root" or item.get("role") in {"manager", "super_admin"})
                     session_info = sessions_by_user.get(int(r["id"]), {})
                     item["is_online"] = bool(session_info.get("is_online"))
                     item["online_status"] = "online" if item["is_online"] else "offline"
                     item["online_last_seen"] = session_info.get("last_seen") or ""
                     item["active_session_count"] = int(session_info.get("session_count") or 0)
                     data.append(item)
+                data.sort(key=lambda item: (
+                    0 if item.get("is_friend") else 1,
+                    0 if item.get("is_official") else 1,
+                    str(item.get("username") or "").lower(),
+                    int(item.get("id") or 0),
+                ))
+                conn.commit()
             finally:
                 conn.close()
             return json_resp({
@@ -758,10 +1000,16 @@ def register_user_routes(app, deps):
         role = normalize_text(data.get("role")) or "user"
         status = normalize_text(data.get("status")) or "active"
         identity_governance_enabled = is_feature_enabled("feature_identity_governance_enabled")
-        member_level = normalize_text(data.get("member_level")) or "normal"
+        member_level = normalize_text(data.get("member_level")) or ("trusted" if role == "user" else "normal")
 
         if role not in ROLE_RANK:
             return json_resp({"ok":False,"msg":"不支援的角色"}), 400
+        if role == "manager":
+            limit = manager_seat_limit()
+            if count_role("manager") >= limit:
+                return json_resp({"ok":False,"msg":f"管理者已達上限（{limit} 人）"}), 409
+        if role == "super_admin" and count_role("super_admin") >= MAX_EXTRA_SUPER_ADMINS:
+            return json_resp({"ok":False,"msg":f"非 root 最高管理者已達上限（{MAX_EXTRA_SUPER_ADMINS} 人）"}), 409
         if status not in ACCOUNT_STATUSES:
             return json_resp({"ok":False,"msg":"帳號狀態錯誤"}), 400
         if not identity_governance_enabled and "member_level" in data:
@@ -1155,8 +1403,10 @@ def register_user_routes(app, deps):
                     return json_resp({"ok":False,"msg":"不支援的角色"}), 400
                 if target["username"] == "root" and val != "super_admin":
                     return json_resp({"ok":False,"msg":"最高管理者角色不可變更"}), 403
-                if val == "manager" and target["role"] != "manager" and count_role("manager") >= MAX_MANAGERS:
-                    return json_resp({"ok":False,"msg":f"管理者已達上限（{MAX_MANAGERS} 人）"}), 409
+                if val == "manager" and target["role"] != "manager":
+                    limit = manager_seat_limit()
+                    if count_role("manager") >= limit:
+                        return json_resp({"ok":False,"msg":f"管理者已達上限（{limit} 人）"}), 409
                 if val == "super_admin" and target["role"] != "super_admin" and count_role("super_admin") >= MAX_EXTRA_SUPER_ADMINS:
                     return json_resp({"ok":False,"msg":f"非 root 最高管理者已達上限（{MAX_EXTRA_SUPER_ADMINS} 人）"}), 409
                 updates.append("role=?")
@@ -1551,7 +1801,7 @@ def register_user_routes(app, deps):
 
             to_role = "manager" if from_role == "user" else "super_admin"
             if to_role == "manager":
-                limit = MAX_MANAGERS
+                limit = manager_seat_limit()
                 if count_role("manager") >= limit:
                     return json_resp({"ok":False,"msg":f"管理者已達上限（{limit} 人）"}), 400
             if to_role == "super_admin" and count_role("super_admin") >= MAX_EXTRA_SUPER_ADMINS:

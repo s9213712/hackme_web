@@ -27,18 +27,22 @@ from datetime import datetime
 from services.storage.cloud_drive import (
     attach_existing_file,
     can_download_file,
+    can_remove_context_attachment,
     create_announcement_attachment_request,
     decrypt_server_encrypted_bytes,
     ensure_cloud_drive_attachment_schema,
     get_file_status,
+    is_chunked_server_encrypted_file,
     is_e2ee_file,
     is_server_encrypted_file,
+    iter_decrypted_server_encrypted_chunks,
     list_cloud_files,
     resolve_file_storage_path,
     review_announcement_attachment_request,
     revoke_e2ee_file_share,
     share_e2ee_file,
     store_cloud_upload,
+    write_decrypted_server_encrypted_file,
 )
 from services.media.previews import build_preview_metadata, preview_category
 from services.system.notifications import create_notification_if_enabled
@@ -171,13 +175,12 @@ def register_file_routes(app, deps):
         path = resolve_file_storage_path(storage_root, row)
         if not is_server_encrypted_file(row):
             return path, None
-        raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
         handle = tempfile.NamedTemporaryFile(prefix="cloud-drive-plain-", delete=False)
         try:
-            handle.write(raw)
             temp_path = handle.name
         finally:
             handle.close()
+        write_decrypted_server_encrypted_file(path, temp_path, server_file_fernet)
 
         @after_this_request
         def _cleanup_temp_file(response):
@@ -210,6 +213,13 @@ def register_file_routes(app, deps):
             "decryption_unavailable": True,
             "message": message,
         }
+
+    def _assert_chunked_server_encrypted_readable(path, size_bytes):
+        if int(size_bytes or 0) <= 0:
+            return
+        for _chunk in iter_decrypted_server_encrypted_chunks(path, server_file_fernet, start=0, end=0):
+            return
+        raise ValueError("伺服器端加密 chunk 內容已損壞，請重新上傳")
 
     def _svg_placeholder_response(message, *, label="預覽不可用"):
         safe_label = (label or "預覽不可用").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -576,6 +586,44 @@ def register_file_routes(app, deps):
         policy = _actor_transfer_policy(actor) if actor else {"download_kb_per_sec": 0}
         download_kb_per_sec = int(policy.get("download_kb_per_sec") or 0)
         if is_server_encrypted_file(row):
+            if is_chunked_server_encrypted_file(row):
+                total_size = int(row["size_bytes"] or 0)
+                byte_range, error = _parse_http_byte_range(request.headers.get("Range"), total_size)
+                if error:
+                    response = Response(status=416)
+                    response.headers["Content-Range"] = f"bytes */{total_size}"
+                    response.headers["Accept-Ranges"] = "bytes"
+                    return response
+                start = byte_range[0] if byte_range else None
+                end = byte_range[1] if byte_range else None
+                content_length = (end - start + 1) if byte_range else total_size
+                _assert_chunked_server_encrypted_readable(path, total_size)
+
+                @stream_with_context
+                def _generate_chunked_plaintext():
+                    for chunk in iter_decrypted_server_encrypted_chunks(path, server_file_fernet, start=start, end=end):
+                        if not chunk:
+                            continue
+                        yield chunk
+                        if download_kb_per_sec > 0:
+                            time.sleep(len(chunk) / max(1, download_kb_per_sec * 1024))
+
+                response = Response(
+                    _generate_chunked_plaintext(),
+                    status=206 if byte_range else 200,
+                    mimetype=mimetype or mimetypes.guess_type(download_name)[0] or "application/octet-stream",
+                )
+                response.headers["Content-Length"] = str(content_length)
+                response.headers["Accept-Ranges"] = "bytes"
+                if byte_range:
+                    response.headers["Content-Range"] = f"bytes {start}-{end}/{total_size}"
+                if download_kb_per_sec > 0:
+                    response.headers["X-Cloud-Drive-Rate-Limit-KB-Per-Sec"] = str(download_kb_per_sec)
+                response.headers["Content-Disposition"] = build_content_disposition(
+                    "attachment" if as_attachment else "inline",
+                    download_name,
+                )
+                return response
             raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
             if request.headers.get("Range") or download_kb_per_sec <= 0:
                 return _send_bytes_with_range(
@@ -1130,6 +1178,8 @@ def register_file_routes(app, deps):
             "error": task.get("error"),
             "file": task.get("file"),
             "storage_file": task.get("storage_file"),
+            "availability_score": int(task.get("availability_score") or 0),
+            "availability_hint": task.get("availability_hint") or "",
             "created_at": task.get("created_at"),
             "updated_at": task.get("updated_at"),
         }
@@ -1357,7 +1407,7 @@ def register_file_routes(app, deps):
         }
 
     def _remote_download_task_sort_key(task):
-        return (str(task.get("created_at") or ""), str(task.get("id") or ""))
+        return (-int(task.get("availability_score") or 0), str(task.get("created_at") or ""), str(task.get("id") or ""))
 
     def _try_acquire_remote_download_slot_locked(owner_user_id, task_id):
         _cleanup_stale_remote_download_tasks_locked()
@@ -3476,8 +3526,9 @@ def register_file_routes(app, deps):
             refs = []
             for row in rows:
                 allowed, reason, _ = can_download_file(conn, actor=actor, file_id=row["file_id"])
-                if allowed or row["attached_by"] == actor["id"] or row["owner_user_id"] == actor["id"]:
-                    refs.append({**dict(row), "can_download": allowed, "download_reason": reason})
+                can_remove = can_remove_context_attachment(actor, row)
+                if allowed or can_remove:
+                    refs.append({**dict(row), "can_download": allowed, "download_reason": reason, "can_remove": can_remove})
             return json_resp({"ok": True, "refs": refs})
         finally:
             conn.close()
@@ -3507,10 +3558,7 @@ def register_file_routes(app, deps):
             row = conn.execute("SELECT * FROM cloud_file_refs WHERE id=?", (ref_id,)).fetchone()
             if not row:
                 return json_resp({"ok": False, "msg": "找不到附件"}), 404
-            allowed = (
-                int(row["attached_by"]) == int(_actor_value(actor, "id"))
-                or int(row["owner_user_id"]) == int(_actor_value(actor, "id"))
-            )
+            allowed = can_remove_context_attachment(actor, row)
             if not allowed:
                 return json_resp({"ok": False, "msg": "沒有移除此附件的權限"}), 403
             now = datetime.now().isoformat()
@@ -3563,8 +3611,13 @@ def register_file_routes(app, deps):
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             preview_row = _preview_row_with_storage_fallback(conn, actor, row)
             try:
-                readable_path, _ = _readable_file_path(row)
-                preview = build_preview_metadata(preview_row, readable_path)
+                category, _mime_type = preview_category(preview_row)
+                if is_chunked_server_encrypted_file(row) and category in {"audio", "video", "image", "pdf"}:
+                    _assert_chunked_server_encrypted_readable(path, row["size_bytes"])
+                    preview = build_preview_metadata(preview_row, path)
+                else:
+                    readable_path, _ = _readable_file_path(row)
+                    preview = build_preview_metadata(preview_row, readable_path)
             except ValueError as exc:
                 preview = _decryption_unavailable_preview(preview_row, str(exc))
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview", result="allowed", reason=preview["category"], ip=get_client_ip(), user_agent=get_ua())

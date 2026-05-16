@@ -66,6 +66,18 @@ SETTING_GROUPS = (
         ),
     },
     {
+        "key": "accounts_and_points",
+        "title": "帳號席位 / 積分發放",
+        "description": "管理員席位上限、初始積分與管理員週薪排程。",
+        "settings": (
+            "max_manager_seats",
+            "points_admin_weekly_salary_enabled",
+            "points_admin_weekly_salary_weekday",
+            "points_admin_weekly_salary_time",
+            "points_admin_weekly_salary_award_on_login",
+        ),
+    },
+    {
         "key": "maintenance",
         "title": "維護模式 / Bypass Token",
         "description": "維護模式會擋住所有人，bypass token 給內部回測用。",
@@ -77,6 +89,7 @@ SETTING_GROUPS = (
             "internal_test_login_token_expires_at",
             "internal_test_login_token_user_id",
             "internal_test_login_token_username",
+            "internal_test_login_token_allowed_features_json",
         ),
     },
     {
@@ -218,6 +231,26 @@ SETTING_DETAILS = {
     "login_autofill_block_enabled": {
         "label": "禁止瀏覽器自動填入密碼",
         "description": "登入表單會避免被密碼管理員自動帶入。",
+    },
+    "max_manager_seats": {
+        "label": "管理員席位上限",
+        "description": "root 可調整一般 manager 帳號最多可同時存在幾席。",
+    },
+    "points_admin_weekly_salary_enabled": {
+        "label": "管理員週薪發放",
+        "description": "啟用後系統會依 root 設定的星期與時間發放管理員週薪。",
+    },
+    "points_admin_weekly_salary_weekday": {
+        "label": "管理員週薪星期",
+        "description": "1-7，依 ISO 星期：1 是星期一，7 是星期日。",
+    },
+    "points_admin_weekly_salary_time": {
+        "label": "管理員週薪時間",
+        "description": "HH:MM，依伺服器本地時間判斷。",
+    },
+    "points_admin_weekly_salary_award_on_login": {
+        "label": "登入時補發管理員週薪",
+        "description": "啟用後管理員登入時也會嘗試補發當週週薪；預設關閉，避免發放時機依賴登入。",
     },
     "production_single_ip_account_lock_enabled": {
         "label": "生產：單 IP 同時只允許單一帳號",

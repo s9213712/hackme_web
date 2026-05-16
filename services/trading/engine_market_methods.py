@@ -446,6 +446,7 @@ def _price_fusion_warning_is_degrading(self, warning):
     return code not in {
         "provider_coverage_partial",
         "provider_weight_cap_applied",
+        "provider_weight_cap_unenforceable",
     }
 
 def _price_fusion_exclusion_is_degrading(self, exclusion):
@@ -454,6 +455,13 @@ def _price_fusion_exclusion_is_degrading(self, exclusion):
         return False
     return reason not in {
         "manual_weight_zero",
+        "fetch_failed",
+        "stale_orderbook",
+        "latency_too_high",
+        "one_sided_depth",
+        "midpoint_deviation",
+        "midpoint_deviation_exceeded",
+        "quantity_unit_unconfirmed",
     }
 
 def _transport_state_from_provider_rows(self, provider_rows, *, warnings=None, degraded=False, conservative_mode=False, min_provider_count=0, ws_enabled=True):
@@ -592,7 +600,7 @@ def _assert_price_meta_allows_high_risk_use(self, conn, *, actor=None, market_sy
     elif "market order" in usage_text or "limit order match" in usage_text or "contract position" in usage_text:
         policy_key = "trading.price_degrade_pause_market_orders"
         policy_label = "市價交易"
-    trade_min_provider_count = 2
+    trade_min_provider_count = DEFAULT_PRICE_FUSION_TRADE_MIN_PROVIDER_COUNT
     settings_rows = conn.execute(
         """
         SELECT key, value
@@ -610,10 +618,10 @@ def _assert_price_meta_allows_high_risk_use(self, conn, *, actor=None, market_sy
     try:
         trade_min_provider_count = max(
             1,
-            int(settings_map.get("trading.price_fusion_trade_min_provider_count") or 2),
+            int(settings_map.get("trading.price_fusion_trade_min_provider_count") or DEFAULT_PRICE_FUSION_TRADE_MIN_PROVIDER_COUNT),
         )
     except Exception:
-        trade_min_provider_count = 2
+        trade_min_provider_count = DEFAULT_PRICE_FUSION_TRADE_MIN_PROVIDER_COUNT
     warning_language = _warning_language(settings_map.get("trading.warning_language"))
     policy_enabled = str(settings_map.get(policy_key, "false")).strip().lower() in {"1", "true", "yes", "on"} if policy_key else False
     provider_count = max(
@@ -900,8 +908,8 @@ def get_root_price_fusion_status(self, *, market_symbol=""):
     finally:
         conn.close()
 
-def get_live_market_quote(self, *, market_symbol=""):
-    return get_live_market_quote_helper(self, market_symbol=market_symbol)
+def get_live_market_quote(self, *, market_symbol="", force_refresh=False):
+    return get_live_market_quote_helper(self, market_symbol=market_symbol, force_refresh=force_refresh)
 
 def _fetch_live_price_points(self, market_symbol, *, with_meta=False, settings=None, conn=None):
     return fetch_live_price_points_helper(

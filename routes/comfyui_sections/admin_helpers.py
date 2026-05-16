@@ -63,6 +63,7 @@ def build_comfyui_admin_helpers(ctx):
         "COMFYUI_MODEL_DOWNLOAD_TYPES": ctx["COMFYUI_MODEL_DOWNLOAD_TYPES"],
         "COMFYUI_SUPPORTED_LORA_BASE_MODEL_FAMILIES": ctx["COMFYUI_SUPPORTED_LORA_BASE_MODEL_FAMILIES"],
         "MAX_COMFYUI_MODEL_DOWNLOAD_BYTES": ctx["MAX_COMFYUI_MODEL_DOWNLOAD_BYTES"],
+        "COMFYUI_BACKEND_REQUEST_TIMEOUT_SECONDS": ctx.get("COMFYUI_BACKEND_REQUEST_TIMEOUT_SECONDS", 8),
         "CIVITAI_ALLOWED_HOSTS": ctx["CIVITAI_ALLOWED_HOSTS"],
         "CIVITAI_API_BASE": ctx["CIVITAI_API_BASE"],
         "CIVITAI_API_BASES": ctx.get("CIVITAI_API_BASES") or [ctx["CIVITAI_API_BASE"]],
@@ -1693,4 +1694,4 @@ def _client_for_url(url):
             storage_root=deps.get("STORAGE_DIR") or ".",
             backend_url=url,
         )
-    return ComfyUIClient(url)
+    return ComfyUIClient(url, timeout=COMFYUI_BACKEND_REQUEST_TIMEOUT_SECONDS)

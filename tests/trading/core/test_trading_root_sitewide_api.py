@@ -154,6 +154,7 @@ def test_root_sitewide_user_positions_are_read_only_and_exclude_root(tmp_path):
     finally:
         conn.close()
 
+    trading.refresh_root_trading_snapshots(source_job_key="unit-test")
     response = app.test_client().get("/api/root/trading/sitewide/user-positions")
     payload = response.get_json()
 
@@ -193,6 +194,7 @@ def test_root_sitewide_pools_endpoint_is_root_only(tmp_path):
     finally:
         conn.close()
 
+    trading.refresh_root_trading_snapshots(source_job_key="unit-test")
     response = app.test_client().get("/api/root/trading/sitewide/pools")
     payload = response.get_json()
 
@@ -206,3 +208,50 @@ def test_root_sitewide_pools_endpoint_is_root_only(tmp_path):
     non_root_app, _points, _trading, _get_db = _app(non_root_dir, {"id": 1, "username": "alice", "role": "user"})
     forbidden = non_root_app.test_client().get("/api/root/trading/sitewide/pools")
     assert forbidden.status_code == 403
+
+
+def test_root_sitewide_endpoints_require_snapshot_instead_of_inline_recompute(tmp_path):
+    app, _points, _trading, _get_db = _app(tmp_path, {"id": 2, "username": "root", "role": "super_admin"})
+
+    response = app.test_client().get("/api/root/trading/sitewide/user-positions")
+    payload = response.get_json()
+
+    assert response.status_code == 503
+    assert payload["ok"] is False
+    assert payload["snapshot"]["missing"] is True
+
+
+def test_root_admin_report_reads_snapshot_only(tmp_path):
+    app, _points, trading, _get_db = _app(tmp_path, {"id": 2, "username": "root", "role": "super_admin"})
+
+    missing = app.test_client().get("/api/admin/trading/report")
+    missing_payload = missing.get_json()
+
+    assert missing.status_code == 503
+    assert missing_payload["snapshot"]["missing"] is True
+
+    trading.refresh_root_trading_snapshots(source_job_key="unit-test", source_run_uuid="run-report-test")
+    response = app.test_client().get("/api/admin/trading/report")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert "report" in payload
+    assert payload["snapshot"]["snapshot_key"] == "root_report"
+    assert payload["snapshot"]["source_run_uuid"] == "run-report-test"
+
+
+def test_root_run_once_enqueues_background_job(tmp_path):
+    app, _points, _trading, _get_db = _app(tmp_path, {"id": 2, "username": "root", "role": "super_admin"})
+
+    response = app.test_client().post(
+        "/api/root/trading/background/run-once",
+        json={"job_key": "sitewide_metrics_refresh", "confirm": "RUN_TRADING_JOB_ONCE"},
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 202
+    assert payload["ok"] is True
+    assert payload["queued"] is True
+    assert payload["job_key"] == "sitewide_metrics_refresh"
+    assert payload["queue_uuid"]

@@ -42,6 +42,14 @@ ROOT_NOTIFICATION_EVENT_TYPES = {
     "session_revoked",
     "login_location_suspicious",
 }
+ROOT_NOTIFICATION_BURST_EVENT_TYPES = {
+    "ip_block",
+    "rate_limit",
+    "403_access",
+    "feature_disabled",
+    "csrf_fail",
+    "permission_denied",
+}
 
 SECURITY_EVENT_LABELS = {
     "login_fail": "登入失敗",
@@ -111,7 +119,7 @@ def format_root_security_notification(event_type, ip, target_user=None, detail="
         f"事件細節：{_humanize_security_detail(normalized_type, detail)}",
         "處理狀態：系統已記錄此事件，並依目前安全設定放行或阻擋。",
     ])
-    if normalized_type == "csrf_fail":
+    if normalized_type in ROOT_NOTIFICATION_BURST_EVENT_TYPES:
         lines.append("通知彙總：同來源短時間重複事件只顯示一則通知，完整紀錄請到安全中心查看。")
     lines.append(f"建議處理：{SECURITY_EVENT_ADVICE.get(normalized_type, '請到安全中心查看近期事件與伺服器日誌。')}")
     return f"安全警訊：{label}", "\n".join(lines)
@@ -127,7 +135,7 @@ def _should_create_root_notification(event_type, detail=""):
 
 def _root_notification_recently_sent(conn, event_type, ip, created_at):
     normalized_type = normalize_security_event_type(event_type)
-    if normalized_type != "csrf_fail":
+    if normalized_type not in ROOT_NOTIFICATION_BURST_EVENT_TYPES:
         return False
     try:
         event_dt = datetime.fromisoformat(str(created_at))

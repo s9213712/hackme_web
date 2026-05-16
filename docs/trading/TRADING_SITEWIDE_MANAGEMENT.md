@@ -1,10 +1,12 @@
 # Root Sitewide Trading Management
 
-Status: background-engine health controls are partially implemented; the full
-sitewide management tab is still staged. Root can already inspect background
-job status and run audited pause / resume / run-once actions. Order, bot,
-TP/SL, and margin-risk drilldowns still need snapshot-backed pages before they
-are suitable for production operations.
+Status: background-engine health controls and the first root snapshot reads are
+implemented; the full sitewide management tab is still staged. Root can inspect
+background job status, run audited pause / resume actions, and enqueue named
+run-once jobs without blocking the root HTTP request. The root report, pool
+summary, and user-position summary read stored snapshots. Order, bot, TP/SL,
+and margin-risk drilldowns still need snapshot-backed pages before they are
+suitable for production operations.
 
 ## Location
 
@@ -56,7 +58,7 @@ Root actions:
 
 - pause background engine
 - resume background engine
-- run one named job once with explicit confirmation
+- enqueue one named job once with explicit confirmation
 - inspect recent job runs and audit records
 
 All actions must use existing root permission checks, CSRF protection, and
@@ -237,6 +239,11 @@ Both routes are root-only and read-only. They exclude root simulated trading
 positions so production PointsChain supply and member exposure are not mixed
 with root simulation balances.
 
+These routes now read `trading_root_snapshots` only. They return 503 with a
+missing-snapshot message if `sitewide_metrics_refresh` has not produced the
+snapshot yet; they must not fall back to inline recalculation on the root
+request path.
+
 ## Planned Sitewide APIs
 
 These routes describe the intended drilldown surface. Do not document them as
@@ -259,6 +266,8 @@ Preferred root UI sources:
 
 - `trading_background_jobs`
 - `trading_background_job_runs`
+- `trading_background_job_queue`
+- `trading_root_snapshots`
 - `trading_sitewide_risk_snapshots`
 - `trading_margin_account_snapshots`
 - `trading_bot_runtime_status`

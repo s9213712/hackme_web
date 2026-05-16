@@ -46,4 +46,4 @@ def test_diffusers_generation_progress_surfaces_huggingface_download_bytes():
     assert "progress.speed_bytes_per_sec" in js
     assert "progress.step" in js
     assert "formatDriveBytes(writtenBytes)" in js
-    assert "不設等待上限" in js
+    assert "上限由後端工作控制" in js

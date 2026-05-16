@@ -1,4 +1,5 @@
 import json
+import secrets
 from datetime import datetime
 
 
@@ -31,6 +32,8 @@ def ensure_user_profile_schema(conn):
             signature TEXT,
             location TEXT,
             website TEXT,
+            friend_code TEXT,
+            friend_code_rotated_at TEXT,
             custom_title TEXT,
             custom_title_status TEXT NOT NULL DEFAULT 'none',
             profile_visibility TEXT NOT NULL DEFAULT 'public',
@@ -43,6 +46,11 @@ def ensure_user_profile_schema(conn):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(user_profiles)").fetchall()}
     if "appearance_json" not in columns:
         conn.execute("ALTER TABLE user_profiles ADD COLUMN appearance_json TEXT NOT NULL DEFAULT '{}'")
+    if "friend_code" not in columns:
+        conn.execute("ALTER TABLE user_profiles ADD COLUMN friend_code TEXT")
+    if "friend_code_rotated_at" not in columns:
+        conn.execute("ALTER TABLE user_profiles ADD COLUMN friend_code_rotated_at TEXT")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profiles_friend_code ON user_profiles(friend_code) WHERE friend_code IS NOT NULL AND friend_code<>''")
 
 
 def _now():
@@ -61,6 +69,53 @@ def _visibility(value):
 def _clean_color(value):
     value = str(value or "").strip()
     return value if len(value) == 7 and value.startswith("#") and all(ch in "0123456789abcdefABCDEF" for ch in value[1:]) else ""
+
+
+def _table_columns(conn, table):
+    columns = set()
+    for row in conn.execute(f"PRAGMA table_info({table})").fetchall():
+        try:
+            columns.add(row["name"])
+        except Exception:
+            columns.add(row[1])
+    return columns
+
+
+def _generate_friend_code(conn):
+    for _ in range(20):
+        cleaned = "".join(ch for ch in secrets.token_urlsafe(12) if ch.isalnum())
+        if len(cleaned) < 12:
+            continue
+        code = "F" + cleaned[:12]
+        if not conn.execute("SELECT 1 FROM user_profiles WHERE friend_code=?", (code,)).fetchone():
+            return code
+    raise RuntimeError("friend code generation exhausted")
+
+
+def ensure_profile_friend_code(conn, user_id):
+    ensure_user_profile_schema(conn)
+    row = conn.execute("SELECT friend_code FROM user_profiles WHERE user_id=?", (int(user_id),)).fetchone()
+    if row and row["friend_code"]:
+        return row["friend_code"]
+    code = _generate_friend_code(conn)
+    now = _now()
+    conn.execute(
+        "UPDATE user_profiles SET friend_code=?, friend_code_rotated_at=?, updated_at=? WHERE user_id=?",
+        (code, now, now, int(user_id)),
+    )
+    return code
+
+
+def rotate_friend_code(conn, user_id):
+    ensure_user_profile_schema(conn)
+    get_or_create_profile(conn, user_id)
+    code = _generate_friend_code(conn)
+    now = _now()
+    conn.execute(
+        "UPDATE user_profiles SET friend_code=?, friend_code_rotated_at=?, updated_at=? WHERE user_id=?",
+        (code, now, now, int(user_id)),
+    )
+    return code
 
 
 def sanitize_appearance_settings(data):
@@ -153,14 +208,18 @@ def get_or_create_profile(conn, user_id):
     ensure_user_profile_schema(conn)
     row = conn.execute("SELECT * FROM user_profiles WHERE user_id=?", (int(user_id),)).fetchone()
     if row:
-        return dict(row)
+        profile = dict(row)
+        if not profile.get("friend_code"):
+            profile["friend_code"] = ensure_profile_friend_code(conn, user_id)
+        return profile
     now = _now()
+    code = _generate_friend_code(conn)
     conn.execute(
         """
-        INSERT INTO user_profiles (user_id, display_name, bio, signature, location, website, profile_visibility, appearance_json, created_at, updated_at)
-        VALUES (?, '', '', '', '', '', 'public', '{}', ?, ?)
+        INSERT INTO user_profiles (user_id, display_name, bio, signature, location, website, friend_code, friend_code_rotated_at, profile_visibility, appearance_json, created_at, updated_at)
+        VALUES (?, '', '', '', '', '', ?, ?, 'public', '{}', ?, ?)
         """,
-        (int(user_id), now, now),
+        (int(user_id), code, now, now, now),
     )
     return dict(conn.execute("SELECT * FROM user_profiles WHERE user_id=?", (int(user_id),)).fetchone())
 
@@ -201,14 +260,20 @@ def update_profile(conn, *, actor, data):
 
 def get_public_profile(conn, *, username, viewer=None):
     ensure_user_profile_schema(conn)
+    user_cols = _table_columns(conn, "users")
+    member_level_expr = "u.member_level" if "member_level" in user_cols else "'' AS member_level"
+    effective_level_expr = "u.effective_level" if "effective_level" in user_cols else "'' AS effective_level"
+    created_at_expr = "u.created_at" if "created_at" in user_cols else "'' AS created_at"
+    deleted_filter = "AND (u.deleted_at IS NULL OR u.deleted_at='')" if "deleted_at" in user_cols else ""
     row = conn.execute(
-        """
-        SELECT u.id, u.username, u.role, u.member_level, u.effective_level, u.created_at,
+        f"""
+        SELECT u.id, u.username, u.role, {member_level_expr}, {effective_level_expr}, {created_at_expr},
                p.display_name, p.bio, p.signature, p.location, p.website,
+               p.friend_code, p.friend_code_rotated_at,
                p.custom_title, p.custom_title_status, p.profile_visibility, p.updated_at AS profile_updated_at
         FROM users u
         LEFT JOIN user_profiles p ON p.user_id=u.id
-        WHERE u.username=? AND (u.deleted_at IS NULL OR u.deleted_at='')
+        WHERE u.username=? {deleted_filter}
         """,
         (str(username or "").strip(),),
     ).fetchone()
@@ -228,4 +293,7 @@ def get_public_profile(conn, *, username, viewer=None):
         data["signature"] = ""
         data["location"] = ""
         data["website"] = ""
+    if not is_owner:
+        data.pop("friend_code", None)
+        data.pop("friend_code_rotated_at", None)
     return data

@@ -82,7 +82,7 @@ def wallet_row(service, conn, user_id, ctx=None):
 def wallet_payload(service, conn, user_id, ctx=None):
     wallet_table, route_ctx = service._resolve_table("wallets", ctx, action="wallet-read")
     if wallet_table == "wallets":
-        return service.points_service.serialize_wallet(service.points_service.ensure_wallet(conn, user_id))
+        return service.points_service.wallet_payload_for_read(conn, user_id)
     return service._shadow_wallet_payload(service._ensure_shadow_wallet(conn, user_id, route_ctx))
 
 

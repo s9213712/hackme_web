@@ -1,5 +1,6 @@
 import hashlib
 import ipaddress
+import json
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -141,10 +142,17 @@ def maintenance_bypass_required_payload(message):
 def access_control_settings_payload(settings):
     settings = dict(settings or {})
     bound_user_id = 0
+    allowed_features = []
     try:
         bound_user_id = int(settings.get("internal_test_login_token_user_id") or 0)
     except Exception:
         bound_user_id = 0
+    try:
+        parsed_features = json.loads(str(settings.get("internal_test_login_token_allowed_features_json") or "[]"))
+        if isinstance(parsed_features, list):
+            allowed_features = [str(item).strip() for item in parsed_features if str(item).strip()]
+    except Exception:
+        allowed_features = []
     return {
         "root_ip_whitelist_enabled": bool(settings.get("root_ip_whitelist_enabled", False)),
         "root_ip_whitelist": settings.get("root_ip_whitelist", ""),
@@ -157,4 +165,6 @@ def access_control_settings_payload(settings):
         "internal_test_token_expired": maintenance_bypass_token_is_expired(settings.get("internal_test_login_token_expires_at")) if settings.get("internal_test_login_token_hash") else False,
         "internal_test_token_user_id": bound_user_id,
         "internal_test_token_username": str(settings.get("internal_test_login_token_username") or "").strip(),
+        "internal_test_token_allowed_features": allowed_features,
+        "internal_test_token_feature_scope_enabled": bool(allowed_features),
     }

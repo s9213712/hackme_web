@@ -58,7 +58,7 @@ TRADING_MARKETS_DDL = """
             fee_rate_percent REAL NOT NULL DEFAULT 0.1,
             updated_at TEXT NOT NULL,
             updated_by INTEGER,
-            price_source TEXT NOT NULL DEFAULT 'fused_weighted',
+            price_source TEXT NOT NULL DEFAULT 'binance_public_api',
             live_price_warmup_started_at TEXT,
             live_price_confirmed_at TEXT,
             CHECK (execution_mode IN ('house_counterparty', 'pvp_matching', 'hybrid_liquidity'))

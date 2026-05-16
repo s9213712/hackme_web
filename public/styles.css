@@ -638,6 +638,18 @@
       overflow: hidden;
     }
 
+    .sidebar-user-card {
+      cursor: pointer;
+    }
+
+    .sidebar-user-card:hover,
+    .sidebar-user-card:focus-visible {
+      color: var(--text);
+      border-color: rgba(255,255,255,.16);
+      background: rgba(255,255,255,.07);
+      outline: none;
+    }
+
     .sidebar-stats-card {
       display: grid;
       grid-template-columns: 1fr;
@@ -3366,6 +3378,11 @@
       border-top: 1px solid rgba(255,255,255,.08);
     }
 
+    .video-publish-panel > .drive-card-heading {
+      margin: 0;
+      padding: .85rem 1rem;
+    }
+
     .settings-collapse {
       margin-bottom: .65rem;
     }
@@ -3719,6 +3736,137 @@
     .chat-friend-row span {
       overflow-wrap: anywhere;
       min-width: 0;
+    }
+
+    .profile-panel {
+      display: grid;
+      gap: .9rem;
+    }
+
+    .profile-tabs,
+    .profile-code-row,
+    .profile-friend-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .45rem;
+      align-items: center;
+    }
+
+    .profile-pane {
+      display: none;
+      gap: .9rem;
+    }
+
+    .profile-pane.active {
+      display: grid;
+    }
+
+    .profile-summary {
+      display: grid;
+      grid-template-columns: 88px minmax(0, 1fr);
+      gap: .9rem;
+      align-items: center;
+      padding: .9rem 0;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+
+    .profile-avatar-large {
+      width: 88px;
+      height: 88px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.12);
+      font-weight: 800;
+    }
+
+    .profile-avatar-large .user-avatar-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .profile-summary-main {
+      min-width: 0;
+      display: grid;
+      gap: .35rem;
+    }
+
+    .profile-summary-main h3,
+    .profile-summary-main p {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .profile-bio {
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    .profile-stats-grid strong {
+      overflow-wrap: anywhere;
+    }
+
+    .profile-code-row input {
+      min-width: 180px;
+      flex: 1 1 220px;
+    }
+
+    .profile-friend-columns {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: .85rem;
+      align-items: start;
+    }
+
+    .profile-friend-columns section {
+      display: grid;
+      gap: .55rem;
+      min-width: 0;
+    }
+
+    .profile-friend-list {
+      display: grid;
+      gap: .45rem;
+      min-width: 0;
+    }
+
+    .profile-friend-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: .45rem;
+      align-items: center;
+      padding: .55rem;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      background: rgba(255,255,255,.035);
+    }
+
+    .profile-friend-row strong,
+    .profile-friend-row span {
+      display: inline-block;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
+
+    .profile-official-badge {
+      margin-left: .35rem;
+      padding: .12rem .38rem;
+      border-radius: 999px;
+      background: rgba(76,175,80,.16);
+      color: #8ee59b;
+      font-size: .68rem;
+      font-weight: 700;
+      vertical-align: middle;
+    }
+
+    .user-target-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .25rem;
+      margin-top: .25rem;
     }
 
     .chat-sticker-bar {
@@ -4409,6 +4557,25 @@
       font-size: .78rem;
       line-height: 1.35;
     }
+    .copy-link-feedback {
+      display: none;
+      flex: 1 0 100%;
+      width: 100%;
+      margin-top: .28rem;
+      font-size: .78rem;
+      font-weight: 700;
+      line-height: 1.35;
+      text-align: left;
+    }
+    .copy-link-feedback.show {
+      display: block;
+    }
+    .copy-link-feedback.ok {
+      color: var(--accent2);
+    }
+    .copy-link-feedback.err {
+      color: var(--danger);
+    }
     .trading-inline-msg {
       margin-top: .55rem;
       margin-bottom: .65rem;
@@ -4672,10 +4839,18 @@
     }
 
     .chat-toolbar {
-      display: grid;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
       gap: .6rem;
-      grid-template-columns: 2fr 1fr auto;
       margin-bottom: .75rem;
+    }
+
+    .chat-room-create-entry,
+    .chat-refresh-wrap {
+      display: flex;
+      align-items: center;
+      min-width: 0;
     }
 
     .chat-room-create,
@@ -4689,9 +4864,63 @@
       flex-wrap: wrap;
     }
 
+    .chat-room-create[hidden] {
+      display: none !important;
+    }
+
+    .chat-room-dialog[hidden] {
+      display: none !important;
+    }
+
+    .chat-room-dialog-modal {
+      width: min(520px, calc(100vw - 2.4rem));
+    }
+
+    .chat-room-dialog-fields {
+      display: grid;
+      gap: .65rem;
+      margin-top: .75rem;
+    }
+
+    .chat-room-dialog-actions {
+      justify-content: flex-end;
+      margin-top: .85rem;
+    }
+
+    .chat-room-dialog-actions .btn {
+      min-width: 6.5rem;
+    }
+
     .chat-room-actions {
       margin: .55rem 0;
       justify-content: flex-end;
+    }
+
+    .chat-room-option {
+      display: inline-flex;
+      align-items: center;
+      gap: .32rem;
+      min-height: 2.25rem;
+      padding: .34rem .5rem;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 7px;
+      background: rgba(255,255,255,.035);
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.15;
+      white-space: nowrap;
+    }
+
+    .chat-sender-official {
+      font-weight: 800;
+    }
+
+    .chat-official-badge,
+    .chat-original-sender {
+      margin-left: .32rem;
+      color: var(--muted);
+      font-size: .74rem;
+      font-weight: 700;
     }
 
     .chat-room-actions input {
@@ -4919,6 +5148,7 @@
     }
 
     .chat-report-btn,
+    .chat-edit-btn,
     .chat-delete-btn {
       display: inline-block;
       margin-top: .32rem;
@@ -4936,15 +5166,28 @@
       cursor: pointer;
     }
 
-    .chat-report-btn:hover {
+    .chat-report-btn:hover,
+    .chat-edit-btn:hover {
       color: var(--text);
       background: rgba(255,255,255,.12);
     }
 
     .chat-report-btn:focus-visible,
+    .chat-edit-btn:focus-visible,
     .chat-delete-btn:focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: 2px;
+    }
+
+    .chat-edit-btn {
+      color: #b8d7ff;
+      border-color: rgba(92, 168, 255, .34);
+      background: rgba(92, 168, 255, .08);
+    }
+
+    .chat-edited-label {
+      color: var(--muted);
+      font-size: .68rem;
     }
 
     .chat-delete-btn {
@@ -5120,6 +5363,76 @@
     .user-edit-modal textarea {
       max-width: 100%;
       min-width: 0;
+    }
+
+    .album-picker-modal {
+      width: min(540px, calc(100vw - 2.4rem));
+    }
+
+    .album-picker-native {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+
+    .album-picker-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+      gap: .5rem;
+      margin-top: .48rem;
+      max-height: min(46vh, 340px);
+      overflow: auto;
+      padding-right: .15rem;
+    }
+
+    .album-picker-card {
+      min-width: 0;
+      min-height: 76px;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 8px;
+      background: rgba(255,255,255,.045);
+      color: var(--text);
+      padding: .62rem .66rem;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color .12s ease, background .12s ease, transform .12s ease;
+    }
+
+    .album-picker-card:hover,
+    .album-picker-card:focus {
+      outline: none;
+      border-color: rgba(100,181,246,.58);
+      background: rgba(100,181,246,.1);
+      transform: translateY(-1px);
+    }
+
+    .album-picker-card.selected {
+      border-color: color-mix(in srgb, var(--accent) 72%, white 8%);
+      background: color-mix(in srgb, var(--panel) 74%, var(--accent) 26%);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+    }
+
+    .album-picker-card-title,
+    .album-picker-card-meta {
+      display: block;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .album-picker-card-title {
+      font-weight: 700;
+      font-size: .82rem;
+      line-height: 1.25;
+    }
+
+    .album-picker-card-meta {
+      margin-top: .35rem;
+      color: var(--muted);
+      font-size: .72rem;
+      line-height: 1.3;
     }
 
     .game-multiplayer-invite-overlay {
@@ -7604,6 +7917,7 @@
     .game-mini-btn,
     .markdown-toolbar .btn,
     .chat-report-btn,
+    .chat-edit-btn,
     .chat-delete-btn {
       min-height: 1.8rem;
       padding: .28rem .48rem;
@@ -7711,7 +8025,7 @@
     }
 
     .chat-toolbar {
-      grid-template-columns: minmax(0, 1.6fr) minmax(260px, .85fr) auto;
+      grid-template-columns: auto minmax(260px, .85fr) auto;
       gap: .55rem;
     }
 
@@ -8468,7 +8782,9 @@
       .chat-room-create,
       .chat-room-join,
       .chat-composer,
-      .chat-friend-add {
+      .chat-friend-add,
+      .profile-summary,
+      .profile-friend-columns {
         grid-template-columns: 1fr;
         display: grid;
       }
@@ -8725,6 +9041,8 @@
       .chat-room-join,
       .chat-composer,
       .chat-friend-add,
+      .profile-summary,
+      .profile-friend-columns,
       .drive-file-preview-layout,
       .game-layout,
       .comfyui-layout {
@@ -9240,6 +9558,10 @@
 
       #module-drive .drive-remaining-row .btn {
         width: 100%;
+      }
+
+      .album-picker-card-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
 

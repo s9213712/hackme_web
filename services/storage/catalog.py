@@ -166,6 +166,8 @@ def ensure_storage_album_schema(conn):
     storage_share_cols = {row["name"] for row in conn.execute("PRAGMA table_info(storage_share_links)").fetchall()}
     storage_share_defs = {
         "token": "TEXT",
+        "can_download": "INTEGER NOT NULL DEFAULT 1",
+        "can_preview": "INTEGER NOT NULL DEFAULT 0",
         "access_scope": "TEXT NOT NULL DEFAULT 'link'",
         "required_user_id": "INTEGER",
         "max_views": "INTEGER NOT NULL DEFAULT 0",
@@ -1022,6 +1024,8 @@ def _storage_share_payload(row, *, token=None):
         data.pop("token", None)
     data["share_url"] = f"/shared/files/{share_token}" if share_token else ""
     data["download_url"] = f"/api/storage/shared/{share_token}/download" if share_token else ""
+    data["preview_url"] = f"/api/storage/shared/{share_token}/preview" if share_token else ""
+    data["preview_content_url"] = f"/api/storage/shared/{share_token}/preview/content" if share_token else ""
     data["requires_fragment_key"] = bool(str(data.get("wrapped_file_key_envelope") or "").strip())
     return data
 
@@ -1101,6 +1105,8 @@ def create_share_link(
     link["token"] = token
     link["share_url"] = f"/shared/files/{token}"
     link["download_url"] = f"/api/storage/shared/{token}/download"
+    link["preview_url"] = f"/api/storage/shared/{token}/preview"
+    link["preview_content_url"] = f"/api/storage/shared/{token}/preview/content"
     return link, None
 
 
@@ -1150,7 +1156,7 @@ def revoke_share_link(conn, *, actor, link_id):
     return get_share_link(conn, actor=actor, link_id=link_id), None
 
 
-def resolve_share_token(conn, token, *, actor=None):
+def resolve_share_token(conn, token, *, actor=None, require_download=True):
     ensure_storage_album_schema(conn)
     row = conn.execute(
         """
@@ -1181,7 +1187,9 @@ def resolve_share_token(conn, token, *, actor=None):
         return None, "view_limit_reached"
     if data.get("storage_deleted_at") or data.get("file_deleted_at") or int(data.get("is_trashed") or 0):
         return None, "deleted"
-    if not int(data.get("can_download") or 0):
+    if require_download and not int(data.get("can_download") or 0):
+        return None, "download_disabled"
+    if not require_download and not (int(data.get("can_download") or 0) or int(data.get("can_preview") or 0)):
         return None, "download_disabled"
     if str(data.get("access_scope") or "link") == "account":
         if not actor:

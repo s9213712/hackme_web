@@ -11,6 +11,7 @@ from pathlib import Path
 import os
 import shutil
 import subprocess
+import threading
 
 import chess
 
@@ -20,6 +21,43 @@ from services.games.chess import to_chess_board
 STOCKFISH_DIFFICULTY = "stockfish"
 DEFAULT_RUNTIME_DEPTH = 10
 DEFAULT_RUNTIME_MOVETIME_MS = 0
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int = 1024) -> int:
+    try:
+        value = int(str(os.environ.get(name, "")).strip())
+    except (TypeError, ValueError):
+        value = int(default)
+    return max(int(minimum), min(int(maximum), value))
+
+
+def _env_float(name: str, default: float, *, minimum: float = 0.1, maximum: float = 30.0) -> float:
+    try:
+        value = float(str(os.environ.get(name, "")).strip())
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(float(minimum), min(float(maximum), value))
+
+
+_STOCKFISH_CONCURRENCY = _env_int(
+    "HTML_LEARNING_CHESS_STOCKFISH_CONCURRENCY",
+    1,
+    minimum=1,
+    maximum=8,
+)
+_STOCKFISH_QUEUE_TIMEOUT_SECONDS = _env_float(
+    "HTML_LEARNING_CHESS_STOCKFISH_QUEUE_TIMEOUT_SECONDS",
+    2.0,
+    minimum=0.1,
+    maximum=30.0,
+)
+_STOCKFISH_HASH_MB = _env_int(
+    "HTML_LEARNING_CHESS_STOCKFISH_HASH_MB",
+    16,
+    minimum=1,
+    maximum=256,
+)
+_STOCKFISH_SEMAPHORE = threading.BoundedSemaphore(_STOCKFISH_CONCURRENCY)
 
 
 def _safe_non_negative_int(value, default: int) -> int:
@@ -183,7 +221,7 @@ class UciStockfish:
         _send(self.proc, "uci")
         _read_until(self.proc, lambda line: line.strip() == "uciok")
         self.setoption("Threads", "1")
-        self.setoption("Hash", "32")
+        self.setoption("Hash", str(_STOCKFISH_HASH_MB))
         self.setoption("UCI_ShowWDL", "true")
         self.setoption("UCI_AnalyseMode", "true")
         self.isready()
@@ -300,13 +338,19 @@ def choose_stockfish_move(
         os.environ.get("HTML_LEARNING_CHESS_STOCKFISH_MOVETIME_MS", ""),
         default_movetime,
     )
-    rows = stockfish_top_k(
-        board,
-        stockfish_path=path,
-        k=1,
-        depth=runtime_depth,
-        movetime_ms=runtime_movetime,
-    )
+    acquired = _STOCKFISH_SEMAPHORE.acquire(timeout=_STOCKFISH_QUEUE_TIMEOUT_SECONDS)
+    if not acquired:
+        return None
+    try:
+        rows = stockfish_top_k(
+            board,
+            stockfish_path=path,
+            k=1,
+            depth=runtime_depth,
+            movetime_ms=runtime_movetime,
+        )
+    finally:
+        _STOCKFISH_SEMAPHORE.release()
     if not rows:
         return None
     try:

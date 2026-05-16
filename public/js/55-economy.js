@@ -68,8 +68,6 @@ function economySetMsg(text, ok = true) {
   el.textContent = text || "";
   el.style.color = ok ? "#4caf50" : "#ff4f6d";
   scheduleInlineMessageClear(el, text, ok);
-  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
 }
 
 function auditChainActionMsg(text, ok = true) {
@@ -78,8 +76,6 @@ function auditChainActionMsg(text, ok = true) {
   el.textContent = text || "";
   el.style.color = ok ? "#4caf50" : "#ff4f6d";
   scheduleInlineMessageClear(el, text, ok);
-  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
 }
 
 function economyRecoveryActionMsg(text, ok = true) {
@@ -88,8 +84,6 @@ function economyRecoveryActionMsg(text, ok = true) {
   el.textContent = text || "";
   el.style.color = ok ? "#4caf50" : "#ff4f6d";
   scheduleInlineMessageClear(el, text, ok);
-  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
 }
 
 function economyRequestId(prefix = "economy") {

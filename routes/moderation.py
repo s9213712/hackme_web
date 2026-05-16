@@ -81,6 +81,23 @@ def register_moderation_routes(app, deps):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_forum_post_reports_status ON forum_post_reports(status, created_at)")
         return True
 
+    def ensure_chat_message_report_review_schema(conn):
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_message_reports' LIMIT 1"
+        ).fetchone()
+        if not table:
+            return False
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(chat_message_reports)").fetchall()}
+        additions = (
+            ("content_snapshot", "TEXT"),
+            ("message_created_at", "TEXT"),
+            ("message_edited_at", "TEXT"),
+        )
+        for name, ddl in additions:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE chat_message_reports ADD COLUMN {name} {ddl}")
+        return True
+
     def actor_value(actor, key, default=None):
         if not actor:
             return default
@@ -826,13 +843,15 @@ def register_moderation_routes(app, deps):
         conn = get_db()
         try:
             has_community_reports = ensure_community_report_schema(conn)
+            if not ensure_chat_message_report_review_schema(conn):
+                return json_resp({"ok": True, "total": 0, "page": page, "limit": limit, "items": []})
             chat_total = conn.execute(
                 "SELECT COUNT(*) AS c FROM chat_message_reports WHERE status=?", (status,)
             ).fetchone()["c"]
             community_total = 0
             chat_rows = conn.execute(
                 "SELECT r.id, r.message_id, r.room_id, r.reason, r.status, r.reviewed_by, r.reviewed_at, r.review_note, r.created_at, "
-                "reporter.username AS reporter_username, reported.username AS reported_username, m.content "
+                "reporter.username AS reporter_username, reported.username AS reported_username, COALESCE(r.content_snapshot, m.content) AS content "
                 "FROM chat_message_reports r "
                 "LEFT JOIN users reporter ON reporter.id=r.reporter_user_id "
                 "LEFT JOIN users reported ON reported.id=r.reported_user_id "

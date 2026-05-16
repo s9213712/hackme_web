@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime
 
 from services.server import startup
 
@@ -141,3 +142,33 @@ def test_trading_bot_worker_honors_pre_set_shutdown_event(monkeypatch):
 
     holder["thread"].target()
     assert calls == {"scan": 0}
+
+
+def test_admin_weekly_salary_schedule_uses_root_settings():
+    payout_time = datetime(2026, 5, 4, 9, 0)
+    year, week, _weekday = payout_time.isocalendar()
+
+    assert startup._scheduled_admin_salary_week(
+        {
+            "points_admin_weekly_salary_enabled": True,
+            "points_admin_weekly_salary_weekday": 1,
+            "points_admin_weekly_salary_time": "09:00",
+        },
+        now=payout_time,
+    ) == f"{int(year)}-W{int(week):02d}"
+    assert startup._scheduled_admin_salary_week(
+        {
+            "points_admin_weekly_salary_enabled": True,
+            "points_admin_weekly_salary_weekday": 1,
+            "points_admin_weekly_salary_time": "09:00",
+        },
+        now=datetime(2026, 5, 4, 8, 59),
+    ) is None
+    assert startup._scheduled_admin_salary_week(
+        {
+            "points_admin_weekly_salary_enabled": False,
+            "points_admin_weekly_salary_weekday": 1,
+            "points_admin_weekly_salary_time": "09:00",
+        },
+        now=payout_time,
+    ) is None

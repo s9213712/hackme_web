@@ -11,6 +11,8 @@ from services.trading.accounting.funding_pool import funding_pool_payload
 from services.trading.constants import (
     DEFAULT_GRID_FEE_DISCOUNT_PERCENT,
     DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT,
+    DEFAULT_PRICE_FUSION_TRADE_MIN_PROVIDER_COUNT,
+    DEFAULT_TRADING_PRICE_SOURCE,
     PRICE_PROVIDER_LABELS,
     WEIGHTED_PRICE_PROVIDERS,
 )
@@ -117,7 +119,7 @@ def settings_payload(service, conn):
         "margin_maintenance_percent": raw_float_setting(raw, "trading.margin_maintenance_percent", "15", name="margin_maintenance_percent", minimum=0, maximum=100),
         "grid_fee_discount_percent": raw_float_setting(raw, "trading.grid_fee_discount_percent", DEFAULT_GRID_FEE_DISCOUNT_PERCENT, name="grid_fee_discount_percent", minimum=0, maximum=100),
         "max_price_staleness_seconds": raw_int_setting(raw, "trading.max_price_staleness_seconds", "900", name="max_price_staleness_seconds", minimum=0, maximum=86400),
-        "price_source": raw.get("trading.price_source", service.FUSED_PRICE_SOURCE),
+        "price_source": raw.get("trading.price_source", DEFAULT_TRADING_PRICE_SOURCE),
         "price_fusion_mode": raw_choice_setting(raw, "trading.price_fusion_mode", "auto_depth", allowed=service.PRICE_FUSION_MODES),
         "price_fusion_manual_weights": _normalize_price_fusion_manual_weights(
             service,
@@ -138,7 +140,7 @@ def settings_payload(service, conn):
         "price_fusion_trade_min_provider_count": raw_int_setting(
             raw,
             "trading.price_fusion_trade_min_provider_count",
-            2,
+            DEFAULT_PRICE_FUSION_TRADE_MIN_PROVIDER_COUNT,
             name="price_fusion_trade_min_provider_count",
             minimum=1,
             maximum=len(WEIGHTED_PRICE_PROVIDERS),

@@ -1,5 +1,8 @@
 import json
+import os
 import socket
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,6 +26,39 @@ from services.comfyui.workflow import builder as workflow_builder
 
 class ComfyUIError(RuntimeError):
     pass
+
+
+_OBJECT_INFO_TTL_SECONDS = 300.0
+_OBJECT_INFO_CACHE = {}
+_OBJECT_INFO_LOCK = threading.RLock()
+
+
+def _object_info_timeout_seconds(default_timeout):
+    try:
+        configured = float(os.environ.get("HACKME_COMFYUI_OBJECT_INFO_TIMEOUT_SECONDS", "8"))
+    except Exception:
+        configured = 8.0
+    try:
+        default = float(default_timeout or 30)
+    except Exception:
+        default = 30.0
+    return max(1.0, min(configured, default, 30.0))
+
+
+def _node_input_options_from_info(info, node_class, input_name):
+    node = info.get(node_class) if isinstance(info, dict) else None
+    required = ((node or {}).get("input") or {}).get("required") or {}
+    raw_values = required.get(input_name) or []
+    values = []
+    if isinstance(raw_values, list) and raw_values:
+        first = raw_values[0]
+        if isinstance(first, list):
+            values = first
+        elif isinstance(first, str) and len(raw_values) > 1 and isinstance(raw_values[1], dict):
+            options = raw_values[1].get("options") or []
+            if isinstance(options, list):
+                values = options
+    return [str(item) for item in values if str(item).strip()]
 
 
 @dataclass
@@ -126,28 +162,45 @@ class ComfyUIClient:
             raise ComfyUIError(f"ComfyUI websocket 連線失敗：{exc}") from exc
 
     def _list_node_input_options(self, node_class, input_name):
-        info = self._json_request(f"/object_info/{node_class}")
-        node = info.get(node_class) if isinstance(info, dict) else None
-        required = ((node or {}).get("input") or {}).get("required") or {}
-        raw_values = required.get(input_name) or []
-        values = []
-        if isinstance(raw_values, list) and raw_values:
-            first = raw_values[0]
-            if isinstance(first, list):
-                values = first
-            elif isinstance(first, str) and len(raw_values) > 1 and isinstance(raw_values[1], dict):
-                options = raw_values[1].get("options") or []
-                if isinstance(options, list):
-                    values = options
-        return [str(item) for item in values if str(item).strip()]
+        return _node_input_options_from_info(self.get_object_info(node_class), node_class, input_name)
 
     def get_object_info(self, node_class=None):
         path = "/object_info"
         if node_class:
             path = f"/object_info/{urllib.parse.quote(str(node_class))}"
-        info = self._json_request(path)
+        cache_key = (self.base_url, path)
+        full_cache_key = (self.base_url, "/object_info")
+        now = time.monotonic()
+        if node_class:
+            with _OBJECT_INFO_LOCK:
+                cached_full = _OBJECT_INFO_CACHE.get(full_cache_key)
+                if cached_full and (now - cached_full[0]) < _OBJECT_INFO_TTL_SECONDS:
+                    full_info = cached_full[1]
+                    node = full_info.get(str(node_class)) if isinstance(full_info, dict) else None
+                    if isinstance(node, dict):
+                        return {str(node_class): node}
+        with _OBJECT_INFO_LOCK:
+            cached = _OBJECT_INFO_CACHE.get(cache_key)
+            if cached and (now - cached[0]) < _OBJECT_INFO_TTL_SECONDS:
+                return cached[1]
+        try:
+            info = self._json_request(path, timeout=_object_info_timeout_seconds(self.timeout))
+        except ComfyUIError:
+            with _OBJECT_INFO_LOCK:
+                cached = _OBJECT_INFO_CACHE.get(cache_key)
+                if cached:
+                    return cached[1]
+                if node_class:
+                    cached_full = _OBJECT_INFO_CACHE.get(full_cache_key)
+                    full_info = cached_full[1] if cached_full else None
+                    node = full_info.get(str(node_class)) if isinstance(full_info, dict) else None
+                    if isinstance(node, dict):
+                        return {str(node_class): node}
+            raise
         if not isinstance(info, dict):
             raise ComfyUIError("ComfyUI object_info 回應格式不正確")
+        with _OBJECT_INFO_LOCK:
+            _OBJECT_INFO_CACHE[cache_key] = (now, info)
         return info
 
     def list_node_classes(self):
@@ -206,11 +259,13 @@ class ComfyUIClient:
     def get_capabilities(self):
         object_info = self.get_object_info()
         available_nodes = set(object_info.keys())
-        models = self.get_models()
-        loras = self.get_loras() if "LoraLoader" in available_nodes else []
-        vaes = self.get_vaes() if "VAELoader" in available_nodes else []
-        controlnet_models = self.get_controlnet_models() if "ControlNetLoader" in available_nodes else []
-        upscale_models = self.get_upscale_models() if "UpscaleModelLoader" in available_nodes else []
+        models = _node_input_options_from_info(object_info, "CheckpointLoaderSimple", "ckpt_name")
+        loras = _node_input_options_from_info(object_info, "LoraLoader", "lora_name") if "LoraLoader" in available_nodes else []
+        vaes = _node_input_options_from_info(object_info, "VAELoader", "vae_name") if "VAELoader" in available_nodes else []
+        controlnet_models = _node_input_options_from_info(object_info, "ControlNetLoader", "control_net_name") if "ControlNetLoader" in available_nodes else []
+        upscale_models = _node_input_options_from_info(object_info, "UpscaleModelLoader", "model_name") if "UpscaleModelLoader" in available_nodes else []
+        samplers = _node_input_options_from_info(object_info, "KSampler", "sampler_name")
+        schedulers = _node_input_options_from_info(object_info, "KSampler", "scheduler")
         controlnet_types = {}
         for key, definition in CONTROLNET_TYPE_DEFINITIONS.items():
             preprocessor_candidates = list(definition.get("preprocessor_candidates") or [])
@@ -241,6 +296,11 @@ class ComfyUIClient:
             }
         return {
             "available_nodes": sorted(available_nodes),
+            "models": models,
+            "loras": loras,
+            "vaes": vaes,
+            "samplers": samplers,
+            "schedulers": schedulers,
             "controlnet_models": controlnet_models,
             "upscale_models": upscale_models,
             "controlnet_types": controlnet_types,
@@ -313,8 +373,8 @@ class ComfyUIClient:
     def queue_prompt(self, workflow, *, extra_data=None):
         return comfy_execution.queue_prompt(self, workflow, extra_data=extra_data, error_cls=ComfyUIError)
 
-    def interrupt(self):
-        return comfy_execution.interrupt(self)
+    def interrupt(self, *, timeout_seconds=None):
+        return comfy_execution.interrupt(self, timeout_seconds=timeout_seconds)
 
     def _emit_progress(self, progress_callback, snapshot):
         return comfy_execution.emit_progress(progress_callback, snapshot)

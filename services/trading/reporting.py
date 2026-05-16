@@ -309,6 +309,18 @@ def root_report(service):
     try:
         service.ensure_schema(conn)
         state = service._state(conn)
+        verification = state.get("verification") if isinstance(state.get("verification"), dict) else {}
+        if not verification:
+            verification = {
+                "ok": not bool(state.get("safe_mode")),
+                "errors": [],
+                "checked_at": state.get("updated_at"),
+                "source": "trading_state_snapshot",
+                "stale": True,
+            }
+        else:
+            verification = dict(verification)
+            verification.setdefault("source", "trading_state_snapshot")
         reserve = service._reserve(conn)
         markets = [
             service._market_payload(row)
@@ -353,7 +365,7 @@ def root_report(service):
             "reserve_events": reserve_events,
             "audit_events": audit_events,
             "bot_audit_dashboard": service._bot_audit_dashboard_on_conn(conn, limit=80),
-            "verification": service._verify_state_on_conn(conn, enter_safe_mode=False),
+            "verification": verification,
         }
     finally:
         conn.close()

@@ -32,6 +32,7 @@ let selectedReportIds = new Set();
 let chatRooms = [];
 let selectedChatRoomId = null;
 let chatPollTimer = null;
+let chatMessageCache = [];
 const CHAT_POLL_MS = 2500;
 const DEFAULT_INACTIVITY_LOGOUT_MS = 10 * 60 * 1000;
 const IDLE_TIMEOUT_LOGOUT_STORAGE_KEY = "hackme_web.idle_timeout_logout_pending";
@@ -175,6 +176,19 @@ const SIDEBAR_ICON_PATHS = {
 };
 const SIDEBAR_MENU_CONFIG = [
   { tabId: "tab-module-chat", module: "chat", tab: "chat", icon: "chat", label: "聊天", group: "日常" },
+  {
+    tabId: "tab-module-profile",
+    module: "profile",
+    tab: "profile",
+    icon: "users",
+    label: "個人面板",
+    group: "日常",
+    submenu: [
+      { label: "我的主頁", action: "profile:home" },
+      { label: "編輯資料", action: "profile:edit" },
+      { label: "好友", action: "profile:friends" },
+    ],
+  },
   { tabId: "tab-module-announcements", module: "community", tab: "announcements", icon: "bell", label: "公告", group: "社群" },
   {
     tabId: "tab-module-community",
@@ -413,6 +427,7 @@ function updateSidebarActiveState() {
       let active = false;
       if (action.startsWith("server:")) active = currentModuleTab === "server" && currentServerTab === action.split(":")[1];
       if (action.startsWith("admin:")) active = currentModuleTab === "accounts" && typeof currentAdminTab !== "undefined" && currentAdminTab === action.split(":")[1];
+      if (action.startsWith("profile:")) active = currentModuleTab === "profile" && typeof currentProfileTab !== "undefined" && currentProfileTab === action.split(":")[1];
       if (action === "module:" + currentModuleTab) active = true;
       if (action === "community:review") active = currentModuleTab === "community" && typeof communityMode !== "undefined" && communityMode === "review";
       sub.classList.toggle("active", active);
@@ -453,6 +468,11 @@ function runSidebarAction(action) {
   if (scope === "admin" && value && typeof switchModuleTab === "function" && typeof switchAdminTab === "function") {
     switchModuleTab("accounts");
     switchAdminTab(value);
+    return;
+  }
+  if (scope === "profile" && value && typeof switchModuleTab === "function") {
+    switchModuleTab("profile");
+    if (typeof switchProfileTab === "function") switchProfileTab(value);
     return;
   }
   if (action === "community:review" && typeof switchModuleTab === "function") {
@@ -1044,8 +1064,9 @@ function flash(el, text, ok) {
   if (!el) return;
   el.textContent = text;
   el.className = "msg show " + (ok ? "ok" : "err");
-  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
+  el.setAttribute("role", ok ? "status" : "alert");
+  el.setAttribute("aria-live", ok ? "polite" : "assertive");
+  el.setAttribute("aria-atomic", "true");
 }
 
 function uiPrefersReducedMotion() {
@@ -1137,6 +1158,24 @@ function showActionFeedback(trigger, text, ok = true, options = {}) {
   }
 }
 
+function showCopyLinkFeedback(trigger, text = "已完成複製", ok = true) {
+  const button = trigger?.closest?.(".btn, button, input[type='button'], input[type='submit']");
+  const message = String(text || "").replace(/\s+/g, " ").trim();
+  if (!button || !message) return;
+  let box = button.nextElementSibling;
+  if (!box || !box.classList?.contains("copy-link-feedback")) {
+    box = document.createElement("div");
+    button.insertAdjacentElement("afterend", box);
+  }
+  box.textContent = message;
+  box.className = `copy-link-feedback ${ok ? "ok" : "err"} show`;
+  if (box._copyLinkFeedbackTimer) clearTimeout(box._copyLinkFeedbackTimer);
+  box._copyLinkFeedbackTimer = window.setTimeout(() => {
+    box.classList.remove("show");
+    box._copyLinkFeedbackTimer = null;
+  }, feedbackDuration(ok, {}, INLINE_MESSAGE_DURATION_MS));
+}
+
 function animateActiveModule(tab) {
   const section = $("module-" + tab);
   if (!section || uiPrefersReducedMotion()) return;
@@ -1172,7 +1211,6 @@ function setUserEditMsg(text, ok) {
   if (!el) return;
   el.textContent = text;
   el.className = ok === true ? "msg show ok" : ok === false ? "msg show err" : "msg";
-  if (ok === true || ok === false) announceInlineMessage(text, ok);
 }
 
 function setChatMsg(elId, text, ok) {
@@ -1180,7 +1218,6 @@ function setChatMsg(elId, text, ok) {
   if (!el) return;
   el.textContent = text;
   el.className = "msg show " + (ok ? "ok" : "err");
-  announceInlineMessage(text, ok);
 }
 
 function stopChatPoll() {
@@ -1225,6 +1262,10 @@ function formatChatTime(ts) {
   return `${d.getFullYear()}-${mm}-${dd} ${hh}:${mi}`;
 }
 
+function canRemoveContextAttachment(ref) {
+  return !!(ref && (ref.can_remove === true || ref.can_remove === 1 || ref.can_remove === "1" || ref.can_remove === "true"));
+}
+
 function renderChatRooms() {
   const wrap = $("chat-room-list");
   if (!wrap) return;
@@ -1242,8 +1283,9 @@ function renderChatRooms() {
     btn.className = "chat-room-item" + (Number(prevId) === Number(r.id) ? " active" : "");
     const lock = r.is_private ? "🔒 " : "";
     const passwordLabel = r.join_password_required ? " · 密碼" : "";
-    const memberCount = r.member_count ? ` · ${r.member_count}人` : "";
-    btn.textContent = `${lock}#${r.id} ${r.name}${memberCount}${passwordLabel}`;
+    const memberCount = r.hide_member_count ? "" : (r.member_count ? ` · ${r.member_count}人` : "");
+    const anonymousLabel = r.allow_anonymous && !r.is_private ? " · 可匿名" : "";
+    btn.textContent = `${lock}#${r.id} ${r.name}${memberCount}${anonymousLabel}${passwordLabel}`;
     btn.setAttribute("title", `聊天室持有者：${r.owner_username || "未知"}${r.is_private ? " · 私人訊息" : ""}${passwordLabel}`);
     btn.addEventListener("click", () => openChatRoom(r.id, true));
     row.appendChild(btn);
@@ -1266,18 +1308,21 @@ function renderChatRooms() {
 function renderChatMessages(messages) {
   const list = $("chat-room-messages");
   if (!list) return;
+  chatMessageCache = Array.isArray(messages) ? messages : [];
   if (!messages.length) {
     list.innerHTML = "<p style=\"color:var(--muted);\">目前還沒有訊息</p>";
     return;
   }
   list.innerHTML = messages.map((m) => {
-    const isSelf = String(m.sender || "") === String(currentUser || "");
+    const isSelf = !!m.is_self || String(m.sender || "") === String(currentUser || "");
     const cls = ["chat-msg"];
     const actions = [];
     if (isSelf) cls.push("self");
     if (!isSelf && m.id) actions.push(`<button class="chat-report-btn" type="button" data-report-message="${m.id}">檢舉</button>`);
+    if (m.can_edit) actions.push(`<button class="chat-edit-btn" type="button" data-edit-message="${m.id}">編輯</button>`);
     if (m.can_recall) actions.push(`<button class="chat-delete-btn" type="button" data-delete-message="${m.id}" data-recall-message="1">收回</button>`);
     else if (canDeleteChatMessage(m)) actions.push(`<button class="chat-delete-btn" type="button" data-delete-message="${m.id}">刪除</button>`);
+    const editedLabel = !m.is_revoked && m.edited_at ? `<small class="chat-edited-label">已編輯</small>` : "";
     const body = m.is_revoked
       ? `<div class="chat-revoked">訊息已收回</div>`
       : (m.message_type === "sticker"
@@ -1288,6 +1333,9 @@ function renderChatMessages(messages) {
           const name = file.original_filename_plain_for_public || file.file_id || "附件";
           const size = typeof formatDriveBytes === "function" ? formatDriveBytes(file.size_bytes || 0) : `${Number(file.size_bytes || 0)} bytes`;
           const warn = typeof driveFileNeedsWarning === "function" ? driveFileNeedsWarning(file) : false;
+          const removeButton = canRemoveContextAttachment(file)
+            ? `<button class="btn btn-danger chat-sticker-btn" type="button" data-drive-action="delete-context-attachment" data-ref-id="${sanitize(file.ref_id || file.id || "")}" data-context-type="chat_message" data-context-id="${sanitize(m.id || file.context_id || "")}" data-target-id="chat-messages">移除附件</button>`
+            : "";
           const imagePreview = typeof driveFileIsImage === "function" && typeof drivePreviewContentUrl === "function" && driveFileIsImage(file)
             ? `<button class="chat-message-image-preview" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(file.file_id || "")}" data-name="${sanitize(name)}"><img src="${sanitize(drivePreviewContentUrl(file.file_id || ""))}" alt="${sanitize(name)}" loading="lazy" /></button>`
             : "";
@@ -1301,17 +1349,23 @@ function renderChatMessages(messages) {
               <span class="chat-message-attachment-actions">
                 <button class="btn chat-sticker-btn" type="button" data-drive-action="preview" data-file-id="${sanitize(file.file_id || "")}">預覽</button>
                 <button class="btn chat-sticker-btn ${warn ? "btn-danger" : "btn-primary"}" type="button" data-drive-action="download" data-file-id="${sanitize(file.file_id || "")}" data-warn="${warn ? "1" : "0"}">下載</button>
-                <button class="btn btn-danger chat-sticker-btn" type="button" data-drive-action="delete-context-attachment" data-ref-id="${sanitize(file.ref_id || file.id || "")}" data-context-type="chat_message" data-context-id="${sanitize(m.id || file.context_id || "")}" data-target-id="chat-messages">移除附件</button>
+                ${removeButton}
               </span>
             </div>
           `;
         }).join("")}</div>`
       : "";
+    const senderOfficial = !!m.sender_is_official;
+    const senderClass = senderOfficial ? "chat-sender-official" : "";
+    const officialBadge = senderOfficial ? `<span class="chat-official-badge">（官方）</span>` : "";
+    const originalSender = m.sender_original && String(m.sender_original) !== String(m.sender || "")
+      ? `<small class="chat-original-sender">原發言者：${sanitize(m.sender_original)}</small>`
+      : "";
     return `
       <div class="${cls.join(" ")}">
         <div class="chat-msg-head">
           ${userAvatarMarkup(m.sender_id, m.sender || "系統", "user-avatar-sm", m.sender_avatar_file_id || "")}
-          <span class="meta"><strong>${sanitize(m.sender || "系統")}</strong><small>${sanitize(formatChatTime(m.created_at))}</small></span>
+          <span class="meta"><strong class="${senderClass}">${sanitize(m.sender || "系統")}${officialBadge}</strong><small>${sanitize(formatChatTime(m.created_at))}</small>${editedLabel}${originalSender}</span>
         </div>
         ${body}
         ${attachments}
@@ -1321,6 +1375,9 @@ function renderChatMessages(messages) {
   }).join("");
   list.querySelectorAll("button[data-report-message]").forEach((btn) => {
     btn.addEventListener("click", () => reportChatMessage(parseInt(btn.getAttribute("data-report-message"), 10)));
+  });
+  list.querySelectorAll("button[data-edit-message]").forEach((btn) => {
+    btn.addEventListener("click", () => editChatMessage(parseInt(btn.getAttribute("data-edit-message"), 10)));
   });
   list.querySelectorAll("button[data-delete-message]").forEach((btn) => {
     btn.addEventListener("click", () => deleteChatMessage(parseInt(btn.getAttribute("data-delete-message"), 10), btn.getAttribute("data-recall-message") === "1"));
@@ -1551,6 +1608,7 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleAccounts = $("tab-module-accounts");
   const tabModuleServer = $("tab-module-server");
   const tabModuleChat = $("tab-module-chat");
+  const tabModuleProfile = $("tab-module-profile");
   const tabModuleAnnouncements = $("tab-module-announcements");
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
@@ -1570,6 +1628,7 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleAccounts) tabModuleAccounts.style.display = canAccessModule("accounts") ? "" : "none";
   if (tabModuleServer) tabModuleServer.style.display = currentUser === "root" ? "" : "none";
   if (tabModuleChat) tabModuleChat.style.display = canAccessModule("chat") ? "" : "none";
+  if (tabModuleProfile) tabModuleProfile.style.display = canAccessModule("profile") ? "" : "none";
   if (tabModuleAnnouncements) tabModuleAnnouncements.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleCommunity) tabModuleCommunity.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleDrive) tabModuleDrive.style.display = canAccessModule("privacy_uploads") ? "" : "none";
@@ -1581,12 +1640,24 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
   if (tabModuleEconomy) tabModuleEconomy.style.display = canAccessModule("economy") ? "" : "none";
   if (tabModuleTrading) tabModuleTrading.style.display = (canAccessModule("economy") && canAccessModule("trading")) ? "" : "none";
-  if (tabModuleAppeals) tabModuleAppeals.style.display = (currentRole !== "super_admin" && canAccessModule("appeals")) ? "" : "none";
+  if (tabModuleAppeals) {
+    if (currentRole !== "super_admin" && canAccessModule("appeals")) {
+      tabModuleAppeals.style.display = "";
+    } else {
+      tabModuleAppeals.style.display = "none";
+    }
+  }
   if (typeof syncSidebarMenuVisibility === "function") {
     syncSidebarMenuVisibility();
     restoreSidebarState();
   }
-  if (appealsTab) appealsTab.style.display = (currentRole === "super_admin" && isFeatureEnabledForUi("feature_appeals_enabled", false)) ? "" : "none";
+  if (appealsTab) {
+    if (currentRole === "super_admin" && canAccessModule("appeals")) {
+      appealsTab.style.display = "";
+    } else {
+      appealsTab.style.display = "none";
+    }
+  }
   if (reportsTab) reportsTab.style.display = (currentRole === "super_admin" && isFeatureEnabledForUi("feature_reports_enabled", false)) ? "" : "none";
   if (governanceTab) governanceTab.style.display = ((currentRole === "manager" || currentRole === "super_admin") && isFeatureEnabledForUi("feature_member_governance_enabled", false)) ? "" : "none";
   if (noticesTab) noticesTab.style.display = ((currentRole === "manager" || currentRole === "super_admin") && isFeatureEnabledForUi("feature_reports_notifications_enabled", false)) ? "" : "none";
@@ -1615,6 +1686,8 @@ function setAuthState(json, showLoginHero = false) {
     ? "accounts"
     : canAccessModule("chat")
       ? "chat"
+      : canAccessModule("profile")
+        ? "profile"
       : canAccessModule("community")
           ? "community"
             : canAccessModule("privacy_uploads")
@@ -1669,6 +1742,7 @@ function resetAuthState() {
     welcomeMsg.textContent = "歡迎回來！";
   }
   const moduleChat = $("module-chat");
+  const moduleProfile = $("module-profile");
   const moduleAnnouncements = $("module-announcements");
   const moduleCommunity = $("module-community");
   const moduleDrive = $("module-drive");
@@ -1684,6 +1758,7 @@ function resetAuthState() {
   const moduleServer = $("module-server");
   const moduleAppeals = $("module-appeals");
   if (moduleChat) moduleChat.classList.remove("active");
+  if (moduleProfile) moduleProfile.classList.remove("active");
   if (moduleAnnouncements) moduleAnnouncements.classList.remove("active");
   if (moduleCommunity) moduleCommunity.classList.remove("active");
   if (moduleDrive) moduleDrive.classList.remove("active");

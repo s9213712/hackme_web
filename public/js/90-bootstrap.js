@@ -1,8 +1,10 @@
 function bindUiEvents() {
   if (typeof decorateSidebarMenu === "function") decorateSidebarMenu();
+  if (typeof bindProfileFriendsControls === "function") bindProfileFriendsControls();
   const tabLogin    = $("tab-login");
   const tabRegister = $("tab-register");
   const tabModuleChat = $("tab-module-chat");
+  const tabModuleProfile = $("tab-module-profile");
   const tabModuleAnnouncements = $("tab-module-announcements");
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
@@ -132,6 +134,12 @@ function bindUiEvents() {
   const editSaveBtn = $("user-edit-save");
   const editCancelBtn = $("user-edit-cancel");
   const avatarUploadBtn = $("edit-user-avatar-upload");
+  const chatCreateToggleBtn = $("chat-create-room-toggle-btn");
+  const chatCreateCancelBtn = $("chat-create-room-cancel-btn");
+  const chatCreateCloseBtn = $("chat-create-room-close-btn");
+  const chatJoinOpenBtn = $("chat-join-room-open-btn");
+  const chatJoinCancelBtn = $("chat-join-room-cancel-btn");
+  const chatJoinCloseBtn = $("chat-join-room-close-btn");
   const chatCreateBtn = $("chat-create-room-btn");
   const chatJoinBtn = $("chat-join-room-btn");
   const chatRefreshRoomBtn = $("chat-room-refresh-btn");
@@ -225,6 +233,7 @@ function bindUiEvents() {
   if (tabLogin)    tabLogin.addEventListener("click",    () => showTab("login"));
   if (tabRegister) tabRegister.addEventListener("click", () => showTab("register"));
   if (tabModuleChat) tabModuleChat.addEventListener("click", () => switchModuleTab("chat"));
+  if (tabModuleProfile) tabModuleProfile.addEventListener("click", () => switchModuleTab("profile"));
   if (tabModuleAnnouncements) tabModuleAnnouncements.addEventListener("click", () => switchModuleTab("announcements"));
   if (tabModuleCommunity) tabModuleCommunity.addEventListener("click", () => switchModuleTab("community"));
   if (tabModuleDrive) tabModuleDrive.addEventListener("click", () => switchModuleTab("drive"));
@@ -262,7 +271,10 @@ function bindUiEvents() {
   if (tabNotices) tabNotices.addEventListener("click", () => switchAdminTab("notices"));
   if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchAdminTab("appeals"));
   if (tabReports)  tabReports.addEventListener("click",   () => switchAdminTab("reports"));
-  if (jobCenterRefreshBtn) jobCenterRefreshBtn.addEventListener("click", () => loadJobCenter());
+  if (jobCenterRefreshBtn) jobCenterRefreshBtn.addEventListener("click", () => {
+    if (typeof startJobCenterPolling === "function") startJobCenterPolling({ immediate: true, force: true });
+    else if (typeof loadJobCenter === "function") loadJobCenter();
+  });
   if (shareCenterRefreshBtn) shareCenterRefreshBtn.addEventListener("click", () => loadShareCenter());
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
@@ -283,7 +295,8 @@ function bindUiEvents() {
   if (notificationToggle) notificationToggle.addEventListener("click", toggleNotificationPanel);
   if (notificationReadAll) notificationReadAll.addEventListener("click", markAllNotificationsRead);
   if (selfEditBtn) selfEditBtn.addEventListener("click", () => {
-    if (currentUserId) editUser(currentUserId);
+    if (typeof openMyProfilePanel === "function") openMyProfilePanel("edit");
+    else if (currentUserId) editUser(currentUserId);
   });
   if (adminRefresh) adminRefresh.addEventListener("click", loadUsers);
   if (adminBulkApproveBtn) adminBulkApproveBtn.addEventListener("click", () => bulkReviewRegistrations("approve"));
@@ -293,6 +306,12 @@ function bindUiEvents() {
   if (adminOpenAddBtn) adminOpenAddBtn.addEventListener("click", showAdminAddDialog);
   if (adminAddBtn)  adminAddBtn.addEventListener("click",  createUserByAdmin);
   if (adminAddCancelBtn) adminAddCancelBtn.addEventListener("click", hideAdminAddDialog);
+  if (chatCreateToggleBtn) chatCreateToggleBtn.addEventListener("click", toggleChatCreatePanel);
+  if (chatCreateCancelBtn) chatCreateCancelBtn.addEventListener("click", () => setChatCreatePanelVisible(false));
+  if (chatCreateCloseBtn) chatCreateCloseBtn.addEventListener("click", () => setChatCreatePanelVisible(false));
+  if (chatJoinOpenBtn) chatJoinOpenBtn.addEventListener("click", toggleChatJoinPanel);
+  if (chatJoinCancelBtn) chatJoinCancelBtn.addEventListener("click", () => setChatJoinPanelVisible(false));
+  if (chatJoinCloseBtn) chatJoinCloseBtn.addEventListener("click", () => setChatJoinPanelVisible(false));
   if (chatCreateBtn) chatCreateBtn.addEventListener("click", createChatRoom);
   if (chatJoinBtn) chatJoinBtn.addEventListener("click", joinChatRoom);
   if (chatRefreshRoomBtn) chatRefreshRoomBtn.addEventListener("click", loadChatRooms);

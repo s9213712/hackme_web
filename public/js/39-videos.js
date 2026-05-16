@@ -493,6 +493,33 @@ function showVideoWatchView() {
   if (watch) watch.style.display = "";
 }
 
+function setVideoPublishPanelVisible(visible, options = {}) {
+  const panel = $("video-publish-panel");
+  const toggle = $("video-publish-open-btn");
+  const show = !!visible;
+  if (panel) {
+    panel.hidden = !show;
+    if ("open" in panel) panel.open = show;
+  }
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", show ? "true" : "false");
+    toggle.textContent = show ? "收起發布影音" : "發布影音";
+  }
+  if (show && options.loadFiles) {
+    loadVideoPublishFiles();
+  }
+  if (show && options.focus !== false) {
+    setTimeout(() => {
+      ($("video-upload-file") || $("video-publish-file") || $("video-publish-title"))?.focus?.();
+    }, 80);
+  }
+}
+
+function toggleVideoPublishPanel() {
+  const panel = $("video-publish-panel");
+  setVideoPublishPanelVisible(!!panel?.hidden, { loadFiles: true });
+}
+
 async function loadVideoPublishFiles() {
   const select = $("video-publish-file");
   if (!select) return;
@@ -508,8 +535,7 @@ async function loadVideoPublishFiles() {
       : `<option value="">雲端硬碟目前沒有可發布的影音檔</option>`;
     if (videoPendingPublishSelection?.fileId) {
       const applied = applyVideoPublishDriveSelection(videoPendingPublishSelection.fileId, videoPendingPublishSelection.title);
-      const panel = $("video-publish-panel");
-      if (applied && panel) panel.open = true;
+      if (applied) setVideoPublishPanelVisible(true, { focus: false });
     }
   } catch (err) {
     videoPublishDriveFiles = [];
@@ -533,8 +559,7 @@ async function openVideoPublishFromDrive(fileId, options = {}) {
     history.pushState(null, "", `${location.pathname}${location.search}#videos`);
   }
   showVideoBrowseView();
-  const panel = $("video-publish-panel");
-  if (panel) panel.open = true;
+  setVideoPublishPanelVisible(true, { focus: false });
   videoMsg("已帶入雲端硬碟影音，正在載入發布設定...", true);
   await loadVideoPublishFiles();
   const applied = applyVideoPublishDriveSelection(target, options.title || "");
@@ -542,7 +567,7 @@ async function openVideoPublishFromDrive(fileId, options = {}) {
     videoMsg("這個檔案不是可發布的影音檔，或目前帳號沒有檔案權限。", false);
     return false;
   }
-  if (panel) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  $("video-publish-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
   const titleInput = $("video-publish-title");
   const visibilityInput = $("video-publish-visibility");
   setTimeout(() => (titleInput || visibilityInput)?.focus?.(), 150);
@@ -689,6 +714,7 @@ async function publishVideoFromDrive() {
     } else {
       videoMsg("影音已發布", true);
     }
+    setVideoPublishPanelVisible(false, { focus: false });
     await loadVideoPublishFiles();
     await loadVideos(videoState.sort);
     openVideoDetail(json.video.id);
@@ -1690,7 +1716,8 @@ async function addVideoComment(videoId) {
   }
 }
 
-async function copyVideoLink(videoId) {
+async function copyVideoLink(videoId, options = {}) {
+  const button = options.button || null;
   const video = videoState.current && Number(videoState.current.id || 0) === Number(videoId || 0)
     ? videoState.current
     : (videoState.videos || []).find((item) => Number(item.id || 0) === Number(videoId || 0));
@@ -1708,7 +1735,9 @@ async function copyVideoLink(videoId) {
   try {
     await navigator.clipboard.writeText(url);
     videoMsg("連結已複製", true);
+    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "已完成複製", true);
   } catch (_) {
+    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "請在彈出視窗複製完整連結", false);
     window.prompt("分享連結", url);
   }
 }
@@ -1788,7 +1817,7 @@ document.addEventListener("click", (event) => {
   }
   const copy = event.target.closest("[data-video-copy-link]");
   if (copy) {
-    copyVideoLink(copy.dataset.videoCopyLink);
+    copyVideoLink(copy.dataset.videoCopyLink, { button: copy });
     return;
   }
   const prepare = event.target.closest("[data-video-prepare-stream]");
@@ -1829,9 +1858,11 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (event.target.closest("#video-publish-open-btn")) {
-    const panel = $("video-publish-panel");
-    if (panel) panel.open = !panel.open;
-    loadVideoPublishFiles();
+    toggleVideoPublishPanel();
+    return;
+  }
+  if (event.target.closest("#video-publish-cancel-btn")) {
+    setVideoPublishPanelVisible(false, { focus: false });
     return;
   }
   if (event.target.closest("#video-publish-btn")) {

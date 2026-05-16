@@ -185,6 +185,7 @@ function switchModuleTab(tab) {
   const canAccessCommunity = !!currentUser && canAccessModule("community");
   const canAccessAnnouncements = canAccessCommunity;
   const canAccessChat = !!currentUser && canAccessModule("chat");
+  const canAccessProfile = !!currentUser && canAccessModule("profile");
   const canAccessDrive = !!currentUser && canAccessModule("privacy_uploads");
   const canAccessAlbums = canAccessDrive && (!isFeatureEnabledForUi || isFeatureEnabledForUi("feature_storage_albums_enabled", false));
   const canAccessVideos = !!currentUser && canAccessModule("videos");
@@ -197,8 +198,9 @@ function switchModuleTab(tab) {
   const canAccessTrading = canAccessEconomy && canAccessModule("trading");
 
   let normTab = tab;
-  const fallbackModule = () => canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessVideos ? "videos" : (canAccessGames ? "games" : (canAccessJobs ? "jobs" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat")))))))));
+  const fallbackModule = () => canAccessChat ? "chat" : (canAccessProfile ? "profile" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessVideos ? "videos" : (canAccessGames ? "games" : (canAccessJobs ? "jobs" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))))));
   if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
+  if (tab === "profile" && !canAccessProfile) normTab = fallbackModule();
   if (tab === "dm") normTab = fallbackModule();
   if (tab === "announcements" && !canAccessAnnouncements) normTab = fallbackModule();
   if (tab === "community" && !canAccessCommunity) normTab = fallbackModule();
@@ -218,6 +220,7 @@ function switchModuleTab(tab) {
   const previousModuleTab = currentModuleTab;
   currentModuleTab = normTab;
   const modChat = $("module-chat");
+  const modProfile = $("module-profile");
   const modAnnouncements = $("module-announcements");
   const modCommunity = $("module-community");
   const modDrive = $("module-drive");
@@ -233,6 +236,7 @@ function switchModuleTab(tab) {
   const modServer = $("module-server");
   const modAppeals = $("module-appeals");
   const mChat = $("tab-module-chat");
+  const mProfile = $("tab-module-profile");
   const mAnnouncements = $("tab-module-announcements");
   const mCommunity = $("tab-module-community");
   const mDrive = $("tab-module-drive");
@@ -249,6 +253,7 @@ function switchModuleTab(tab) {
   const mAppeals = $("tab-module-appeals");
 
   if (modChat) modChat.classList.toggle("active", normTab === "chat");
+  if (modProfile) modProfile.classList.toggle("active", normTab === "profile");
   if (modAnnouncements) modAnnouncements.classList.toggle("active", normTab === "announcements");
   if (modCommunity) modCommunity.classList.toggle("active", normTab === "community");
   if (modDrive) modDrive.classList.toggle("active", normTab === "drive");
@@ -264,6 +269,7 @@ function switchModuleTab(tab) {
   if (modServer) modServer.classList.toggle("active", normTab === "server");
   if (modAppeals) modAppeals.classList.toggle("active", normTab === "appeals");
   if (mChat) mChat.classList.toggle("active", normTab === "chat");
+  if (mProfile) mProfile.classList.toggle("active", normTab === "profile");
   if (mAnnouncements) mAnnouncements.classList.toggle("active", normTab === "announcements");
   if (mCommunity) mCommunity.classList.toggle("active", normTab === "community");
   if (mDrive) mDrive.classList.toggle("active", normTab === "drive");
@@ -289,6 +295,9 @@ function switchModuleTab(tab) {
   if (normTab === "chat" && canAccessChat && typeof loadChatRooms === "function") {
     loadChatRooms();
   }
+  if (normTab === "profile" && canAccessProfile && typeof loadProfilePanel === "function") {
+    loadProfilePanel();
+  }
   if (normTab === "community" && canAccessCommunity) {
     loadCommunityHome();
   }
@@ -300,7 +309,7 @@ function switchModuleTab(tab) {
     switchServerTab(currentServerTab || "security");
   }
   if (normTab === "drive" && canAccessDrive) {
-    loadDriveDashboard();
+    loadDriveDashboard({ lazy: true });
   }
   if (normTab === "albums" && canAccessAlbums) {
     loadAlbumGallery();
@@ -311,8 +320,9 @@ function switchModuleTab(tab) {
   if (normTab === "games" && canAccessGames && typeof loadGameZone === "function") {
     loadGameZone();
   }
-  if (normTab === "jobs" && canAccessJobs && typeof loadJobCenter === "function") {
-    loadJobCenter();
+  if (normTab === "jobs" && canAccessJobs) {
+    if (typeof startJobCenterPolling === "function") startJobCenterPolling({ immediate: true });
+    else if (typeof loadJobCenter === "function") loadJobCenter();
   }
   if (normTab === "shares" && canAccessShareCenter && typeof loadShareCenter === "function") {
     loadShareCenter();
@@ -381,7 +391,11 @@ function renderAdminNoticeTargetOptions() {
     return true;
   });
   select.innerHTML = selectable.length
-    ? selectable.map((user) => `<option value="${user.id}">${sanitize(user.username || "-")}（#${user.id}）</option>`).join("")
+    ? selectable.map((user) => {
+        const marks = [user.is_friend ? "好友" : "", user.is_official ? "官方/管理者" : ""].filter(Boolean);
+        const suffix = marks.length ? ` · ${marks.join(" · ")}` : "";
+        return `<option value="${user.id}">${sanitize(user.username || "-")}（#${user.id}）${sanitize(suffix)}</option>`;
+      }).join("")
     : `<option value="">沒有可發送通知的成員</option>`;
 }
 
@@ -656,7 +670,8 @@ function renderGovernanceTargetOptions(selectedValue = null) {
     const role = user.username === "root" ? "root" : (user.role || "user");
     const status = user.status || "-";
     const level = user.effective_level || user.member_level || "";
-    const label = `${user.username || "unknown"} (#${id}) · ${role} · ${status}${level ? " · " + level : ""}`;
+    const relation = [user.is_friend ? "好友" : "", user.is_official ? "官方/管理者" : ""].filter(Boolean).join(" · ");
+    const label = `${user.username || "unknown"} (#${id}) · ${role} · ${status}${level ? " · " + level : ""}${relation ? " · " + relation : ""}`;
     return `<option value="${sanitize(id)}">${sanitize(label)}</option>`;
   }).join("");
   if (previous && targetRows.some((user) => String(user.id || "") === previous)) {
@@ -1403,8 +1418,6 @@ function rootTradingSettingsMsg(text, ok = true) {
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
   scheduleInlineMessageClear(msg, text, ok);
-  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
 }
 
 function rootTradingPriceFusionMsg(text, ok = true) {
@@ -1413,8 +1426,6 @@ function rootTradingPriceFusionMsg(text, ok = true) {
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
   scheduleInlineMessageClear(msg, text, ok);
-  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
 }
 
 function rootTradingBotAuditMsg(text, ok = true) {
@@ -1423,8 +1434,6 @@ function rootTradingBotAuditMsg(text, ok = true) {
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
   scheduleInlineMessageClear(msg, text, ok);
-  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
 }
 
 function rootTradingBackgroundMsg(text, ok = true) {
@@ -1433,8 +1442,6 @@ function rootTradingBackgroundMsg(text, ok = true) {
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
   scheduleInlineMessageClear(msg, text, ok);
-  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
 }
 
 function rootTradingBackgroundJobLabel(jobKey) {
@@ -1623,8 +1630,6 @@ function rootTradingMarketRegistryMsg(text, ok = true) {
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
   scheduleInlineMessageClear(msg, text, ok);
-  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
 }
 
 function rootTradingMarketRegistryEditorStatus(text, ok = true) {
@@ -1633,8 +1638,6 @@ function rootTradingMarketRegistryEditorStatus(text, ok = true) {
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
   scheduleInlineMessageClear(msg, text, ok);
-  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
 }
 
 function rootTradingMarketProviderStatus(text, ok = true) {
@@ -1643,8 +1646,6 @@ function rootTradingMarketProviderStatus(text, ok = true) {
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
   scheduleInlineMessageClear(msg, text, ok);
-  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
 }
 
 function tradingMarketRegistryCheckbox(id, value, fallback = false) {
@@ -2545,7 +2546,7 @@ function renderRootTradingFusionWeightInputs(settings = {}) {
 }
 
 function toggleRootTradingPriceFusionControls() {
-  const source = $("root-trading-price-source")?.value || "fused_weighted";
+  const source = $("root-trading-price-source")?.value || "binance_public_api";
   const mode = $("root-trading-price-fusion-mode")?.value || "auto_depth";
   const modeField = $("root-trading-price-fusion-mode-field");
   const weightsField = $("root-trading-price-fusion-weights-field");
@@ -2578,14 +2579,14 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-grid-fee-discount-percent")) $("root-trading-grid-fee-discount-percent").value = adminPercentValue(settings.grid_fee_discount_percent ?? 25, 25);
   if ($("root-trading-margin-long-financing-percent")) $("root-trading-margin-long-financing-percent").value = adminPercentValue(settings.margin_long_financing_percent ?? 90, 90);
   if ($("root-trading-short-collateral-percent")) $("root-trading-short-collateral-percent").value = adminPercentValue(settings.short_collateral_percent ?? 60, 60);
-  if ($("root-trading-price-source")) $("root-trading-price-source").value = settings.price_source || "fused_weighted";
+  if ($("root-trading-price-source")) $("root-trading-price-source").value = settings.price_source || "binance_public_api";
   if ($("root-trading-price-fusion-mode")) $("root-trading-price-fusion-mode").value = settings.price_fusion_mode || "auto_depth";
   if ($("root-trading-price-fusion-depth-band-percent")) $("root-trading-price-fusion-depth-band-percent").value = Number(settings.price_fusion_depth_band_percent ?? 1);
   if ($("root-trading-price-fusion-depth-levels")) $("root-trading-price-fusion-depth-levels").value = Number(settings.price_fusion_depth_levels ?? 100);
   if ($("root-trading-price-fusion-min-coverage-percent")) $("root-trading-price-fusion-min-coverage-percent").value = Number(settings.price_fusion_min_orderbook_coverage_percent ?? 0.5);
   if ($("root-trading-price-fusion-max-provider-weight")) $("root-trading-price-fusion-max-provider-weight").value = adminPercentValue(settings.price_fusion_max_single_provider_weight_percent ?? 40, 40);
-  if ($("root-trading-price-fusion-min-provider-count")) $("root-trading-price-fusion-min-provider-count").value = Number(settings.price_fusion_min_provider_count ?? 3);
-  if ($("root-trading-price-fusion-trade-min-provider-count")) $("root-trading-price-fusion-trade-min-provider-count").value = Number(settings.price_fusion_trade_min_provider_count ?? 2);
+  if ($("root-trading-price-fusion-min-provider-count")) $("root-trading-price-fusion-min-provider-count").value = Number(settings.price_fusion_min_provider_count ?? 1);
+  if ($("root-trading-price-fusion-trade-min-provider-count")) $("root-trading-price-fusion-trade-min-provider-count").value = Number(settings.price_fusion_trade_min_provider_count ?? 1);
   if ($("root-trading-warning-language")) $("root-trading-warning-language").value = settings.warning_language || "zh-TW";
   if ($("root-trading-price-degrade-pause-market-orders")) $("root-trading-price-degrade-pause-market-orders").checked = !!settings.price_degrade_pause_market_orders;
   if ($("root-trading-price-degrade-pause-bots")) $("root-trading-price-degrade-pause-bots").checked = !!settings.price_degrade_pause_bots;
@@ -2766,15 +2767,15 @@ async function saveRootTradingSettings() {
       grid_fee_discount_percent: adminInputPercent($("root-trading-grid-fee-discount-percent")?.value || 25),
       margin_long_financing_percent: adminInputPercent($("root-trading-margin-long-financing-percent")?.value || 90, 90),
       short_collateral_percent: adminInputPercent($("root-trading-short-collateral-percent")?.value || 60, 60),
-      price_source: ($("root-trading-price-source")?.value || "fused_weighted"),
+      price_source: ($("root-trading-price-source")?.value || "binance_public_api"),
       price_fusion_mode: ($("root-trading-price-fusion-mode")?.value || "auto_depth"),
       price_fusion_manual_weights: collectRootTradingFusionWeights(),
       price_fusion_depth_band_percent: Number($("root-trading-price-fusion-depth-band-percent")?.value || 1),
       price_fusion_depth_levels: Number($("root-trading-price-fusion-depth-levels")?.value || 100),
       price_fusion_min_orderbook_coverage_percent: Number($("root-trading-price-fusion-min-coverage-percent")?.value || 0.5),
       price_fusion_max_single_provider_weight_percent: adminInputPercent($("root-trading-price-fusion-max-provider-weight")?.value || 40),
-      price_fusion_min_provider_count: Number($("root-trading-price-fusion-min-provider-count")?.value || 3),
-      price_fusion_trade_min_provider_count: Number($("root-trading-price-fusion-trade-min-provider-count")?.value || 2),
+      price_fusion_min_provider_count: Number($("root-trading-price-fusion-min-provider-count")?.value || 1),
+      price_fusion_trade_min_provider_count: Number($("root-trading-price-fusion-trade-min-provider-count")?.value || 1),
       warning_language: ($("root-trading-warning-language")?.value || "zh-TW"),
       price_degrade_pause_market_orders: !!$("root-trading-price-degrade-pause-market-orders")?.checked,
       price_degrade_pause_bots: !!$("root-trading-price-degrade-pause-bots")?.checked,
@@ -4199,6 +4200,7 @@ async function loadSettings() {
     driveStorageStatus.style.color = driveStorage.restart_required ? "#ffb74d" : "var(--muted)";
   }
   if ($("s-module-chat-min-role")) $("s-module-chat-min-role").value = s.module_chat_min_role || "user";
+  if ($("s-module-profile-min-role")) $("s-module-profile-min-role").value = s.module_profile_min_role || "user";
   if ($("s-module-community-min-role")) $("s-module-community-min-role").value = s.module_community_min_role || "user";
   if ($("s-module-appeals-min-role")) $("s-module-appeals-min-role").value = s.module_appeals_min_role || "user";
   if ($("s-module-accounts-min-role")) $("s-module-accounts-min-role").value = s.module_accounts_min_role || "manager";
@@ -4486,8 +4488,6 @@ function setSettingsStatus(text = "", ok = null, options = {}) {
   el.style.color = ok === true ? "#4caf50" : ok === false ? "#ff4f6d" : "#ffb74d";
   const autoClearMs = Number(options.autoClearMs || 0);
   scheduleInlineMessageClear(el, text, ok, autoClearMs > 0 ? { duration: autoClearMs } : { persistent: ok === null });
-  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
-  announceInlineMessage(text, ok);
   if (autoClearMs > 0) {
     const expectedText = text;
     settingsStatusAutoClearTimer = setTimeout(() => {
@@ -5891,6 +5891,7 @@ async function saveSettings() {
     snapshot_daily_auto_enabled: !!$("s-snapshot-daily-auto-enabled")?.checked,
     snapshot_daily_time: $("s-snapshot-daily-time")?.value || "03:00",
     module_chat_min_role: $("s-module-chat-min-role")?.value || "user",
+    module_profile_min_role: $("s-module-profile-min-role")?.value || "user",
     module_community_min_role: $("s-module-community-min-role")?.value || "user",
     module_appeals_min_role: $("s-module-appeals-min-role")?.value || "user",
     module_accounts_min_role: $("s-module-accounts-min-role")?.value || "manager",

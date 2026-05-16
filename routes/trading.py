@@ -1780,13 +1780,36 @@ def register_trading_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    def root_trading_snapshot_response(snapshot_key):
+        snapshot = trading_service.get_root_trading_snapshot(snapshot_key=snapshot_key)
+        if not snapshot.get("ok"):
+            return json_resp({
+                "ok": False,
+                "msg": snapshot.get("msg") or "交易報表快照尚未產生",
+                "snapshot": {
+                    "snapshot_key": snapshot_key,
+                    "missing": True,
+                },
+            }, 503)
+        payload = snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {}
+        response_payload = dict(payload)
+        response_payload.setdefault("ok", True)
+        response_payload["snapshot"] = {
+            "snapshot_key": snapshot_key,
+            "generated_at": snapshot.get("generated_at"),
+            "source_job_key": snapshot.get("source_job_key"),
+            "source_run_uuid": snapshot.get("source_run_uuid"),
+            "snapshot_backed": True,
+        }
+        return json_resp(response_payload)
+
     @app.route("/api/admin/trading/report", methods=["GET"])
     @require_csrf_safe
     def admin_trading_report():
         actor, err = root_or_403()
         if err:
             return err
-        return json_resp({"ok": True, "report": trading_service.root_report()})
+        return root_trading_snapshot_response("root_report")
 
     @app.route("/api/root/trading/sitewide/pools", methods=["GET"])
     @require_csrf_safe
@@ -1794,81 +1817,7 @@ def register_trading_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
-        conn = trading_service.get_db()
-        try:
-            trading_service.ensure_schema(conn)
-            reserve = dict(trading_service._reserve(conn))
-            funding_pool = trading_service._funding_pool_payload(conn)
-            fee_summary = dict(conn.execute(
-                """
-                SELECT
-                    COUNT(*) AS fill_count,
-                    COALESCE(SUM(fee_points), 0) AS total_fee_points,
-                    COALESCE(SUM(reserve_delta_points), 0) AS reserve_delta_points,
-                    MAX(created_at) AS latest_fill_at
-                FROM trading_fills
-                """
-            ).fetchone())
-            lending_summary = dict(conn.execute(
-                """
-                SELECT
-                    COALESCE(SUM(CASE WHEN event_type IN ('margin_principal_lent', 'margin_collateral_withdraw_principal_lent') THEN ABS(delta_points) ELSE 0 END), 0) AS lent_out_points,
-                    COALESCE(SUM(CASE WHEN event_type='margin_principal_repaid' THEN delta_points ELSE 0 END), 0) AS repaid_points,
-                    COALESCE(SUM(CASE WHEN event_type='margin_interest_retained' THEN delta_points ELSE 0 END), 0) AS interest_retained_points,
-                    COALESCE(SUM(CASE WHEN event_type IN ('fee_retained', 'margin_fee_retained') THEN delta_points ELSE 0 END), 0) AS fee_retained_points,
-                    COALESCE(SUM(CASE WHEN event_type='margin_profit_paid' THEN ABS(delta_points) ELSE 0 END), 0) AS profit_paid_points,
-                    COUNT(*) AS reserve_event_count,
-                    MAX(created_at) AS latest_reserve_event_at
-                FROM trading_reserve_pool_events
-                """
-            ).fetchone())
-            open_margin = dict(conn.execute(
-                """
-                SELECT
-                    COUNT(*) AS open_margin_positions,
-                    COALESCE(SUM(principal_points), 0) AS open_principal_points,
-                    COALESCE(SUM(collateral_points), 0) AS open_collateral_points,
-                    COALESCE(SUM(interest_points - interest_paid_points), 0) AS open_interest_due_points,
-                    COALESCE(SUM(interest_carry_micropoints), 0) AS interest_carry_micropoints
-                FROM trading_margin_positions
-                WHERE status='open'
-                """
-            ).fetchone()) if table_columns(conn, "trading_margin_positions") else {
-                "open_margin_positions": 0,
-                "open_principal_points": 0,
-                "open_collateral_points": 0,
-                "open_interest_due_points": 0,
-                "interest_carry_micropoints": 0,
-            }
-            reserve_events = [
-                dict(row)
-                for row in conn.execute(
-                    """
-                    SELECT e.*, actor.username AS actor_username, source.username AS source_username
-                    FROM trading_reserve_pool_events e
-                    LEFT JOIN users actor ON actor.id=e.actor_user_id
-                    LEFT JOIN users source ON source.id=e.source_user_id
-                    ORDER BY e.id DESC
-                    LIMIT 30
-                    """
-                ).fetchall()
-            ]
-            return json_resp({
-                "ok": True,
-                "pools": {
-                    "reserve_pool": reserve,
-                    "funding_pool": funding_pool,
-                    "fee_summary": fee_summary,
-                    "lending_summary": lending_summary,
-                    "open_margin_summary": open_margin,
-                    "reserve_events": reserve_events,
-                    "read_only": True,
-                },
-            })
-        except Exception as exc:
-            return service_error(exc)
-        finally:
-            conn.close()
+        return root_trading_snapshot_response("sitewide_pools")
 
     @app.route("/api/root/trading/sitewide/user-positions", methods=["GET"])
     @require_csrf_safe
@@ -1876,273 +1825,7 @@ def register_trading_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
-        conn = trading_service.get_db()
-        try:
-            trading_service.ensure_schema(conn)
-            wallet_rows = []
-            if table_columns(conn, "points_wallets"):
-                wallet_summary = dict(conn.execute(
-                    """
-                    SELECT
-                        COUNT(*) AS user_count,
-                        COALESCE(SUM(w.soft_balance + w.hard_balance), 0) AS total_available_points,
-                        COALESCE(SUM(w.soft_frozen + w.hard_frozen), 0) AS total_frozen_points,
-                        COALESCE(SUM(w.soft_balance + w.hard_balance + w.soft_frozen + w.hard_frozen), 0) AS total_outstanding_points
-                    FROM users u
-                    LEFT JOIN points_wallets w ON w.user_id=u.id
-                    WHERE COALESCE(LOWER(u.username), '') != 'root'
-                    """
-                ).fetchone())
-                wallet_rows = [
-                    dict(row)
-                    for row in conn.execute(
-                        """
-                        SELECT
-                            u.id AS user_id,
-                            u.username,
-                            u.role,
-                            u.status AS account_status,
-                            COALESCE(w.soft_balance + w.hard_balance, 0) AS points_balance,
-                            COALESCE(w.soft_frozen + w.hard_frozen, 0) AS points_frozen,
-                            COALESCE(w.soft_balance + w.hard_balance + w.soft_frozen + w.hard_frozen, 0) AS outstanding_points,
-                            COALESCE(w.wallet_status, 'missing') AS wallet_status,
-                            COALESCE(w.risk_level, 'normal') AS risk_level,
-                            w.updated_at AS wallet_updated_at
-                        FROM users u
-                        LEFT JOIN points_wallets w ON w.user_id=u.id
-                        WHERE COALESCE(LOWER(u.username), '') != 'root'
-                        ORDER BY outstanding_points DESC, u.id ASC
-                        LIMIT 100
-                        """
-                    ).fetchall()
-                ]
-            else:
-                wallet_summary = dict(conn.execute(
-                    """
-                    SELECT
-                        COUNT(*) AS user_count,
-                        0 AS total_available_points,
-                        0 AS total_frozen_points,
-                        0 AS total_outstanding_points
-                    FROM users
-                    WHERE COALESCE(LOWER(username), '') != 'root'
-                    """
-                ).fetchone())
-                wallet_rows = [
-                    {
-                        "user_id": row["id"],
-                        "username": row["username"],
-                        "role": row["role"],
-                        "account_status": row["status"],
-                        "points_balance": 0,
-                        "points_frozen": 0,
-                        "outstanding_points": 0,
-                        "wallet_status": "missing",
-                        "risk_level": "normal",
-                        "wallet_updated_at": None,
-                    }
-                    for row in conn.execute(
-                        """
-                        SELECT id, username, role, status
-                        FROM users
-                        WHERE COALESCE(LOWER(username), '') != 'root'
-                        ORDER BY id ASC
-                        LIMIT 100
-                        """
-                    ).fetchall()
-                ]
-            spot_summary = dict(conn.execute(
-                """
-                SELECT COUNT(*) AS position_count
-                FROM trading_spot_positions p
-                JOIN users u ON u.id=p.user_id
-                WHERE COALESCE(LOWER(u.username), '') != 'root'
-                  AND (p.quantity_units > 0 OR p.locked_quantity_units > 0)
-                """
-            ).fetchone())
-            spot_positions = [
-                {
-                    **dict(row),
-                    "quantity": units_to_quantity(row["quantity_units"]),
-                    "locked_quantity": units_to_quantity(row["locked_quantity_units"]),
-                }
-                for row in conn.execute(
-                    """
-                    SELECT p.*, u.username
-                    FROM trading_spot_positions p
-                    JOIN users u ON u.id=p.user_id
-                    WHERE COALESCE(LOWER(u.username), '') != 'root'
-                      AND (p.quantity_units > 0 OR p.locked_quantity_units > 0)
-                    ORDER BY p.updated_at DESC, p.user_id ASC, p.market_symbol ASC
-                    LIMIT 200
-                    """
-                    ).fetchall()
-            ]
-            margin_summary = dict(conn.execute(
-                """
-                SELECT COUNT(*) AS position_count
-                FROM trading_margin_positions p
-                JOIN users u ON u.id=p.user_id
-                WHERE COALESCE(LOWER(u.username), '') != 'root'
-                  AND p.status='open'
-                """
-            ).fetchone()) if table_columns(conn, "trading_margin_positions") else {"position_count": 0}
-            margin_positions = [
-                {
-                    **dict(row),
-                    "quantity": units_to_quantity(row["quantity_units"]),
-                    "interest_due_points": max(0, int(row["interest_points"] or 0) - int(row["interest_paid_points"] or 0)),
-                }
-                for row in conn.execute(
-                    """
-                    SELECT p.*, u.username
-                    FROM trading_margin_positions p
-                    JOIN users u ON u.id=p.user_id
-                    WHERE COALESCE(LOWER(u.username), '') != 'root'
-                      AND p.status='open'
-                    ORDER BY p.updated_at DESC, p.user_id ASC
-                    LIMIT 200
-                    """
-                ).fetchall()
-            ] if table_columns(conn, "trading_margin_positions") else []
-            order_summary = dict(conn.execute(
-                """
-                SELECT
-                    COUNT(*) AS open_orders,
-                    COALESCE(SUM(frozen_points + trial_frozen_points + chain_frozen_points), 0) AS frozen_order_points,
-                    COALESCE(SUM(quantity_units - filled_quantity_units), 0) AS remaining_quantity_units
-                FROM trading_orders o
-                JOIN users u ON u.id=o.user_id
-                WHERE COALESCE(LOWER(u.username), '') != 'root'
-                  AND o.status IN ('open', 'partially_filled')
-                """
-            ).fetchone())
-            bot_summary = dict(conn.execute(
-                """
-                SELECT
-                    COUNT(*) AS bot_count,
-                    COALESCE(SUM(CASE WHEN b.enabled=1 THEN 1 ELSE 0 END), 0) AS enabled_bot_count
-                FROM trading_bots b
-                JOIN users u ON u.id=b.user_id
-                WHERE COALESCE(LOWER(u.username), '') != 'root'
-                """
-            ).fetchone()) if table_columns(conn, "trading_bots") else {"bot_count": 0, "enabled_bot_count": 0}
-            grid_bot_summary = dict(conn.execute(
-                """
-                SELECT
-                    COUNT(*) AS grid_bot_count,
-                    COALESCE(SUM(CASE WHEN gb.enabled=1 THEN 1 ELSE 0 END), 0) AS enabled_grid_bot_count
-                FROM trading_grid_bots gb
-                JOIN users u ON u.id=gb.user_id
-                WHERE COALESCE(LOWER(u.username), '') != 'root'
-                """
-            ).fetchone()) if table_columns(conn, "trading_grid_bots") else {"grid_bot_count": 0, "enabled_grid_bot_count": 0}
-            bots = [
-                dict(row)
-                for row in conn.execute(
-                    """
-                    SELECT
-                        b.bot_uuid,
-                        b.user_id,
-                        u.username,
-                        b.bot_type,
-                        b.name,
-                        b.market_symbol,
-                        b.side,
-                        b.order_type,
-                        b.quantity_text,
-                        b.limit_price_points,
-                        b.trigger_type,
-                        b.trigger_price_points,
-                        b.enabled,
-                        b.run_count,
-                        b.max_runs,
-                        b.cooldown_seconds,
-                        b.interval_hours,
-                        b.budget_points,
-                        b.stop_loss_percent,
-                        b.take_profit_percent,
-                        b.last_run_at,
-                        b.last_error,
-                        b.updated_at
-                    FROM trading_bots b
-                    JOIN users u ON u.id=b.user_id
-                    WHERE COALESCE(LOWER(u.username), '') != 'root'
-                    ORDER BY b.enabled DESC, b.updated_at DESC, b.id DESC
-                    LIMIT 200
-                    """
-                ).fetchall()
-            ] if table_columns(conn, "trading_bots") else []
-            grid_bots = [
-                dict(row)
-                for row in conn.execute(
-                    """
-                    SELECT
-                        gb.bot_uuid,
-                        gb.user_id,
-                        u.username,
-                        'grid' AS bot_type,
-                        gb.name,
-                        gb.market_symbol,
-                        gb.enabled,
-                        gb.total_profit_points,
-                        gb.total_trades,
-                        gb.initial_price_points,
-                        gb.lower_price_points,
-                        gb.upper_price_points,
-                        gb.grid_count,
-                        gb.order_amount_points,
-                        gb.stop_loss_percent,
-                        gb.take_profit_percent,
-                        gb.last_scan_at,
-                        gb.last_error,
-                        gb.updated_at,
-                        COALESCE(SUM(CASE WHEN go.status='open' THEN 1 ELSE 0 END), 0) AS open_grid_orders,
-                        COALESCE(SUM(CASE WHEN go.status='filled' THEN 1 ELSE 0 END), 0) AS filled_grid_orders
-                    FROM trading_grid_bots gb
-                    JOIN users u ON u.id=gb.user_id
-                    LEFT JOIN trading_grid_orders go ON go.grid_bot_id=gb.id
-                    WHERE COALESCE(LOWER(u.username), '') != 'root'
-                    GROUP BY gb.id
-                    ORDER BY gb.enabled DESC, gb.updated_at DESC, gb.id DESC
-                    LIMIT 200
-                    """
-                ).fetchall()
-            ] if table_columns(conn, "trading_grid_bots") else []
-            return json_resp({
-                "ok": True,
-                "positions": {
-                    "summary": {
-                        "user_count": int(wallet_summary["user_count"] or 0),
-                        "total_available_points": int(wallet_summary["total_available_points"] or 0),
-                        "total_frozen_points": int(wallet_summary["total_frozen_points"] or 0),
-                        "total_outstanding_points": int(wallet_summary["total_outstanding_points"] or 0),
-                        "spot_position_count": int(spot_summary["position_count"] or 0),
-                        "margin_position_count": int(margin_summary["position_count"] or 0),
-                        "open_order_count": int(order_summary["open_orders"] or 0),
-                        "frozen_order_points": int(order_summary["frozen_order_points"] or 0),
-                        "remaining_order_quantity": units_to_quantity(order_summary["remaining_quantity_units"]),
-                        "bot_count": int(bot_summary["bot_count"] or 0),
-                        "enabled_bot_count": int(bot_summary["enabled_bot_count"] or 0),
-                        "grid_bot_count": int(grid_bot_summary["grid_bot_count"] or 0),
-                        "enabled_grid_bot_count": int(grid_bot_summary["enabled_grid_bot_count"] or 0),
-                        "total_bot_count": int(bot_summary["bot_count"] or 0) + int(grid_bot_summary["grid_bot_count"] or 0),
-                        "total_enabled_bot_count": int(bot_summary["enabled_bot_count"] or 0) + int(grid_bot_summary["enabled_grid_bot_count"] or 0),
-                        "root_simulated_excluded": True,
-                    },
-                    "wallets": wallet_rows,
-                    "spot_positions": spot_positions,
-                    "margin_positions": margin_positions,
-                    "bots": bots,
-                    "grid_bots": grid_bots,
-                    "order_summary": order_summary,
-                    "read_only": True,
-                },
-            })
-        except Exception as exc:
-            return service_error(exc)
-        finally:
-            conn.close()
+        return root_trading_snapshot_response("sitewide_user_positions")
 
     @app.route("/api/root/trading/settings", methods=["GET"])
     @require_csrf_safe
@@ -2195,22 +1878,24 @@ def register_trading_routes(app, deps):
         if str(data.get("confirm") or "") != "RUN_TRADING_JOB_ONCE":
             return json_resp({"ok": False, "msg": "confirm 必須為 RUN_TRADING_JOB_ONCE"}, 400)
         try:
-            result = trading_service.run_background_job_once(
+            result = trading_service.enqueue_background_job_once(
                 job_key=job_key,
-                get_system_settings=get_system_settings,
-                get_runtime_server_mode=get_runtime_server_mode,
-                owner=f"root:{actor_value(actor, 'username', 'root')}",
+                requested_by=actor,
                 force=True,
             )
             audit(
-                "TRADING_BACKGROUND_JOB_RUN_ONCE",
+                "TRADING_BACKGROUND_JOB_RUN_ONCE_ENQUEUED",
                 get_client_ip(),
                 user=actor_value(actor, "username", "root"),
                 success=bool(result.get("ok")),
                 ua=get_ua(),
-                detail=json.dumps({"job_key": job_key, "status": result.get("status")}, ensure_ascii=False),
+                detail=json.dumps({
+                    "job_key": job_key,
+                    "queue_uuid": result.get("queue_uuid"),
+                    "status": result.get("status"),
+                }, ensure_ascii=False),
             )
-            return json_resp(result)
+            return json_resp(result, 202)
         except Exception as exc:
             return service_error(exc)
 

@@ -1,9 +1,11 @@
 import hashlib
 import hmac
 import json
+import os
 import random
 import secrets
 import sqlite3
+import threading
 import time
 from datetime import datetime, timedelta
 from functools import wraps
@@ -38,6 +40,39 @@ _hasher = argon2.PasswordHasher(time_cost=3, memory_cost=65536,
                                 parallelism=4, hash_len=32, salt_len=16)
 
 
+def _env_int(name, default, *, minimum=1, maximum=64):
+    try:
+        value = int(str(os.environ.get(name, "")).strip())
+    except (TypeError, ValueError):
+        value = int(default)
+    return max(int(minimum), min(int(maximum), value))
+
+
+def _env_float(name, default, *, minimum=0.1, maximum=120.0):
+    try:
+        value = float(str(os.environ.get(name, "")).strip())
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(float(minimum), min(float(maximum), value))
+
+
+_ARGON2_VERIFY_CONCURRENCY = _env_int(
+    "HTML_LEARNING_ARGON2_VERIFY_CONCURRENCY",
+    min(4, os.cpu_count() or 1),
+    minimum=1,
+    maximum=16,
+)
+_ARGON2_VERIFY_TIMEOUT_SECONDS = _env_float(
+    "HTML_LEARNING_ARGON2_VERIFY_TIMEOUT_SECONDS",
+    30.0,
+    minimum=1.0,
+    maximum=120.0,
+)
+_ARGON2_VERIFY_SEMAPHORE = threading.BoundedSemaphore(_ARGON2_VERIFY_CONCURRENCY)
+_SESSION_COLUMNS_CACHE = {"columns": None}
+_SESSION_COLUMNS_LOCK = threading.RLock()
+
+
 def _is_sqlite_locked_error(exc):
     return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
 
@@ -67,6 +102,8 @@ def configure_auth_service(
         "tester_token_user_lookup": tester_token_user_lookup,
         "get_runtime_server_mode": get_runtime_server_mode,
     })
+    with _SESSION_COLUMNS_LOCK:
+        _SESSION_COLUMNS_CACHE["columns"] = None
 
 
 def _is_superweak_csrf_bypass():
@@ -169,6 +206,20 @@ def _auth_write(operation, *, attempts=5, delay_seconds=0.1):
     return None
 
 
+def _session_columns(auth_conn):
+    with _SESSION_COLUMNS_LOCK:
+        cached = _SESSION_COLUMNS_CACHE.get("columns")
+        if cached is not None:
+            return cached
+    try:
+        columns = frozenset(item["name"] for item in auth_conn.execute("PRAGMA table_info(sessions)").fetchall())
+    except Exception:
+        columns = frozenset()
+    with _SESSION_COLUMNS_LOCK:
+        _SESSION_COLUMNS_CACHE["columns"] = columns
+    return columns
+
+
 def record_login_attempt(*, user_id, ip_address, user_agent, success, attempted_at):
     def _write(conn):
         conn.execute(
@@ -243,6 +294,9 @@ def hash_password(pw):
 
 
 def verify_password(h, p):
+    acquired = _ARGON2_VERIFY_SEMAPHORE.acquire(timeout=_ARGON2_VERIFY_TIMEOUT_SECONDS)
+    if not acquired:
+        return False
     try:
         return _hasher.verify(h, p)
     except argon2.exceptions.VerifyMismatchError:
@@ -255,6 +309,8 @@ def verify_password(h, p):
         return False
     except Exception:
         return False
+    finally:
+        _ARGON2_VERIFY_SEMAPHORE.release()
 
 
 def make_token(username):
@@ -530,28 +586,56 @@ def get_request_csrf_token():
     return ""
 
 
-def db_save_session(user_id, token, ip, ua):
+def _normalize_session_allowed_features(allowed_features):
+    if not allowed_features:
+        return []
+    if isinstance(allowed_features, str):
+        items = allowed_features.replace("\n", ",").split(",")
+    else:
+        try:
+            items = list(allowed_features)
+        except Exception:
+            items = []
+    normalized = []
+    for item in items:
+        key = str(item or "").strip()
+        if key and key not in normalized:
+            normalized.append(key)
+    return normalized
+
+
+def db_save_session(user_id, token, ip, ua, *, auth_scope="", allowed_features=None):
     now = datetime.now().isoformat()
     expires = (datetime.now() + timedelta(seconds=_STATE["session_ttl"])).isoformat()
     def _write(conn):
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
         session_epoch = _current_security_epoch(conn)
+        auth_scope_value = str(auth_scope or "").strip()
+        allowed_features_json = json.dumps(_normalize_session_allowed_features(allowed_features), ensure_ascii=True, sort_keys=True)
+        optional_cols = []
+        optional_values = []
+        if "auth_scope" in cols:
+            optional_cols.append("auth_scope")
+            optional_values.append(auth_scope_value)
+        if "allowed_features_json" in cols:
+            optional_cols.append("allowed_features_json")
+            optional_values.append(allowed_features_json)
         if "device_info" in cols:
+            cols_sql = ["user_id", "token_hash", "ip_address", "user_agent", "device_info", "expires_at", "last_seen"]
+            values = [user_id, _hash_token(token), ip, ua, _device_info_from_user_agent(ua), expires, now]
             if "session_epoch" in cols:
-                conn.execute(
-                    "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, device_info, expires_at, last_seen, session_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (user_id, _hash_token(token), ip, ua, _device_info_from_user_agent(ua), expires, now, session_epoch)
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, device_info, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (user_id, _hash_token(token), ip, ua, _device_info_from_user_agent(ua), expires, now)
-                )
+                cols_sql.append("session_epoch")
+                values.append(session_epoch)
         else:
-            conn.execute(
-                "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, _hash_token(token), ip, ua, expires, now)
-            )
+            cols_sql = ["user_id", "token_hash", "ip_address", "user_agent", "expires_at", "last_seen"]
+            values = [user_id, _hash_token(token), ip, ua, expires, now]
+        cols_sql.extend(optional_cols)
+        values.extend(optional_values)
+        placeholders = ", ".join("?" for _ in values)
+        conn.execute(
+            f"INSERT INTO sessions ({', '.join(cols_sql)}) VALUES ({placeholders})",
+            tuple(values),
+        )
     _auth_write(_write)
 
 
@@ -600,13 +684,15 @@ def db_get_user_from_token(token):
     try:
         now = datetime.now()
         now_iso = now.isoformat()
-        try:
-            session_cols = {item["name"] for item in auth_conn.execute("PRAGMA table_info(sessions)").fetchall()}
-        except Exception:
-            session_cols = set()
+        session_cols = _session_columns(auth_conn)
         session_epoch_expr = "s.session_epoch" if "session_epoch" in session_cols else "0"
+        auth_scope_expr = "s.auth_scope" if "auth_scope" in session_cols else "''"
+        allowed_features_expr = "s.allowed_features_json" if "allowed_features_json" in session_cols else "'[]'"
         row = auth_conn.execute(
-            f"SELECT s.id, s.user_id, s.last_seen, s.ip_address, s.user_agent, COALESCE({session_epoch_expr}, 0) AS session_epoch "
+            f"SELECT s.id, s.user_id, s.last_seen, s.ip_address, s.user_agent, "
+            f"COALESCE({session_epoch_expr}, 0) AS session_epoch, "
+            f"COALESCE({auth_scope_expr}, '') AS auth_scope, "
+            f"COALESCE({allowed_features_expr}, '[]') AS allowed_features_json "
             "FROM sessions s "
             "WHERE s.token_hash=? AND s.expires_at>? AND COALESCE(s.is_revoked, 0)=0",
             (_hash_token(token), now_iso)
@@ -694,6 +780,18 @@ def db_get_user_from_token(token):
                 auth_conn.commit()
             except sqlite3.OperationalError:
                 auth_conn.rollback()
+        if has_request_context():
+            allowed_features = []
+            try:
+                parsed_features = json.loads(str(row["allowed_features_json"] or "[]"))
+                if isinstance(parsed_features, list):
+                    allowed_features = [str(item).strip() for item in parsed_features if str(item).strip()]
+            except Exception:
+                allowed_features = []
+            request.environ["hackme_web.session_meta"] = {
+                "auth_scope": str(row["auth_scope"] or "").strip(),
+                "allowed_features": allowed_features,
+            }
         return username
     finally:
         auth_conn.close()
@@ -711,4 +809,17 @@ def get_current_user_ctx():
                 username = None
     if not username:
         return None
-    return _STATE["get_user_by_username"](username)
+    user = _STATE["get_user_by_username"](username)
+    if user and has_request_context():
+        meta = request.environ.get("hackme_web.session_meta")
+        if isinstance(meta, dict):
+            try:
+                user_payload = dict(user)
+                user_payload["_auth_scope"] = str(meta.get("auth_scope") or "")
+                user_payload["_allowed_features"] = list(meta.get("allowed_features") or [])
+                user_payload["auth_scope"] = user_payload["_auth_scope"]
+                user_payload["allowed_features"] = user_payload["_allowed_features"]
+                return user_payload
+            except Exception:
+                return user
+    return user

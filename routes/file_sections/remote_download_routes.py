@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 import threading
+import urllib.parse
 import uuid
 from datetime import datetime
 
@@ -48,6 +49,28 @@ def register_file_remote_download_routes(app, ctx):
     remote_download_capabilities = ctx["remote_download_capabilities"]
     validate_remote_url = ctx["validate_remote_url"]
     validate_torrent_file_trackers = ctx.get("validate_torrent_file_trackers")
+
+    def _availability_score(source_type, url="", tracker_report=None):
+        source_type = str(source_type or "direct")
+        if source_type == "direct":
+            return 900, "direct link"
+        if source_type == "torrent_file":
+            trackers = tracker_report.get("trackers") if isinstance(tracker_report, dict) else []
+            count = len([item for item in trackers if str(item or "").strip()])
+            return min(850, 160 + count * 25), f"torrent trackers={count}"
+        if source_type == "magnet":
+            parsed = urllib.parse.urlparse(str(url or ""))
+            params = urllib.parse.parse_qs(parsed.query)
+            trackers = [item for item in params.get("tr", []) if str(item or "").strip()]
+            score = 90 + min(12, len(set(trackers))) * 25
+            if params.get("dn"):
+                score += 20
+            if params.get("xl"):
+                score += 20
+            return min(780, score), f"magnet trackers={len(set(trackers))}"
+        if source_type == "torrent_url":
+            return 130, "torrent url"
+        return 80, source_type
     RemoteDownloadError = ctx["RemoteDownloadError"]
 
     def _actor_snapshot(actor):
@@ -104,6 +127,7 @@ def register_file_remote_download_routes(app, ctx):
             source_type = "direct"
         privacy_mode = str(data.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
         virtual_path = str(data.get("virtual_path") or "").strip()
+        availability_score, availability_hint = _availability_score(source_type, url)
         task_id = uuid.uuid4().hex
         now = datetime.now().isoformat()
         task = {
@@ -133,6 +157,8 @@ def register_file_remote_download_routes(app, ctx):
             "error": "",
             "file": None,
             "storage_file": None,
+            "availability_score": availability_score,
+            "availability_hint": availability_hint,
             "ip": get_client_ip(),
             "ua": get_ua(),
             "created_at": now,
@@ -179,14 +205,16 @@ def register_file_remote_download_routes(app, ctx):
             if torrent_size > 2 * 1024 * 1024:
                 shutil.rmtree(tmpdir, ignore_errors=True)
                 return json_resp({"ok": False, "msg": "BT 種子檔太大，請上傳 2MB 以內的 .torrent"}), 400
+            tracker_report = None
             if validate_torrent_file_trackers:
                 try:
-                    validate_torrent_file_trackers(torrent_path)
+                    tracker_report = validate_torrent_file_trackers(torrent_path)
                 except RemoteDownloadError as exc:
                     shutil.rmtree(tmpdir, ignore_errors=True)
                     return json_resp({"ok": False, "msg": str(exc)}), 400
             privacy_mode = str(request.form.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
             virtual_path = str(request.form.get("virtual_path") or "").strip()
+            availability_score, availability_hint = _availability_score("torrent_file", f"BT 檔案：{filename}", tracker_report)
             task_id = uuid.uuid4().hex
             now = datetime.now().isoformat()
             task = {
@@ -216,6 +244,8 @@ def register_file_remote_download_routes(app, ctx):
                 "error": "",
                 "file": None,
                 "storage_file": None,
+                "availability_score": availability_score,
+                "availability_hint": availability_hint,
                 "ip": get_client_ip(),
                 "ua": get_ua(),
                 "created_at": now,

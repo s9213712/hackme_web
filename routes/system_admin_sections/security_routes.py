@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -15,6 +16,24 @@ from services.system.ci_status import playwright_ci_status
 
 
 _LAST_CPU_SAMPLE = None
+_RESOURCE_USAGE_CACHE = {"expires_at": 0.0, "value": None}
+_RESOURCE_USAGE_CACHE_LOCK = threading.Lock()
+
+
+def _env_float(name, default, *, minimum=0.5, maximum=60.0):
+    try:
+        value = float(str(os.environ.get(name, "")).strip())
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(float(minimum), min(float(maximum), value))
+
+
+_RESOURCE_USAGE_CACHE_TTL_SECONDS = _env_float(
+    "HTML_LEARNING_RESOURCE_USAGE_CACHE_TTL_SECONDS",
+    5.0,
+    minimum=1.0,
+    maximum=30.0,
+)
 
 
 def _safe_percent(value):
@@ -155,14 +174,26 @@ def _gpu_usage_snapshot():
 
 
 def system_resource_usage_snapshot():
-    gpu = _gpu_usage_snapshot()
-    return {
-        "sampled_at": datetime.now().replace(microsecond=0).isoformat(),
-        "cpu": _cpu_usage_snapshot(),
-        "ram": _ram_usage_snapshot(),
-        "gpu": gpu["gpu"],
-        "vram": gpu["vram"],
-    }
+    now_mono = time.monotonic()
+    cached = _RESOURCE_USAGE_CACHE.get("value")
+    if cached and now_mono < float(_RESOURCE_USAGE_CACHE.get("expires_at") or 0):
+        return cached
+    with _RESOURCE_USAGE_CACHE_LOCK:
+        now_mono = time.monotonic()
+        cached = _RESOURCE_USAGE_CACHE.get("value")
+        if cached and now_mono < float(_RESOURCE_USAGE_CACHE.get("expires_at") or 0):
+            return cached
+        gpu = _gpu_usage_snapshot()
+        snapshot = {
+            "sampled_at": datetime.now().replace(microsecond=0).isoformat(),
+            "cpu": _cpu_usage_snapshot(),
+            "ram": _ram_usage_snapshot(),
+            "gpu": gpu["gpu"],
+            "vram": gpu["vram"],
+        }
+        _RESOURCE_USAGE_CACHE["value"] = snapshot
+        _RESOURCE_USAGE_CACHE["expires_at"] = now_mono + _RESOURCE_USAGE_CACHE_TTL_SECONDS
+        return snapshot
 
 
 def register_system_admin_security_routes(app, ctx):

@@ -1,4 +1,5 @@
 import json
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -15,6 +16,8 @@ ADMIN_DISK_QUOTA_RATIO = 0.9
 ADMIN_DISK_WARNING_RATIO = 0.8
 MANAGER_CLOUD_DRIVE_QUOTA_BYTES = 1024 * 1024 * 1024
 SUPERWEAK_CLOUD_DRIVE_QUOTA_BYTES = 10 * 1024 * 1024
+_UPLOAD_SCHEMA_LOCK = threading.Lock()
+_UPLOAD_SCHEMA_READY_PATHS = set()
 SCAN_STATUSES = {
     "not_required",
     "pending",
@@ -246,6 +249,26 @@ class UploadPolicyDecision:
 
 
 def ensure_upload_security_schema(conn):
+    db_path = _connection_path(conn)
+    if db_path and db_path in _UPLOAD_SCHEMA_READY_PATHS:
+        return
+    with _UPLOAD_SCHEMA_LOCK:
+        if db_path and db_path in _UPLOAD_SCHEMA_READY_PATHS:
+            return
+        _ensure_upload_security_schema_uncached(conn)
+        if db_path:
+            _UPLOAD_SCHEMA_READY_PATHS.add(db_path)
+
+
+def _connection_path(conn):
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        return str(row["file"] if hasattr(row, "keys") else row[2])
+    except Exception:
+        return ""
+
+
+def _ensure_upload_security_schema_uncached(conn):
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS uploaded_files (

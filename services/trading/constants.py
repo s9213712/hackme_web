@@ -27,7 +27,9 @@ PRICE_PROVIDER_LABELS = {
     "bitstamp_public_api": "Bitstamp",
     "coingecko_simple_price": "CoinGecko",
 }
-DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT = 3
+DEFAULT_TRADING_PRICE_SOURCE = "binance_public_api"
+DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT = 1
+DEFAULT_PRICE_FUSION_TRADE_MIN_PROVIDER_COUNT = 1
 REFERENCE_PRICE_CAPABLE_PROVIDERS = {
     "binance_public_api",
     "okx_public_api",

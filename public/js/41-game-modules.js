@@ -359,6 +359,7 @@
       "experiment 3:dl": "DL 語義平衡實驗；偏研究模型。",
       "experiment 4:pv": "Policy/Value + MCTS 實驗；有候選策略。",
       "experiment 5:nnue": "NNUE + AlphaBeta/PVS；目前最有潛力但仍需實戰 gate。",
+      "experiment 6:neuralnet": "Neural Network (Exp6)；3 層 NNUE-style 真實神經網路 + 增量累加器，需訓練後才有實戰強度。",
       stockfish: "Stockfish 本機外部引擎；只在 server 偵測到本機 binary 時顯示。",
     },
   };

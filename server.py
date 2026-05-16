@@ -66,6 +66,7 @@ from services.platform.settings import (
     DEFAULT_SETTINGS,
     build_feature_disabled_payload,
     configure_settings_service,
+    get_cached_system_setting,
     get_feature_settings,
     get_system_settings,
     init_system_settings_table,
@@ -1008,6 +1009,7 @@ _runtime_services = build_runtime_services(
         "session_idle_timeout": SESSION_IDLE_TIMEOUT_SECONDS,
         "tester_token_user_lookup": tester_token_username_from_request,
         "get_runtime_server_mode": get_runtime_server_mode,
+        "get_cached_system_setting": get_cached_system_setting,
         "get_system_settings": get_system_settings,
         "save_settings": save_settings,
         "refresh_system_settings": refresh_system_settings,
@@ -1039,6 +1041,11 @@ app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
 app.config["SECRET_KEY"] = SECRET_KEY
 MAX_UPLOAD_REQUEST_MB = _env_int("HTML_LEARNING_MAX_CONTENT_MB", 1024, minimum=128)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_MB * 1024 * 1024
+STATIC_ASSET_CACHE_SECONDS = _env_int(
+    "HTML_LEARNING_STATIC_ASSET_CACHE_SECONDS",
+    365 * 24 * 60 * 60,
+    minimum=0,
+)
 app.config["SESSION_COOKIE_SECURE"] = SESSION_COOKIE_SECURE
 app.config["SESSION_COOKIE_HTTPONLY"] = SESSION_COOKIE_HTTPONLY
 app.config["SESSION_COOKIE_SAMESITE"] = SESSION_COOKIE_SAMESITE
@@ -1079,6 +1086,12 @@ def extra_security_headers(response):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    elif STATIC_ASSET_CACHE_SECONDS > 0 and (
+        ((request.path == "/styles.css" or request.path.startswith("/js/")) and request.args.get("v"))
+        or request.path.startswith("/assets/")
+    ):
+        response.headers["Cache-Control"] = f"public, max-age={STATIC_ASSET_CACHE_SECONDS}, immutable"
+        response.headers.pop("Pragma", None)
     return response
 
 

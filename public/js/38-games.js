@@ -620,9 +620,11 @@ function renderGameUsers(users) {
     select.innerHTML = '<option value="">目前沒有可邀請玩家</option>';
     return;
   }
-  select.innerHTML = '<option value="">選擇玩家</option>' + rows.map((user) => (
-    `<option value="${sanitize(user.username || "")}">${sanitize(user.username || "")} · ${sanitize(user.role || "user")}</option>`
-  )).join("");
+  select.innerHTML = '<option value="">選擇好友玩家</option>' + rows.map((user) => {
+    const marks = [user.is_friend ? "好友" : "", user.is_official ? "官方/管理者" : ""].filter(Boolean);
+    const label = `${user.username || ""} · ${user.role || "user"}${marks.length ? " · " + marks.join(" · ") : ""}`;
+    return `<option value="${sanitize(user.username || "")}">${sanitize(label)}</option>`;
+  }).join("");
 }
 
 function renderGameMultiplayerUsers(users = gameState.users || []) {
@@ -634,9 +636,11 @@ function renderGameMultiplayerUsers(users = gameState.users || []) {
     select.innerHTML = '<option value="">目前沒有可邀請玩家</option>';
     return;
   }
-  select.innerHTML = '<option value="">選擇玩家</option>' + rows.map((user) => (
-    `<option value="${sanitize(user.username || "")}">${sanitize(user.username || "")} · ${sanitize(user.role || "user")}</option>`
-  )).join("");
+  select.innerHTML = '<option value="">選擇好友玩家</option>' + rows.map((user) => {
+    const marks = [user.is_friend ? "好友" : "", user.is_official ? "官方/管理者" : ""].filter(Boolean);
+    const label = `${user.username || ""} · ${user.role || "user"}${marks.length ? " · " + marks.join(" · ") : ""}`;
+    return `<option value="${sanitize(user.username || "")}">${sanitize(label)}</option>`;
+  }).join("");
   if (current && rows.some((user) => user.username === current)) select.value = current;
 }
 

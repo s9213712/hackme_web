@@ -91,8 +91,31 @@ DEFAULT_COMFYUI_URL = os.environ.get("COMFYUI_API_URL", "http://localhost:8192")
 COMFYUI_LOCAL_START_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "comfyui" / "comfyui_run_in_linux.template.sh"
 SAFE_SAMPLER_FALLBACK = "euler"
 SAFE_SCHEDULER_FALLBACK = "normal"
-DEFAULT_GENERATION_TIMEOUT_SECONDS = 0
-MAX_GENERATION_TIMEOUT_SECONDS = 7 * 24 * 3600
+
+
+def _env_int(name, default, minimum, maximum):
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _env_float(name, default, minimum, maximum):
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+DEFAULT_GENERATION_TIMEOUT_SECONDS = _env_int("COMFYUI_GENERATION_TIMEOUT_SECONDS", 1800, 30, 6 * 3600)
+MAX_GENERATION_TIMEOUT_SECONDS = _env_int("COMFYUI_GENERATION_MAX_TIMEOUT_SECONDS", 6 * 3600, 60, 24 * 3600)
+COMFYUI_BACKEND_REQUEST_TIMEOUT_SECONDS = _env_int("COMFYUI_BACKEND_REQUEST_TIMEOUT_SECONDS", 8, 2, 30)
+COMFYUI_STATUS_TIMEOUT_SECONDS = _env_float("COMFYUI_STATUS_TIMEOUT_SECONDS", 2.0, 0.5, 10.0)
+COMFYUI_INTERRUPT_TIMEOUT_SECONDS = _env_float("COMFYUI_INTERRUPT_TIMEOUT_SECONDS", 2.0, 0.5, 10.0)
+COMFYUI_JOB_STALE_SECONDS = _env_float("COMFYUI_JOB_STALE_SECONDS", 90.0, 10.0, 600.0)
+COMFYUI_JOB_PROGRESS_DB_THROTTLE_SECONDS = _env_float("COMFYUI_JOB_PROGRESS_DB_THROTTLE_SECONDS", 2.0, 0.0, 30.0)
 COMFYUI_BASIC_PRICE_ITEM_KEY = "comfyui_txt2img_basic"
 MAX_COMFYUI_FETCH_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_COMFYUI_LORAS_PER_PROMPT = 8
@@ -1594,6 +1617,7 @@ def register_comfyui_routes(app, deps):
         return updated
 
     def _update_generation_job_progress(job_id, progress):
+        now = time.time()
         with generation_jobs_lock:
             job = generation_jobs.get(job_id)
             if not job:
@@ -1601,12 +1625,31 @@ def register_comfyui_routes(app, deps):
             job["progress"] = {
                 **(job.get("progress") or {}),
                 **(progress or {}),
-                "updated_at": time.time(),
+                "updated_at": now,
             }
             if job["status"] in {"queued", "running"}:
                 job["status"] = "running"
-            job["updated_at"] = time.time()
+            job["updated_at"] = now
+            previous_platform_progress = float(job.get("_last_platform_progress_at") or 0)
+            previous_platform_signature = job.get("_last_platform_progress_signature")
+            progress_data = job.get("progress") or {}
+            progress_signature = (
+                str(progress_data.get("phase") or ""),
+                int(float(progress_data.get("percent") or 0)),
+                str(progress_data.get("detail") or "")[:240],
+            )
+            should_write_platform_progress = (
+                not previous_platform_progress
+                or progress_signature != previous_platform_signature
+                or COMFYUI_JOB_PROGRESS_DB_THROTTLE_SECONDS <= 0
+                or now - previous_platform_progress >= COMFYUI_JOB_PROGRESS_DB_THROTTLE_SECONDS
+            )
+            if should_write_platform_progress:
+                job["_last_platform_progress_at"] = now
+                job["_last_platform_progress_signature"] = progress_signature
             updated = dict(job)
+        if not should_write_platform_progress:
+            return updated
         try:
             from services.job_center import add_job_event, get_job_by_source, update_job as update_platform_job
 
@@ -1639,6 +1682,25 @@ def register_comfyui_routes(app, deps):
         if int(job.get("owner_user_id") or 0) != int(_generation_owner_id(actor) or 0):
             return None, json_resp({"ok": False, "msg": "無權查看此 ComfyUI 工作"}, 403)
         return job, None
+
+    def _generation_job_payload(job):
+        payload = {
+            "job_id": job["job_id"],
+            "status": job["status"],
+            "progress": dict(job.get("progress") or {}),
+            "error": job.get("error") or "",
+            "result": job.get("result"),
+        }
+        if payload["status"] in {"queued", "running"}:
+            progress = payload["progress"]
+            updated_at = float(progress.get("updated_at") or job.get("updated_at") or job.get("created_at") or 0)
+            if updated_at and time.time() - updated_at >= COMFYUI_JOB_STALE_SECONDS:
+                progress["phase"] = "backend_unresponsive"
+                progress["detail"] = "ComfyUI 後端暫時沒有回報進度，可能正在載入大模型或被磁碟/VRAM 壓力拖慢"
+                progress["backend_unresponsive"] = True
+                progress["stale_seconds"] = int(time.time() - updated_at)
+                progress["timeout_seconds"] = int(progress.get("timeout_seconds") or DEFAULT_GENERATION_TIMEOUT_SECONDS)
+        return payload
 
     def _active_generation_snapshot():
         with active_generations_lock:
@@ -1677,6 +1739,7 @@ def register_comfyui_routes(app, deps):
         "COMFYUI_MODEL_DOWNLOAD_TYPES": COMFYUI_MODEL_DOWNLOAD_TYPES,
         "COMFYUI_SUPPORTED_LORA_BASE_MODEL_FAMILIES": COMFYUI_SUPPORTED_LORA_BASE_MODEL_FAMILIES,
         "MAX_COMFYUI_MODEL_DOWNLOAD_BYTES": MAX_COMFYUI_MODEL_DOWNLOAD_BYTES,
+        "COMFYUI_BACKEND_REQUEST_TIMEOUT_SECONDS": COMFYUI_BACKEND_REQUEST_TIMEOUT_SECONDS,
         "CIVITAI_ALLOWED_HOSTS": CIVITAI_ALLOWED_HOSTS,
         "CIVITAI_API_BASE": CIVITAI_API_BASE,
         "CIVITAI_API_BASES": CIVITAI_API_BASES,
@@ -1765,6 +1828,28 @@ def register_comfyui_routes(app, deps):
     _upload_comfyui_model_file = _admin_helpers["_upload_comfyui_model_file"]
     _client = _admin_helpers["_client"]
     _client_for_url = _admin_helpers["_client_for_url"]
+
+    def _comfyui_storage_warnings():
+        warnings = []
+        candidates = [
+            ("base_dir", _configured_comfyui_base_dir()),
+            ("project_dir", _configured_comfyui_project_dir()),
+        ]
+        seen = set()
+        for label, raw_path in candidates:
+            path_text = str(raw_path or "").strip()
+            if not path_text or path_text in seen:
+                continue
+            seen.add(path_text)
+            normalized = Path(path_text).as_posix()
+            if normalized.startswith("/mnt/"):
+                warnings.append({
+                    "code": "windows_mount_model_storage",
+                    "path": path_text,
+                    "label": label,
+                    "message": "ComfyUI 模型或專案位於 /mnt/* Windows 掛載路徑；大型模型載入可能拖慢小主機，建議把常用模型移到 WSL/Linux native storage。",
+                })
+        return warnings
     del _admin_helpers
 
     _billing_helpers = build_comfyui_billing_helpers({
@@ -1905,6 +1990,12 @@ def register_comfyui_routes(app, deps):
         audit_ip = request_meta.get("client_ip") or "-"
         audit_ua = request_meta.get("user_agent") or "-"
         _update_generation_job(job_id, status="running")
+        _update_generation_job_progress(job_id, {
+            "phase": "queued",
+            "percent": 0,
+            "detail": "已送出至 ComfyUI 背景工作",
+            "timeout_seconds": int(timeout_seconds or DEFAULT_GENERATION_TIMEOUT_SECONDS),
+        })
         try:
             result = active_client.generate_image(
                 params,
@@ -2216,8 +2307,8 @@ def register_comfyui_routes(app, deps):
         except Exception:
             number = DEFAULT_GENERATION_TIMEOUT_SECONDS
         if number <= 0:
-            return 0
-        return _int_range(number, DEFAULT_GENERATION_TIMEOUT_SECONDS or 1800, 30, MAX_GENERATION_TIMEOUT_SECONDS)
+            return DEFAULT_GENERATION_TIMEOUT_SECONDS
+        return _int_range(number, DEFAULT_GENERATION_TIMEOUT_SECONDS, 30, MAX_GENERATION_TIMEOUT_SECONDS)
 
     def _float_range(value, default, minimum, maximum):
         try:
@@ -2803,6 +2894,7 @@ def register_comfyui_routes(app, deps):
         "COMFYUI_HISTORY_LIMIT": COMFYUI_HISTORY_LIMIT,
         "DEFAULT_GENERATION_TIMEOUT_SECONDS": DEFAULT_GENERATION_TIMEOUT_SECONDS,
         "MAX_GENERATION_TIMEOUT_SECONDS": MAX_GENERATION_TIMEOUT_SECONDS,
+        "COMFYUI_STATUS_TIMEOUT_SECONDS": COMFYUI_STATUS_TIMEOUT_SECONDS,
         "actor_or_401": _actor_or_401,
         "root_or_403": _root_or_403,
         "actor_value": _actor_value,
@@ -2824,6 +2916,7 @@ def register_comfyui_routes(app, deps):
         "configured_connection_mode": _configured_connection_mode,
         "configured_default_dimensions": _configured_default_dimensions,
         "configured_max_batch_size": _configured_max_batch_size,
+        "comfyui_storage_warnings": _comfyui_storage_warnings,
         "create_generation_job": _create_generation_job,
         "ensure_comfyui_balance": _ensure_comfyui_balance,
         "finalize_generation_records": _finalize_generation_records,
@@ -2840,6 +2933,7 @@ def register_comfyui_routes(app, deps):
         "parse_generation_request": _parse_generation_request,
         "record_generation_history": _record_generation_history,
         "register_active_generation": _register_active_generation,
+        "generation_job_payload": _generation_job_payload,
         "run_comfyui_generation_job": _run_comfyui_generation_job,
         "start_local_comfyui": _start_local_comfyui,
         "stop_local_comfyui": _stop_local_comfyui,
@@ -2988,4 +3082,5 @@ def register_comfyui_routes(app, deps):
         "COMFYUI_ALLOWED_IMAGE_EXTENSIONS": COMFYUI_ALLOWED_IMAGE_EXTENSIONS,
         "COMFYUI_ALLOWED_IMAGE_MIME_TYPES": COMFYUI_ALLOWED_IMAGE_MIME_TYPES,
         "MAX_COMFYUI_FETCH_IMAGE_BYTES": MAX_COMFYUI_FETCH_IMAGE_BYTES,
+        "COMFYUI_INTERRUPT_TIMEOUT_SECONDS": COMFYUI_INTERRUPT_TIMEOUT_SECONDS,
     })

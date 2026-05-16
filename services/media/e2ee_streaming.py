@@ -211,7 +211,8 @@ def upsert_e2ee_stream_v2_asset(conn, *, file_row, storage_root, manifest_payloa
     manifest_path = resolve_storage_path(storage_root, manifest_rel, create_parent=True)
     bundle_path = resolve_storage_path(storage_root, bundle_rel, create_parent=True)
     manifest_path.write_text(json.dumps(normalized_manifest, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-    bundle_path.write_bytes(bytes(bundle_bytes))
+    with bundle_path.open("wb") as handle:
+        handle.write(bundle_bytes)
     now = _now()
     existing = _asset_row(conn, file_row["id"])
     params = (

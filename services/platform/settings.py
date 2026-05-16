@@ -25,6 +25,7 @@ DEFAULT_SETTINGS = {
     "internal_test_login_token_expires_at": "",
     "internal_test_login_token_user_id": 0,
     "internal_test_login_token_username": "",
+    "internal_test_login_token_allowed_features_json": "[]",
     "server_listen_host": "",
     "server_listen_port": 0,
     "server_ssl_enabled": True,
@@ -36,6 +37,11 @@ DEFAULT_SETTINGS = {
     "require_email_verification": False,
     "password_reset_mode": "admin_review",
     "login_autofill_block_enabled": False,
+    "max_manager_seats": 5,
+    "points_admin_weekly_salary_enabled": True,
+    "points_admin_weekly_salary_weekday": 1,
+    "points_admin_weekly_salary_time": "09:00",
+    "points_admin_weekly_salary_award_on_login": False,
     "notification_muted_types": "",
     "captcha_mode": "none",
     "captcha_ttl_seconds": 300,
@@ -60,6 +66,7 @@ DEFAULT_SETTINGS = {
     "site_panel_style": "glass",
     "site_sidebar_width": "standard",
     "module_chat_min_role": "user",
+    "module_profile_min_role": "user",
     "module_community_min_role": "user",
     "module_appeals_min_role": "user",
     "module_accounts_min_role": "manager",
@@ -446,6 +453,13 @@ def _import_legacy_settings_files(conn):
 def get_system_settings():
     with _SETTINGS_LOCK:
         return (_SYSTEM_SETTINGS.copy() if isinstance(_SYSTEM_SETTINGS, dict) else _load_settings_from_db())
+
+
+def get_cached_system_setting(key, default=None):
+    settings = _SYSTEM_SETTINGS
+    if isinstance(settings, dict):
+        return settings.get(key, default)
+    return DEFAULT_SETTINGS.get(key, default)
 
 
 def load_settings():

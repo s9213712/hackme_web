@@ -5,6 +5,9 @@ CREATE TABLE IF NOT EXISTS chat_message_reports (
  reporter_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  reported_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  reason TEXT NOT NULL,
+ content_snapshot TEXT,
+ message_created_at TEXT,
+ message_edited_at TEXT,
  status TEXT NOT NULL DEFAULT 'pending',
  reviewed_by TEXT,
  reviewed_at TEXT,
@@ -24,6 +27,10 @@ CREATE TABLE IF NOT EXISTS chat_messages (
             is_revoked     INTEGER NOT NULL DEFAULT 0,
             revoked_at     TEXT,
             revoked_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            edited_at      TEXT,
+            edited_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            edit_count     INTEGER NOT NULL DEFAULT 0,
+            original_content TEXT,
             blocked_reason TEXT,
             created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
         );
@@ -39,6 +46,23 @@ CREATE TABLE IF NOT EXISTS user_friends (
             UNIQUE(user_id, friend_user_id),
             CHECK (user_id <> friend_user_id),
             CHECK (status IN ('pending', 'accepted', 'rejected', 'blocked'))
+        );
+
+CREATE TABLE IF NOT EXISTS user_profiles (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            display_name TEXT,
+            bio TEXT,
+            signature TEXT,
+            location TEXT,
+            website TEXT,
+            friend_code TEXT,
+            friend_code_rotated_at TEXT,
+            custom_title TEXT,
+            custom_title_status TEXT NOT NULL DEFAULT 'none',
+            profile_visibility TEXT NOT NULL DEFAULT 'public',
+            appearance_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         );
 
 CREATE TABLE IF NOT EXISTS chat_room_invites (
@@ -117,6 +141,7 @@ CREATE TABLE IF NOT EXISTS chat_room_members (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             room_id    INTEGER NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
             user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            anonymous_enabled INTEGER NOT NULL DEFAULT 0,
             joined_at  TEXT    NOT NULL DEFAULT (datetime('now')),
             UNIQUE(room_id, user_id)
         );
@@ -129,6 +154,7 @@ CREATE TABLE IF NOT EXISTS chat_rooms (
             is_active      INTEGER NOT NULL DEFAULT 1,
             join_password_hash TEXT,
             join_password_required INTEGER NOT NULL DEFAULT 0,
+            allow_anonymous INTEGER NOT NULL DEFAULT 0,
             created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
         );
 
@@ -867,6 +893,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     revoked_at   TEXT,
     last_seen    TEXT,
     session_epoch INTEGER NOT NULL DEFAULT 0,
+    auth_scope   TEXT    NOT NULL DEFAULT '',
+    allowed_features_json TEXT NOT NULL DEFAULT '[]',
     created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -1070,6 +1098,8 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_room     ON chat_messages(room_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_time     ON chat_messages(created_at);
 
 CREATE INDEX IF NOT EXISTS idx_user_friends_user_status ON user_friends(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_user_friends_friend_status ON user_friends(friend_user_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profiles_friend_code ON user_profiles(friend_code) WHERE friend_code IS NOT NULL AND friend_code<>'';
 CREATE INDEX IF NOT EXISTS idx_chat_room_invites_invitee ON chat_room_invites(invitee_user_id, status);
 CREATE INDEX IF NOT EXISTS idx_game_matches_players ON game_matches(game_key, status, white_user_id, black_user_id);
 CREATE INDEX IF NOT EXISTS idx_game_matches_finished ON game_matches(game_key, mode, finished_at);

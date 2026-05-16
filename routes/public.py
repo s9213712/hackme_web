@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -60,6 +61,7 @@ def register_public_routes(app, deps):
     get_db = deps["get_db"]
     get_feature_settings = deps["get_feature_settings"]
     get_member_level_rule = deps.get("get_member_level_rule")
+    get_cached_system_setting = deps.get("get_cached_system_setting")
     get_system_settings = deps["get_system_settings"]
     get_ua = deps["get_ua"]
     hash_password = deps["hash_password"]
@@ -171,25 +173,34 @@ def register_public_routes(app, deps):
         except Exception:
             return False
 
-    def internal_test_login_allowed(conn, settings, data, user_id):
+    def internal_test_login_authorization(conn, settings, data, user_id):
         token = (
             str(data.get("internal_test_token") or "").strip()
             or str(data.get("login_token") or "").strip()
             or request.headers.get("X-Internal-Test-Token", "").strip()
         )
         if tester_token_login_allowed(conn, token, user_id):
-            return True
+            return {"ok": True, "scope": "tester_token", "allowed_features": []}
         if not verify_internal_test_token(
             token,
             settings.get("internal_test_login_token_hash", ""),
             settings.get("internal_test_login_token_expires_at", ""),
         ):
-            return False
+            return {"ok": False, "scope": "", "allowed_features": []}
         try:
             bound_user_id = int(settings.get("internal_test_login_token_user_id") or 0)
         except Exception:
             bound_user_id = 0
-        return not bound_user_id or int(user_id) == bound_user_id
+        if bound_user_id and int(user_id) != bound_user_id:
+            return {"ok": False, "scope": "", "allowed_features": []}
+        allowed_features = []
+        try:
+            parsed_features = json.loads(str(settings.get("internal_test_login_token_allowed_features_json") or "[]"))
+            if isinstance(parsed_features, list):
+                allowed_features = [str(item).strip() for item in parsed_features if str(item).strip()]
+        except Exception:
+            allowed_features = []
+        return {"ok": True, "scope": "internal_test_token", "allowed_features": allowed_features}
 
     def production_login_conflict(main_conn, auth_conn, user_id, ip, now_iso, settings):
         if current_server_mode(main_conn) != "production":
@@ -402,13 +413,18 @@ def register_public_routes(app, deps):
 
     @app.route("/api/version", methods=["GET"])
     def get_version():
+        maintenance_mode = (
+            get_cached_system_setting("maintenance_mode", False)
+            if callable(get_cached_system_setting)
+            else False
+        )
         return json_resp({
             "ok": True,
             "app": SERVER_APP_NAME,
             "release_id": SERVER_RELEASE_ID,
             "version": SERVER_VERSION,
             "started_at": SERVER_STARTED_AT,
-            "maintenance_mode": bool(get_system_settings().get("maintenance_mode", False)),
+            "maintenance_mode": bool(maintenance_mode),
         })
 
     @app.route("/api/password-strength", methods=["POST"])
@@ -668,8 +684,11 @@ def register_public_routes(app, deps):
                 if settings.get("require_email_verification") and not bool(user_row["email_verified"] or 0):
                     audit("LOGIN_EMAIL_UNVERIFIED", ip, username, ua=ua, success=False)
                     return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
+                internal_test_auth_scope = ""
+                internal_test_allowed_features = []
                 if current_server_mode(conn) == "internal_test" and user_row["username"] != "root":
-                    if not internal_test_login_allowed(conn, settings, data, user_row["id"]):
+                    internal_test_authz = internal_test_login_authorization(conn, settings, data, user_row["id"])
+                    if not internal_test_authz.get("ok"):
                         if callable(record_login_attempt):
                             record_login_attempt(
                                 user_id=user_row["id"],
@@ -680,6 +699,8 @@ def register_public_routes(app, deps):
                             )
                         audit("LOGIN_INTERNAL_TEST_TOKEN_REQUIRED", ip, username, ua=ua, success=False)
                         return json_resp({"ok":False,"msg":"目前是內測模式，請輸入 root 提供的內測 token"}), 403
+                    internal_test_auth_scope = str(internal_test_authz.get("scope") or "")
+                    internal_test_allowed_features = list(internal_test_authz.get("allowed_features") or [])
 
                 auth_conn = get_auth_db()
                 try:
@@ -722,7 +743,12 @@ def register_public_routes(app, deps):
                     record_login_location(conn, user_row["id"], username, ip, ua)
                 conn.commit()
 
-                if points_service and user_row["username"] != "root" and user_row["role"] in {"manager", "super_admin"}:
+                if (
+                    points_service
+                    and bool(settings.get("points_admin_weekly_salary_award_on_login", False))
+                    and user_row["username"] != "root"
+                    and user_row["role"] in {"manager", "super_admin"}
+                ):
                     try:
                         points_service.award_admin_weekly_salary(
                             user_id=user_row["id"],
@@ -733,7 +759,14 @@ def register_public_routes(app, deps):
 
                 # Create token + save session to DB
                 token = make_token(username)
-                db_save_session(user_row["id"], token, ip, ua)
+                db_save_session(
+                    user_row["id"],
+                    token,
+                    ip,
+                    ua,
+                    auth_scope=internal_test_auth_scope,
+                    allowed_features=internal_test_allowed_features,
+                )
                 sync_official_room_membership(user_row["id"])
 
                 audit("LOGIN_OK", ip, username, ua=ua, success=True)

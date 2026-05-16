@@ -658,6 +658,29 @@ def test_media_prepare_stream_route_requires_owner(tmp_path, monkeypatch):
     assert manager_response.status_code == 403
 
 
+def test_media_prepare_and_status_require_login_without_500(tmp_path):
+    db_path = tmp_path / "media-auth-required.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    anonymous_client = _build_app(
+        db_path,
+        storage_root,
+        fernet,
+        current_user=None,
+        extra_deps={"DB_PATH": str(db_path), "LOG_DIR": str(tmp_path / "logs")},
+    ).test_client()
+
+    prepare = anonymous_client.post("/api/media/private-video/prepare-stream")
+    status = anonymous_client.get("/api/media/private-video/stream-status")
+
+    assert prepare.status_code == 401
+    assert prepare.get_json()["error"] == "login_required"
+    assert status.status_code == 401
+    assert status.get_json()["error"] == "login_required"
+
+
 def test_video_publish_auto_prepares_stream_asset_without_blocking_publish(tmp_path, monkeypatch):
     db_path = tmp_path / "publish-route.db"
     storage_root = tmp_path / "storage"

@@ -1,10 +1,12 @@
 # Trading Background Engine
 
-Status: base worker implemented, sitewide reporting still staged. The current
-code starts a server-owned trading background worker, creates job / lease / run
-tables, exposes root status / pause / resume / run-once APIs, and runs the
-first job set through existing trading services. The wider root sitewide
-snapshot reports remain staged work.
+Status: base worker and root snapshot path implemented. The current code starts
+a server-owned trading background worker, creates job / lease / run / queue /
+root snapshot tables, exposes root status / pause / resume / enqueue run-once
+APIs, and runs the first job set through existing trading services. Root
+`report`, sitewide pools, and sitewide user positions read stored snapshots
+instead of recalculating inside the root HTTP request. Deeper order, bot,
+TP/SL, liquidation, and typed lending drilldowns remain staged work.
 
 ## Core Rule
 
@@ -58,6 +60,7 @@ Implemented first job set:
 | `bot_trigger_scan` | trigger DCA, grid, workflow, BTC_trade bridge bots | 10-30s |
 | `margin_liquidation_scan` | scan cross-margin risk and liquidate when required | 10-30s |
 | `interest_accrual` | accrue borrow interest and micropoints carry | 1h |
+| `sitewide_metrics_refresh` | publish root-visible report, pool, and user-position snapshots | 30-60s |
 
 Planned next job families:
 
@@ -65,7 +68,6 @@ Planned next job families:
 |---|---|---:|
 | `funding_or_fee_settlement` | settle fees, pool income, and funding side effects | 30-60s or event-driven |
 | `risk_snapshot_refresh` | publish root-visible risk snapshots | 30-60s |
-| `sitewide_metrics_refresh` | publish root-visible sitewide metrics | 30-60s |
 | `bot_audit_refresh` | keep existing bot audit scheduler semantics | 5-15m or current setting |
 
 Borrow interest already uses hourly accrual, a minimum started-hour billing
@@ -210,6 +212,13 @@ root-triggered state changes.
 }
 ```
 
+`run-once` is enqueue-only on the root request path. A successful request
+returns `202 Accepted` with a `queue_uuid` immediately; the background worker
+claims and executes the queued job later. Operators should inspect
+`GET /api/root/trading/background/status` for `queued_runs`, `recent_runs`, and
+the snapshot metadata rather than expecting the POST response to contain the
+heavy job result.
+
 ## Planned API Surface
 
 The following routes are still planning targets for deeper drilldown pages and
@@ -230,10 +239,14 @@ Scheduler and lease tables:
 - `trading_background_jobs`
 - `trading_background_locks`
 - `trading_background_job_runs`
+- `trading_background_job_queue`
+- `trading_root_snapshots`
 
 ## Planned Snapshot Tables
 
-Snapshot and rollup tables still needed for full sitewide reporting:
+The generic `trading_root_snapshots` table is the first deployed root report
+cache. Typed snapshot and rollup tables still needed for full sitewide
+reporting:
 
 - `trading_price_snapshots`
 - `trading_sitewide_risk_snapshots`
@@ -247,13 +260,14 @@ Daily rollup/report tables:
 - `trading_lending_income_daily`
 - `trading_fee_income_daily`
 
-The most important first tables are:
+The most important next typed tables are:
 
 - `trading_margin_account_snapshots`
 - `trading_lending_pool_snapshots`
 
-These let root UI read recent snapshots instead of recalculating all users,
-orders, positions, interest, and pool income on every request.
+These let deeper root UI pages read recent typed snapshots instead of
+recalculating all users, orders, positions, interest, and pool income on every
+request.
 
 ## Implementation Phases
 
@@ -270,12 +284,19 @@ Phase 1 - background status and server-owned base jobs: implemented.
 - job table
 - lease lock
 - run log
+- root run-once queue
+- generic root report snapshot table
 - server-owned `price_refresh`, `order_matching`, `take_profit_stop_loss_scan`,
-  `bot_trigger_scan`, `margin_liquidation_scan`, and `interest_accrual`
-- root status / pause / resume / run-once routes
+  `bot_trigger_scan`, `margin_liquidation_scan`, `interest_accrual`, and
+  `sitewide_metrics_refresh`
+- root status / pause / resume / enqueue run-once routes
 
 Phase 2 - root reporting hardening:
 
+- implemented: `GET /api/admin/trading/report`,
+  `GET /api/root/trading/sitewide/pools`, and
+  `GET /api/root/trading/sitewide/user-positions` read
+  `trading_root_snapshots`
 - snapshot tables for margin accounts and lending pools
 - sitewide order / bot / TP-SL / risk drilldowns
 - background job audit drilldown

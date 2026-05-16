@@ -10,18 +10,22 @@ PORT="${PORT:-5000}"
 CLI_MODE=0
 SKIP_INSTALL=0
 FOREGROUND=0
+IN_PLACE="${HACKME_DEV_IN_PLACE:-0}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-root}"
 MANAGER_PASSWORD="${MANAGER_PASSWORD:-admin}"
 TEST_PASSWORD="${TEST_PASSWORD:-test}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 FEATURE_MODE="${HACKME_DEV_FEATURE_MODE:-all}"
 FEATURE_LIST="${HACKME_DEV_FEATURES:-}"
+DEV_TOKEN_FEATURES="${HACKME_DEV_TOKEN_FEATURES:-${HACKME_DEV_INTERNAL_TEST_TOKEN_FEATURES:-}}"
+DEV_TOKEN_TTL_MINUTES="${HACKME_DEV_TOKEN_TTL_MINUTES:-1440}"
 FEATURE_MODE_SET=0
 SECURITY_SETTINGS_ENABLED="${HACKME_DEV_SECURITY_ENABLED:-0}"
 SERVER_MODE="${HACKME_DEV_SERVER_MODE:-dev_ready}"
 EXTRA_ACCOUNTS="${HACKME_DEV_EXTRA_ACCOUNTS:-}"
 PORT_CONFLICT_ACTION="${HACKME_DEV_PORT_CONFLICT_ACTION:-}"
-BTC_TRADE_AUTOSTART="${HACKME_DEV_BTC_TRADE_AUTOSTART:-1}"
+BTC_TRADE_AUTOSTART="${HACKME_DEV_BTC_TRADE_AUTOSTART:-0}"
+BACKTEST_PROBE_ON_STARTUP="${HACKME_DEV_BACKTEST_PROBE_ON_STARTUP:-0}"
 DRY_RUN=0
 
 usage() {
@@ -30,9 +34,10 @@ Usage:
   ./test_for_develop.sh [options]
 
 Purpose:
-  Copy the repo to /tmp, initialize a development-friendly runtime, and launch
-  server.py from the copied workspace so the repo never accumulates runtime or
-  cache pollution.
+  Copy the repo to /tmp by default, initialize a development-friendly runtime,
+  and launch server.py from the copied workspace so the repo never accumulates
+  runtime or cache pollution. Pass --in-place / --no-copy when you explicitly
+  want to launch from the current repo without copying source files.
 
 Important:
   Without --cli, the script asks for workspace, host, port, feature mode,
@@ -50,6 +55,15 @@ Options:
   --port PORT              Default: 5000; prompts if occupied in interactive mode
   --feature-mode MODE      all, defaults, or custom. Default: all
   --features LIST          Comma-separated feature_* keys for custom mode
+  --token-features LIST    Comma-separated feature_* keys allowed by generated
+                           test/internal-test dev tokens. Empty means no extra
+                           token-level feature restriction.
+  --internal-test-token-features LIST
+                           Comma-separated feature_* keys allowed by the
+                           generated internal-test login token. Alias of
+                           --token-features.
+  --token-ttl-minutes N    TTL for generated test/internal-test tokens.
+                           Default: 1440
   --security VALUE         on/off. Default: off for dev-friendly runtime
   --server-mode MODE       dev_ready, internal_test, test, preprod, production,
                            superweak, maintenance, or incident_lockdown
@@ -57,10 +71,16 @@ Options:
   --accounts LIST          Comma-separated --add-account specs
   --port-conflict ACTION   ask, kill, fallback, or fail. Default: ask interactively,
                            fallback under --cli
+  --btc-trade-autostart    Start BTC_trade in the background after boot
   --no-btc-trade-autostart Do not start BTC_trade in the background
+  --backtest-probe-on-startup
+                           Run the first-boot trading backtest capacity probe
+                           in this temporary runtime
   --dry-run                Print resolved config and exit before copying/starting
   --run-root PATH          Use a fixed /tmp run root instead of auto-generating one
-  --skip-install           Reuse runtime/venv inside the tmp copy
+  --in-place, --no-copy    Launch from the current repo; runtime still uses run-root
+  --copy                   Force the default /tmp copied source workspace
+  --skip-install           Reuse runtime/venv or current Python environment
   --foreground             Run in the foreground instead of nohup background mode
   --root-password VALUE    Default: root
   --manager-password VALUE Default: admin
@@ -152,10 +172,14 @@ normalize_runtime_options() {
   normalize_feature_mode
   normalize_server_mode
   normalize_port_conflict_action
+  normalize_yes_no_value "$IN_PLACE" "in-place"
+  IN_PLACE="$NORMALIZED_YES_NO"
   normalize_yes_no_value "$SECURITY_SETTINGS_ENABLED" "security"
   SECURITY_SETTINGS_ENABLED="$NORMALIZED_YES_NO"
   normalize_yes_no_value "$BTC_TRADE_AUTOSTART" "btc trade autostart"
   BTC_TRADE_AUTOSTART="$NORMALIZED_YES_NO"
+  normalize_yes_no_value "$BACKTEST_PROBE_ON_STARTUP" "backtest probe on startup"
+  BACKTEST_PROBE_ON_STARTUP="$NORMALIZED_YES_NO"
 }
 
 append_csv_value() {
@@ -173,10 +197,17 @@ print_resolved_config() {
   say "[dev-tmp] config:"
   say "  cli:                 $CLI_MODE"
   say "  run_root:            ${RUN_ROOT:-/tmp/hackme_web_dev_${RUN_ID}_$$}"
+  if [[ "$IN_PLACE" == "1" ]]; then
+    say "  launch_mode:         in-place (no source copy)"
+  else
+    say "  launch_mode:         tmp copy"
+  fi
   say "  host:                $HOST"
   say "  port:                $PORT"
   say "  feature_mode:        $FEATURE_MODE"
   say "  features:            ${FEATURE_LIST:-<none>}"
+  say "  token_features:      ${DEV_TOKEN_FEATURES:-<unrestricted>}"
+  say "  token_ttl_minutes:   $DEV_TOKEN_TTL_MINUTES"
   say "  security_enabled:    $SECURITY_SETTINGS_ENABLED"
   say "  server_mode:         $SERVER_MODE"
   if [[ -n "$EXTRA_ACCOUNTS" ]]; then
@@ -188,6 +219,7 @@ print_resolved_config() {
   say "  skip_install:        $SKIP_INSTALL"
   say "  foreground:          $FOREGROUND"
   say "  btc_trade_autostart: $BTC_TRADE_AUTOSTART"
+  say "  backtest_probe:      $BACKTEST_PROBE_ON_STARTUP"
 }
 
 prompt_value() {
@@ -386,11 +418,16 @@ prompt_runtime_config() {
 
   say "[dev-tmp] interactive setup; pass --cli to skip prompts"
   prompt_value "Tmp workspace/run root" "$default_run_root" RUN_ROOT
+  prompt_yes_no "Launch from current repo without copying source files" "$IN_PLACE" IN_PLACE
   prompt_value "Host" "$HOST" HOST
   prompt_value "Port" "$PORT" PORT
   prompt_feature_settings
   prompt_yes_no "Enable security settings" "$SECURITY_SETTINGS_ENABLED" SECURITY_SETTINGS_ENABLED
   prompt_server_mode
+  if [[ "$SERVER_MODE" == "test" || "$SERVER_MODE" == "internal_test" ]]; then
+    prompt_value "Generated dev token TTL minutes" "$DEV_TOKEN_TTL_MINUTES" DEV_TOKEN_TTL_MINUTES
+    prompt_value "Generated dev token allowed feature keys (blank = unrestricted)" "$DEV_TOKEN_FEATURES" DEV_TOKEN_FEATURES
+  fi
   prompt_yes_no "Skip dependency install / reuse existing environment" "$SKIP_INSTALL" SKIP_INSTALL
   prompt_yes_no "Run server in foreground" "$FOREGROUND" FOREGROUND
   prompt_yes_no "Start BTC_trade background job after boot" "$BTC_TRADE_AUTOSTART" BTC_TRADE_AUTOSTART
@@ -413,16 +450,25 @@ prompt_runtime_config() {
 
 copy_repo() {
   mkdir -p "$COPY_ROOT"
+  # The tmp runtime only needs files required to run and develop the server.
+  # Keep scripts/tests/workflows, but skip documentation, generated reports,
+  # CI metadata and caches so large evidence/doc trees do not make startup hang.
   tar -C "$SOURCE_ROOT" \
     --exclude='./.git' \
+    --exclude='./.github' \
+    --exclude='./docs' \
+    --exclude='./reports' \
     --exclude='./.pytest_cache' \
     --exclude='./.venv' \
     --exclude='./__pycache__' \
     --exclude='./cache' \
     --exclude='./runtime' \
+    --exclude='*/reports' \
     --exclude='*/.pytest_cache' \
     --exclude='*/__pycache__' \
     --exclude='*/cache' \
+    --exclude='*.log' \
+    --exclude='*.out' \
     --exclude='*.pyc' \
     -cf - . | tar -C "$COPY_ROOT" -xf -
 }
@@ -477,6 +523,44 @@ wait_for_server_url() {
     sleep 0.5
   done
   return 1
+}
+
+print_generated_dev_tokens() {
+  local tokens_file="${HACKME_DEV_TOKENS_FILE:-}"
+  if [[ -z "$tokens_file" || ! -s "$tokens_file" ]]; then
+    return 0
+  fi
+  say "[dev-tmp] tokens:    $tokens_file"
+  "$PYTHON_BIN" - "$tokens_file" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+except Exception as exc:
+    print(f"[dev-tmp] token read failed: {exc}")
+    raise SystemExit(0)
+
+tokens = payload.get("tokens") if isinstance(payload, dict) else {}
+if not isinstance(tokens, dict):
+    raise SystemExit(0)
+for name, info in tokens.items():
+    if not isinstance(info, dict):
+        continue
+    token = str(info.get("token") or "").strip()
+    if not token:
+        continue
+    username = info.get("username") or info.get("target_username") or "test"
+    expires_at = info.get("expires_at") or ""
+    features = info.get("allowed_features") or []
+    feature_text = "unrestricted" if not features else ",".join(str(item) for item in features)
+    print(f"[dev-tmp] {name}: {token}")
+    print(f"[dev-tmp]   user={username} expires_at={expires_at} features={feature_text}")
+for warning in payload.get("warnings") or []:
+    print(f"[dev-tmp] token warning: {warning}")
+PY
 }
 
 normalize_port() {
@@ -709,6 +793,14 @@ while [[ $# -gt 0 ]]; do
       fi
       shift 2
       ;;
+    --token-features|--internal-test-token-features)
+      DEV_TOKEN_FEATURES="${2:?missing generated token feature list}"
+      shift 2
+      ;;
+    --token-ttl-minutes|--internal-test-token-ttl-minutes)
+      DEV_TOKEN_TTL_MINUTES="${2:?missing token ttl minutes}"
+      shift 2
+      ;;
     --security)
       SECURITY_SETTINGS_ENABLED="${2:?missing security value}"
       shift 2
@@ -745,6 +837,10 @@ while [[ $# -gt 0 ]]; do
       BTC_TRADE_AUTOSTART=0
       shift
       ;;
+    --backtest-probe-on-startup)
+      BACKTEST_PROBE_ON_STARTUP=1
+      shift
+      ;;
     --dry-run)
       DRY_RUN=1
       shift
@@ -752,6 +848,14 @@ while [[ $# -gt 0 ]]; do
     --run-root)
       RUN_ROOT="${2:?missing run root}"
       shift 2
+      ;;
+    --in-place|--no-copy)
+      IN_PLACE=1
+      shift
+      ;;
+    --copy)
+      IN_PLACE=0
+      shift
       ;;
     --skip-install)
       SKIP_INSTALL=1
@@ -798,14 +902,22 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
-COPY_ROOT="$RUN_ROOT/hackme_web"
-RUNTIME_ROOT="$COPY_ROOT/runtime"
+if [[ "$IN_PLACE" == "1" ]]; then
+  COPY_ROOT="$SOURCE_ROOT"
+  RUNTIME_ROOT="$RUN_ROOT/runtime"
+else
+  COPY_ROOT="$RUN_ROOT/hackme_web"
+  RUNTIME_ROOT="$COPY_ROOT/runtime"
+fi
 LOG_CAPTURE="$RUNTIME_ROOT/logs/server_direct.out"
 PID_FILE="$RUNTIME_ROOT/server.pid"
 
-[[ ! -e "$COPY_ROOT" ]] || die "tmp copy already exists: $COPY_ROOT"
-
-copy_repo
+if [[ "$IN_PLACE" == "1" ]]; then
+  mkdir -p "$RUN_ROOT"
+else
+  [[ ! -e "$COPY_ROOT" ]] || die "tmp copy already exists: $COPY_ROOT"
+  copy_repo
+fi
 mkdir -p \
   "$RUNTIME_ROOT/database" \
   "$RUNTIME_ROOT/logs" \
@@ -841,10 +953,17 @@ export HTML_LEARNING_MANAGER_PASSWORD="$MANAGER_PASSWORD"
 export HTML_LEARNING_TEST_PASSWORD="$TEST_PASSWORD"
 export HACKME_DEV_FEATURE_MODE="$FEATURE_MODE"
 export HACKME_DEV_FEATURES="$FEATURE_LIST"
+export HACKME_DEV_IN_PLACE="$IN_PLACE"
+export HACKME_DEV_TOKEN_FEATURES="$DEV_TOKEN_FEATURES"
+export HACKME_DEV_TOKEN_TTL_MINUTES="$DEV_TOKEN_TTL_MINUTES"
+export HACKME_DEV_INTERNAL_TEST_TOKEN_FEATURES="$DEV_TOKEN_FEATURES"
+export HACKME_DEV_TOKENS_FILE="$RUNTIME_ROOT/dev_tokens.json"
 export HACKME_DEV_SECURITY_ENABLED="$SECURITY_SETTINGS_ENABLED"
 export HACKME_DEV_SERVER_MODE="$SERVER_MODE"
 export HACKME_DEV_EXTRA_ACCOUNTS="$EXTRA_ACCOUNTS"
 export HACKME_DEV_BTC_TRADE_AUTOSTART="$BTC_TRADE_AUTOSTART"
+export HACKME_DEV_BACKTEST_PROBE_ON_STARTUP="$BACKTEST_PROBE_ON_STARTUP"
+export HTML_LEARNING_TRADING_BACKTEST_PROBE_ON_STARTUP="$BACKTEST_PROBE_ON_STARTUP"
 export HACKME_DEV_DEFAULT_ACCOUNT_PASSWORDS="$DEFAULT_ACCOUNT_PASSWORDS"
 if [[ "$SECURITY_SETTINGS_ENABLED" == "1" ]]; then
   export HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_POLICY=0
@@ -868,10 +987,15 @@ export PYTHONPYCACHEPREFIX="$RUNTIME_ROOT/pycache"
 cd "$COPY_ROOT"
 
 HACKME_RUNTIME_OUTPUT_CAPTURE=0 "$PYTHON_BIN" - <<'PY'
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
 import server
+from services.security.access_controls import (
+    generate_internal_test_token,
+    hash_internal_test_token,
+    maintenance_bypass_expires_at,
+)
 
 server.init_db(
     ensure_secure_audit_columns=server.ensure_secure_audit_columns,
@@ -903,6 +1027,41 @@ def normalize_feature_key(value):
     if not value.startswith("feature_"):
         value = f"feature_{value}"
     return value
+
+
+def normalize_token_feature_scope(raw_value):
+    raw_value = str(raw_value or "").strip()
+    if not raw_value or raw_value.lower() in {"all", "*", "unrestricted", "none"}:
+        return []
+    allowed = []
+    unknown = []
+    feature_key_set = set(feature_keys)
+    for item in raw_value.replace("\n", ",").split(","):
+        key = item.strip()
+        if not key:
+            continue
+        if not key.startswith("feature_"):
+            key = f"feature_{key}"
+        if key not in feature_key_set and not key.endswith("_enabled"):
+            maybe_enabled = f"{key}_enabled"
+            if maybe_enabled in feature_key_set:
+                key = maybe_enabled
+        if key not in feature_key_set:
+            unknown.append(key)
+            continue
+        if key not in allowed:
+            allowed.append(key)
+    if unknown:
+        raise SystemExit(f"unknown dev token feature scope: {', '.join(unknown)}")
+    return allowed
+
+
+def dev_token_ttl_minutes():
+    try:
+        ttl = int(str(os.environ.get("HACKME_DEV_TOKEN_TTL_MINUTES", "1440")).strip())
+    except Exception:
+        ttl = 1440
+    return max(5, min(ttl, 30 * 24 * 60))
 
 
 selected_features = {
@@ -995,6 +1154,7 @@ def parse_extra_accounts(raw_value):
 
 
 def ensure_extra_account(conn, username, password, role, now):
+    member_level = "trusted" if role == "user" else "normal"
     row = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
     if row:
         user_id = row["id"]
@@ -1008,10 +1168,13 @@ def ensure_extra_account(conn, username, password, role, now):
                 failed_login_count=0,
                 locked_until=NULL,
                 blocked_until=NULL,
+                member_level=?,
+                base_level=?,
+                effective_level=?,
                 updated_at=?
             WHERE id=?
             """,
-            (role, now, user_id),
+            (role, member_level, member_level, member_level, now, user_id),
         )
     else:
         cur = conn.execute(
@@ -1019,9 +1182,9 @@ def ensure_extra_account(conn, username, password, role, now):
             INSERT INTO users
                 (username, status, role, member_level, base_level, effective_level, created_at, updated_at)
             VALUES
-                (?, 'active', ?, 'normal', 'normal', 'normal', ?, ?)
+                (?, 'active', ?, ?, ?, ?, ?, ?)
             """,
-            (username, role, now, now),
+            (username, role, member_level, member_level, member_level, now, now),
         )
         user_id = cur.lastrowid
     conn.execute(
@@ -1186,12 +1349,96 @@ try:
     conn.commit()
 finally:
     conn.close()
+
+dev_tokens_path = os.environ.get("HACKME_DEV_TOKENS_FILE", "").strip()
+dev_tokens_payload = {
+    "ok": True,
+    "server_mode": selected_server_mode,
+    "tokens": {},
+    "warnings": [],
+}
+if selected_server_mode in {"test", "internal_test"} and dev_tokens_path:
+    ttl_minutes = dev_token_ttl_minutes()
+    token_features = normalize_token_feature_scope(os.environ.get("HACKME_DEV_TOKEN_FEATURES", ""))
+    token_user = None
+    conn = server.get_db()
+    try:
+        token_user = conn.execute(
+            "SELECT id, username FROM users WHERE username='test' LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    if token_user:
+        user_id = int(token_user["id"])
+        username = str(token_user["username"] or "test")
+        if selected_server_mode == "internal_test":
+            login_token = generate_internal_test_token()
+            login_expires_at = maintenance_bypass_expires_at(ttl_minutes)
+            server.save_settings({
+                "internal_test_login_token_hash": hash_internal_test_token(login_token),
+                "internal_test_login_token_expires_at": login_expires_at,
+                "internal_test_login_token_user_id": user_id,
+                "internal_test_login_token_username": username,
+                "internal_test_login_token_allowed_features_json": json.dumps(token_features, ensure_ascii=True, sort_keys=True),
+            })
+            dev_tokens_payload["tokens"]["internal_test_login_token"] = {
+                "token": login_token,
+                "target_user_id": user_id,
+                "target_username": username,
+                "expires_at": login_expires_at,
+                "ttl_minutes": ttl_minutes,
+                "allowed_features": token_features,
+                "usage": "login as the bound test user in internal_test mode via internal_test_token/login_token/X-Internal-Test-Token",
+            }
+        if hasattr(server, "server_mode_service"):
+            tester_expires_at = (datetime.now() + timedelta(minutes=ttl_minutes)).replace(microsecond=0).isoformat()
+            tester_result = server.server_mode_service.create_tester_token(
+                actor={"id": 1, "username": "root", "role": "super_admin"},
+                tester_user_id=user_id,
+                allowed_features=token_features,
+                allowed_routes=[],
+                expires_at=tester_expires_at,
+                max_requests_per_minute=120,
+                can_modify_own_role=False,
+                can_modify_own_points=False,
+                can_run_security_tests=False,
+            )
+            if tester_result.get("ok"):
+                dev_tokens_payload["tokens"]["tester_token"] = {
+                    "token": tester_result.get("token"),
+                    "token_id": tester_result.get("token_id"),
+                    "user_id": user_id,
+                    "username": username,
+                    "expires_at": tester_result.get("expires_at") or tester_expires_at,
+                    "ttl_minutes": ttl_minutes,
+                    "allowed_features": token_features,
+                    "usage": "X-Tester-Token for test/internal_test scoped API probes",
+                }
+            else:
+                dev_tokens_payload["warnings"].append(f"tester token generation failed: {tester_result.get('msg') or tester_result}")
+    else:
+        dev_tokens_payload["warnings"].append("test user was not found; no dev token generated")
+    os.makedirs(os.path.dirname(dev_tokens_path) or ".", exist_ok=True)
+    tmp_path = f"{dev_tokens_path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(dev_tokens_payload, fh, ensure_ascii=False, indent=2, sort_keys=True)
+        fh.write("\n")
+    try:
+        os.chmod(tmp_path, 0o600)
+    except Exception:
+        pass
+    os.replace(tmp_path, dev_tokens_path)
 PY
 
 if [[ "$FOREGROUND" == "1" ]]; then
-  say "[dev-tmp] repo copy: $COPY_ROOT"
+  if [[ "$IN_PLACE" == "1" ]]; then
+    say "[dev-tmp] source:    $COPY_ROOT (in-place, no copy)"
+  else
+    say "[dev-tmp] repo copy: $COPY_ROOT"
+  fi
   say "[dev-tmp] runtime:   $RUNTIME_ROOT"
   say "[dev-tmp] mode:      foreground server.py"
+  print_generated_dev_tokens
   exec "$PYTHON_BIN" server.py
 fi
 
@@ -1201,7 +1448,11 @@ printf '%s\n' "$SERVER_PID" > "$PID_FILE"
 
 SERVER_URL="$(wait_for_server_url || true)"
 
-say "[dev-tmp] repo copy: $COPY_ROOT"
+if [[ "$IN_PLACE" == "1" ]]; then
+  say "[dev-tmp] source:    $COPY_ROOT (in-place, no copy)"
+else
+  say "[dev-tmp] repo copy: $COPY_ROOT"
+fi
 say "[dev-tmp] runtime:   $RUNTIME_ROOT"
 say "[dev-tmp] pid:       $SERVER_PID"
 if [[ -n "$SERVER_URL" ]]; then
@@ -1211,6 +1462,7 @@ else
 fi
 say "[dev-tmp] accounts:   root/${ROOT_PASSWORD} admin/${MANAGER_PASSWORD} test/${TEST_PASSWORD}"
 say "[dev-tmp] log:       $LOG_CAPTURE"
+print_generated_dev_tokens
 
 # BTC_trade autostart: kick the prediction pipeline off in the background
 # so the trading dashboard already has live BTC_trade signal data on first

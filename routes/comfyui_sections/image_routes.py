@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 
 
@@ -42,6 +43,7 @@ def register_comfyui_image_routes(app, ctx):
     COMFYUI_ALLOWED_IMAGE_EXTENSIONS = ctx["COMFYUI_ALLOWED_IMAGE_EXTENSIONS"]
     COMFYUI_ALLOWED_IMAGE_MIME_TYPES = ctx["COMFYUI_ALLOWED_IMAGE_MIME_TYPES"]
     MAX_COMFYUI_FETCH_IMAGE_BYTES = ctx["MAX_COMFYUI_FETCH_IMAGE_BYTES"]
+    COMFYUI_INTERRUPT_TIMEOUT_SECONDS = ctx.get("COMFYUI_INTERRUPT_TIMEOUT_SECONDS", 2.0)
 
     def _cloud_image_row_payload(row, *, storage_row=None):
         filename = row["original_filename_plain_for_public"] or "image.png"
@@ -361,7 +363,18 @@ def register_comfyui_image_routes(app, ctx):
         try:
             if not hasattr(active_client, "interrupt"):
                 return json_resp({"ok": False, "msg": "ComfyUI 中斷產圖不支援"}), 501
-            result = active_client.interrupt()
+            try:
+                signature = inspect.signature(active_client.interrupt)
+                accepts_timeout = (
+                    "timeout_seconds" in signature.parameters
+                    or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+                )
+            except (TypeError, ValueError):
+                accepts_timeout = True
+            if accepts_timeout:
+                result = active_client.interrupt(timeout_seconds=COMFYUI_INTERRUPT_TIMEOUT_SECONDS)
+            else:
+                result = active_client.interrupt()
         except ComfyUIError as exc:
             audit("COMFYUI_INTERRUPT_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
             return _json_error_from_comfy(exc, active_client)

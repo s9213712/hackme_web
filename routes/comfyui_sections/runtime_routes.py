@@ -15,6 +15,7 @@ def register_comfyui_runtime_routes(app, ctx):
     COMFYUI_HISTORY_LIMIT = ctx["COMFYUI_HISTORY_LIMIT"]
     DEFAULT_GENERATION_TIMEOUT_SECONDS = ctx["DEFAULT_GENERATION_TIMEOUT_SECONDS"]
     MAX_GENERATION_TIMEOUT_SECONDS = ctx["MAX_GENERATION_TIMEOUT_SECONDS"]
+    COMFYUI_STATUS_TIMEOUT_SECONDS = ctx.get("COMFYUI_STATUS_TIMEOUT_SECONDS", 2.0)
     _actor_or_401 = ctx["actor_or_401"]
     _root_or_403 = ctx["root_or_403"]
     _actor_value = ctx["actor_value"]
@@ -31,6 +32,7 @@ def register_comfyui_runtime_routes(app, ctx):
     _comfyui_total_quantity = ctx["comfyui_total_quantity"]
     _comfyui_unavailable_payload = ctx["comfyui_unavailable_payload"]
     _comfyui_wallet_payload = ctx["comfyui_wallet_payload"]
+    _comfyui_storage_warnings = ctx.get("comfyui_storage_warnings", lambda: [])
     _comfyui_paid_api_status_payload = ctx.get("comfyui_paid_api_status_payload", lambda: {})
     _build_node_catalog = ctx.get("build_node_catalog")
     _configured_comfyui_port = ctx["configured_comfyui_port"]
@@ -53,6 +55,7 @@ def register_comfyui_runtime_routes(app, ctx):
     _record_generation_history = ctx["record_generation_history"]
     _register_active_generation = ctx["register_active_generation"]
     _run_comfyui_generation_job = ctx["run_comfyui_generation_job"]
+    _generation_job_payload = ctx.get("generation_job_payload")
     _start_local_comfyui = ctx["start_local_comfyui"]
     _stop_local_comfyui = ctx["stop_local_comfyui"]
     _unregister_active_generation = ctx["unregister_active_generation"]
@@ -68,7 +71,7 @@ def register_comfyui_runtime_routes(app, ctx):
         active_client = _client_for_url(binding["url"])
         try:
             if hasattr(active_client, "health_check"):
-                status = active_client.health_check(timeout=3)
+                status = active_client.health_check(timeout=COMFYUI_STATUS_TIMEOUT_SECONDS)
             else:
                 active_client.get_models()
                 status = {"ok": True}
@@ -92,8 +95,11 @@ def register_comfyui_runtime_routes(app, ctx):
                     "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
                     "paid_api_nodes": _comfyui_paid_api_status_payload(),
                     "local_runtime": runtime,
+                    "storage_warnings": _comfyui_storage_warnings(),
                 })
-            return json_resp(_comfyui_unavailable_payload(exc, active_client))
+            unavailable = _comfyui_unavailable_payload(exc, active_client)
+            unavailable["storage_warnings"] = _comfyui_storage_warnings()
+            return json_resp(unavailable)
         return json_resp({
             "ok": True,
             "available": True,
@@ -108,6 +114,7 @@ def register_comfyui_runtime_routes(app, ctx):
             "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
             "paid_api_nodes": _comfyui_paid_api_status_payload(),
             "system": status.get("system") if isinstance(status, dict) else {},
+            "storage_warnings": _comfyui_storage_warnings(),
         })
 
     @app.route("/api/comfyui/start", methods=["POST"])
@@ -153,10 +160,19 @@ def register_comfyui_runtime_routes(app, ctx):
         binding = _comfyui_binding(actor)
         active_client = _client_for_url(binding["url"])
         try:
-            models = active_client.get_models()
-            options = active_client.get_sampler_options()
-            loras = active_client.get_loras() if hasattr(active_client, "get_loras") else []
             capabilities = active_client.get_capabilities() if hasattr(active_client, "get_capabilities") else {}
+            models = list((capabilities or {}).get("models") or [])
+            loras = list((capabilities or {}).get("loras") or [])
+            options = {
+                "samplers": list((capabilities or {}).get("samplers") or []),
+                "schedulers": list((capabilities or {}).get("schedulers") or []),
+            }
+            if not models and hasattr(active_client, "get_models"):
+                models = active_client.get_models()
+            if not options["samplers"] and hasattr(active_client, "get_sampler_options"):
+                options = active_client.get_sampler_options()
+            if not loras and hasattr(active_client, "get_loras"):
+                loras = active_client.get_loras()
         except ComfyUIError as exc:
             unavailable = _comfyui_unavailable_payload(exc, active_client)
             return json_resp({
@@ -180,9 +196,12 @@ def register_comfyui_runtime_routes(app, ctx):
                 "wallet": _comfyui_wallet_payload(actor),
                 "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
                 "paid_api_nodes": _comfyui_paid_api_status_payload(),
+                "storage_warnings": _comfyui_storage_warnings(),
             })
         try:
-            vaes = active_client.get_vaes() if hasattr(active_client, "get_vaes") else []
+            vaes = list((capabilities or {}).get("vaes") or [])
+            if not vaes and hasattr(active_client, "get_vaes"):
+                vaes = active_client.get_vaes()
         except ComfyUIError:
             vaes = []
         try:
@@ -215,6 +234,7 @@ def register_comfyui_runtime_routes(app, ctx):
             "wallet": _comfyui_wallet_payload(actor),
             "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
             "paid_api_nodes": _comfyui_paid_api_status_payload(),
+            "storage_warnings": _comfyui_storage_warnings(),
         })
 
     @app.route("/api/comfyui/diffusers/inspect", methods=["POST"])
@@ -342,90 +362,27 @@ def register_comfyui_runtime_routes(app, ctx):
                     ),
                     "billing": {**quote, "confirmation_required": True},
                 }), 409
-        if _coerce_bool(data.get("async_progress")):
-            job_id = _create_generation_job(actor)
-            request_meta = _capture_request_audit_meta()
-            worker = threading.Thread(
-                target=_run_comfyui_generation_job,
-                args=(job_id, dict(actor), params, quote, timeout_seconds, request_meta, backend_binding),
-                daemon=True,
-            )
-            worker.start()
-            return json_resp({
-                "ok": True,
-                "async": True,
-                "job": {
-                    "job_id": job_id,
-                    "status": "queued",
-                    "progress": {
-                        "phase": "queued",
-                        "percent": 0,
-                        "detail": "已建立產圖工作",
-                    },
-                },
-            })
-        generation_token = _register_active_generation(
-            actor,
-            backend_url=backend_binding.get("url"),
-            backend_scope=backend_binding.get("backend_scope"),
+        job_id = _create_generation_job(actor)
+        request_meta = _capture_request_audit_meta()
+        worker = threading.Thread(
+            target=_run_comfyui_generation_job,
+            args=(job_id, dict(actor), params, quote, timeout_seconds, request_meta, backend_binding),
+            daemon=True,
         )
-        try:
-            result = active_client.generate_image(
-                params,
-                timeout_seconds=timeout_seconds,
-            )
-        except ComfyUIError as exc:
-            audit("COMFYUI_GENERATE_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
-            return _json_error_from_comfy(exc, active_client)
-        finally:
-            _unregister_active_generation(generation_token)
-        billing = {"charged": False, "exempt": "root"} if not quote else None
-        if quote:
-            try:
-                billing = _charge_comfyui_generation(actor, quote, prompt_id=result.get("prompt_id"))
-            except Exception as exc:
-                audit("COMFYUI_BILLING_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
-                return json_resp({"ok": False, "msg": f"產圖成功，但扣款失敗：{exc}"}), 409
-        images = _finalize_generation_records(actor, params, result, backend_url=backend_binding.get("url"))
-        history_id = None
-        conn = get_db()
-        try:
-            history_id = _record_generation_history(
-                conn,
-                actor=actor,
-                params=params,
-                backend_url=backend_binding.get("url"),
-                result_payload={
-                    "prompt_id": result.get("prompt_id") or "",
-                    "images": [
-                        {
-                            "image_ref": item.get("image_ref"),
-                            "mime_type": item.get("mime_type"),
-                            "size_bytes": item.get("size_bytes"),
-                        }
-                        for item in images
-                    ],
-                },
-            )
-            conn.commit()
-        except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-        finally:
-            conn.close()
-        image = images[0]
-        image_ref = result["image_ref"]
-        audit("COMFYUI_GENERATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"prompt_id={result['prompt_id']}, file={image_ref.get('filename')}, batch={len(images)}")
+        worker.start()
         return json_resp({
             "ok": True,
-            "image": image,
-            "images": images,
-            "billing": billing,
-            "history_id": history_id,
-            "wallet": (billing or {}).get("wallet") or _comfyui_wallet_payload(actor),
-            "backend_scope": backend_binding["backend_scope"],
+            "async": True,
+            "job": {
+                "job_id": job_id,
+                "status": "queued",
+                "progress": {
+                    "phase": "queued",
+                    "percent": 0,
+                    "detail": "已建立產圖工作",
+                    "timeout_seconds": timeout_seconds,
+                },
+            },
         })
 
     @app.route("/api/comfyui/jobs/<job_id>", methods=["GET"])
@@ -437,16 +394,14 @@ def register_comfyui_runtime_routes(app, ctx):
         job, err = _assert_generation_job_owner(job_id, actor)
         if err:
             return err
-        return json_resp({
-            "ok": True,
-            "job": {
-                "job_id": job["job_id"],
-                "status": job["status"],
-                "progress": job.get("progress") or {},
-                "error": job.get("error") or "",
-                "result": job.get("result"),
-            },
-        })
+        public_job = _generation_job_payload(job) if _generation_job_payload else {
+            "job_id": job["job_id"],
+            "status": job["status"],
+            "progress": job.get("progress") or {},
+            "error": job.get("error") or "",
+            "result": job.get("result"),
+        }
+        return json_resp({"ok": True, "job": public_job})
 
     @app.route("/api/comfyui/history", methods=["GET"])
     @require_csrf_safe

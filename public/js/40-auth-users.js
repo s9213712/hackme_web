@@ -1,4 +1,35 @@
+function safeLoginReturnToPath() {
+  let raw = "";
+  try {
+    raw = new URLSearchParams(window.location.search || "").get("return_to") || "";
+  } catch (err) {
+    return "";
+  }
+  raw = String(raw || "").trim();
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return "";
+  let target = null;
+  try {
+    target = new URL(raw, window.location.origin);
+  } catch (err) {
+    return "";
+  }
+  if (target.origin !== window.location.origin) return "";
+  if (!target.pathname.startsWith("/shared/")) return "";
+  return `${target.pathname}${target.search}${target.hash}`;
+}
+
+function redirectToLoginReturnToIfNeeded(loginJson = {}) {
+  if (loginJson?.must_change_password) return false;
+  const returnTo = safeLoginReturnToPath();
+  if (!returnTo) return false;
+  window.location.assign(returnTo);
+  return true;
+}
+
+let loginRequestBusy = false;
+
 async function doLogin() {
+  if (loginRequestBusy) return;
   const user = sanitize($("li-user").value.trim());
   const pw   = $("li-pw").value;
   const internalTestToken = isInternalTestLoginMode() ? ($("li-internal-test-token")?.value || "") : "";
@@ -10,6 +41,7 @@ async function doLogin() {
     flash($("li-msg"), "安全驗證狀態失效，請重新整理頁面", false);
     return;
   }
+  loginRequestBusy = true;
   setLoading("li-btn", "li-spinner", true);
   clearMsg();
 
@@ -33,6 +65,7 @@ async function doLogin() {
     }
     clearIdleTimeoutLogoutPending();
     setCsrfToken(null);
+    if (redirectToLoginReturnToIfNeeded(json)) return;
     const meRes = await apiFetch(API + "/me", { credentials: "same-origin" });
     const me = await meRes.json();
     if (me.ok) setAuthState(me, true);
@@ -40,6 +73,7 @@ async function doLogin() {
   } catch (e) {
     flash($("li-msg"), "網路錯誤，請稍後再試", false);
   } finally {
+    loginRequestBusy = false;
     setLoading("li-btn", "li-spinner", false);
   }
 }

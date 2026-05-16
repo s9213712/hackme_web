@@ -104,7 +104,7 @@ def register_video_routes(app, deps):
     def _actor_or_401():
         actor = get_current_user_ctx()
         if not actor:
-            return None, json_resp({"ok": False, "msg": "請先登入", "error": "login_required"}), 401
+            return None, json_resp({"ok": False, "msg": "請先登入", "error": "login_required"}, 401)
         return actor, None
 
     def _error_response(exc):
@@ -536,7 +536,7 @@ def register_video_routes(app, deps):
         return _env_size_bytes(
             "HACKME_E2EE_STREAM_BUNDLE_MAX_BYTES",
             "HACKME_E2EE_STREAM_BUNDLE_MAX_MB",
-            512 * 1024 * 1024,
+            128 * 1024 * 1024,
         )
 
     def _default_media_title(file_storage):

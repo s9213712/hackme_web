@@ -1,8 +1,10 @@
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from functools import lru_cache
+import copy
 import math
 import os
+import time
 
 
 @lru_cache(maxsize=1)
@@ -587,6 +589,8 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
     min_orderbook_coverage_percent = service._price_fusion_min_orderbook_coverage_percent(settings)
     max_single_provider_weight_percent = service._price_fusion_provider_weight_cap_percent(settings)
     min_provider_count = service._price_fusion_min_provider_count(settings)
+    mode = str((settings or {}).get("price_fusion_mode") or "auto_depth").strip()
+    weight_map = service._price_fusion_manual_weights(settings)
     fetchers = (
         ("binance_public_api", service._fetch_binance_orderbook_snapshot),
         ("okx_public_api", service._fetch_okx_orderbook_snapshot),
@@ -595,7 +599,16 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
         ("gemini_public_api", service._fetch_gemini_orderbook_snapshot),
         ("bitstamp_public_api", service._fetch_bitstamp_orderbook_snapshot),
     )
-    for source, fetcher in fetchers:
+    fetchers_to_query = fetchers
+    if mode == "manual_weights":
+        weighted_fetchers = tuple(
+            (source, fetcher)
+            for source, fetcher in fetchers
+            if max(float(weight_map.get(source, 0.0)), 0.0) > 0
+        )
+        if weighted_fetchers:
+            fetchers_to_query = weighted_fetchers
+    for source, fetcher in fetchers_to_query:
         try:
             try:
                 snapshots.append(
@@ -815,7 +828,6 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
             raise ValueError("; ".join(errors) or "all fused price providers failed") from fallback_exc
 
     median_midpoint = engine._median_float([snap.get("midpoint_points") or snap.get("price_points") or 0.0 for snap in snapshots])
-    weight_map = service._price_fusion_manual_weights(settings)
     excluded_providers = [
         {
             "source": source,
@@ -1035,7 +1047,6 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
             errors.append(f"quality_filtered_single_source: {str(fallback_exc)[:120]}")
             raise ValueError("; ".join(errors) or "all fused price providers failed quality checks") from fallback_exc
 
-    mode = str((settings or {}).get("price_fusion_mode") or "auto_depth").strip()
     manual_positive_reference = sum(max(float(weight_map.get(snap["source"], 0.0)), 0.0) for snap in snapshots)
     if mode == "manual_weights" and manual_positive_reference > 0:
         weighted_reference_snapshots = []
@@ -1464,7 +1475,84 @@ def root_price_fusion_status_on_conn(service, conn, *, market_symbol=""):
     return payload
 
 
-def get_live_market_quote(service, *, market_symbol=""):
+def _live_quote_cache_seconds():
+    try:
+        return max(0.0, min(float(os.environ.get("HACKME_TRADING_LIVE_QUOTE_CACHE_SECONDS", "2.0")), 30.0))
+    except Exception:
+        return 2.0
+
+
+def _live_quote_stale_seconds():
+    try:
+        return max(0.0, min(float(os.environ.get("HACKME_TRADING_LIVE_QUOTE_STALE_SECONDS", "15.0")), 120.0))
+    except Exception:
+        return 15.0
+
+
+def _clone_quote(payload, *, cache_status=None):
+    cloned = copy.deepcopy(payload)
+    if cache_status:
+        cloned["price_cache_status"] = cache_status
+    return cloned
+
+
+def _configured_provider_fetcher(service, source):
+    return {
+        "binance_public_api": service._fetch_binance_price_points,
+        "okx_public_api": service._fetch_okx_price_points,
+        "coinbase_exchange": service._fetch_coinbase_price_points,
+        "kraken_public_api": service._fetch_kraken_price_points,
+        "gemini_public_api": service._fetch_gemini_price_points,
+        "bitstamp_public_api": service._fetch_bitstamp_price_points,
+        "coingecko_simple_price": service._fetch_coingecko_price_points,
+    }.get(str(source or "").strip())
+
+
+def get_live_market_quote(service, *, market_symbol="", force_refresh=False):
+    requested_symbol = str(market_symbol or "").strip().upper()
+    cache_key = requested_symbol or "__default__"
+    now = time.monotonic()
+    ttl = _live_quote_cache_seconds()
+    stale_ttl = _live_quote_stale_seconds()
+    if not force_refresh and ttl > 0:
+        with service._live_quote_cache_lock:
+            entry = service._live_quote_cache.get(cache_key)
+            if entry and entry.get("payload") and float(entry.get("expires_at") or 0.0) > now:
+                return _clone_quote(entry["payload"], cache_status="hit")
+            if entry and entry.get("payload") and entry.get("refreshing") and float(entry.get("stale_until") or 0.0) > now:
+                return _clone_quote(entry["payload"], cache_status="stale_while_refresh")
+            service._live_quote_cache[cache_key] = {
+                "payload": (entry or {}).get("payload"),
+                "expires_at": float((entry or {}).get("expires_at") or 0.0),
+                "stale_until": float((entry or {}).get("stale_until") or 0.0),
+                "refreshing": True,
+            }
+    try:
+        payload = _refresh_live_market_quote(service, market_symbol=market_symbol)
+    except Exception:
+        if not force_refresh and stale_ttl > 0:
+            with service._live_quote_cache_lock:
+                entry = service._live_quote_cache.get(cache_key) or {}
+                if entry.get("payload") and float(entry.get("stale_until") or 0.0) > now:
+                    entry["refreshing"] = False
+                    return _clone_quote(entry["payload"], cache_status="stale_after_refresh_error")
+                if entry:
+                    entry["refreshing"] = False
+        raise
+    if not force_refresh and ttl > 0:
+        refreshed_at = time.monotonic()
+        with service._live_quote_cache_lock:
+            service._live_quote_cache[cache_key] = {
+                "payload": copy.deepcopy(payload),
+                "expires_at": refreshed_at + ttl,
+                "stale_until": refreshed_at + max(ttl, stale_ttl),
+                "refreshing": False,
+            }
+        return _clone_quote(payload, cache_status="refresh")
+    return payload
+
+
+def _refresh_live_market_quote(service, *, market_symbol=""):
     engine = _engine_module()
     conn = service.get_db()
     try:
@@ -1670,7 +1758,7 @@ def current_market_price_points(service, conn, market, *, with_meta=False, high_
     engine = _engine_module()
     symbol = market["symbol"]
     settings = service._settings_payload(conn)
-    configured_source = settings.get("price_source") or engine.FUSED_PRICE_SOURCE
+    configured_source = settings.get("price_source") or engine.DEFAULT_TRADING_PRICE_SOURCE
     confirmed_at_text = str(market.get("live_price_confirmed_at") or "").strip()
     warmup_started_at_text = str(market.get("live_price_warmup_started_at") or "").strip()
     price_meta = {
@@ -1759,7 +1847,38 @@ def current_market_price_points(service, conn, market, *, with_meta=False, high_
         elif service.live_price_provider:
             price, live_source, live_transport_meta = service._fetch_live_price_points(symbol, with_meta=True, settings=settings, conn=conn)
         else:
-            price, live_source, live_transport_meta = service._fetch_live_price_points(symbol, with_meta=True, settings=settings, conn=conn)
+            configured_fetcher = _configured_provider_fetcher(service, configured_source)
+            if configured_fetcher:
+                try:
+                    price, live_transport_meta = service._call_with_optional_conn(
+                        configured_fetcher,
+                        symbol,
+                        settings=settings,
+                        with_meta=True,
+                        conn=conn,
+                    )
+                    live_source = configured_source
+                except Exception as primary_exc:
+                    price, fusion_details = service._call_with_optional_conn(
+                        service._fetch_weighted_fused_price_points,
+                        symbol,
+                        settings=settings,
+                        conn=conn,
+                    )
+                    fusion_details = dict(fusion_details or {})
+                    fusion_details["primary_price_source"] = configured_source
+                    fusion_details["primary_price_error"] = str(primary_exc)[:300]
+                    fusion_details["warning_only"] = True
+                    fusion_details["warnings"] = service._append_price_fusion_warning(
+                        fusion_details.get("warnings"),
+                        "primary_price_source_failed_fused_fallback",
+                        f"{configured_source} 報價失敗，已改用融合價格 fallback。",
+                        severity="warning",
+                    )
+                    live_source = engine.FUSED_PRICE_SOURCE
+                    live_transport_meta = dict((fusion_details or {}).get("transport_state") or {})
+            else:
+                price, live_source, live_transport_meta = service._fetch_live_price_points(symbol, with_meta=True, settings=settings, conn=conn)
     except Exception as exc:
         max_stale = int(settings.get("max_price_staleness_seconds") or 0)
         try:
@@ -1839,7 +1958,8 @@ def current_market_price_points(service, conn, market, *, with_meta=False, high_
                 metadata={"old_price_points": old_price, "new_price_points": price, "jump_percent": jump_percent, "allowed_percent": allowed_percent},
             )
             raise ValueError(f"live trading price jump {jump_percent:.2f}% exceeds max {allowed_percent:.2f}% for {symbol}")
-    if configured_source == engine.FUSED_PRICE_SOURCE and fusion_details and (
+    fusion_active = bool(fusion_details and live_source == engine.FUSED_PRICE_SOURCE)
+    if fusion_active and (
         fusion_details.get("conservative_mode")
         or fusion_details.get("fallback_active")
         or fusion_details.get("degraded")
@@ -1911,7 +2031,7 @@ def current_market_price_points(service, conn, market, *, with_meta=False, high_
                 "risk_grade_price_points": fusion_details.get("risk_grade_price_points"),
             },
         )
-    elif configured_source == engine.FUSED_PRICE_SOURCE and fusion_details:
+    elif fusion_active:
         transport_state = dict((fusion_details.get("transport_state") or {}))
         risk_grade_usable = bool(
             (fusion_details.get("risk_grade_provider_count") or 0)
@@ -2000,7 +2120,7 @@ def current_market_price_points(service, conn, market, *, with_meta=False, high_
         or bool(active_transport_state.get("degraded"))
     ):
         price_meta["fallback_reason"] = str(active_transport_state.get("message") or active_transport_state.get("exclusion_reason") or "").strip()
-    if configured_source == engine.FUSED_PRICE_SOURCE and fusion_details and high_risk and fusion_details.get("risk_grade_price_points") is not None:
+    if fusion_active and high_risk and fusion_details.get("risk_grade_price_points") is not None:
         price = float(engine._to_decimal(fusion_details.get("risk_grade_price_points"), name="risk_grade_price_points", minimum=0.00000001))
     now = engine._now()
     next_confirmed_at = confirmed_at_text or None

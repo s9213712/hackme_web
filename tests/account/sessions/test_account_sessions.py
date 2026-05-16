@@ -18,6 +18,8 @@ def _build_app(
     enable_foreign_keys=False,
     validate_password=None,
     enforce_password_strength=None,
+    count_role=None,
+    system_settings=None,
 ):
     app = Flask(__name__)
     app.testing = True
@@ -48,7 +50,7 @@ def _build_app(
         "add_violation": default_add_violation,
         "audit": lambda *args, **kwargs: None,
         "check_user_rate_limit": lambda *args, **kwargs: (False, {"limit": 10}),
-        "count_role": lambda role: 0,
+        "count_role": count_role or (lambda role: 0),
         "db_get_user_from_token": lambda *args, **kwargs: None,
         "db_get_user_role": lambda *args, **kwargs: "user",
         "delete_csrf_tokens_for_username": delete_csrf_tokens_for_username or (lambda username: None),
@@ -58,6 +60,7 @@ def _build_app(
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: actor_box["actor"],
         "get_db": get_db,
+        "get_system_settings": lambda: dict(system_settings or {}),
         "get_ua": lambda: "test-agent",
         "hash_password": lambda value: value,
         "hash_token": _hash_token,
@@ -794,9 +797,87 @@ def test_admin_create_user_accepts_minimal_required_fields(tmp_path):
     assert res.status_code == 200
     assert body["ok"] is True
     conn = sqlite3.connect(db_path)
-    row = conn.execute("SELECT username, status, role FROM users WHERE username='minimal_user'").fetchone()
-    assert row == ("minimal_user", "active", "user")
+    row = conn.execute("SELECT username, status, role, member_level, base_level, effective_level FROM users WHERE username='minimal_user'").fetchone()
+    assert row == ("minimal_user", "active", "user", "trusted", "trusted", "trusted")
     conn.close()
+
+
+def test_admin_create_manager_obeys_root_configured_seat_limit(tmp_path):
+    db_path = tmp_path / "admin-create-manager-seat-limit.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT,
+            base_level TEXT,
+            effective_level TEXT,
+            trust_score INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            reputation INTEGER DEFAULT 0,
+            violation_score INTEGER DEFAULT 0,
+            sanction_status TEXT,
+            sanction_until TEXT,
+            level_updated_at TEXT,
+            level_updated_by TEXT,
+            level_update_reason TEXT,
+            password_strength_score INTEGER DEFAULT 0,
+            avatar_file_id INTEGER,
+            avatar_crop_json TEXT,
+            blocked_until TEXT,
+            violation_count INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE user_passwords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username, status, role, member_level, base_level, effective_level, created_at, updated_at) VALUES (1, 'root', 'active', 'super_admin', 'normal', 'normal', 'normal', '2026-01-01T00:00:00', '2026-01-01T00:00:00')")
+    conn.execute("INSERT INTO users (id, username, status, role, member_level, base_level, effective_level, created_at, updated_at) VALUES (2, 'admin', 'active', 'manager', 'normal', 'normal', 'normal', '2026-01-01T00:00:00', '2026-01-01T00:00:00')")
+    conn.commit()
+    conn.close()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "status": "active"}}
+    client = _build_app(
+        str(db_path),
+        actor_box,
+        enable_foreign_keys=True,
+        count_role=lambda role: 1 if role == "manager" else 0,
+        system_settings={"max_manager_seats": 1},
+    ).test_client()
+
+    res = client.post(
+        "/api/admin/users",
+        json={
+            "username": "blocked_manager",
+            "password": "AdminCreate#123",
+            "password_confirm": "AdminCreate#123",
+            "nickname": "Blocked Manager",
+            "role": "manager",
+            "status": "active",
+        },
+    )
+
+    assert res.status_code == 409
+    assert res.get_json()["msg"] == "管理者已達上限（1 人）"
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT 1 FROM users WHERE username='blocked_manager'").fetchone()
+    conn.close()
+    assert row is None
 
 
 def test_admin_promote_user_succeeds_when_csrf_cleanup_writes_same_db(tmp_path):

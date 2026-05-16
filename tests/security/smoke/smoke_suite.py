@@ -260,7 +260,7 @@ def run_functional_suite(base_url):
         res = user.request(
             "POST",
             "/api/chat/rooms",
-            body={"name": "smoke-room", "target_user": "admin"},
+            body={"name": "smoke-room"},
             headers={"X-CSRF-Token": csrf},
         )
         assert_status("test create chat room", res, 200)

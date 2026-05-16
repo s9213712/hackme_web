@@ -35,7 +35,8 @@ function albumShareLinkMarkup(album) {
   `;
 }
 
-async function copyAlbumShareUrl(url) {
+async function copyAlbumShareUrl(url, options = {}) {
+  const button = options.button || null;
   const shareUrl = absoluteAlbumShareUrl(url);
   if (!shareUrl) {
     alert("這本相簿尚未產生分享連結");
@@ -43,8 +44,10 @@ async function copyAlbumShareUrl(url) {
   }
   try {
     await navigator.clipboard.writeText(shareUrl);
-    alert("已複製分享連結");
+    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "已完成複製", true);
+    else alert("已複製分享連結");
   } catch (err) {
+    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "請在彈出視窗複製完整連結", false);
     window.prompt("分享連結", shareUrl);
   }
 }
@@ -266,36 +269,48 @@ async function openAlbumViewer(id, options = {}) {
   }
 }
 
-async function loadDriveDashboard() {
+async function loadDriveDashboard(options = {}) {
   if (!currentUser || !canAccessModule("privacy_uploads")) return;
-  updateDriveE2eePassphraseVisibility();
-  const msg = $("drive-msg");
-  try {
-    await fetchCsrfToken({ force: true });
-    const csrf = getCsrfToken();
-    const res = await apiFetch(API + "/files/security-policy", {
-      credentials: "same-origin",
-      headers: { "X-CSRF-Token": csrf || "" }
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!json.ok) {
-      if (msg) flash(msg, json.msg || "雲端硬碟狀態讀取失敗", false);
-      return;
-    }
-    renderDriveDashboard(json);
-    await loadStorageUpgradeOptions();
-    await loadRemoteDownloadCapabilities();
-    if (typeof restoreDriveBackgroundTransfers === "function") {
-      await restoreDriveBackgroundTransfers();
-    } else {
-      await restoreRemoteDownloadTasks();
-    }
-    await loadDriveFiles(csrf);
-    await loadStorageFiles(csrf);
-    if (msg) msg.className = "msg";
-  } catch (err) {
-    if (msg) flash(msg, "雲端硬碟狀態讀取失敗", false);
+  if (driveDashboardInFlight) return driveDashboardInFlight;
+  const lazy = options && options.lazy === true;
+  if (lazy && driveDashboardLoadedAt && Date.now() - driveDashboardLoadedAt < DRIVE_DASHBOARD_LAZY_REFRESH_MS) {
+    if (typeof restoreDriveBackgroundTransfers === "function") return restoreDriveBackgroundTransfers();
+    return restoreRemoteDownloadTasks();
   }
+  driveDashboardInFlight = (async () => {
+    updateDriveE2eePassphraseVisibility();
+    const msg = $("drive-msg");
+    try {
+      await fetchCsrfToken({ force: true });
+      const csrf = getCsrfToken();
+      const res = await apiFetch(API + "/files/security-policy", {
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf || "" }
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!json.ok) {
+        if (msg) flash(msg, json.msg || "雲端硬碟狀態讀取失敗", false);
+        return;
+      }
+      renderDriveDashboard(json);
+      await loadStorageUpgradeOptions();
+      await loadRemoteDownloadCapabilities();
+      if (typeof restoreDriveBackgroundTransfers === "function") {
+        await restoreDriveBackgroundTransfers();
+      } else {
+        await restoreRemoteDownloadTasks();
+      }
+      await loadDriveFiles(csrf);
+      await loadStorageFiles(csrf);
+      driveDashboardLoadedAt = Date.now();
+      if (msg) msg.className = "msg";
+    } catch (err) {
+      if (msg) flash(msg, "雲端硬碟狀態讀取失敗", false);
+    } finally {
+      driveDashboardInFlight = null;
+    }
+  })();
+  return driveDashboardInFlight;
 }
 
 async function loadStorageUpgradeOptions() {

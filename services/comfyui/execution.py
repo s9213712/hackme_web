@@ -34,8 +34,14 @@ def queue_prompt(client, workflow, *, extra_data=None, error_cls):
     return queue_prompt_with_client_id(client, workflow, client_id=None, extra_data=extra_data, error_cls=error_cls)["prompt_id"]
 
 
-def interrupt(client):
-    return client._json_request("/interrupt", method="POST", payload={}, allow_non_json=True)
+def interrupt(client, *, timeout_seconds=None):
+    return client._json_request(
+        "/interrupt",
+        method="POST",
+        payload={},
+        timeout=timeout_seconds,
+        allow_non_json=True,
+    )
 
 
 def emit_progress(progress_callback, snapshot):

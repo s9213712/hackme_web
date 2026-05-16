@@ -3,6 +3,7 @@
 const sharedFileState = {
   token: "",
   file: null,
+  previewObjectUrl: "",
 };
 
 function sharedFileToken() {
@@ -21,12 +22,82 @@ function sharedFileSetMsg(text, bad = false) {
   el.className = bad ? "msg err" : "msg";
 }
 
+function sharedFileErrorFromResponse(res, json, fallback) {
+  const err = new Error(json?.msg || fallback || `HTTP ${res.status}`);
+  err.status = res.status;
+  err.reason = json?.reason || "";
+  return err;
+}
+
+function sharedFileSetLoginRequired(required) {
+  const link = document.getElementById("shared-file-login-link");
+  if (!link) return;
+  link.hidden = !required;
+  if (required) {
+    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    link.href = `/?return_to=${encodeURIComponent(returnTo)}`;
+  }
+}
+
+function sharedFileMaybeShowLogin(err) {
+  sharedFileSetLoginRequired(err?.reason === "login_required" || Number(err?.status) === 401);
+}
+
 function sharedFileFormatBytes(bytes) {
   const value = Number(bytes || 0);
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
   return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function sharedFileEscape(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[ch]));
+}
+
+function sharedFileClearPreview() {
+  if (sharedFileState.previewObjectUrl) {
+    URL.revokeObjectURL(sharedFileState.previewObjectUrl);
+    sharedFileState.previewObjectUrl = "";
+  }
+}
+
+function sharedFilePreviewBox() {
+  return document.getElementById("shared-file-preview");
+}
+
+function sharedFileContentUrl(file) {
+  return file?.preview_content_url || `/api/storage/shared/${encodeURIComponent(sharedFileState.token)}/preview/content`;
+}
+
+function sharedFilePreviewMetadataUrl(file) {
+  return file?.preview_url || `/api/storage/shared/${encodeURIComponent(sharedFileState.token)}/preview`;
+}
+
+function sharedFileExtension(filename) {
+  const lower = String(filename || "").toLowerCase();
+  for (const ext of [".tar.gz", ".tar.bz2", ".tar.xz"]) {
+    if (lower.endsWith(ext)) return ext;
+  }
+  const index = lower.lastIndexOf(".");
+  return index >= 0 ? lower.slice(index) : "";
+}
+
+function sharedFileCategory(filename, mime = "") {
+  const type = String(mime || "").toLowerCase();
+  const ext = sharedFileExtension(filename);
+  if (type.startsWith("image/") || [".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"].includes(ext)) return "image";
+  if (type.startsWith("video/") || [".m4v", ".mov", ".mp4", ".ogv", ".webm"].includes(ext)) return "video";
+  if (type.startsWith("audio/") || [".aac", ".aif", ".aiff", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".weba"].includes(ext)) return "audio";
+  if (type === "application/pdf" || ext === ".pdf") return "pdf";
+  if (type.startsWith("text/") || [".css", ".csv", ".htm", ".html", ".ini", ".js", ".json", ".log", ".md", ".py", ".sh", ".sql", ".text", ".toml", ".txt", ".xml", ".yaml", ".yml"].includes(ext) || !ext) return "text";
+  return "metadata";
 }
 
 function sharedFileBase64ToBytes(value) {
@@ -104,6 +175,71 @@ function sharedFileSaveBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
+function sharedFileShowPreview(html) {
+  const box = sharedFilePreviewBox();
+  if (!box) return;
+  box.hidden = false;
+  box.innerHTML = html;
+}
+
+async function sharedFileRenderBlobPreview(blob, filename) {
+  sharedFileClearPreview();
+  const safeName = sharedFileEscape(filename || "preview");
+  const category = sharedFileCategory(filename, blob.type || "");
+  if (category === "text") {
+    const text = await blob.text();
+    sharedFileShowPreview(`<pre>${sharedFileEscape(text.slice(0, 65536))}</pre>`);
+    return;
+  }
+  if (["image", "video", "audio", "pdf"].includes(category)) {
+    const url = URL.createObjectURL(blob);
+    sharedFileState.previewObjectUrl = url;
+    if (category === "image") {
+      sharedFileShowPreview(`<img src="${url}" alt="${safeName}" />`);
+    } else if (category === "video") {
+      sharedFileShowPreview(`<video controls playsinline preload="metadata" src="${url}"></video>`);
+    } else if (category === "audio") {
+      sharedFileShowPreview(`<audio controls preload="metadata" src="${url}"></audio>`);
+    } else {
+      sharedFileShowPreview(`<iframe src="${url}" title="${safeName}" loading="lazy"></iframe>`);
+    }
+    return;
+  }
+  sharedFileShowPreview(`<pre>${safeName}\n${sharedFileEscape(sharedFileFormatBytes(blob.size || 0))}</pre>`);
+}
+
+function sharedFileRenderPreviewMetadata(preview, file) {
+  sharedFileClearPreview();
+  const category = preview?.category || "metadata";
+  const safeName = sharedFileEscape(preview?.filename || file?.display_name || "preview");
+  if (preview?.render_mode === "text") {
+    sharedFileShowPreview(`<pre>${sharedFileEscape(preview.text || "")}</pre>`);
+    return;
+  }
+  if (preview?.render_mode === "archive") {
+    const entries = Array.isArray(preview.entries) ? preview.entries : [];
+    const rows = entries.length
+      ? entries.map((entry) => `<li>${sharedFileEscape(entry.name || "-")} <span class="meta">${sharedFileEscape(sharedFileFormatBytes(entry.size || entry.compressed_size || 0))}</span></li>`).join("")
+      : "<li>沒有可顯示的項目</li>";
+    sharedFileShowPreview(`<ol class="preview-list">${rows}</ol>`);
+    return;
+  }
+  if (preview?.render_mode === "media" && ["image", "video", "audio", "pdf"].includes(category)) {
+    const url = sharedFileContentUrl(file);
+    if (category === "image") {
+      sharedFileShowPreview(`<img src="${url}" alt="${safeName}" />`);
+    } else if (category === "video") {
+      sharedFileShowPreview(`<video controls playsinline preload="metadata" src="${url}"></video>`);
+    } else if (category === "audio") {
+      sharedFileShowPreview(`<audio controls preload="metadata" src="${url}"></audio>`);
+    } else {
+      sharedFileShowPreview(`<iframe src="${url}" title="${safeName}" loading="lazy"></iframe>`);
+    }
+    return;
+  }
+  sharedFileShowPreview(`<pre>${safeName}\n${sharedFileEscape(preview?.mime_type || "application/octet-stream")}\n${sharedFileEscape(sharedFileFormatBytes(preview?.size_bytes || file?.size_bytes || 0))}</pre>`);
+}
+
 async function sharedFileFetchDownload(file, confirmed = false) {
   const url = new URL(file.download_url, window.location.origin);
   if (confirmed) url.searchParams.set("confirm_high_risk", "1");
@@ -116,7 +252,7 @@ async function sharedFileFetchDownload(file, confirmed = false) {
   }
   if (!res.ok) {
     const json = await res.json().catch(() => ({}));
-    throw new Error(json.msg || `下載失敗（HTTP ${res.status}）`);
+    throw sharedFileErrorFromResponse(res, json, `下載失敗（HTTP ${res.status}）`);
   }
   return res.blob();
 }
@@ -139,9 +275,45 @@ async function sharedFileDownload() {
     }
     sharedFileSetMsg("下載已開始。");
   } catch (err) {
+    sharedFileMaybeShowLogin(err);
     sharedFileSetMsg(err.message || "下載失敗", true);
   } finally {
     if (btn) btn.disabled = false;
+  }
+}
+
+async function sharedFilePreview() {
+  const file = sharedFileState.file;
+  if (!file) return;
+  const btn = document.getElementById("shared-file-preview-btn");
+  if (btn) btn.disabled = true;
+  sharedFileSetMsg("準備預覽...");
+  try {
+    if (!file.can_preview) throw new Error("此分享連結未開放瀏覽器預覽。");
+    if (file.e2ee?.requires_fragment_key) {
+      if (!window.crypto?.subtle) throw new Error("此瀏覽器不支援 E2EE 分享解密。");
+      const blob = await fetch(sharedFileContentUrl(file), { credentials: "same-origin" }).then(async (res) => {
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}));
+          throw sharedFileErrorFromResponse(res, json, `預覽失敗（HTTP ${res.status}）`);
+        }
+        return res.blob();
+      });
+      const decrypted = await sharedFileDecryptBlob(blob, file);
+      await sharedFileRenderBlobPreview(decrypted.blob, decrypted.filename);
+      sharedFileSetMsg("預覽已在瀏覽器端解密。");
+      return;
+    }
+    const res = await fetch(sharedFilePreviewMetadataUrl(file), { credentials: "same-origin" });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw sharedFileErrorFromResponse(res, json, `預覽失敗（HTTP ${res.status}）`);
+    sharedFileRenderPreviewMetadata(json.preview || {}, file);
+    sharedFileSetMsg("預覽已載入。");
+  } catch (err) {
+    sharedFileMaybeShowLogin(err);
+    sharedFileSetMsg(err.message || "預覽失敗", true);
+  } finally {
+    if (btn) btn.disabled = !sharedFileState.file?.can_preview;
   }
 }
 
@@ -149,7 +321,8 @@ async function sharedFileLoad() {
   sharedFileState.token = sharedFileToken();
   const title = document.getElementById("shared-file-title");
   const meta = document.getElementById("shared-file-meta");
-  const btn = document.getElementById("shared-file-download-btn");
+  const downloadBtn = document.getElementById("shared-file-download-btn");
+  const previewBtn = document.getElementById("shared-file-preview-btn");
   if (!sharedFileState.token) {
     sharedFileSetMsg("分享連結不完整。", true);
     return;
@@ -157,23 +330,31 @@ async function sharedFileLoad() {
   try {
     const res = await fetch(`/api/storage/shared/${encodeURIComponent(sharedFileState.token)}`, { credentials: "same-origin" });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok || !json.ok) throw new Error(json.msg || "分享連結不存在或已失效");
+    if (!res.ok || !json.ok) throw sharedFileErrorFromResponse(res, json, "分享連結不存在或已失效");
     const file = json.file || {};
     sharedFileState.file = file;
-    if (title) title.textContent = file.display_name || "檔案下載";
+    sharedFileSetLoginRequired(false);
+    if (title) title.textContent = file.display_name || "檔案分享";
     const e2eeText = file.e2ee?.requires_fragment_key ? " · E2EE 瀏覽器端解密" : "";
+    const previewText = file.can_preview ? " · 可瀏覽器預覽" : " · 未開放預覽";
     const scopeText = file.access_scope === "account" ? ` · 限 ${file.required_username || "指定帳戶"}` : " · 知道連結即可下載";
-    if (meta) meta.textContent = `${sharedFileFormatBytes(file.size_bytes)}${scopeText}${e2eeText}`;
-    if (btn) {
-      btn.disabled = false;
-      btn.addEventListener("click", sharedFileDownload);
+    if (meta) meta.textContent = `${sharedFileFormatBytes(file.size_bytes)}${scopeText}${previewText}${e2eeText}`;
+    if (downloadBtn) {
+      downloadBtn.disabled = false;
+      downloadBtn.addEventListener("click", sharedFileDownload);
     }
-    sharedFileSetMsg(file.e2ee?.requires_fragment_key ? "請使用包含 #key= 的完整分享連結下載。" : "");
+    if (previewBtn) {
+      previewBtn.disabled = !file.can_preview;
+      previewBtn.addEventListener("click", sharedFilePreview);
+    }
+    sharedFileSetMsg(file.e2ee?.requires_fragment_key ? "請使用包含 #key= 的完整分享連結預覽或下載。" : "");
   } catch (err) {
-    if (title) title.textContent = "檔案無法下載";
+    if (title) title.textContent = "檔案無法開啟";
     if (meta) meta.textContent = "";
+    sharedFileMaybeShowLogin(err);
     sharedFileSetMsg(err.message || "分享連結不存在或已失效", true);
   }
 }
 
 document.addEventListener("DOMContentLoaded", sharedFileLoad);
+window.addEventListener("beforeunload", sharedFileClearPreview);

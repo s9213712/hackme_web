@@ -35,6 +35,13 @@ DIFFUSERS_BACKEND_NETLOC = "local"
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
+def _env_flag(name, *, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
 def _format_bytes(value):
     size = max(0, int(value or 0))
     units = ("B", "KB", "MB", "GB", "TB")
@@ -136,6 +143,15 @@ class DiffusersClient:
     def _ensure_configured(self, model_repo=None):
         if not str(model_repo or self.model_repo or "").strip():
             raise ComfyUIError("Diffusers 模式尚未設定 Hugging Face model repo，例如 dhead/waiIllustriousSDXL_v150")
+
+    def _ensure_in_process_runtime_allowed(self):
+        if _env_flag("HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS", default=False):
+            return
+        raise ComfyUIError(
+            "Diffusers 模式會在 Flask 主程序內載入模型並執行推論，可能占用大量 RAM/VRAM/CPU；"
+            "本站預設停用這條路徑。請改用外部 ComfyUI local/remote backend。"
+            "若你明確接受主程序資源風險，才設定 HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS=1。"
+        )
 
     def _effective_model_variant(self, params=None):
         params = params or {}
@@ -267,6 +283,11 @@ class DiffusersClient:
         return {
             "backend_kind": "diffusers",
             "available_nodes": [],
+            "models": [self.model_repo] if self.model_repo else [],
+            "loras": [],
+            "vaes": [],
+            "samplers": ["diffusers-auto"],
+            "schedulers": ["default"],
             "controlnet_models": [],
             "upscale_models": [],
             "controlnet_types": {},
@@ -364,7 +385,7 @@ class DiffusersClient:
             raise ComfyUIError(f"Diffusers 預覽檔案刪除失敗：{exc}") from exc
         return {"file_deleted": True, "file_missing": False, "file_delete_supported": True, "history_deleted": bool(prompt_id)}
 
-    def interrupt(self):
+    def interrupt(self, *, timeout_seconds=None):
         return {"interrupted": False, "message": "Diffusers 後端目前不支援中斷已進入推論中的工作"}
 
     def _token_fingerprint(self):
@@ -854,6 +875,7 @@ class DiffusersClient:
         }
 
     def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None, extra_data=None):
+        self._ensure_in_process_runtime_allowed()
         params = params or {}
         mode = str(params.get("generation_mode") or "txt2img").strip().lower()
         if mode not in {"txt2img", "img2img", "inpaint"}:

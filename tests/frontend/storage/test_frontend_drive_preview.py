@@ -68,6 +68,7 @@ def test_filemanager_and_albummanager_ui_are_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
     shared_file_js = (ROOT / "public" / "js" / "shared-file.js").read_text(encoding="utf-8")
+    share_preview_routes = (ROOT / "routes" / "file_sections" / "share_preview_routes.py").read_text(encoding="utf-8")
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
@@ -181,10 +182,21 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "copyBtn.dataset.shareUrl = shareUrl" in drive_js
     assert 'copyBtn.dataset.shareRequiresFragment = requiresFragment ? "1" : "0";' in drive_js
     assert 'setDriveShareCopyStatus("連結已複製"' in drive_js
+    assert 'flash(msg, err?.message || "分享連結建立失敗", false)' in drive_js
+    assert 'flash(msg.message || "分享連結建立失敗", false)' not in drive_js
     assert "payload.storage_file_id = storageFileId" in drive_js
     assert 'switchModuleTab("shares")' in drive_js
     assert "sharedFileDownload" in shared_file_js
+    assert "sharedFilePreview" in shared_file_js
+    assert "sharedFileRenderPreviewMetadata" in shared_file_js
+    assert "sharedFileRenderBlobPreview" in shared_file_js
+    assert "preview_content_url" in shared_file_js
     assert "/api/storage/shared/" in shared_file_js
+    assert 'id="shared-file-login-link"' in share_preview_routes
+    assert "前往登入" in share_preview_routes
+    assert "function sharedFileSetLoginRequired(required)" in shared_file_js
+    assert 'reason === "login_required"' in shared_file_js
+    assert "return_to=" in shared_file_js
     assert "sharedFileDecryptBlob" in shared_file_js
     assert "async function moveStorageFolder()" in drive_js
     assert "async function createAlbum()" in drive_js
@@ -192,7 +204,7 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "await openAlbumViewer(id, options);" in drive_js
     assert "async function saveAlbumDetail()" in drive_js
     assert "function albumShareLinkMarkup(album)" in drive_js
-    assert "async function copyAlbumShareUrl(url)" in drive_js
+    assert "async function copyAlbumShareUrl(url, options = {})" in drive_js
     assert 'data-drive-action="copy-album-share-link"' in drive_js
     assert "share_url" in drive_js
     assert "payload.share_password = sharePassword" in drive_js
@@ -300,6 +312,8 @@ def test_album_viewer_has_dedicated_module():
     assert 'joinStoragePath("/attachments", uniqueName)' in drive_js
     assert 'form.append("virtual_path", attachmentStoragePath(selectedFile, contextType || "attachment"))' in drive_js
     assert 'form.append("display_name", selectedFile.name || "attachment.bin")' in drive_js
+    assert 'canRemoveContextAttachment(ref)' in drive_js
+    assert "const removeButton = canRemove" in drive_js
     assert 'data-drive-action="delete-context-attachment"' in drive_js
     assert "async function deleteContextAttachment" in drive_js
     assert "/cloud-drive/refs/${encodeURIComponent(refId)}/delete" in drive_js
@@ -612,7 +626,7 @@ def test_share_link_copy_buttons_have_clipboard_fallback():
     video_js = (ROOT / "public" / "js" / "39-videos.js").read_text(encoding="utf-8")
 
     # Drive: prompt-based fallback is OK (user can select+copy).
-    assert "async function copyAlbumShareUrl(url)" in drive_js
+    assert "async function copyAlbumShareUrl(url, options = {})" in drive_js
     assert "async function copyDriveShareUrl(url, options = {})" in drive_js
     assert "navigator.clipboard.writeText(shareUrl)" in drive_js
     assert 'setDriveShareCopyStatus("連結已複製"' in drive_js
@@ -624,7 +638,7 @@ def test_share_link_copy_buttons_have_clipboard_fallback():
 
     # Videos: assert copyVideoLink has a fallback that lets the user
     # actually copy the URL (window.prompt OR a persistent visible element).
-    assert "async function copyVideoLink(videoId)" in video_js
+    assert "async function copyVideoLink(videoId, options = {})" in video_js
     assert "navigator.clipboard.writeText(url)" in video_js
     has_prompt_fallback = "window.prompt" in video_js
     has_input_fallback = (

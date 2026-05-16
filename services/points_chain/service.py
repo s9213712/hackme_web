@@ -18,6 +18,7 @@ def _connection_path(conn):
 class PointsLedgerService:
     _schema_lock = threading.Lock()
     _schema_ready_paths = set()
+    _wallet_lock = threading.Lock()
 
     def __init__(self, *, get_db, chain_secret, audit=None, backup_dir=None, mode_reader=None, security_event_recorder=None):
         self.get_db = get_db
@@ -528,15 +529,46 @@ class PointsLedgerService:
             conn.close()
 
     def ensure_wallet(self, conn, user_id):
+        user_id = int(user_id)
+        row = conn.execute("SELECT * FROM points_wallets WHERE user_id=?", (user_id,)).fetchone()
+        if row:
+            return row
         now = utc_now()
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO points_wallets (user_id, created_at, updated_at)
-            VALUES (?, ?, ?)
-            """,
-            (int(user_id), now, now),
-        )
-        return conn.execute("SELECT * FROM points_wallets WHERE user_id=?", (int(user_id),)).fetchone()
+        with self._wallet_lock:
+            row = conn.execute("SELECT * FROM points_wallets WHERE user_id=?", (user_id,)).fetchone()
+            if row:
+                return row
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO points_wallets (user_id, created_at, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (user_id, now, now),
+            )
+            return conn.execute("SELECT * FROM points_wallets WHERE user_id=?", (user_id,)).fetchone()
+
+    def wallet_payload_for_read(self, conn, user_id):
+        user_id = int(user_id)
+        row = conn.execute("SELECT * FROM points_wallets WHERE user_id=?", (user_id,)).fetchone()
+        if row:
+            return self.serialize_wallet(row)
+        return {
+            "user_id": user_id,
+            "public_account_id": self._public_account_id(user_id),
+            "currency_type": DISPLAY_CURRENCY,
+            "points_balance": 0,
+            "points_frozen": 0,
+            "total_points_earned": 0,
+            "total_points_spent": 0,
+            "soft_balance": 0,
+            "hard_balance": 0,
+            "soft_frozen": 0,
+            "hard_frozen": 0,
+            "wallet_status": "active",
+            "risk_level": "normal",
+            "created_at": None,
+            "updated_at": None,
+        }
 
     def get_wallet(self, user_id):
         conn = self.get_db()

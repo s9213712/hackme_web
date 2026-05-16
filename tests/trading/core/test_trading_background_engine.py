@@ -274,3 +274,46 @@ def test_background_dev_ready_can_be_enabled_for_isolated_qa(tmp_path):
     job = next(row for row in status["jobs"] if row["job_key"] == "price_refresh")
     assert job["failure_count"] == 0
     assert job["last_success_at"]
+
+
+def test_background_sitewide_metrics_refresh_writes_root_snapshots(tmp_path):
+    _points, trading = _services(tmp_path)
+
+    result = trading.run_background_job_once(
+        job_key="sitewide_metrics_refresh",
+        get_system_settings=_settings,
+        get_runtime_server_mode=lambda: "production",
+        owner="unit-test",
+        force=True,
+    )
+
+    assert result["status"] == "success"
+    assert "root_report" in result["result"]["snapshot_keys"]
+    pools = trading.get_root_trading_snapshot(snapshot_key="sitewide_pools")
+    positions = trading.get_root_trading_snapshot(snapshot_key="sitewide_user_positions")
+    assert pools["ok"] is True
+    assert positions["ok"] is True
+    assert pools["source_run_uuid"]
+    assert pools["payload"]["pools"]["snapshot_backed"] is True
+
+
+def test_background_run_once_queue_is_processed_by_worker_loop(tmp_path):
+    _points, trading = _services(tmp_path)
+    queued = trading.enqueue_background_job_once(
+        job_key="sitewide_metrics_refresh",
+        requested_by={"id": 2, "username": "root"},
+        force=True,
+    )
+
+    result = trading.run_due_background_jobs(
+        get_system_settings=_settings,
+        get_runtime_server_mode=lambda: "production",
+        owner="unit-test",
+        job_keys=[],
+    )
+
+    assert result["queued_results"][0]["queue_uuid"] == queued["queue_uuid"]
+    assert result["queued_results"][0]["queue_status"] == "succeeded"
+    status = trading.get_background_status()
+    queued_row = next(row for row in status["queued_runs"] if row["queue_uuid"] == queued["queue_uuid"])
+    assert queued_row["status"] == "succeeded"

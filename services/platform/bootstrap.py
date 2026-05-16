@@ -505,9 +505,13 @@ def _ensure_chat_social_schema(conn):
     for name, ddl in (
         ("join_password_hash", "TEXT"),
         ("join_password_required", "INTEGER NOT NULL DEFAULT 0"),
+        ("allow_anonymous", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if name not in room_cols:
             conn.execute(f"ALTER TABLE chat_rooms ADD COLUMN {name} {ddl}")
+    member_cols = _table_columns(conn, "chat_room_members")
+    if "anonymous_enabled" not in member_cols:
+        conn.execute("ALTER TABLE chat_room_members ADD COLUMN anonymous_enabled INTEGER NOT NULL DEFAULT 0")
     cols = _table_columns(conn, "chat_messages")
     for name, ddl in (
         ("message_type", "TEXT NOT NULL DEFAULT 'text'"),

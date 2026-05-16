@@ -54,8 +54,10 @@ from services.trading.constants import (
     APR_DAYS_PER_YEAR,
     ASSET_SCALE,
     DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT,
+    DEFAULT_PRICE_FUSION_TRADE_MIN_PROVIDER_COUNT,
     DEFAULT_GRID_FEE_DISCOUNT_PERCENT,
     DEFAULT_SPOT_FEE_RATE_PERCENT,
+    DEFAULT_TRADING_PRICE_SOURCE,
     DEPTH_CAPABLE_PROVIDERS,
     GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT,
     OPEN_ORDER_STATUSES,
@@ -107,8 +109,11 @@ from services.trading.admin import (
     update_root_settings as update_root_settings_helper,
 )
 from services.trading.background_engine import (
+    enqueue_background_job_once as enqueue_background_job_once_helper,
     ensure_background_schema as ensure_background_schema_helper,
     get_background_status as get_background_status_helper,
+    get_root_trading_snapshot as get_root_trading_snapshot_helper,
+    refresh_root_trading_snapshots as refresh_root_trading_snapshots_helper,
     run_background_job_once as run_background_job_once_helper,
     run_due_background_jobs as run_due_background_jobs_helper,
     set_background_job_enabled as set_background_job_enabled_helper,
@@ -806,7 +811,7 @@ def _sync_registry_markets_to_runtime(conn):
                 registry["default_manual_price_points"] or 1,
                 DEFAULT_SPOT_FEE_RATE_PERCENT,
                 now,
-                FUSED_PRICE_SOURCE,
+                DEFAULT_TRADING_PRICE_SOURCE,
                 registry["display_quote_currency"],
                 registry["display_name"],
                 registry["market_type"],
@@ -959,7 +964,7 @@ def ensure_trading_schema(conn):
         ("trading.margin_maintenance_percent", "15"),
         ("trading.grid_fee_discount_percent", str(DEFAULT_GRID_FEE_DISCOUNT_PERCENT)),
         ("trading.max_price_staleness_seconds", "900"),
-        ("trading.price_source", FUSED_PRICE_SOURCE),
+        ("trading.price_source", DEFAULT_TRADING_PRICE_SOURCE),
         ("trading.price_fusion_mode", "auto_depth"),
         ("trading.price_fusion_manual_weights_json", _json_dumps(DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS)),
         ("trading.price_fusion_depth_band_percent", str(DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT)),
@@ -967,7 +972,7 @@ def ensure_trading_schema(conn):
         ("trading.price_fusion_min_orderbook_coverage_percent", str(DEFAULT_PRICE_FUSION_MIN_ORDERBOOK_COVERAGE_PERCENT)),
         ("trading.price_fusion_max_single_provider_weight_percent", str(DEFAULT_PRICE_FUSION_MAX_SINGLE_PROVIDER_WEIGHT_PERCENT)),
         ("trading.price_fusion_min_provider_count", str(DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT)),
-        ("trading.price_fusion_trade_min_provider_count", "2"),
+        ("trading.price_fusion_trade_min_provider_count", str(DEFAULT_PRICE_FUSION_TRADE_MIN_PROVIDER_COUNT)),
         ("trading.warning_language", "zh-TW"),
         ("trading.price_degrade_pause_market_orders", "false"),
         ("trading.price_degrade_pause_bots", "false"),
@@ -998,6 +1003,36 @@ def ensure_trading_schema(conn):
             "INSERT OR IGNORE INTO trading_settings (key, value, updated_at) VALUES (?, ?, ?)",
             (key, value, now),
         )
+    conn.execute(
+        """
+        UPDATE trading_settings
+        SET value=?, updated_at=?
+        WHERE key='trading.price_source'
+          AND value=?
+          AND (updated_by IS NULL OR TRIM(CAST(updated_by AS TEXT))='')
+        """,
+        (DEFAULT_TRADING_PRICE_SOURCE, now, FUSED_PRICE_SOURCE),
+    )
+    conn.execute(
+        """
+        UPDATE trading_settings
+        SET value=?, updated_at=?
+        WHERE key='trading.price_fusion_min_provider_count'
+          AND value='3'
+          AND (updated_by IS NULL OR TRIM(CAST(updated_by AS TEXT))='')
+        """,
+        (str(DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT), now),
+    )
+    conn.execute(
+        """
+        UPDATE trading_settings
+        SET value=?, updated_at=?
+        WHERE key='trading.price_fusion_trade_min_provider_count'
+          AND value='2'
+          AND (updated_by IS NULL OR TRIM(CAST(updated_by AS TEXT))='')
+        """,
+        (str(DEFAULT_PRICE_FUSION_TRADE_MIN_PROVIDER_COUNT), now),
+    )
     _seed_market_registry_from_catalog(conn)
     _sync_registry_markets_to_runtime(conn)
     for table in ("trading_orders", "trading_fills"):
@@ -1158,6 +1193,8 @@ class TradingEngineService:
     DEFAULT_PRICE_FUSION_MAX_MIDPOINT_DEVIATION_PERCENT = DEFAULT_PRICE_FUSION_MAX_MIDPOINT_DEVIATION_PERCENT
     DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO = DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO
     DEFAULT_PRICE_STREAM_WS_STALE_SECONDS = DEFAULT_PRICE_STREAM_WS_STALE_SECONDS
+    DEFAULT_TRADING_PRICE_SOURCE = DEFAULT_TRADING_PRICE_SOURCE
+    DEFAULT_PRICE_FUSION_TRADE_MIN_PROVIDER_COUNT = DEFAULT_PRICE_FUSION_TRADE_MIN_PROVIDER_COUNT
     TRADING_BOT_AUDIT_INTERVAL_SECONDS = TRADING_BOT_AUDIT_INTERVAL_SECONDS
     TRADING_BOT_AUDIT_LIMIT = TRADING_BOT_AUDIT_LIMIT
     TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS = TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS
@@ -1174,6 +1211,8 @@ class TradingEngineService:
         self.stream_hub = stream_hub
         self._matching_orderbooks = {}
         self._funding_channels = {}
+        self._live_quote_cache = {}
+        self._live_quote_cache_lock = threading.RLock()
 
     def ensure_schema(self, conn):
         db_path = _connection_path(conn)
@@ -2307,6 +2346,24 @@ class TradingEngineService:
 
     def get_background_status(self, *, limit=20):
         return get_background_status_helper(self, limit=limit)
+
+    def enqueue_background_job_once(self, *, job_key, requested_by=None, force=True):
+        return enqueue_background_job_once_helper(
+            self,
+            job_key=job_key,
+            requested_by=requested_by,
+            force=force,
+        )
+
+    def get_root_trading_snapshot(self, *, snapshot_key):
+        return get_root_trading_snapshot_helper(self, snapshot_key=snapshot_key)
+
+    def refresh_root_trading_snapshots(self, *, source_job_key="manual", source_run_uuid=""):
+        return refresh_root_trading_snapshots_helper(
+            self,
+            source_job_key=source_job_key,
+            source_run_uuid=source_run_uuid,
+        )
 
     def run_background_job_once(
         self,

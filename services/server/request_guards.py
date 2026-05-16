@@ -319,6 +319,32 @@ def enforce_feature_flags(
     build_feature_disabled_payload,
     json_resp,
 ):
+    def actor_value(actor, key, default=None):
+        if not actor:
+            return default
+        try:
+            if isinstance(actor, dict):
+                return actor.get(key, default)
+            if hasattr(actor, "keys") and key in actor.keys():
+                return actor[key]
+        except Exception:
+            pass
+        return default
+
+    def token_scope_denies(actor, feature_key):
+        auth_scope = str(actor_value(actor, "_auth_scope", actor_value(actor, "auth_scope", "")) or "")
+        if auth_scope != "internal_test_token":
+            return False
+        allowed_features = actor_value(actor, "_allowed_features", actor_value(actor, "allowed_features", []))
+        if isinstance(allowed_features, str):
+            allowed = {item.strip() for item in allowed_features.replace("\n", ",").split(",") if item.strip()}
+        else:
+            try:
+                allowed = {str(item).strip() for item in allowed_features if str(item).strip()}
+            except Exception:
+                allowed = set()
+        return bool(allowed) and feature_key not in allowed
+
     if request_obj.method == "OPTIONS" or not request_obj.path.startswith("/api"):
         return None
     if request_obj.path in (
@@ -334,15 +360,49 @@ def enforce_feature_flags(
     ):
         return None
     feature_key = feature_gate_for_path_func(request_obj.path)
-    if not feature_key or is_feature_enabled(feature_key):
+    if not feature_key:
+        return None
+    actor = None
+    if is_feature_enabled(feature_key):
+        request_cookies = getattr(request_obj, "cookies", {}) or {}
+        if request_cookies.get("session_token"):
+            actor = get_current_user_ctx()
+            if actor and token_scope_denies(actor, feature_key):
+                username = actor_value(actor, "username", "-")
+                record_security_event(
+                    "permission_denied",
+                    get_client_ip(),
+                    target_user=username,
+                    detail=f"internal_test_token_feature_scope:path={request_obj.path},feature={feature_key}",
+                )
+                return json_resp({
+                    "ok": False,
+                    "msg": "內測登入 token 未開放此功能範圍",
+                    "feature": feature_key,
+                    "auth_scope": "internal_test_token",
+                }), 403
         return None
     actor = get_current_user_ctx()
     if not actor:
         return json_resp({"ok": False, "msg": "未登入"}), 401
+    if token_scope_denies(actor, feature_key):
+        username = actor_value(actor, "username", "-")
+        record_security_event(
+            "permission_denied",
+            get_client_ip(),
+            target_user=username,
+            detail=f"internal_test_token_feature_scope:path={request_obj.path},feature={feature_key}",
+        )
+        return json_resp({
+            "ok": False,
+            "msg": "內測登入 token 未開放此功能範圍",
+            "feature": feature_key,
+            "auth_scope": "internal_test_token",
+        }), 403
     record_security_event(
         "feature_disabled",
         get_client_ip(),
-        target_user=actor["username"],
+        target_user=actor_value(actor, "username", "-"),
         detail=f"path={request_obj.path},feature={feature_key}",
     )
     return json_resp(build_feature_disabled_payload(feature_key), 503)

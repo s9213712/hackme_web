@@ -14,6 +14,9 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert 'accept="image/*"' in index_html
     assert "發布影片或音樂" in index_html
     assert "雲端硬碟影音" in index_html
+    assert 'id="video-publish-open-btn" type="button" aria-expanded="false" aria-controls="video-publish-panel"' in index_html
+    assert 'id="video-publish-panel" hidden aria-label="發布影音"' in index_html
+    assert 'id="video-publish-cancel-btn"' in index_html
     assert 'id="video-search-form"' in index_html
     assert 'id="video-search-input"' in index_html
     assert 'id="video-search-status"' in index_html
@@ -26,6 +29,11 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "params.set(\"q\", videoState.searchQuery)" in videos_js
     assert "找不到與" in videos_js
     assert "let videoPendingPublishSelection = null;" in videos_js
+    assert "function setVideoPublishPanelVisible" in videos_js
+    assert "function toggleVideoPublishPanel" in videos_js
+    assert 'toggle.setAttribute("aria-expanded", show ? "true" : "false");' in videos_js
+    assert 'event.target.closest("#video-publish-cancel-btn")' in videos_js
+    assert "setVideoPublishPanelVisible(false, { focus: false });" in videos_js
     assert "async function openVideoPublishFromDrive(fileId, options = {})" in videos_js
     assert "applyVideoPublishDriveSelection" in videos_js
     assert "請完成標題、可見性、分享與封面設定後發布" in videos_js

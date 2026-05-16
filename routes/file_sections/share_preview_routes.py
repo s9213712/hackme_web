@@ -23,6 +23,7 @@ from services.storage.storage_albums import (
 )
 from services.share_access_events import log_share_access_event
 from services.security.upload_security import log_file_access
+from services.users.friends import assert_can_target_user
 
 
 def register_file_share_preview_routes(app, ctx):
@@ -79,16 +80,39 @@ def register_file_share_preview_routes(app, ctx):
                     "msg": "E2EE 分享金鑰不得送到伺服器；請只提交瀏覽器端包裝後的分享授權。",
                     "fields": leaked_fields,
                 }), 400
+            access_scope = data.get("access_scope") or "link"
+            required_user_id = data.get("required_user_id") or None
+            required_username = data.get("required_username") or data.get("required_account") or None
+            if access_scope == "account":
+                target_row = None
+                if required_user_id not in (None, ""):
+                    try:
+                        required_user_id = int(required_user_id)
+                    except Exception:
+                        return json_resp({"ok": False, "msg": "指定帳戶格式錯誤"}), 400
+                    target_row = conn.execute("SELECT id, username FROM users WHERE id=? LIMIT 1", (required_user_id,)).fetchone()
+                elif str(required_username or "").strip():
+                    target_row = conn.execute(
+                        "SELECT id, username FROM users WHERE username=? LIMIT 1",
+                        (str(required_username or "").strip(),),
+                    ).fetchone()
+                if not target_row:
+                    return json_resp({"ok": False, "msg": "找不到指定帳戶"}), 400
+                allowed, deny_msg = assert_can_target_user(conn, actor, target_row["id"], context="cloud_drive_share")
+                if not allowed:
+                    return json_resp({"ok": False, "msg": deny_msg}), 403
+                required_user_id = int(target_row["id"])
+                required_username = None
             link, msg = create_share_link(
                 conn,
                 actor=actor,
                 storage_file_id=data.get("storage_file_id"),
                 file_id=data.get("file_id"),
                 expires_at=data.get("expires_at") or None,
-                can_preview=bool(data.get("can_preview", False)),
-                access_scope=data.get("access_scope") or "link",
-                required_user_id=data.get("required_user_id") or None,
-                required_username=data.get("required_username") or data.get("required_account") or None,
+                can_preview=bool(data.get("can_preview", True)),
+                access_scope=access_scope,
+                required_user_id=required_user_id,
+                required_username=required_username,
                 max_views=data.get("max_views") or 0,
                 wrapped_file_key_envelope=data.get("wrapped_file_key_envelope") or None,
             )
@@ -151,9 +175,25 @@ def register_file_share_preview_routes(app, ctx):
             "expires_at": row["expires_at"] or "",
             "max_views": int(row["max_views"] or 0),
             "access_count": int(row["access_count"] or 0),
+            "can_preview": bool(row["can_preview"]),
             "download_url": f"/api/storage/shared/{token}/download",
+            "preview_url": f"/api/storage/shared/{token}/preview",
+            "preview_content_url": f"/api/storage/shared/{token}/preview/content",
             "e2ee": e2ee,
         }
+
+    def _storage_share_preview_row(row):
+        preview_row = dict(row)
+        preview_row["id"] = row["file_id"]
+        if not preview_row.get("original_filename_plain_for_public"):
+            preview_row["original_filename_plain_for_public"] = row["display_name"] or "preview"
+        return preview_row
+
+    def _storage_share_preview_denied(row):
+        data = dict(row)
+        if not int(data.get("can_preview") or 0):
+            return json_resp({"ok": False, "msg": "此分享連結未開放瀏覽器預覽"}), 403
+        return None
 
     def _html_safe_json(value):
         return (
@@ -173,14 +213,23 @@ def register_file_share_preview_routes(app, ctx):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>檔案下載</title>
+  <title>檔案分享</title>
   <style>
     body {{ margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #172033; }}
     main {{ max-width: 720px; margin: 0 auto; padding: 40px 20px; }}
     .panel {{ background: #fff; border: 1px solid #dde3ea; border-radius: 8px; padding: 22px; }}
     .meta {{ color: #667085; margin: 8px 0 18px; overflow-wrap: anywhere; }}
-    button {{ padding: 10px 14px; border: 0; border-radius: 6px; background: #2357d9; color: #fff; cursor: pointer; }}
+    .actions {{ display: flex; flex-wrap: wrap; gap: 10px; }}
+    button, .button-link {{ display: inline-flex; align-items: center; justify-content: center; min-height: 38px; padding: 10px 14px; border: 0; border-radius: 6px; background: #2357d9; color: #fff; cursor: pointer; text-decoration: none; box-sizing: border-box; }}
     button[disabled] {{ opacity: .55; cursor: not-allowed; }}
+    .login-link {{ background: #0f766e; }}
+    [hidden] {{ display: none !important; }}
+    .preview {{ margin-top: 18px; border: 1px solid #e4e7ec; border-radius: 8px; background: #fbfcfe; overflow: hidden; }}
+    .preview pre {{ margin: 0; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; overflow: auto; }}
+    .preview img, .preview video, .preview audio, .preview iframe {{ display: block; width: 100%; border: 0; }}
+    .preview img {{ height: auto; max-height: 70vh; object-fit: contain; background: #111827; }}
+    .preview video, .preview iframe {{ min-height: 360px; background: #111827; }}
+    .preview-list {{ margin: 0; padding: 12px 18px 12px 34px; max-height: 55vh; overflow: auto; }}
     .msg {{ margin-top: 14px; color: #667085; }}
     .err {{ color: #b42318; }}
   </style>
@@ -188,9 +237,14 @@ def register_file_share_preview_routes(app, ctx):
 <body>
   <main>
     <section class="panel">
-      <h1 id="shared-file-title">檔案下載</h1>
+      <h1 id="shared-file-title">檔案分享</h1>
       <div class="meta" id="shared-file-meta">讀取中...</div>
-      <button id="shared-file-download-btn" type="button" disabled>下載檔案</button>
+      <div class="actions">
+        <button id="shared-file-preview-btn" type="button" disabled>在瀏覽器預覽</button>
+        <button id="shared-file-download-btn" type="button" disabled>下載檔案</button>
+        <a id="shared-file-login-link" class="button-link login-link" href="/" hidden>前往登入</a>
+      </div>
+      <div class="preview" id="shared-file-preview" hidden></div>
       <div class="msg" id="shared-file-msg"></div>
     </section>
   </main>
@@ -204,10 +258,96 @@ def register_file_share_preview_routes(app, ctx):
         actor = get_current_user_ctx()
         conn = get_db()
         try:
-            row, reason = resolve_share_token(conn, token, actor=actor)
+            row, reason = resolve_share_token(conn, token, actor=actor, require_download=False)
             if not row:
                 return _storage_share_error_response(reason)
             return json_resp({"ok": True, "file": _storage_shared_file_payload(row, token)})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/shared/<token>/preview", methods=["GET"])
+    def storage_share_link_preview(token):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            row, reason = resolve_share_token(conn, token, actor=actor, require_download=False)
+            if not row:
+                return _storage_share_error_response(reason)
+            denied = _storage_share_preview_denied(row)
+            if denied:
+                return denied
+            path = resolve_file_storage_path(storage_root, row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            preview_row = _storage_share_preview_row(row)
+            if is_e2ee_file(row):
+                preview = _decryption_unavailable_preview(preview_row, "E2EE 檔案須由瀏覽器端解密後預覽")
+                preview["browser_decrypt_required"] = True
+                return json_resp({"ok": True, "preview": preview})
+            policy = get_cloud_drive_security_policy(conn)
+            ok, msg = _preview_allowed_by_policy(policy, row)
+            if not ok:
+                return json_resp({"ok": False, "msg": msg}), 403
+            try:
+                readable_path, _ = _readable_file_path(row)
+                preview = build_preview_metadata(preview_row, readable_path)
+            except ValueError as exc:
+                preview = _decryption_unavailable_preview(preview_row, str(exc))
+            log_file_access(conn, file_id=row["file_id"], actor_user_id=(actor["id"] if actor else None), action="storage_share_preview", result="allowed", reason=preview["category"], ip=get_client_ip(), user_agent=get_ua())
+            conn.commit()
+            return json_resp({"ok": True, "preview": preview})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/shared/<token>/preview/content", methods=["GET"])
+    def storage_share_link_preview_content(token):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            row, reason = resolve_share_token(conn, token, actor=actor, require_download=False)
+            if not row:
+                return _storage_share_error_response(reason)
+            denied = _storage_share_preview_denied(row)
+            if denied:
+                return denied
+            path = resolve_file_storage_path(storage_root, row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            preview_row = _storage_share_preview_row(row)
+            if is_e2ee_file(row):
+                mark_share_link_accessed(conn, row["id"])
+                log_share_access_event(conn, share_type="file", share_id=row["id"], ip=get_client_ip(), user_agent=get_ua())
+                log_file_access(conn, file_id=row["file_id"], actor_user_id=(actor["id"] if actor else None), action="storage_share_e2ee_preview_ciphertext", result="allowed", reason="share_link", ip=get_client_ip(), user_agent=get_ua())
+                conn.commit()
+                return send_file(
+                    path,
+                    as_attachment=False,
+                    download_name=preview_row["original_filename_plain_for_public"] or "e2ee.bin",
+                    mimetype="application/octet-stream",
+                    conditional=True,
+                )
+            policy = get_cloud_drive_security_policy(conn)
+            ok, msg = _preview_allowed_by_policy(policy, row)
+            if not ok:
+                return json_resp({"ok": False, "msg": msg}), 403
+            category, mime_type = preview_category(preview_row)
+            if category not in {"audio", "video", "image", "pdf"}:
+                return json_resp({"ok": False, "msg": "此檔案類型不支援 inline content preview"}), 415
+            mark_share_link_accessed(conn, row["id"])
+            log_share_access_event(conn, share_type="file", share_id=row["id"], ip=get_client_ip(), user_agent=get_ua())
+            log_file_access(conn, file_id=row["file_id"], actor_user_id=(actor["id"] if actor else None), action="storage_share_preview_content", result="allowed", reason=category, ip=get_client_ip(), user_agent=get_ua())
+            conn.commit()
+            response = _send_readable_file(
+                row,
+                as_attachment=False,
+                download_name=preview_row["original_filename_plain_for_public"] or "preview",
+                mimetype=mime_type,
+                conditional=True,
+                actor=actor,
+            )
+            if response is None:
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            return response
         finally:
             conn.close()
 
@@ -242,7 +382,7 @@ def register_file_share_preview_routes(app, ctx):
             log_share_access_event(conn, share_type="file", share_id=row["id"], ip=get_client_ip(), user_agent=get_ua())
             log_file_access(conn, file_id=row["file_id"], actor_user_id=(actor["id"] if actor else None), action="storage_share_download", result="allowed", reason="share_link", ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
-            response = _send_readable_file(row, as_attachment=True, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
+            response = _send_readable_file(row, as_attachment=True, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin", actor=actor)
             if response is None:
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             return response

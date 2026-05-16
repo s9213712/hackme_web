@@ -22,7 +22,10 @@ from services.security.upload_security import (
 
 CONTEXT_TYPES = {"dm", "group_chat", "chat_message", "forum_thread", "forum_post", "forum_comment", "announcement"}
 ANNOUNCEMENT_REQUEST_STATUSES = {"pending", "approved", "rejected"}
-DEFAULT_SERVER_ENCRYPTED_INLINE_MAX_BYTES = 256 * 1024 * 1024
+DEFAULT_SERVER_ENCRYPTED_INLINE_MAX_BYTES = 64 * 1024 * 1024
+DEFAULT_SERVER_ENCRYPTED_CHUNK_BYTES = 4 * 1024 * 1024
+SERVER_ENCRYPTED_CHUNKED_VERSION = "server-side-chunked-v1"
+SERVER_ENCRYPTED_CHUNKED_MAGIC = b"HACKME_SERVER_ENCRYPTED_CHUNKED_V1\n"
 
 
 def server_encrypted_inline_max_bytes():
@@ -35,12 +38,30 @@ def server_encrypted_inline_max_bytes():
     return max(0, int(value))
 
 
-def _server_encrypted_size_error(size_bytes):
+def server_encrypted_chunk_bytes():
+    raw_bytes = os.environ.get("HACKME_SERVER_ENCRYPTED_CHUNK_BYTES")
+    raw_mb = os.environ.get("HACKME_SERVER_ENCRYPTED_CHUNK_MB")
+    try:
+        value = int(raw_bytes) if raw_bytes is not None else int(raw_mb) * 1024 * 1024 if raw_mb is not None else DEFAULT_SERVER_ENCRYPTED_CHUNK_BYTES
+    except Exception:
+        value = DEFAULT_SERVER_ENCRYPTED_CHUNK_BYTES
+    return max(64 * 1024, int(value))
+
+
+def _server_encrypted_size_error(size_bytes, *, operation="upload"):
     limit = server_encrypted_inline_max_bytes()
     if limit <= 0 or int(size_bytes or 0) <= limit:
         return ""
     limit_mb = max(1, limit // (1024 * 1024))
-    return f"伺服器端加密目前只允許 {limit_mb} MB 以內的單檔即時處理；較大的檔案請使用 E2EE 或等背景加密管線。"
+    if operation == "decrypt":
+        return (
+            f"此伺服器端加密檔案超過 {limit_mb} MB；為避免主伺服器一次解密大檔造成卡頓，"
+            "目前暫停在主程序預覽或下載。請改用 E2EE / HLS 背景處理，或請管理員評估調整上限。"
+        )
+    return (
+        f"此伺服器端加密操作超過 {limit_mb} MB；"
+        "請使用 chunked server-side encryption 路徑，避免主伺服器一次載入完整檔案。"
+    )
 
 
 def ensure_cloud_drive_attachment_schema(conn):
@@ -113,10 +134,118 @@ def is_server_encrypted_file(row_or_mode):
     return is_server_encrypted_privacy_mode(mode)
 
 
+def is_chunked_server_encrypted_file(row):
+    try:
+        return str(row["encryption_version"] or "") == SERVER_ENCRYPTED_CHUNKED_VERSION
+    except Exception:
+        return False
+
+
+def _is_chunked_server_encrypted_path(path):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(len(SERVER_ENCRYPTED_CHUNKED_MAGIC)) == SERVER_ENCRYPTED_CHUNKED_MAGIC
+    except Exception:
+        return False
+
+
+def _read_chunked_manifest(handle):
+    header = handle.read(len(SERVER_ENCRYPTED_CHUNKED_MAGIC))
+    if header != SERVER_ENCRYPTED_CHUNKED_MAGIC:
+        raise ValueError("不是 chunked server-side encrypted 檔案")
+    try:
+        return json.loads(handle.readline().decode("utf-8"))
+    except Exception as exc:
+        raise ValueError("伺服器端加密 chunk manifest 已損壞") from exc
+
+
+def encrypt_server_encrypted_chunked_stream(source, target, server_file_fernet, *, size_bytes=None, chunk_size=None):
+    if not server_file_fernet:
+        raise ValueError("server-side file encryption key is unavailable")
+    chunk_size = int(chunk_size or server_encrypted_chunk_bytes())
+    target = Path(target)
+    tmp_path = target.with_name(f".{target.name}.chunked-encrypt-{uuid.uuid4().hex}.tmp")
+    ciphertext_sha = hashlib.sha256()
+    plaintext_sha = hashlib.sha256()
+    chunk_count = 0
+    plaintext_size = 0
+    manifest = {
+        "version": 1,
+        "chunk_size": chunk_size,
+        "plaintext_size": int(size_bytes or 0),
+    }
+    try:
+        with open(tmp_path, "wb") as out:
+            out.write(SERVER_ENCRYPTED_CHUNKED_MAGIC)
+            out.write(json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode("utf-8") + b"\n")
+            while True:
+                chunk = source.read(chunk_size)
+                if not chunk:
+                    break
+                plaintext_size += len(chunk)
+                plaintext_sha.update(chunk)
+                token = server_file_fernet.encrypt(chunk)
+                ciphertext_sha.update(token)
+                out.write(str(len(token)).encode("ascii") + b"\n")
+                out.write(token + b"\n")
+                chunk_count += 1
+        os.replace(tmp_path, target)
+        return {
+            "ciphertext_sha256": ciphertext_sha.hexdigest(),
+            "plaintext_sha256": plaintext_sha.hexdigest(),
+            "chunk_count": chunk_count,
+            "plaintext_size": plaintext_size,
+            "chunk_size": chunk_size,
+        }
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+
+
+def iter_decrypted_server_encrypted_chunks(path, server_file_fernet, *, start=None, end=None):
+    if not server_file_fernet:
+        raise ValueError("server-side file encryption key is unavailable")
+    start = 0 if start is None else max(0, int(start))
+    end = None if end is None else int(end)
+    with open(path, "rb") as handle:
+        _read_chunked_manifest(handle)
+        plaintext_offset = 0
+        while True:
+            length_line = handle.readline()
+            if not length_line:
+                break
+            try:
+                token_len = int(length_line.strip())
+            except Exception as exc:
+                raise ValueError("伺服器端加密 chunk 長度已損壞") from exc
+            token = handle.read(token_len)
+            handle.readline()
+            try:
+                plain = server_file_fernet.decrypt(token)
+            except InvalidToken as exc:
+                raise ValueError("此檔案無法以目前伺服器金鑰解密，可能是重設或換鑰後留下的舊檔案，請重新上傳") from exc
+            chunk_start = plaintext_offset
+            chunk_end = plaintext_offset + len(plain) - 1
+            plaintext_offset += len(plain)
+            if end is not None and chunk_start > end:
+                break
+            if chunk_end < start:
+                continue
+            slice_start = max(0, start - chunk_start)
+            slice_end = len(plain) if end is None else min(len(plain), end - chunk_start + 1)
+            if slice_start < slice_end:
+                yield plain[slice_start:slice_end]
+
+
 def decrypt_server_encrypted_bytes(path, server_file_fernet):
     if not server_file_fernet:
         raise ValueError("server-side file encryption key is unavailable")
-    size_error = _server_encrypted_size_error(Path(path).stat().st_size)
+    if _is_chunked_server_encrypted_path(path):
+        return b"".join(iter_decrypted_server_encrypted_chunks(path, server_file_fernet))
+    size_error = _server_encrypted_size_error(Path(path).stat().st_size, operation="decrypt")
     if size_error:
         raise ValueError(size_error)
     try:
@@ -125,27 +254,15 @@ def decrypt_server_encrypted_bytes(path, server_file_fernet):
         raise ValueError("此檔案無法以目前伺服器金鑰解密，可能是重設或換鑰後留下的舊檔案，請重新上傳") from exc
 
 
-def _server_encrypted_scan_path_from_bytes(plaintext_bytes):
-    """Expose plaintext to scanners through an in-memory file descriptor path.
-
-    ``server_encrypted`` uploads already require whole-file encryption with
-    Fernet, so holding the plaintext in memory is not a regression. Using a
-    Linux memfd avoids writing the plaintext to any persistent storage path
-    before the final ciphertext is produced.
-    """
-    if not hasattr(os, "memfd_create"):
-        raise RuntimeError("server_encrypted uploads require os.memfd_create support")
-    fd = os.memfd_create("cloud-drive-server-encrypted-upload", os.MFD_CLOEXEC)
-    try:
-        os.write(fd, plaintext_bytes)
-        os.lseek(fd, 0, os.SEEK_SET)
-        return fd, Path(f"/proc/self/fd/{fd}")
-    except Exception:
-        try:
-            os.close(fd)
-        except Exception:
-            pass
-        raise
+def write_decrypted_server_encrypted_file(path, target, server_file_fernet):
+    target = Path(target)
+    if _is_chunked_server_encrypted_path(path):
+        with open(target, "wb") as out:
+            for chunk in iter_decrypted_server_encrypted_chunks(path, server_file_fernet):
+                out.write(chunk)
+        return target
+    target.write_bytes(decrypt_server_encrypted_bytes(path, server_file_fernet))
+    return target
 
 
 def _actor_value(actor, key, default=None):
@@ -172,6 +289,16 @@ def is_manager_or_root(actor):
 def _actor_owns(actor, owner_user_id):
     try:
         return int(_actor_value(actor, "id")) == int(owner_user_id)
+    except Exception:
+        return False
+
+
+def can_remove_context_attachment(actor, ref_row):
+    if not actor or not ref_row:
+        return False
+    try:
+        actor_id = int(_actor_value(actor, "id"))
+        return actor_id in {int(ref_row["attached_by"]), int(ref_row["owner_user_id"])}
     except Exception:
         return False
 
@@ -325,23 +452,24 @@ def store_cloud_upload(
     target = resolve_storage_path(storage_root, rel_path, create_parent=True)
     server_encrypted = is_server_encrypted_privacy_mode(privacy_mode)
     if server_encrypted:
-        size_error = _server_encrypted_size_error(size_bytes)
-        if size_error:
+        disk_ok, _disk = storage_root_can_accept_bytes(storage_root, int(size_bytes or 0) * 2)
+        if not disk_ok:
             if position is not None and hasattr(stream, "seek"):
                 stream.seek(position)
-            return None, size_error
-    memfd = None
+            return None, "Host 磁碟可用空間不足，無法暫存並加密此伺服器端加密檔案"
     plaintext_scan_path = target
-    plaintext_bytes = b""
+    plaintext_temp_path = None
+    if server_encrypted and server_file_fernet is None:
+        raise ValueError("server_file_encryption_key is required for server_encrypted uploads")
     if server_encrypted:
-        chunks = []
-        while True:
-            chunk = stream.read(1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        plaintext_bytes = b"".join(chunks)
-        memfd, plaintext_scan_path = _server_encrypted_scan_path_from_bytes(plaintext_bytes)
+        plaintext_temp_path = target.with_name(f".{target.name}.server-encrypt-plain-{uuid.uuid4().hex}.tmp")
+        with open(plaintext_temp_path, "wb") as out:
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+        plaintext_scan_path = plaintext_temp_path
     else:
         with open(plaintext_scan_path, "wb") as out:
             while True:
@@ -350,8 +478,6 @@ def store_cloud_upload(
                     break
                 out.write(chunk)
     try:
-        if server_encrypted and server_file_fernet is None:
-            raise ValueError("server_file_encryption_key is required for server_encrypted uploads")
         result = create_uploaded_file_record(
             conn,
             owner_user_id=actor["id"],
@@ -366,7 +492,7 @@ def store_cloud_upload(
             ciphertext_sha256=ciphertext_sha256,
             plaintext_sha256=None,
             encryption_algorithm="Fernet" if server_encrypted else encryption_algorithm,
-            encryption_version="server-side-v1" if server_encrypted else encryption_version,
+            encryption_version=SERVER_ENCRYPTED_CHUNKED_VERSION if server_encrypted else encryption_version,
             nonce=nonce,
             client_scan_report=client_scan_report,
             user=actor,
@@ -384,27 +510,34 @@ def store_cloud_upload(
             result["risk_level"] = scan_result["risk_level"]
             result["scan_result"] = scan_result
         if server_encrypted:
-            plaintext = plaintext_scan_path.read_bytes()
-            ciphertext = server_file_fernet.encrypt(plaintext)
-            target.write_bytes(ciphertext)
-            digest = hashlib.sha256(ciphertext).hexdigest()
+            with open(plaintext_temp_path, "rb") as source:
+                encrypted = encrypt_server_encrypted_chunked_stream(
+                    source,
+                    target,
+                    server_file_fernet,
+                    size_bytes=size_bytes,
+                )
             conn.execute(
                 """
                 UPDATE uploaded_files
                 SET ciphertext_sha256=?, encryption_algorithm=?, encryption_version=?, updated_at=?
                 WHERE id=?
                 """,
-                (digest, "Fernet", "server-side-v1", _now(), result["file_id"]),
+                (encrypted["ciphertext_sha256"], "Fernet", SERVER_ENCRYPTED_CHUNKED_VERSION, _now(), result["file_id"]),
             )
-            result["ciphertext_sha256"] = digest
+            result["ciphertext_sha256"] = encrypted["ciphertext_sha256"]
             result["encryption_algorithm"] = "Fernet"
-            result["encryption_version"] = "server-side-v1"
+            result["encryption_version"] = SERVER_ENCRYPTED_CHUNKED_VERSION
+            result["server_encrypted_chunked"] = {
+                "chunk_count": encrypted["chunk_count"],
+                "chunk_size": encrypted["chunk_size"],
+            }
         result["size_bytes"] = int(size_bytes or 0)
         return result, None
     finally:
-        if memfd is not None:
+        if plaintext_temp_path is not None:
             try:
-                os.close(memfd)
+                Path(plaintext_temp_path).unlink()
             except Exception:
                 pass
 

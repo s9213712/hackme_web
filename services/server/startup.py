@@ -9,6 +9,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime
 
 
 def _int_env(name, default, *, minimum=None, maximum=None):
@@ -33,6 +34,63 @@ def _feature_flag_enabled(get_system_settings, key, *, default=False):
     value = settings.get(key, default)
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _setting_bool(settings, key, *, default=False):
+    value = (settings or {}).get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return bool(value)
+
+
+def _scheduled_admin_salary_week(settings, now=None):
+    settings = settings or {}
+    if not _setting_bool(settings, "points_admin_weekly_salary_enabled", default=True):
+        return None
+    now = now or datetime.now()
+    try:
+        weekday = int(settings.get("points_admin_weekly_salary_weekday", 1))
+    except Exception:
+        weekday = 1
+    weekday = max(1, min(weekday, 7))
+    if int(now.isoweekday()) != weekday:
+        return None
+    raw_time = str(settings.get("points_admin_weekly_salary_time") or "09:00").strip()
+    try:
+        hour_text, minute_text = raw_time.split(":", 1)
+        payout_hour = int(hour_text)
+        payout_minute = int(minute_text)
+    except Exception:
+        payout_hour, payout_minute = 9, 0
+    payout_hour = max(0, min(payout_hour, 23))
+    payout_minute = max(0, min(payout_minute, 59))
+    if (int(now.hour), int(now.minute)) < (payout_hour, payout_minute):
+        return None
+    year, week, _weekday = now.isocalendar()
+    return f"{int(year)}-W{int(week):02d}"
+
+
+def _env_flag(name, *, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _startup_backtest_probe_enabled(get_system_settings):
+    raw_env = os.environ.get("HTML_LEARNING_TRADING_BACKTEST_PROBE_ON_STARTUP")
+    if raw_env is not None:
+        return _env_flag("HTML_LEARNING_TRADING_BACKTEST_PROBE_ON_STARTUP", default=True)
+    if get_system_settings is None:
+        return True
+    try:
+        settings = get_system_settings() or {}
+    except Exception:
+        return True
+    value = settings.get("trading_backtest_capacity_probe_on_startup_enabled", True)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
     return bool(value)
 
 
@@ -147,6 +205,7 @@ def start_points_chain_block_worker(
                     if _wait_or_stop(shutdown_event, check_interval):
                         break
                     continue
+                settings = (get_system_settings() or {}) if callable(get_system_settings) else {}
                 backup_result = points_service.create_scheduled_backup_if_due()
                 if backup_result.get("created"):
                     audit(
@@ -156,6 +215,20 @@ def start_points_chain_block_worker(
                         success=bool(backup_result.get("ok")),
                         detail=backup_result.get("backup_id"),
                     )
+                salary_week = _scheduled_admin_salary_week(settings)
+                if salary_week:
+                    salary_result = points_service.award_admin_weekly_salaries(
+                        salary_week=salary_week,
+                        actor=actor,
+                    )
+                    if salary_result.get("created_count"):
+                        audit(
+                            "POINTS_ADMIN_WEEKLY_SALARY_AUTO_RUN",
+                            "0.0.0.0",
+                            user="system",
+                            success=True,
+                            detail=f"week={salary_result.get('salary_week')},created={salary_result.get('created_count')}",
+                        )
                 result = points_service.seal_due_block(
                     actor=actor,
                     ledger_threshold=ledger_threshold,
@@ -557,7 +630,12 @@ def run_server_main(
         try:
             system_actor = {"username": "system", "role": "system"}
             genesis = points_service.bootstrap_admin_initial_grants(actor=system_actor, seal_genesis=True)
-            salary = points_service.award_admin_weekly_salaries(actor=system_actor)
+            settings = get_system_settings() or {}
+            salary_week = _scheduled_admin_salary_week(settings)
+            if salary_week:
+                salary = points_service.award_admin_weekly_salaries(salary_week=salary_week, actor=system_actor)
+            else:
+                salary = {"created_count": 0, "salary_week": ""}
             if genesis.get("created_count") or salary.get("created_count"):
                 audit(
                     "POINTS_BOOTSTRAP_GRANTS",
@@ -601,7 +679,10 @@ def run_server_main(
                 start_trading_bot_worker(shutdown_event=shutdown_event),
             ]
         )
-    if measure_backtest_capacity_first_boot is not None:
+    if (
+        measure_backtest_capacity_first_boot is not None
+        and _startup_backtest_probe_enabled(get_system_settings)
+    ):
         try:
             measure_backtest_capacity_first_boot()
         except Exception as exc:

@@ -78,7 +78,8 @@ def test_diffusers_health_allows_blank_default_repo_for_generation_page_override
     assert health["model_repo"] == ""
 
 
-def test_diffusers_client_requires_effective_model_repo_before_dependency_check(tmp_path):
+def test_diffusers_client_requires_effective_model_repo_before_dependency_check(tmp_path, monkeypatch):
+    monkeypatch.setenv("HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS", "1")
     client = DiffusersClient(storage_root=tmp_path)
 
     with pytest.raises(ComfyUIError) as exc:

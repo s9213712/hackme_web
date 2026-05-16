@@ -41,6 +41,10 @@ BACKGROUND_JOB_DEFINITIONS = {
         "interval_seconds": 3600,
         "lease_seconds": 120,
     },
+    "sitewide_metrics_refresh": {
+        "interval_seconds": 60,
+        "lease_seconds": 120,
+    },
 }
 
 PAUSED_MODES = {"maintenance", "incident_lockdown", "superweak"}
@@ -168,7 +172,44 @@ def ensure_background_schema(service, conn=None):
             """
         )
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trading_background_job_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                queue_uuid TEXT NOT NULL UNIQUE,
+                job_key TEXT NOT NULL,
+                requested_by_user_id INTEGER,
+                requested_by_username TEXT NOT NULL DEFAULT '',
+                force INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'queued',
+                requested_at TEXT NOT NULL,
+                next_attempt_at TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                worker_owner TEXT NOT NULL DEFAULT '',
+                result_json TEXT NOT NULL DEFAULT '{}',
+                error TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trading_root_snapshots (
+                snapshot_key TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                generated_at TEXT NOT NULL,
+                source_job_key TEXT NOT NULL DEFAULT '',
+                source_run_uuid TEXT NOT NULL DEFAULT '',
+                error TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_trading_background_job_runs_job_started ON trading_background_job_runs(job_key, started_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trading_background_job_queue_status_next ON trading_background_job_queue(status, next_attempt_at, id)"
         )
         now = _now_text()
         for job_key, definition in BACKGROUND_JOB_DEFINITIONS.items():
@@ -384,7 +425,7 @@ def _run_price_refresh(service):
     errors = []
     for symbol in symbols:
         try:
-            quote = service.get_live_market_quote(market_symbol=symbol)
+            quote = service.get_live_market_quote(market_symbol=symbol, force_refresh=True)
             market = quote.get("market") or {}
             refreshed.append(
                 {
@@ -536,7 +577,89 @@ def _run_interest_accrual(service, *, ctx):
         conn.close()
 
 
-def _execute_job_body(service, *, job_key, server_mode):
+def refresh_root_trading_snapshots(service, *, source_job_key="sitewide_metrics_refresh", source_run_uuid=""):
+    from services.trading.sitewide_reports import build_sitewide_snapshot_payloads
+
+    payloads = build_sitewide_snapshot_payloads(service)
+    conn = service.get_db()
+    try:
+        ensure_background_schema(service, conn)
+        conn.commit()
+        now = _now_text()
+        conn.execute("BEGIN IMMEDIATE")
+        for snapshot_key, payload in payloads.items():
+            conn.execute(
+                """
+                INSERT INTO trading_root_snapshots (
+                    snapshot_key, payload_json, generated_at,
+                    source_job_key, source_run_uuid, error, updated_at
+                ) VALUES (?, ?, ?, ?, ?, '', ?)
+                ON CONFLICT(snapshot_key) DO UPDATE SET
+                    payload_json=excluded.payload_json,
+                    generated_at=excluded.generated_at,
+                    source_job_key=excluded.source_job_key,
+                    source_run_uuid=excluded.source_run_uuid,
+                    error='',
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    str(snapshot_key),
+                    _json_dumps(payload),
+                    now,
+                    str(source_job_key or ""),
+                    str(source_run_uuid or ""),
+                    now,
+                ),
+            )
+        conn.commit()
+        return {
+            "snapshot_count": len(payloads),
+            "snapshot_keys": sorted(payloads.keys()),
+            "generated_at": now,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_root_trading_snapshot(service, *, snapshot_key):
+    conn = service.get_db()
+    try:
+        ensure_background_schema(service, conn)
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM trading_root_snapshots WHERE snapshot_key=?",
+            (str(snapshot_key or ""),),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return {
+            "ok": False,
+            "missing": True,
+            "snapshot_key": str(snapshot_key or ""),
+            "payload": {},
+            "msg": "交易報表快照尚未產生，請等待背景引擎或由 root 佇列執行 sitewide_metrics_refresh。",
+        }
+    try:
+        payload = json.loads(row["payload_json"] or "{}")
+    except Exception:
+        payload = {}
+    return {
+        "ok": True,
+        "missing": False,
+        "snapshot_key": row["snapshot_key"],
+        "payload": payload,
+        "generated_at": row["generated_at"],
+        "source_job_key": row["source_job_key"],
+        "source_run_uuid": row["source_run_uuid"],
+        "error": row["error"],
+    }
+
+
+def _execute_job_body(service, *, job_key, server_mode, source_run_uuid=""):
     ctx = _ctx_for_background_mode(server_mode)
     if job_key == "price_refresh":
         return _run_price_refresh(service)
@@ -550,6 +673,12 @@ def _execute_job_body(service, *, job_key, server_mode):
         return _run_margin_liquidation(service, ctx=ctx)
     if job_key == "interest_accrual":
         return _run_interest_accrual(service, ctx=ctx)
+    if job_key == "sitewide_metrics_refresh":
+        return refresh_root_trading_snapshots(
+            service,
+            source_job_key=job_key,
+            source_run_uuid=source_run_uuid,
+        )
     raise ValueError(f"unknown trading background job: {job_key}")
 
 
@@ -577,7 +706,12 @@ def run_background_job_once(
             result = _skip_result(skipped_reason, server_mode=server_mode)
             _finish_run(service, lease=lease, owner=owner, status="skipped", result=result)
             return {"ok": True, "job_key": job_key, "status": "skipped", "result": result}
-        result = _execute_job_body(service, job_key=job_key, server_mode=server_mode)
+        result = _execute_job_body(
+            service,
+            job_key=job_key,
+            server_mode=server_mode,
+            source_run_uuid=lease.get("run_uuid") or "",
+        )
         result["duration_ms_client"] = round((time.monotonic() - start) * 1000.0, 3)
         result["server_mode"] = server_mode
         _finish_run(service, lease=lease, owner=owner, status="success", result=result)
@@ -597,7 +731,13 @@ def run_due_background_jobs(
 ):
     ensure_background_schema(service)
     owner = owner or _lease_owner()
-    keys = list(job_keys or BACKGROUND_JOB_DEFINITIONS.keys())
+    queued_results = process_queued_background_jobs(
+        service,
+        get_system_settings=get_system_settings,
+        get_runtime_server_mode=get_runtime_server_mode,
+        owner=owner,
+    )
+    keys = list(BACKGROUND_JOB_DEFINITIONS.keys() if job_keys is None else job_keys)
     results = []
     for job_key in keys:
         try:
@@ -613,7 +753,195 @@ def run_due_background_jobs(
             )
         except Exception as exc:
             results.append({"ok": False, "job_key": job_key, "status": "failed", "error": str(exc)[:1000]})
-    return {"ok": True, "results": results}
+    return {"ok": True, "queued_results": queued_results, "results": results}
+
+
+def enqueue_background_job_once(service, *, job_key, requested_by=None, force=True):
+    if job_key not in BACKGROUND_JOB_DEFINITIONS:
+        raise ValueError(f"unknown trading background job: {job_key}")
+    requested_by = requested_by or {}
+    conn = service.get_db()
+    try:
+        ensure_background_schema(service, conn)
+        now = _now_text()
+        queue_uuid = str(uuid.uuid4())
+        conn.execute(
+            """
+            INSERT INTO trading_background_job_queue (
+                queue_uuid, job_key, requested_by_user_id, requested_by_username,
+                force, status, requested_at, next_attempt_at
+            ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
+            """,
+            (
+                queue_uuid,
+                str(job_key),
+                requested_by.get("id") if isinstance(requested_by, dict) else None,
+                str((requested_by.get("username") if isinstance(requested_by, dict) else "") or ""),
+                1 if force else 0,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return {
+            "ok": True,
+            "accepted": True,
+            "queued": True,
+            "queue_uuid": queue_uuid,
+            "job_key": job_key,
+            "status": "queued",
+            "requested_at": now,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _claim_queued_background_job(service, *, owner):
+    conn = service.get_db()
+    try:
+        ensure_background_schema(service, conn)
+        conn.commit()
+        now = _now_text()
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT *
+            FROM trading_background_job_queue
+            WHERE status='queued'
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (now,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        conn.execute(
+            """
+            UPDATE trading_background_job_queue
+            SET status='running', started_at=?, attempt_count=attempt_count+1,
+                worker_owner=?, error=''
+            WHERE id=? AND status='queued'
+            """,
+            (now, str(owner or ""), int(row["id"])),
+        )
+        conn.commit()
+        claimed = dict(row)
+        claimed["started_at"] = now
+        claimed["attempt_count"] = int(row["attempt_count"] or 0) + 1
+        claimed["worker_owner"] = str(owner or "")
+        return claimed
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _finish_queued_background_job(service, *, queue_item, status, result=None, error="", retry_after_seconds=0):
+    conn = service.get_db()
+    try:
+        ensure_background_schema(service, conn)
+        conn.commit()
+        finished = _now_text()
+        if status == "queued":
+            next_attempt_at = (_parse_dt(finished) + timedelta(seconds=max(1, int(retry_after_seconds or 1)))).isoformat()
+            finished_at = None
+        else:
+            next_attempt_at = None
+            finished_at = finished
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            UPDATE trading_background_job_queue
+            SET status=?, finished_at=?, next_attempt_at=?, result_json=?, error=?
+            WHERE id=?
+            """,
+            (
+                status,
+                finished_at,
+                next_attempt_at,
+                _json_dumps(result or {}),
+                str(error or "")[:1000],
+                int(queue_item["id"]),
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def process_queued_background_jobs(
+    service,
+    *,
+    get_system_settings=None,
+    get_runtime_server_mode=None,
+    owner=None,
+    max_jobs=3,
+):
+    ensure_background_schema(service)
+    owner = owner or _lease_owner("trading-bg-queue")
+    processed = []
+    for _idx in range(max(1, min(int(max_jobs or 3), 10))):
+        item = _claim_queued_background_job(service, owner=owner)
+        if not item:
+            break
+        try:
+            result = run_background_job_once(
+                service,
+                job_key=item["job_key"],
+                get_system_settings=get_system_settings,
+                get_runtime_server_mode=get_runtime_server_mode,
+                owner=f"{owner}:queue:{str(item['queue_uuid'])[:8]}",
+                force=bool(item.get("force", 1)),
+            )
+            status = str(result.get("status") or "")
+            if status == "not_due_or_locked":
+                _finish_queued_background_job(
+                    service,
+                    queue_item=item,
+                    status="queued",
+                    result=result,
+                    error="job lease not available",
+                    retry_after_seconds=5,
+                )
+                processed.append({"queue_uuid": item["queue_uuid"], **result, "queue_status": "retry_wait"})
+                break
+            queue_status = "succeeded" if status == "success" else status
+            if queue_status not in {"succeeded", "skipped", "failed"}:
+                queue_status = "succeeded" if result.get("ok") else "failed"
+            _finish_queued_background_job(
+                service,
+                queue_item=item,
+                status=queue_status,
+                result=result,
+                error=str(result.get("error") or ""),
+            )
+            processed.append({"queue_uuid": item["queue_uuid"], **result, "queue_status": queue_status})
+        except Exception as exc:
+            _finish_queued_background_job(
+                service,
+                queue_item=item,
+                status="failed",
+                result={},
+                error=str(exc),
+            )
+            processed.append({
+                "ok": False,
+                "queue_uuid": item["queue_uuid"],
+                "job_key": item["job_key"],
+                "status": "failed",
+                "queue_status": "failed",
+                "error": str(exc)[:1000],
+            })
+    return processed
 
 
 def get_background_status(service, *, limit=20):
@@ -628,6 +956,18 @@ def get_background_status(service, *, limit=20):
             for row in conn.execute(
                 """
                 SELECT * FROM trading_background_job_runs
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (max(1, min(int(limit or 20), 200)),),
+            ).fetchall()
+        ]
+        queued = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT *
+                FROM trading_background_job_queue
                 ORDER BY id DESC
                 LIMIT ?
                 """,
@@ -652,7 +992,20 @@ def get_background_status(service, *, limit=20):
             run["result"] = json.loads(run.get("result_json") or "{}")
         except Exception:
             run["result"] = {}
-    return {"ok": True, "jobs": jobs, "locks": locks, "recent_runs": runs, "server_time": _now_text()}
+    for item in queued:
+        item["force"] = bool(item.get("force"))
+        try:
+            item["result"] = json.loads(item.get("result_json") or "{}")
+        except Exception:
+            item["result"] = {}
+    return {
+        "ok": True,
+        "jobs": jobs,
+        "locks": locks,
+        "recent_runs": runs,
+        "queued_runs": queued,
+        "server_time": _now_text(),
+    }
 
 
 def set_background_job_enabled(service, *, job_key, enabled, reason="", actor=None):

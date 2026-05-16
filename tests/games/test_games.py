@@ -45,6 +45,7 @@ from services.games.chess_model_registry import ensure_runtime_model_from_bundle
 from services.games.chess_pv import experiment_pv_model_template
 from services.games.chess import game_status, initial_board, legal_moves, validate_move
 from services.games.chess_search import ZobristHasher, search_best_move
+from services.users.friends import ensure_social_schema
 
 
 def _build_app(db_path, actor_box, points_service=None, chess_engine_store=None):
@@ -91,6 +92,13 @@ def _seed_db(db_path):
         """
     )
     ensure_game_schema(conn)
+    ensure_social_schema(conn)
+    conn.execute(
+        """
+        INSERT INTO user_friends (user_id, friend_user_id, status, requested_by, created_at, updated_at)
+        VALUES (2, 3, 'accepted', 2, '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -171,6 +179,13 @@ def _seed_legacy_user_db(db_path):
         """
     )
     ensure_game_schema(conn)
+    ensure_social_schema(conn)
+    conn.execute(
+        """
+        INSERT INTO user_friends (user_id, friend_user_id, status, requested_by, created_at, updated_at)
+        VALUES (2, 3, 'accepted', 2, '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -297,11 +312,16 @@ def test_games_users_and_invites_work_with_legacy_users_table_without_deleted_at
     assert users.status_code == 200
     payload = users.get_json()
     assert payload["ok"] is True
-    assert [row["username"] for row in payload["users"]] == ["bob", "root"]
+    assert [row["username"] for row in payload["users"]] == ["bob"]
+    assert payload["users"][0]["is_friend"] is True
 
     invite = client.post("/api/games/chess/invites", json={"opponent_username": "bob"})
     assert invite.status_code == 200
     assert invite.get_json()["ok"] is True
+
+    blocked = client.post("/api/games/chess/invites", json={"opponent_username": "root"})
+    assert blocked.status_code == 403
+    assert "好友" in blocked.get_json()["msg"]
 
 
 def test_multiplayer_rooms_invite_accept_and_sync_events(tmp_path):
