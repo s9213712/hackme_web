@@ -17,6 +17,7 @@ TEST_PASSWORD="${TEST_PASSWORD:-test}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 FEATURE_MODE="${HACKME_DEV_FEATURE_MODE:-all}"
 FEATURE_LIST="${HACKME_DEV_FEATURES:-}"
+FEATURE_BUNDLES="${HACKME_DEV_FEATURE_BUNDLES:-${HACKME_DEV_FEATURE_PACKAGES:-}}"
 DEV_TOKEN_FEATURES="${HACKME_DEV_TOKEN_FEATURES:-${HACKME_DEV_INTERNAL_TEST_TOKEN_FEATURES:-}}"
 DEV_TOKEN_TTL_MINUTES="${HACKME_DEV_TOKEN_TTL_MINUTES:-1440}"
 DEV_TOKEN_USER="${HACKME_DEV_TOKEN_USER:-test}"
@@ -65,8 +66,12 @@ Options:
   --cli                    Run non-interactively from command/env options
   --host HOST              Default: 127.0.0.1
   --port PORT              Default: 5000; prompts if occupied in interactive mode
-  --feature-mode MODE      all, defaults, or custom. Default: all
-  --features LIST          Comma-separated feature_* keys for custom mode
+  --feature-mode MODE      all, defaults, bundles, or custom. Default: all
+  --feature-bundles LIST   Comma-separated feature package names such as
+                           core-admin,social,storage,media,trading,ai.
+  --features LIST          Comma-separated feature_* keys or package names for
+                           custom mode. Required/recommended dependencies are
+                           expanded automatically.
   --token-features LIST    Comma-separated feature_* keys, short feature names,
                            or interactive list numbers allowed by generated
                            test/internal-test dev tokens. Empty/0 means no extra
@@ -126,13 +131,16 @@ die() {
 normalize_feature_mode() {
   FEATURE_MODE="${FEATURE_MODE,,}"
   case "$FEATURE_MODE" in
-    all|defaults|custom)
+    all|defaults|bundles|custom)
       ;;
     default)
       FEATURE_MODE="defaults"
       ;;
+    bundle|package|packages|preset|presets)
+      FEATURE_MODE="bundles"
+      ;;
     *)
-      die "feature mode must be all, defaults, or custom: $FEATURE_MODE"
+      die "feature mode must be all, defaults, bundles, or custom: $FEATURE_MODE"
       ;;
   esac
 }
@@ -259,6 +267,14 @@ normalize_port_conflict_action() {
 
 normalize_runtime_options() {
   normalize_feature_mode
+  if [[ "$FEATURE_MODE" == "bundles" ]]; then
+    [[ -n "$FEATURE_BUNDLES" ]] || die "feature mode bundles requires --feature-bundles or an interactive bundle selection"
+    normalize_feature_or_bundle_selection "$FEATURE_BUNDLES" "bundle" || die "invalid feature bundle selection: $FEATURE_BUNDLES"
+    FEATURE_LIST="$NORMALIZED_FEATURE_SELECTION"
+  elif [[ "$FEATURE_MODE" == "custom" ]]; then
+    normalize_feature_or_bundle_selection "$FEATURE_LIST" || die "invalid feature selection: $FEATURE_LIST"
+    FEATURE_LIST="$NORMALIZED_FEATURE_SELECTION"
+  fi
   normalize_server_mode
   normalize_token_feature_selection "$DEV_TOKEN_FEATURES" || die "invalid generated dev token feature selection: $DEV_TOKEN_FEATURES"
   DEV_TOKEN_FEATURES="$NORMALIZED_DEV_TOKEN_FEATURES"
@@ -298,6 +314,9 @@ print_resolved_config() {
   say "  host:                $HOST"
   say "  port:                $PORT"
   say "  feature_mode:        $FEATURE_MODE"
+  if [[ "$FEATURE_MODE" == "bundles" ]]; then
+    say "  feature_bundles:     ${FEATURE_BUNDLES:-<none>}"
+  fi
   say "  features:            ${FEATURE_LIST:-<none>}"
   say "  token_features:      ${DEV_TOKEN_FEATURES:-<unrestricted>}"
   say "  token_ttl_minutes:   $DEV_TOKEN_TTL_MINUTES"
@@ -389,15 +408,19 @@ prompt_feature_settings() {
     defaults)
       default_choice="2"
       ;;
-    custom)
+    bundles)
       default_choice="3"
+      ;;
+    custom)
+      default_choice="4"
       ;;
   esac
 
   say "Feature mode:"
   say "  1) all      Enable every server DEFAULT_SETTINGS feature_* flag"
   say "  2) defaults Keep server feature defaults"
-  say "  3) custom   Enable only the comma-separated feature_* keys you enter"
+  say "  3) bundles  Enable feature packages with dependencies already grouped"
+  say "  4) custom   Advanced: enter package names and/or feature_* keys"
   while true; do
     printf 'Feature mode [%s]: ' "$default_choice"
     if ! read -r choice; then
@@ -413,18 +436,82 @@ prompt_feature_settings() {
       2|default|defaults)
         FEATURE_MODE="defaults"
         FEATURE_LIST=""
+        FEATURE_BUNDLES=""
         return 0
         ;;
-      3|custom)
+      3|bundle|bundles|package|packages|preset|presets)
+        FEATURE_MODE="bundles"
+        prompt_feature_bundle_scope
+        return 0
+        ;;
+      4|custom)
         FEATURE_MODE="custom"
-        prompt_value "Enabled feature keys, comma-separated" "$FEATURE_LIST" FEATURE_LIST
+        print_known_feature_bundles
+        print_known_feature_keys
+        prompt_value "Enabled feature packages / keys, comma-separated" "$FEATURE_LIST" FEATURE_LIST
         return 0
         ;;
       *)
-        say "Please choose 1, 2, or 3."
+        say "Please choose 1, 2, 3, or 4."
         ;;
     esac
   done
+}
+
+print_known_feature_bundles() {
+  PYTHONPATH="$SOURCE_ROOT" python3 - <<'PY' 2>/dev/null || true
+try:
+    from services.platform.settings import FEATURE_FLAG_KEYS
+except Exception:
+    raise SystemExit(0)
+
+feature_keys = set(FEATURE_FLAG_KEYS)
+bundles = [
+    ("core-admin", "核心管理 / 健康 / audit", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled",
+    )),
+    ("social", "聊天、討論區、附件、檢舉通知", (
+        "feature_chat_enabled", "feature_community_enabled", "feature_attachments_enabled",
+        "feature_reports_enabled", "feature_reports_notifications_enabled", "feature_social_search_enabled",
+    )),
+    ("storage", "雲端硬碟 / E2EE / 相簿", (
+        "feature_privacy_uploads_enabled", "feature_storage_albums_enabled", "feature_attachments_enabled",
+    )),
+    ("media", "影音分享 / 上傳保存 / 打賞經濟", (
+        "feature_videos_enabled", "feature_privacy_uploads_enabled", "feature_economy_enabled",
+    )),
+    ("games", "遊戲區 / 西洋棋", ("feature_games_enabled",)),
+    ("ai", "ComfyUI AI 產圖 + 儲存分享", (
+        "feature_comfyui_enabled", "feature_privacy_uploads_enabled",
+    )),
+    ("economy", "PointsChain 積分系統", ("feature_economy_enabled",)),
+    ("trading", "積分交易所 + PointsChain", (
+        "feature_trading_enabled", "feature_economy_enabled",
+    )),
+    ("moderation", "申訴、檢舉、違規治理", (
+        "feature_accounts_enabled", "feature_appeals_enabled", "feature_reports_enabled",
+        "feature_violation_center_enabled", "feature_reports_notifications_enabled",
+        "feature_member_governance_enabled", "feature_identity_governance_enabled",
+    )),
+    ("personalization", "個人外觀與介面客製化", (
+        "feature_personalization_enabled", "feature_ui_rebuild_enabled",
+    )),
+    ("full-user", "一般使用者完整體驗", (
+        "feature_chat_enabled", "feature_community_enabled", "feature_privacy_uploads_enabled",
+        "feature_storage_albums_enabled", "feature_videos_enabled", "feature_games_enabled",
+        "feature_comfyui_enabled", "feature_economy_enabled", "feature_trading_enabled",
+        "feature_personalization_enabled", "feature_social_search_enabled",
+    )),
+    ("qa-all", "QA / 找碴測試：所有 feature flags", tuple(FEATURE_FLAG_KEYS)),
+]
+
+print("Available feature packages:")
+for index, (name, label, keys) in enumerate(bundles, 1):
+    count = len([key for key in keys if key in feature_keys])
+    print(f"  b{index:<2d}) {name}: {label} ({count} feature flags)")
+PY
 }
 
 print_known_feature_keys() {
@@ -435,30 +522,67 @@ try:
 except Exception:
     raise SystemExit(0)
 
-print("Available generated dev token feature keys:")
+print("Available individual feature keys:")
 for index, key in enumerate(FEATURE_FLAG_KEYS, 1):
     detail = setting_detail(key)
     label = str(detail.get("label") or key).strip()
-    print(f"  {index:2d}) {key}: {label}")
+    print(f"  f{index:<2d}) {key}: {label}")
 PY
 }
 
-normalize_token_feature_selection() {
+normalize_feature_or_bundle_selection() {
   local raw_value="$1"
+  local number_mode="${2:-feature}"
   local normalized
-  if ! normalized="$(PYTHONPATH="$SOURCE_ROOT" python3 - "$raw_value" <<'PY'
+  if ! normalized="$(PYTHONPATH="$SOURCE_ROOT" python3 - "$raw_value" "$number_mode" <<'PY'
 import re
 import sys
 
 raw_value = str(sys.argv[1] or "").strip()
+number_mode = str(sys.argv[2] or "feature").strip().lower()
 try:
-    from services.platform.settings import FEATURE_FLAG_KEYS
+    from services.platform.settings import FEATURE_DEPENDENCY_RULES, FEATURE_FLAG_KEYS, normalize_feature_key
 except Exception as exc:
     print(f"feature catalog unavailable: {exc}", file=sys.stderr)
     raise SystemExit(2)
 
 feature_keys = list(FEATURE_FLAG_KEYS)
 feature_key_set = set(feature_keys)
+bundles = [
+    ("core-admin", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled",
+    )),
+    ("social", (
+        "feature_chat_enabled", "feature_community_enabled", "feature_attachments_enabled",
+        "feature_reports_enabled", "feature_reports_notifications_enabled", "feature_social_search_enabled",
+    )),
+    ("storage", (
+        "feature_privacy_uploads_enabled", "feature_storage_albums_enabled", "feature_attachments_enabled",
+    )),
+    ("media", (
+        "feature_videos_enabled", "feature_privacy_uploads_enabled", "feature_economy_enabled",
+    )),
+    ("games", ("feature_games_enabled",)),
+    ("ai", ("feature_comfyui_enabled", "feature_privacy_uploads_enabled")),
+    ("economy", ("feature_economy_enabled",)),
+    ("trading", ("feature_trading_enabled", "feature_economy_enabled")),
+    ("moderation", (
+        "feature_accounts_enabled", "feature_appeals_enabled", "feature_reports_enabled",
+        "feature_violation_center_enabled", "feature_reports_notifications_enabled",
+        "feature_member_governance_enabled", "feature_identity_governance_enabled",
+    )),
+    ("personalization", ("feature_personalization_enabled", "feature_ui_rebuild_enabled")),
+    ("full-user", (
+        "feature_chat_enabled", "feature_community_enabled", "feature_privacy_uploads_enabled",
+        "feature_storage_albums_enabled", "feature_videos_enabled", "feature_games_enabled",
+        "feature_comfyui_enabled", "feature_economy_enabled", "feature_trading_enabled",
+        "feature_personalization_enabled", "feature_social_search_enabled",
+    )),
+    ("qa-all", tuple(feature_keys)),
+]
+bundle_map = {name: tuple(key for key in keys if key in feature_key_set) for name, keys in bundles}
 if not raw_value or raw_value.lower() in {"all", "*", "unrestricted", "none", "0"}:
     print("")
     raise SystemExit(0)
@@ -466,25 +590,59 @@ if not raw_value or raw_value.lower() in {"all", "*", "unrestricted", "none", "0
 allowed = []
 unknown = []
 for item in re.split(r"[\s,，]+", raw_value):
-    key = item.strip()
-    if not key:
+    choice = item.strip()
+    if not choice:
         continue
-    if key.isdigit():
-        index = int(key)
+    lowered = choice.lower()
+    if lowered in bundle_map:
+        for key in bundle_map[lowered]:
+            if key not in allowed:
+                allowed.append(key)
+        continue
+    if lowered.startswith(("bundle:", "package:", "preset:")):
+        bundle_name = lowered.split(":", 1)[1]
+        if bundle_name in bundle_map:
+            for key in bundle_map[bundle_name]:
+                if key not in allowed:
+                    allowed.append(key)
+            continue
+        unknown.append(choice)
+        continue
+    if lowered.startswith(("b", "p")) and lowered[1:].isdigit():
+        index = int(lowered[1:])
+        if 1 <= index <= len(bundles):
+            for key in bundles[index - 1][1]:
+                if key in feature_key_set and key not in allowed:
+                    allowed.append(key)
+            continue
+        unknown.append(choice)
+        continue
+    if lowered.startswith("f") and lowered[1:].isdigit():
+        index = int(lowered[1:])
         if 1 <= index <= len(feature_keys):
             key = feature_keys[index - 1]
         else:
-            unknown.append(item)
+            unknown.append(choice)
+            continue
+        if key not in allowed:
+            allowed.append(key)
+        continue
+    if choice.isdigit():
+        index = int(choice)
+        if number_mode == "bundle" and 1 <= index <= len(bundles):
+            for key in bundles[index - 1][1]:
+                if key in feature_key_set and key not in allowed:
+                    allowed.append(key)
+            continue
+        if 1 <= index <= len(feature_keys):
+            key = feature_keys[index - 1]
+        else:
+            unknown.append(choice)
             continue
     else:
-        if not key.startswith("feature_"):
-            key = f"feature_{key}"
-        if key not in feature_key_set and not key.endswith("_enabled"):
-            maybe_enabled = f"{key}_enabled"
-            if maybe_enabled in feature_key_set:
-                key = maybe_enabled
+        key = normalize_feature_key(choice)
     if key not in feature_key_set:
-        unknown.append(item)
+        unknown.append(choice)
         continue
     if key not in allowed:
         allowed.append(key)
@@ -492,23 +650,54 @@ for item in re.split(r"[\s,，]+", raw_value):
 if unknown:
     print(f"unknown feature choice(s): {', '.join(unknown)}", file=sys.stderr)
     raise SystemExit(2)
+
+changed = True
+while changed:
+    changed = False
+    for key in list(allowed):
+        rule = FEATURE_DEPENDENCY_RULES.get(key, {}) or {}
+        for dep in tuple(rule.get("required", ()) or ()) + tuple(rule.get("recommended", ()) or ()):
+            dep = normalize_feature_key(dep)
+            if dep in feature_key_set and dep not in allowed:
+                allowed.append(dep)
+                changed = True
+
 print(",".join(allowed))
 PY
 )"; then
     return 1
   fi
-  NORMALIZED_DEV_TOKEN_FEATURES="$normalized"
+  NORMALIZED_FEATURE_SELECTION="$normalized"
   return 0
+}
+
+normalize_token_feature_selection() {
+  normalize_feature_or_bundle_selection "$1" "feature" || return 1
+  NORMALIZED_DEV_TOKEN_FEATURES="$NORMALIZED_FEATURE_SELECTION"
+  return 0
+}
+
+prompt_feature_bundle_scope() {
+  local answer
+  say "Feature packages:"
+  print_known_feature_bundles
+  say "Enter comma-separated package numbers or names. Examples: 2,3,trading or social,storage,media."
+  prompt_value "Feature packages" "${FEATURE_BUNDLES:-full-user}" answer
+  FEATURE_BUNDLES="$answer"
+  normalize_feature_or_bundle_selection "$FEATURE_BUNDLES" "bundle" || die "invalid feature bundle selection: $FEATURE_BUNDLES"
+  FEATURE_LIST="$NORMALIZED_FEATURE_SELECTION"
+  say "Resolved feature package keys: ${FEATURE_LIST:-<none>}"
 }
 
 prompt_token_feature_scope() {
   local answer
   say "Generated dev token allowed feature scope:"
   say "   0) unrestricted token scope (default; no token-level feature restriction)"
+  print_known_feature_bundles
   print_known_feature_keys
-  say "Enter comma-separated numbers or feature keys. Examples: 1,5,feature_trading_enabled or chat,videos."
+  say "Enter comma-separated package names, b-numbers, f-numbers, or feature keys. Examples: social,storage,trading or b8,feature_videos_enabled,f20."
   while true; do
-    prompt_value "Generated dev token allowed feature choices" "$DEV_TOKEN_FEATURES" answer
+    prompt_value "Generated dev token allowed feature packages / keys" "$DEV_TOKEN_FEATURES" answer
     if normalize_token_feature_selection "$answer"; then
       DEV_TOKEN_FEATURES="$NORMALIZED_DEV_TOKEN_FEATURES"
       if [[ -z "$DEV_TOKEN_FEATURES" ]]; then
@@ -1018,6 +1207,12 @@ while [[ $# -gt 0 ]]; do
       FEATURE_MODE_SET=1
       shift 2
       ;;
+    --feature-bundles|--feature-packages|--feature-presets)
+      FEATURE_BUNDLES="${2:?missing feature bundle list}"
+      FEATURE_MODE="bundles"
+      FEATURE_MODE_SET=1
+      shift 2
+      ;;
     --features|--enable-features)
       FEATURE_LIST="${2:?missing feature list}"
       if [[ "$FEATURE_MODE_SET" == "0" ]]; then
@@ -1170,6 +1365,9 @@ done
 if [[ -n "$FEATURE_LIST" && -z "${HACKME_DEV_FEATURE_MODE:-}" && "$FEATURE_MODE_SET" == "0" ]]; then
   FEATURE_MODE="custom"
 fi
+if [[ -n "$FEATURE_BUNDLES" && -z "${HACKME_DEV_FEATURE_MODE:-}" && "$FEATURE_MODE_SET" == "0" ]]; then
+  FEATURE_MODE="bundles"
+fi
 
 if [[ "$CLI_MODE" != "1" ]]; then
   prompt_runtime_config
@@ -1233,6 +1431,7 @@ export HTML_LEARNING_MANAGER_PASSWORD="$MANAGER_PASSWORD"
 export HTML_LEARNING_TEST_PASSWORD="$TEST_PASSWORD"
 export HACKME_DEV_FEATURE_MODE="$FEATURE_MODE"
 export HACKME_DEV_FEATURES="$FEATURE_LIST"
+export HACKME_DEV_FEATURE_BUNDLES="$FEATURE_BUNDLES"
 export HACKME_DEV_IN_PLACE="$IN_PLACE"
 export HACKME_DEV_TOKEN_FEATURES="$DEV_TOKEN_FEATURES"
 export HACKME_DEV_TOKEN_TTL_MINUTES="$DEV_TOKEN_TTL_MINUTES"
@@ -1393,7 +1592,7 @@ selected_features = {
 }
 if feature_mode == "defaults":
     feature_updates = {}
-elif feature_mode == "custom":
+elif feature_mode in {"custom", "bundles"}:
     feature_updates = {
         key: key in selected_features
         for key in feature_keys
