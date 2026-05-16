@@ -658,6 +658,449 @@ _SEARCH_PROFILES = {
         "final_low_legal_check_escape_max_nodes": 0,
         "final_low_legal_check_escape_enable_king_mobility4": True,
     },
+    # V29a — V28e + critical-position-gated widened mate-net scan.
+    #
+    # Hypothesis: V28h's "low-legal mate scan 12" found a real blind spot
+    # (forced-checking-mate helper misses mate nets when opponent has >6
+    # root checking moves), but widening unconditionally was too slow.
+    # V29a widens ``max_root_checks`` to 12 ONLY when
+    # ``_is_critical_root_position`` reports True (>=2 opponent checking
+    # moves and at least one check leaves us with <=8 legal replies).
+    # Backed by ``MateNetContext`` Zobrist-keyed memo shared across the
+    # chosen-move check and the scan_limit alternatives so the extra cost
+    # is amortized.
+    #
+    # All other V28e knobs unchanged: depth=3, q=2, no null-move, PVS+LMR
+    # +futility, same evaluator, same opening book, same fast-king-mobility4
+    # final guard.
+    "fixed_depth_fianchetto_tail_castle_guard_v29a_depth3_no_null_mate_net30_critical_widen12": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "tail_mate_min_margin_cp": -3000,
+        "tail_mate_max_pieces": 30,
+        "tail_mate_max_nodes": 12_000,
+        "tail_mate_max_root_checks": 6,
+        "mate_two_min_margin_cp": -3000,
+        "mate_two_max_pieces": 30,
+        "enable_v27_forced_mate_defense": True,
+        "v27_forced_mate_defense_max_pieces": 30,
+        "v27_forced_mate_defense_max_depth": 7,
+        "v27_forced_mate_defense_max_nodes": 12_000,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": True,
+        "enable_special_rule_fusion": False,
+        "enable_final_low_legal_check_escape": True,
+        "final_low_legal_check_escape_max_legal": 4,
+        "final_low_legal_check_escape_max_pieces": 30,
+        "final_low_legal_check_escape_max_depth": 0,
+        "final_low_legal_check_escape_max_nodes": 0,
+        "final_low_legal_check_escape_enable_king_mobility4": True,
+        # NEW: turn on the V29 critical-position gate for the mate-net
+        # filters. With the V28e settings above, this currently only
+        # affects ``_avoid_opponent_forced_mate_net_filter`` — the
+        # ``_low_legal_check_escape_filter`` is configured with
+        # ``max_depth=0/max_nodes=0`` so it skips ``_has_bounded_opponent_
+        # forced_mate`` regardless. The V29b variant flips that on.
+        "enable_v29_critical_widen_mate_net": True,
+    },
+    # V29r_diag — V28e behavior unchanged, plus log-only emission of
+    # pre-existing threat diagnostics.
+    #
+    # Hypothesis: V28e's existing guards never check "did my move address
+    # an opponent threat that already existed before I moved" — they only
+    # check whether the moved piece itself can be recaptured, and the raw
+    # capture-only worst-reply metric. The canonical missed case is game
+    # 2 ply 24 (a7a6 while Be6 is hanging to Ng5xe6). V29r_diag emits one
+    # JSONL row per ``choose_experiment_nnue_move`` call describing the
+    # top SEE-positive opponent threat (if any), whether the chosen move
+    # neutralizes it, and the best-neutralizing alternative. Used to:
+    # (1) find the true first bad ply in game 2 (not the ply-24 symptom);
+    # (2) measure how often a pre-existing threat exists across the
+    #     V28e draw cycles in games 1, 3, 4, 5 — so the later behavior
+    #     versions (V29r_order, V29r_guard) don't accidentally break
+    #     those cycles.
+    #
+    # Log path is set via ``EXP5_V29R_LOG_PATH`` env var. If unset, the
+    # diagnostic is a no-op even when this profile is selected.
+    "fixed_depth_fianchetto_tail_castle_guard_v29r_diag_depth3_no_null_mate_net30_threat_log": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "tail_mate_min_margin_cp": -3000,
+        "tail_mate_max_pieces": 30,
+        "tail_mate_max_nodes": 12_000,
+        "tail_mate_max_root_checks": 6,
+        "mate_two_min_margin_cp": -3000,
+        "mate_two_max_pieces": 30,
+        "enable_v27_forced_mate_defense": True,
+        "v27_forced_mate_defense_max_pieces": 30,
+        "v27_forced_mate_defense_max_depth": 7,
+        "v27_forced_mate_defense_max_nodes": 12_000,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": True,
+        "enable_special_rule_fusion": False,
+        "enable_final_low_legal_check_escape": True,
+        "final_low_legal_check_escape_max_legal": 4,
+        "final_low_legal_check_escape_max_pieces": 30,
+        "final_low_legal_check_escape_max_depth": 0,
+        "final_low_legal_check_escape_max_nodes": 0,
+        "final_low_legal_check_escape_enable_king_mobility4": True,
+        "enable_v29r_threat_diagnostic": True,
+    },
+    # V29r_order_60 — V28e + narrow pre-existing threat tie-break swap.
+    #
+    # When a pre-existing opponent capture threat with SEE >= 250cp
+    # exists, the chosen move ignores it, and a neutralizing alternative
+    # has a search score within 60cp of chosen, swap to the neutralizer.
+    #
+    # Diagnostic evidence (V29r_diag staged-5 log):
+    # - g2 ply 24 a7a6 → d8d7 has gap = +20cp → swap fires
+    # - g1/g3/g4/g5 draw-cycle failure rows have gap either > 60cp (not
+    #   in band) or < 0 (search already prefers neut but a later filter
+    #   overrode — outside our tie-break zone). So this profile should
+    #   only diverge from V28e in narrow "blunder ignoring threat" cases.
+    "fixed_depth_fianchetto_tail_castle_guard_v29r_order_60_depth3_no_null_mate_net30_threat_tiebreak60": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "tail_mate_min_margin_cp": -3000,
+        "tail_mate_max_pieces": 30,
+        "tail_mate_max_nodes": 12_000,
+        "tail_mate_max_root_checks": 6,
+        "mate_two_min_margin_cp": -3000,
+        "mate_two_max_pieces": 30,
+        "enable_v27_forced_mate_defense": True,
+        "v27_forced_mate_defense_max_pieces": 30,
+        "v27_forced_mate_defense_max_depth": 7,
+        "v27_forced_mate_defense_max_nodes": 12_000,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": True,
+        "enable_special_rule_fusion": False,
+        "enable_final_low_legal_check_escape": True,
+        "final_low_legal_check_escape_max_legal": 4,
+        "final_low_legal_check_escape_max_pieces": 30,
+        "final_low_legal_check_escape_max_depth": 0,
+        "final_low_legal_check_escape_max_nodes": 0,
+        "final_low_legal_check_escape_enable_king_mobility4": True,
+        "enable_v29r_threat_response": True,
+        "v29r_threat_response_max_gap_cp": 60,
+        "v29r_threat_response_min_see_cp": 250,
+    },
+    # V29r_order_40 — V29r_order with tighter 40cp window.
+    #
+    # V29r_order_60 fixed staged g2 (a7a6 → d8d7, gap=20cp) but also
+    # fired at g4 ply 38 (f7f5 → b4c5, gap=49cp) which converted that
+    # game from draw to loss — net 0 change in staged-5 score. A 40cp
+    # window keeps the g2 fix (20 <= 40) while leaving g4 untouched
+    # (49 > 40), so the only divergence from V28e on staged-5 should be
+    # the canonical g2 ply-24 case.
+    "fixed_depth_fianchetto_tail_castle_guard_v29r_order_40_depth3_no_null_mate_net30_threat_tiebreak40": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "tail_mate_min_margin_cp": -3000,
+        "tail_mate_max_pieces": 30,
+        "tail_mate_max_nodes": 12_000,
+        "tail_mate_max_root_checks": 6,
+        "mate_two_min_margin_cp": -3000,
+        "mate_two_max_pieces": 30,
+        "enable_v27_forced_mate_defense": True,
+        "v27_forced_mate_defense_max_pieces": 30,
+        "v27_forced_mate_defense_max_depth": 7,
+        "v27_forced_mate_defense_max_nodes": 12_000,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": True,
+        "enable_special_rule_fusion": False,
+        "enable_final_low_legal_check_escape": True,
+        "final_low_legal_check_escape_max_legal": 4,
+        "final_low_legal_check_escape_max_pieces": 30,
+        "final_low_legal_check_escape_max_depth": 0,
+        "final_low_legal_check_escape_max_nodes": 0,
+        "final_low_legal_check_escape_enable_king_mobility4": True,
+        "enable_v29r_threat_response": True,
+        "v29r_threat_response_max_gap_cp": 40,
+        "v29r_threat_response_min_see_cp": 250,
+    },
+    # V29q — V28e + deeper quiescence (q=4 instead of 2).
+    #
+    # Quiescence is meant to resolve "loud" sequences (captures, etc.)
+    # past the nominal search depth. V28e uses q=2 which under-resolves
+    # the recapture network in busy middlegames. q=4 should let the
+    # search see deeper trade sequences without changing the move
+    # ordering or any post-search filter, making it a broad but cheap
+    # candidate fix.
+    "fixed_depth_fianchetto_tail_castle_guard_v29q_depth3_no_null_mate_net30_qdepth4": {
+        "depth": 3,
+        "quiescence_depth": 4,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "tail_mate_min_margin_cp": -3000,
+        "tail_mate_max_pieces": 30,
+        "tail_mate_max_nodes": 12_000,
+        "tail_mate_max_root_checks": 6,
+        "mate_two_min_margin_cp": -3000,
+        "mate_two_max_pieces": 30,
+        "enable_v27_forced_mate_defense": True,
+        "v27_forced_mate_defense_max_pieces": 30,
+        "v27_forced_mate_defense_max_depth": 7,
+        "v27_forced_mate_defense_max_nodes": 12_000,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": True,
+        "enable_special_rule_fusion": False,
+        "enable_final_low_legal_check_escape": True,
+        "final_low_legal_check_escape_max_legal": 4,
+        "final_low_legal_check_escape_max_pieces": 30,
+        "final_low_legal_check_escape_max_depth": 0,
+        "final_low_legal_check_escape_max_nodes": 0,
+        "final_low_legal_check_escape_enable_king_mobility4": True,
+    },
+    # V29t — V28e + selective root depth on opponent SEE threat.
+    #
+    # Tries to fix the depth-3 horizon miss (game 2 ply 24: a7a6 ignored
+    # Ng5xe6 threat) without the broad side effects the post-search SEE
+    # filter introduced. When the opponent has a positive-SEE capture
+    # threat against one of our pieces in the current position, the root
+    # search runs at depth 4 instead of 3, so the search itself sees
+    # "after a6, opponent plays Nxe6 winning a bishop". Cost is paid only
+    # in tactical positions, not in calm play.
+    "fixed_depth_fianchetto_tail_castle_guard_v29t_depth3_no_null_mate_net30_threat_selective_d4": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "tail_mate_min_margin_cp": -3000,
+        "tail_mate_max_pieces": 30,
+        "tail_mate_max_nodes": 12_000,
+        "tail_mate_max_root_checks": 6,
+        "mate_two_min_margin_cp": -3000,
+        "mate_two_max_pieces": 30,
+        "enable_v27_forced_mate_defense": True,
+        "v27_forced_mate_defense_max_pieces": 30,
+        "v27_forced_mate_defense_max_depth": 7,
+        "v27_forced_mate_defense_max_nodes": 12_000,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": True,
+        "enable_special_rule_fusion": False,
+        "enable_final_low_legal_check_escape": True,
+        "final_low_legal_check_escape_max_legal": 4,
+        "final_low_legal_check_escape_max_pieces": 30,
+        "final_low_legal_check_escape_max_depth": 0,
+        "final_low_legal_check_escape_max_nodes": 0,
+        "final_low_legal_check_escape_enable_king_mobility4": True,
+        "enable_v29_threat_selective_depth": True,
+        "v29_threat_selective_depth": 4,
+    },
+    # V29h — V28e with the "intentional draw-seeking" filter DISABLED.
+    #
+    # ``_claimable_draw_resource_filter`` actively cycles into threefold
+    # whenever the engine is down by >=250cp. That filter is responsible
+    # for most of V28e's 4D-out-of-5-games staged Blockfish result —
+    # making the metric a draw-cycle test rather than a strength test.
+    # V29h removes that crutch so the staged-5 reflects actual play
+    # quality. This is the new "honest baseline" against which subsequent
+    # V29 strength candidates are measured.
+    #
+    # All other V28e knobs unchanged.
+    "fixed_depth_fianchetto_tail_castle_guard_v29h_depth3_no_null_mate_net30_no_draw_seek": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "tail_mate_min_margin_cp": -3000,
+        "tail_mate_max_pieces": 30,
+        "tail_mate_max_nodes": 12_000,
+        "tail_mate_max_root_checks": 6,
+        "mate_two_min_margin_cp": -3000,
+        "mate_two_max_pieces": 30,
+        "enable_v27_forced_mate_defense": True,
+        "v27_forced_mate_defense_max_pieces": 30,
+        "v27_forced_mate_defense_max_depth": 7,
+        "v27_forced_mate_defense_max_nodes": 12_000,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": True,
+        "enable_special_rule_fusion": False,
+        "enable_final_low_legal_check_escape": True,
+        "final_low_legal_check_escape_max_legal": 4,
+        "final_low_legal_check_escape_max_pieces": 30,
+        "final_low_legal_check_escape_max_depth": 0,
+        "final_low_legal_check_escape_max_nodes": 0,
+        "final_low_legal_check_escape_enable_king_mobility4": True,
+        "enable_claimable_draw_resource": False,
+    },
+    # V29h_see — V29h + SEE-aware ``_avoid_immediate_material_drop_filter``.
+    #
+    # The raw drop filter sees every non-defending move as having the same
+    # "worst floor" because the opponent's best capture is the same in
+    # all of them — so it never fires when the right move is "defend the
+    # piece" rather than "move the piece". SEE-aware floor distinguishes
+    # a defended target (low SEE cost) from a hanging one (full piece
+    # SEE), so defending moves bubble up. Verified on game 2 ply 24:
+    # raw floor for d8d7=-350 vs SEE floor d8d7=-15 (Qd7 defends Be6).
+    "fixed_depth_fianchetto_tail_castle_guard_v29h_see_depth3_no_null_mate_net30_no_draw_seek_see_floor": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "tail_mate_min_margin_cp": -3000,
+        "tail_mate_max_pieces": 30,
+        "tail_mate_max_nodes": 12_000,
+        "tail_mate_max_root_checks": 6,
+        "mate_two_min_margin_cp": -3000,
+        "mate_two_max_pieces": 30,
+        "enable_v27_forced_mate_defense": True,
+        "v27_forced_mate_defense_max_pieces": 30,
+        "v27_forced_mate_defense_max_depth": 7,
+        "v27_forced_mate_defense_max_nodes": 12_000,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": True,
+        "enable_special_rule_fusion": False,
+        "enable_final_low_legal_check_escape": True,
+        "final_low_legal_check_escape_max_legal": 4,
+        "final_low_legal_check_escape_max_pieces": 30,
+        "final_low_legal_check_escape_max_depth": 0,
+        "final_low_legal_check_escape_max_nodes": 0,
+        "final_low_legal_check_escape_enable_king_mobility4": True,
+        "enable_claimable_draw_resource": False,
+        "enable_see_aware_material_drop_filter": True,
+    },
+    # V29b — V29a + activate the in-check evasion forced-mate verifier.
+    #
+    # V28e left ``_low_legal_check_escape_filter``'s forced-mate check
+    # dormant (max_depth=0/max_nodes=0). V29b turns it on with conservative
+    # bounds (depth=5, nodes=8_000) plus the same critical-position gate so
+    # only dangerous evasion positions pay the cost.
+    "fixed_depth_fianchetto_tail_castle_guard_v29b_depth3_no_null_mate_net30_critical_widen12_evasion_verifier": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "tail_mate_min_margin_cp": -3000,
+        "tail_mate_max_pieces": 30,
+        "tail_mate_max_nodes": 12_000,
+        "tail_mate_max_root_checks": 6,
+        "mate_two_min_margin_cp": -3000,
+        "mate_two_max_pieces": 30,
+        "enable_v27_forced_mate_defense": True,
+        "v27_forced_mate_defense_max_pieces": 30,
+        "v27_forced_mate_defense_max_depth": 7,
+        "v27_forced_mate_defense_max_nodes": 12_000,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": True,
+        "enable_special_rule_fusion": False,
+        "enable_final_low_legal_check_escape": True,
+        "final_low_legal_check_escape_max_legal": 4,
+        "final_low_legal_check_escape_max_pieces": 30,
+        # V29b: enable the in-check evasion forced-mate verifier with
+        # conservative bounds.
+        "final_low_legal_check_escape_max_depth": 5,
+        "final_low_legal_check_escape_max_nodes": 8_000,
+        "final_low_legal_check_escape_enable_king_mobility4": True,
+        "enable_v29_critical_widen_mate_net": True,
+    },
     "fixed_depth_center_fianchetto": {
         "depth": 2,
         "quiescence_depth": 2,
@@ -777,9 +1220,23 @@ _STATIC_OPENING_BOOK_FULLMOVE_LIMIT = 10
 _OPENING_KING_WALK_FULLMOVE_LIMIT = 12
 _TRAP_PRIOR_FULLMOVE_LIMIT = 12
 _MOVE_HISTORY_KEY = "__move_history__"
-_MATE_IN_TWO_MAX_PIECES = 12
-_MATE_IN_TWO_MAX_LEGAL_MOVES = 45
-_MATE_IN_TWO_MAX_REPLIES = 45
+# Score window (in centipawn search-score units) for SEE-aware override in
+# ``_avoid_immediate_material_drop_filter``. Override only fires if a safer
+# candidate's search score is within this window of the original pick;
+# otherwise the search's positional reasoning is trusted.
+_SEE_DROP_FILTER_SCORE_WINDOW_CP = 600
+# Mate-net constants and helpers live in ``chess_exp5_mate_net``. The names
+# are re-exported below (after the helpers they depend on are defined) so
+# existing imports (including the architecture test) keep working without
+# changes.
+from services.games.chess_exp5_mate_net import (
+    _MATE_IN_TWO_MAX_PIECES,
+    _MATE_IN_TWO_MAX_LEGAL_MOVES,
+    _MATE_IN_TWO_MAX_REPLIES,
+    _CRITICAL_WIDEN_MAX_ROOT_CHECKS,
+    MateNetContext,
+    _is_critical_root_position,
+)
 _CONVERSION_MARGIN_CP = 500
 _CONVERSION_FULLMOVE = 20
 _CONVERSION_TOTAL_MATERIAL_CP = 3600
@@ -2469,7 +2926,13 @@ def _material_margin_for_color(board: chess.Board, color: chess.Color) -> int:
 
 
 def _worst_immediate_reply_material_margin(board: chess.Board, color: chess.Color) -> int:
-    """Worst material margin after the opponent's immediate forcing reply."""
+    """Worst material margin after the opponent's immediate forcing reply.
+
+    Capture-only, no recapture accounting. Treats every recapturable trade
+    as a full piece loss, which inflates the "loss floor" and can blind the
+    drop-filter to defending moves whose true SEE cost is small. See
+    ``_worst_immediate_reply_see_margin`` for the SEE-aware variant.
+    """
     worst = _material_margin_for_color(board, color)
     for reply in board.legal_moves:
         after = board.copy(stack=False)
@@ -2479,6 +2942,59 @@ def _worst_immediate_reply_material_margin(board: chess.Board, color: chess.Colo
         if board.is_capture(reply):
             worst = min(worst, _material_margin_for_color(after, color))
     return worst
+
+
+def _worst_immediate_reply_see_margin(board: chess.Board, color: chess.Color) -> int:
+    """SEE-aware version of ``_worst_immediate_reply_material_margin``.
+
+    For each opponent capture reply, compute its static exchange evaluation
+    (which accounts for our recapture sequence) and return the base margin
+    minus the opponent's best SEE gain. This correctly identifies
+    "defended pieces" as low-cost trades rather than full piece losses,
+    so the drop-filter can distinguish a real hang from a defended target.
+    """
+    base = _material_margin_for_color(board, color)
+    worst_capture_gain = 0
+    for reply in board.legal_moves:
+        if not board.is_capture(reply):
+            continue
+        after = board.copy(stack=False)
+        after.push(reply)
+        if after.is_checkmate():
+            return -_PIECE_VALUES[chess.KING]
+        see = _static_exchange_eval(board, reply)
+        if see > worst_capture_gain:
+            worst_capture_gain = see
+    return base - worst_capture_gain
+
+
+def _opponent_has_positive_see_threat(board: chess.Board, color: chess.Color, *, min_see_cp: int = 100) -> bool:
+    """Does opponent have a capture move with SEE>=``min_see_cp`` against
+    one of our pieces, BEFORE we move?
+
+    Precondition for firing SEE-aware override filters. In calm positions
+    where the search's chosen move isn't responding to an actual threat,
+    the SEE-aware override has no signal worth using and only injects
+    noise into otherwise sound search choices. Uses a null-move trick to
+    flip the side to move so we can enumerate opponent's responses.
+    """
+    if board.turn != color:
+        return False
+    if board.is_check():
+        return True
+    if not board.has_legal_en_passant():  # cheap early-out fine to remove
+        pass
+    after_null = board.copy(stack=False)
+    try:
+        after_null.push(chess.Move.null())
+    except Exception:
+        return False
+    for reply in after_null.legal_moves:
+        if not after_null.is_capture(reply):
+            continue
+        if _static_exchange_eval(after_null, reply) >= int(min_see_cp):
+            return True
+    return False
 
 
 def _opponent_knight_fork_danger(board: chess.Board, color: chess.Color) -> int:
@@ -3112,429 +3628,22 @@ def _avoid_shuffle_with_advanced_pawn_push_filter(
     return sorted(candidates, reverse=True)[0][4]
 
 
-def _opponent_mate_in_one_moves(board: chess.Board) -> list[chess.Move]:
-    mates: list[chess.Move] = []
-    for reply in board.legal_moves:
-        after = board.copy(stack=False)
-        after.push(reply)
-        if after.is_checkmate():
-            mates.append(reply)
-    return mates
-
-
-def _forced_single_reply_mate_net_move(board: chess.Board) -> chess.Move | None:
-    """Find a checking move where the only legal reply allows mate in one."""
-    if board.legal_moves.count() > 90:
-        return None
-    candidates: list[tuple[int, int, str, chess.Move]] = []
-    for move in board.legal_moves:
-        if not board.gives_check(move) or _would_stalemate(board, move):
-            continue
-        after = board.copy(stack=False)
-        after.push(move)
-        if after.is_checkmate() or after.is_stalemate():
-            continue
-        replies = list(after.legal_moves)
-        if len(replies) != 1:
-            continue
-        reply_board = after.copy(stack=False)
-        reply_board.push(replies[0])
-        mate_replies = _opponent_mate_in_one_moves(reply_board)
-        if not mate_replies:
-            continue
-        candidates.append((
-            _move_order_score(board, move),
-            _captured_piece_value(board, move),
-            move.uci(),
-            move,
-        ))
-    if not candidates:
-        return None
-    return sorted(candidates, reverse=True)[0][3]
-
-
-def _forced_mate_in_two_priority_move(
-    board: chess.Board,
-    *,
-    max_pieces: int = _MATE_IN_TWO_MAX_PIECES,
-    max_legal_moves: int = _MATE_IN_TWO_MAX_LEGAL_MOVES,
-    max_replies: int = _MATE_IN_TWO_MAX_REPLIES,
-    min_material_margin_cp: int = 0,
-) -> chess.Move | None:
-    """Find a conservative forced mate-in-two move in simplified positions.
-
-    This is deliberately bounded to low-material or otherwise small legal-move
-    spaces. Exp5's default live profile is shallow, so this fills an important
-    human-visible gap in simple endgames without adding a broad expensive
-    tactical solver to every middlegame move.
-    """
-    if len(board.piece_map()) > int(max_pieces or _MATE_IN_TWO_MAX_PIECES):
-        return None
-    if int(min_material_margin_cp or 0) > 0 and _material_margin_for_color(board, board.turn) < int(min_material_margin_cp):
-        return None
-    legal_moves = sorted(board.legal_moves, key=lambda item: item.uci())
-    if not legal_moves or len(legal_moves) > int(max_legal_moves or _MATE_IN_TWO_MAX_LEGAL_MOVES):
-        return None
-
-    candidates: list[chess.Move] = []
-    for move in legal_moves:
-        after = board.copy(stack=False)
-        after.push(move)
-        if after.is_checkmate() or after.is_stalemate():
-            continue
-        replies = list(after.legal_moves)
-        if not replies or len(replies) > int(max_replies or _MATE_IN_TWO_MAX_REPLIES):
-            continue
-        forced = True
-        for reply in replies:
-            reply_board = after.copy(stack=False)
-            reply_board.push(reply)
-            if not _opponent_mate_in_one_moves(reply_board):
-                forced = False
-                break
-        if forced:
-            candidates.append(move)
-    if not candidates:
-        return None
-    return sorted(
-        candidates,
-        key=lambda move: (
-            board.gives_check(move),
-            _move_order_score(board, move),
-            _captured_piece_value(board, move),
-            move.uci(),
-        ),
-        reverse=True,
-    )[0]
-
-
-def _forced_checking_mate_priority_move(
-    board: chess.Board,
-    *,
-    max_depth_plies: int = 7,
-    max_pieces: int = 18,
-    max_legal_moves: int = 70,
-    min_material_margin_cp: int = 700,
-    max_nodes: int = 30_000,
-    max_root_checks: int = 5,
-) -> chess.Move | None:
-    """Find a bounded checking sequence that forces mate.
-
-    This is a tail/endgame helper, not a full tactical search. It only considers
-    checking attacker moves, then requires every defender reply to remain inside
-    the forced mate tree. That keeps the search small and avoids changing quiet
-    middlegame choices.
-    """
-    if len(board.piece_map()) > int(max_pieces or 18):
-        return None
-    legal_count = board.legal_moves.count()
-    if legal_count <= 0 or legal_count > int(max_legal_moves or 70):
-        return None
-    if _material_margin_for_color(board, board.turn) < int(min_material_margin_cp or 0):
-        return None
-
-    attacker = board.turn
-    max_depth_plies = max(1, int(max_depth_plies or 1))
-    max_nodes = max(1000, int(max_nodes or 30_000))
-    nodes = 0
-    memo: dict[tuple[str, int, bool], bool] = {}
-
-    def checking_moves(current: chess.Board) -> list[chess.Move]:
-        moves = [move for move in current.legal_moves if current.gives_check(move)]
-        return sorted(
-            moves,
-            key=lambda move: (
-                current.is_capture(move),
-                bool(move.promotion),
-                _promotion_priority(move),
-                _captured_piece_value(current, move),
-                _move_order_score(current, move),
-                move.uci(),
-            ),
-            reverse=True,
-        )
-
-    def can_force(current: chess.Board, depth: int) -> bool:
-        nonlocal nodes
-        nodes += 1
-        if nodes > max_nodes:
-            return False
-        if current.is_checkmate():
-            return current.turn != attacker
-        if current.is_stalemate() or depth <= 0:
-            return False
-        key = (current.fen(), depth, current.turn)
-        cached = memo.get(key)
-        if cached is not None:
-            return cached
-        if current.turn == attacker:
-            for move in checking_moves(current):
-                current.push(move)
-                ok = can_force(current, depth - 1)
-                current.pop()
-                if ok:
-                    memo[key] = True
-                    return True
-            memo[key] = False
-            return False
-
-        replies = list(current.legal_moves)
-        if not replies or len(replies) > int(max_legal_moves or 70):
-            memo[key] = False
-            return False
-        for reply in replies:
-            current.push(reply)
-            ok = can_force(current, depth - 1)
-            current.pop()
-            if not ok:
-                memo[key] = False
-                return False
-        memo[key] = True
-        return True
-
-    root_checks = checking_moves(board)
-    if not root_checks or len(root_checks) > int(max_root_checks or 5):
-        return None
-    candidates: list[chess.Move] = []
-    for move in root_checks:
-        board.push(move)
-        ok = can_force(board, max_depth_plies - 1)
-        board.pop()
-        if ok:
-            candidates.append(move)
-    if not candidates:
-        return None
-    return sorted(
-        candidates,
-        key=lambda move: (
-            board.is_capture(move),
-            bool(move.promotion),
-            _promotion_priority(move),
-            _captured_piece_value(board, move),
-            _move_order_score(board, move),
-            move.uci(),
-        ),
-        reverse=True,
-    )[0]
-
-
-def _has_bounded_opponent_forced_mate(
-    board: chess.Board,
-    *,
-    max_depth_plies: int,
-    max_pieces: int,
-    max_nodes: int,
-) -> bool:
-    return (
-        _forced_checking_mate_priority_move(
-            board,
-            max_depth_plies=max_depth_plies,
-            max_pieces=max_pieces,
-            max_legal_moves=70,
-            min_material_margin_cp=-3000,
-            max_nodes=max_nodes,
-            max_root_checks=6,
-        )
-        is not None
-    )
-
-
-def _avoid_opponent_forced_mate_net_filter(
-    board: chess.Board,
-    move: chess.Move | None,
-    *,
-    side: str,
-    score_move,
-    max_depth_plies: int = 7,
-    max_pieces: int = 30,
-    max_nodes: int = 12_000,
-    scan_limit: int = 16,
-) -> chess.Move | None:
-    """Avoid candidate moves that allow a bounded checking forced mate.
-
-    This is deliberately narrower than a general tactical solver: it first
-    tests only the already selected move. Alternative scanning happens only if
-    that move fails the bounded mate-net check.
-    """
-    if move is None:
-        return None
-    if len(board.piece_map()) > int(max_pieces or 30) or board.legal_moves.count() > 70:
-        return move
-    color = chess.WHITE if str(side or "white").lower() == "white" else chess.BLACK
-    after = board.copy(stack=False)
-    after.push(move)
-    if after.is_checkmate() or after.is_stalemate():
-        return move
-    if not _has_bounded_opponent_forced_mate(
-        after,
-        max_depth_plies=max_depth_plies,
-        max_pieces=max_pieces,
-        max_nodes=max_nodes,
-    ):
-        return move
-
-    chosen_score = float(score_move(move))
-    candidates: list[tuple[float, int, str, chess.Move]] = []
-    ordered = sorted(
-        [candidate for candidate in board.legal_moves if candidate != move],
-        key=lambda candidate: (float(score_move(candidate)), candidate.uci()),
-        reverse=True,
-    )[: max(1, int(scan_limit or 16))]
-    for candidate in ordered:
-        if _would_stalemate(board, candidate):
-            continue
-        candidate_after = board.copy(stack=False)
-        candidate_after.push(candidate)
-        if candidate_after.is_checkmate():
-            return candidate
-        if _opponent_mate_in_one_moves(candidate_after):
-            continue
-        if _has_bounded_opponent_forced_mate(
-            candidate_after,
-            max_depth_plies=max_depth_plies,
-            max_pieces=max_pieces,
-            max_nodes=max_nodes,
-        ):
-            continue
-        floor = _worst_immediate_reply_material_margin(candidate_after, color)
-        candidate_score = float(score_move(candidate))
-        if candidate_score < chosen_score - 1800.0 and floor < _material_margin_for_color(board, color) - 900:
-            continue
-        candidates.append((candidate_score, floor, candidate.uci(), candidate))
-    if not candidates:
-        return move
-    return sorted(candidates, reverse=True)[0][3]
-
-
-def _low_legal_check_escape_filter(
-    board: chess.Board,
-    move: chess.Move | None,
-    *,
-    side: str,
-    score_move,
-    max_legal: int = 4,
-    max_pieces: int = 30,
-    max_depth_plies: int = 7,
-    max_nodes: int = 12_000,
-    enable_king_mobility4: bool = False,
-) -> chess.Move | None:
-    """Final narrow guard for low-legal check evasions.
-
-    Earlier post-search filters may replace a safe search result. This guard
-    only runs in check with very few legal moves, where scanning every evasion
-    is cheap and avoids obvious forced-mate funnels.
-    """
-    if move is None or not board.is_check():
-        return move
-    legal_moves = list(board.legal_moves)
-    if len(legal_moves) <= 1 or len(legal_moves) > int(max_legal or 4):
-        return move
-    if len(board.piece_map()) > int(max_pieces or 30):
-        return move
-    color = chess.WHITE if str(side or "white").lower() == "white" else chess.BLACK
-
-    def king_edge_distance(after: chess.Board) -> int:
-        square = after.king(color)
-        if square is None:
-            return 0
-        file_index = chess.square_file(square)
-        rank_index = chess.square_rank(square)
-        return min(file_index, 7 - file_index, rank_index, 7 - rank_index)
-
-    risk_cache: dict[str, tuple[bool, bool]] = {}
-    depth_limit = max(0, int(max_depth_plies if max_depth_plies is not None else 7))
-    node_limit = max(0, int(max_nodes if max_nodes is not None else 12_000))
-
-    def candidate_risk(candidate: chess.Move) -> tuple[bool, bool]:
-        uci = candidate.uci()
-        cached = risk_cache.get(uci)
-        if cached is not None:
-            return cached
-        after = board.copy(stack=False)
-        after.push(candidate)
-        mate_in_one = not after.is_checkmate() and bool(_opponent_mate_in_one_moves(after))
-        forced_mate = False
-        if not mate_in_one and depth_limit > 0 and node_limit > 0:
-            forced_mate = _has_bounded_opponent_forced_mate(
-                after,
-                max_depth_plies=depth_limit,
-                max_pieces=int(max_pieces or 30),
-                max_nodes=node_limit,
-            )
-        risk_cache[uci] = (mate_in_one, forced_mate)
-        return risk_cache[uci]
-
-    def candidate_tuple(candidate: chess.Move) -> tuple[int, float, str, chess.Move]:
-        after = board.copy(stack=False)
-        after.push(candidate)
-        if after.is_checkmate():
-            return (10_000_000, float(score_move(candidate)), candidate.uci(), candidate)
-        mate_in_one, forced_mate = candidate_risk(candidate)
-        moving_piece = board.piece_at(candidate.from_square)
-        is_king_move = bool(moving_piece and moving_piece.piece_type == chess.KING)
-        opponent_check_count = sum(1 for reply in after.legal_moves if after.gives_check(reply))
-        score = 0
-        if mate_in_one:
-            score -= 1_000_000
-        if forced_mate:
-            score -= 250_000
-        score += king_edge_distance(after) * 900
-        score -= opponent_check_count * 35
-        if is_king_move and king_edge_distance(after) == 0:
-            score -= 700
-        if not is_king_move:
-            score += 450
-        if board.is_capture(candidate):
-            score += min(900, _captured_piece_value(board, candidate))
-        if candidate.promotion:
-            score += 1200
-        score += int(max(-5000.0, min(5000.0, float(score_move(candidate)))))
-        return (score, float(score_move(candidate)), candidate.uci(), candidate)
-
-    chosen_mate_in_one, chosen_forced_mate = candidate_risk(move)
-    if not chosen_mate_in_one and not chosen_forced_mate:
-        if not bool(enable_king_mobility4) or len(legal_moves) != 4:
-            return move
-        chosen_piece = board.piece_at(move.from_square)
-        if not chosen_piece or chosen_piece.piece_type != chess.KING:
-            return move
-        chosen_after = board.copy(stack=False)
-        chosen_after.push(move)
-        if king_edge_distance(chosen_after) != 0:
-            return move
-        chosen_score = candidate_tuple(move)[0]
-        king_candidates: list[tuple[int, float, str, chess.Move]] = []
-        for candidate in legal_moves:
-            if candidate == move:
-                continue
-            moving_piece = board.piece_at(candidate.from_square)
-            if not moving_piece or moving_piece.piece_type != chess.KING:
-                continue
-            after = board.copy(stack=False)
-            after.push(candidate)
-            if king_edge_distance(after) <= 0:
-                continue
-            mate_in_one, forced_mate = candidate_risk(candidate)
-            if mate_in_one or forced_mate:
-                continue
-            score = candidate_tuple(candidate)[0]
-            king_candidates.append((score, float(score_move(candidate)), candidate.uci(), candidate))
-        if not king_candidates:
-            return move
-        best_king = sorted(king_candidates, reverse=True)[0]
-        if best_king[0] <= chosen_score + 250:
-            return move
-        return best_king[3]
-
-    chosen = candidate_tuple(move)
-    chosen_score = chosen[0]
-    candidates = [candidate_tuple(candidate) for candidate in legal_moves]
-    best = sorted(candidates, reverse=True)[0]
-    if best[3] == move:
-        return move
-    if best[0] <= chosen_score + 650:
-        return move
-    return best[3]
+# Mate-net helpers were extracted into ``services.games.chess_exp5_mate_net``
+# without behavior change. They are re-exported here so internal call sites in
+# this module and external imports (e.g. tests) keep working unchanged. This
+# import is placed after the helpers the mate-net functions lazily import from
+# this module (``_would_stalemate``, ``_move_order_score``,
+# ``_captured_piece_value``, ``_material_margin_for_color``,
+# ``_worst_immediate_reply_material_margin``, ``_promotion_priority``).
+from services.games.chess_exp5_mate_net import (  # noqa: E402
+    _opponent_mate_in_one_moves,
+    _forced_single_reply_mate_net_move,
+    _forced_mate_in_two_priority_move,
+    _forced_checking_mate_priority_move,
+    _has_bounded_opponent_forced_mate,
+    _avoid_opponent_forced_mate_net_filter,
+    _low_legal_check_escape_filter,
+)
 
 
 def _avoid_allowing_mate_in_one_filter(board: chess.Board, move: chess.Move | None, *, score_move) -> chess.Move | None:
@@ -3567,7 +3676,20 @@ def _avoid_immediate_material_drop_filter(
     side: str,
     score_move,
     compensation_fn=None,
+    use_see_floor: bool = False,
 ) -> chess.Move | None:
+    """Replace ``move`` with an alternative whose worst opponent reply costs
+    materially less, by a margin large enough to be worth the swap.
+
+    ``use_see_floor``: when True the floor metric is computed via static
+    exchange evaluation (``_worst_immediate_reply_see_margin``) instead of
+    raw capture-only material (``_worst_immediate_reply_material_margin``).
+    SEE-aware floor correctly treats defended pieces as low-cost trades,
+    which surfaces defending moves the raw metric blinds out — every
+    non-defending candidate looks "equally bad" under the raw metric when
+    the same dangling piece is attacked, so the gain threshold never
+    fires.
+    """
     if move is None:
         return None
     chosen_after = board.copy(stack=False)
@@ -3575,9 +3697,29 @@ def _avoid_immediate_material_drop_filter(
     if chosen_after.is_checkmate():
         return move
     color = chess.WHITE if str(side or "white").lower() == "white" else chess.BLACK
-    chosen_floor = _worst_immediate_reply_material_margin(chosen_after, color)
+    # SEE-aware floor only kicks in when opponent has a real positive-SEE
+    # capture threat against one of our pieces RIGHT NOW. In calm
+    # positions the raw capture-only floor + fork-danger adjustment that
+    # V28e relied on still applies — switching to SEE there would lose
+    # the fork-danger signal that drives V28e's opening shuffling-knight
+    # avoidance. The fork-danger adjustment is added below for both
+    # paths, and the per-candidate iteration also keeps it.
+    # Only activate SEE override when the opponent's threat is at least a
+    # minor piece (default 250cp). Smaller threats (single pawns, 100cp
+    # captures) are routinely handled by the search at depth 3 — firing
+    # SEE-aware override on them broadly broke V28e's opening responses
+    # in games 1 and 4 of the staged screen.
+    see_active = bool(use_see_floor) and _opponent_has_positive_see_threat(
+        board, color, min_see_cp=250,
+    )
+    floor_fn = _worst_immediate_reply_see_margin if see_active else _worst_immediate_reply_material_margin
+    chosen_floor = floor_fn(chosen_after, color)
     if board.fullmove_number <= _OPENING_DEVELOPMENT_FULLMOVE_LIMIT:
         chosen_floor -= _opponent_knight_fork_danger(chosen_after, color)
+    required_floor_gain = 180 if board.fullmove_number <= _OPENING_DEVELOPMENT_FULLMOVE_LIMIT else _PIECE_VALUES[chess.KNIGHT]
+    if see_active and chosen_floor > -required_floor_gain:
+        return move
+    chosen_score_pre = float(score_move(move)) if see_active else None
 
     candidates: list[tuple[int, float, str, chess.Move]] = []
     best_floor = chosen_floor
@@ -3590,15 +3732,21 @@ def _avoid_immediate_material_drop_filter(
             return candidate
         if _opponent_mate_in_one_moves(after):
             continue
-        floor = _worst_immediate_reply_material_margin(after, color)
+        floor = floor_fn(after, color)
         if board.fullmove_number <= _OPENING_DEVELOPMENT_FULLMOVE_LIMIT:
             floor -= _opponent_knight_fork_danger(after, color)
         best_floor = max(best_floor, floor)
         candidates.append((floor, float(score_move(candidate)), candidate.uci(), candidate))
-    required_floor_gain = 180 if board.fullmove_number <= _OPENING_DEVELOPMENT_FULLMOVE_LIMIT else _PIECE_VALUES[chess.KNIGHT]
     if best_floor - chosen_floor < required_floor_gain:
         return move
     safer = [item for item in candidates if item[0] >= best_floor - 80]
+    if see_active and chosen_score_pre is not None:
+        # SEE-aware: only override the search pick when at least one safer
+        # alternative also has a search-score within the configured window
+        # of the original choice. Without this gate, SEE-aware override
+        # can swap to a positionally much-weaker move for the sake of
+        # material safety, breaking otherwise sound lines.
+        safer = [item for item in safer if item[1] >= chosen_score_pre - _SEE_DROP_FILTER_SCORE_WINDOW_CP]
     if not safer:
         return move
     if compensation_fn is not None:
@@ -4400,6 +4548,19 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
     if bool(profile.get("enable_v26_selective_depth")) and _v26_should_selective_depth(board, ai_color):
         search_depth = max(search_depth, int(profile.get("v26_selective_depth") or search_depth))
         quiescence_depth = max(quiescence_depth, int(profile.get("v26_selective_quiescence_depth") or quiescence_depth))
+    # V29 selective depth: extend root search by one ply (capped at the
+    # profile's ``v29_threat_selective_depth``) when the opponent has a
+    # positive-SEE capture threat against one of our pieces right now.
+    # This is a narrow trigger: most opening/middlegame quiet positions
+    # do not satisfy it, so the cost is paid only when the cheap depth-3
+    # search is most likely to walk into a material loss it can't see in
+    # 3 plies. Verified on game 2 ply 24 (Ng5 attacking Be6, no defender)
+    # as the canonical case the V28e depth-3 horizon misses.
+    if bool(profile.get("enable_v29_threat_selective_depth")) and _opponent_has_positive_see_threat(
+        board, ai_color,
+        min_see_cp=int(profile.get("v29_threat_min_see_cp", 100)),
+    ):
+        search_depth = max(search_depth, int(profile.get("v29_threat_selective_depth") or (search_depth + 1)))
     def move_order_fn(current_board, move, _ply):
         return (
             _move_order_score(current_board, move)
@@ -4446,6 +4607,17 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
     best_move = _opening_king_walk_filter(board, best_move, score_move=score_move)
     if bool(profile.get("enable_special_rule_fusion")):
         best_move = _special_rule_fusion_filter(board, best_move, score_move=score_move)
+    # One ``MateNetContext`` shared across the two mate-net filters below so
+    # repeated ``_has_bounded_opponent_forced_mate`` queries from the chosen
+    # move plus its alternatives (in ``_avoid_opponent_forced_mate_net_filter``)
+    # and the in-check evasion scan (in ``_low_legal_check_escape_filter``)
+    # reuse one Zobrist-keyed memo. Each query still keeps its own
+    # ``max_nodes`` budget. ``critical_widen`` is opt-in via the V29 flag.
+    critical_widen = bool(profile.get("enable_v29_critical_widen_mate_net"))
+    mate_net_ctx = MateNetContext() if (
+        bool(profile.get("enable_v27_forced_mate_defense"))
+        or bool(profile.get("enable_final_low_legal_check_escape"))
+    ) else None
     if bool(profile.get("enable_v27_forced_mate_defense")):
         best_move = _avoid_opponent_forced_mate_net_filter(
             board,
@@ -4456,6 +4628,8 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
             max_pieces=int(profile.get("v27_forced_mate_defense_max_pieces", 30)),
             max_nodes=int(profile.get("v27_forced_mate_defense_max_nodes", 12_000)),
             scan_limit=int(profile.get("v27_forced_mate_defense_scan_limit", 16)),
+            critical_widen=critical_widen,
+            ctx=mate_net_ctx,
         )
     compensation_fn = None
     if bool(model.get("_enable_center_break") or model.get("_enable_fianchetto_development")):
@@ -4478,9 +4652,17 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
         side=side,
         score_move=score_move,
         compensation_fn=compensation_fn,
+        use_see_floor=bool(profile.get("enable_see_aware_material_drop_filter")),
     )
     best_move = _avoid_unanswered_immediate_promotion_filter(board, best_move, side=side, score_move=score_move)
-    best_move = _claimable_draw_resource_filter(board, best_move, side=side, score_move=score_move)
+    # ``_claimable_draw_resource_filter`` actively steers toward threefold
+    # repetition whenever the engine evaluates itself as down by >=250cp.
+    # On the staged Blockfish 5-game it produces most of the 4D in V28e's
+    # 0W/4D/1L baseline — making the staged metric a "can Exp5 force a
+    # cycle before Stockfish converts" test rather than a strength test.
+    # Honest profiles can disable it via ``enable_claimable_draw_resource``.
+    if bool(profile.get("enable_claimable_draw_resource", True)):
+        best_move = _claimable_draw_resource_filter(board, best_move, side=side, score_move=score_move)
     best_move = _avoid_claimable_repetition_filter(board, best_move, score_move=score_move)
     best_move = _avoid_reversible_cycle_when_ahead_filter(board, best_move, side=side, score_move=score_move)
     best_move = _avoid_enabling_opponent_repetition_when_ahead_filter(board, best_move, side=side, score_move=score_move)
@@ -4501,9 +4683,160 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
             max_depth_plies=int(profile.get("final_low_legal_check_escape_max_depth", 7)),
             max_nodes=int(profile.get("final_low_legal_check_escape_max_nodes", 12_000)),
             enable_king_mobility4=bool(profile.get("final_low_legal_check_escape_enable_king_mobility4")),
+            critical_widen=critical_widen,
+            ctx=mate_net_ctx,
         )
     best_move = _avoid_stalemate_filter(board, best_move, score_move=score_move)
+    # V29r threat-response tie-break. Fires only when a pre-existing
+    # opponent capture threat with SEE >= ``v29r_threat_response_min_see_cp``
+    # exists, the chosen move does not neutralize it, and the best
+    # neutralizing legal move is within a small positive search-score gap
+    # of chosen. The narrow window means the swap costs at most a small
+    # positional bonus to address a real material threat; calm positions
+    # have no firing condition. See ``chess_exp5_threat_guard`` for the
+    # detector and tie-break contract.
+    if bool(profile.get("enable_v29r_threat_response")) and best_move is not None:
+        from services.games.chess_exp5_threat_guard import threat_response_tiebreak
+        best_move = threat_response_tiebreak(
+            board,
+            best_move,
+            score_move=score_move,
+            max_gap_cp=int(profile.get("v29r_threat_response_max_gap_cp", 60)),
+            min_see_cp=int(profile.get("v29r_threat_response_min_see_cp", 250)),
+        )
+    # V29r diagnostic: log-only. When enabled by profile, write one JSONL
+    # row per ``choose_experiment_nnue_move`` call describing the
+    # pre-existing threat (if any), whether the chosen move neutralizes
+    # it, and what the best-neutralizing alternative would have been.
+    # Behavior is unchanged — the row is emitted just before returning
+    # ``best_move``. The output path comes from the ``EXP5_V29R_LOG_PATH``
+    # environment variable; if unset, the diagnostic is a no-op.
+    if bool(profile.get("enable_v29r_threat_diagnostic")) and best_move is not None:
+        try:
+            _emit_v29r_threat_diagnostic(
+                board=board,
+                best_move=best_move,
+                side=side,
+                score_move=score_move,
+            )
+        except Exception:
+            # Diagnostic must never break engine play.
+            pass
     return _move_dict(board, best_move) if best_move is not None else None
+
+
+_V29R_LOG_ENV = "EXP5_V29R_LOG_PATH"
+
+
+def _emit_v29r_threat_diagnostic(
+    *,
+    board: chess.Board,
+    best_move: chess.Move,
+    side: str,
+    score_move,
+) -> None:
+    log_path = os.environ.get(_V29R_LOG_ENV, "").strip()
+    if not log_path:
+        return
+    from services.games.chess_exp5_threat_guard import (
+        find_pre_existing_threats,
+        neutralizes_threat,
+    )
+
+    color = chess.WHITE if str(side or "white").lower() == "white" else chess.BLACK
+    threats = find_pre_existing_threats(board, max_threats=4, min_see_cp=250)
+    fen = board.fen()
+    fen_digest = hashlib.sha256(fen.encode("utf-8")).hexdigest()[:12]
+    chosen_uci = best_move.uci()
+    chosen_score = float(score_move(best_move))
+
+    row: dict = {
+        "fen_digest": fen_digest,
+        "fullmove_number": int(board.fullmove_number),
+        "side_to_move": "white" if board.turn == chess.WHITE else "black",
+        "engine_side": str(side),
+        "chosen_move": chosen_uci,
+        "chosen_search_score": round(chosen_score, 2),
+        "pre_existing_threat_exists": bool(threats),
+    }
+
+    if not threats:
+        row["top_threat_move"] = None
+        row["top_threat_kind"] = None
+        row["top_threat_see_cp"] = 0
+        row["top_threat_target_square"] = None
+        row["top_threat_victim"] = None
+        row["chosen_neutralizes_top_threat"] = True
+        row["best_neutralizer"] = None
+        row["best_neutralizer_search_score"] = None
+        row["score_gap_cp"] = 0.0
+        row["worst_reply_after_chosen"] = _worst_immediate_reply_material_margin(
+            board.copy(stack=False) if False else _board_after(board, best_move),
+            color,
+        )
+        row["worst_reply_after_best_neutralizer"] = None
+        _append_v29r_log_row(log_path, row)
+        return
+
+    top = threats[0]
+    victim_piece = board.piece_at(top.victim_square) if top.victim_square is not None else None
+    row["top_threat_move"] = top.move.uci()
+    row["top_threat_kind"] = top.kind
+    row["top_threat_see_cp"] = int(top.see_cp)
+    row["top_threat_target_square"] = (
+        chess.square_name(top.target_square) if top.target_square is not None else None
+    )
+    row["top_threat_victim"] = victim_piece.symbol() if victim_piece is not None else None
+    row["chosen_neutralizes_top_threat"] = bool(
+        neutralizes_threat(board, best_move, top)
+    )
+
+    best_neut_move = None
+    best_neut_score = None
+    for candidate in board.legal_moves:
+        if not neutralizes_threat(board, candidate, top):
+            continue
+        try:
+            candidate_score = float(score_move(candidate))
+        except Exception:
+            continue
+        if best_neut_score is None or candidate_score > best_neut_score:
+            best_neut_score = candidate_score
+            best_neut_move = candidate
+
+    row["best_neutralizer"] = best_neut_move.uci() if best_neut_move else None
+    row["best_neutralizer_search_score"] = (
+        round(best_neut_score, 2) if best_neut_score is not None else None
+    )
+    row["score_gap_cp"] = (
+        round(chosen_score - best_neut_score, 2) if best_neut_score is not None else None
+    )
+
+    after_chosen = _board_after(board, best_move)
+    row["worst_reply_after_chosen"] = int(
+        _worst_immediate_reply_material_margin(after_chosen, color)
+    )
+    if best_neut_move is not None:
+        after_neut = _board_after(board, best_neut_move)
+        row["worst_reply_after_best_neutralizer"] = int(
+            _worst_immediate_reply_material_margin(after_neut, color)
+        )
+    else:
+        row["worst_reply_after_best_neutralizer"] = None
+
+    _append_v29r_log_row(log_path, row)
+
+
+def _board_after(board: chess.Board, move: chess.Move) -> chess.Board:
+    after = board.copy(stack=False)
+    after.push(move)
+    return after
+
+
+def _append_v29r_log_row(path: str, row: dict) -> None:
+    line = json.dumps(row, ensure_ascii=False, sort_keys=True)
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
 
 
 def build_experiment_nnue_sample_from_position(
