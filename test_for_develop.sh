@@ -939,6 +939,8 @@ import argon2
 import cryptography
 import flask
 import flask_talisman
+import chess
+import websocket
 PY
   if [[ "${SERVER_RUNNER:-flask}" == "gunicorn" ]]; then
     python3 - <<'PY' >/dev/null 2>&1 || return 1

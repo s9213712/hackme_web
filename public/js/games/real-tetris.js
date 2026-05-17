@@ -947,7 +947,8 @@
   function updateRealTetrisStatus(api, state, prefix = "") {
     const elapsed = window.soloElapsedMs ? window.formatSoloGameTime(window.soloElapsedMs(state)) : "";
     const mode = state.paused ? "暫停中" : state.status === "finished" ? "已結束" : "物理模擬中";
-    api.status(`${prefix ? `${prefix} ` : ""}${realTetrisModeLabel(state.mode)} · ${mode} · 分數 ${Number(state.score || 0).toLocaleString()} · 90% 消線 ${state.lines} 行 · 倒塌 ${state.collapseEvents || 0} · ${elapsed}`);
+    const score = Math.max(0, Math.round(Number(state.score || 0)));
+    api.status(`${prefix ? `${prefix} ` : ""}${realTetrisModeLabel(state.mode)} · ${mode} · 分數 ${score.toLocaleString()} · 90% 消線 ${state.lines} 行 · 倒塌 ${state.collapseEvents || 0} · ${elapsed}`);
   }
 
   function finishRealTetrisGame(api) {

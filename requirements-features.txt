@@ -1,0 +1,18 @@
+# Optional feature dependencies.
+#
+# Install this layer only when the deployment enables the corresponding feature.
+# The base server can start without these packages, but the feature will degrade
+# or reject work with an explicit message if its dependency is missing.
+
+# Cloud Drive / upload security: image metadata normalization and inspection.
+Pillow>=10.0
+
+# ComfyUI alternative backend: local Hugging Face / Diffusers generation.
+diffusers>=0.30
+torch>=2.3
+transformers>=4.44
+accelerate>=0.33
+safetensors>=0.4
+huggingface-hub>=0.24
+hf_transfer>=0.1.8
+gguf>=0.10

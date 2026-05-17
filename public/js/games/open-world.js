@@ -476,6 +476,17 @@
 
   function createPlayerMesh(THREE) {
     const group = new THREE.Group();
+    const groundShadow = new THREE.Mesh(
+      new THREE.CircleGeometry(0.72, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.28,
+        depthWrite: false,
+      }),
+    );
+    groundShadow.rotation.x = -Math.PI / 2;
+    groundShadow.position.y = 0.026;
     const leftLeg = createBox(THREE, 0.28, 0.84, 0.28, "#1f2937");
     leftLeg.position.set(-0.18, 0.42, 0);
     const rightLeg = createBox(THREE, 0.28, 0.84, 0.28, "#1f2937");
@@ -503,7 +514,8 @@
     visor.position.set(0, 2.08, 0.33);
     const backpack = createBox(THREE, 0.48, 0.72, 0.22, "#0f766e");
     backpack.position.set(0, 1.34, -0.32);
-    group.add(leftLeg, rightLeg, torso, vest, armL, armR, head, helmet, visor, backpack);
+    group.add(groundShadow, leftLeg, rightLeg, torso, vest, armL, armR, head, helmet, visor, backpack);
+    group.userData.walkParts = { leftLeg, rightLeg, armL, armR, torso, head, groundShadow };
     return group;
   }
 
@@ -566,6 +578,22 @@
     object.position.set(x, y, z);
     object.rotation.y = angle;
     object.rotation.z = 0;
+  }
+
+  function animatePlayerWalk(mesh, cycle = 0, intensity = 0) {
+    const parts = mesh?.userData?.walkParts;
+    if (!parts) return;
+    const clamped = clamp(intensity, 0, 1);
+    const swing = Math.sin(cycle) * clamped;
+    const counter = Math.sin(cycle + Math.PI) * clamped;
+    parts.leftLeg.rotation.x = swing * 0.5;
+    parts.rightLeg.rotation.x = counter * 0.5;
+    parts.armL.rotation.x = counter * 0.42;
+    parts.armR.rotation.x = swing * 0.42;
+    parts.torso.rotation.x = Math.abs(Math.sin(cycle * 2)) * 0.035 * clamped;
+    parts.head.position.y = 2.05 + Math.abs(Math.sin(cycle * 2)) * 0.035 * clamped;
+    const shadowScale = 1 + clamped * 0.08 - Math.abs(Math.sin(cycle * 2)) * 0.05 * clamped;
+    parts.groundShadow.scale.set(shadowScale, shadowScale, 1);
   }
 
   function roadSegmentLength(road) {
@@ -1189,10 +1217,11 @@
     }
     const walkRatio = Math.min(1, Math.abs(player.speed) / walkSpeed);
     player.walkCycle = Number(player.walkCycle || 0) + Math.abs(player.speed) * dt * (sprint ? 3.1 : 2.45);
-    const bob = Math.sin(player.walkCycle) * 0.055 * walkRatio;
+    const bob = Math.abs(Math.sin(player.walkCycle * 2)) * 0.045 * walkRatio;
     const lean = -turn * 0.1 * walkRatio;
     setObjectPose(player.mesh, player.x, player.z, player.angle, bob);
     player.mesh.rotation.z = lean;
+    animatePlayerWalk(player.mesh, player.walkCycle, walkRatio);
   }
 
   function syncOpenWorldPlayerPose(state) {

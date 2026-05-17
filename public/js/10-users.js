@@ -46,6 +46,7 @@ function renderUsers() {
       levelWrap.style.alignItems = "center";
       const levelSelect = document.createElement("select");
       levelSelect.id = `member-level-select-${u.id}`;
+      levelSelect.setAttribute("aria-label", `${u.username || "用戶"} 的會員等級`);
       levelSelect.style.maxWidth = "105px";
       const levelOptions = currentRole === "super_admin"
         ? ["newbie", "normal", "trusted", "vip", "restricted", "suspended"]

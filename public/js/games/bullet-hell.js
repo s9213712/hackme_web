@@ -872,6 +872,7 @@
         <button class="btn game-mini-btn" type="button" data-hold="right">右</button>
         <button class="btn game-mini-btn" type="button" data-hold="focus">精密</button>
         <button class="btn game-mini-btn btn-primary" type="button" data-bomb="1">Bomb</button>
+        <span class="game-control-note">黃點=中彈判定；藍圈=擦彈範圍</span>
       `);
       api.onAction = (action) => {
         if (action === "new") startBulletHell(api);

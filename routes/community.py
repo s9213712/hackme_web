@@ -1505,8 +1505,8 @@ def register_community_routes(app, deps):
                         (actor["id"],)
                     ).fetchone()
                     if not exists:
-                        return json_resp({"ok": False, "msg": "只有管理員或版主可審核主題"}), 403
-            return json_resp({"ok": True, "items": [thread_payload(row) for row in rows]})
+                        return json_resp({"ok": True, "items": [], "can_review": False})
+            return json_resp({"ok": True, "items": [thread_payload(row) for row in rows], "can_review": True})
         finally:
             conn.close()
 

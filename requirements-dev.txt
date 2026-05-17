@@ -1,0 +1,8 @@
+# Developer and QA dependencies.
+#
+# Install together with the minimal runtime layer when you need tests:
+#   python3 -m pip install -r requirements-minimal.txt -r requirements-dev.txt
+
+pytest>=8.0
+playwright>=1.52
+pytest-playwright>=0.7

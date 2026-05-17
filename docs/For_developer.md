@@ -133,7 +133,7 @@ Server Mode v2 note:
 ## Fast Local Setup
 
 ```bash
-python3 -m pip install -r requirements.txt
+python3 -m pip install -r requirements-minimal.txt -r requirements-dev.txt
 python3 server.py --doctor
 ./test_for_develop.sh --port 50785
 ```

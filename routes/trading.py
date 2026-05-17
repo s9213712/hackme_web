@@ -1790,7 +1790,7 @@ def register_trading_routes(app, deps):
                     "snapshot_key": snapshot_key,
                     "missing": True,
                 },
-            }, 503)
+            })
         payload = snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {}
         response_payload = dict(payload)
         response_payload.setdefault("ok", True)

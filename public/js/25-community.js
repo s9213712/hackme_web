@@ -948,7 +948,7 @@ async function loadCommunityThreadReviews(options = {}) {
     if (!quiet) flash($("community-msg"), json.msg || "待審核主題讀取失敗", false);
     return;
   }
-  canReviewCommunityThreads = true;
+  canReviewCommunityThreads = json.can_review !== false;
   communityThreadReviews = Array.isArray(json.items) ? json.items : [];
   renderCommunityThreadReviews();
 }

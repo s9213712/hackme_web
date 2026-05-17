@@ -312,6 +312,11 @@ function switchModuleTab(tab) {
     document.dispatchEvent(new CustomEvent("hackme:module-changed", {
       detail: { previous: previousModuleTab, current: normTab },
     }));
+    try {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    } catch (_) {
+      window.scrollTo(0, 0);
+    }
   }
 
   if (normTab === "chat" && canAccessChat && typeof loadChatRooms === "function") {

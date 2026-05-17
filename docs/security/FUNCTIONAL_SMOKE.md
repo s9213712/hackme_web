@@ -211,7 +211,9 @@ runtime/reports/security/functional_<RUN_ID>/
 - `curl`
 - `tar`
 - `python3`
-- 專案 Python dependencies，依 `requirements.txt` 安裝
+- 專案 Python dependencies：最小啟動用 `requirements-minimal.txt`；執行本文件的
+  開發 / QA 流程請再安裝 `requirements-dev.txt`。若要一次沿用舊流程，可安裝聚合檔
+  `requirements.txt`。
 
 外部 pentest 工具如 `nmap`、`nuclei`、`sqlmap` 不需要安裝；那些只屬於
 `scripts/security/pentest/run_pentest.sh`。

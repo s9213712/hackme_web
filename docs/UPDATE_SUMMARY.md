@@ -244,8 +244,9 @@ Release ID: `2026.05.13-157`
 - ComfyUI workflow import now rejects oversized workflow JSON, excessive node
   counts, and overly deep nesting to reduce denial-of-service risk from giant
   crafted workflows.
-- `websocket-client` is now declared in `requirements.txt`, matching the live
-  trading websocket provider code path used by Binance/Coinbase streaming.
+- `websocket-client` is now declared in the minimal runtime requirements,
+  matching the live trading websocket provider code path used by Binance/Coinbase
+  streaming. `requirements.txt` remains the full compatibility aggregate.
 
 ## 2026.05.06-142
 

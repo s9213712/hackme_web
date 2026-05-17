@@ -792,7 +792,7 @@
       min-width: 0;
       width: 100%;
       text-align: left;
-      padding: 3.2rem 1rem 1rem;
+      padding: 4.45rem 1rem 1rem;
       background: rgba(255,255,255,.015);
     }
 
@@ -1413,6 +1413,10 @@
 
     .economy-subtabs {
       margin: .7rem 0 .75rem;
+    }
+
+    #module-economy .economy-subtabs {
+      flex-wrap: wrap;
     }
 
     .economy-subpage {
@@ -3761,7 +3765,7 @@
 
     .chat-friend-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) minmax(0, auto);
       align-items: center;
       gap: .35rem;
       padding: .4rem;
@@ -3776,6 +3780,13 @@
       min-width: 0;
     }
 
+    .chat-friend-row > span:last-child {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: .3rem;
+    }
+
     .profile-panel {
       display: grid;
       gap: .9rem;
@@ -3788,6 +3799,10 @@
       flex-wrap: wrap;
       gap: .45rem;
       align-items: center;
+    }
+
+    .profile-friend-actions {
+      justify-content: flex-end;
     }
 
     .profile-pane {
@@ -3854,7 +3869,7 @@
 
     .profile-friend-columns {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
       gap: .85rem;
       align-items: start;
     }
@@ -3873,7 +3888,7 @@
 
     .profile-friend-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) minmax(0, auto);
       gap: .45rem;
       align-items: center;
       padding: .55rem;
@@ -5980,7 +5995,7 @@
     .game-zone { text-align: left; }
     .game-layout {
       display: grid;
-      grid-template-columns: minmax(240px, 1fr) minmax(360px, 1.4fr) minmax(220px, .85fr);
+      grid-template-columns: minmax(220px, .82fr) minmax(420px, 1.58fr) minmax(220px, .72fr);
       gap: .75rem;
       align-items: start;
       margin-top: .85rem;
@@ -5991,6 +6006,22 @@
       background: color-mix(in srgb, var(--surface) 82%, transparent);
       border-radius: 8px;
       padding: .75rem;
+    }
+    .game-board-panel {
+      background:
+        radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--accent) 10%, transparent) 0 22%, transparent 46%),
+        color-mix(in srgb, var(--surface) 86%, transparent);
+    }
+    .game-experience-hint {
+      display: block;
+      margin-bottom: .62rem;
+      padding: .58rem .68rem;
+      border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--accent) 10%, var(--surface) 90%);
+      color: color-mix(in srgb, var(--text) 90%, var(--accent) 10%);
+      font-size: .84rem;
+      line-height: 1.45;
     }
     .game-catalog-list {
       display: grid;
@@ -7159,6 +7190,19 @@
     .game-action-toolbar select {
       min-height: 2rem;
     }
+    .game-control-note {
+      display: inline-flex;
+      align-items: center;
+      grid-column: 1 / -1;
+      min-height: 2.05rem;
+      padding: .28rem .55rem;
+      border: 1px solid rgba(250,204,21,.34);
+      border-radius: 8px;
+      background: rgba(250,204,21,.1);
+      color: #fde68a;
+      font-size: .78rem;
+      line-height: 1.25;
+    }
     .game-page-controls {
       display: grid;
       gap: .45rem;
@@ -7581,6 +7625,8 @@
       display: grid;
       justify-items: center;
       gap: .55rem;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
     }
     .board-game-online-banner {
       width: min(100%, 640px);
@@ -7693,6 +7739,7 @@
       gap: 0;
       padding: 0;
       overflow: hidden;
+      min-width: 0;
       background:
         radial-gradient(circle at 24% 18%, rgba(255,255,255,.16), transparent 22%),
         linear-gradient(135deg, #c98a2b, #a16207 48%, #7c3f0c);
@@ -8002,7 +8049,7 @@
     }
 
     .app-main {
-      padding: 3.25rem clamp(.75rem, 1.4vw, 1.35rem) 1.25rem;
+      padding: 4.45rem clamp(.75rem, 1.4vw, 1.35rem) 1.25rem;
       background: transparent;
     }
 
@@ -8288,7 +8335,7 @@
     }
 
     .game-layout {
-      grid-template-columns: minmax(250px, .85fr) minmax(420px, 1.35fr) minmax(240px, .75fr);
+      grid-template-columns: minmax(230px, .78fr) minmax(460px, 1.6fr) minmax(220px, .72fr);
     }
 
     .security-log-grid {
@@ -9399,7 +9446,7 @@
       body.sidebar-collapsed .app-shell {
         display: block;
         min-height: 100dvh;
-        padding-top: 3.15rem;
+        padding-top: .45rem;
       }
 
       .app-sidebar {
@@ -9546,12 +9593,17 @@
       .app-main {
         width: calc(100vw - 3.65rem);
         margin-left: 3.65rem;
-        padding: 4.1rem .62rem 1rem;
+        padding: .85rem .62rem 1rem;
       }
 
       .app-action-bar {
-        left: 4.05rem;
+        position: relative;
+        top: auto;
+        left: auto;
         right: .45rem;
+        width: auto;
+        margin: .52rem .45rem .15rem 4.05rem;
+        justify-content: flex-end;
         z-index: 24;
       }
     }
@@ -9560,7 +9612,7 @@
       .app-main {
         width: calc(100vw - 3.55rem);
         margin-left: 3.55rem;
-        padding: 4rem .48rem .9rem;
+        padding: .75rem .48rem .9rem;
       }
 
       .app-sidebar,
@@ -9573,7 +9625,8 @@
       }
 
       .app-action-bar {
-        left: 3.88rem;
+        left: auto;
+        margin-left: 3.88rem;
       }
 
       .session-countdown {
@@ -10066,6 +10119,21 @@
         padding: .25rem;
       }
 
+      .board-game-online-shell {
+        justify-items: start;
+        padding-bottom: .25rem;
+      }
+
+      .board-game-grid.go {
+        width: 456px;
+        min-width: 456px;
+      }
+
+      .board-game-grid.gomoku {
+        width: 420px;
+        min-width: 420px;
+      }
+
       #module-games .settings-option-grid {
         grid-template-columns: 1fr !important;
       }
@@ -10080,23 +10148,23 @@
       }
 
       #module-trading .trading-indicator-controls {
-        display: flex;
-        flex-wrap: nowrap;
-        overflow-x: auto;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        overflow-x: visible;
         gap: .28rem;
         margin: .25rem 0 .48rem;
-        padding-bottom: .12rem;
+        padding-bottom: 0;
         scrollbar-width: thin;
-        -webkit-overflow-scrolling: touch;
       }
 
       #module-trading .trading-indicator-controls label {
-        flex: 0 0 auto;
+        min-width: 0;
         min-height: 1.65rem;
         padding: .16rem .42rem;
         border-radius: 999px;
         font-size: .68rem;
         justify-content: flex-start;
+        white-space: normal;
       }
 
       #module-trading .trading-indicator-controls input {

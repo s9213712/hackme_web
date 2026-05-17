@@ -370,7 +370,7 @@
           <div class="chat-composer-tools">
             <input type="file" id="chat-attachment-file" hidden />
             <button class="btn" id="chat-attachment-pick-btn" type="button">上傳附件</button>
-            <select id="chat-attachment-existing-file-id">
+            <select id="chat-attachment-existing-file-id" aria-label="從雲端檔案附加">
               <option value="">從雲端檔案附加…</option>
             </select>
             <span class="chat-composer-tools-hint">選檔後會立即加入待送附件，可送出前先移除。</span>
@@ -1019,7 +1019,7 @@
             </div>
             <div class="field">
               <label>可見性</label>
-              <select id="album-create-visibility">
+              <select id="album-create-visibility" aria-label="相簿可見性">
                 <option value="private">私人</option>
                 <option value="unlisted">不列出，持連結可看</option>
                 <option value="public">公開</option>
@@ -1084,7 +1084,7 @@
         </div>
         <div class="field compact-field">
           <label>預覽圖大小</label>
-          <select id="album-thumb-size">
+          <select id="album-thumb-size" aria-label="相簿預覽圖大小">
             <option value="small">小</option>
             <option value="medium" selected>中</option>
             <option value="large">大</option>
@@ -1233,7 +1233,7 @@
       <div class="drive-card-heading">
         <div>
           <div class="mini-title">遊戲區</div>
-          <div class="drive-card-sub">目前開放西洋棋、中國象棋、數獨、踩地雷、1A2B、俄羅斯方塊、真實版俄羅斯方塊、宇宙戰機、3D 射擊場、彈幕遊戲、火柴人橫向射擊、貪食蛇、2048、打磚塊、黑白棋、圍棋與五子棋。3D 與火柴人支援多人邀請；使用下拉選單切換遊戲。</div>
+          <div class="drive-card-sub">選一款遊戲開始玩。每款遊戲會在下方顯示操作提示、手機控制與當前目標。</div>
         </div>
         <button class="btn" id="game-refresh-btn" type="button">刷新</button>
       </div>
@@ -1270,7 +1270,7 @@
           <div class="settings-option-grid game-action-grid">
             <div class="field">
               <label>邀請玩家</label>
-              <select id="game-invite-user"><option value="">載入玩家中...</option></select>
+              <select id="game-invite-user" aria-label="邀請玩家"><option value="">載入玩家中...</option></select>
             </div>
             <div class="field">
               <label>&nbsp;</label>
@@ -1278,14 +1278,14 @@
             </div>
             <div class="field">
               <label>電腦練習方位</label>
-              <select id="game-practice-side">
+              <select id="game-practice-side" aria-label="電腦練習方位">
                 <option value="white">我執白方</option>
                 <option value="black">我執黑方</option>
               </select>
             </div>
             <div class="field">
               <label>電腦難度</label>
-              <select id="game-practice-difficulty">
+              <select id="game-practice-difficulty" aria-label="電腦難度">
                 <option value="experiment 0:minimax2ply">實驗 0：2 層物質 minimax</option>
                 <option value="experiment 1:search">實驗 1：引擎搜尋 + 對局學習</option>
                 <option value="experiment 2:nn">實驗 2：NN 評估</option>
@@ -1315,6 +1315,7 @@
           <div class="game-fullscreen-row">
             <button class="btn game-mini-btn" id="game-fullscreen-btn" type="button">全螢幕遊戲</button>
           </div>
+          <div class="game-experience-hint" id="game-experience-hint">選擇遊戲後會顯示操作提示。</div>
           <div id="chess-game-panel">
           <details class="drive-collapsible-panel game-rules-panel">
             <summary>西洋棋玩法說明</summary>
@@ -1867,7 +1868,7 @@
           <div class="comfyui-template-selector">
             <div class="field">
               <label>Workflow 模板</label>
-              <select id="comfyui-template-select">
+              <select id="comfyui-template-select" aria-label="Workflow 模板">
                 <option value="">先選擇模板</option>
               </select>
               <div class="drive-card-sub" id="comfyui-template-select-hint">可從官方模板、自己的 preset、其他公開 preset，或先匯入模板檔後再建立簡化卡片頁面。</div>
@@ -2837,7 +2838,7 @@
 	              <div class="drive-card-title">Binance 參考價格</div>
 	              <div class="drive-card-sub" id="trading-reference-price-meta">公開 API 蠟燭圖會作為 reference price 參考；API 故障時使用最後健康快取，不能直接當風控價格。</div>
 	            </div>
-	            <select id="trading-reference-interval" class="compact-select">
+	            <select id="trading-reference-interval" class="compact-select" aria-label="參考價格時間週期">
 	              <option value="5m">5 分</option>
 	              <option value="15m" selected>15 分</option>
 	              <option value="1h">1 小時</option>
@@ -2886,25 +2887,25 @@
         <div class="settings-option-grid" id="trading-order-form" style="margin-top:.65rem;">
           <div class="field">
             <label>市場</label>
-            <select id="trading-market-select"><option value="">讀取市場中...</option></select>
+            <select id="trading-market-select" aria-label="交易市場"><option value="">讀取市場中...</option></select>
           </div>
           <div class="field">
             <label>方向</label>
-            <select id="trading-side">
+            <select id="trading-side" aria-label="交易方向">
               <option value="buy">買入</option>
               <option value="sell">賣出</option>
             </select>
           </div>
           <div class="field">
             <label>訂單種類</label>
-            <select id="trading-order-type">
+            <select id="trading-order-type" aria-label="訂單種類">
               <option value="market">市價單</option>
               <option value="limit">限價單</option>
             </select>
           </div>
           <div class="field">
             <label>輸入方式</label>
-            <select id="trading-input-mode">
+            <select id="trading-input-mode" aria-label="交易輸入方式">
               <option value="quantity">用枚數下單</option>
               <option value="points">用點數換算</option>
             </select>
@@ -3239,10 +3240,10 @@
               <div><span class="drive-card-sub">總借出本金</span><strong id="trading-margin-total-borrowed">-</strong><small id="trading-margin-maintenance-total">-</small></div>
             </div>
             <div class="settings-option-grid" id="trading-margin-open-form">
-              <div class="field"><label>市場</label><select id="trading-margin-market-select"><option value="">讀取市場中...</option></select></div>
+              <div class="field"><label>市場</label><select id="trading-margin-market-select" aria-label="借貸交易市場"><option value="">讀取市場中...</option></select></div>
               <div class="field">
                 <label>類型</label>
-                <select id="trading-margin-type">
+                <select id="trading-margin-type" aria-label="借貸交易類型">
                   <option value="margin_long">融資買入</option>
                   <option value="short">借券放空</option>
                 </select>

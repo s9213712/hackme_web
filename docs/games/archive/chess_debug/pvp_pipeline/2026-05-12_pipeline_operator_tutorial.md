@@ -52,7 +52,8 @@ it for you.**
 
 ## Prerequisites
 
-- Python 3.10+ with the project's pip dependencies (`pip install -r requirements.txt`).
+- Python 3.10+ with the minimal runtime dependencies
+  (`pip install -r requirements-minimal.txt`).
 - `chess` module (python-chess).
 - A bundled or staging copy of exp4 / exp5 model JSONs you can read
   (`services/games/models/chess_experiment_4_pv.json` &

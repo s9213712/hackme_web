@@ -1,18 +1,11 @@
-flask>=3.0
-cryptography>=42
-flask-talisman>=1.1
-argon2-cffi>=23.1
-gunicorn>=22.0
-python-chess>=1.999
-websocket-client>=1.8
-playwright>=1.52
-pytest-playwright>=0.7
-diffusers>=0.30
-torch>=2.3
-Pillow>=10.0
-transformers>=4.44
-accelerate>=0.33
-safetensors>=0.4
-huggingface-hub>=0.24
-hf_transfer>=0.1.8
-gguf>=0.10
+# Full compatibility install for CI and existing setup scripts.
+#
+# Prefer the smaller files below when you only need one layer:
+# - requirements-minimal.txt: enough to start the Flask app / bounded WSGI server.
+# - requirements-dev.txt: developer and browser-test tooling.
+# - requirements-features.txt: optional feature backends such as image inspection
+#   and local Hugging Face / Diffusers generation.
+
+-r requirements-minimal.txt
+-r requirements-dev.txt
+-r requirements-features.txt

@@ -23,7 +23,7 @@ cleanup predictable, reviewable, and reversible.
 The repository root should contain only:
 
 - entry docs: `README.md`, `SECURITY.md`
-- bootstrap files: `requirements.txt`, `server.py`, `test_for_develop.sh`
+- bootstrap files: `requirements*.txt`, `server.py`, `test_for_develop.sh`
 - top-level source trees: `routes/`, `services/`, `public/`
 - operator and validation tree: `scripts/`
 - documentation and tests: `docs/`, `tests/`

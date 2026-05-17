@@ -359,7 +359,14 @@ async function openChatRoom(roomId, autoPoll = true) {
   }
   if (autoPoll) startChatPoll();
   const msgInput = $("chat-message-input");
-  if (msgInput) msgInput.focus();
+  if (msgInput) {
+    try {
+      msgInput.focus({ preventScroll: true });
+    } catch (_) {
+      msgInput.focus();
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    }
+  }
 }
 
 async function loadChatMessages(roomId, silent = false) {

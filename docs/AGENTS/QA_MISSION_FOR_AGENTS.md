@@ -257,7 +257,7 @@ rsync -a --delete \
 cd "$QA_REPO"
 python3 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python3 -m pip install -r requirements-minimal.txt -r requirements-dev.txt
 ```
 
 ## 啟動隔離伺服器

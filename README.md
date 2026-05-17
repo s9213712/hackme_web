@@ -28,6 +28,11 @@ Server Mode 等能力。
 
 本 repo 的公開入口現在只保留三條：
 
+- `python3 -m pip install -r requirements-minimal.txt`
+  只安裝最小啟動伺服器所需套件。開發測試請再加
+  `requirements-dev.txt`，特定功能後端請再加 `requirements-features.txt`。
+  舊流程仍可用 `requirements.txt` 一次安裝全部相容依賴。
+
 - `python3 server.py --doctor`
   檢查目前 runtime 環境是否已存在且可寫；缺目錄時會明確報錯，不會靜默補建。
 - `python3 server.py`

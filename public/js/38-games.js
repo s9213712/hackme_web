@@ -331,6 +331,37 @@ function gameMultiplayerPeerState(snapshot, room) {
   return players.find((player) => Number(player.user_id) === Number(peerId)) || null;
 }
 
+function gameExperienceHint(key) {
+  const hints = {
+    chess: "西洋棋：先按「和電腦練習」或選擇棋局；點棋子後可點亮起的合法目標格，升變會用視窗選擇。",
+    sudoku: "數獨：先按開始。手機可直接點格輸入；筆記模式用來暫存候選數，提示會加時。",
+    minesweeper: "踩地雷：首次翻格安全。手機請用「插旗模式」在翻格與插旗之間切換。",
+    "1a2b": "1A2B：輸入 4 位不重複數字；A 是數字位置都對，B 是數字對但位置不同。",
+    tetris: "俄羅斯方塊：方向鍵移動/旋轉，空白鍵落下，C Hold；手機下方按鍵可長按左右與加速。",
+    space_shooter: "宇宙戰機：左右移動、空白鍵或發射鍵射擊；敵方閃避預設關閉，想提高難度再打開。",
+    fps_arena: "3D 射擊場：WASD 移動、滑鼠/拖曳瞄準；手機按住「前/左/右」會連續移動，不是一步一步點。",
+    open_world: "都市開放世界：WASD 或手機搖桿移動，靠近車輛可上車；路面目標光柱是任務方向。",
+    bullet_hell: "彈幕遊戲：黃點才是中彈判定，藍圈是擦彈範圍；按住「精密」會變慢並縮小判定。",
+    stickman_shooter: "火柴人橫向射擊：按住移動鍵走位，射擊與跳躍要配合掩體；合作模式需要雙方配合機關。",
+    real_tetris: "真實版俄羅斯方塊：方塊會旋轉、傾斜與倒塌，目標是讓行覆蓋率達 90% 才消線。",
+    snake: "貪食蛇：方向鍵或滑動轉向，手機請滑動棋盤；避免回頭撞到自己。",
+    game_2048: "2048：方向鍵或滑動合併，同數字相撞會升級；可用撤銷修正最近幾步。",
+    brick_breaker: "打磚塊：按住左右移動擋板，球碰擋板位置會改變反彈角度。",
+    reversi: "黑白棋：落子必須夾住對手棋，合法位置會提示；結算看黑白棋數。",
+    go: "圍棋：19 路棋盤，輪流落子與停一手；目前採教育級目數估算，不是職業級死活判定。",
+    gomoku: "五子棋：先連成五顆獲勝；可切換 AI 難度與禁手規則。",
+    chinese_chess: "中國象棋：點選棋子後再點目標；將帥、馬腿、象眼等規則會由前端限制。",
+  };
+  return hints[key] || "選擇遊戲後會顯示操作提示。";
+}
+
+function updateGameExperienceHint(key = gameSelectedKey) {
+  const el = $("game-experience-hint");
+  if (!el) return;
+  el.textContent = gameExperienceHint(key);
+  el.dataset.gameHint = key || "";
+}
+
 function switchGameView(key) {
   setGameMsg("", true);
   const previousModule = activeGameViewModule();
@@ -343,6 +374,7 @@ function switchGameView(key) {
     }
   }
   gameSelectedKey = key || "chess";
+  updateGameExperienceHint(gameSelectedKey);
   const select = $("game-select");
   if (select && select.value !== gameSelectedKey) select.value = gameSelectedKey;
   const isLocalGameModule = isLocalGameModuleAvailable(gameSelectedKey);

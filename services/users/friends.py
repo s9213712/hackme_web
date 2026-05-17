@@ -359,7 +359,7 @@ def get_profile_payload(conn, *, target_user_id, viewer=None):
         "friend_request_id": relation.get("request_id"),
         "can_request_friend": bool(viewer_id and relation["status"] in {"none", "rejected"}),
         "can_accept_friend": bool(viewer_id and relation["status"] == "pending_incoming"),
-        "can_block": bool(viewer_id and not owner and relation["status"] != "blocked"),
+        "can_block": bool(viewer_id and not owner and not blocked_state),
         "can_unblock": bool(viewer_id and relation["status"] == "blocked"),
         "can_pm": bool(can_interact and not owner),
         "can_invite_game": bool(can_interact and not owner),
@@ -570,6 +570,10 @@ def block_user(conn, actor, *, target_user_id):
     existing = get_friend_row(conn, actor["id"], target["id"])
     now = _now()
     if existing:
+        if existing["status"] == "blocked":
+            if int(existing.get("requested_by") or 0) == int(actor["id"]):
+                return {"status": "blocked", "target": target, "request_id": existing["id"]}, "已封鎖使用者", 200
+            return None, "對方已封鎖你，無法變更封鎖狀態", 403
         conn.execute(
             "UPDATE user_friends SET status='blocked', requested_by=?, updated_at=? WHERE id=?",
             (actor["id"], now, existing["id"]),
@@ -593,7 +597,7 @@ def unblock_user(conn, actor, *, target_user_id):
     row = get_friend_row(conn, actor["id"], target_user_id)
     if not row or row.get("status") != "blocked":
         return False, "找不到封鎖關係", 404
-    if int(row.get("requested_by") or 0) != int(actor["id"]) and not is_privileged_actor(actor):
+    if int(row.get("requested_by") or 0) != int(actor["id"]):
         return False, "只能解除自己建立的封鎖", 403
     cur = conn.execute(
         "DELETE FROM user_friends WHERE user_id=? AND friend_user_id=? AND status='blocked'",
