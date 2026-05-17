@@ -565,6 +565,7 @@
   function setObjectPose(object, x, z, angle = 0, y = 0) {
     object.position.set(x, y, z);
     object.rotation.y = angle;
+    object.rotation.z = 0;
   }
 
   function roadSegmentLength(road) {
@@ -1170,17 +1171,28 @@
       setObjectPose(vehicle.mesh, vehicle.x, vehicle.z, vehicle.angle);
       return;
     }
-    const walkSpeed = sprint ? 9.2 : 5.6;
-    player.angle += turn * 2.4 * dt;
-    player.speed = throttle * walkSpeed;
+    const walkSpeed = sprint ? 8.6 : 5.2;
+    const targetSpeed = throttle * walkSpeed;
+    const accelRate = throttle ? 9.5 : 13.5;
+    player.speed += (targetSpeed - player.speed) * Math.min(1, dt * accelRate);
+    if (!throttle && Math.abs(player.speed) < 0.04) player.speed = 0;
+    const turnIntent = turn * (Math.abs(player.speed) > 0.25 ? 1 : 0.52);
+    player.angle += turnIntent * 2.15 * dt * (player.speed < -0.2 ? -0.72 : 1);
     const nextX = player.x + Math.sin(player.angle) * player.speed * dt;
     const nextZ = player.z + Math.cos(player.angle) * player.speed * dt;
     if (!openWorldBlocked(state, nextX, nextZ, PLAYER_RADIUS)) {
       player.x = nextX;
       player.z = nextZ;
       state.distanceWalked += Math.abs(player.speed) * dt;
+    } else {
+      player.speed *= -0.18;
     }
-    setObjectPose(player.mesh, player.x, player.z, player.angle);
+    const walkRatio = Math.min(1, Math.abs(player.speed) / walkSpeed);
+    player.walkCycle = Number(player.walkCycle || 0) + Math.abs(player.speed) * dt * (sprint ? 3.1 : 2.45);
+    const bob = Math.sin(player.walkCycle) * 0.055 * walkRatio;
+    const lean = -turn * 0.1 * walkRatio;
+    setObjectPose(player.mesh, player.x, player.z, player.angle, bob);
+    player.mesh.rotation.z = lean;
   }
 
   function syncOpenWorldPlayerPose(state) {
@@ -1701,6 +1713,7 @@
         z: 6,
         angle: 0,
         speed: 0,
+        walkCycle: 0,
         mesh: null,
         inVehicle: null,
       },
@@ -1834,6 +1847,73 @@
     if (key === " " && pressed) fireOpenWorldGadget(api, state);
   }
 
+  function resetOpenWorldJoystick(api, stick) {
+    const state = api?._openWorldState;
+    if (state) {
+      ["left", "right", "up", "down", "sprint"].forEach((key) => setOpenWorldInput(state, key, false));
+    }
+    const knob = stick?.querySelector?.(".game-virtual-stick-knob");
+    if (knob) knob.style.transform = "translate(-50%, -50%)";
+    if (stick) stick.classList.remove("is-active");
+  }
+
+  function updateOpenWorldJoystick(api, stick, clientX, clientY) {
+    const state = api?._openWorldState;
+    if (!state || !stick) return;
+    const rect = stick.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const radius = Math.max(1, Math.min(rect.width, rect.height) / 2);
+    const dx = clamp((clientX - cx) / radius, -1, 1);
+    const dy = clamp((clientY - cy) / radius, -1, 1);
+    const dead = 0.18;
+    setOpenWorldInput(state, "left", dx < -dead);
+    setOpenWorldInput(state, "right", dx > dead);
+    setOpenWorldInput(state, "up", dy < -dead);
+    setOpenWorldInput(state, "down", dy > dead);
+    setOpenWorldInput(state, "sprint", Math.hypot(dx, dy) > 0.78);
+    const knob = stick.querySelector(".game-virtual-stick-knob");
+    if (knob) knob.style.transform = `translate(calc(-50% + ${Math.round(dx * 34)}px), calc(-50% + ${Math.round(dy * 34)}px))`;
+    stick.classList.add("is-active");
+  }
+
+  function bindOpenWorldJoystick(api) {
+    const stick = api.controls?.querySelector?.("[data-open-world-stick]");
+    if (!stick) return () => {};
+    let pointerId = null;
+    const down = (event) => {
+      pointerId = event.pointerId;
+      event.preventDefault();
+      try {
+        stick.setPointerCapture?.(pointerId);
+      } catch (_) {}
+      updateOpenWorldJoystick(api, stick, event.clientX, event.clientY);
+    };
+    const move = (event) => {
+      if (pointerId !== event.pointerId) return;
+      event.preventDefault();
+      updateOpenWorldJoystick(api, stick, event.clientX, event.clientY);
+    };
+    const up = (event) => {
+      if (pointerId !== event.pointerId) return;
+      pointerId = null;
+      resetOpenWorldJoystick(api, stick);
+    };
+    stick.addEventListener("pointerdown", down, { passive: false });
+    stick.addEventListener("pointermove", move, { passive: false });
+    stick.addEventListener("pointerup", up);
+    stick.addEventListener("pointercancel", up);
+    stick.addEventListener("lostpointercapture", up);
+    return () => {
+      stick.removeEventListener("pointerdown", down);
+      stick.removeEventListener("pointermove", move);
+      stick.removeEventListener("pointerup", up);
+      stick.removeEventListener("pointercancel", up);
+      stick.removeEventListener("lostpointercapture", up);
+      resetOpenWorldJoystick(api, stick);
+    };
+  }
+
   window.registerHackmeLocalGameModule("open_world", {
     mount(api) {
       let disposed = false;
@@ -1846,6 +1926,10 @@
         <button class="btn game-mini-btn" type="button" data-action="finish">結算</button>
       `);
       api.setControls(`
+        <div class="game-virtual-stick" data-open-world-stick aria-label="移動搖桿" role="application">
+          <span class="game-virtual-stick-label">移動</span>
+          <span class="game-virtual-stick-knob"></span>
+        </div>
         <button class="btn game-mini-btn" type="button" data-hold="left">左</button>
         <button class="btn game-mini-btn" type="button" data-hold="up">前進</button>
         <button class="btn game-mini-btn" type="button" data-hold="down">後退</button>
@@ -1855,6 +1939,7 @@
         <button class="btn game-mini-btn" type="button" data-open-world-control="gadget">干擾器</button>
         <button class="btn game-mini-btn" type="button" data-open-world-control="mission">任務</button>
       `);
+      const cleanupJoystick = bindOpenWorldJoystick(api);
       api.onAction = (action) => {
         const state = api._openWorldState;
         if (action === "new") startOpenWorld(api);
@@ -1884,6 +1969,7 @@
       }
       return () => {
         disposed = true;
+        cleanupJoystick();
         disposeOpenWorldState(api._openWorldState);
         api._openWorldState = null;
       };

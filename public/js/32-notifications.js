@@ -19,6 +19,19 @@ function setNotificationBadge(count) {
   }
 }
 
+function setNotificationInlineError(message) {
+  const clean = String(message || "通知操作失敗，請稍後再試。").trim();
+  const list = $("notification-list");
+  if (notificationsOpen && list) {
+    const row = document.createElement("div");
+    row.className = "notification-item notification-inline-error";
+    row.setAttribute("role", "alert");
+    row.textContent = clean;
+    list.prepend(row);
+  }
+  if (typeof showAppToast === "function") showAppToast(clean, false);
+}
+
 function renderNotifications(items, unreadCount) {
   setNotificationBadge(unreadCount);
   const list = $("notification-list");
@@ -120,7 +133,7 @@ async function markNotificationRead(notificationId) {
   });
   const json = await res.json().catch(() => ({}));
   if (!json.ok) {
-    alert(json.msg || "通知已讀更新失敗");
+    setNotificationInlineError(json.msg || "通知已讀更新失敗");
     return;
   }
   await loadNotifications({ force: true });
@@ -137,7 +150,7 @@ async function markAllNotificationsRead() {
   });
   const json = await res.json().catch(() => ({}));
   if (!json.ok) {
-    alert(json.msg || "全部已讀失敗");
+    setNotificationInlineError(json.msg || "全部已讀失敗");
     return;
   }
   await loadNotifications({ force: true });
@@ -154,7 +167,7 @@ async function dismissNotification(notificationId) {
   });
   const json = await res.json().catch(() => ({}));
   if (!json.ok) {
-    alert(json.msg || "通知隱藏失敗");
+    setNotificationInlineError(json.msg || "通知隱藏失敗");
     return;
   }
   await loadNotifications({ force: true });

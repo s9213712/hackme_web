@@ -10,7 +10,15 @@ from services.storage.cloud_drive import attach_existing_file, can_download_file
 from services.system.notifications import create_notification, create_notification_if_enabled, ensure_notifications_schema
 from services.security.permissions import require_member_action
 from services.core.sqlite_safe import table_columns as safe_table_columns
-from services.users.friends import assert_can_target_user
+from services.users.friends import (
+    assert_can_target_user,
+    block_user,
+    create_friend_request,
+    list_friend_state,
+    remove_friend,
+    review_friend_request,
+    unblock_user,
+)
 
 CHAT_RECALL_WINDOW_SECONDS = 5 * 60
 CHAT_STICKERS = {
@@ -1148,6 +1156,17 @@ def register_chat_routes(app, deps):
                 return json_resp({"ok":False,"msg":f"訊息發送過於頻繁（每分鐘最多 {info['limit']} 則）"}), 429
             if attachment_file_ids and not _table_columns(conn, "uploaded_files"):
                 return json_resp({"ok":False,"msg":"附件系統尚未初始化，請先完成雲端硬碟上傳"}), 400
+            private_member_rows = []
+            if bool(room["is_private"]) and not is_official_chat_room(room):
+                private_member_rows = conn.execute(
+                    "SELECT user_id FROM chat_room_members WHERE room_id=? AND user_id<>?",
+                    (room_id, actor["id"]),
+                ).fetchall()
+                target_context = "pm" if len(private_member_rows) <= 1 else "private_group"
+                for member_row in private_member_rows:
+                    allowed, deny_msg = assert_can_target_user(conn, actor, member_row["user_id"], context=target_context)
+                    if not allowed:
+                        return json_resp({"ok":False,"msg":deny_msg or "你不能向此聊天室發送訊息"}), 403
 
             is_bad, bad_reason = detect_chat_violation(content)
             if message_type == "text" and is_bad:
@@ -1469,44 +1488,8 @@ def register_chat_routes(app, deps):
         conn = get_db()
         try:
             ensure_chat_feature_schema(conn)
-            rows = conn.execute(
-                """
-                SELECT f.id, f.user_id, f.friend_user_id, f.status, f.requested_by, f.created_at, f.updated_at,
-                       u1.username AS user_username, u2.username AS friend_username, req.username AS requested_by_username
-                FROM user_friends f
-                JOIN users u1 ON u1.id=f.user_id
-                JOIN users u2 ON u2.id=f.friend_user_id
-                LEFT JOIN users req ON req.id=f.requested_by
-                WHERE f.user_id=? OR f.friend_user_id=?
-                ORDER BY f.updated_at DESC, f.id DESC
-                """,
-                (actor["id"], actor["id"]),
-            ).fetchall()
-            friends = []
-            incoming = []
-            outgoing = []
-            for row in rows:
-                other_id = row["friend_user_id"] if row["user_id"] == actor["id"] else row["user_id"]
-                other_username = row["friend_username"] if row["user_id"] == actor["id"] else row["user_username"]
-                item = {
-                    "id": row["id"],
-                    "user_id": row["user_id"],
-                    "friend_user_id": row["friend_user_id"],
-                    "other_user_id": other_id,
-                    "other_username": other_username,
-                    "status": row["status"],
-                    "requested_by": row["requested_by"],
-                    "requested_by_username": row["requested_by_username"],
-                    "created_at": row["created_at"],
-                    "updated_at": row["updated_at"],
-                }
-                if row["status"] == "accepted":
-                    friends.append(item)
-                elif row["status"] == "pending" and row["requested_by"] == actor["id"]:
-                    outgoing.append(item)
-                elif row["status"] == "pending":
-                    incoming.append(item)
-            return json_resp({"ok":True,"friends":friends,"incoming":incoming,"outgoing":outgoing})
+            state = list_friend_state(conn, actor)
+            return json_resp({"ok":True, **state})
         finally:
             conn.close()
 
@@ -1525,39 +1508,16 @@ def register_chat_routes(app, deps):
         username = normalize_text(data.get("username"))
         if not username:
             return json_resp({"ok":False,"msg":"請輸入好友帳號"}), 400
-        if username == actor["username"]:
-            return json_resp({"ok":False,"msg":"不能加自己為好友"}), 400
         conn = get_db()
         try:
             ensure_chat_feature_schema(conn)
-            user_cols = _table_columns(conn, "users")
-            status_filter = "AND status='active'" if "status" in user_cols else ""
-            target = conn.execute(f"SELECT id, username FROM users WHERE username=? {status_filter}", (username,)).fetchone()
-            if not target:
-                return json_resp({"ok":False,"msg":"找不到指定帳號"}), 404
-            user_a, user_b = sorted([int(actor["id"]), int(target["id"])])
-            existing = conn.execute(
-                "SELECT * FROM user_friends WHERE user_id=? AND friend_user_id=?",
-                (user_a, user_b),
-            ).fetchone()
-            now = datetime.now().isoformat()
-            if existing:
-                if existing["status"] == "accepted":
-                    return json_resp({"ok":True,"msg":"已經是好友"})
-                if existing["status"] == "pending":
-                    return json_resp({"ok":True,"msg":"好友邀請已存在"})
-                conn.execute(
-                    "UPDATE user_friends SET status='pending', requested_by=?, updated_at=? WHERE id=?",
-                    (actor["id"], now, existing["id"]),
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO user_friends (user_id, friend_user_id, status, requested_by, created_at, updated_at) VALUES (?, ?, 'pending', ?, ?, ?)",
-                    (user_a, user_b, actor["id"], now, now),
-                )
-            conn.commit()
-            audit("CHAT_FRIEND_REQUESTED", get_client_ip(), user=actor["username"], detail=f"target={target['username']}")
-            return json_resp({"ok":True,"msg":"好友邀請已送出"})
+            result, msg, status = create_friend_request(conn, actor, username=username)
+            if status < 400:
+                conn.commit()
+                target = (result or {}).get("target") or {}
+                audit("CHAT_FRIEND_REQUESTED", get_client_ip(), user=actor["username"], detail=f"target={target.get('username')}")
+                return json_resp({"ok":True,"msg":msg,"request":result})
+            return json_resp({"ok":False,"msg":msg}), status
         finally:
             conn.close()
 
@@ -1567,23 +1527,15 @@ def register_chat_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
-        if decision not in {"accept", "reject"}:
-            return json_resp({"ok":False,"msg":"不支援的操作"}), 400
         conn = get_db()
         try:
             ensure_chat_feature_schema(conn)
-            row = conn.execute("SELECT * FROM user_friends WHERE id=?", (request_id,)).fetchone()
-            if not row:
-                return json_resp({"ok":False,"msg":"找不到好友邀請"}), 404
-            if row["status"] != "pending":
-                return json_resp({"ok":False,"msg":"好友邀請已處理"}), 409
-            if row["requested_by"] == actor["id"] or actor["id"] not in {row["user_id"], row["friend_user_id"]}:
-                return json_resp({"ok":False,"msg":"你不能處理這筆好友邀請"}), 403
-            status = "accepted" if decision == "accept" else "rejected"
-            conn.execute("UPDATE user_friends SET status=?, updated_at=? WHERE id=?", (status, datetime.now().isoformat(), request_id))
-            conn.commit()
-            audit("CHAT_FRIEND_REVIEWED", get_client_ip(), user=actor["username"], detail=f"request_id={request_id},decision={decision}")
-            return json_resp({"ok":True,"msg":"已加入好友" if decision == "accept" else "已拒絕好友邀請"})
+            result, msg, status = review_friend_request(conn, actor, request_id=request_id, decision=decision)
+            if status < 400:
+                conn.commit()
+                audit("CHAT_FRIEND_REVIEWED", get_client_ip(), user=actor["username"], detail=f"request_id={request_id},decision={decision}")
+                return json_resp({"ok":True,"msg":msg,"request":result})
+            return json_resp({"ok":False,"msg":msg}), status
         finally:
             conn.close()
 
@@ -1593,19 +1545,52 @@ def register_chat_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
-        user_a, user_b = sorted([int(actor["id"]), int(friend_user_id)])
         conn = get_db()
         try:
             ensure_chat_feature_schema(conn)
-            cur = conn.execute(
-                "DELETE FROM user_friends WHERE user_id=? AND friend_user_id=? AND status='accepted'",
-                (user_a, user_b),
-            )
-            conn.commit()
-            if cur.rowcount < 1:
-                return json_resp({"ok":False,"msg":"找不到好友關係"}), 404
-            audit("CHAT_FRIEND_REMOVED", get_client_ip(), user=actor["username"], detail=f"friend_user_id={friend_user_id}")
-            return json_resp({"ok":True,"msg":"已解除好友"})
+            ok, msg, status = remove_friend(conn, actor, friend_user_id=friend_user_id)
+            if ok:
+                conn.commit()
+                audit("CHAT_FRIEND_REMOVED", get_client_ip(), user=actor["username"], detail=f"friend_user_id={friend_user_id}")
+                return json_resp({"ok":True,"msg":msg})
+            return json_resp({"ok":False,"msg":msg}), status
+        finally:
+            conn.close()
+
+    @app.route("/api/chat/friends/<int:target_user_id>/block", methods=["POST"], strict_slashes=False)
+    @require_csrf
+    def chat_friend_block(target_user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            ensure_chat_feature_schema(conn)
+            result, msg, status = block_user(conn, actor, target_user_id=target_user_id)
+            if status < 400:
+                conn.commit()
+                target = (result or {}).get("target") or {}
+                audit("CHAT_FRIEND_BLOCKED", get_client_ip(), user=actor["username"], detail=f"target_user_id={target.get('id')}")
+                return json_resp({"ok":True,"msg":msg,"block":result})
+            return json_resp({"ok":False,"msg":msg}), status
+        finally:
+            conn.close()
+
+    @app.route("/api/chat/friends/<int:target_user_id>/block", methods=["DELETE"], strict_slashes=False)
+    @require_csrf
+    def chat_friend_unblock(target_user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            ensure_chat_feature_schema(conn)
+            ok, msg, status = unblock_user(conn, actor, target_user_id=target_user_id)
+            if ok:
+                conn.commit()
+                audit("CHAT_FRIEND_UNBLOCKED", get_client_ip(), user=actor["username"], detail=f"target_user_id={target_user_id}")
+                return json_resp({"ok":True,"msg":msg})
+            return json_resp({"ok":False,"msg":msg}), status
         finally:
             conn.close()
 

@@ -193,6 +193,7 @@ function switchModuleTab(tab) {
   const canAccessAlbums = canAccessDrive && (!isFeatureEnabledForUi || isFeatureEnabledForUi("feature_storage_albums_enabled", false));
   const canAccessVideos = !!currentUser && canAccessModule("videos");
   const canAccessGames = !!currentUser && canAccessModule("games");
+  const canAccessExperiments = !!currentUser && canAccessModule("experiments");
   const canAccessJobs = !!currentUser && canAccessModule("jobs");
   const canAccessShareCenter = !!currentUser && canAccessModule("shares");
   const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
@@ -201,7 +202,20 @@ function switchModuleTab(tab) {
   const canAccessTrading = canAccessEconomy && canAccessModule("trading");
 
   let normTab = tab;
-  const fallbackModule = () => canAccessChat ? "chat" : (canAccessProfile ? "profile" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessVideos ? "videos" : (canAccessGames ? "games" : (canAccessJobs ? "jobs" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))))));
+  const fallbackModule = () => ([
+    [canAccessChat, "chat"],
+    [canAccessProfile, "profile"],
+    [canAccessCommunity, "community"],
+    [canAccessDrive, "drive"],
+    [canAccessVideos, "videos"],
+    [canAccessGames, "games"],
+    [canAccessExperiments, "experiments"],
+    [canAccessJobs, "jobs"],
+    [canAccessComfyui, "comfyui"],
+    [canAccessEconomy, "economy"],
+    [canAccessAppeals, "appeals"],
+    [canAccessAccounts, "accounts"],
+  ].find(([allowed]) => allowed)?.[1] || "chat");
   if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
   if (tab === "profile" && !canAccessProfile) normTab = fallbackModule();
   if (tab === "dm") normTab = fallbackModule();
@@ -211,6 +225,7 @@ function switchModuleTab(tab) {
   if (tab === "albums" && !canAccessAlbums) normTab = fallbackModule();
   if (tab === "videos" && !canAccessVideos) normTab = fallbackModule();
   if (tab === "games" && !canAccessGames) normTab = fallbackModule();
+  if (tab === "experiments" && !canAccessExperiments) normTab = fallbackModule();
   if (tab === "jobs" && !canAccessJobs) normTab = fallbackModule();
   if (tab === "shares" && !canAccessShareCenter) normTab = fallbackModule();
   if (tab === "comfyui" && !canAccessComfyui) normTab = fallbackModule();
@@ -230,6 +245,7 @@ function switchModuleTab(tab) {
   const modAlbums = $("module-albums");
   const modVideos = $("module-videos");
   const modGames = $("module-games");
+  const modExperiments = $("module-experiments");
   const modJobs = $("module-jobs");
   const modShares = $("module-shares");
   const modComfyui = $("module-comfyui");
@@ -246,6 +262,7 @@ function switchModuleTab(tab) {
   const mAlbums = $("tab-module-albums");
   const mVideos = $("tab-module-videos");
   const mGames = $("tab-module-games");
+  const mExperiments = $("tab-module-experiments");
   const mJobs = $("tab-module-jobs");
   const mShares = $("tab-module-shares");
   const mComfyui = $("tab-module-comfyui");
@@ -263,6 +280,7 @@ function switchModuleTab(tab) {
   if (modAlbums) modAlbums.classList.toggle("active", normTab === "albums");
   if (modVideos) modVideos.classList.toggle("active", normTab === "videos");
   if (modGames) modGames.classList.toggle("active", normTab === "games");
+  if (modExperiments) modExperiments.classList.toggle("active", normTab === "experiments");
   if (modJobs) modJobs.classList.toggle("active", normTab === "jobs");
   if (modShares) modShares.classList.toggle("active", normTab === "shares");
   if (modComfyui) modComfyui.classList.toggle("active", normTab === "comfyui");
@@ -279,6 +297,7 @@ function switchModuleTab(tab) {
   if (mAlbums) mAlbums.classList.toggle("active", normTab === "albums");
   if (mVideos) mVideos.classList.toggle("active", normTab === "videos");
   if (mGames) mGames.classList.toggle("active", normTab === "games");
+  if (mExperiments) mExperiments.classList.toggle("active", normTab === "experiments");
   if (mJobs) mJobs.classList.toggle("active", normTab === "jobs");
   if (mShares) mShares.classList.toggle("active", normTab === "shares");
   if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
@@ -322,6 +341,9 @@ function switchModuleTab(tab) {
   }
   if (normTab === "games" && canAccessGames && typeof loadGameZone === "function") {
     loadGameZone();
+  }
+  if (normTab === "experiments" && canAccessExperiments && typeof initExperimentArea === "function") {
+    initExperimentArea();
   }
   if (normTab === "jobs" && canAccessJobs) {
     if (typeof startJobCenterPolling === "function") startJobCenterPolling({ immediate: true });
@@ -4344,13 +4366,13 @@ async function loadSettings() {
   if ($("s-module-videos-min-role")) $("s-module-videos-min-role").value = s.module_videos_min_role || "user";
   if ($("s-video-tip-fee-percent")) $("s-video-tip-fee-percent").value = s.video_tip_fee_percent ?? 5;
   if ($("s-video-tip-min-points")) $("s-video-tip-min-points").value = s.video_tip_min_points ?? 1;
-  if ($("s-site-bg")) $("s-site-bg").value = s.site_bg || "#0f0f1a";
+  if ($("s-site-bg")) $("s-site-bg").value = s.site_bg || "#11131d";
   if ($("s-site-theme-mode")) $("s-site-theme-mode").value = s.site_theme_mode || "dark";
-  if ($("s-site-surface")) $("s-site-surface").value = s.site_surface || "#1a1a2e";
-  if ($("s-site-accent")) $("s-site-accent").value = s.site_accent || "#6c63ff";
-  if ($("s-site-accent2")) $("s-site-accent2").value = s.site_accent2 || "#00d4aa";
-  if ($("s-site-text")) $("s-site-text").value = s.site_text || "#e0e0f0";
-  if ($("s-site-muted")) $("s-site-muted").value = s.site_muted || "#8888aa";
+  if ($("s-site-surface")) $("s-site-surface").value = s.site_surface || "#1b2030";
+  if ($("s-site-accent")) $("s-site-accent").value = s.site_accent || "#7a7bdc";
+  if ($("s-site-accent2")) $("s-site-accent2").value = s.site_accent2 || "#43b6a0";
+  if ($("s-site-text")) $("s-site-text").value = s.site_text || "#eceef8";
+  if ($("s-site-muted")) $("s-site-muted").value = s.site_muted || "#aeb8cc";
   if ($("s-site-layout-mode")) $("s-site-layout-mode").value = s.site_layout_mode || "centered";
   if ($("s-site-density")) $("s-site-density").value = s.site_density || "comfortable";
   if ($("s-site-radius-px")) $("s-site-radius-px").value = String(s.site_radius_px || 12);
@@ -6047,12 +6069,12 @@ async function saveSettings() {
     video_tip_fee_percent: Number($("s-video-tip-fee-percent")?.value || 5),
     video_tip_min_points: parseInt($("s-video-tip-min-points")?.value || "1"),
     site_theme_mode: $("s-site-theme-mode")?.value || "dark",
-    site_bg: $("s-site-bg")?.value || "#0f0f1a",
-    site_surface: $("s-site-surface")?.value || "#1a1a2e",
-    site_accent: $("s-site-accent")?.value || "#6c63ff",
-    site_accent2: $("s-site-accent2")?.value || "#00d4aa",
-    site_text: $("s-site-text")?.value || "#e0e0f0",
-    site_muted: $("s-site-muted")?.value || "#8888aa",
+    site_bg: $("s-site-bg")?.value || "#11131d",
+    site_surface: $("s-site-surface")?.value || "#1b2030",
+    site_accent: $("s-site-accent")?.value || "#7a7bdc",
+    site_accent2: $("s-site-accent2")?.value || "#43b6a0",
+    site_text: $("s-site-text")?.value || "#eceef8",
+    site_muted: $("s-site-muted")?.value || "#aeb8cc",
     site_layout_mode: $("s-site-layout-mode")?.value || "centered",
     site_density: $("s-site-density")?.value || "comfortable",
     site_radius_px: parseInt($("s-site-radius-px")?.value || "12", 10) || 12,

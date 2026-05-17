@@ -61,12 +61,12 @@ DEFAULT_SETTINGS = {
     "session_ttl_hours": 4,
     "session_idle_timeout_minutes": 10,
     "site_theme_mode": "dark",
-    "site_bg": "#0f0f1a",
-    "site_surface": "#1a1a2e",
-    "site_accent": "#6c63ff",
-    "site_accent2": "#00d4aa",
-    "site_text": "#e0e0f0",
-    "site_muted": "#8888aa",
+    "site_bg": "#11131d",
+    "site_surface": "#1b2030",
+    "site_accent": "#7a7bdc",
+    "site_accent2": "#43b6a0",
+    "site_text": "#eceef8",
+    "site_muted": "#aeb8cc",
     "site_layout_mode": "centered",
     "site_density": "comfortable",
     "site_radius_px": 12,
@@ -128,6 +128,7 @@ DEFAULT_SETTINGS = {
     "feature_economy_enabled": False,
     "feature_trading_enabled": False,
     "feature_games_enabled": False,
+    "feature_experiments_enabled": False,
     "feature_videos_enabled": False,
     "video_tip_fee_percent": 5,
     "video_tip_min_points": 1,
@@ -139,6 +140,15 @@ DEFAULT_SETTINGS = {
     "security_quarantined_files_threshold": 0,
     "security_unknown_encrypted_files_threshold": 50,
     "security_log_tail_lines": 200,
+}
+
+LEGACY_THEME_DEFAULT_REPLACEMENTS = {
+    "site_bg": ("#0f0f1a", DEFAULT_SETTINGS["site_bg"]),
+    "site_surface": ("#1a1a2e", DEFAULT_SETTINGS["site_surface"]),
+    "site_accent": ("#6c63ff", DEFAULT_SETTINGS["site_accent"]),
+    "site_accent2": ("#00d4aa", DEFAULT_SETTINGS["site_accent2"]),
+    "site_text": ("#e0e0f0", DEFAULT_SETTINGS["site_text"]),
+    "site_muted": ("#8888aa", DEFAULT_SETTINGS["site_muted"]),
 }
 
 FEATURE_FLAG_KEYS = tuple(key for key in DEFAULT_SETTINGS if key.startswith("feature_"))
@@ -164,6 +174,7 @@ FEATURE_SETTING_LABELS = {
     "feature_storage_albums_enabled": "Storage / 相簿",
     "feature_videos_enabled": "影音分享",
     "feature_games_enabled": "遊戲區 / 西洋棋",
+    "feature_experiments_enabled": "實驗區",
     "feature_comfyui_enabled": "ComfyUI AI 產圖",
     "feature_economy_enabled": "PointsChain 積分系統",
     "feature_trading_enabled": "積分交易所",
@@ -446,6 +457,17 @@ def _seed_missing_settings_to_db(conn):
                 "INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                 (key, str(default), now, "system")
             )
+    for key, (legacy_value, replacement_value) in LEGACY_THEME_DEFAULT_REPLACEMENTS.items():
+        conn.execute(
+            """
+            UPDATE system_settings
+               SET value = ?, updated_at = ?, updated_by = ?
+             WHERE key = ?
+               AND value = ?
+               AND COALESCE(updated_by, 'system') IN ('system', 'migration')
+            """,
+            (str(replacement_value), now, "system_theme_refresh", key, str(legacy_value))
+        )
 
 
 def _import_legacy_settings_files(conn):

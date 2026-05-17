@@ -2,6 +2,9 @@
 
 let spaceShooterState = null;
 let spaceShooterLoopTimer = null;
+const SPACE_SHOOTER_TOUCH_HOLD_ACTIONS = new Set(["shooter-left", "shooter-right", "shooter-fire"]);
+const spaceShooterTouchPointers = new Map();
+let spaceShooterSuppressClickUntil = 0;
 const SPACE_SHOOTER_ENEMY_TYPES = ["striker", "gunner", "evader"];
 const SPACE_SHOOTER_ASSET_SOURCES = Object.freeze({
   extension: {
@@ -68,6 +71,10 @@ function clearSpaceShooterLoop() {
 
 function spaceShooterRandom() {
   return typeof spaceShooterState?.rng === "function" ? spaceShooterState.rng() : Math.random();
+}
+
+function spaceShooterEnemyDodgeEnabled() {
+  return Boolean(document.getElementById("space-shooter-enemy-dodge")?.checked);
 }
 
 function recordSpaceShooterAchievement(id, label, detail = "") {
@@ -175,6 +182,7 @@ function fireSpaceShooterEnemyAttack(state, enemy) {
 }
 
 function updateSpaceShooterEnemyDodge(state, enemy) {
+  if (!state.enemyDodgeEnabled) return;
   if (enemy.type !== "evader" && enemy.type !== "gunner") return;
   if (state.tick < Number(enemy.dodgeUntil || 0)) return;
   const threat = state.bullets.find((bullet) => (
@@ -252,6 +260,7 @@ function startSpaceShooterGame() {
     nextBossScore: 450,
     keys: {},
     lastShotTick: -20,
+    enemyDodgeEnabled: spaceShooterEnemyDodgeEnabled(),
   };
   renderSpaceShooterBoard();
   ensureSoloGameTimer();
@@ -272,6 +281,16 @@ function finishSpaceShooterGame() {
     submitSoloGameScore("space_shooter", spaceShooterState);
   }
   setGameMsg(`宇宙戰機結束，分數 ${Number(spaceShooterState.score || 0).toLocaleString()}`, true);
+}
+
+function suspendSpaceShooterGame() {
+  if (!spaceShooterState || spaceShooterState.status !== "active") return;
+  spaceShooterState.status = "paused";
+  spaceShooterState.keys = {};
+  spaceShooterTouchPointers.clear();
+  clearSpaceShooterLoop();
+  renderSpaceShooterBoard();
+  updateSpaceShooterStatus("已暫停；按開始可重新出擊。");
 }
 
 function tickSpaceShooterGame() {
@@ -405,6 +424,46 @@ function shootSpaceShooter() {
   fireSpaceShooterShots(state);
   state.lastShotTick = state.tick;
   renderSpaceShooterBoard();
+}
+
+function setSpaceShooterTouchAction(action, pressed) {
+  const state = spaceShooterState;
+  if (!state || state.status !== "active") return;
+  if (action === "shooter-left") state.keys.ArrowLeft = Boolean(pressed);
+  if (action === "shooter-right") state.keys.ArrowRight = Boolean(pressed);
+  if (action === "shooter-fire") state.keys[" "] = Boolean(pressed);
+}
+
+function releaseSpaceShooterTouch(pointerId) {
+  const action = spaceShooterTouchPointers.get(pointerId);
+  if (!action) return;
+  spaceShooterTouchPointers.delete(pointerId);
+  setSpaceShooterTouchAction(action, false);
+}
+
+function bindSpaceShooterTouchHold() {
+  if (bindSpaceShooterTouchHold.bound) return;
+  bindSpaceShooterTouchHold.bound = true;
+  document.addEventListener("pointerdown", (event) => {
+    const button = event.target?.closest?.("#space-shooter-game-panel [data-game-touch]");
+    const action = button?.dataset.gameTouch || "";
+    if (!SPACE_SHOOTER_TOUCH_HOLD_ACTIONS.has(action)) return;
+    event.preventDefault();
+    spaceShooterSuppressClickUntil = Date.now() + 420;
+    spaceShooterTouchPointers.set(event.pointerId, action);
+    button.classList.add("is-held");
+    try {
+      button.setPointerCapture?.(event.pointerId);
+    } catch (_) {}
+    setSpaceShooterTouchAction(action, true);
+  }, { passive: false });
+  ["pointerup", "pointercancel", "lostpointercapture"].forEach((type) => {
+    document.addEventListener(type, (event) => {
+      const button = event.target?.closest?.("#space-shooter-game-panel [data-game-touch]");
+      if (button) button.classList.remove("is-held");
+      releaseSpaceShooterTouch(event.pointerId);
+    });
+  });
 }
 
 function drawSpaceShooterBackdrop(ctx, canvas, state) {
@@ -689,7 +748,7 @@ function updateSpaceShooterStatus(prefix = "") {
   if (spaceShooterState.status === "finished") {
     status.textContent = `任務結束 · 分數 ${score} · 武器 ${spaceShooterState.weaponLevel} · 時間 ${time}`;
   } else {
-    status.textContent = `${prefix ? `${prefix} ` : ""}分數 ${score} · 生命 ${spaceShooterState.lives} · 護盾 ${spaceShooterState.shield} · 武器 ${spaceShooterState.weaponLevel} · 時間 ${time}`;
+    status.textContent = `${prefix ? `${prefix} ` : ""}分數 ${score} · 生命 ${spaceShooterState.lives} · 護盾 ${spaceShooterState.shield} · 武器 ${spaceShooterState.weaponLevel} · 敵方閃避 ${spaceShooterState.enemyDodgeEnabled ? "on" : "off"} · 時間 ${time}`;
   }
 }
 
@@ -698,6 +757,7 @@ function updateSpaceShooterStatus(prefix = "") {
     key: "space_shooter",
     panelIds: ["space-shooter-game-panel"],
     ensure() {
+      bindSpaceShooterTouchHold();
       if (!spaceShooterState) {
         renderSpaceShooterBoard();
         updateSpaceShooterStatus();
@@ -709,6 +769,9 @@ function updateSpaceShooterStatus(prefix = "") {
     isActive() {
       return !!spaceShooterState && spaceShooterState.status === "active";
     },
+    suspend() {
+      suspendSpaceShooterGame();
+    },
     leaderboardPath() {
       return "/games/space_shooter/solo-leaderboard";
     },
@@ -717,8 +780,22 @@ function updateSpaceShooterStatus(prefix = "") {
         startSpaceShooterGame();
         return true;
       }
+      if (type === "change" && event.target?.closest?.("#space-shooter-enemy-dodge")) {
+        if (spaceShooterState?.status === "active") {
+          spaceShooterState.enemyDodgeEnabled = spaceShooterEnemyDodgeEnabled();
+          spaceShooterState.enemies.forEach((enemy) => {
+            enemy.dodgeUntil = 0;
+            enemy.dodgeVx = 0;
+          });
+          updateSpaceShooterStatus("難度設定已更新。");
+        } else {
+          updateSpaceShooterStatus();
+        }
+        return true;
+      }
       const touchBtn = type === "click" ? event.target?.closest?.("[data-game-touch]") : null;
       const action = touchBtn?.dataset.gameTouch || "";
+      if (touchBtn && Date.now() < spaceShooterSuppressClickUntil && SPACE_SHOOTER_TOUCH_HOLD_ACTIONS.has(action)) return true;
       if (action === "shooter-left") { nudgeSpaceShooter(-34); return true; }
       if (action === "shooter-right") { nudgeSpaceShooter(34); return true; }
       if (action === "shooter-fire") { shootSpaceShooter(); return true; }

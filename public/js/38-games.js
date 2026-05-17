@@ -333,6 +333,15 @@ function gameMultiplayerPeerState(snapshot, room) {
 
 function switchGameView(key) {
   setGameMsg("", true);
+  const previousModule = activeGameViewModule();
+  const previousKey = gameSelectedKey;
+  if (previousKey && previousKey !== key && typeof previousModule?.suspend === "function") {
+    try {
+      previousModule.suspend(legacyGameRuntime());
+    } catch (err) {
+      console.warn("game suspend failed", previousKey, err);
+    }
+  }
   gameSelectedKey = key || "chess";
   const select = $("game-select");
   if (select && select.value !== gameSelectedKey) select.value = gameSelectedKey;
@@ -1417,6 +1426,7 @@ document.addEventListener("touchend", (event) => {
   const dy = touch.clientY - localGameModuleTouchStart.y;
   localGameModuleTouchStart = null;
   if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+  event.preventDefault();
   const key = Math.abs(dx) > Math.abs(dy)
     ? (dx > 0 ? "ArrowRight" : "ArrowLeft")
     : (dy > 0 ? "ArrowDown" : "ArrowUp");

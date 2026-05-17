@@ -1520,6 +1520,18 @@ function finishFpsArenaGame(reason = "time") {
   setGameMsg(`${label}，分數 ${Number(state.score || 0).toLocaleString()}`, reason !== "health");
 }
 
+function suspendFpsArenaGame() {
+  const state = fpsArenaState;
+  if (!state || state.status !== "active") return;
+  state.status = "paused";
+  state.keys = {};
+  if (fpsArenaRaf) {
+    cancelAnimationFrame(fpsArenaRaf);
+    fpsArenaRaf = null;
+  }
+  updateFpsArenaStatus("已暫停；按開始可重新進入任務。");
+}
+
 function fpsArenaApplyCamera(state) {
   state.camera.position.copy(state.player);
   state.camera.position.x += (state.shakeVector?.x || 0) * 0.025;
@@ -2068,6 +2080,24 @@ function handleFpsArenaTouch(action) {
   if (action === "fps-left") fpsArenaMoveWithCollision(state, right.multiplyScalar(-impulse));
 }
 
+function handleFpsArenaTouchHold(action, pressed) {
+  const state = fpsArenaState;
+  if (!state || state.status !== "active") return;
+  const keyMap = {
+    "fps-forward": "w",
+    "fps-back": "s",
+    "fps-left": "a",
+    "fps-right": "d",
+    "fps-fire": " ",
+  };
+  const key = keyMap[action];
+  if (key) {
+    state.keys[key] = Boolean(pressed);
+    return;
+  }
+  if (action === "fps-sprint") state.mobileSprint = Boolean(pressed);
+}
+
 function fpsArenaApplyLookDelta(state, dx, dy) {
   if (!state || (!dx && !dy)) return;
   state.yaw -= dx * 0.0024;
@@ -2153,5 +2183,7 @@ window.renderFpsArenaBoard = renderFpsArenaBoard;
 window.updateFpsArenaStatus = updateFpsArenaStatus;
 window.startFpsArenaGame = startFpsArenaGame;
 window.finishFpsArenaGame = finishFpsArenaGame;
+window.suspendFpsArenaGame = suspendFpsArenaGame;
 window.handleFpsArenaKey = handleFpsArenaKey;
 window.handleFpsArenaTouch = handleFpsArenaTouch;
+window.handleFpsArenaTouchHold = handleFpsArenaTouchHold;

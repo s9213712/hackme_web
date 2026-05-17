@@ -332,6 +332,14 @@ function toggleTetrisPause() {
   updateTetrisStatus(tetrisState.paused ? "已暫停。" : "繼續遊戲。");
 }
 
+function suspendTetrisGame() {
+  if (!tetrisState || tetrisState.status !== "active") return;
+  tetrisState.paused = true;
+  tetrisState.keys = {};
+  tetrisHeldTouchAction = "";
+  updateTetrisStatus("已暫停；切回本遊戲後可按「暫停」繼續。");
+}
+
 function tetrisGhostPiece(piece) {
   if (!piece) return null;
   const ghost = {
@@ -420,6 +428,9 @@ function updateTetrisStatus(prefix = "") {
     },
     isActive() {
       return !!tetrisState && tetrisState.status === "active";
+    },
+    suspend() {
+      suspendTetrisGame();
     },
     leaderboardPath() {
       return "/games/tetris/solo-leaderboard";

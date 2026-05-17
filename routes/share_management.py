@@ -6,7 +6,7 @@ from services.media.videos import ensure_video_schema
 from services.media.videos import ensure_video_share_link
 from services.share_access_events import ensure_share_access_event_schema, list_share_access_events
 from services.storage.albums import ensure_album_share_link
-from services.storage.catalog import ensure_storage_album_schema
+from services.storage.catalog import apply_storage_share_password, ensure_storage_album_schema
 from services.storage.catalog import _normalize_storage_share_max_views, _normalize_storage_share_scope
 from services.users.friends import assert_can_target_user
 
@@ -78,7 +78,7 @@ def register_share_management_routes(app, deps):
             "resource_id": data.get("storage_file_id") or data.get("file_id"),
             "resource_title": data.get("display_name") or data.get("original_filename_plain_for_public") or data.get("file_id") or "檔案分享",
             "owner_user_id": row_int(data, "owner_user_id"),
-            "password_required": False,
+            "password_required": bool(row_int(data, "password_required")),
             "can_preview": bool(row_int(data, "can_preview")),
             "can_download": bool(row_int(data, "can_download", 1)),
             "access_scope": data.get("access_scope") or "link",
@@ -296,6 +296,17 @@ def register_share_management_routes(app, deps):
                 row["id"],
             ),
         )
+        password_provided = "share_password" in data
+        clear_password = truthy(data.get("clear_password"))
+        if password_provided or clear_password:
+            msg = apply_storage_share_password(
+                conn,
+                row["id"],
+                password=str(data.get("share_password") or ""),
+                clear_password=clear_password,
+            )
+            if msg:
+                raise ValueError(msg)
         return conn.execute("SELECT * FROM storage_share_links WHERE id=?", (row["id"],)).fetchone()
 
     def update_album_share(conn, actor, row, data):

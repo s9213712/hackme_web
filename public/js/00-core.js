@@ -10,6 +10,8 @@ let currentUserId = null;
 let currentUserAvatarFileId = "";
 let currentRole = "user";
 let currentRoleLabel = "user";
+let currentAuthScope = "";
+let currentAllowedFeatures = [];
 let currentMustChangePassword = false;
 let forcedPasswordChangeMode = false;
 let canManageUsers = false;
@@ -88,16 +90,16 @@ const SITE_SIDEBAR_WIDTH_MAP = {
 };
 const SITE_THEME_MODE_PALETTES = {
   dark: {
-    site_bg: "#0f0f1a",
-    site_surface: "#1a1a2e",
-    site_text: "#e0e0f0",
-    site_muted: "#a8b5d4",
+    site_bg: "#11131d",
+    site_surface: "#1b2030",
+    site_text: "#eceef8",
+    site_muted: "#aeb8cc",
   },
   light: {
-    site_bg: "#f5f7fb",
-    site_surface: "#ffffff",
-    site_text: "#202636",
-    site_muted: "#5f6b82",
+    site_bg: "#eef2f6",
+    site_surface: "#fbfcfe",
+    site_text: "#243041",
+    site_muted: "#5c6678",
   },
   custom: {},
 };
@@ -108,6 +110,8 @@ const TOAST_DURATION_MS = { ok: 2400, info: 1600, err: 4200 };
 let lastAppToastSignature = "";
 let lastAppToastAt = 0;
 let lastServerBusyToastAt = 0;
+let appDialogResolve = null;
+let appDialogPreviousFocus = null;
 const SERVER_BUSY_USER_MESSAGE = "目前是流量高峰，伺服器正在保護服務品質。請稍候再試。";
 
 function clientRoleRank(role) {
@@ -131,7 +135,39 @@ function isFeatureEnabledForUi(featureKey, defaultValue = true) {
   return siteConfig[key] !== false;
 }
 
+function normalizeClientFeatureKey(featureKey) {
+  const raw = String(featureKey || "").trim();
+  if (!raw) return "";
+  let key = raw.startsWith("feature_") ? raw : `feature_${raw}`;
+  if (!key.endsWith("_enabled")) key = `${key}_enabled`;
+  return key;
+}
+
+function setCurrentAllowedFeatures(features) {
+  if (Array.isArray(features)) {
+    currentAllowedFeatures = features.map((item) => normalizeClientFeatureKey(item)).filter(Boolean);
+    return;
+  }
+  if (typeof features === "string") {
+    currentAllowedFeatures = features.split(/[\s,]+/).map((item) => normalizeClientFeatureKey(item)).filter(Boolean);
+    return;
+  }
+  currentAllowedFeatures = [];
+}
+
+function internalTestTokenAllowsFeature(featureKey) {
+  if (currentAuthScope !== "internal_test_token") return false;
+  const normalized = normalizeClientFeatureKey(featureKey);
+  if (!normalized) return false;
+  if (!currentAllowedFeatures.length) return true;
+  return currentAllowedFeatures.includes(normalized);
+}
+
 function canAccessModule(moduleKey, role = currentRole) {
+  if (moduleKey === "experiments") {
+    if (currentUser === "root") return true;
+    return !!currentUser && internalTestTokenAllowsFeature("feature_experiments_enabled");
+  }
   const featureKey = `feature_${moduleKey}_enabled`;
   if (siteConfig && siteConfig[featureKey] === false) return false;
   const fallback = moduleKey === "accounts" ? "manager" : "user";
@@ -252,6 +288,7 @@ const SIDEBAR_MENU_CONFIG = [
     ],
   },
   { tabId: "tab-module-games", module: "games", tab: "games", icon: "game", label: "遊戲區", group: "工具" },
+  { tabId: "tab-module-experiments", module: "experiments", tab: "experiments", icon: "spark", label: "實驗區", group: "工具" },
   { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "工具" },
   { tabId: "tab-module-economy", module: "economy", tab: "economy", icon: "wallet", label: "積分錢包", group: "工具" },
   { tabId: "tab-module-trading", module: "trading", tab: "trading", icon: "wallet", label: "積分交易所", group: "工具" },
@@ -1123,11 +1160,12 @@ async function notifyServerBusyResponse(response, payload = null) {
 
 function flash(el, text, ok) {
   if (!el) return;
-  el.textContent = text;
-  el.className = "msg show " + (ok ? "ok" : "err");
+  el.textContent = text || "";
+  el.className = text ? "msg show " + (ok ? "ok" : "err") : "msg";
   el.setAttribute("role", ok ? "status" : "alert");
   el.setAttribute("aria-live", ok ? "polite" : "assertive");
   el.setAttribute("aria-atomic", "true");
+  scheduleInlineMessageClear(el, text, ok);
 }
 
 function uiPrefersReducedMotion() {
@@ -1157,6 +1195,169 @@ function showAppToast(text, ok = true, options = {}) {
     toast.addEventListener("transitionend", () => toast.remove(), { once: true });
     window.setTimeout(() => toast.remove(), 420);
   }, duration);
+}
+
+function closeAppDialog(result = null) {
+  const overlay = $("app-dialog-overlay");
+  if (overlay) {
+    overlay.classList.remove("show");
+    overlay.setAttribute("aria-hidden", "true");
+  }
+  document.body?.classList?.remove("modal-open");
+  const resolve = appDialogResolve;
+  appDialogResolve = null;
+  if (typeof resolve === "function") resolve(result);
+  if (appDialogPreviousFocus && typeof appDialogPreviousFocus.focus === "function") {
+    appDialogPreviousFocus.focus();
+  }
+  appDialogPreviousFocus = null;
+}
+
+function ensureAppDialogOverlay() {
+  let overlay = $("app-dialog-overlay");
+  if (overlay) return overlay;
+  overlay = document.createElement("div");
+  overlay.id = "app-dialog-overlay";
+  overlay.className = "app-dialog-overlay";
+  overlay.setAttribute("aria-hidden", "true");
+  overlay.innerHTML = `
+    <form class="app-dialog-card" id="app-dialog-card" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
+      <div class="mini-title" id="app-dialog-title"></div>
+      <div class="drive-card-sub app-dialog-message" id="app-dialog-message"></div>
+      <div class="field app-dialog-input-wrap" id="app-dialog-input-wrap" hidden></div>
+      <div class="msg app-dialog-msg" id="app-dialog-msg"></div>
+      <div class="app-dialog-actions">
+        <button class="btn" type="button" id="app-dialog-cancel">取消</button>
+        <button class="btn btn-primary" type="submit" id="app-dialog-confirm">確認</button>
+      </div>
+    </form>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) closeAppDialog(null);
+  });
+  overlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeAppDialog(null);
+    }
+  });
+  $("app-dialog-cancel")?.addEventListener("click", () => closeAppDialog(null));
+  $("app-dialog-card")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = $("app-dialog-input");
+    const msg = $("app-dialog-msg");
+    if (input) {
+      const value = String(input.value || "");
+      const required = input.dataset.required === "1";
+      const maxLength = Number(input.getAttribute("maxlength") || 0);
+      if (required && !value.trim()) {
+        if (msg) {
+          msg.textContent = "請填寫內容";
+          msg.className = "msg app-dialog-msg show err";
+        }
+        input.focus();
+        return;
+      }
+      if (maxLength > 0 && value.length > maxLength) {
+        if (msg) {
+          msg.textContent = `請控制在 ${maxLength} 字以內`;
+          msg.className = "msg app-dialog-msg show err";
+        }
+        input.focus();
+        return;
+      }
+      closeAppDialog(value);
+      return;
+    }
+    closeAppDialog(true);
+  });
+  return overlay;
+}
+
+function showAppDialog(options = {}) {
+  const overlay = ensureAppDialogOverlay();
+  if (!overlay) return Promise.resolve(null);
+  if (appDialogResolve) closeAppDialog(null);
+  appDialogPreviousFocus = document.activeElement;
+  const title = $("app-dialog-title");
+  const message = $("app-dialog-message");
+  const inputWrap = $("app-dialog-input-wrap");
+  const msg = $("app-dialog-msg");
+  const confirm = $("app-dialog-confirm");
+  const cancel = $("app-dialog-cancel");
+  if (title) title.textContent = options.title || "確認操作";
+  if (message) message.textContent = options.message || "";
+  if (msg) {
+    msg.textContent = "";
+    msg.className = "msg app-dialog-msg";
+  }
+  if (confirm) {
+    confirm.textContent = options.confirmLabel || "確認";
+    confirm.classList.toggle("btn-danger", Boolean(options.danger));
+    confirm.classList.toggle("btn-primary", !options.danger);
+  }
+  if (cancel) cancel.textContent = options.cancelLabel || "取消";
+  if (inputWrap) {
+    inputWrap.hidden = !options.prompt;
+    inputWrap.innerHTML = "";
+    if (options.prompt) {
+      const label = document.createElement("label");
+      label.setAttribute("for", "app-dialog-input");
+      label.textContent = options.inputLabel || "內容";
+      const input = document.createElement(options.multiline ? "textarea" : "input");
+      input.id = "app-dialog-input";
+      input.name = "app-dialog-input";
+      if (!options.multiline) input.type = "text";
+      input.value = String(options.defaultValue || "");
+      input.placeholder = options.placeholder || "";
+      input.dataset.required = options.required ? "1" : "0";
+      if (Number(options.maxLength || 0) > 0) input.setAttribute("maxlength", String(Number(options.maxLength)));
+      if (options.readOnly) input.readOnly = true;
+      if (options.multiline) input.rows = Math.max(3, Number(options.rows || 4));
+      inputWrap.append(label, input);
+    }
+  }
+  overlay.classList.add("show");
+  overlay.setAttribute("aria-hidden", "false");
+  document.body?.classList?.add("modal-open");
+  const focusTarget = $("app-dialog-input") || confirm || cancel;
+  window.setTimeout(() => focusTarget?.focus?.(), 0);
+  return new Promise((resolve) => {
+    appDialogResolve = resolve;
+  });
+}
+
+function showAppConfirm(message, options = {}) {
+  return showAppDialog({
+    title: options.title || "確認操作",
+    message,
+    confirmLabel: options.confirmLabel || "確認",
+    cancelLabel: options.cancelLabel || "取消",
+    danger: Boolean(options.danger),
+  }).then((result) => result === true);
+}
+
+function showAppPrompt(message, options = {}) {
+  return showAppDialog({
+    ...options,
+    title: options.title || "需要輸入",
+    message,
+    prompt: true,
+  });
+}
+
+function showCopyFallbackDialog(text, title = "複製內容") {
+  return showAppPrompt("瀏覽器阻擋自動複製，請手動複製下方內容。", {
+    title,
+    inputLabel: "完整內容",
+    defaultValue: text || "",
+    multiline: true,
+    rows: 4,
+    readOnly: true,
+    confirmLabel: "完成",
+    cancelLabel: "關閉",
+  });
 }
 
 function messageKind(ok) {
@@ -1277,8 +1478,12 @@ function setUserEditMsg(text, ok) {
 function setChatMsg(elId, text, ok) {
   const el = $(elId);
   if (!el) return;
-  el.textContent = text;
-  el.className = "msg show " + (ok ? "ok" : "err");
+  el.textContent = text || "";
+  el.className = text ? "msg show " + (ok ? "ok" : "err") : "msg";
+  el.setAttribute("role", ok ? "status" : "alert");
+  el.setAttribute("aria-live", ok ? "polite" : "assertive");
+  el.setAttribute("aria-atomic", "true");
+  scheduleInlineMessageClear(el, text, ok);
 }
 
 function stopChatPoll() {
@@ -1584,6 +1789,8 @@ function setAuthState(json, showLoginHero = false) {
   currentUserAvatarFileId = json.avatar_file_id || "";
   currentRole = json.role || "user";
   currentRoleLabel = json.role_label || currentRole || "user";
+  currentAuthScope = json.auth_scope || json._auth_scope || "";
+  setCurrentAllowedFeatures(json.allowed_features || json._allowed_features || []);
   currentMustChangePassword = !!json.must_change_password;
   try {
     localStorage.setItem(AUTH_SESSION_HINT_STORAGE_KEY, "1");
@@ -1676,6 +1883,7 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleAlbums = $("tab-module-albums");
   const tabModuleVideos = $("tab-module-videos");
   const tabModuleGames = $("tab-module-games");
+  const tabModuleExperiments = $("tab-module-experiments");
   const tabModuleJobs = $("tab-module-jobs");
   const tabModuleShares = $("tab-module-shares");
   const tabModuleComfyui = $("tab-module-comfyui");
@@ -1696,6 +1904,7 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleAlbums) tabModuleAlbums.style.display = (canAccessModule("privacy_uploads") && isFeatureEnabledForUi("feature_storage_albums_enabled", false)) ? "" : "none";
   if (tabModuleVideos) tabModuleVideos.style.display = canAccessModule("videos") ? "" : "none";
   if (tabModuleGames) tabModuleGames.style.display = canAccessModule("games") ? "" : "none";
+  if (tabModuleExperiments) tabModuleExperiments.style.display = canAccessModule("experiments") ? "" : "none";
   if (tabModuleJobs) tabModuleJobs.style.display = canAccessModule("jobs") ? "" : "none";
   if (tabModuleShares) tabModuleShares.style.display = canAccessModule("shares") ? "" : "none";
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
@@ -1738,11 +1947,14 @@ function setAuthState(json, showLoginHero = false) {
   try {
     requestedModuleParam = new URLSearchParams(location.search || "").get("module") || "";
   } catch (err) {}
-  const requestedInitialModule = ((location.pathname === "/videos" || (location.hash || "").startsWith("#videos/")) && canAccessModule("videos"))
-    ? "videos"
-    : (requestedModuleParam === "games" && canAccessModule("games"))
-      ? "games"
-      : "";
+  let requestedInitialModule = "";
+  if ((location.pathname === "/videos" || (location.hash || "").startsWith("#videos/")) && canAccessModule("videos")) {
+    requestedInitialModule = "videos";
+  } else if (requestedModuleParam === "games" && canAccessModule("games")) {
+    requestedInitialModule = "games";
+  } else if (requestedModuleParam === "experiments" && canAccessModule("experiments")) {
+    requestedInitialModule = "experiments";
+  }
   const initialModule = requestedInitialModule || (canAccessModule("accounts")
     ? "accounts"
     : canAccessModule("chat")
@@ -1759,9 +1971,11 @@ function setAuthState(json, showLoginHero = false) {
                   ? "comfyui"
                   : canAccessModule("games")
                     ? "games"
-                    : canAccessModule("economy")
-                      ? "economy"
-                      : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat");
+                    : canAccessModule("experiments")
+                      ? "experiments"
+                      : canAccessModule("economy")
+                        ? "economy"
+                        : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat");
   switchModuleTab(initialModule);
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
   resetInactivityTimer();
@@ -1779,6 +1993,8 @@ function resetAuthState() {
   currentUserAvatarFileId = "";
   currentRole = "user";
   currentRoleLabel = "user";
+  currentAuthScope = "";
+  currentAllowedFeatures = [];
   currentMustChangePassword = false;
   inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
   inactivitySuspendReasons.clear();
@@ -1810,6 +2026,7 @@ function resetAuthState() {
   const moduleAlbums = $("module-albums");
   const moduleVideos = $("module-videos");
   const moduleGames = $("module-games");
+  const moduleExperiments = $("module-experiments");
   const moduleJobs = $("module-jobs");
   const moduleShares = $("module-shares");
   const moduleComfyui = $("module-comfyui");
@@ -1826,6 +2043,7 @@ function resetAuthState() {
   if (moduleAlbums) moduleAlbums.classList.remove("active");
   if (moduleVideos) moduleVideos.classList.remove("active");
   if (moduleGames) moduleGames.classList.remove("active");
+  if (moduleExperiments) moduleExperiments.classList.remove("active");
   if (moduleJobs) moduleJobs.classList.remove("active");
   if (moduleShares) moduleShares.classList.remove("active");
   if (moduleComfyui) moduleComfyui.classList.remove("active");

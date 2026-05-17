@@ -4,7 +4,16 @@ const CHESS_PIECES = {
   K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
   k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
 };
+const CHESS_BOARD_PIECES = {
+  k: "♔", q: "♕", r: "♖", b: "♗", n: "♘", p: "♙",
+};
 const CHESS_MATERIAL_VALUES = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+const CHESS_PROMOTION_CHOICES = [
+  { key: "q", label: "后", piece: "♕", hint: "最強攻擊力" },
+  { key: "r", label: "車", piece: "♖", hint: "直線控制" },
+  { key: "b", label: "象", piece: "♗", hint: "斜線控制" },
+  { key: "n", label: "馬", piece: "♘", hint: "跳躍戰術" },
+];
 
 const CHESS_PIPELINE_FALLBACK_COMMANDS = {
   prepare: "python3 scripts/games/chess_replay_prepare.py --replace-output --include-quarantine",
@@ -16,6 +25,8 @@ const CHESS_PIPELINE_FALLBACK_COMMANDS = {
 
 let chessClockMeta = { matchId: null, moveCount: 0, turn: "" };
 let chessPracticeDifficultyUiBound = false;
+let chessDialogResolve = null;
+let chessDialogPreviousFocus = null;
 const chessCompetitionClock = window.createHackmeCompetitionClock?.({
   onExpire(side) {
     const loser = side === "white" ? "白方" : "黑方";
@@ -24,6 +35,123 @@ const chessCompetitionClock = window.createHackmeCompetitionClock?.({
     renderChessClockDisplay();
   },
 }) || null;
+
+function ensureChessDialogOverlay() {
+  let overlay = $("chess-action-dialog");
+  if (overlay) return overlay;
+  overlay = document.createElement("div");
+  overlay.id = "chess-action-dialog";
+  overlay.className = "user-edit-overlay chess-action-dialog-overlay";
+  overlay.setAttribute("aria-hidden", "true");
+  overlay.innerHTML = `
+    <div class="user-edit-modal chess-action-dialog-modal" role="dialog" aria-modal="true" aria-labelledby="chess-action-dialog-title">
+      <div class="mini-title" id="chess-action-dialog-title"></div>
+      <div class="drive-card-sub" id="chess-action-dialog-body"></div>
+      <div class="chess-action-dialog-choices" id="chess-action-dialog-choices"></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) closeChessDialog(null);
+  });
+  return overlay;
+}
+
+function closeChessDialog(value) {
+  const overlay = $("chess-action-dialog");
+  if (overlay) {
+    overlay.classList.remove("show");
+    overlay.setAttribute("aria-hidden", "true");
+  }
+  document.body.classList.remove("modal-open");
+  if (typeof chessDialogResolve === "function") {
+    const resolve = chessDialogResolve;
+    chessDialogResolve = null;
+    resolve(value);
+  }
+  if (chessDialogPreviousFocus && typeof chessDialogPreviousFocus.focus === "function") {
+    chessDialogPreviousFocus.focus();
+  }
+  chessDialogPreviousFocus = null;
+}
+
+function showChessChoiceDialog({ title, message, choices, cancelLabel = "取消" }) {
+  const overlay = ensureChessDialogOverlay();
+  const titleEl = $("chess-action-dialog-title");
+  const bodyEl = $("chess-action-dialog-body");
+  const choicesEl = $("chess-action-dialog-choices");
+  if (!overlay || !choicesEl) return Promise.resolve(null);
+  if (chessDialogResolve) closeChessDialog(null);
+  chessDialogPreviousFocus = document.activeElement;
+  if (titleEl) titleEl.textContent = title || "確認操作";
+  if (bodyEl) bodyEl.textContent = message || "";
+  choicesEl.innerHTML = "";
+  (choices || []).forEach((choice) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `btn game-mini-btn ${choice.primary ? "btn-primary" : ""} ${choice.danger ? "btn-danger" : ""}`;
+    button.dataset.chessDialogValue = String(choice.value ?? "");
+    if (choice.piece) {
+      const piece = document.createElement("span");
+      piece.className = "chess-promotion-piece";
+      piece.textContent = choice.piece;
+      button.appendChild(piece);
+    }
+    const text = document.createElement("span");
+    text.textContent = choice.label || String(choice.value || "");
+    button.appendChild(text);
+    if (choice.hint) {
+      const hint = document.createElement("small");
+      hint.textContent = choice.hint;
+      button.appendChild(hint);
+    }
+    button.addEventListener("click", () => closeChessDialog(choice.value));
+    choicesEl.appendChild(button);
+  });
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "btn game-mini-btn";
+  cancel.textContent = cancelLabel;
+  cancel.addEventListener("click", () => closeChessDialog(null));
+  choicesEl.appendChild(cancel);
+  overlay.classList.add("show");
+  overlay.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  window.setTimeout(() => choicesEl.querySelector("button")?.focus(), 0);
+  return new Promise((resolve) => {
+    chessDialogResolve = resolve;
+  });
+}
+
+function confirmChessAction(title, message, confirmLabel = "確認", danger = false) {
+  return showChessChoiceDialog({
+    title,
+    message,
+    choices: [{ value: "confirm", label: confirmLabel, primary: !danger, danger }],
+    cancelLabel: "取消",
+  }).then((value) => value === "confirm");
+}
+
+async function chooseChessPromotion(candidateMoves) {
+  const available = new Set(candidateMoves.map((move) => String(move.promotion || "").toLowerCase()).filter(Boolean));
+  const choices = CHESS_PROMOTION_CHOICES
+    .filter((choice) => !available.size || available.has(choice.key))
+    .map((choice) => ({ ...choice, value: choice.key, primary: choice.key === "q" }));
+  const selected = await showChessChoiceDialog({
+    title: "選擇兵升變",
+    message: "請選擇這步兵升變要變成的棋子。",
+    choices,
+    cancelLabel: "取消升變",
+  });
+  return selected ? String(selected).toLowerCase() : null;
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && chessDialogResolve) {
+    event.preventDefault();
+    closeChessDialog(null);
+  }
+});
 
 function chessClockSideLabel(side) {
   return side === "white" ? "白" : "黑";
@@ -574,6 +702,7 @@ function renderChessBoard(match) {
       const square = file + rank;
       const piece = boardMap[square] || "";
       const isDark = (file.charCodeAt(0) + rank) % 2 === 0;
+      const pieceSideClass = piece ? (piece === piece.toUpperCase() ? "white-piece" : "black-piece") : "";
       const selectable = myTurn && piece && ((match.my_side === "white" && piece === piece.toUpperCase()) || (match.my_side === "black" && piece === piece.toLowerCase()));
       const special = specialTargets.get(square);
       const specialClass = special?.castle ? " castle-target" : (special?.en_passant ? " en-passant-target" : (special?.promotion ? " promotion-target" : ""));
@@ -584,9 +713,9 @@ function renderChessBoard(match) {
         square === deadKingSquare ? "dead-king" : "",
       ].filter(Boolean).join(" ");
       squares.push(`
-        <button class="chess-square ${isDark ? "dark" : "light"} ${square === gameSelectedSquare ? "selected" : ""} ${legalTargets.has(square) ? `target${specialClass}` : ""} ${kingStateClass}"
+        <button class="chess-square ${isDark ? "dark" : "light"} ${pieceSideClass} ${square === gameSelectedSquare ? "selected" : ""} ${legalTargets.has(square) ? `target${specialClass}` : ""} ${kingStateClass}"
                 type="button" data-chess-square="${square}" title="${sanitize(specialLabel || square)}" ${match.status !== "active" || chessMoveInFlight || clockExpired ? "disabled" : ""}>
-          <span>${sanitize(CHESS_PIECES[piece] || "")}</span>
+          <span class="${piece ? "chess-piece-glyph" : ""}">${sanitize(CHESS_BOARD_PIECES[String(piece || "").toLowerCase()] || "")}</span>
           <small>${specialLabel ? sanitize(specialLabel) : (selectable || legalTargets.has(square) ? sanitize(square) : "")}</small>
         </button>
       `);
@@ -852,15 +981,13 @@ async function selectChessSquare(square) {
     };
     let promotion = chosenMove.promotion || null;
     if (candidateMoves.length > 1 && candidateMoves.some((move) => move.promotion)) {
-      const raw = window.prompt("兵升變請輸入 q / r / b / n", "q");
-      if (raw === null) {
+      const selectedPromotion = await chooseChessPromotion(candidateMoves);
+      if (!selectedPromotion) {
         setGameMsg("已取消升變走棋。", false);
         return;
       }
-      const normalized = String(raw || "q").trim().toLowerCase();
-      const resolved = ["q", "r", "b", "n"].includes(normalized) ? normalized : "q";
-      chosenMove = candidateMoves.find((move) => String(move.promotion || "").toLowerCase() === resolved) || candidateMoves[0];
-      promotion = chosenMove.promotion || resolved;
+      chosenMove = candidateMoves.find((move) => String(move.promotion || "").toLowerCase() === selectedPromotion) || candidateMoves[0];
+      promotion = chosenMove.promotion || selectedPromotion;
     }
     const previousMatch = match;
     await submitChessMove(previousMatch, chosenMove, { from, to: targetSquare, promotion });
@@ -991,7 +1118,8 @@ async function resignGame() {
     setGameMsg("這局已經結束，不需要再認輸。", false);
     return;
   }
-  if (!confirm("確認認輸並結束這局？")) return;
+  const confirmed = await confirmChessAction("確認認輸", "認輸後這局會立即結束，不能復原。", "認輸", true);
+  if (!confirmed) return;
   try {
     const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/resign`, { method: "POST", body: {} });
     gameSelectedSquare = null;
@@ -1016,7 +1144,8 @@ async function deleteFinishedGame(matchId) {
     setGameMsg("進行中的棋局不能刪除，請先完成棋局或認輸。", false);
     return;
   }
-  if (!confirm("確定要從列表刪除這局已結束賽局？排行榜紀錄不會被移除。")) return;
+  const confirmed = await confirmChessAction("刪除已結束棋局", "只會從你的棋局列表移除，排行榜紀錄不會被移除。", "刪除", true);
+  if (!confirmed) return;
   try {
     await gameRequest(`/games/chess/matches/${encodeURIComponent(matchId)}`, { method: "DELETE", body: {} });
     if (String(gameSelectedMatchId) === String(matchId)) {

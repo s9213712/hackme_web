@@ -17,12 +17,14 @@ from services.users.recovery import (
 from services.users.friends import (
     accept_friend_by_code,
     accepted_friend_ids,
+    block_user,
     create_friend_request,
     get_profile_payload,
     list_targetable_users,
     list_friend_state,
     remove_friend,
     review_friend_request,
+    unblock_user,
 )
 from services.users.profiles import (
     ensure_user_profile_schema,
@@ -805,6 +807,43 @@ def register_user_routes(app, deps):
                 conn.commit()
                 audit("FRIEND_REMOVED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                       detail=f"friend_user_id={friend_user_id}")
+                return json_resp({"ok":True,"msg":msg})
+            return json_resp({"ok":False,"msg":msg}), status
+        finally:
+            conn.close()
+
+    @app.route("/api/friends/<int:target_user_id>/block", methods=["POST"], strict_slashes=False)
+    @require_csrf
+    def api_friend_block(target_user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            result, msg, status = block_user(conn, actor, target_user_id=target_user_id)
+            if status < 400:
+                conn.commit()
+                target = (result or {}).get("target") or {}
+                audit("FRIEND_BLOCKED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                      detail=f"target_user_id={target.get('id')}")
+                return json_resp({"ok":True,"msg":msg,"block":result})
+            return json_resp({"ok":False,"msg":msg}), status
+        finally:
+            conn.close()
+
+    @app.route("/api/friends/<int:target_user_id>/block", methods=["DELETE"], strict_slashes=False)
+    @require_csrf
+    def api_friend_unblock(target_user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            ok, msg, status = unblock_user(conn, actor, target_user_id=target_user_id)
+            if ok:
+                conn.commit()
+                audit("FRIEND_UNBLOCKED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                      detail=f"target_user_id={target_user_id}")
                 return json_resp({"ok":True,"msg":msg})
             return json_resp({"ok":False,"msg":msg}), status
         finally:

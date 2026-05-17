@@ -158,6 +158,8 @@ def describe_relationship(conn, viewer_id, target_user_id):
     status = row.get("status")
     if status == "pending":
         status = "pending_outgoing" if int(row.get("requested_by") or 0) == int(viewer_id) else "pending_incoming"
+    elif status == "blocked":
+        status = "blocked" if int(row.get("requested_by") or 0) == int(viewer_id) else "blocked_by_them"
     return {"status": status, "request_id": row.get("id"), "requested_by": row.get("requested_by")}
 
 
@@ -170,6 +172,17 @@ def is_accepted_friend(conn, user_id, friend_user_id):
     except ValueError:
         return False
     return bool(row and row.get("status") == "accepted")
+
+
+def is_blocked_relationship(conn, user_id, friend_user_id):
+    if not user_id or not friend_user_id:
+        return False
+    ensure_user_friends_schema(conn)
+    try:
+        row = get_friend_row(conn, user_id, friend_user_id)
+    except ValueError:
+        return False
+    return bool(row and row.get("status") == "blocked")
 
 
 def accepted_friend_ids(conn, user_id):
@@ -210,6 +223,8 @@ def can_target_user(conn, actor, target_user_id, *, context="personal"):
     if actor_id == target_id:
         return False, "不能指定自己"
     ctx = _target_context(context)
+    if is_blocked_relationship(conn, actor_id, target_id) and not _privileged_actor_can_target_all(ctx, actor):
+        return False, "你與對方目前有封鎖關係，不能指定互動"
     if is_accepted_friend(conn, actor_id, target_id):
         return True, ""
     if _privileged_actor_can_target_all(ctx, actor):
@@ -332,7 +347,10 @@ def get_profile_payload(conn, *, target_user_id, viewer=None):
         "location": profile.get("location") or "",
         "website": profile.get("website") or "",
     } if show_private else {"bio": "", "signature": "", "location": "", "website": ""}
+    blocked_state = relation["status"] in {"blocked", "blocked_by_them"}
     can_interact = relation["status"] == "accepted" or privileged
+    if blocked_state and not privileged:
+        can_interact = False
     payload = {
         **_user_payload(target, profile),
         **public_fields,
@@ -341,6 +359,8 @@ def get_profile_payload(conn, *, target_user_id, viewer=None):
         "friend_request_id": relation.get("request_id"),
         "can_request_friend": bool(viewer_id and relation["status"] in {"none", "rejected"}),
         "can_accept_friend": bool(viewer_id and relation["status"] == "pending_incoming"),
+        "can_block": bool(viewer_id and not owner and relation["status"] != "blocked"),
+        "can_unblock": bool(viewer_id and relation["status"] == "blocked"),
         "can_pm": bool(can_interact and not owner),
         "can_invite_game": bool(can_interact and not owner),
         "profile_updated_at": profile.get("updated_at"),
@@ -416,6 +436,7 @@ def list_friend_state(conn, actor):
     friends = []
     incoming = []
     outgoing = []
+    blocked = []
     for row in rows:
         item = _friend_item_from_row(row, actor["id"])
         if item["status"] == "accepted":
@@ -424,7 +445,9 @@ def list_friend_state(conn, actor):
             outgoing.append(item)
         elif item["status"] == "pending":
             incoming.append(item)
-    return {"friends": friends, "incoming": incoming, "outgoing": outgoing}
+        elif item["status"] == "blocked" and int(item["requested_by"]) == int(actor["id"]):
+            blocked.append(item)
+    return {"friends": friends, "incoming": incoming, "outgoing": outgoing, "blocked": blocked}
 
 
 def create_friend_request(conn, actor, *, target_user_id=None, username=None):
@@ -534,3 +557,48 @@ def remove_friend(conn, actor, *, friend_user_id):
     if cur.rowcount < 1:
         return False, "找不到好友關係", 404
     return True, "已解除好友", 200
+
+
+def block_user(conn, actor, *, target_user_id):
+    ensure_social_schema(conn)
+    target = find_active_user(conn, user_id=target_user_id)
+    if not target:
+        return None, "找不到指定帳號", 404
+    if int(target["id"]) == int(actor["id"]):
+        return None, "不能封鎖自己", 400
+    user_a, user_b = normalized_pair(actor["id"], target["id"])
+    existing = get_friend_row(conn, actor["id"], target["id"])
+    now = _now()
+    if existing:
+        conn.execute(
+            "UPDATE user_friends SET status='blocked', requested_by=?, updated_at=? WHERE id=?",
+            (actor["id"], now, existing["id"]),
+        )
+        request_id = existing["id"]
+    else:
+        cur = conn.execute(
+            "INSERT INTO user_friends (user_id, friend_user_id, status, requested_by, created_at, updated_at) VALUES (?, ?, 'blocked', ?, ?, ?)",
+            (user_a, user_b, actor["id"], now, now),
+        )
+        request_id = cur.lastrowid
+    return {"status": "blocked", "target": target, "request_id": request_id}, "已封鎖使用者", 200
+
+
+def unblock_user(conn, actor, *, target_user_id):
+    ensure_social_schema(conn)
+    try:
+        user_a, user_b = normalized_pair(actor["id"], target_user_id)
+    except ValueError:
+        return False, "不能解除封鎖自己", 400
+    row = get_friend_row(conn, actor["id"], target_user_id)
+    if not row or row.get("status") != "blocked":
+        return False, "找不到封鎖關係", 404
+    if int(row.get("requested_by") or 0) != int(actor["id"]) and not is_privileged_actor(actor):
+        return False, "只能解除自己建立的封鎖", 403
+    cur = conn.execute(
+        "DELETE FROM user_friends WHERE user_id=? AND friend_user_id=? AND status='blocked'",
+        (user_a, user_b),
+    )
+    if cur.rowcount < 1:
+        return False, "找不到封鎖關係", 404
+    return True, "已解除封鎖", 200

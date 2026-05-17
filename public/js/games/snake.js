@@ -355,7 +355,9 @@
       };
       api.onAction = (action) => { if (action === "new") start(); };
       api.onControl = (target) => move(target.dataset.dir);
-      api.onKey = (event) => {
+      api.onKey = (event, pressed) => {
+        if (!pressed) return;
+        if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) event.preventDefault?.();
         if (event.key === "ArrowLeft") move("左");
         if (event.key === "ArrowRight") move("右");
         if (event.key === "ArrowUp") move("上");

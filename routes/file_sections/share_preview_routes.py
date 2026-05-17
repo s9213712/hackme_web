@@ -115,6 +115,7 @@ def register_file_share_preview_routes(app, ctx):
                 required_username=required_username,
                 max_views=data.get("max_views") or 0,
                 wrapped_file_key_envelope=data.get("wrapped_file_key_envelope") or None,
+                share_password=data.get("share_password") or None,
             )
             if msg:
                 conn.rollback()
@@ -148,6 +149,10 @@ def register_file_share_preview_routes(app, ctx):
             return json_resp({"ok": False, "msg": "此分享連結限定指定帳戶下載，請先登入。", "reason": reason}), 401
         if reason == "forbidden":
             return json_resp({"ok": False, "msg": "此分享連結不開放目前帳戶下載。", "reason": reason}), 403
+        if reason == "password_required":
+            return json_resp({"ok": False, "msg": "此分享連結需要密碼。", "reason": reason, "password_required": True}), 401
+        if reason == "password_invalid":
+            return json_resp({"ok": False, "msg": "分享密碼不正確。", "reason": reason, "password_required": True}), 403
         if reason == "view_limit_reached":
             return json_resp({"ok": False, "msg": "分享下載次數已用完。", "reason": reason}), 410
         if reason == "e2ee_share_authorization_missing":
@@ -176,6 +181,7 @@ def register_file_share_preview_routes(app, ctx):
             "max_views": int(row["max_views"] or 0),
             "access_count": int(row["access_count"] or 0),
             "can_preview": bool(row["can_preview"]),
+            "password_required": bool(int(row["password_required"] or 0)),
             "download_url": f"/api/storage/shared/{token}/download",
             "preview_url": f"/api/storage/shared/{token}/preview",
             "preview_content_url": f"/api/storage/shared/{token}/preview/content",
@@ -193,6 +199,21 @@ def register_file_share_preview_routes(app, ctx):
         data = dict(row)
         if not int(data.get("can_preview") or 0):
             return json_resp({"ok": False, "msg": "此分享連結未開放瀏覽器預覽"}), 403
+        return None
+
+    def _storage_share_password_from_request():
+        header_value = request.headers.get("X-Share-Password")
+        if header_value is not None:
+            return header_value
+        query_value = request.args.get("password")
+        if query_value is not None:
+            return query_value
+        if request.method in {"POST", "PUT", "PATCH"}:
+            data = request.get_json(silent=True) if request.is_json else None
+            if isinstance(data, dict) and "password" in data:
+                return data.get("password") or ""
+            if "password" in request.form:
+                return request.form.get("password") or ""
         return None
 
     def _html_safe_json(value):
@@ -223,6 +244,9 @@ def register_file_share_preview_routes(app, ctx):
     button, .button-link {{ display: inline-flex; align-items: center; justify-content: center; min-height: 38px; padding: 10px 14px; border: 0; border-radius: 6px; background: #2357d9; color: #fff; cursor: pointer; text-decoration: none; box-sizing: border-box; }}
     button[disabled] {{ opacity: .55; cursor: not-allowed; }}
     .login-link {{ background: #0f766e; }}
+    .password-form {{ display: grid; gap: 8px; max-width: 360px; margin-top: 14px; padding: 12px; border: 1px solid #e4e7ec; border-radius: 8px; background: #fbfcfe; }}
+    .password-form label {{ font-weight: 700; color: #344054; }}
+    .password-form input {{ width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box; }}
     [hidden] {{ display: none !important; }}
     .preview {{ margin-top: 18px; border: 1px solid #e4e7ec; border-radius: 8px; background: #fbfcfe; overflow: hidden; }}
     .preview pre {{ margin: 0; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; overflow: auto; }}
@@ -258,7 +282,13 @@ def register_file_share_preview_routes(app, ctx):
         actor = get_current_user_ctx()
         conn = get_db()
         try:
-            row, reason = resolve_share_token(conn, token, actor=actor, require_download=False)
+            row, reason = resolve_share_token(
+                conn,
+                token,
+                actor=actor,
+                require_download=False,
+                password=_storage_share_password_from_request(),
+            )
             if not row:
                 return _storage_share_error_response(reason)
             return json_resp({"ok": True, "file": _storage_shared_file_payload(row, token)})
@@ -270,7 +300,13 @@ def register_file_share_preview_routes(app, ctx):
         actor = get_current_user_ctx()
         conn = get_db()
         try:
-            row, reason = resolve_share_token(conn, token, actor=actor, require_download=False)
+            row, reason = resolve_share_token(
+                conn,
+                token,
+                actor=actor,
+                require_download=False,
+                password=_storage_share_password_from_request(),
+            )
             if not row:
                 return _storage_share_error_response(reason)
             denied = _storage_share_preview_denied(row)
@@ -304,7 +340,13 @@ def register_file_share_preview_routes(app, ctx):
         actor = get_current_user_ctx()
         conn = get_db()
         try:
-            row, reason = resolve_share_token(conn, token, actor=actor, require_download=False)
+            row, reason = resolve_share_token(
+                conn,
+                token,
+                actor=actor,
+                require_download=False,
+                password=_storage_share_password_from_request(),
+            )
             if not row:
                 return _storage_share_error_response(reason)
             denied = _storage_share_preview_denied(row)
@@ -356,7 +398,12 @@ def register_file_share_preview_routes(app, ctx):
         actor = get_current_user_ctx()
         conn = get_db()
         try:
-            row, reason = resolve_share_token(conn, token, actor=actor)
+            row, reason = resolve_share_token(
+                conn,
+                token,
+                actor=actor,
+                password=_storage_share_password_from_request(),
+            )
             if not row:
                 return _storage_share_error_response(reason)
             policy = get_cloud_drive_security_policy(conn)

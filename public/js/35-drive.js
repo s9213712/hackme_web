@@ -1487,6 +1487,7 @@ function openDriveShareDialog(fileId, name = "", storageFileId = "") {
   if ($("drive-share-account")) $("drive-share-account").value = "";
   if ($("drive-share-expires-at")) $("drive-share-expires-at").value = "";
   if ($("drive-share-max-views")) $("drive-share-max-views").value = "0";
+  if ($("drive-share-password")) $("drive-share-password").value = "";
   if ($("drive-share-result")) {
     $("drive-share-result").style.display = "none";
     $("drive-share-result").textContent = "";
@@ -1641,6 +1642,8 @@ async function createDriveShareLink() {
     expires_at: $("drive-share-expires-at")?.value || "",
     max_views: Number($("drive-share-max-views")?.value || 0),
   };
+  const sharePassword = ($("drive-share-password")?.value || "").trim();
+  if (sharePassword) payload.share_password = sharePassword;
   if (storageFileId) payload.storage_file_id = storageFileId;
   else payload.file_id = fileId;
   if (scope === "account") {

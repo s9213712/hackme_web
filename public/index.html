@@ -6,16 +6,9 @@
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
   <link rel="stylesheet" href="/styles.css?v=20260515-drive-capacity-reservoir" />
-  <link rel="stylesheet" href="/i18n-language-switcher.css?v=20260516-i18n-v1" />
+  <link rel="stylesheet" href="/experiments.css?v=20260517-experiment-area" />
 </head>
 <body>
-<div class="global-language-switcher" id="global-language-switcher">
-  <label for="app-language-select" data-i18n="language.label">語言</label>
-  <select id="app-language-select" data-language-select aria-label="語言">
-    <option value="zh-TW">繁體中文</option>
-    <option value="en">English</option>
-  </select>
-</div>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
 <div class="card" id="auth-card" data-login-autofill-block="__LOGIN_AUTOFILL_BLOCK__">
 
@@ -236,6 +229,7 @@
         <button class="tab" id="tab-module-albums" style="display:none;">相簿</button>
         <button class="tab" id="tab-module-videos" style="display:none;">影音</button>
         <button class="tab" id="tab-module-games" style="display:none;">遊戲區</button>
+        <button class="tab" id="tab-module-experiments" style="display:none;">實驗區</button>
         <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
         <button class="tab" id="tab-module-economy" style="display:none;">積分系統</button>
         <button class="tab" id="tab-module-trading" style="display:none;">積分交易所</button>
@@ -512,6 +506,10 @@
             <h3>送出的申請</h3>
             <div class="profile-friend-list" id="profile-outgoing-list"></div>
           </section>
+          <section>
+            <h3>封鎖名單</h3>
+            <div class="profile-friend-list" id="profile-blocked-list"></div>
+          </section>
         </div>
       </section>
       <datalist id="target-options-personal"></datalist>
@@ -572,6 +570,16 @@
         <div id="video-manage-msg" class="msg"></div>
         <div id="video-manage-list" class="drive-file-list" style="margin-top:.75rem;"></div>
       </div>
+    </div>
+  </div>
+
+  <div id="share-center-events-modal" class="user-edit-overlay share-center-events-modal-overlay" aria-hidden="true">
+    <div class="user-edit-modal share-center-events-modal" role="dialog" aria-modal="true" aria-labelledby="share-center-events-title">
+      <div class="share-center-events-header">
+        <strong id="share-center-events-title">分享紀錄</strong>
+        <button class="btn btn-small" type="button" data-share-events-close>關閉</button>
+      </div>
+      <div id="share-center-events-modal-body" class="share-center-event-list"></div>
     </div>
   </div>
 
@@ -1481,6 +1489,10 @@
                 <div class="drive-card-sub" id="space-shooter-status">按開始後出擊，最高分列入排行榜。</div>
               </div>
               <div class="drive-file-actions">
+                <label class="inline-check" title="關閉時敵方不會因玩家子彈主動閃避，適合手機或休閒難度。">
+                  <input type="checkbox" id="space-shooter-enemy-dodge" />
+                  敵方閃避
+                </label>
                 <button class="btn game-mini-btn" id="space-shooter-new-btn" type="button">開始</button>
               </div>
             </div>
@@ -1664,6 +1676,163 @@
         </section>
       </div>
       <div id="game-msg" class="msg"></div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-experiments">
+    <div class="experiment-shell">
+      <div class="experiment-header">
+        <div>
+          <div class="experiment-kicker">純前端 Canvas 教育模擬</div>
+          <h2 class="experiment-title">實驗區</h2>
+          <p class="experiment-lead">這裡提供低負載、即時互動的視覺化實驗。所有計算都在瀏覽器完成，不會建立後端任務、資料表或背景 worker。</p>
+        </div>
+        <button class="btn experiment-pause-btn" id="experiment-pause-toggle" type="button" aria-pressed="false">暫停動畫</button>
+      </div>
+
+      <div class="experiment-tabs" role="tablist" aria-label="實驗區子分頁">
+        <button class="experiment-tab active" type="button" role="tab" aria-selected="true" data-experiment-tab="plane" data-experiment-stage="plane">飛機氣流</button>
+        <button class="experiment-tab" type="button" role="tab" aria-selected="false" data-experiment-tab="liquid" data-experiment-stage="liquid">液體分子</button>
+        <button class="experiment-tab" type="button" role="tab" aria-selected="false" data-experiment-tab="hummingbird" data-experiment-stage="hummingbird">蜂鳥懸停</button>
+      </div>
+
+      <section class="experiment-stage active" data-experiment-stage="plane" aria-label="飛機飛行時氣流流動與受力動畫">
+        <div class="experiment-layout">
+          <div class="experiment-canvas-panel">
+            <div class="experiment-panel-title">Canvas 動畫區</div>
+            <canvas class="experiment-canvas" id="experiment-plane-canvas" aria-label="飛機飛行時氣流流動與受力動畫"></canvas>
+          </div>
+          <aside class="experiment-control-panel">
+            <div class="experiment-panel-title">控制面板</div>
+            <label class="experiment-control">機翼攻角
+              <input id="experiment-plane-aoa" type="range" min="-8" max="22" step="1" value="7" />
+              <span><b data-experiment-value-for="experiment-plane-aoa">7</b>°</span>
+            </label>
+            <label class="experiment-control">襟翼 / 機翼傾角
+              <input id="experiment-plane-flap" type="range" min="0" max="35" step="1" value="8" />
+              <span><b data-experiment-value-for="experiment-plane-flap">8</b>°</span>
+            </label>
+            <label class="experiment-control">迎面氣流
+              <input id="experiment-plane-wind" type="range" min="0" max="80" step="1" value="35" />
+              <span><b data-experiment-value-for="experiment-plane-wind">35</b></span>
+            </label>
+            <label class="experiment-control">機體地速
+              <input id="experiment-plane-speed" type="range" min="20" max="140" step="1" value="72" />
+              <span><b data-experiment-value-for="experiment-plane-speed">72</b></span>
+            </label>
+            <label class="experiment-toggle"><input id="experiment-plane-spoiler" type="checkbox" /> 擾流板</label>
+            <label class="experiment-toggle"><input id="experiment-plane-vortices" type="checkbox" checked /> 渦流 / 翼尖擾動</label>
+          </aside>
+        </div>
+        <div class="experiment-kpis" aria-label="飛機氣流 KPI">
+          <div class="experiment-kpi"><span>相對升力</span><strong id="experiment-plane-lift">--</strong></div>
+          <div class="experiment-kpi"><span>相對阻力</span><strong id="experiment-plane-drag">--</strong></div>
+          <div class="experiment-kpi"><span>失速風險</span><strong id="experiment-plane-stall">--</strong></div>
+        </div>
+        <div class="experiment-notes">
+          <div>
+            <div class="experiment-panel-title">觀察重點</div>
+            <p>攻角與襟翼增加時，升力會先上升，但過高攻角會進入失速區，升力下降且阻力快速增加；機體地速與迎面氣流共同形成相對空速。</p>
+          </div>
+          <div>
+            <div class="experiment-panel-title">簡化說明</div>
+            <p>這是教育近似，不是 CFD。動畫只用簡化粒子與相對量呈現氣流、升力、阻力與失速趨勢。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="experiment-stage" data-experiment-stage="liquid" aria-label="液體分子移動動畫">
+        <div class="experiment-layout">
+          <div class="experiment-canvas-panel">
+            <div class="experiment-panel-title">Canvas 動畫區</div>
+            <canvas class="experiment-canvas" id="experiment-liquid-canvas" aria-label="液體分子移動動畫"></canvas>
+          </div>
+          <aside class="experiment-control-panel">
+            <div class="experiment-panel-title">控制面板</div>
+            <label class="experiment-control">杯子傾角
+              <input id="experiment-liquid-tilt" type="range" min="-45" max="60" step="1" value="0" />
+              <span><b data-experiment-value-for="experiment-liquid-tilt">0</b>°</span>
+            </label>
+            <label class="experiment-control">黏滯度
+              <input id="experiment-liquid-viscosity" type="range" min="0.15" max="1" step="0.05" value="0.45" />
+              <span><b data-experiment-value-for="experiment-liquid-viscosity">0.45</b></span>
+            </label>
+            <label class="experiment-control">液面高度
+              <input id="experiment-liquid-level" type="range" min="35" max="90" step="1" value="68" />
+              <span><b data-experiment-value-for="experiment-liquid-level">68</b>%</span>
+            </label>
+            <div class="experiment-button-row">
+              <button class="btn" id="experiment-liquid-shake" type="button">搖動杯子</button>
+              <button class="btn" id="experiment-liquid-pour" type="button">傾倒杯子</button>
+              <button class="btn" id="experiment-liquid-drop" type="button">丟入物品</button>
+              <button class="btn" id="experiment-liquid-reset" type="button">重置液體</button>
+            </div>
+          </aside>
+        </div>
+        <div class="experiment-kpis" aria-label="液體分子 KPI">
+          <div class="experiment-kpi"><span>分子動能</span><strong id="experiment-liquid-energy">--</strong></div>
+          <div class="experiment-kpi"><span>可見粒子數</span><strong id="experiment-liquid-count">--</strong></div>
+          <div class="experiment-kpi"><span>杯中物品數</span><strong id="experiment-liquid-objects">--</strong></div>
+        </div>
+        <div class="experiment-notes">
+          <div>
+            <div class="experiment-panel-title">觀察重點</div>
+            <p>黏滯度越低，粒子受到搖動與傾倒後會更快流動；杯子傾斜時液面仍以重力方向為準，傾角過大會真的倒出可見粒子。</p>
+          </div>
+          <div>
+            <div class="experiment-panel-title">簡化說明</div>
+            <p>這是即時粒子近似，不是嚴格 Navier-Stokes / SPH。碰撞、表面張力與邊界條件都以低 CPU 的方式簡化。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="experiment-stage" data-experiment-stage="hummingbird" aria-label="蜂鳥在空中懸停時的氣流走向">
+        <div class="experiment-layout">
+          <div class="experiment-canvas-panel">
+            <div class="experiment-panel-title">Canvas 動畫區</div>
+            <canvas class="experiment-canvas" id="experiment-hummingbird-canvas" aria-label="蜂鳥懸停時的下洗氣流動畫"></canvas>
+          </div>
+          <aside class="experiment-control-panel">
+            <div class="experiment-panel-title">控制面板</div>
+            <label class="experiment-control">翼拍頻率
+              <input id="experiment-hummingbird-frequency" type="range" min="18" max="80" step="1" value="52" />
+              <span><b data-experiment-value-for="experiment-hummingbird-frequency">52</b> Hz</span>
+            </label>
+            <label class="experiment-control">翼面振幅
+              <input id="experiment-hummingbird-amplitude" type="range" min="20" max="85" step="1" value="58" />
+              <span><b data-experiment-value-for="experiment-hummingbird-amplitude">58</b>°</span>
+            </label>
+            <label class="experiment-control">懸停穩定度
+              <input id="experiment-hummingbird-stability" type="range" min="0" max="100" step="1" value="72" />
+              <span><b data-experiment-value-for="experiment-hummingbird-stability">72</b>%</span>
+            </label>
+            <label class="experiment-toggle"><input id="experiment-hummingbird-brain" type="checkbox" checked /> 顯示蜂鳥腦中需估計的控制量</label>
+          </aside>
+        </div>
+        <div class="experiment-kpis" aria-label="蜂鳥懸停 KPI">
+          <div class="experiment-kpi"><span>下洗強度</span><strong id="experiment-hummingbird-downwash">--</strong></div>
+          <div class="experiment-kpi"><span>左右平衡</span><strong id="experiment-hummingbird-balance">--</strong></div>
+          <div class="experiment-kpi"><span>翼拍週期</span><strong id="experiment-hummingbird-cycle">--</strong></div>
+        </div>
+        <div class="experiment-notes">
+          <div>
+            <div class="experiment-panel-title">蜂鳥腦中需計算 / 估計</div>
+            <ul class="experiment-list">
+              <li>身體姿態誤差</li>
+              <li>視覺與前庭回授</li>
+              <li>花朵位置、距離、風造成的漂移</li>
+              <li>兩翼翼拍頻率、相位、振幅與左右不對稱修正</li>
+              <li>升力是否足以抵消體重</li>
+              <li>側風、花朵晃動、肌肉延遲補償</li>
+              <li>能量成本與疲勞取捨</li>
+            </ul>
+          </div>
+          <div>
+            <div class="experiment-panel-title">簡化說明</div>
+            <p>這是教育視覺化，只顯示翼拍、平衡修正與下洗氣流的近似關係，不代表真實神經控制或流體工程模型。翼拍動畫採慢動作呈現，KPI 保留真實頻率與週期。</p>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -4167,6 +4336,14 @@
             </div>
             <div class="settings-option-grid settings-appearance-grid">
               <div class="field">
+                <label for="settings-language-select" data-i18n="language.label">語言</label>
+                <select id="settings-language-select" data-language-select aria-label="語言">
+                  <option value="zh-TW">繁體中文</option>
+                  <option value="en">English</option>
+                </select>
+                <div class="drive-card-sub">只影響目前瀏覽器顯示語言，不會蓋住其他操作介面。</div>
+              </div>
+              <div class="field">
                 <label>快速色系</label>
                 <select id="s-site-theme-mode">
                   <option value="dark">夜色</option>
@@ -5580,6 +5757,14 @@
         </div>
         <div class="settings-option-grid settings-appearance-grid">
           <div class="field">
+            <label for="edit-user-language-select" data-i18n="language.label">語言</label>
+            <select id="edit-user-language-select" data-language-select aria-label="語言">
+              <option value="zh-TW">繁體中文</option>
+              <option value="en">English</option>
+            </select>
+            <div class="drive-card-sub">只切換目前瀏覽器的介面語言。</div>
+          </div>
+          <div class="field">
             <label>快速色系</label>
             <select id="edit-user-theme-mode">
               <option value="custom">保留自訂色盤</option>
@@ -5941,6 +6126,11 @@
         <label>最大下載次數</label>
         <input type="number" id="drive-share-max-views" min="0" step="1" value="0" />
       </div>
+      <div class="field">
+        <label>分享密碼（選填）</label>
+        <input type="password" id="drive-share-password" maxlength="128" autocomplete="new-password" placeholder="留空代表不設定密碼" />
+        <div class="field-help">設定後，開啟連結、預覽或下載都需要輸入密碼。</div>
+      </div>
     </div>
     <div id="drive-share-e2ee-note" class="drive-card-sub" style="display:none;">E2EE 檔案會在瀏覽器端建立分享授權；完整連結含片段金鑰，遺失後只能重新產生。</div>
     <div id="drive-share-result" class="drive-share-result" style="display:none;"></div>
@@ -6124,6 +6314,7 @@
 <script src="/js/games/game-view-registry.js?v=20260513-legacy-modules" defer></script>
 <script src="/js/games/chess.js?v=20260515-stockfish-depth-toggle" defer></script>
 <script src="/js/38-games.js?v=20260514-open-world" defer></script>
+<script src="/js/42-experiments.js?v=20260517-experiment-area" defer></script>
 <script src="/js/39-videos.js?v=20260515-hls-background-worker" defer></script>
 <script src="/js/40-auth-users.js?v=20260503-appearance-reset" defer></script>
 <script src="/js/50-admin.js?v=20260504-fusion-coverage-v1" defer></script>

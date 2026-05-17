@@ -11,6 +11,7 @@ CLI_MODE=0
 SKIP_INSTALL=0
 FOREGROUND=0
 IN_PLACE="${HACKME_DEV_IN_PLACE:-0}"
+RUNTIME_IN_SOURCE="${HACKME_DEV_RUNTIME_IN_SOURCE:-${HACKME_DEV_DEPLOY_IN_PLACE:-0}}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-root}"
 MANAGER_PASSWORD="${MANAGER_PASSWORD:-admin}"
 TEST_PASSWORD="${TEST_PASSWORD:-test}"
@@ -50,7 +51,9 @@ Purpose:
   Copy the repo to /tmp by default, initialize a development-friendly runtime,
   and launch server.py from the copied workspace so the repo never accumulates
   runtime or cache pollution. Pass --in-place / --no-copy when you explicitly
-  want to launch from the current repo without copying source files.
+  want to launch from the current repo without copying source files while still
+  keeping runtime under --run-root. Pass --runtime-in-source / --deploy-in-place
+  when you intentionally want the current repo to own ./runtime directly.
 
 Important:
   Without --cli, the script asks for workspace, host, port, feature mode,
@@ -109,6 +112,11 @@ Options:
   --dry-run                Print resolved config and exit before copying/starting
   --run-root PATH          Use a fixed /tmp run root instead of auto-generating one
   --in-place, --no-copy    Launch from the current repo; runtime still uses run-root
+  --runtime-in-source,
+  --source-runtime,
+  --deploy-in-place        Launch from the current repo and write runtime/ there.
+                           This is the local deployment layout, not isolated QA.
+  --tmp-runtime            With --in-place, keep runtime under --run-root
   --copy                   Force the default /tmp copied source workspace
   --skip-install           Reuse runtime/venv or current Python environment
   --foreground             Run in the foreground instead of nohup background mode
@@ -283,6 +291,11 @@ normalize_runtime_options() {
   normalize_port_conflict_action
   normalize_yes_no_value "$IN_PLACE" "in-place"
   IN_PLACE="$NORMALIZED_YES_NO"
+  normalize_yes_no_value "$RUNTIME_IN_SOURCE" "runtime in source"
+  RUNTIME_IN_SOURCE="$NORMALIZED_YES_NO"
+  if [[ "$RUNTIME_IN_SOURCE" == "1" ]]; then
+    IN_PLACE=1
+  fi
   normalize_yes_no_value "$SECURITY_SETTINGS_ENABLED" "security"
   SECURITY_SETTINGS_ENABLED="$NORMALIZED_YES_NO"
   normalize_yes_no_value "$BTC_TRADE_AUTOSTART" "btc trade autostart"
@@ -305,11 +318,18 @@ append_csv_value() {
 print_resolved_config() {
   say "[dev-tmp] config:"
   say "  cli:                 $CLI_MODE"
-  say "  run_root:            ${RUN_ROOT:-/tmp/hackme_web_dev_${RUN_ID}_$$}"
-  if [[ "$IN_PLACE" == "1" ]]; then
-    say "  launch_mode:         in-place (no source copy)"
+  if [[ "$RUNTIME_IN_SOURCE" == "1" ]]; then
+    say "  run_root:            <not used; source runtime>"
+    say "  launch_mode:         source runtime deployment"
+    say "  runtime_root:        $SOURCE_ROOT/runtime"
+  elif [[ "$IN_PLACE" == "1" ]]; then
+    say "  run_root:            ${RUN_ROOT:-/tmp/hackme_web_dev_${RUN_ID}_$$}"
+    say "  launch_mode:         in-place (no source copy; tmp runtime)"
+    say "  runtime_root:        ${RUN_ROOT:-/tmp/hackme_web_dev_${RUN_ID}_$$}/runtime"
   else
+    say "  run_root:            ${RUN_ROOT:-/tmp/hackme_web_dev_${RUN_ID}_$$}"
     say "  launch_mode:         tmp copy"
+    say "  runtime_root:        ${RUN_ROOT:-/tmp/hackme_web_dev_${RUN_ID}_$$}/hackme_web/runtime"
   fi
   say "  host:                $HOST"
   say "  port:                $PORT"
@@ -791,6 +811,53 @@ prompt_extra_accounts() {
   done
 }
 
+prompt_launch_layout() {
+  local default_choice="1"
+  local answer
+
+  normalize_yes_no_value "$IN_PLACE" "in-place"
+  IN_PLACE="$NORMALIZED_YES_NO"
+  normalize_yes_no_value "$RUNTIME_IN_SOURCE" "runtime in source"
+  RUNTIME_IN_SOURCE="$NORMALIZED_YES_NO"
+  if [[ "$RUNTIME_IN_SOURCE" == "1" ]]; then
+    default_choice="3"
+  elif [[ "$IN_PLACE" == "1" ]]; then
+    default_choice="2"
+  fi
+
+  say "Launch layout:"
+  say "  1) isolated tmp copy + tmp runtime (best for QA; no repo runtime changes)"
+  say "  2) current repo + tmp runtime (no source copy; runtime stays under --run-root)"
+  say "  3) current repo + ./runtime (local deployment layout)"
+  while true; do
+    printf 'Choose launch layout [default %s]: ' "$default_choice"
+    if ! read -r answer; then
+      die "interactive setup was interrupted"
+    fi
+    answer="${answer:-$default_choice}"
+    case "${answer,,}" in
+      1|tmp|copy|isolated|qa)
+        IN_PLACE=0
+        RUNTIME_IN_SOURCE=0
+        return 0
+        ;;
+      2|current|in-place|inplace|no-copy|nocopy)
+        IN_PLACE=1
+        RUNTIME_IN_SOURCE=0
+        return 0
+        ;;
+      3|deploy|deployment|source|source-runtime|runtime-in-source|formal)
+        IN_PLACE=1
+        RUNTIME_IN_SOURCE=1
+        return 0
+        ;;
+      *)
+        say "Please choose 1, 2, or 3."
+        ;;
+    esac
+  done
+}
+
 prompt_runtime_config() {
   local default_run_root="${RUN_ROOT:-/tmp/hackme_web_dev_${RUN_ID}_$$}"
   local use_default_passwords=1
@@ -805,8 +872,10 @@ prompt_runtime_config() {
   BTC_TRADE_AUTOSTART="$NORMALIZED_YES_NO"
 
   say "[dev-tmp] interactive setup; pass --cli to skip prompts"
-  prompt_value "Tmp workspace/run root" "$default_run_root" RUN_ROOT
-  prompt_yes_no "Launch from current repo without copying source files" "$IN_PLACE" IN_PLACE
+  prompt_launch_layout
+  if [[ "$RUNTIME_IN_SOURCE" != "1" ]]; then
+    prompt_value "Tmp workspace/run root" "$default_run_root" RUN_ROOT
+  fi
   prompt_value "Host" "$HOST" HOST
   prompt_value "Port" "$PORT" PORT
   prompt_feature_settings
@@ -1328,8 +1397,18 @@ while [[ $# -gt 0 ]]; do
       IN_PLACE=1
       shift
       ;;
+    --runtime-in-source|--source-runtime|--deploy-in-place)
+      IN_PLACE=1
+      RUNTIME_IN_SOURCE=1
+      shift
+      ;;
+    --tmp-runtime)
+      RUNTIME_IN_SOURCE=0
+      shift
+      ;;
     --copy)
       IN_PLACE=0
+      RUNTIME_IN_SOURCE=0
       shift
       ;;
     --skip-install)
@@ -1382,7 +1461,11 @@ fi
 
 if [[ "$IN_PLACE" == "1" ]]; then
   COPY_ROOT="$SOURCE_ROOT"
-  RUNTIME_ROOT="$RUN_ROOT/runtime"
+  if [[ "$RUNTIME_IN_SOURCE" == "1" ]]; then
+    RUNTIME_ROOT="$SOURCE_ROOT/runtime"
+  else
+    RUNTIME_ROOT="$RUN_ROOT/runtime"
+  fi
 else
   COPY_ROOT="$RUN_ROOT/hackme_web"
   RUNTIME_ROOT="$COPY_ROOT/runtime"
@@ -1390,7 +1473,9 @@ fi
 LOG_CAPTURE="$RUNTIME_ROOT/logs/server_direct.out"
 PID_FILE="$RUNTIME_ROOT/server.pid"
 
-if [[ "$IN_PLACE" == "1" ]]; then
+if [[ "$RUNTIME_IN_SOURCE" == "1" ]]; then
+  :
+elif [[ "$IN_PLACE" == "1" ]]; then
   mkdir -p "$RUN_ROOT"
 else
   [[ ! -e "$COPY_ROOT" ]] || die "tmp copy already exists: $COPY_ROOT"
@@ -1433,6 +1518,7 @@ export HACKME_DEV_FEATURE_MODE="$FEATURE_MODE"
 export HACKME_DEV_FEATURES="$FEATURE_LIST"
 export HACKME_DEV_FEATURE_BUNDLES="$FEATURE_BUNDLES"
 export HACKME_DEV_IN_PLACE="$IN_PLACE"
+export HACKME_DEV_RUNTIME_IN_SOURCE="$RUNTIME_IN_SOURCE"
 export HACKME_DEV_TOKEN_FEATURES="$DEV_TOKEN_FEATURES"
 export HACKME_DEV_TOKEN_TTL_MINUTES="$DEV_TOKEN_TTL_MINUTES"
 export HACKME_DEV_TOKEN_USER="$DEV_TOKEN_USER"
@@ -2000,8 +2086,10 @@ if selected_server_mode in {"test", "internal_test"} and dev_tokens_path:
 PY
 
 if [[ "$FOREGROUND" == "1" ]]; then
-  if [[ "$IN_PLACE" == "1" ]]; then
-    say "[dev-tmp] source:    $COPY_ROOT (in-place, no copy)"
+  if [[ "$RUNTIME_IN_SOURCE" == "1" ]]; then
+    say "[dev-tmp] source:    $COPY_ROOT (source runtime deployment)"
+  elif [[ "$IN_PLACE" == "1" ]]; then
+    say "[dev-tmp] source:    $COPY_ROOT (in-place, no copy; tmp runtime)"
   else
     say "[dev-tmp] repo copy: $COPY_ROOT"
   fi
@@ -2052,8 +2140,10 @@ printf '%s\n' "$SERVER_PID" > "$PID_FILE"
 
 SERVER_URL="$(wait_for_server_url || true)"
 
-if [[ "$IN_PLACE" == "1" ]]; then
-  say "[dev-tmp] source:    $COPY_ROOT (in-place, no copy)"
+if [[ "$RUNTIME_IN_SOURCE" == "1" ]]; then
+  say "[dev-tmp] source:    $COPY_ROOT (source runtime deployment)"
+elif [[ "$IN_PLACE" == "1" ]]; then
+  say "[dev-tmp] source:    $COPY_ROOT (in-place, no copy; tmp runtime)"
 else
   say "[dev-tmp] repo copy: $COPY_ROOT"
 fi

@@ -9,7 +9,16 @@ function profileSetMsg(text, bad = false) {
   const el = $("profile-msg");
   if (!el) return;
   el.textContent = text || "";
-  el.className = "msg" + (text ? (bad ? " err" : " ok") : "");
+  el.className = text ? "msg show" + (bad ? " err" : " ok") : "msg";
+  el.setAttribute("role", bad ? "alert" : "status");
+  el.setAttribute("aria-live", bad ? "assertive" : "polite");
+  el.setAttribute("aria-atomic", "true");
+  if (typeof scheduleInlineMessageClear === "function") scheduleInlineMessageClear(el, text, !bad);
+}
+
+function profileConfirm(message, options = {}) {
+  if (typeof showAppConfirm === "function") return showAppConfirm(message, options);
+  return Promise.resolve(window.confirm(message));
 }
 
 async function profileReadJson(url, options = {}) {
@@ -31,6 +40,7 @@ function profileFriendStatusLabel(status) {
     accepted: "已成為好友",
     rejected: "已拒絕",
     blocked: "已封鎖",
+    blocked_by_them: "無法互動",
     anonymous: "未登入",
   }[status] || status || "-";
 }
@@ -135,12 +145,15 @@ function renderProfileFriendRows(containerId, rows, mode) {
       actions = `
         <button class="btn chat-sticker-btn" type="button" data-profile-pm="${username}">私訊</button>
         <button class="btn chat-sticker-btn" type="button" data-profile-remove="${item.other_user_id}">解除</button>
+        <button class="btn btn-danger chat-sticker-btn" type="button" data-profile-block="${item.other_user_id}">封鎖</button>
       `;
     } else if (mode === "incoming") {
       actions = `
         <button class="btn chat-sticker-btn" type="button" data-profile-review="${item.id}" data-decision="accept">接受</button>
         <button class="btn chat-sticker-btn" type="button" data-profile-review="${item.id}" data-decision="reject">拒絕</button>
       `;
+    } else if (mode === "blocked") {
+      actions = `<button class="btn chat-sticker-btn" type="button" data-profile-unblock="${item.other_user_id}">解除封鎖</button>`;
     } else {
       actions = `<span class="drive-card-sub">等待 ${username} 回覆</span>`;
     }
@@ -161,6 +174,12 @@ function renderProfileFriendRows(containerId, rows, mode) {
   el.querySelectorAll("[data-profile-remove]").forEach((btn) => {
     btn.addEventListener("click", () => removeProfileFriend(btn.dataset.profileRemove));
   });
+  el.querySelectorAll("[data-profile-block]").forEach((btn) => {
+    btn.addEventListener("click", () => blockProfileUser(btn.dataset.profileBlock));
+  });
+  el.querySelectorAll("[data-profile-unblock]").forEach((btn) => {
+    btn.addEventListener("click", () => unblockProfileUser(btn.dataset.profileUnblock));
+  });
   el.querySelectorAll("[data-profile-review]").forEach((btn) => {
     btn.addEventListener("click", () => reviewProfileFriend(btn.dataset.profileReview, btn.dataset.decision));
   });
@@ -173,6 +192,7 @@ async function loadProfileFriends({ quiet = false } = {}) {
     renderProfileFriendRows("profile-friend-list", json.friends || [], "friends");
     renderProfileFriendRows("profile-incoming-list", json.incoming || [], "incoming");
     renderProfileFriendRows("profile-outgoing-list", json.outgoing || [], "outgoing");
+    renderProfileFriendRows("profile-blocked-list", json.blocked || [], "blocked");
     if (!quiet) profileSetMsg("");
   } catch (err) {
     profileSetMsg(err.message || "好友資料讀取失敗", true);
@@ -238,7 +258,11 @@ async function reviewProfileFriend(requestId, decision) {
 
 async function removeProfileFriend(friendUserId) {
   if (!friendUserId) return;
-  if (!confirm("確定要解除這位好友嗎？")) return;
+  if (!(await profileConfirm("確定要解除這位好友嗎？解除後需要重新申請才能恢復好友互動。", {
+    title: "解除好友",
+    confirmLabel: "解除",
+    danger: true,
+  }))) return;
   try {
     const json = await profileReadJson(API + `/friends/${encodeURIComponent(friendUserId)}`, { method: "DELETE" });
     profileSetMsg(json.msg || "已解除好友");
@@ -249,8 +273,44 @@ async function removeProfileFriend(friendUserId) {
   }
 }
 
+async function blockProfileUser(friendUserId) {
+  if (!friendUserId) return;
+  if (!(await profileConfirm("確定要封鎖這位使用者？封鎖後對方不能再與你私訊、邀請遊戲或重新送出好友申請。", {
+    title: "封鎖使用者",
+    confirmLabel: "封鎖",
+    danger: true,
+  }))) return;
+  try {
+    const json = await profileReadJson(API + `/friends/${encodeURIComponent(friendUserId)}/block`, { method: "POST" });
+    profileSetMsg(json.msg || "已封鎖使用者");
+    await loadProfileFriends({ quiet: true });
+    if (typeof loadChatFriends === "function") loadChatFriends();
+  } catch (err) {
+    profileSetMsg(err.message || "封鎖失敗", true);
+  }
+}
+
+async function unblockProfileUser(friendUserId) {
+  if (!friendUserId) return;
+  if (!(await profileConfirm("確定要解除封鎖？解除後不會自動恢復好友關係。", {
+    title: "解除封鎖",
+    confirmLabel: "解除封鎖",
+  }))) return;
+  try {
+    const json = await profileReadJson(API + `/friends/${encodeURIComponent(friendUserId)}/block`, { method: "DELETE" });
+    profileSetMsg(json.msg || "已解除封鎖");
+    await loadProfileFriends({ quiet: true });
+    if (typeof loadChatFriends === "function") loadChatFriends();
+  } catch (err) {
+    profileSetMsg(err.message || "解除封鎖失敗", true);
+  }
+}
+
 async function rotateProfileFriendCode() {
-  if (!confirm("重新產生好友代碼後，舊代碼會失效。確定要繼續嗎？")) return;
+  if (!(await profileConfirm("重新產生好友代碼後，舊代碼會失效。確定要繼續嗎？", {
+    title: "重新產生好友代碼",
+    confirmLabel: "重新產生",
+  }))) return;
   try {
     const json = await profileReadJson(API + "/users/me/friend-code/rotate", { method: "POST" });
     profileSetMsg(json.msg || "好友代碼已重新產生");

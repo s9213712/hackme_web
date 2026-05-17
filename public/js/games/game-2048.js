@@ -11,17 +11,18 @@
     },
   });
 
-  function render2048Cell(value) {
+  function render2048Cell(value, x, y, state) {
     const label = value < 0 ? "X" : (value || "");
     const tone = value < 0 ? "tile-block" : `tile-${value || 0}`;
     const sizeClass = value >= 1024 ? "tile-tight" : value >= 128 ? "tile-mid" : "";
-    return `<button class="${tone} tile-gloss ${sizeClass}" type="button" data-2048-value="${value || 0}">${label}</button>`;
+    const isNew = state?.lastSpawn && state.lastSpawn.x === x && state.lastSpawn.y === y && value > 0;
+    return `<button class="${tone} tile-gloss ${sizeClass}${isNew ? " tile-new" : ""}" type="button" data-2048-value="${value || 0}">${label}</button>`;
   }
 
   window.registerHackmeLocalGameModule("game_2048", {
     mount(api) {
       makeCtx(api, "2048");
-      const state = { startedAt: 0, board: Array.from({ length: 4 }, () => Array(4).fill(0)), score: 0, mode: "classic", moves: 0, moveLimit: 60, history: [], maxTile: 0, active: false, finished: false, dailyChallenge: null };
+      const state = { startedAt: 0, board: Array.from({ length: 4 }, () => Array(4).fill(0)), score: 0, mode: "classic", moves: 0, moveLimit: 60, history: [], maxTile: 0, active: false, finished: false, dailyChallenge: null, lastSpawn: null, animationTimer: 0 };
       const setActions = () => api.setActions(`
         <button class="btn game-mini-btn btn-primary" type="button" data-action="new">開始</button>
         <button class="btn game-mini-btn" type="button" data-action="mode">模式：${state.mode === "classic" ? "一般" : state.mode === "obstacle" ? "障礙" : "限步"}</button>
@@ -33,10 +34,11 @@
       const emptyCells = () => state.board.flatMap((row, y) => row.map((v, x) => v ? null : [x, y])).filter(Boolean);
       const addTile = () => {
         const cells = emptyCells();
-        if (!cells.length) return;
+        if (!cells.length) return null;
         const [x, y] = cells[Math.floor(Math.random() * cells.length)];
         state.board[y][x] = Math.random() > 0.9 ? 4 : 2;
         state.maxTile = Math.max(state.maxTile, state.board[y][x]);
+        return { x, y };
       };
       const placeObstacles = () => {
         if (state.mode !== "obstacle") return;
@@ -45,7 +47,7 @@
       const render = () => {
         root.dataset.assetTheme = "kenney-puzzle-pack";
         root.dataset.mode = state.mode;
-        const cells = state.board.flat().map((v) => render2048Cell(v)).join("");
+        const cells = state.board.map((row, y) => row.map((v, x) => render2048Cell(v, x, y, state)).join("")).join("");
         const overlay = state.finished
           ? `<div class="single-game-over-overlay">GAME OVER<br><small>分數 ${Number(state.score || 0).toLocaleString()} · 最大 ${state.maxTile || 0} · 步數 ${state.moves}</small></div>`
           : "";
@@ -55,10 +57,22 @@
         else api.status(`待機 · 模式：${state.mode === "classic" ? "一般" : state.mode === "obstacle" ? "障礙" : "限步"} · 按開始後才會產生初始方塊。`);
         setActions();
       };
+      const animateMove = (dir) => {
+        if (!root || !dir) return;
+        root.dataset.moveDir = dir;
+        root.classList.remove("is-moving");
+        void root.offsetWidth;
+        root.classList.add("is-moving");
+        window.clearTimeout(state.animationTimer);
+        state.animationTimer = window.setTimeout(() => {
+          root.classList.remove("is-moving");
+          delete root.dataset.moveDir;
+        }, 180);
+      };
       const reset = () => {
-        state.startedAt = Date.now(); state.score = 0; state.moves = 0; state.maxTile = 0; state.history = []; state.active = true; state.finished = false; state.dailyChallenge = api.dailyChallenge?.() || null;
+        state.startedAt = Date.now(); state.score = 0; state.moves = 0; state.maxTile = 0; state.history = []; state.active = true; state.finished = false; state.dailyChallenge = api.dailyChallenge?.() || null; state.lastSpawn = null;
         state.board = Array.from({ length: 4 }, () => Array(4).fill(0));
-        placeObstacles(); addTile(); addTile(); render();
+        placeObstacles(); addTile(); state.lastSpawn = addTile(); render();
       };
       const merge = (line) => {
         const values = line.filter((value) => value > 0);
@@ -110,9 +124,13 @@
         if (before !== JSON.stringify(state.board)) {
           if (state.history.length < 3) state.history.push({ board: JSON.parse(before), score: beforeScore, moves: state.moves, maxTile: state.maxTile });
           state.moves += 1;
-          addTile();
+          state.lastSpawn = addTile();
+          render();
+          animateMove(dir);
+        } else {
+          state.lastSpawn = null;
+          render();
         }
-        render();
         if (state.maxTile >= 512) { api.achievement?.("tile-512", "512 里程碑", "合成 512。"); api.mission?.("tile-512", state.maxTile, 512, "合出 512"); }
         if (state.mode === "limited") api.mission?.("limited", state.moves, state.moveLimit, "限步模式完成 60 步");
         if ((state.mode === "limited" && state.moves >= state.moveLimit) || !canMove()) {
@@ -143,7 +161,13 @@
         if (action === "undo") undo();
       };
       api.onControl = (target) => move(target.dataset.dir);
-      api.onKey = (event) => ({ ArrowLeft: "左", ArrowRight: "右", ArrowUp: "上", ArrowDown: "下" }[event.key] && move({ ArrowLeft: "左", ArrowRight: "右", ArrowUp: "上", ArrowDown: "下" }[event.key]));
+      api.onKey = (event, pressed) => {
+        if (!pressed) return;
+        const dir = { ArrowLeft: "左", ArrowRight: "右", ArrowUp: "上", ArrowDown: "下" }[event.key];
+        if (!dir) return;
+        event.preventDefault?.();
+        move(dir);
+      };
       render();
     },
   });

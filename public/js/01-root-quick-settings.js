@@ -75,6 +75,12 @@ const ROOT_MODULE_QUICK_SETTINGS = {
       { id: "s-module-games-min-role", label: "最低可用角色" },
     ],
   },
+  experiments: {
+    label: "實驗區",
+    section: "features",
+    note: "實驗區目前是純前端 Canvas 教育模擬，沒有後端重型 job、DB 或 worker。",
+    fields: [],
+  },
   jobs: {
     label: "任務中心",
     section: "system",

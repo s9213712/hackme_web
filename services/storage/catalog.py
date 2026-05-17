@@ -117,6 +117,8 @@ def ensure_storage_album_schema(conn):
             owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             token TEXT,
             token_hash TEXT NOT NULL UNIQUE,
+            password_required INTEGER NOT NULL DEFAULT 0,
+            password_hash TEXT,
             can_download INTEGER NOT NULL DEFAULT 1,
             can_preview INTEGER NOT NULL DEFAULT 0,
             access_scope TEXT NOT NULL DEFAULT 'link',
@@ -172,6 +174,8 @@ def ensure_storage_album_schema(conn):
         "required_user_id": "INTEGER",
         "max_views": "INTEGER NOT NULL DEFAULT 0",
         "wrapped_file_key_envelope": "TEXT",
+        "password_required": "INTEGER NOT NULL DEFAULT 0",
+        "password_hash": "TEXT",
     }
     for column, ddl in storage_share_defs.items():
         if column not in storage_share_cols:
@@ -1027,7 +1031,62 @@ def _storage_share_payload(row, *, token=None):
     data["preview_url"] = f"/api/storage/shared/{share_token}/preview" if share_token else ""
     data["preview_content_url"] = f"/api/storage/shared/{share_token}/preview/content" if share_token else ""
     data["requires_fragment_key"] = bool(str(data.get("wrapped_file_key_envelope") or "").strip())
+    data["password_required"] = bool(int(data.get("password_required") or 0))
+    data.pop("password_hash", None)
     return data
+
+
+def _hash_storage_share_password(password):
+    password = str(password or "")
+    if len(password) > MAX_ALBUM_SHARE_PASSWORD_LENGTH:
+        raise ValueError("檔案分享密碼太長")
+    salt = secrets.token_urlsafe(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        ALBUM_SHARE_PASSWORD_ITERATIONS,
+    ).hex()
+    return f"pbkdf2_sha256${ALBUM_SHARE_PASSWORD_ITERATIONS}${salt}${digest}"
+
+
+def _verify_storage_share_password(password, stored_hash):
+    parts = str(stored_hash or "").split("$", 3)
+    if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
+        return False
+    try:
+        iterations = int(parts[1])
+    except Exception:
+        return False
+    actual = hashlib.pbkdf2_hmac(
+        "sha256",
+        str(password or "").encode("utf-8"),
+        parts[2].encode("utf-8"),
+        iterations,
+    ).hex()
+    return secrets.compare_digest(actual, parts[3])
+
+
+def apply_storage_share_password(conn, link_id, *, password=None, clear_password=False):
+    ensure_storage_album_schema(conn)
+    if clear_password:
+        conn.execute(
+            "UPDATE storage_share_links SET password_required=0, password_hash=NULL WHERE id=?",
+            (link_id,),
+        )
+        return None
+    password = str(password or "")
+    if not password:
+        return None
+    try:
+        password_hash = _hash_storage_share_password(password)
+    except ValueError as exc:
+        return str(exc)
+    conn.execute(
+        "UPDATE storage_share_links SET password_required=1, password_hash=? WHERE id=?",
+        (password_hash, link_id),
+    )
+    return None
 
 
 def create_share_link(
@@ -1043,6 +1102,7 @@ def create_share_link(
     required_username=None,
     max_views=0,
     wrapped_file_key_envelope=None,
+    share_password=None,
 ):
     ensure_storage_album_schema(conn)
     storage_file, msg = _storage_file_for_share(conn, actor=actor, storage_file_id=storage_file_id, file_id=file_id)
@@ -1076,13 +1136,21 @@ def create_share_link(
     token = secrets.token_urlsafe(32)
     now = _now()
     link_id = uuid.uuid4().hex
+    password_hash = None
+    password_required = 0
+    if str(share_password or ""):
+        try:
+            password_hash = _hash_storage_share_password(share_password)
+            password_required = 1
+        except ValueError as exc:
+            return None, str(exc)
     conn.execute(
         """
         INSERT INTO storage_share_links (
             id, storage_file_id, file_id, owner_user_id, token, token_hash, can_download,
             can_preview, access_scope, required_user_id, max_views, wrapped_file_key_envelope,
-            expires_at, created_by, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+            password_required, password_hash, expires_at, created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             link_id,
@@ -1096,6 +1164,8 @@ def create_share_link(
             required_user_id,
             max_views,
             envelope or None,
+            password_required,
+            password_hash,
             str(expires_at or "").strip() or None,
             int(actor["id"]),
             now,
@@ -1121,7 +1191,8 @@ def list_share_links(conn, *, actor, storage_file_id=None):
         f"""
         SELECT id, storage_file_id, file_id, owner_user_id, token, can_download, can_preview,
                access_scope, required_user_id, max_views, wrapped_file_key_envelope,
-               expires_at, revoked_at, access_count, last_accessed_at, created_by, created_at
+               password_required, expires_at, revoked_at, access_count, last_accessed_at,
+               created_by, created_at
         FROM storage_share_links
         WHERE {where}
         ORDER BY created_at DESC
@@ -1136,7 +1207,8 @@ def get_share_link(conn, *, actor, link_id):
         """
         SELECT id, storage_file_id, file_id, owner_user_id, token, can_download, can_preview,
                access_scope, required_user_id, max_views, wrapped_file_key_envelope,
-               expires_at, revoked_at, access_count, last_accessed_at, created_by, created_at
+               password_required, expires_at, revoked_at, access_count, last_accessed_at,
+               created_by, created_at
         FROM storage_share_links
         WHERE id=? AND owner_user_id=?
         """,
@@ -1156,7 +1228,7 @@ def revoke_share_link(conn, *, actor, link_id):
     return get_share_link(conn, actor=actor, link_id=link_id), None
 
 
-def resolve_share_token(conn, token, *, actor=None, require_download=True):
+def resolve_share_token(conn, token, *, actor=None, require_download=True, password=None, password_verified=False):
     ensure_storage_album_schema(conn)
     row = conn.execute(
         """
@@ -1197,6 +1269,11 @@ def resolve_share_token(conn, token, *, actor=None, require_download=True):
         actor_id = int(actor["id"])
         if actor_id != int(data.get("required_user_id") or 0) and actor_id != int(data.get("owner_user_id") or 0):
             return None, "forbidden"
+    if int(data.get("password_required") or 0) and not password_verified:
+        if not str(password or ""):
+            return None, "password_required"
+        if not _verify_storage_share_password(password, data.get("password_hash")):
+            return None, "password_invalid"
     if str(data.get("privacy_mode") or "") == "e2ee" and not str(data.get("wrapped_file_key_envelope") or "").strip():
         return None, "e2ee_share_authorization_missing"
     return data, ""

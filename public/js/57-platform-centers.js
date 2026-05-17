@@ -4,7 +4,22 @@ function platformCenterSetMsg(id, text, ok = true) {
   const el = $(id);
   if (!el) return;
   el.textContent = text || "";
-  el.className = "msg " + (ok ? "ok" : "err");
+  el.className = text ? "msg show " + (ok ? "ok" : "err") : "msg";
+  el.setAttribute("role", ok ? "status" : "alert");
+  el.setAttribute("aria-live", ok ? "polite" : "assertive");
+  el.setAttribute("aria-atomic", "true");
+  if (typeof scheduleInlineMessageClear === "function") scheduleInlineMessageClear(el, text, ok);
+}
+
+function platformConfirm(message, options = {}) {
+  if (typeof showAppConfirm === "function") return showAppConfirm(message, options);
+  return Promise.resolve(window.confirm(message));
+}
+
+function platformCopyFallback(text, title = "複製連結") {
+  if (typeof showCopyFallbackDialog === "function") return showCopyFallbackDialog(text, title);
+  window.prompt(title, text);
+  return Promise.resolve(null);
 }
 
 function platformStatusLabel(status) {
@@ -456,7 +471,11 @@ document.addEventListener("visibilitychange", () => {
 
 async function updateJobCenterJob(jobUuid, action) {
   if (!jobUuid || !["cancel", "retry"].includes(action)) return;
-  if (action === "cancel" && !confirm("確定要取消這個任務？")) return;
+  if (action === "cancel" && !(await platformConfirm("確定要取消這個任務？", {
+    title: "取消任務",
+    confirmLabel: "取消任務",
+    danger: true,
+  }))) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await apiFetch(API + `/jobs/${encodeURIComponent(jobUuid)}/${action}`, {
@@ -475,7 +494,11 @@ async function updateJobCenterJob(jobUuid, action) {
 
 async function updateJobCenterRemoteDownloadTask(taskId, action) {
   if (!taskId || !["pause", "resume", "cancel"].includes(action)) return;
-  if (action === "cancel" && !confirm("確定要取消這個下載任務？")) return;
+  if (action === "cancel" && !(await platformConfirm("確定要取消這個下載任務？", {
+    title: "取消下載任務",
+    confirmLabel: "取消下載",
+    danger: true,
+  }))) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await apiFetch(API + `/cloud-drive/remote-download/tasks/${encodeURIComponent(taskId)}/${action}`, {
@@ -546,26 +569,35 @@ function shareCenterLinkUrl(share) {
 }
 
 function closeShareCenterEvents() {
-  const panel = $("share-center-events");
-  if (!panel) return;
-  panel.style.display = "none";
-  panel.className = "msg";
-  panel.textContent = "";
+  const legacyPanel = $("share-center-events");
+  if (legacyPanel) {
+    legacyPanel.style.display = "none";
+    legacyPanel.className = "msg";
+    legacyPanel.textContent = "";
+  }
+  const overlay = $("share-center-events-modal");
+  const body = $("share-center-events-modal-body");
+  if (body) body.innerHTML = "";
+  if (overlay) {
+    overlay.classList.remove("show");
+    overlay.setAttribute("aria-hidden", "true");
+  }
+  const anyOverlayOpen = document.querySelector(".user-edit-overlay.show, .album-full-preview-overlay.show");
+  if (!anyOverlayOpen) document.body.classList.remove("modal-open");
 }
 
 function renderShareCenterEventsPanel(bodyHtml = "", { bad = false } = {}) {
-  const panel = $("share-center-events");
-  if (!panel) return null;
-  panel.style.display = "block";
-  panel.className = `msg ${bad ? "err" : "ok"} share-center-events-panel`;
-  panel.innerHTML = `
-    <div class="share-center-events-header">
-      <strong>分享紀錄</strong>
-      <button class="btn btn-small" type="button" data-share-events-close>關閉</button>
-    </div>
-    ${bodyHtml}
-  `;
-  return panel;
+  const legacyPanel = $("share-center-events");
+  if (legacyPanel) legacyPanel.style.display = "none";
+  const overlay = $("share-center-events-modal");
+  const body = $("share-center-events-modal-body");
+  if (!overlay || !body) return null;
+  body.className = `share-center-event-list${bad ? " err" : ""}`;
+  body.innerHTML = bodyHtml;
+  overlay.classList.add("show");
+  overlay.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  return overlay;
 }
 
 function shareCenterItemKey(share = {}) {
@@ -608,7 +640,7 @@ function renderShareCenterEditForm(share = {}) {
       <label class="field checkbox-field"><input type="checkbox" data-share-edit-can-download ${share.can_download ? "checked" : ""} /> 允許下載</label>
     `
     : "";
-  const passwordFields = (type === "album" || type === "video")
+  const passwordFields = (type === "file" || type === "album" || type === "video")
     ? `
       <label class="field">
         <span>分享密碼</span>
@@ -706,8 +738,8 @@ function renderShareCenter(shares = []) {
         platformCenterSetMsg("share-center-msg", "連結已複製", true);
         if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(btn, "已完成複製", true);
       } catch (_) {
-        if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(btn, "請在彈出視窗複製完整連結", false);
-        window.prompt("分享連結", url);
+        if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(btn, "請手動複製完整連結", false);
+        await platformCopyFallback(url, "分享連結");
       }
     });
   });
@@ -751,7 +783,7 @@ async function saveShareCenterOptions(key) {
     payload.can_preview = !!form.querySelector("[data-share-edit-can-preview]")?.checked;
     payload.can_download = !!form.querySelector("[data-share-edit-can-download]")?.checked;
   }
-  if (share.share_type === "album" || share.share_type === "video") {
+  if (share.share_type === "file" || share.share_type === "album" || share.share_type === "video") {
     const password = form.querySelector("[data-share-edit-password]")?.value || "";
     const clearPassword = !!form.querySelector("[data-share-edit-clear-password]")?.checked;
     if (password || clearPassword) payload.share_password = clearPassword ? "" : password;
@@ -816,7 +848,11 @@ async function loadShareCenterLinks() {
 
 async function revokeShareCenterLink(type, id) {
   if (!type || !id) return;
-  if (!confirm("確定要撤銷這個分享連結？")) return;
+  if (!(await platformConfirm("確定要撤銷這個分享連結？撤銷後既有連結將無法再使用。", {
+    title: "撤銷分享連結",
+    confirmLabel: "撤銷",
+    danger: true,
+  }))) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await apiFetch(API + `/shares/${encodeURIComponent(type)}/${encodeURIComponent(id)}/revoke`, {
@@ -1093,7 +1129,10 @@ async function ensureManagedVideoCanShare(row, videoId, csrf) {
   const visibilitySelect = row.querySelector("[data-video-manage-visibility]");
   const visibility = visibilitySelect?.value || "public";
   if (visibility === "unlisted") return true;
-  if (!confirm("要將這支影音改為「持連結」並產生分享連結嗎？")) return false;
+  if (!(await platformConfirm("要將這支影音改為「持連結」並產生分享連結嗎？", {
+    title: "建立影音分享",
+    confirmLabel: "改為持連結",
+  }))) return false;
   const payload = {
     title: row.querySelector("[data-video-manage-title]")?.value || "",
     description: row.querySelector("[data-video-manage-description]")?.value || "",
@@ -1189,13 +1228,17 @@ async function copyManagedVideoShareLink(videoId) {
     platformCenterSetMsg("video-manage-msg", "影音分享連結已複製", true);
     if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "已完成複製", true);
   } catch (_) {
-    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "請在彈出視窗複製完整連結", false);
-    window.prompt("影音分享連結", text);
+    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "請手動複製完整連結", false);
+    await platformCopyFallback(text, "影音分享連結");
   }
 }
 
 async function revokeManagedVideoShareLink(videoId) {
-  if (!videoId || !confirm("確定要撤銷這支影音的分享連結？")) return;
+  if (!videoId || !(await platformConfirm("確定要撤銷這支影音的分享連結？撤銷後舊連結會失效。", {
+    title: "撤銷影音分享",
+    confirmLabel: "撤銷",
+    danger: true,
+  }))) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   try {
@@ -1217,7 +1260,11 @@ async function revokeManagedVideoShareLink(videoId) {
 }
 
 async function deleteManagedVideo(videoId) {
-  if (!videoId || !confirm("確定要刪除這支影音？分享連結也會失效。")) return;
+  if (!videoId || !(await platformConfirm("確定要刪除這支影音？分享連結也會失效。", {
+    title: "刪除影音",
+    confirmLabel: "刪除",
+    danger: true,
+  }))) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   try {

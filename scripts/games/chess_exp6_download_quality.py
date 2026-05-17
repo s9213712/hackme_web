@@ -335,7 +335,8 @@ def _stockfish_quality_score(record: dict, *, stockfish_path: str,
     return rejects
 
 
-def filter_quality(target: int = 1000, *, stockfish_path: str | None = None) -> dict:
+def filter_quality(target: int = 1000, *, stockfish_path: str | None = None,
+                   out_jsonl: Path | None = None, summary_json: Path | None = None) -> dict:
     """Cascading-tier filter.
 
     Walk ``QUALITY_TIERS`` from strictest to loosest. At each tier, add
@@ -428,8 +429,10 @@ def filter_quality(target: int = 1000, *, stockfish_path: str | None = None) -> 
                 per_tier[tier_name] += 1
             break
 
-    FINAL_JSONL.parent.mkdir(parents=True, exist_ok=True)
-    with FINAL_JSONL.open("w") as f:
+    final_path = out_jsonl if out_jsonl is not None else FINAL_JSONL
+    summary_path = summary_json if summary_json is not None else SUMMARY_JSON
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    with final_path.open("w") as f:
         for rec in kept:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     summary = {
@@ -440,8 +443,9 @@ def filter_quality(target: int = 1000, *, stockfish_path: str | None = None) -> 
         "tiers_attempted": [t["name"] for t in QUALITY_TIERS[:len([t for t in QUALITY_TIERS if per_tier.get(t["name"], 0) > 0]) + 1]],
         "min_avg_elo": min((rec.get("pgn_labels", {}).get("avg_elo") or 0) for rec in kept) if kept else 0,
         "max_avg_elo": max((rec.get("pgn_labels", {}).get("avg_elo") or 0) for rec in kept) if kept else 0,
+        "output_jsonl": str(final_path),
     }
-    SUMMARY_JSON.write_text(json.dumps(summary, indent=2, ensure_ascii=False))
+    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False))
     print(f"[filter] kept {len(kept)} / target {target}", flush=True)
     print(f"[filter] per source: {dict(per_source)}", flush=True)
     print(f"[filter] per tier:   {dict(per_tier)}", flush=True)
@@ -453,6 +457,10 @@ def main() -> int:
     parser.add_argument("--target", type=int, default=1000)
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--skip-convert", action="store_true")
+    parser.add_argument("--out-jsonl", type=Path, default=None,
+                        help="Override output JSONL path (default quality_1000_games.jsonl).")
+    parser.add_argument("--summary-json", type=Path, default=None,
+                        help="Override summary JSON path.")
     parser.add_argument(
         "--stockfish-path",
         default="/home/s92137/reference_repos/Stockfish/src/stockfish",
@@ -474,7 +482,8 @@ def main() -> int:
     if not args.skip_convert and pgn_paths:
         pgn_to_replay(pgn_paths, REPLAY_JSONL)
 
-    summary = filter_quality(target=args.target, stockfish_path=args.stockfish_path)
+    summary = filter_quality(target=args.target, stockfish_path=args.stockfish_path,
+                             out_jsonl=args.out_jsonl, summary_json=args.summary_json)
     print(f"[done] kept {summary['kept']} quality games; report: {SUMMARY_JSON}", flush=True)
     return 0
 

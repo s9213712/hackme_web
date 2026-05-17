@@ -1179,6 +1179,8 @@ def register_public_routes(app, deps):
             "avatar_file_id": ((avatar_row["avatar_file_id"] if avatar_row and "avatar_file_id" in avatar_row.keys() else dict(ctx).get("avatar_file_id")) or ""),
             "chat_violation_warned": dict(ctx).get("chat_violation_warned") or 0,
             "appearance_settings": appearance_settings,
+            "auth_scope": dict(ctx).get("auth_scope") or dict(ctx).get("_auth_scope") or "",
+            "allowed_features": list(dict(ctx).get("allowed_features") or dict(ctx).get("_allowed_features") or []),
         })
 
     @app.route("/api/me/appearance", methods=["GET", "PUT", "DELETE"])

@@ -241,14 +241,17 @@
     if (!realTetrisRootUser()) return "";
     const params = loadRealTetrisPhysicsParams(mode);
     return `
-      <div class="real-tetris-root-controls" aria-label="root 物理參數">
-        <label>重力 <input type="range" min="650" max="1800" step="10" value="${params.gravity}" data-real-tetris-param="gravity" /><span data-real-tetris-value="gravity">${Math.round(params.gravity)}</span></label>
-        <label>彈性 <input type="range" min="0.05" max="1.45" step="0.01" value="${params.elasticity}" data-real-tetris-param="elasticity" /><span data-real-tetris-value="elasticity">${params.elasticity.toFixed(2)}</span></label>
-        <label>摩擦 <input type="range" min="0.01" max="0.75" step="0.01" value="${params.friction}" data-real-tetris-param="friction" /><span data-real-tetris-value="friction">${params.friction.toFixed(2)}</span></label>
-        <label>倒塌力矩 <input type="range" min="0" max="96" step="1" value="${params.stackTorque}" data-real-tetris-param="stackTorque" /><span data-real-tetris-value="stackTorque">${Math.round(params.stackTorque)}</span></label>
-        <label>阻尼 <input type="range" min="0.920" max="0.999" step="0.001" value="${params.stackDamping}" data-real-tetris-param="stackDamping" /><span data-real-tetris-value="stackDamping">${params.stackDamping.toFixed(3)}</span></label>
-        <button class="btn game-mini-btn" type="button" data-real-tetris-reset="1">重設物理</button>
-      </div>
+      <details class="real-tetris-root-settings">
+        <summary>root 物理參數</summary>
+        <div class="real-tetris-root-controls" aria-label="root 物理參數">
+          <label>重力 <input type="range" min="650" max="1800" step="10" value="${params.gravity}" data-real-tetris-param="gravity" /><span data-real-tetris-value="gravity">${Math.round(params.gravity)}</span></label>
+          <label>彈性 <input type="range" min="0.05" max="1.45" step="0.01" value="${params.elasticity}" data-real-tetris-param="elasticity" /><span data-real-tetris-value="elasticity">${params.elasticity.toFixed(2)}</span></label>
+          <label>摩擦 <input type="range" min="0.01" max="0.75" step="0.01" value="${params.friction}" data-real-tetris-param="friction" /><span data-real-tetris-value="friction">${params.friction.toFixed(2)}</span></label>
+          <label>倒塌力矩 <input type="range" min="0" max="96" step="1" value="${params.stackTorque}" data-real-tetris-param="stackTorque" /><span data-real-tetris-value="stackTorque">${Math.round(params.stackTorque)}</span></label>
+          <label>阻尼 <input type="range" min="0.920" max="0.999" step="0.001" value="${params.stackDamping}" data-real-tetris-param="stackDamping" /><span data-real-tetris-value="stackDamping">${params.stackDamping.toFixed(3)}</span></label>
+          <button class="btn game-mini-btn" type="button" data-real-tetris-reset="1">重設物理</button>
+        </div>
+      </details>
     `;
   }
 

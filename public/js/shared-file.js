@@ -4,6 +4,7 @@ const sharedFileState = {
   token: "",
   file: null,
   previewObjectUrl: "",
+  password: "",
 };
 
 function sharedFileToken() {
@@ -20,6 +21,38 @@ function sharedFileSetMsg(text, bad = false) {
   if (!el) return;
   el.textContent = text || "";
   el.className = bad ? "msg err" : "msg";
+}
+
+function sharedFilePasswordStorageKey() {
+  return `hackme:shared-file-password:${sharedFileState.token || sharedFileToken()}`;
+}
+
+function sharedFileRememberedPassword() {
+  try {
+    return sessionStorage.getItem(sharedFilePasswordStorageKey()) || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function sharedFileSetPassword(password) {
+  sharedFileState.password = String(password || "");
+  try {
+    if (sharedFileState.password) sessionStorage.setItem(sharedFilePasswordStorageKey(), sharedFileState.password);
+    else sessionStorage.removeItem(sharedFilePasswordStorageKey());
+  } catch (_) {}
+}
+
+function sharedFileRequestOptions(extra = {}) {
+  const headers = { ...(extra.headers || {}) };
+  if (sharedFileState.password) headers["X-Share-Password"] = sharedFileState.password;
+  return { ...extra, credentials: "same-origin", headers };
+}
+
+function sharedFileUrlWithPassword(url) {
+  const parsed = new URL(url || "/", window.location.origin);
+  if (sharedFileState.password) parsed.searchParams.set("password", sharedFileState.password);
+  return `${parsed.pathname}${parsed.search}`;
 }
 
 function sharedFileErrorFromResponse(res, json, fallback) {
@@ -73,11 +106,40 @@ function sharedFilePreviewBox() {
 }
 
 function sharedFileContentUrl(file) {
-  return file?.preview_content_url || `/api/storage/shared/${encodeURIComponent(sharedFileState.token)}/preview/content`;
+  return sharedFileUrlWithPassword(file?.preview_content_url || `/api/storage/shared/${encodeURIComponent(sharedFileState.token)}/preview/content`);
 }
 
 function sharedFilePreviewMetadataUrl(file) {
-  return file?.preview_url || `/api/storage/shared/${encodeURIComponent(sharedFileState.token)}/preview`;
+  return sharedFileUrlWithPassword(file?.preview_url || `/api/storage/shared/${encodeURIComponent(sharedFileState.token)}/preview`);
+}
+
+function sharedFileRenderPasswordForm(message = "此分享連結需要密碼。") {
+  const msg = document.getElementById("shared-file-msg");
+  if (!msg) return;
+  msg.className = "msg";
+  msg.innerHTML = `
+    <form id="shared-file-password-form" class="password-form">
+      <label for="shared-file-password-input">${sharedFileEscape(message)}</label>
+      <input id="shared-file-password-input" type="password" autocomplete="current-password" placeholder="輸入分享密碼" />
+      <button type="submit">解鎖分享</button>
+    </form>
+  `;
+  const input = document.getElementById("shared-file-password-input");
+  if (input) input.focus();
+  const form = document.getElementById("shared-file-password-form");
+  if (form) {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const password = document.getElementById("shared-file-password-input")?.value || "";
+      sharedFileSetPassword(password);
+      sharedFileLoad();
+    }, { once: true });
+  }
+}
+
+function sharedFileClearPasswordForm() {
+  const form = document.getElementById("shared-file-password-form");
+  if (form) form.remove();
 }
 
 function sharedFileExtension(filename) {
@@ -243,7 +305,7 @@ function sharedFileRenderPreviewMetadata(preview, file) {
 async function sharedFileFetchDownload(file, confirmed = false) {
   const url = new URL(file.download_url, window.location.origin);
   if (confirmed) url.searchParams.set("confirm_high_risk", "1");
-  const res = await fetch(url.pathname + url.search, { credentials: "same-origin" });
+  const res = await fetch(sharedFileUrlWithPassword(url.pathname + url.search), sharedFileRequestOptions());
   if (res.status === 409 && !confirmed) {
     const json = await res.json().catch(() => ({}));
     if (json.requires_confirmation && window.confirm(json.msg || "此檔案可能高風險，仍要下載？")) {
@@ -292,7 +354,7 @@ async function sharedFilePreview() {
     if (!file.can_preview) throw new Error("此分享連結未開放瀏覽器預覽。");
     if (file.e2ee?.requires_fragment_key) {
       if (!window.crypto?.subtle) throw new Error("此瀏覽器不支援 E2EE 分享解密。");
-      const blob = await fetch(sharedFileContentUrl(file), { credentials: "same-origin" }).then(async (res) => {
+      const blob = await fetch(sharedFileContentUrl(file), sharedFileRequestOptions()).then(async (res) => {
         if (!res.ok) {
           const json = await res.json().catch(() => ({}));
           throw sharedFileErrorFromResponse(res, json, `預覽失敗（HTTP ${res.status}）`);
@@ -304,7 +366,7 @@ async function sharedFilePreview() {
       sharedFileSetMsg("預覽已在瀏覽器端解密。");
       return;
     }
-    const res = await fetch(sharedFilePreviewMetadataUrl(file), { credentials: "same-origin" });
+    const res = await fetch(sharedFilePreviewMetadataUrl(file), sharedFileRequestOptions());
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw sharedFileErrorFromResponse(res, json, `預覽失敗（HTTP ${res.status}）`);
     sharedFileRenderPreviewMetadata(json.preview || {}, file);
@@ -319,6 +381,7 @@ async function sharedFilePreview() {
 
 async function sharedFileLoad() {
   sharedFileState.token = sharedFileToken();
+  if (!sharedFileState.password) sharedFileState.password = sharedFileRememberedPassword();
   const title = document.getElementById("shared-file-title");
   const meta = document.getElementById("shared-file-meta");
   const downloadBtn = document.getElementById("shared-file-download-btn");
@@ -328,30 +391,37 @@ async function sharedFileLoad() {
     return;
   }
   try {
-    const res = await fetch(`/api/storage/shared/${encodeURIComponent(sharedFileState.token)}`, { credentials: "same-origin" });
+    const res = await fetch(`/api/storage/shared/${encodeURIComponent(sharedFileState.token)}`, sharedFileRequestOptions());
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw sharedFileErrorFromResponse(res, json, "分享連結不存在或已失效");
     const file = json.file || {};
     sharedFileState.file = file;
+    sharedFileClearPasswordForm();
     sharedFileSetLoginRequired(false);
     if (title) title.textContent = file.display_name || "檔案分享";
     const e2eeText = file.e2ee?.requires_fragment_key ? " · E2EE 瀏覽器端解密" : "";
     const previewText = file.can_preview ? " · 可瀏覽器預覽" : " · 未開放預覽";
+    const passwordText = file.password_required ? " · 需要分享密碼" : "";
     const scopeText = file.access_scope === "account" ? ` · 限 ${file.required_username || "指定帳戶"}` : " · 知道連結即可下載";
-    if (meta) meta.textContent = `${sharedFileFormatBytes(file.size_bytes)}${scopeText}${previewText}${e2eeText}`;
+    if (meta) meta.textContent = `${sharedFileFormatBytes(file.size_bytes)}${scopeText}${previewText}${passwordText}${e2eeText}`;
     if (downloadBtn) {
       downloadBtn.disabled = false;
-      downloadBtn.addEventListener("click", sharedFileDownload);
+      downloadBtn.onclick = sharedFileDownload;
     }
     if (previewBtn) {
       previewBtn.disabled = !file.can_preview;
-      previewBtn.addEventListener("click", sharedFilePreview);
+      previewBtn.onclick = sharedFilePreview;
     }
     sharedFileSetMsg(file.e2ee?.requires_fragment_key ? "請使用包含 #key= 的完整分享連結預覽或下載。" : "");
   } catch (err) {
     if (title) title.textContent = "檔案無法開啟";
     if (meta) meta.textContent = "";
     sharedFileMaybeShowLogin(err);
+    if (err?.reason === "password_required" || err?.reason === "password_invalid") {
+      sharedFileSetPassword(err?.reason === "password_invalid" ? "" : sharedFileState.password);
+      sharedFileRenderPasswordForm(err?.message || "此分享連結需要密碼。");
+      return;
+    }
     sharedFileSetMsg(err.message || "分享連結不存在或已失效", true);
   }
 }

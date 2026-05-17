@@ -666,6 +666,33 @@
     ctx.stroke();
   }
 
+  function drawBulletHellHitbox(ctx, state) {
+    const hitRadius = state.keys.focus ? 4.2 : 6.2;
+    const grazeRadius = 22;
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "rgba(56,189,248,.46)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(state.player.x, state.player.y, grazeRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "#fef08a";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(state.player.x, state.player.y, hitRadius + 1.5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "#fef08a";
+    ctx.beginPath();
+    ctx.arc(state.player.x, state.player.y, Math.max(2.6, hitRadius * 0.48), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.font = "700 10px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(254,240,138,.95)";
+    ctx.fillText("判定點", state.player.x, state.player.y - grazeRadius - 6);
+    ctx.restore();
+  }
+
   function drawBulletHell(state) {
     const ctx = state.ctx;
     ctx.clearRect(0, 0, WIDTH, HEIGHT);
@@ -713,12 +740,15 @@
       ctx.beginPath();
       ctx.arc(state.player.x, state.player.y, state.keys.focus ? 4.2 : 6.2, 0, Math.PI * 2);
       ctx.fill();
+      drawBulletHellHitbox(ctx, state);
     }
 
     ctx.fillStyle = "rgba(226,232,240,.86)";
     ctx.font = "12px system-ui, sans-serif";
     ctx.fillText(`wave ${state.wave} score ${Number(Math.round(state.score)).toLocaleString()}`, 18, 20);
     ctx.fillText(`life ${state.lives} bomb ${state.bombs} P${state.shotLevel} H${state.homingLevel || 0} O${state.optionLevel || 0}`, 164, 20);
+    ctx.fillStyle = "rgba(254,240,138,.9)";
+    ctx.fillText("黃點=中彈判定；藍圈=擦彈範圍", 18, HEIGHT - 18);
     if (state.status === "finished") {
       ctx.fillStyle = "rgba(7,17,31,.76)";
       ctx.fillRect(34, 196, WIDTH - 68, 112);
