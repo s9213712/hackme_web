@@ -209,6 +209,10 @@ HTML_LEARNING_PORT=8000
 
 #### Worker 邊界
 
+正式部署不要使用 `python3 server.py`。該入口會啟動 Flask/Werkzeug direct
+development server，並執行 `server.py` 的 `__main__` 區塊；它只適合單程序 debug、
+`--doctor`、本機救援或重現舊式 in-process worker 行為。
+
 `gunicorn server:app` 不會執行 `server.py` 的 `__main__` 區塊，因此不會自動啟動
 舊式 in-process worker。這是正式部署應有的邊界：web service 不應擁有長任務生命週期。
 

@@ -125,7 +125,8 @@ def test_avatar_payloads_are_available_before_frontend_renders_images():
     community = (ROOT / "routes" / "community.py").read_text(encoding="utf-8")
 
     assert '"avatar_file_id": ((avatar_row["avatar_file_id"] if avatar_row and "avatar_file_id" in avatar_row.keys() else dict(ctx).get("avatar_file_id")) or "")' in public
-    assert '"sender_avatar_file_id": r["avatar_file_id"] or ""' in chat
+    assert '"sender_avatar_file_id": avatar_file_id' in chat
+    assert 'if anonymous_to_viewer and not is_self:\n            avatar_file_id = ""' in chat
     assert '"author_avatar_file_id": row_value(row, "author_avatar_file_id", "")' in community
     assert "COALESCE(u.avatar_file_id, '') AS author_avatar_file_id" in community
 
@@ -336,9 +337,11 @@ def test_root_notifications_skip_normal_session_revocation_noise():
 
 def test_frontend_boot_does_not_probe_disabled_chat_feature():
     core = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
+    admin = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
 
-    assert 'if (canAccessModule("chat")) {' in core
-    assert '    loadChatRooms();' in core
+    assert 'if (tabModuleChat) tabModuleChat.style.display = canAccessModule("chat") ? "" : "none";' in core
+    assert 'if (normTab === "chat" && canAccessChat && typeof loadChatRooms === "function") {' in admin
+    assert '    loadChatRooms();' in admin
 
 
 def test_frontend_boot_does_not_eager_load_economy_before_module_selection():
@@ -346,7 +349,7 @@ def test_frontend_boot_does_not_eager_load_economy_before_module_selection():
     boot_body = core.split('if (currentRole === "manager" || currentRole === "super_admin") {', 1)[1].split("switchModuleTab(initialModule);", 1)[0]
 
     assert "loadEconomyDashboard();" not in boot_body
-    assert "loadChatRooms();" in boot_body
+    assert "loadChatRooms();" not in boot_body
 
 
 def test_trading_stress_pentest_covers_margin_risk_controls():
@@ -433,7 +436,9 @@ def test_root_margin_trading_uses_simulated_funds_not_pointschain():
     margin_verify = trading_engine.split("def _verify_margin_position_locks", 1)[1].split("def _verify_spot_realized_pnl", 1)[0]
 
     assert "is_root_simulated = service._is_root_actor(actor)" in open_margin
-    assert "service._sim_delta(conn, user_id, balance_delta=-(collateral + fee), locked_delta=collateral)" in open_margin
+    assert "service._sim_delta(conn, user_id, balance_delta=-collateral, locked_delta=collateral)" in open_margin
+    assert "fee_micro = fee_micropoints(notional, float(market[\"fee_rate_percent\"] or 0))" in open_margin
+    assert "fee = 0" in open_margin
     assert '"funding_mode": "root_simulated"' in open_margin
     assert "close_margin_position_helper(" in close_margin
     assert "is_root_simulated = service._is_root_user_id(conn, user_id)" in trading_margin

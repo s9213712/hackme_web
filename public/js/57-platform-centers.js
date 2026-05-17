@@ -417,6 +417,9 @@ async function loadJobCenter(options = {}) {
       liveDriveKeys = new Set(driveJobs.map(platformJobCenterMergeKey).filter(Boolean));
       jobs = mergePlatformJobCenterJobs([...jobs, ...driveJobs]);
     }
+    if (typeof getVideoUploadLiveJobs === "function") {
+      jobs = mergePlatformJobCenterJobs([...jobs, ...getVideoUploadLiveJobs()]);
+    }
     jobs = markMissingLiveSourceJobs(jobs, liveDriveKeys);
     jobs = mergePlatformJobCenterJobs(await hydrateJobCenterLiveProgress(jobs, { csrf }));
     const summary = summarizeJobCenterJobs(jobs);

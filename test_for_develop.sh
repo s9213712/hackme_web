@@ -31,7 +31,7 @@ EXTRA_ACCOUNTS="${HACKME_DEV_EXTRA_ACCOUNTS:-}"
 PORT_CONFLICT_ACTION="${HACKME_DEV_PORT_CONFLICT_ACTION:-}"
 BTC_TRADE_AUTOSTART="${HACKME_DEV_BTC_TRADE_AUTOSTART:-0}"
 BACKTEST_PROBE_ON_STARTUP="${HACKME_DEV_BACKTEST_PROBE_ON_STARTUP:-0}"
-SERVER_RUNNER="${HACKME_DEV_SERVER_RUNNER:-flask}"
+SERVER_RUNNER="${HACKME_DEV_SERVER_RUNNER:-gunicorn}"
 GUNICORN_WORKERS="${HACKME_DEV_GUNICORN_WORKERS:-auto}"
 GUNICORN_THREADS="${HACKME_DEV_GUNICORN_THREADS:-auto}"
 GUNICORN_TIMEOUT="${HACKME_DEV_GUNICORN_TIMEOUT:-20}"
@@ -56,9 +56,9 @@ Purpose:
   when you intentionally want the current repo to own ./runtime directly.
 
 Important:
-  Without --cli, the script asks for workspace, host, port, feature mode,
-  security posture, server mode, dependency handling, foreground mode,
-  BTC_trade autostart, account password settings, and extra accounts.
+  Without --cli, the script asks for workspace, host, port, server runner,
+  feature mode, security posture, server mode, dependency handling, foreground
+  mode, BTC_trade autostart, account password settings, and extra accounts.
   With --cli, it never prompts and only uses command-line/env values.
 
   For server-mode / production-gate validation, HTML_LEARNING_GIT_REPO_DIR must
@@ -98,13 +98,14 @@ Options:
   --add-account SPEC       Add dev account as username:password[:role]; repeatable
   --accounts LIST          Comma-separated --add-account specs
   --port-conflict ACTION   ask, kill, fallback, or fail. Default: ask interactively,
-                           fallback under --cli
+                           fallback under --cli. kill falls back to another port
+                           if the process cannot be terminated or the port stays busy
   --btc-trade-autostart    Start BTC_trade in the background after boot
   --no-btc-trade-autostart Do not start BTC_trade in the background
   --backtest-probe-on-startup
                            Run the first-boot trading backtest capacity probe
                            in this temporary runtime
-  --server-runner RUNNER    flask or gunicorn. Default: flask
+  --server-runner RUNNER    flask or gunicorn. Default: gunicorn
   --gunicorn-workers N      Default: auto when --server-runner gunicorn
   --gunicorn-threads N      Default: auto when --server-runner gunicorn
   --gunicorn-timeout N      Default: 20 seconds
@@ -858,6 +859,51 @@ prompt_launch_layout() {
   done
 }
 
+prompt_server_runner() {
+  local default_choice="1"
+  local answer
+  local customize=0
+
+  normalize_server_runner
+  if [[ "$SERVER_RUNNER" == "flask" ]]; then
+    default_choice="2"
+  fi
+
+  say "Server runner:"
+  say "  1) bounded gunicorn (recommended; protects the app under uploads/HLS/load)"
+  say "     - imports server:app; does not run server.py __main__ or legacy in-process workers"
+  say "  2) Flask/Werkzeug direct server (debug only; not for upload/HLS stress)"
+  say "     - same path as python3 server.py; starts legacy in-process workers in one process"
+  while true; do
+    printf 'Choose server runner [default %s]: ' "$default_choice"
+    if ! read -r answer; then
+      die "interactive setup was interrupted"
+    fi
+    answer="${answer:-$default_choice}"
+    case "${answer,,}" in
+      1|gunicorn|bounded|wsgi|prod|production)
+        SERVER_RUNNER="gunicorn"
+        break
+        ;;
+      2|flask|werkzeug|direct|debug)
+        SERVER_RUNNER="flask"
+        return 0
+        ;;
+      *)
+        say "Please choose 1 or 2."
+        ;;
+    esac
+  done
+
+  prompt_yes_no "Customize gunicorn worker/thread settings" 0 customize
+  if [[ "$customize" == "1" ]]; then
+    prompt_value "Gunicorn workers" "$GUNICORN_WORKERS" GUNICORN_WORKERS
+    prompt_value "Gunicorn threads per worker" "$GUNICORN_THREADS" GUNICORN_THREADS
+    prompt_value "Gunicorn timeout seconds" "$GUNICORN_TIMEOUT" GUNICORN_TIMEOUT
+    prompt_value "Gunicorn backlog" "$GUNICORN_BACKLOG" GUNICORN_BACKLOG
+  fi
+}
+
 prompt_runtime_config() {
   local default_run_root="${RUN_ROOT:-/tmp/hackme_web_dev_${RUN_ID}_$$}"
   local use_default_passwords=1
@@ -878,6 +924,7 @@ prompt_runtime_config() {
   fi
   prompt_value "Host" "$HOST" HOST
   prompt_value "Port" "$PORT" PORT
+  prompt_server_runner
   prompt_feature_settings
   prompt_yes_no "Enable security settings" "$SECURITY_SETTINGS_ENABLED" SECURITY_SETTINGS_ENABLED
   prompt_server_mode
@@ -1177,11 +1224,15 @@ kill_port_processes() {
   local requested="$1"
   local pids="$2"
   if [[ -z "$pids" ]]; then
-    die "cannot kill the process on port $requested because no pid was identified"
+    say "[dev-tmp] port:      cannot kill the process on port $requested because no pid was identified; falling back to another port"
+    use_next_available_port "$requested"
+    return 0
   fi
   say "[dev-tmp] port:      terminating pid(s): $pids"
   if ! kill $pids; then
-    die "failed to terminate pid(s): $pids"
+    say "[dev-tmp] port:      failed to terminate pid(s): $pids; falling back to another port"
+    use_next_available_port "$requested"
+    return 0
   fi
   for _ in $(seq 1 20); do
     if port_is_available "$requested"; then
@@ -1191,7 +1242,8 @@ kill_port_processes() {
     fi
     sleep 0.25
   done
-  die "port $requested is still occupied after terminating pid(s): $pids"
+  say "[dev-tmp] port:      port $requested is still occupied after terminating pid(s): $pids; falling back to another port"
+  use_next_available_port "$requested"
 }
 
 resolve_occupied_port_interactively() {
@@ -1539,6 +1591,9 @@ export HACKME_DEV_SERVER_RUNNER="$SERVER_RUNNER"
 export HACKME_DEV_GUNICORN_WORKERS="$GUNICORN_WORKERS"
 export HACKME_DEV_GUNICORN_THREADS="$GUNICORN_THREADS"
 export HACKME_DEV_GUNICORN_TIMEOUT="$GUNICORN_TIMEOUT"
+if [[ "$SERVER_RUNNER" == "flask" ]]; then
+  export HACKME_ALLOW_DIRECT_SERVER=1
+fi
 export HTML_LEARNING_BACKPRESSURE_ENABLED="${HTML_LEARNING_BACKPRESSURE_ENABLED:-1}"
 if [[ "$SERVER_RUNNER" == "gunicorn" ]]; then
   export HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY="${HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY:-$GUNICORN_THREADS}"
@@ -2097,6 +2152,9 @@ if [[ "$FOREGROUND" == "1" ]]; then
   fi
   say "[dev-tmp] runtime:   $RUNTIME_ROOT"
   say "[dev-tmp] mode:      foreground $SERVER_RUNNER"
+  if [[ "$SERVER_RUNNER" == "flask" ]]; then
+    say "[dev-tmp] warning:   Flask/Werkzeug direct server is debug-only; use gunicorn for uploads/HLS/load."
+  fi
   print_generated_dev_tokens
   if [[ "$SERVER_RUNNER" == "gunicorn" ]]; then
     exec "$PYTHON_BIN" -m gunicorn "server:app" \
@@ -2135,6 +2193,7 @@ if [[ "$SERVER_RUNNER" == "gunicorn" ]]; then
     --access-logfile - \
     --error-logfile - >"$LOG_CAPTURE" 2>&1 < /dev/null &
 else
+  say "[dev-tmp] warning:   Flask/Werkzeug direct server is debug-only; use gunicorn for uploads/HLS/load."
   setsid "$PYTHON_BIN" server.py >"$LOG_CAPTURE" 2>&1 < /dev/null &
 fi
 SERVER_PID="$!"

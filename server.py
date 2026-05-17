@@ -1366,6 +1366,32 @@ def measure_backtest_capacity_first_boot():
     return measure_backtest_capacity_if_needed_helper(trading_service=trading_service, audit=audit)
 
 
+def _warn_direct_server_entrypoint():
+    if os.environ.get("HACKME_SUPPRESS_DIRECT_SERVER_WARNING", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+    print(
+        "\n[startup-warning] Direct `python3 server.py` uses Flask/Werkzeug's development server.",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(
+        "[startup-warning] Use it only for single-process debug, doctor/recovery work, or legacy worker reproduction.",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(
+        "[startup-warning] For normal dev, uploads, HLS, stress tests, and deployment, use "
+        "`./test_for_develop.sh --server-runner gunicorn` or `python -m gunicorn server:app ...`.",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(
+        "[startup-warning] Gunicorn imports `server:app` and will not run this `__main__` block or its in-process workers.\n",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Hackme Web server entrypoint")
@@ -1380,6 +1406,8 @@ if __name__ == "__main__":
     if not doctor.get("ok"):
         _print_doctor_report(doctor)
         raise SystemExit(2)
+
+    _warn_direct_server_entrypoint()
 
     SERVER_SHUTDOWN_EVENT = threading.Event()
 

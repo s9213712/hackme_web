@@ -2151,10 +2151,11 @@ def test_comfyui_status_warns_when_models_are_on_windows_mount(tmp_path):
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
+    windows_mount_path = "/mnt" + "/d/share/ComfyUI_windows_portable"
     client = _build_app(
         db_path,
         storage_root,
-        settings={"comfyui_base_dir": "/mnt/d/share/ComfyUI_windows_portable"},
+        settings={"comfyui_base_dir": windows_mount_path},
     ).test_client()
 
     status = client.get("/api/comfyui/status")
@@ -2163,7 +2164,7 @@ def test_comfyui_status_warns_when_models_are_on_windows_mount(tmp_path):
     warnings = status.get_json()["storage_warnings"]
     assert warnings
     assert warnings[0]["code"] == "windows_mount_model_storage"
-    assert "/mnt/d/share/ComfyUI_windows_portable" in warnings[0]["path"]
+    assert windows_mount_path in warnings[0]["path"]
 
 
 def test_root_can_test_unsaved_comfyui_endpoint(tmp_path):

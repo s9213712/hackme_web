@@ -115,6 +115,17 @@ _SEARCH_PROFILES: dict[str, dict] = {
 # as a separate difficulty option.
 EXP6_DEFAULT_SEARCH_PROFILE = "balanced"
 
+_OPENING_PRINCIPLE_ENV = "EXP6_OPENING_PRINCIPLES"
+_OPENING_PRINCIPLE_DEFAULT = "0"
+_PIECE_ORDER_VALUE_CP = {
+    chess.PAWN: 100,
+    chess.KNIGHT: 320,
+    chess.BISHOP: 330,
+    chess.ROOK: 500,
+    chess.QUEEN: 900,
+    chess.KING: 0,
+}
+
 
 def bundled_neural_weights_path() -> Path:
     """Read-only seed weights shipped with the repo. Mirrors
@@ -157,10 +168,19 @@ def default_neural_weights_path() -> Path:
     return bundle_path
 
 
-def _resolve_search_profile(profile: str | None) -> dict:
+def _resolve_search_profile(profile: str | None, *, board: chess.Board | None = None) -> dict:
     name = str(profile or EXP6_DEFAULT_SEARCH_PROFILE).strip()
     if name not in _SEARCH_PROFILES:
         name = EXP6_DEFAULT_SEARCH_PROFILE
+    # v9.4 hybrid: when EXP6_HYBRID_ENDGAME_D3 is set and the board has
+    # ≤ EXP6_HYBRID_PIECE_THRESHOLD pieces (default 10), upgrade depth-2
+    # profiles to depth-3 (fixed_depth_d3). Endgame depth-3 wall-clock
+    # is ~245 ms median (vs middlegame 3000+ ms), acceptable for web.
+    if board is not None and os.environ.get("EXP6_HYBRID_ENDGAME_D3", "").strip():
+        threshold = int(os.environ.get("EXP6_HYBRID_PIECE_THRESHOLD", "10"))
+        if len(board.piece_map()) <= threshold:
+            if name in ("balanced", "fixed_depth_d2") and "fixed_depth_d3" in _SEARCH_PROFILES:
+                name = "fixed_depth_d3"
     return dict(_SEARCH_PROFILES[name])
 
 
@@ -205,6 +225,103 @@ def _move_order_score(board: chess.Board, move: chess.Move, _ply: int) -> int:
     if board.gives_check(move):
         score += 50_000
     return score
+
+
+def _center_bonus(square: int) -> int:
+    file = chess.square_file(square)
+    rank = chess.square_rank(square)
+    return int(28 - 4 * (abs(file - 3.5) + abs(rank - 3.5)))
+
+
+def _opening_principles_enabled() -> bool:
+    value = os.environ.get(_OPENING_PRINCIPLE_ENV, _OPENING_PRINCIPLE_DEFAULT).strip().lower()
+    return value not in {"", "0", "false", "no", "off"}
+
+
+def _opening_principle_score(board: chess.Board, move: chess.Move) -> int:
+    if board.fullmove_number > 12 or board.is_check():
+        return 0
+    moving = board.piece_at(move.from_square)
+    if moving is None:
+        return 0
+    score = 0
+    if board.is_capture(move):
+        captured = board.piece_at(move.to_square)
+        if captured is None and board.is_en_passant(move):
+            captured = chess.Piece(chess.PAWN, not board.turn)
+        if captured is not None:
+            score += 200 + _PIECE_ORDER_VALUE_CP.get(captured.piece_type, 0)
+    if board.gives_check(move):
+        score += 120
+    if move.promotion:
+        score += 900
+    if board.is_castling(move):
+        score += 1200
+
+    to_file = chess.square_file(move.to_square)
+    from_rank = chess.square_rank(move.from_square)
+    to_rank = chess.square_rank(move.to_square)
+    home_rank = 0 if moving.color == chess.WHITE else 7
+    if moving.piece_type in (chess.KNIGHT, chess.BISHOP):
+        if from_rank == home_rank:
+            score += 800
+        score += _center_bonus(move.to_square) * 6
+    elif moving.piece_type == chess.PAWN:
+        direction = 1 if moving.color == chess.WHITE else -1
+        advanced = (to_rank - from_rank) * direction
+        if to_file in (3, 4):
+            score += 650 if advanced == 2 else 520
+        elif to_file in (2, 5):
+            score += 220
+        elif to_file in (0, 7):
+            score -= 520
+        elif to_file in (1, 6):
+            score -= 240
+    elif moving.piece_type == chess.QUEEN:
+        score -= 460
+    elif moving.piece_type == chess.ROOK:
+        score -= 520
+    elif moving.piece_type == chess.KING and not board.is_castling(move):
+        score -= 700
+    return score
+
+
+def _principled_move_order_score(board: chess.Board, move: chess.Move, ply: int) -> int:
+    return _move_order_score(board, move, ply) + _opening_principle_score(board, move)
+
+
+def _is_bad_early_principle_move(board: chess.Board, move: chess.Move) -> bool:
+    if board.fullmove_number > 12 or board.is_check():
+        return False
+    if board.is_capture(move) or board.gives_check(move) or move.promotion or board.is_castling(move):
+        return False
+    moving = board.piece_at(move.from_square)
+    if moving is None:
+        return False
+    to_file = chess.square_file(move.to_square)
+    if moving.piece_type == chess.PAWN and to_file in (0, 7):
+        return True
+    if moving.piece_type == chess.PAWN and to_file in (1, 6) and board.fullmove_number <= 8:
+        return True
+    if moving.piece_type in (chess.QUEEN, chess.ROOK):
+        return True
+    if moving.piece_type == chess.KING and not board.is_castling(move):
+        return True
+    return False
+
+
+def _opening_principle_filter(board: chess.Board, best_move: chess.Move | None) -> chess.Move | None:
+    if best_move is None or not _is_bad_early_principle_move(board, best_move):
+        return best_move
+    legal = list(board.legal_moves)
+    if not legal:
+        return best_move
+    scored = [(move, _opening_principle_score(board, move)) for move in legal]
+    candidate, candidate_score = max(scored, key=lambda item: (item[1], item[0].uci()))
+    best_score = _opening_principle_score(board, best_move)
+    if candidate != best_move and candidate_score >= max(450, best_score + 500):
+        return candidate
+    return best_move
 
 
 def _ensure_default_weights() -> Path:
@@ -271,14 +388,16 @@ def choose_experiment_neural_move(
     weights = load_weights(weights_file)
     evaluator = NeuralEvaluator(weights)
 
-    profile = _resolve_search_profile(search_profile)
+    profile = _resolve_search_profile(search_profile, board=board)
     hasher = ZobristHasher(seed=20260601)
 
+    opening_principles = _opening_principles_enabled()
+    move_order_fn = _principled_move_order_score if opening_principles else _move_order_score
     result = search_best_move(
         board,
         max_depth=int(profile["depth"]),
         evaluate=evaluator,
-        move_order_fn=_move_order_score,
+        move_order_fn=move_order_fn,
         quiescence_depth=int(profile["quiescence_depth"]),
         hasher=hasher,
         time_budget_ms=profile.get("time_budget_ms"),
@@ -293,8 +412,10 @@ def choose_experiment_neural_move(
     best_move = opening_sanity_filter(
         board,
         result.best_move,
-        score_move=lambda mv: _move_order_score(board, mv, 0),
+        score_move=lambda mv: move_order_fn(board, mv, 0),
     )
+    if opening_principles:
+        best_move = _opening_principle_filter(board, best_move)
     if best_move is None:
         return None
     return _move_dict(board, best_move)

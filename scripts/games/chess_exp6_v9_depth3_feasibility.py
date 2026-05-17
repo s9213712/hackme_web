@@ -28,7 +28,7 @@ from services.games.chess_neural import NeuralEvaluator, load_weights  # noqa: E
 from services.games.chess_search import ZobristHasher, search_best_move  # noqa: E402
 from services.games.chess_exp6 import _move_order_score, _SEARCH_PROFILES  # noqa: E402
 
-CHAMPION_PATH = Path("/home/s92137/hackme_web/runtime/games/models/chess_experiment_6_neural.npz")
+CHAMPION_PATH = ROOT / "runtime/games/models/chess_experiment_6_neural.npz"
 
 
 def benchmark_one_position(weights, board: chess.Board, profile_name: str) -> float:

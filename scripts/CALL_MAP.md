@@ -264,7 +264,7 @@ exp5 candidate artifacts
     -> optional wrapper: chess_exp5_restart_smoke.py [--run-staged]
     -> run targeted Blockfish screen before full validation
     -> run staged five-game Blockfish comparison before expanded-100
-    -> keep private replay/detail/question files outside repo, preferably /home/s92137/hackme_web_private/runtime/private/games/exp5/
+    -> keep private replay/detail/question files outside repo, preferably under a private runtime root such as `<private-runtime-root>/games/exp5/`
     -> publish only aggregate redacted docs/evidence
   -> chess_exp5_production_readiness.py
   -> chess_exp5_promote_candidate.py

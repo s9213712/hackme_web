@@ -95,8 +95,24 @@ def run(ctx: PrepushContext) -> CheckResult:
             )
         return CheckResult.warn("gitleaks availability", "gitleaks is not installed; custom secrets scan passed")
 
+    # Run from the repo root with a relative source so `.gitleaks.toml` path
+    # allowlists such as `^runtime/` match generated local runtime trees.
     proc = utils.run_command(
-        ["gitleaks", "detect", "--source", str(ctx.repo_root), "--no-git", "--redact", "--config", str(ctx.repo_root / ".gitleaks.toml")],
+        [
+            "gitleaks",
+            "detect",
+            "--source",
+            ".",
+            "--no-git",
+            "--redact",
+            "--max-target-megabytes",
+            "2",
+            "--no-banner",
+            "--log-level",
+            "error",
+            "--config",
+            str(ctx.repo_root / ".gitleaks.toml"),
+        ],
         cwd=ctx.repo_root,
         timeout=90,
     )

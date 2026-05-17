@@ -16,12 +16,58 @@ const videoState = {
 };
 let videoPublishDriveFiles = [];
 let videoPendingPublishSelection = null;
+const videoUploadLiveJobs = new Map();
 const VIDEO_SHARE_FRAGMENT_STORAGE_KEY = "hackme_web.video_share_fragments";
 const VIDEO_HLS_JS_URL = "/js/hls.light.min.js?v=20260505-hlsjs";
 const VIDEO_E2EE_STREAM_V2_WORKER_URL = "/js/e2ee-stream-v2-worker.js?v=20260505-e2eev2";
 const VIDEO_E2EE_STREAM_V2_CHUNK_SIZE = 512 * 1024;
 const VIDEO_E2EE_STREAM_V2_MAX_RETRIES = 2;
 const VIDEO_E2EE_STREAM_V2_CACHE_LIMIT = 16;
+
+function videoUploadLiveJobId() {
+  return `video-upload-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function updateVideoUploadLiveJob(jobId, updates = {}) {
+  if (!jobId) return null;
+  const now = new Date().toISOString();
+  const existing = videoUploadLiveJobs.get(jobId) || {
+    job_uuid: jobId,
+    source_module: "video_upload_client",
+    source_ref: `video_upload:${jobId}`,
+    job_type: "video.upload.client",
+    title: "影音上傳",
+    description: "瀏覽器端影音上傳進度與伺服器處理等待狀態",
+    status: "running",
+    progress_percent: 0,
+    stage: "uploading",
+    stage_detail: "影音檔上傳中",
+    created_at: now,
+    metadata: {},
+    live_progress: true,
+    live_status_source: "Video upload",
+  };
+  const next = {
+    ...existing,
+    ...updates,
+    updated_at: now,
+    metadata: { ...(existing.metadata || {}), ...((updates && updates.metadata) || {}) },
+    live_progress: true,
+    live_status_source: "Video upload",
+  };
+  videoUploadLiveJobs.set(jobId, next);
+  return next;
+}
+
+window.getVideoUploadLiveJobs = function getVideoUploadLiveJobs() {
+  const now = Date.now();
+  const maxAgeMs = 15 * 60 * 1000;
+  Array.from(videoUploadLiveJobs.entries()).forEach(([key, job]) => {
+    const updated = Date.parse(job.updated_at || job.created_at || "") || 0;
+    if (updated && now - updated > maxAgeMs) videoUploadLiveJobs.delete(key);
+  });
+  return Array.from(videoUploadLiveJobs.values());
+};
 
 function videoMsg(text, ok = true) {
   const el = $("video-msg");
@@ -600,6 +646,7 @@ async function publishVideoFromDrive() {
   if (!directFile && !payload.cloud_file_id) return videoMsg("請選擇要直接上傳的影音檔，或選擇雲端硬碟中的影音檔", false);
   if (!payload.title && !directFile) return videoMsg("請輸入影音標題", false);
   let e2eeShare = null;
+  let liveUploadJobId = "";
   if (!directFile && selectedFile?.privacy_mode === "e2ee" && payload.visibility === "unlisted") {
     try {
       e2eeShare = await prepareVideoE2eeShareArtifacts(selectedFile.id);
@@ -613,10 +660,18 @@ async function publishVideoFromDrive() {
     let status = 0;
     let json = {};
     if (directFile) {
+      liveUploadJobId = videoUploadLiveJobId();
       const uploadPrivacyMode = $("video-upload-privacy-mode")?.value || "standard_plain";
       const uploadDoneStatus = uploadPrivacyMode === "server_encrypted"
         ? "上傳完成，伺服器端加密與掃描中；HLS 會在後台轉檔，進度可到任務中心查看"
         : "上傳完成，伺服器儲存與掃描中；HLS 會在後台轉檔，進度可到任務中心查看";
+      updateVideoUploadLiveJob(liveUploadJobId, {
+        title: `影音上傳：${directFile.name}`,
+        progress_percent: 1,
+        stage: "queued",
+        stage_detail: `準備上傳 ${directFile.name}`,
+        metadata: { filename: directFile.name, size_bytes: directFile.size, privacy_mode: uploadPrivacyMode },
+      });
       const form = new FormData();
       form.append("video", directFile);
       form.append("title", payload.title || directFile.name.replace(/\.[^.]+$/, ""));
@@ -639,8 +694,22 @@ async function publishVideoFromDrive() {
             total: event.total,
             status: event.loaded >= event.total ? uploadDoneStatus : "影音檔上傳中",
           });
+          updateVideoUploadLiveJob(liveUploadJobId, {
+            status: "running",
+            progress_percent: event.loaded >= event.total ? 88 : Math.max(1, Math.min(87, Math.round(percent * 0.87))),
+            stage: event.loaded >= event.total ? "server_processing" : "uploading",
+            stage_detail: event.loaded >= event.total ? uploadDoneStatus : "影音檔上傳中",
+            metadata: { loaded_bytes: event.loaded, total_bytes: event.total },
+          });
         } else {
           setVideoUploadProgress({ visible: true, percent: 0, loaded: event.loaded || 0, total: 0, status: "影音檔上傳中", indeterminate: true });
+          updateVideoUploadLiveJob(liveUploadJobId, {
+            status: "running",
+            progress_percent: 5,
+            stage: "uploading",
+            stage_detail: "影音檔上傳中",
+            metadata: { loaded_bytes: event.loaded || 0 },
+          });
         }
       });
       status = upload.status;
@@ -687,6 +756,15 @@ async function publishVideoFromDrive() {
     if (status < 200 || status >= 300 || !json.ok) throw new Error(json.msg || `HTTP ${status}`);
     if (directFile || coverFile) {
       setVideoUploadProgress({ visible: true, percent: 100, loaded: directFile?.size || coverFile?.size || 0, total: directFile?.size || coverFile?.size || 0, status: "處理完成" });
+      if (liveUploadJobId) {
+        updateVideoUploadLiveJob(liveUploadJobId, {
+          status: "succeeded",
+          progress_percent: 100,
+          stage: "completed",
+          stage_detail: "影音上傳與伺服器處理完成；若需要 HLS，後續轉檔會以另一筆任務顯示。",
+          metadata: { video_id: json.video?.id, file_id: json.file?.file_id || json.video?.cloud_file_id },
+        });
+      }
     }
     const input = $("video-upload-file");
     if (input) input.value = "";
@@ -726,6 +804,15 @@ async function publishVideoFromDrive() {
   } catch (err) {
     if (directFile || coverFile) {
       setVideoUploadProgress({ visible: true, percent: 100, loaded: 0, total: 0, status: err.message || "影音發布失敗" });
+      if (liveUploadJobId) {
+        updateVideoUploadLiveJob(liveUploadJobId, {
+          status: "failed",
+          progress_percent: 100,
+          stage: "failed",
+          stage_detail: err.message || "影音發布失敗",
+          error_message: err.message || "影音發布失敗",
+        });
+      }
     }
     videoMsg(err.message || "影音發布失敗", false);
   } finally {

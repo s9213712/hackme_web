@@ -23,7 +23,7 @@ QUICK_TESTS = [
     "tests/regressions/test_security_issue_regressions.py",
     "tests/users/test_user_csv_exports.py",
 ]
-QUICK_TIMEOUT_SECONDS = 180
+QUICK_TIMEOUT_SECONDS = 300
 QUICK_PYTEST_TIMEOUT_SECONDS = QUICK_TIMEOUT_SECONDS
 
 

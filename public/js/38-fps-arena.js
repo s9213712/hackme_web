@@ -317,6 +317,18 @@ function fpsArenaMaterial(color, roughness = 0.78, metalness = 0.06) {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness });
 }
 
+function fpsArenaGlowMaterial(color, opacity = 1, intensity = 0.65) {
+  return new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: intensity,
+    roughness: 0.48,
+    metalness: 0.16,
+    transparent: opacity < 1,
+    opacity,
+  });
+}
+
 function fpsArenaAddBox(scene, x, y, z, sx, sy, sz, color) {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), fpsArenaMaterial(color));
   mesh.position.set(x, y, z);
@@ -1180,6 +1192,25 @@ function fpsArenaBuildCombatMap(scene, level = FPS_ARENA_LEVELS[0]) {
   };
   const addCoverBox = (...args) => trackCover(fpsArenaAddBox(scene, ...args));
   const addCoverCylinder = (...args) => trackCover(fpsArenaAddCylinder(scene, ...args));
+  const addDecorBox = (x, y, z, sx, sy, sz, color, options = {}) => {
+    const mesh = fpsArenaAddBox(scene, x, y, z, sx, sy, sz, color);
+    mesh.userData = { ...mesh.userData, kind: "set_dressing", blocksPlayer: false };
+    if (options.glow) mesh.material = fpsArenaGlowMaterial(color, options.opacity ?? 1, options.intensity ?? 0.58);
+    mesh.castShadow = options.shadow !== false;
+    mesh.receiveShadow = options.receiveShadow !== false;
+    if (options.rotationY) mesh.rotation.y = options.rotationY;
+    return mesh;
+  };
+  const addDecorCylinder = (x, y, z, radius, height, color, options = {}) => {
+    const mesh = fpsArenaAddCylinder(scene, x, y, z, radius, height, color);
+    mesh.userData = { ...mesh.userData, kind: "set_dressing", blocksPlayer: false };
+    if (options.glow) mesh.material = fpsArenaGlowMaterial(color, options.opacity ?? 1, options.intensity ?? 0.6);
+    if (options.rotationX) mesh.rotation.x = options.rotationX;
+    if (options.rotationZ) mesh.rotation.z = options.rotationZ;
+    mesh.castShadow = options.shadow !== false;
+    mesh.receiveShadow = options.receiveShadow !== false;
+    return mesh;
+  };
   const addFloorMark = (x, z, sx, sz, color) => {
     const mark = fpsArenaAddBox(scene, x, 0.015, z, sx, 0.03, sz, color);
     mark.castShadow = false;
@@ -1222,12 +1253,32 @@ function fpsArenaBuildCombatMap(scene, level = FPS_ARENA_LEVELS[0]) {
   fpsArenaAddBox(scene, -4.8, 0.04, -14, 2.8, 0.04, 2.8, 0x78350f);
   fpsArenaAddBox(scene, 4.8, 0.04, -18, 2.8, 0.04, 2.8, 0x78350f);
 
-  if (level.key === "reactor") {
+  if (level.key === "warehouse") {
+    [-9.8, 9.8].forEach((x, sideIndex) => {
+      [-7.8, -14.5, -21.2, -27.9].forEach((z, rowIndex) => {
+        const color = (sideIndex + rowIndex) % 3 === 0 ? 0x1d4ed8 : (rowIndex % 2 ? 0xea580c : 0x475569);
+        addDecorBox(x, 1.1, z, 1.7, 2.2, 4.6, color);
+        if (rowIndex % 2 === 0) addDecorBox(x, 3.35, z + 0.35, 1.65, 2.1, 3.8, color === 0x475569 ? 0x334155 : color);
+      });
+    });
+    addDecorBox(0, 4.15, -16.5, 18.5, 0.28, 0.34, 0xfacc15);
+    addDecorBox(-3.2, 3.55, -16.5, 0.18, 1.1, 0.18, 0xfacc15);
+    addDecorCylinder(-3.2, 2.85, -16.5, 0.16, 0.44, 0xf97316, { rotationX: Math.PI / 2 });
+    addFloorMark(0, -6.2, 8.5, 0.16, 0xf97316);
+  } else if (level.key === "reactor") {
     addFloorMark(0, -20, 16, 0.16, 0x22d3ee);
     addCoverCylinder(-2.8, 1.25, -18.8, 0.7, 2.5, 0x155e75);
     addCoverCylinder(2.8, 1.25, -18.8, 0.7, 2.5, 0x155e75);
     addCoverBox(0, 0.5, -23.1, 7.2, 1.0, 0.44, 0x0f766e);
     addCoverBox(-8.5, 0.7, -15.5, 1.2, 1.4, 4.2, 0x164e63);
+    addDecorCylinder(0, 1.85, -18.8, 1.15, 3.7, 0x22d3ee, { glow: true, opacity: 0.82, intensity: 0.9 });
+    addDecorCylinder(0, 3.95, -18.8, 1.55, 0.28, 0x67e8f9, { glow: true, opacity: 0.68, intensity: 0.7 });
+    addDecorCylinder(0, 0.28, -18.8, 1.7, 0.32, 0x0e7490);
+    [-7.7, 7.7].forEach((x) => {
+      addDecorCylinder(x, 2.15, -20.3, 0.18, 17.5, 0x0e7490, { rotationX: Math.PI / 2 });
+      addDecorBox(x, 2.18, -11.8, 1.0, 0.35, 0.9, 0x22d3ee, { glow: true, opacity: 0.78 });
+    });
+    addDecorBox(0, 4.55, -18.8, 6.2, 0.18, 6.2, 0x164e63);
   } else if (level.key === "subway") {
     addFloorMark(-6.2, -18.5, 0.2, 26, 0xfacc15);
     addFloorMark(6.2, -18.5, 0.2, 26, 0xfacc15);
@@ -1235,6 +1286,19 @@ function fpsArenaBuildCombatMap(scene, level = FPS_ARENA_LEVELS[0]) {
     addCoverBox(0, 0.56, -20.5, 8.2, 1.12, 0.52, 0x374151);
     addCoverBox(-8.3, 0.82, -25.2, 2.0, 1.64, 3.8, 0x4b5563);
     addCoverBox(8.3, 0.82, -12.5, 2.0, 1.64, 3.8, 0x4b5563);
+    [-3.2, 3.2].forEach((x) => {
+      addFloorMark(x, -19, 0.14, 28.5, 0x020617);
+      addDecorBox(x, 0.08, -19, 0.2, 0.12, 28.5, 0x0f172a, { shadow: false });
+    });
+    [-6.8, 6.8].forEach((x, index) => {
+      addDecorBox(x, 1.32, -21.8 + index * 5.2, 1.1, 2.25, 11.8, 0x2563eb);
+      addDecorBox(x, 2.02, -21.8 + index * 5.2, 1.16, 0.28, 11.9, 0x0f172a);
+      for (let z = -26.4 + index * 5.2; z <= -17.4 + index * 5.2; z += 2.2) {
+        addDecorBox(x - Math.sign(x) * 0.58, 1.45, z, 0.05, 0.58, 0.82, 0xbfdbfe, { glow: true, opacity: 0.82, intensity: 0.42 });
+      }
+    });
+    addDecorBox(0, 3.25, -13.7, 7.2, 0.22, 0.9, 0xfacc15, { glow: true, opacity: 0.9, intensity: 0.45 });
+    addDecorBox(0, 3.04, -13.7, 4.7, 0.58, 0.08, 0x111827);
   } else if (level.key === "citadel") {
     addFloorMark(0, -18.4, 18, 0.18, 0xc4b5fd);
     addCoverBox(0, 0.88, -18.4, 2.2, 1.76, 7.2, 0x4c1d95);
@@ -1242,6 +1306,16 @@ function fpsArenaBuildCombatMap(scene, level = FPS_ARENA_LEVELS[0]) {
     addCoverBox(7.8, 1.08, -22.2, 1.5, 2.16, 5.8, 0x312e81);
     addCoverCylinder(-3.8, 1.36, -28.8, 0.58, 2.72, 0x6d28d9);
     addCoverCylinder(3.8, 1.36, -28.8, 0.58, 2.72, 0x6d28d9);
+    [-9.0, 9.0].forEach((x) => {
+      addDecorCylinder(x, 2.25, -8.5, 0.72, 4.5, 0x312e81);
+      addDecorCylinder(x, 2.25, -29.2, 0.72, 4.5, 0x312e81);
+      addDecorBox(x, 4.62, -18.8, 1.05, 0.5, 22.6, 0x4c1d95);
+    });
+    addDecorBox(0, 4.65, -9.0, 12.5, 0.55, 0.72, 0x4c1d95);
+    addDecorBox(0, 3.2, -9.0, 3.2, 2.5, 0.65, 0x111827);
+    addDecorCylinder(0, 2.1, -27.8, 0.92, 4.2, 0xa78bfa, { glow: true, opacity: 0.72, intensity: 0.86 });
+    addDecorCylinder(0, 4.42, -27.8, 1.28, 0.22, 0xc4b5fd, { glow: true, opacity: 0.74, intensity: 0.7 });
+    addFloorMark(0, -27.8, 6.2, 6.2, 0x6d28d9);
   }
 
   const coverPoints = [

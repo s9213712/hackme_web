@@ -24,7 +24,7 @@ import sys
 import time
 from pathlib import Path
 
-REPO = Path("/home/s92137/hackme_web")
+REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 import chess  # noqa: E402
@@ -45,7 +45,7 @@ from services.games.chess_exp6 import (  # noqa: E402
 )
 
 
-STOCKFISH_BIN = resolve_stockfish_path("/home/s92137/reference_repos/Stockfish/src/stockfish")
+STOCKFISH_BIN = resolve_stockfish_path(os.environ.get("STOCKFISH_PATH", ""))
 # Quality games come from ``chess_exp6_download_quality.py``. The script
 # produces ``quality_1000_games.jsonl`` after filtering multi-source
 # downloads through the elite gate.

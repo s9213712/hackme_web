@@ -339,71 +339,75 @@
   }
 
   function makeStickmanWorld(level = STICKMAN_LEVELS[0]) {
-    const platforms = [
-      { x: 0, y: 318, w: WORLD_WIDTH, h: 42, type: "ground" },
-      { x: 130, y: 265, w: 126, h: 12, type: "catwalk" },
-      { x: 344, y: 236, w: 112, h: 12, type: "cratewalk" },
-      { x: 570, y: 278, w: 118, h: 12, type: "catwalk" },
-      { x: 802, y: 274, w: 136, h: 12, type: "catwalk" },
-      { x: 1012, y: 232, w: 128, h: 12, type: "pipe" },
-      { x: 1216, y: 276, w: 132, h: 12, type: "catwalk" },
-      { x: 1502, y: 258, w: 118, h: 12, type: "catwalk" },
-      { x: 1710, y: 220, w: 118, h: 12, type: "pipe" },
-      { x: 1888, y: 282, w: 160, h: 12, type: "catwalk" },
-      { x: 2206, y: 266, w: 150, h: 12, type: "catwalk" },
-      { x: 2474, y: 230, w: 136, h: 12, type: "pipe" },
-      { x: 2660, y: 286, w: 150, h: 12, type: "catwalk" },
-    ];
-    if (level.key === "dock") {
-      platforms.push(
+    const layouts = {
+      dock: [
+        { x: 130, y: 265, w: 126, h: 12, type: "catwalk" },
         { x: 238, y: 212, w: 92, h: 12, type: "container" },
+        { x: 344, y: 236, w: 112, h: 12, type: "cratewalk" },
         { x: 468, y: 192, w: 112, h: 12, type: "crane" },
+        { x: 570, y: 278, w: 118, h: 12, type: "catwalk" },
         { x: 724, y: 226, w: 96, h: 12, type: "container" },
+        { x: 802, y: 274, w: 136, h: 12, type: "catwalk" },
+        { x: 1012, y: 232, w: 128, h: 12, type: "pipe" },
+        { x: 1216, y: 276, w: 132, h: 12, type: "catwalk" },
         { x: 1392, y: 210, w: 108, h: 12, type: "container" },
+        { x: 1502, y: 258, w: 118, h: 12, type: "catwalk" },
         { x: 1628, y: 188, w: 92, h: 12, type: "crane" },
+        { x: 1888, y: 282, w: 160, h: 12, type: "catwalk" },
         { x: 2110, y: 214, w: 122, h: 12, type: "container" },
+        { x: 2206, y: 266, w: 150, h: 12, type: "catwalk" },
         { x: 2586, y: 184, w: 96, h: 12, type: "crane" },
-      );
-    } else if (level.key === "reactor") {
-      platforms.push(
+        { x: 2660, y: 286, w: 150, h: 12, type: "catwalk" },
+      ],
+      reactor: [
         { x: 188, y: 210, w: 102, h: 12, type: "pipe" },
+        { x: 334, y: 272, w: 148, h: 12, type: "reactor" },
         { x: 488, y: 188, w: 92, h: 12, type: "vent" },
         { x: 706, y: 214, w: 96, h: 12, type: "pipe" },
         { x: 958, y: 176, w: 118, h: 12, type: "reactor" },
+        { x: 1164, y: 258, w: 148, h: 12, type: "pipe" },
         { x: 1332, y: 206, w: 112, h: 12, type: "pipe" },
         { x: 1578, y: 176, w: 112, h: 12, type: "reactor" },
+        { x: 1786, y: 246, w: 142, h: 12, type: "vent" },
         { x: 2108, y: 218, w: 126, h: 12, type: "pipe" },
+        { x: 2264, y: 272, w: 130, h: 12, type: "reactor" },
         { x: 2428, y: 188, w: 104, h: 12, type: "vent" },
         { x: 2688, y: 212, w: 96, h: 12, type: "pipe" },
-      );
-    } else if (level.key === "skyline") {
-      platforms.push(
+      ],
+      skyline: [
+        { x: 116, y: 282, w: 138, h: 12, type: "girder" },
         { x: 280, y: 196, w: 92, h: 12, type: "girder" },
         { x: 470, y: 202, w: 118, h: 12, type: "girder" },
         { x: 762, y: 174, w: 106, h: 12, type: "billboard" },
+        { x: 930, y: 262, w: 124, h: 12, type: "girder" },
         { x: 1180, y: 188, w: 138, h: 12, type: "girder" },
         { x: 1452, y: 160, w: 108, h: 12, type: "antenna" },
+        { x: 1646, y: 274, w: 132, h: 12, type: "girder" },
         { x: 1970, y: 176, w: 148, h: 12, type: "girder" },
         { x: 2196, y: 146, w: 96, h: 12, type: "antenna" },
         { x: 2398, y: 198, w: 118, h: 12, type: "girder" },
         { x: 2642, y: 172, w: 122, h: 12, type: "billboard" },
-      );
-    } else if (level.key === "core") {
-      platforms.push(
+      ],
+      core: [
+        { x: 118, y: 262, w: 112, h: 12, type: "core-rail" },
         { x: 342, y: 206, w: 92, h: 12, type: "core-rail" },
         { x: 610, y: 198, w: 122, h: 12, type: "core-rail" },
         { x: 824, y: 164, w: 92, h: 12, type: "core-node" },
         { x: 1020, y: 178, w: 112, h: 12, type: "core-node" },
         { x: 1286, y: 148, w: 96, h: 12, type: "core-rail" },
         { x: 1510, y: 202, w: 118, h: 12, type: "core-rail" },
+        { x: 1648, y: 274, w: 120, h: 12, type: "core-node" },
         { x: 1768, y: 160, w: 102, h: 12, type: "core-node" },
         { x: 2024, y: 184, w: 126, h: 12, type: "core-rail" },
         { x: 2272, y: 154, w: 108, h: 12, type: "core-node" },
         { x: 2508, y: 192, w: 132, h: 12, type: "core-rail" },
         { x: 2706, y: 146, w: 98, h: 12, type: "core-node" },
-      );
-    }
-    return platforms;
+      ],
+    };
+    return [
+      { x: 0, y: 318, w: WORLD_WIDTH, h: 42, type: "ground" },
+      ...(layouts[level.key] || layouts.dock),
+    ];
   }
 
   function makeStickmanScenery(level = STICKMAN_LEVELS[0]) {
@@ -632,6 +636,49 @@
     return pool[(index + room) % pool.length];
   }
 
+  function stickmanEnemySpawnOffset(level, room, index) {
+    const plans = {
+      dock: [
+        [248, 384, 552, 646],
+        [120, 338, 514, 650],
+        [156, 310, 510, 638],
+        [190, 356, 520, 636],
+      ],
+      reactor: [
+        [168, 352, 548, 632],
+        [104, 286, 486, 630],
+        [224, 402, 560, 660],
+        [148, 336, 516, 628],
+      ],
+      skyline: [
+        [116, 300, 504, 642],
+        [202, 430, 604, 668],
+        [112, 308, 520, 654],
+        [250, 456, 612, 666],
+      ],
+      core: [
+        [142, 332, 518, 648],
+        [96, 292, 472, 638],
+        [198, 390, 542, 666],
+        [150, 320, 500, 642],
+      ],
+    };
+    const levelPlan = plans[level?.key] || plans.dock;
+    const roomPlan = levelPlan[Math.max(0, Math.min(levelPlan.length - 1, room - 1))] || levelPlan[0];
+    return roomPlan[index % roomPlan.length] + Math.floor(index / roomPlan.length) * 34;
+  }
+
+  function stickmanBossSpawnOffset(level, index) {
+    const plans = {
+      dock: [398, 504],
+      reactor: [314, 542],
+      skyline: [456, 608],
+      core: [308, 548],
+    };
+    const plan = plans[level?.key] || plans.dock;
+    return plan[index % plan.length] + Math.floor(index / plan.length) * 34;
+  }
+
   function pointInStickmanRect(x, y, rect, inflate = 0) {
     return x >= rect.x - inflate && x <= rect.x + rect.w + inflate && y >= rect.y - inflate && y <= rect.y + rect.h + inflate;
   }
@@ -826,7 +873,7 @@
     for (let i = 0; i < enemyCount; i += 1) {
       const aiRole = stickmanRoleForRoom(state, room, i);
       const role = STICKMAN_ENEMY_ROLES[aiRole] || STICKMAN_ENEMY_ROLES.rifle;
-      const x = baseX + 245 + i * 132 + stickmanRandom(state) * 44;
+      const x = baseX + stickmanEnemySpawnOffset(level, room, i) + (stickmanRandom(state) - 0.5) * 34;
       const y = groundYAt(state, x) - 42;
       const hp = Math.max(1, 3 + Math.floor(room / 2) + mode.enemyHp + Number(level.enemyHp || 0) + role.hpBonus);
       state.enemies.push({
@@ -863,9 +910,10 @@
       for (let i = 0; i < bossCount; i += 1) {
         const bossRole = level.boss?.role || "boss";
         const bossHp = Number(level.boss?.hp || 22) + mode.enemyHp * 3;
+        const x = baseX + stickmanBossSpawnOffset(level, i);
         state.enemies.push({
-          x: baseX + 405 + i * 92,
-          y: 318 - 64,
+          x,
+          y: groundYAt(state, x + 19) - 64,
           w: 38,
           h: 64,
           vx: i % 2 ? 0.68 : -0.72,

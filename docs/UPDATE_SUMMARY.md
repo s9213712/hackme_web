@@ -1,6 +1,23 @@
 # Update Summary
 
-Release ID: `2026.05.13-157`
+Release ID: `2026.05.17-158`
+
+## 2026.05.17-158
+
+- Hardened the CI/pre-push gate after recent game, experiment, and deployment
+  changes: generated chess runtime DB files are no longer tracked, local
+  workstation paths were replaced with deployable defaults, maintained Exp6 /
+  stress / browser QA scripts were registered in `scripts/INDEX.md`, and
+  gitleaks now skips generated chess runtime evidence.
+- Updated regression assertions to match the current lazy module-loading,
+  anonymous chat-avatar, and deferred margin-fee settlement behavior.
+- Kept the recent frontend gameplay and experiment-area polish in the release
+  train so the published release id matches the code users are actually served.
+- Reworked the open-world game map from a uniform road grid into a more
+  readable city: varied avenue widths, sidewalks, medians, crosswalks, alleys,
+  waterfront, park, hospital, market, industrial props, and matching minimap
+  colors now make districts easier to read while preserving existing missions
+  and vehicle routing.
 
 ## 2026.05.13-157
 

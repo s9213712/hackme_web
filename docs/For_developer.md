@@ -20,12 +20,32 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.13-157`
+- Release ID: `2026.05.17-158`
 - Schema version: `30`
 - Release ID source: `services/platform/release_info.py`
 - Runtime version endpoint: `GET /api/version`
 - Branch and release policy: [BRANCHING_AND_RELEASE.md](BRANCHING_AND_RELEASE.md)
 - Upload request-body cap: `HTML_LEARNING_MAX_CONTENT_MB` (default `1024`, minimum `128`)
+
+## Server Runner Boundary
+
+There are two supported startup paths, and they are intentionally different.
+
+`python3 server.py` is the legacy direct path. It starts Flask/Werkzeug's
+development server, runs the `server.py` `__main__` block, and may start legacy
+in-process workers in the same process. Keep it for one-process debugging,
+`--doctor`, local recovery, and reproducing old worker behavior. Do not use it
+for normal operation, upload/HLS stress, or deployment.
+
+`./test_for_develop.sh --server-runner gunicorn` and
+`python -m gunicorn server:app ...` are the bounded web-serving paths. They
+import `server:app`, use fixed workers/threads/backlog/timeouts, and rely on the
+app-level backpressure fast lane. Gunicorn does not execute the `server.py`
+`__main__` block, so long-running jobs must be started by explicit worker
+entrypoints instead of being hidden inside web workers.
+
+The development script defaults to Gunicorn. Choose the Flask/Werkzeug runner
+only when you deliberately need the direct debug path.
 
 ## Project Working Principles
 

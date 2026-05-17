@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -47,7 +48,7 @@ from pathlib import Path
 from urllib.request import urlopen, Request
 
 
-REPO = Path("/home/s92137/hackme_web")
+REPO = Path(__file__).resolve().parents[2]
 OUT_DIR = REPO / "runtime/private/games/exp6"
 DOWNLOADS_DIR = OUT_DIR / "downloads"
 REPLAY_JSONL = OUT_DIR / "downloaded_replay.jsonl"
@@ -56,9 +57,9 @@ SUMMARY_JSON = OUT_DIR / "quality_1000_summary.json"
 
 # Existing trusted JSONLs that already passed the elite pipeline.
 PREEXISTING_TRUSTED = [
-    "/home/s92137/hackme_web_private/runtime/private/games/exp5/v24_expanded_100/imported_replay_top_supplement.jsonl",
-    "/home/s92137/hackme_web_private/runtime/private/games/exp5/v24_expanded_100/imported_replay.jsonl",
-    "/home/s92137/hackme_web_private/runtime/private/games/exp5/v24_expanded_100/imported_replay_multi.jsonl",
+    str(Path.home() / "hackme_web_private/runtime/private/games/exp5/v24_expanded_100/imported_replay_top_supplement.jsonl"),
+    str(Path.home() / "hackme_web_private/runtime/private/games/exp5/v24_expanded_100/imported_replay.jsonl"),
+    str(Path.home() / "hackme_web_private/runtime/private/games/exp5/v24_expanded_100/imported_replay_multi.jsonl"),
 ]
 
 # Fresh source URLs. Lichess limits anonymous PGN exports to ~500 per
@@ -463,7 +464,7 @@ def main() -> int:
                         help="Override summary JSON path.")
     parser.add_argument(
         "--stockfish-path",
-        default="/home/s92137/reference_repos/Stockfish/src/stockfish",
+        default=os.environ.get("STOCKFISH_PATH", ""),
         help="Required at the final tier if the candidate pool exceeds the "
              "remaining quota — used to rank surplus by per-move rejection count.",
     )

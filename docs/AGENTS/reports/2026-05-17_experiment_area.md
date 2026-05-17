@@ -4,6 +4,8 @@
 
 Added a new `experiments` single-page app module for lightweight educational Canvas simulations. The module is intentionally frontend-only: it does not create backend jobs, DB tables, migrations, Flask routes, or background workers.
 
+The simulations now start in static-preview mode. Opening the module, switching sub-tabs, or changing controls draws a single preview frame only; the continuous `requestAnimationFrame` loop starts only after the user presses `開始模擬`, and it stops when the user pauses, switches experiment tabs, hides the browser tab, or leaves the module.
+
 Access is limited in the client navigation to:
 
 - `root`
@@ -56,7 +58,9 @@ Manual smoke checklist:
 
 - Log in as an allowed account and confirm the sidebar shows `實驗區`.
 - Switch all three experiment tabs.
-- Confirm each Canvas animates and controls update KPIs.
+- Confirm each Canvas first shows a static preview and does not continuously animate until `開始模擬` is pressed.
+- Confirm `開始模擬` starts animation, `暫停模擬` stops it, and switching experiment tabs returns to preview-only mode.
+- Confirm controls update KPI previews without starting the continuous animation loop.
 - Confirm logout removes `module-experiments.active`.
 - Confirm browser console has no errors.
 - Confirm no backend API call, DB migration, or worker is introduced by the simulations.

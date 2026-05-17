@@ -23,7 +23,7 @@ BASELINE_PROFILE = (
     "fixed_depth_fianchetto_tail_castle_guard_v28e_depth3_no_null_mate_net30_"
     "fast_king_mobility4"
 )
-DEFAULT_STOCKFISH_PATH = "/home/s92137/reference_repos/Stockfish/src/stockfish"
+DEFAULT_STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "")
 
 
 def _repo_root() -> Path:

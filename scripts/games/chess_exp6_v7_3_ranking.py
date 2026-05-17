@@ -74,6 +74,7 @@ K_NEGATIVES = 3                  # alternative legal moves sampled per position
 RANK_TEMPERATURE = 0.5           # logistic ranking softness in value space
 
 PLAYED_MOVES_PATH = ROOT / "runtime/private/games/exp6/played_moves.jsonl"
+# v9.3 override targets — pass via --labels / --played-moves at runtime.
 PERSISTENT_DIR = Path.home() / "exp6_output"
 SNAPSHOTS_DIR = PERSISTENT_DIR / "v7_3_snapshots"
 REPORT_JSON = PERSISTENT_DIR / "v7_3_report.json"
@@ -85,24 +86,25 @@ def _value_target_from_cp_white(cp_white: float, stm_is_white: bool) -> float:
     return math.tanh(cp_clipped / VALUE_SCALE)
 
 
-def load_played_moves() -> dict[tuple[int, str], str]:
+def load_played_moves(path: Path = PLAYED_MOVES_PATH) -> dict[tuple[int, str], str]:
     """Returns {(game_idx, fen_before): played_move_uci}."""
-    if not PLAYED_MOVES_PATH.exists():
-        raise FileNotFoundError(f"missing {PLAYED_MOVES_PATH}; run chess_exp6_extract_played_moves.py first")
+    if not path.exists():
+        raise FileNotFoundError(f"missing {path}; run chess_exp6_extract_played_moves.py first")
     out: dict[tuple[int, str], str] = {}
-    with PLAYED_MOVES_PATH.open() as f:
+    with path.open() as f:
         for line in f:
             rec = json.loads(line)
             out[(int(rec["game_idx"]), rec["fen"])] = rec["played_move"]
     return out
 
 
-def load_split(played_map: dict) -> tuple[list, list]:
-    if not cc.LABELS_PATH.exists():
-        raise FileNotFoundError(f"Labels cache missing: {cc.LABELS_PATH}")
+def load_split(played_map: dict, labels_path: Path | None = None) -> tuple[list, list]:
+    labels_path = labels_path or cc.LABELS_PATH
+    if not labels_path.exists():
+        raise FileNotFoundError(f"Labels cache missing: {labels_path}")
     train, dev = [], []
     n_no_move = 0
-    with cc.LABELS_PATH.open() as f:
+    with labels_path.open() as f:
         for line in f:
             rec = json.loads(line)
             fen = rec["fen"]
@@ -556,18 +558,34 @@ def main() -> int:
     ap.add_argument("--ranking-weight", type=float, default=0.15)
     ap.add_argument("--k-neg", type=int, default=K_NEGATIVES)
     ap.add_argument("--out-snapshot-name", default="v7_3_best.npz")
+    ap.add_argument("--labels-path", type=Path, default=None,
+                    help="Override labels jsonl path (default v7.1's 1k labels).")
+    ap.add_argument("--played-moves-path", type=Path, default=None,
+                    help="Override played_moves jsonl path.")
+    ap.add_argument("--train-game-id-max", type=int, default=None,
+                    help="Override train/dev split upper edge (inclusive). For 10K dataset use 8999.")
+    ap.add_argument("--dev-game-id-max", type=int, default=None,
+                    help="Override dev range upper edge (inclusive). For 10K dataset use 9999.")
     args = ap.parse_args()
+    # Apply game_id range overrides for v9 (10K) dataset
+    if args.train_game_id_max is not None and args.dev_game_id_max is not None:
+        global TRAIN_GAME_ID_RANGE, DEV_GAME_ID_RANGE
+        TRAIN_GAME_ID_RANGE = (0, args.train_game_id_max)
+        DEV_GAME_ID_RANGE = (args.train_game_id_max + 1, args.dev_game_id_max)
+        print(f"  override split: train [0..{args.train_game_id_max}], dev [{args.train_game_id_max+1}..{args.dev_game_id_max}]", flush=True)
 
     SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"loading played moves...", flush=True)
+    played_moves_path = args.played_moves_path if args.played_moves_path else PLAYED_MOVES_PATH
+    labels_path = args.labels_path if args.labels_path else cc.LABELS_PATH
+    print(f"loading played moves from {played_moves_path} ...", flush=True)
     t0 = time.perf_counter()
-    played_map = load_played_moves()
+    played_map = load_played_moves(played_moves_path)
     print(f"  {len(played_map)} (game_idx, fen) → played_move entries ({time.perf_counter()-t0:.1f}s)", flush=True)
 
-    print(f"loading labels + splitting by game_id...", flush=True)
+    print(f"loading labels from {labels_path} + splitting by game_id...", flush=True)
     t0 = time.perf_counter()
-    train_rows, dev_rows = load_split(played_map)
+    train_rows, dev_rows = load_split(played_map, labels_path=labels_path)
     print(f"  train={len(train_rows)}, dev={len(dev_rows)} ({time.perf_counter()-t0:.1f}s)", flush=True)
 
     print(f"precomputing features...", flush=True)

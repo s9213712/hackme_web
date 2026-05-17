@@ -44,6 +44,9 @@ public/data/workflow_template_benchmarks_*.json
 !docs/games/evidence/**/
 !docs/games/evidence/**/*.json
 !docs/games/evidence/**/*.jsonl
+docs/games/evidence/**/_runtime/**/*.db
+docs/games/evidence/**/_runtime/**/*.sqlite
+docs/games/evidence/**/_runtime/**/*.sqlite3
 !docs/games/experiments/
 !docs/games/experiments/**/
 !docs/games/experiments/**/*.md

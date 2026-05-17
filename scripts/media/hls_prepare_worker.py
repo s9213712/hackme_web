@@ -8,10 +8,16 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
 from cryptography.fernet import Fernet
+
+try:
+    import fcntl
+except Exception:  # pragma: no cover - non-POSIX fallback
+    fcntl = None
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -68,6 +74,69 @@ def _load_stream_file(conn, file_id):
     return row
 
 
+def _media_runtime_dir(storage_root):
+    try:
+        return Path(storage_root).resolve().parent
+    except Exception:
+        return Path.cwd()
+
+
+def _lower_worker_priority():
+    try:
+        nice_value = int(os.environ.get("HACKME_MEDIA_HLS_WORKER_NICE", "10"))
+    except Exception:
+        nice_value = 10
+    if nice_value <= 0 or not hasattr(os, "nice"):
+        return
+    try:
+        os.nice(min(19, nice_value))
+    except Exception:
+        return
+
+
+def _acquire_hls_worker_slot(conn, *, args, file_row):
+    if fcntl is None:
+        return None
+    lock_dir = _media_runtime_dir(args.storage_root) / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_handle = (lock_dir / "media_hls_prepare.lock").open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return lock_handle
+    except BlockingIOError:
+        _sync_hls_platform_job(
+            conn,
+            args=args,
+            file_row=file_row,
+            status="running",
+            progress_percent=12,
+            stage="waiting_worker_slot",
+            stage_detail="HLS 外部程序已排隊，等待前一個影音轉檔釋放資源。",
+        )
+        conn.commit()
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        return lock_handle
+    except Exception:
+        try:
+            lock_handle.close()
+        except Exception:
+            pass
+        return None
+
+
+def _release_hls_worker_slot(lock_handle):
+    if not lock_handle or fcntl is None:
+        return
+    try:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        pass
+    try:
+        lock_handle.close()
+    except Exception:
+        pass
+
+
 def _hls_job_source_ref(file_id):
     return f"media_stream:{str(file_id or '').strip()}"
 
@@ -122,8 +191,7 @@ def _sync_hls_platform_job(
             if error_message:
                 updates["error_message"] = error_message
                 updates["error_stage"] = stage
-            defer_progress = status not in {"succeeded", "failed", "cancelled", "expired"}
-            job = update_job(conn, existing["job_uuid"], defer_progress=defer_progress, **updates)
+            job = update_job(conn, existing["job_uuid"], defer_progress=False, flush=True, **updates)
             add_job_event(
                 conn,
                 job["job_uuid"],
@@ -132,7 +200,8 @@ def _sync_hls_platform_job(
                 message=stage_detail or error_message or "HLS 任務狀態更新",
                 progress_percent=progress_percent,
                 payload=metadata,
-                defer_progress=defer_progress,
+                defer_progress=False,
+                flush=True,
             )
             return job
         return create_job(
@@ -152,6 +221,41 @@ def _sync_hls_platform_job(
         )
     except Exception:
         return None
+
+
+def _asset_result_summary(asset):
+    if not isinstance(asset, dict):
+        return {}
+    variants = asset.get("variants") if isinstance(asset.get("variants"), list) else []
+    summarized_variants = []
+    segment_count = 0
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        segments = variant.get("segments") if isinstance(variant.get("segments"), list) else []
+        segment_count += len(segments)
+        summarized_variants.append({
+            "name": variant.get("name"),
+            "width": variant.get("width"),
+            "height": variant.get("height"),
+            "bitrate": variant.get("bitrate"),
+            "codec": variant.get("codec"),
+            "playlist_path": variant.get("playlist_path"),
+            "segment_count": len(segments),
+        })
+    return {
+        "id": asset.get("id"),
+        "uploaded_file_id": asset.get("uploaded_file_id"),
+        "status": asset.get("status"),
+        "media_type": asset.get("media_type"),
+        "source_mode": asset.get("source_mode"),
+        "source_size_bytes": asset.get("source_size_bytes"),
+        "duration_seconds": asset.get("duration_seconds"),
+        "master_manifest_path": asset.get("master_manifest_path"),
+        "variants_count": len(summarized_variants),
+        "segments_count": segment_count,
+        "variants": summarized_variants,
+    }
 
 
 def _mark_video_ready(conn, *, file_id, video_id=0, duration_seconds=0):
@@ -218,11 +322,47 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+    _lower_worker_priority()
     conn = open_db(args.db_path)
+    slot_lock = None
+    progress_state = {"last_at": 0.0, "last_percent": -1}
+
+    def progress(percent, stage="processing", detail=""):
+        try:
+            value = max(0, min(99, int(percent or 0)))
+        except Exception:
+            value = 0
+        now = time.monotonic()
+        if value < 100 and value < int(progress_state["last_percent"]) + 2 and now - float(progress_state["last_at"]) < 2.0:
+            return
+        progress_state["last_at"] = now
+        progress_state["last_percent"] = value
+        _sync_hls_platform_job(
+            conn,
+            args=args,
+            file_row=file_row,
+            status="running",
+            progress_percent=value,
+            stage=stage,
+            stage_detail=detail or "HLS 外部程序正在處理；你可以先做別的事，完成後會通知。",
+        )
+        conn.commit()
+
     try:
         ensure_video_schema(conn)
         ensure_media_stream_schema(conn)
         file_row = _load_stream_file(conn, args.file_id)
+        _sync_hls_platform_job(
+            conn,
+            args=args,
+            file_row=file_row,
+            status="running",
+            progress_percent=10,
+            stage="worker_started",
+            stage_detail="HLS 外部程序已啟動，正在等待轉檔資源。",
+        )
+        conn.commit()
+        slot_lock = _acquire_hls_worker_slot(conn, args=args, file_row=file_row)
         _sync_hls_platform_job(
             conn,
             args=args,
@@ -244,6 +384,7 @@ def main(argv=None):
             server_file_fernet=server_file_fernet,
             ffprobe_bin=args.ffprobe_bin,
             ffmpeg_bin=args.ffmpeg_bin,
+            progress_callback=progress,
         )
         if asset and asset.get("status") == "ready":
             _mark_video_ready(
@@ -267,7 +408,7 @@ def main(argv=None):
                 progress_percent=100,
                 stage="ready",
                 stage_detail="HLS 處理完成，影音可以播放與分享。",
-                result=asset,
+                result=_asset_result_summary(asset),
             )
             conn.commit()
             print(json.dumps({"ok": True, "asset": asset}, ensure_ascii=False), flush=True)
@@ -281,7 +422,7 @@ def main(argv=None):
             stage="not_ready",
             stage_detail="HLS 處理結束但未產生可播放串流。",
             error_message="stream_not_ready",
-            result=asset or {},
+            result=_asset_result_summary(asset or {}),
         )
         conn.commit()
         print(json.dumps({"ok": False, "asset": asset, "error": "stream_not_ready"}, ensure_ascii=False), flush=True)
@@ -327,6 +468,7 @@ def main(argv=None):
         print(json.dumps({"ok": False, "error": message}, ensure_ascii=False), file=sys.stderr, flush=True)
         return 1
     finally:
+        _release_hls_worker_slot(slot_lock)
         conn.close()
 
 

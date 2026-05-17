@@ -14,6 +14,20 @@
     { x1: -84, z1: 18, x2: 30, z2: 78, width: 10, color: "#343a46" },
     { x1: 18, z1: -82, x2: 82, z2: -16, width: 10.5, color: "#2f3542" },
   ];
+  const OPEN_WORLD_ALLEY_ROADS = [
+    { x1: -78, z1: -12, x2: -40, z2: 7, width: 3.6, color: "#46515f", noCenterLine: true },
+    { x1: -39, z1: 34, x2: -8, z2: 51, width: 3.2, color: "#4b5563", noCenterLine: true },
+    { x1: 13, z1: 16, x2: 52, z2: 33, width: 3.4, color: "#414957", noCenterLine: true },
+    { x1: 39, z1: -71, x2: 67, z2: -42, width: 3.5, color: "#475569", noCenterLine: true },
+  ];
+  const OPEN_WORLD_SCENIC_ZONES = Object.freeze([
+    { key: "harbor", label: "碼頭水岸", x: -88, z: -8, w: 12, d: 174, color: "#0e7490" },
+    { key: "park", label: "中央公園", x: 55, z: 55, w: 28, d: 24, color: "#3f8f57" },
+    { key: "hospital", label: "醫療區", x: 58, z: 68, w: 21, d: 14, color: "#e0f2fe" },
+    { key: "industrial", label: "工業倉儲", x: 46, z: -58, w: 31, d: 24, color: "#64748b" },
+    { key: "market", label: "夜市街", x: -33, z: 45, w: 22, d: 15, color: "#f59e0b" },
+    { key: "oldtown", label: "老城墓園", x: -60, z: -60, w: 28, d: 23, color: "#7dd3fc" },
+  ]);
   const ENTER_VEHICLE_DISTANCE = 6.5;
   const TRAFFIC_HIT_DISTANCE = 6.2;
   const TRAFFIC_COLLISION_DISTANCE = 4.2;
@@ -264,6 +278,176 @@
       material.needsUpdate = true;
     }
     return material;
+  }
+
+  function createOpenWorldSidewalkMaterial(THREE) {
+    const texture = createOpenWorldCanvasTexture(THREE, 192, 192, (ctx, w, h) => {
+      ctx.fillStyle = "#9aa6b6";
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = "rgba(15,23,42,.18)";
+      ctx.lineWidth = 1;
+      for (let x = 0; x <= w; x += 24) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      for (let y = 0; y <= h; y += 24) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+      ctx.fillStyle = "rgba(248,250,252,.12)";
+      for (let i = 0; i < 32; i += 1) ctx.fillRect((i * 31) % w, (i * 47) % h, 2, 2);
+    });
+    const material = makeMaterial(THREE, "#9aa6b6", 0.86, 0);
+    if (texture) {
+      texture.repeat.set(12, 12);
+      material.map = texture;
+      material.needsUpdate = true;
+    }
+    return material;
+  }
+
+  function createOpenWorldWaterMaterial(THREE) {
+    const texture = createOpenWorldCanvasTexture(THREE, 256, 256, (ctx, w, h) => {
+      const gradient = ctx.createLinearGradient(0, 0, w, h);
+      gradient.addColorStop(0, "#0f766e");
+      gradient.addColorStop(0.52, "#0284c7");
+      gradient.addColorStop(1, "#0e7490");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = "rgba(224,242,254,.24)";
+      ctx.lineWidth = 2;
+      for (let y = 20; y < h; y += 34) {
+        ctx.beginPath();
+        for (let x = -20; x <= w + 20; x += 18) {
+          const waveY = y + Math.sin((x + y) * 0.04) * 4;
+          if (x === -20) ctx.moveTo(x, waveY);
+          else ctx.lineTo(x, waveY);
+        }
+        ctx.stroke();
+      }
+    });
+    const material = makeMaterial(THREE, "#0e7490", 0.66, 0.02);
+    if (texture) {
+      texture.repeat.set(4, 18);
+      material.map = texture;
+      material.needsUpdate = true;
+    }
+    return material;
+  }
+
+  function createOpenWorldPlane(THREE, width, depth, material, x, z, y = 0.02) {
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), material);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(x, y, z);
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  function createOpenWorldEllipsePlane(THREE, width, depth, material, x, z, y = 0.02) {
+    const mesh = new THREE.Mesh(new THREE.CircleGeometry(1, 48), material);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.scale.set(width / 2, depth / 2, 1);
+    mesh.position.set(x, y, z);
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  function openWorldRoadProfile(coord) {
+    const abs = Math.abs(coord);
+    if (coord === 0) {
+      return { width: 11.6, sidewalk: 18.4, asphalt: "#29313d", median: true, dashLength: 6.2, gap: 6.8 };
+    }
+    if (abs === 72) {
+      return { width: 8.2, sidewalk: 12.6, asphalt: "#252c35", dashLength: 5.2, gap: 8.4 };
+    }
+    if (abs === 48) {
+      return { width: 9.6, sidewalk: 15.2, asphalt: "#303846", dashLength: 5.8, gap: 7.2 };
+    }
+    return { width: 8.8, sidewalk: 13.8, asphalt: "#333b48", dashLength: 4.4, gap: 8.8 };
+  }
+
+  function addOpenWorldLaneDashes(THREE, group, axis, coord, offset, material, dashLength, gap) {
+    const start = -WORLD_SIZE / 2 + 7;
+    const end = WORLD_SIZE / 2 - 7;
+    for (let pos = start; pos <= end; pos += dashLength + gap) {
+      const dash = new THREE.Mesh(
+        axis === "z"
+          ? new THREE.PlaneGeometry(0.28, dashLength)
+          : new THREE.PlaneGeometry(dashLength, 0.28),
+        material,
+      );
+      dash.rotation.x = -Math.PI / 2;
+      dash.position.set(axis === "z" ? coord + offset : pos, 0.072, axis === "z" ? pos : coord + offset);
+      group.add(dash);
+    }
+  }
+
+  function createOpenWorldStraightRoad(THREE, axis, coord, materials) {
+    const profile = openWorldRoadProfile(coord);
+    const group = new THREE.Group();
+    const length = WORLD_SIZE + 8;
+    const roadMaterial = createOpenWorldRoadMaterial(THREE, profile.asphalt);
+    const isNorthSouth = axis === "z";
+    group.add(createOpenWorldPlane(
+      THREE,
+      isNorthSouth ? profile.sidewalk : length,
+      isNorthSouth ? length : profile.sidewalk,
+      materials.sidewalk,
+      isNorthSouth ? coord : 0,
+      isNorthSouth ? 0 : coord,
+      0.018,
+    ));
+    group.add(createOpenWorldPlane(
+      THREE,
+      isNorthSouth ? profile.width : length,
+      isNorthSouth ? length : profile.width,
+      roadMaterial,
+      isNorthSouth ? coord : 0,
+      isNorthSouth ? 0 : coord,
+      0.036,
+    ));
+
+    const curbA = createOpenWorldPlane(
+      THREE,
+      isNorthSouth ? 0.2 : length,
+      isNorthSouth ? length : 0.2,
+      materials.curb,
+      isNorthSouth ? coord - profile.width / 2 : 0,
+      isNorthSouth ? 0 : coord - profile.width / 2,
+      0.082,
+    );
+    const curbB = createOpenWorldPlane(
+      THREE,
+      isNorthSouth ? 0.2 : length,
+      isNorthSouth ? length : 0.2,
+      materials.curb,
+      isNorthSouth ? coord + profile.width / 2 : 0,
+      isNorthSouth ? 0 : coord + profile.width / 2,
+      0.082,
+    );
+    group.add(curbA, curbB);
+
+    if (profile.median) {
+      const median = createOpenWorldPlane(
+        THREE,
+        isNorthSouth ? 1.25 : length,
+        isNorthSouth ? length : 1.25,
+        materials.median,
+        isNorthSouth ? coord : 0,
+        isNorthSouth ? 0 : coord,
+        0.088,
+      );
+      group.add(median);
+      addOpenWorldLaneDashes(THREE, group, axis, coord, -2.35, materials.line, profile.dashLength, profile.gap);
+      addOpenWorldLaneDashes(THREE, group, axis, coord, 2.35, materials.line, profile.dashLength, profile.gap);
+    } else {
+      addOpenWorldLaneDashes(THREE, group, axis, coord, 0, materials.line, profile.dashLength, profile.gap);
+    }
+    return group;
   }
 
   function createOpenWorldBuildingMesh(THREE, width, height, depth, color, options = {}) {
@@ -697,9 +881,119 @@
     line.rotation.x = -Math.PI / 2;
     line.rotation.z = angle;
     line.position.y = 0.055;
-    group.add(roadMesh, line);
+    group.add(roadMesh);
+    if (!road.noCenterLine) group.add(line);
     group.position.set((road.x1 + road.x2) / 2, 0, (road.z1 + road.z2) / 2);
     return group;
+  }
+
+  function addOpenWorldCrosswalks(THREE, scene, material) {
+    const majorRoads = OPEN_WORLD_ROADS.filter((coord) => coord === 0 || Math.abs(coord) === 48);
+    majorRoads.forEach((x) => {
+      majorRoads.forEach((z) => {
+        for (let i = -2; i <= 2; i += 1) {
+          const northSouthStripe = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_WIDTH * 0.78, 0.36), material);
+          northSouthStripe.rotation.x = -Math.PI / 2;
+          northSouthStripe.position.set(x, 0.096, z + ROAD_WIDTH * 0.58 + i * 0.82);
+          scene.add(northSouthStripe);
+          const eastWestStripe = new THREE.Mesh(new THREE.PlaneGeometry(0.36, ROAD_WIDTH * 0.78), material);
+          eastWestStripe.rotation.x = -Math.PI / 2;
+          eastWestStripe.position.set(x + ROAD_WIDTH * 0.58 + i * 0.82, 0.098, z);
+          scene.add(eastWestStripe);
+        }
+      });
+    });
+  }
+
+  function addOpenWorldSmallCollider(state, x, z, w, d) {
+    if (blocksReservedPoint(x, z, w, d)) return false;
+    if (rectTouchesDiagonalCorridor(x, z, w, d, 1.1)) return false;
+    state.colliders.push({ x, z, w, d });
+    return true;
+  }
+
+  function addOpenWorldAmbientDistricts(THREE, scene, state) {
+    const waterMaterial = createOpenWorldWaterMaterial(THREE);
+    const boardwalkMaterial = makeMaterial(THREE, "#8b6f47", 0.88, 0);
+    const plazaMaterial = makeMaterial(THREE, "#a7b4c4", 0.82, 0);
+    const parkMaterial = makeMaterial(THREE, "#3f8f57", 0.92, 0);
+    const hospitalMaterial = makeMaterial(THREE, "#dbeafe", 0.78, 0);
+    const industrialMaterial = makeMaterial(THREE, "#64748b", 0.86, 0.02);
+    const marketMaterial = makeMaterial(THREE, "#b7791f", 0.82, 0);
+    const oldtownMaterial = makeMaterial(THREE, "#75a7b8", 0.86, 0);
+    const zoneMaterials = {
+      harbor: waterMaterial,
+      park: parkMaterial,
+      hospital: hospitalMaterial,
+      industrial: industrialMaterial,
+      market: marketMaterial,
+      oldtown: oldtownMaterial,
+    };
+    OPEN_WORLD_SCENIC_ZONES.forEach((zone) => {
+      scene.add(createOpenWorldPlane(THREE, zone.w, zone.d, zoneMaterials[zone.key] || plazaMaterial, zone.x, zone.z, zone.key === "harbor" ? 0.012 : 0.022));
+    });
+    scene.add(createOpenWorldPlane(THREE, 5.4, 158, boardwalkMaterial, -80.5, -8, 0.034));
+
+    [-58, -34, -10, 16, 42, 66].forEach((z, index) => {
+      const dock = createBox(THREE, 8.5, 0.32, 2.1, index % 2 ? "#a16207" : "#92400e");
+      dock.position.set(-79.5, 0.16, z);
+      scene.add(dock);
+      addOpenWorldSmallCollider(state, -79.5, z, 8.7, 2.3);
+    });
+    [-62, -55, -48].forEach((z, index) => {
+      const container = createBox(THREE, 2.4, 1.55, 6.2, ["#2563eb", "#dc2626", "#f59e0b"][index]);
+      container.position.set(39 + index * 4.2, 0.78, z);
+      container.rotation.y = index % 2 ? 0.08 : -0.05;
+      scene.add(container);
+      addOpenWorldSmallCollider(state, 39 + index * 4.2, z, 2.8, 6.6);
+    });
+    [50, 58, 66].forEach((x, index) => {
+      const container = createBox(THREE, 6.4, 1.35, 2.3, ["#0f766e", "#7c3aed", "#ea580c"][index]);
+      container.position.set(x, 0.68, -50 + index * 4.8);
+      scene.add(container);
+      addOpenWorldSmallCollider(state, x, -50 + index * 4.8, 6.8, 2.7);
+    });
+
+    const pond = new THREE.Mesh(
+      new THREE.CircleGeometry(5.2, 36),
+      createOpenWorldWaterMaterial(THREE),
+    );
+    pond.rotation.x = -Math.PI / 2;
+    pond.scale.set(1.35, 0.72, 1);
+    pond.position.set(55, 0.094, 55);
+    pond.receiveShadow = true;
+    scene.add(pond);
+    const civicStatue = { x: 13, z: 13 };
+    const statueBase = createCylinder(THREE, 1.25, 0.55, "#475569", 18);
+    statueBase.position.set(civicStatue.x, 0.28, civicStatue.z);
+    const statue = createCylinder(THREE, 0.48, 2.4, "#94a3b8", 14);
+    statue.position.set(civicStatue.x, 1.48, civicStatue.z);
+    scene.add(statueBase, statue);
+    addOpenWorldSmallCollider(state, civicStatue.x, civicStatue.z, 2.8, 2.8);
+
+    [
+      { x: 49, z: 45 }, { x: 62, z: 45 }, { x: 68, z: 56 }, { x: 45, z: 63 },
+      { x: -45, z: 42 }, { x: -24, z: 52 }, { x: -66, z: -51 }, { x: -51, z: -70 },
+    ].forEach((tree, index) => {
+      const mesh = createOpenWorldStreetPropMesh(THREE, "tree", { color: index % 2 ? "#14532d" : "#15803d" });
+      mesh.position.set(tree.x, 0, tree.z);
+      scene.add(mesh);
+    });
+
+    const hospitalPad = createOpenWorldPlane(THREE, 9, 9, makeMaterial(THREE, "#f8fafc", 0.75, 0), 58, 68, 0.105);
+    scene.add(hospitalPad);
+    const hA = createBox(THREE, 1.1, 0.08, 5.6, "#ef4444");
+    const hB = createBox(THREE, 5.6, 0.08, 1.1, "#ef4444");
+    hA.position.set(58, 0.18, 68);
+    hB.position.set(58, 0.19, 68);
+    scene.add(hA, hB);
+
+    [-41, -35, -29, -23].forEach((x, index) => {
+      const stall = createBox(THREE, 3.4, 1.25, 2.4, ["#ef4444", "#22c55e", "#3b82f6", "#f59e0b"][index]);
+      stall.position.set(x, 0.62, 45 + (index % 2) * 3.3);
+      scene.add(stall);
+      addOpenWorldSmallCollider(state, x, 45 + (index % 2) * 3.3, 3.8, 2.8);
+    });
   }
 
   function openWorldBlocked(state, x, z, radius) {
@@ -867,30 +1161,20 @@
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     scene.add(ground);
+    addOpenWorldAmbientDistricts(THREE, scene, state);
 
-    const roadMaterial = createOpenWorldRoadMaterial(THREE, "#2f3542");
     const lineMaterial = makeMaterial(THREE, "#f8fafc", 0.55, 0);
+    const roadMaterials = {
+      sidewalk: createOpenWorldSidewalkMaterial(THREE),
+      curb: makeMaterial(THREE, "#d9e1ea", 0.72, 0),
+      median: makeMaterial(THREE, "#2f7d4e", 0.9, 0),
+      line: lineMaterial,
+    };
     OPEN_WORLD_ROADS.forEach((x) => {
-      const road = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_WIDTH, WORLD_SIZE + 8), roadMaterial);
-      road.rotation.x = -Math.PI / 2;
-      road.position.set(x, 0.025, 0);
-      road.receiveShadow = true;
-      scene.add(road);
-      const line = new THREE.Mesh(new THREE.PlaneGeometry(0.32, WORLD_SIZE), lineMaterial);
-      line.rotation.x = -Math.PI / 2;
-      line.position.set(x, 0.04, 0);
-      scene.add(line);
+      scene.add(createOpenWorldStraightRoad(THREE, "z", x, roadMaterials));
     });
     OPEN_WORLD_ROADS.forEach((z) => {
-      const road = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_SIZE + 8, ROAD_WIDTH), roadMaterial);
-      road.rotation.x = -Math.PI / 2;
-      road.position.set(0, 0.03, z);
-      road.receiveShadow = true;
-      scene.add(road);
-      const line = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_SIZE, 0.32), lineMaterial);
-      line.rotation.x = -Math.PI / 2;
-      line.position.set(0, 0.045, z);
-      scene.add(line);
+      scene.add(createOpenWorldStraightRoad(THREE, "x", z, roadMaterials));
     });
     OPEN_WORLD_DIAGONAL_ROADS.forEach((road) => {
       const segment = createOpenWorldRoadSegment(
@@ -901,20 +1185,28 @@
       );
       scene.add(segment);
     });
+    OPEN_WORLD_ALLEY_ROADS.forEach((road) => {
+      const segment = createOpenWorldRoadSegment(
+        THREE,
+        road,
+        makeMaterial(THREE, road.color || "#475569", 0.9, 0),
+        lineMaterial,
+      );
+      scene.add(segment);
+    });
+    addOpenWorldCrosswalks(THREE, scene, lineMaterial);
 
-    const plazas = [
-      { x: 0, z: 0, w: 18, d: 18, color: "#94a3b8" },
-      { x: 54, z: 54, w: 24, d: 18, color: "#4ade80" },
-      { x: -58, z: -62, w: 24, d: 18, color: "#7dd3fc" },
-      { x: -30, z: 42, w: 20, d: 14, color: "#65a30d" },
-      { x: 36, z: -56, w: 18, d: 22, color: "#38bdf8" },
-      { x: 66, z: 0, w: 12, d: 26, color: "#f59e0b" },
+    const districtPads = [
+      { x: 13, z: 13, w: 14, d: 10, color: "#a7b4c4", angle: 0.18 },
+      { x: 55, z: 55, w: 22, d: 16, color: "#5fa76b", angle: -0.1 },
+      { x: -59, z: -61, w: 20, d: 15, color: "#8fc6d6", angle: 0.22 },
+      { x: -33, z: 45, w: 18, d: 11, color: "#b7791f", angle: -0.16 },
+      { x: 48, z: -58, w: 24, d: 16, color: "#7a8798", angle: 0.08 },
+      { x: -80, z: -8, w: 5, d: 154, color: "#8b6f47", angle: 0 },
     ];
-    plazas.forEach((plaza) => {
-      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(plaza.w, plaza.d), makeMaterial(THREE, plaza.color, 0.8, 0));
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.position.set(plaza.x, 0.06, plaza.z);
-      mesh.receiveShadow = true;
+    districtPads.forEach((pad) => {
+      const mesh = createOpenWorldEllipsePlane(THREE, pad.w, pad.d, makeMaterial(THREE, pad.color, 0.82, 0), pad.x, pad.z, 0.029);
+      mesh.rotation.z = pad.angle || 0;
       scene.add(mesh);
     });
 
@@ -923,6 +1215,7 @@
       OPEN_WORLD_BLOCK_CENTERS.forEach((z) => {
         if (Math.abs(x) < 16 && Math.abs(z) < 16) return;
         if (x > 42 && z > 42) return;
+        if (x > 30 && z < -42) return;
         if (x < -46 && z < -48) return;
         const h = 4.5 + ((Math.abs(x * 13 + z * 7) % 10) * 1.15);
         const w = 7 + (Math.abs(x + z) % 3);
@@ -1556,8 +1849,35 @@
     const scale = size / WORLD_SIZE;
     const toX = (x) => (x + WORLD_SIZE / 2) * scale;
     const toY = (z) => (z + WORLD_SIZE / 2) * scale;
-    ctx.strokeStyle = "#64748b";
-    ctx.lineWidth = Math.max(2, ROAD_WIDTH * scale);
+    OPEN_WORLD_SCENIC_ZONES.forEach((zone) => {
+      ctx.fillStyle = zone.key === "harbor"
+        ? "rgba(14,116,144,.82)"
+        : zone.key === "park"
+          ? "rgba(63,143,87,.74)"
+          : zone.key === "hospital"
+            ? "rgba(224,242,254,.72)"
+            : zone.key === "industrial"
+              ? "rgba(100,116,139,.72)"
+              : zone.key === "market"
+                ? "rgba(245,158,11,.68)"
+                : "rgba(125,211,252,.62)";
+      ctx.fillRect(toX(zone.x - zone.w / 2), toY(zone.z - zone.d / 2), zone.w * scale, zone.d * scale);
+    });
+    OPEN_WORLD_ROADS.forEach((road) => {
+      const profile = openWorldRoadProfile(road);
+      ctx.strokeStyle = profile.asphalt || "#64748b";
+      ctx.lineWidth = Math.max(2, profile.width * scale);
+      ctx.beginPath();
+      ctx.moveTo(toX(road), 0);
+      ctx.lineTo(toX(road), size);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, toY(road));
+      ctx.lineTo(size, toY(road));
+      ctx.stroke();
+    });
+    ctx.strokeStyle = "rgba(226,232,240,.82)";
+    ctx.lineWidth = Math.max(1, 0.5 * scale);
     OPEN_WORLD_ROADS.forEach((road) => {
       ctx.beginPath();
       ctx.moveTo(toX(road), 0);
@@ -1571,6 +1891,14 @@
     OPEN_WORLD_DIAGONAL_ROADS.forEach((road) => {
       ctx.strokeStyle = road.color || "#64748b";
       ctx.lineWidth = Math.max(2, (road.width || ROAD_WIDTH) * scale);
+      ctx.beginPath();
+      ctx.moveTo(toX(road.x1), toY(road.z1));
+      ctx.lineTo(toX(road.x2), toY(road.z2));
+      ctx.stroke();
+    });
+    OPEN_WORLD_ALLEY_ROADS.forEach((road) => {
+      ctx.strokeStyle = road.color || "#475569";
+      ctx.lineWidth = Math.max(1, (road.width || 3.4) * scale);
       ctx.beginPath();
       ctx.moveTo(toX(road.x1), toY(road.z1));
       ctx.lineTo(toX(road.x2), toY(road.z2));

@@ -9,7 +9,7 @@
   let rafId = 0;
   let lastFrameAt = 0;
   let activeStage = "plane";
-  let paused = false;
+  let running = false;
   const canvasSizeCache = new Map();
 
   const state = {
@@ -116,13 +116,17 @@
   function seedLiquidParticles() {
     const level = numberValue("experiment-liquid-level", 68) / 100;
     const top = 1 - level;
-    state.liquid.particles = Array.from({ length: LIQUID_PARTICLE_COUNT }, () => ({
-      x: randomRange(0.12, 0.88),
-      y: randomRange(top + 0.04, 0.95),
-      vx: randomRange(-0.002, 0.002),
-      vy: randomRange(-0.001, 0.002),
-      r: randomRange(1.4, 2.8),
-    }));
+    state.liquid.particles = Array.from({ length: LIQUID_PARTICLE_COUNT }, () => {
+      const x = randomRange(0.12, 0.88);
+      return {
+        x,
+        y: randomRange(top + 0.04, 0.95),
+        vx: randomRange(-0.002, 0.002),
+        vy: randomRange(-0.001, 0.002),
+        homeX: x,
+        r: randomRange(1.4, 2.8),
+      };
+    });
     state.liquid.objects = [];
     state.liquid.shake = 0;
     state.liquid.stir = 0;
@@ -677,7 +681,9 @@
     const level = numberValue("experiment-liquid-level", 68) / 100;
     const top = 1 - level;
     const step = Math.min(dt || 16, 40) / 16.67;
-    const tiltForce = Math.sin(tilt * Math.PI / 180) * 0.0032;
+    const tiltBias = Math.sin(tilt * Math.PI / 180);
+    const tiltForce = tiltBias * 0.00024;
+    const sloshShift = tiltBias * 0.18;
     state.liquid.shake = Math.max(0, state.liquid.shake - 0.03 * step);
     state.liquid.stir = Math.max(0, state.liquid.stir - 0.008 * step);
     const stirCenterY = top + level * 0.52;
@@ -686,6 +692,7 @@
     const fluidBottom = 0.96;
     const fluidHeight = Math.max(0.12, fluidBottom - fluidTop);
     const thermalScale = clamp(0.0019 - viscosity * 0.0009 + state.liquid.shake * 0.001 + state.liquid.stir * 0.0012, 0.00045, 0.0032);
+    const spreadStrength = clamp(0.00105 - viscosity * 0.00045 + state.liquid.shake * 0.00018 + state.liquid.stir * 0.00025, 0.00042, 0.0012);
     let energy = 0;
 
     state.liquid.particles.forEach((p, index) => {
@@ -696,7 +703,15 @@
       const swirl = clamp(1 - distance / 0.42, 0, 1) * stirStrength;
       const phase = time * 0.003 + index * 12.989;
       const verticalMix = (0.5 - (p.y - fluidTop) / fluidHeight) * 0.00028;
-      p.vx += (tiltForce + shakeForce) * step;
+      if (!Number.isFinite(p.homeX)) p.homeX = clamp(p.x, 0.12, 0.88);
+      const targetX = clamp(p.homeX + sloshShift + Math.sin(index * 2.17) * Math.abs(tiltBias) * 0.035, 0.09, 0.91);
+      const wallPressure = p.x < 0.13
+        ? (0.13 - p.x) * 0.0045
+        : p.x > 0.87
+          ? (0.87 - p.x) * 0.0045
+          : 0;
+      // Keep the educational slosh effect, but add a pressure-like return so tilt cannot collapse every particle onto one cup wall.
+      p.vx += (tiltForce + (targetX - p.x) * spreadStrength + wallPressure + shakeForce) * step;
       p.vx += (-dy * swirl * 0.010 - dx * swirl * 0.0012) * step;
       p.vy += (dx * swirl * 0.006 - dy * swirl * 0.0008) * step;
       p.vx += Math.sin(phase) * thermalScale * step;
@@ -1135,20 +1150,44 @@
     else if (activeStage === "hummingbird") drawHummingbird(time, dt);
   }
 
-  function frame(time) {
+  function isExperimentAreaActive() {
     const root = $("module-experiments");
-    if (!root || !root.classList.contains("active") || document.hidden || paused) {
+    return !!(root && root.classList.contains("active"));
+  }
+
+  function updateRunButton() {
+    const button = $("experiment-pause-toggle");
+    if (!button) return;
+    button.setAttribute("aria-pressed", running ? "true" : "false");
+    button.textContent = running ? "暫停模擬" : "開始模擬";
+  }
+
+  function setSimulationRunning(nextRunning, options = {}) {
+    running = !!nextRunning;
+    updateRunButton();
+    if (!running) {
+      stopLoop();
+      if (options.drawPreview) drawActiveStage(performance.now(), 16);
+      return;
+    }
+    drawActiveStage(performance.now(), 16);
+    startLoop();
+  }
+
+  function frame(time) {
+    if (!isExperimentAreaActive() || document.hidden || !running) {
+      if (running) setSimulationRunning(false, { drawPreview: false });
       rafId = 0;
       return;
     }
     const dt = lastFrameAt ? time - lastFrameAt : 16;
     lastFrameAt = time;
-    if (!paused) drawActiveStage(time, dt);
+    drawActiveStage(time, dt);
     rafId = window.requestAnimationFrame(frame);
   }
 
   function startLoop() {
-    if (rafId || paused) return;
+    if (rafId || !running || !isExperimentAreaActive() || document.hidden) return;
     lastFrameAt = 0;
     rafId = window.requestAnimationFrame(frame);
   }
@@ -1161,8 +1200,10 @@
     lastFrameAt = 0;
   }
 
-  function setActiveStage(stage) {
-    activeStage = stage || "plane";
+  function setActiveStage(stage, options = {}) {
+    const nextStage = stage || "plane";
+    const changed = nextStage !== activeStage;
+    activeStage = nextStage;
     document.querySelectorAll("[data-experiment-stage]").forEach((node) => {
       if (node.classList.contains("experiment-stage")) {
         node.classList.toggle("active", node.dataset.experimentStage === activeStage);
@@ -1174,6 +1215,7 @@
       button.setAttribute("aria-selected", selected ? "true" : "false");
     });
     resizeCanvases();
+    if (changed && !options.keepRunning) setSimulationRunning(false, { drawPreview: false });
     drawActiveStage(performance.now(), 16);
   }
 
@@ -1196,15 +1238,7 @@
     const pauseButton = $("experiment-pause-toggle");
     if (pauseButton) {
       pauseButton.addEventListener("click", () => {
-        paused = !paused;
-        pauseButton.setAttribute("aria-pressed", paused ? "true" : "false");
-        pauseButton.textContent = paused ? "繼續動畫" : "暫停動畫";
-        if (paused) {
-          stopLoop();
-        } else {
-          drawActiveStage(performance.now(), 16);
-          startLoop();
-        }
+        setSimulationRunning(!running, { drawPreview: true });
       });
     }
     const shakeButton = $("experiment-liquid-shake");
@@ -1230,7 +1264,10 @@
           tilt.value = "55";
           syncControlValue(tilt);
         }
-        state.liquid.particles.forEach((p) => { p.vx += randomRange(0.01, 0.026); });
+        state.liquid.particles.forEach((p) => {
+          p.vx += randomRange(0.003, 0.011);
+          p.vy += randomRange(-0.004, 0.003);
+        });
         drawActiveStage(performance.now(), 16);
       });
     }
@@ -1256,10 +1293,13 @@
         drawActiveStage(performance.now(), 16);
       });
     }
-    window.addEventListener("resize", resizeCanvases, { passive: true });
+    window.addEventListener("resize", () => {
+      resizeCanvases();
+      if (isExperimentAreaActive()) drawActiveStage(performance.now(), 16);
+    }, { passive: true });
     document.addEventListener("visibilitychange", () => {
-      const root = $("module-experiments");
-      if (!document.hidden && root && root.classList.contains("active")) startLoop();
+      if (document.hidden) setSimulationRunning(false, { drawPreview: false });
+      else if (isExperimentAreaActive()) drawActiveStage(performance.now(), 16);
     });
   }
 
@@ -1274,8 +1314,9 @@
       bindControls();
     }
     resizeCanvases();
-    setActiveStage(activeStage);
-    startLoop();
+    setActiveStage(activeStage, { keepRunning: true });
+    if (!running) stopLoop();
+    updateRunButton();
   }
 
   window.initExperimentArea = initExperimentArea;

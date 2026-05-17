@@ -480,7 +480,7 @@
     '發布': 'Publish',
     '可直接上傳影音，或選擇雲端硬碟影音發布；只會使用 cloud_file_id 串接，不公開 storage path。': 'Upload media directly or publish existing Cloud Drive media; only cloud_file_id is used, and storage paths are not exposed.',
     '直接上傳影音': 'Direct media upload',
-    '可直接發布影片或音樂；系統仍會存入你的 Cloud Drive，不建立第二套檔案系統。公開 / 持連結可看影片與伺服器端加密影音會優先嘗試建立 HLS 串流衍生檔。': 'Publish video or music directly; the system still stores it in your Cloud Drive and does not create a second file system. Public/link-access videos and server-side encrypted media will prefer HLS derivatives.',
+    '可直接發布影片或音樂；系統仍會存入你的 Cloud Drive，不建立第二套檔案系統。公開 / 持連結可看影片與伺服器端加密影音會優先嘗試建立 HLS 串流衍生檔；轉檔期間可以先做別的事，進度會顯示在任務中心，完成後會通知上傳者。': 'Publish video or music directly; the system still stores it in your Cloud Drive and does not create a second file system. Public/link-access videos and server-side encrypted media will prefer HLS derivatives. You can do other work during transcoding; progress appears in Job Center and the uploader is notified when it finishes.',
     '封面圖（選填）': 'Cover image (optional)',
     '建議使用 16:9 圖片；不提供時影片首頁會使用影片首幀或音樂預設封面。': 'A 16:9 image is recommended; if omitted, the video first frame or default music cover is used.',
     '上傳隱私': 'Upload privacy',

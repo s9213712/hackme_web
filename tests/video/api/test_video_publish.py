@@ -250,6 +250,24 @@ def test_video_upload_endpoint_stores_server_encrypted_video_and_requires_hls_fo
     assert body["video"]["cover_url"].endswith(f"/api/videos/{body['video']['id']}/cover")
     assert body["storage_file"]["virtual_path"].startswith("/Media/")
     assert body["cover_storage_file"]["virtual_path"].startswith("/Media/Covers/")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    job = conn.execute(
+        """
+        SELECT source_module, status, progress_percent, stage, stage_detail, metadata_json
+        FROM job_center_jobs
+        WHERE source_module='video_upload_publish'
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    conn.close()
+    assert job is not None
+    assert job["status"] == "succeeded"
+    assert job["progress_percent"] == 100
+    assert job["stage"] == "published"
+    assert "影音已發布" in job["stage_detail"]
+    assert '"privacy_mode": "server_encrypted"' in job["metadata_json"]
 
     stream = client.get(f"/api/videos/{body['video']['id']}/stream")
     assert stream.status_code == 403

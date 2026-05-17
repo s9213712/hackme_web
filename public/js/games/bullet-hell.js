@@ -653,17 +653,20 @@
   }
 
   function drawBulletHellEnemyBullet(ctx, bullet) {
-    drawBulletHellGlow(ctx, bullet.x, bullet.y, bullet.r * 3.2, bullet.color || "#fb7185", 0.16);
-    if (drawBulletHellImage(ctx, "enemyBullet", bullet.x, bullet.y, bullet.r * 4.1, bullet.r * 4.1, {
-      rotation: Math.atan2(bullet.vy || 1, bullet.vx || 0),
-      alpha: bullet.wallHits ? 0.95 : 0.82,
-    })) return;
+    const radius = Math.max(2.8, Number(bullet.r || 4));
+    const color = bullet.color || "#fb7185";
+    drawBulletHellGlow(ctx, bullet.x, bullet.y, radius * 2.25, color, 0.12);
     ctx.beginPath();
-    ctx.arc(bullet.x, bullet.y, bullet.r, 0, Math.PI * 2);
-    ctx.fillStyle = bullet.color;
+    ctx.arc(bullet.x, bullet.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = color;
     ctx.fill();
-    ctx.strokeStyle = bullet.wallHits ? "rgba(255,255,255,.72)" : "rgba(255,255,255,.44)";
+    ctx.lineWidth = bullet.wallHits ? 1.8 : 1.2;
+    ctx.strokeStyle = bullet.wallHits ? "rgba(255,255,255,.86)" : "rgba(255,255,255,.7)";
     ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(bullet.x, bullet.y, Math.max(1.1, radius * 0.34), 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,.92)";
+    ctx.fill();
   }
 
   function drawBulletHellHitbox(ctx, state) {

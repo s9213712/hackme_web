@@ -240,6 +240,107 @@ def register_video_routes(app, deps):
         clean = str(title or fallback or "影音").strip() or "影音"
         return f"{prefix}：{clean[:96]}"
 
+    def _actor_user_id(actor):
+        try:
+            return int(actor["id"])
+        except Exception:
+            return None
+
+    def _video_upload_source_ref(upload_id):
+        return f"video_upload:{str(upload_id or '').strip()}"
+
+    def _sync_video_upload_platform_job(
+        conn,
+        *,
+        upload_id,
+        actor,
+        filename="",
+        privacy_mode="",
+        job_uuid=None,
+        status="running",
+        progress_percent=0,
+        stage="server_processing",
+        stage_detail="",
+        error_message="",
+        result=None,
+        file_id=None,
+        video_id=None,
+    ):
+        try:
+            safe_name = safe_public_filename(filename or "影音上傳")
+            metadata = {
+                "upload_id": str(upload_id or ""),
+                "filename": safe_name,
+                "privacy_mode": str(privacy_mode or ""),
+                "file_id": file_id,
+                "video_id": int(video_id or 0),
+                "content_length": int(request.content_length or 0),
+            }
+            terminal = status in {"succeeded", "failed", "cancelled", "expired"}
+            if job_uuid:
+                updates = {
+                    "status": status,
+                    "progress_percent": progress_percent,
+                    "stage": stage,
+                    "stage_detail": stage_detail,
+                    "metadata_json": metadata,
+                }
+                if terminal:
+                    updates["finished_at"] = _now_iso()
+                if result is not None:
+                    updates["result_json"] = result
+                if error_message:
+                    updates["error_message"] = error_message
+                    updates["error_stage"] = stage
+                job = update_platform_job(conn, job_uuid, defer_progress=False, flush=True, **updates)
+                add_platform_job_event(
+                    conn,
+                    job_uuid,
+                    event_type="failed" if status == "failed" else "progress",
+                    stage=stage,
+                    message=stage_detail or error_message or "影音上傳處理狀態更新",
+                    progress_percent=progress_percent,
+                    payload=metadata,
+                    defer_progress=False,
+                    flush=True,
+                )
+                return job
+            existing = get_platform_job_by_source(conn, "video_upload_publish", _video_upload_source_ref(upload_id))
+            if existing:
+                return _sync_video_upload_platform_job(
+                    conn,
+                    upload_id=upload_id,
+                    actor=actor,
+                    filename=safe_name,
+                    privacy_mode=privacy_mode,
+                    job_uuid=existing["job_uuid"],
+                    status=status,
+                    progress_percent=progress_percent,
+                    stage=stage,
+                    stage_detail=stage_detail,
+                    error_message=error_message,
+                    result=result,
+                    file_id=file_id,
+                    video_id=video_id,
+                )
+            return create_platform_job(
+                conn,
+                owner_user_id=_actor_user_id(actor),
+                created_by_user_id=_actor_user_id(actor),
+                job_type="video.upload.publish",
+                title=_platform_job_title("影音上傳", safe_name, "影音上傳"),
+                description="影音上傳、掃描、伺服器端加密保存與發布狀態追蹤",
+                source_module="video_upload_publish",
+                source_ref=_video_upload_source_ref(upload_id),
+                status=status,
+                progress_percent=progress_percent,
+                stage=stage,
+                stage_detail=stage_detail,
+                metadata=metadata,
+            )
+        except Exception:
+            return None
+
     def _sync_hls_platform_job(
         conn,
         *,
@@ -1130,10 +1231,42 @@ def register_video_routes(app, deps):
             return json_resp({"ok": False, "msg": "影音隱私模式不支援", "error": "unsupported_privacy_mode"}), 400
         cover_upload = request.files.get("cover")
         conn = get_db()
+        upload_job = None
+        upload_id = secrets.token_hex(10)
+        upload_filename = safe_public_filename(uploaded.filename)
         try:
+            upload_job = _sync_video_upload_platform_job(
+                conn,
+                upload_id=upload_id,
+                actor=actor,
+                filename=upload_filename,
+                privacy_mode=privacy_mode,
+                status="running",
+                progress_percent=8,
+                stage="server_received",
+                stage_detail="伺服器已收到影音上傳，正在準備掃描、保存與發布。",
+            )
+            conn.commit()
             ensure_cloud_drive_attachment_schema(conn)
             ensure_storage_album_schema(conn)
             rule = get_member_level_rule(conn, actor["effective_level"] or actor["member_level"])
+            _sync_video_upload_platform_job(
+                conn,
+                upload_id=upload_id,
+                actor=actor,
+                filename=upload_filename,
+                privacy_mode=privacy_mode,
+                job_uuid=(upload_job or {}).get("job_uuid"),
+                status="running",
+                progress_percent=18,
+                stage="saving",
+                stage_detail=(
+                    "正在以 chunked server-side encryption 保存影音；主站會保持可操作。"
+                    if privacy_mode == "server_encrypted"
+                    else "正在保存影音並執行安全掃描。"
+                ),
+            )
+            conn.commit()
             upload_result, msg = store_cloud_upload(
                 conn,
                 actor=actor,
@@ -1146,7 +1279,34 @@ def register_video_routes(app, deps):
             )
             if msg:
                 conn.rollback()
+                _sync_video_upload_platform_job(
+                    conn,
+                    upload_id=upload_id,
+                    actor=actor,
+                    filename=upload_filename,
+                    privacy_mode=privacy_mode,
+                    job_uuid=(upload_job or {}).get("job_uuid"),
+                    status="failed",
+                    progress_percent=100,
+                    stage="upload_rejected",
+                    stage_detail=msg,
+                    error_message=msg,
+                )
+                conn.commit()
                 return json_resp({"ok": False, "msg": msg, "error": "upload_rejected"}), 400
+            _sync_video_upload_platform_job(
+                conn,
+                upload_id=upload_id,
+                actor=actor,
+                filename=upload_filename,
+                privacy_mode=privacy_mode,
+                job_uuid=(upload_job or {}).get("job_uuid"),
+                status="running",
+                progress_percent=62,
+                stage="stored",
+                stage_detail="影音已保存到雲端硬碟，正在建立影音發布紀錄。",
+                file_id=upload_result["file_id"],
+            )
             file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload_result["file_id"],)).fetchone()
             storage_file, storage_msg = create_storage_file_entry(
                 conn,
@@ -1158,6 +1318,21 @@ def register_video_routes(app, deps):
             )
             if storage_msg:
                 conn.rollback()
+                _sync_video_upload_platform_job(
+                    conn,
+                    upload_id=upload_id,
+                    actor=actor,
+                    filename=upload_filename,
+                    privacy_mode=privacy_mode,
+                    job_uuid=(upload_job or {}).get("job_uuid"),
+                    status="failed",
+                    progress_percent=100,
+                    stage="storage_entry_failed",
+                    stage_detail=storage_msg,
+                    error_message=storage_msg,
+                    file_id=upload_result["file_id"],
+                )
+                conn.commit()
                 return json_resp({"ok": False, "msg": storage_msg, "error": "storage_entry_failed"}), 400
             cover_result = None
             cover_storage_file = None
@@ -1171,6 +1346,21 @@ def register_video_routes(app, deps):
                 )
                 if cover_msg:
                     conn.rollback()
+                    _sync_video_upload_platform_job(
+                        conn,
+                        upload_id=upload_id,
+                        actor=actor,
+                        filename=upload_filename,
+                        privacy_mode=privacy_mode,
+                        job_uuid=(upload_job or {}).get("job_uuid"),
+                        status="failed",
+                        progress_percent=100,
+                        stage="cover_failed",
+                        stage_detail=cover_msg,
+                        error_message=cover_msg,
+                        file_id=upload_result["file_id"],
+                    )
+                    conn.commit()
                     return json_resp({"ok": False, "msg": cover_msg, "error": cover_error}), 400
             video = publish_video(
                 conn,
@@ -1194,6 +1384,25 @@ def register_video_routes(app, deps):
             )
             if stream_asset and stream_asset.get("status") == "processing":
                 video["status"] = "processing"
+            _sync_video_upload_platform_job(
+                conn,
+                upload_id=upload_id,
+                actor=actor,
+                filename=upload_filename,
+                privacy_mode=privacy_mode,
+                job_uuid=(upload_job or {}).get("job_uuid"),
+                status="succeeded",
+                progress_percent=100,
+                stage="published",
+                stage_detail=(
+                    "影音已發布；HLS 背景處理已排程，可在任務中心查看轉檔進度。"
+                    if stream_queued
+                    else "影音已發布。"
+                ),
+                result={"file_id": upload_result["file_id"], "video_id": video["id"], "stream_queued": bool(stream_queued)},
+                file_id=upload_result["file_id"],
+                video_id=video["id"],
+            )
             conn.commit()
             if stream_queued:
                 worker_started = _start_stream_prepare_worker(
@@ -1249,6 +1458,20 @@ def register_video_routes(app, deps):
             })
         except Exception as exc:
             conn.rollback()
+            _sync_video_upload_platform_job(
+                conn,
+                upload_id=upload_id,
+                actor=actor,
+                filename=upload_filename,
+                privacy_mode=privacy_mode,
+                job_uuid=(upload_job or {}).get("job_uuid"),
+                status="failed",
+                progress_percent=100,
+                stage="server_error",
+                stage_detail=str(exc)[:300],
+                error_message=str(exc)[:500],
+            )
+            conn.commit()
             return _error_response(exc)
         finally:
             conn.close()

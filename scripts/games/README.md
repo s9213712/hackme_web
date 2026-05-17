@@ -73,7 +73,7 @@ PYTHONPATH=. python3 scripts/games/chess_exp5_restart_smoke.py --run-staged
 Keep sensitive artifacts outside the repo, preferably under:
 
 ```text
-/home/s92137/hackme_web_private/runtime/private/games/exp5/
+<private-runtime-root>/games/exp5/
 ```
 
 Do not commit:

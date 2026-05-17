@@ -30,7 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-REPO = Path("/home/s92137/hackme_web")
+REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 import chess  # noqa: E402
@@ -42,7 +42,7 @@ from services.games.chess_stockfish_teacher import (  # noqa: E402
 from routes import games as games_routes  # noqa: E402
 
 
-STOCKFISH_BIN = resolve_stockfish_path("/home/s92137/reference_repos/Stockfish/src/stockfish")
+STOCKFISH_BIN = resolve_stockfish_path(os.environ.get("STOCKFISH_PATH", ""))
 OUT_DIR = Path.home() / "exp6_output"
 REPORT_JSON = OUT_DIR / "engine_comparison.json"
 REPORT_MD = OUT_DIR / "engine_comparison.md"
