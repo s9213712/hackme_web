@@ -58,3 +58,22 @@ def test_initial_english_dictionary_covers_core_navigation_and_auth():
     }
     missing = [pair for pair in expected_pairs if pair not in i18n_js]
     assert not missing
+
+
+def test_english_dictionary_has_cjk_phrase_fallback_for_mixed_ui_text():
+    i18n_js = (ROOT / "public" / "js" / "05-i18n.js").read_text(encoding="utf-8")
+
+    assert "translateByPhraseFallback" in i18n_js
+    assert "hasCjkText(trimmed)" in i18n_js
+    assert ".filter((key) => key.length >= 2)" in i18n_js
+
+    expected_pairs = {
+        "'剩餘容量': 'Remaining capacity'",
+        "'單檔限制': 'Single-file limit'",
+        "'測試 / 內測 token（可取代密碼）': 'Test / internal test token (can replace password)'",
+        "'發布影音': 'Publish media'",
+        "'Stockfish 深度': 'Stockfish depth'",
+        "'Civitai 模型頁網址': 'Civitai model page URL'",
+    }
+    missing = [pair for pair in expected_pairs if pair not in i18n_js]
+    assert not missing
