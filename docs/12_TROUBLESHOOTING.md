@@ -24,6 +24,8 @@
 - 先看 server console 印出的實際 URL，不要先假設一定是 HTTP
 - 若你是直接執行 `python3 server.py`，本機通常應優先嘗試
   `https://127.0.0.1:5000/`
+- 若是正式部署，先看 Nginx 是否對外、Gunicorn 是否只在 `127.0.0.1:8000`
+  listening，並查 `systemctl status hackme-web.service`
 - port 是否被占用
 
 ### TRB-BOOT-002 頁面正常但登入或寫入 API 全部 `403`
@@ -38,6 +40,43 @@
 
 不能 commit。DB、logs、storage、reports、keys、certs 都應留在部署地 runtime。
 若你不確定 runtime 邊界，回頭看 [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md)。
+
+### TRB-BOOT-004 Nginx 回 `502 Bad Gateway`
+
+先看三件事：
+
+- `systemctl status hackme-web.service`
+- `journalctl -u hackme-web.service -n 100 --no-pager`
+- Nginx upstream 是否指向 `127.0.0.1:8000`
+
+常見原因：
+
+- `/opt/hackme_web/.venv/bin/gunicorn` 尚未建立或套件未安裝。
+- `/etc/hackme_web/hackme-web.env` 的 secrets 還是 placeholder。
+- runtime 目錄不存在或權限不是 `hackme:hackme`。
+- `python3 server.py --doctor` 在 `ExecStartPre` 失敗。
+
+### TRB-BOOT-005 登入後一直跳回登入頁或 secure cookie 不生效
+
+若 TLS 在 Nginx 終止，確認 env 與 proxy header 一致：
+
+```env
+FORCE_HTTPS=true
+SESSION_COOKIE_SECURE=true
+USE_XFF=true
+TRUSTED_PROXY_IPS=127.0.0.1,::1
+GUNICORN_FORWARDED_ALLOW_IPS=127.0.0.1,::1
+```
+
+Nginx 必須送出：
+
+```nginx
+proxy_set_header X-Forwarded-Proto https;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header Host $host;
+```
+
+如果 Nginx 不在同一台主機，`TRUSTED_PROXY_IPS` 必須改成實際 proxy IP。
 
 ## B. 登入 / CSRF / Session
 

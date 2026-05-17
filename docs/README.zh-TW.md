@@ -23,16 +23,26 @@
 
 ## 最短啟動
 
+本機 / staging：
+
 ```bash
 python3 server.py --doctor
 python3 server.py
 ./test_for_develop.sh --port 50785
 ```
 
+正式對外服務：
+
+```text
+先讀 02_DEPLOY_PRODUCTION.md，再套用 ../deploy/README.md 的 Nginx / systemd 範本。
+Nginx 對外，Gunicorn 只綁 127.0.0.1:8000。
+```
+
 原則：
 
 - 正式啟動前先跑 `python3 server.py --doctor`。
 - 開發測試優先用 `./test_for_develop.sh`，它會在 `/tmp` 建隔離副本。
+- 不要把 Flask development server 直接暴露給使用者。
 - 不要直接把 runtime、cache、pytest 產物留在 repo 工作樹。
 
 ## 主題路線
@@ -48,6 +58,7 @@ python3 server.py
 | Games / AI | [games/README.md](games/README.md) |
 | Video | [video/README.md](video/README.md) |
 | Server Mode v2 | [server_mode_v2/README.md](server_mode_v2/README.md) |
+| 正式部署範本 | [../deploy/README.md](../deploy/README.md), [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md) |
 | Agent QA | [AGENTS/README.md](AGENTS/README.md) |
 | Agent research / 未來規格 | [AGENTS/research/README.md](AGENTS/research/README.md) |
 
@@ -68,6 +79,7 @@ Trading 背景常駐引擎設計入口：
 - [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md)
 - [WEB.md](WEB.md)
 - [DEPLOYMENT.md](DEPLOYMENT.md)
+- [../deploy/README.md](../deploy/README.md)
 - [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md)
 - [RELEASE_LAYOUT.md](RELEASE_LAYOUT.md)
 - [REPOSITORY_STRUCTURE.md](REPOSITORY_STRUCTURE.md)

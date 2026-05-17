@@ -26,6 +26,7 @@ The repository root should contain only:
 - bootstrap files: `requirements*.txt`, `server.py`, `test_for_develop.sh`
 - top-level source trees: `routes/`, `services/`, `public/`
 - operator and validation tree: `scripts/`
+- production deployment templates: `deploy/`
 - documentation and tests: `docs/`, `tests/`
 - runtime boundary: `runtime/`
 

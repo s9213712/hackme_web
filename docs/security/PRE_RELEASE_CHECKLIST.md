@@ -36,7 +36,8 @@
     python3 scripts/security/pentest/stress_test.py --target https://<staging-host> --i-own-this-target
     ```
   - 報告路徑：
-  - 結論：沒有 HTTP 500/502/503；若有瓶頸，已記錄目前主機容量上限。
+  - 結論：基準容量內沒有 HTTP 500/502/503；若刻意超載，controlled `503 server_busy`
+    必須有使用者可讀提示、`Retry-After`，並記錄目前主機容量上限。
 
 - [ ] 阻擋：本機自動測試通過。
   ```bash
@@ -52,6 +53,13 @@
 
 ## 部署設定
 
+- [ ] 已確認正式 serving 架構。
+  - Nginx 是唯一對外入口。
+  - Gunicorn 只綁 `127.0.0.1:8000` 或其他 loopback upstream。
+  - systemd service 使用 `deploy/systemd/` 範本或等效設定。
+  - 沒有直接把 Flask development server 或 Gunicorn upstream 暴露到公網。
+  - 已讀 [../../deploy/README.md](../../deploy/README.md) 並替換所有 domain、path、TLS cert 與 secret placeholder。
+
 - [ ] 已確認 production 模式設定。
   - 安全機制全開。
   - 測試帳戶停用。
@@ -62,6 +70,7 @@
   - root 設定 `server_ssl_enabled` 符合部署策略。
   - `runtime/cert.pem` / `runtime/key.pem` 或反向代理 TLS 設定已就緒。
   - `SESSION_COOKIE_SECURE=true`。
+  - 若 TLS 在 Nginx 終止，`USE_XFF=true`、`TRUSTED_PROXY_IPS` 與 `GUNICORN_FORWARDED_ALLOW_IPS` 已限制為受控 proxy。
 
 - [ ] Secrets 與 runtime 檔案確認。
   - `runtime/.fkey`、`runtime/.filekey`、`runtime/.csrfkey`、`runtime/.chain_seed`、`runtime/.integrity_key` 由部署地生成或由 secret manager 注入。

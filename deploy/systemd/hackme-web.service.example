@@ -1,0 +1,50 @@
+[Unit]
+Description=hackme_web bounded Gunicorn web service
+Documentation=https://github.com/s9213712/hackme_web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hackme
+Group=hackme
+WorkingDirectory=/opt/hackme_web
+EnvironmentFile=/etc/hackme_web/hackme-web.env
+
+# Doctor checks runtime paths and deployment settings before binding the port.
+ExecStartPre=/opt/hackme_web/.venv/bin/python3 /opt/hackme_web/server.py --doctor
+
+ExecStart=/opt/hackme_web/.venv/bin/gunicorn server:app \
+  --bind 127.0.0.1:8000 \
+  --worker-class gthread \
+  --workers 2 \
+  --threads 12 \
+  --timeout 20 \
+  --graceful-timeout 10 \
+  --keep-alive 2 \
+  --backlog 64 \
+  --max-requests 1000 \
+  --max-requests-jitter 200 \
+  --access-logfile - \
+  --error-logfile - \
+  --capture-output
+
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# Keep the web process bounded. Raise these only after measuring the host.
+LimitNOFILE=65535
+TasksMax=256
+MemoryMax=1536M
+
+# Hardening. Keep ReadWritePaths aligned with the env file.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/hackme_web /var/log/hackme_web /etc/hackme_web/secrets
+
+[Install]
+WantedBy=multi-user.target

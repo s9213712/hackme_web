@@ -1045,7 +1045,12 @@ Security and pentest runner documentation:
 
 ## Production Start
 
-Production bootstrap is now explicit:
+Production should run behind Nginx + systemd + bounded Gunicorn. Use the
+templates in `deploy/nginx/` and `deploy/systemd/`; do not expose Flask's
+development server to users.
+
+Manual `server.py` startup is still useful for local checks and emergency
+maintenance:
 
 ```bash
 python3 server.py --doctor
@@ -1070,3 +1075,6 @@ Recommended production defaults:
 - `SESSION_COOKIE_HTTPONLY=true`
 - `SESSION_COOKIE_SAMESITE=Strict`
 - `IP_BLOCKING_ENABLED=true`
+- `USE_XFF=true` only when `TRUSTED_PROXY_IPS` is restricted to the controlled proxy.
+- Gunicorn binds loopback only, for example `127.0.0.1:8000`.
+- Nginx is the public TLS endpoint.

@@ -23,6 +23,7 @@ Server Mode 等能力。
 1. [docs/00_START_HERE.md](docs/00_START_HERE.md)
 2. [docs/01_DEPLOY_QUICKSTART.md](docs/01_DEPLOY_QUICKSTART.md)
 3. [docs/02_DEPLOY_PRODUCTION.md](docs/02_DEPLOY_PRODUCTION.md)
+4. Production templates: [deploy/README.md](deploy/README.md)
 
 ## Quick Start
 
@@ -36,7 +37,8 @@ Server Mode 等能力。
 - `python3 server.py --doctor`
   檢查目前 runtime 環境是否已存在且可寫；缺目錄時會明確報錯，不會靜默補建。
 - `python3 server.py`
-  正式 / 手動啟動入口。只有 doctor 通過時才會繼續啟 server。
+  手動 / 本機檢查入口。只有 doctor 通過時才會繼續啟 server。正式對外服務請使用
+  `deploy/nginx/` + `deploy/systemd/` 的 Nginx / Gunicorn 範本。
 - `./test_for_develop.sh`
   開發專用入口。它會先把 repo 複製到 `/tmp/.../hackme_web`，把開發用 runtime、
   cache、venv 都留在 `/tmp`，再從 `/tmp` 內的 `server.py` 啟動。
@@ -62,6 +64,10 @@ scripts/testing/pytest_in_tmp.sh -q tests
 python3 server.py --doctor
 python3 server.py
 ```
+
+正式部署不要直接對外開 `python3 server.py`。請先看
+[docs/02_DEPLOY_PRODUCTION.md](docs/02_DEPLOY_PRODUCTION.md)，再套用
+[deploy/README.md](deploy/README.md) 的 Nginx/systemd 範本。
 
 啟動後請以 server console 或腳本印出的實際 URL 為準。一般情況：
 

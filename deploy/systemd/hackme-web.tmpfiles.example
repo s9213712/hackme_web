@@ -1,0 +1,17 @@
+# tmpfiles.d example for hackme_web runtime directories.
+#
+# Install as:
+#   /etc/tmpfiles.d/hackme-web.conf
+# Then run:
+#   systemd-tmpfiles --create /etc/tmpfiles.d/hackme-web.conf
+
+d /var/lib/hackme_web 0750 hackme hackme -
+d /var/lib/hackme_web/runtime 0750 hackme hackme -
+d /var/lib/hackme_web/runtime/database 0750 hackme hackme -
+d /var/lib/hackme_web/runtime/chats 0750 hackme hackme -
+d /var/lib/hackme_web/runtime/anchors 0750 hackme hackme -
+d /var/lib/hackme_web/runtime/storage 0750 hackme hackme -
+d /var/lib/hackme_web/runtime/reports 0750 hackme hackme -
+d /var/log/hackme_web 0750 hackme hackme -
+d /etc/hackme_web 0750 root hackme -
+d /etc/hackme_web/secrets 0750 root hackme -

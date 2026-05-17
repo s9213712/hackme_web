@@ -83,12 +83,17 @@ python3 -m pip install -r requirements.txt
 - `python3`
 - `git`
 - `curl`
+- `systemd` / `systemctl`（production service 管理）
+- `nginx`（production reverse proxy）
 
 用途：
 
 - 建立虛擬環境、啟動站點
 - clone / update repo
 - 驗證 `/api/version`、跑 smoke / pentest 類腳本
+- 以 bounded Gunicorn service + Nginx TLS reverse proxy 長期營運
+
+Production 範本放在 `deploy/nginx/` 與 `deploy/systemd/`。
 
 ### 2.2 Video / HLS
 
@@ -220,12 +225,14 @@ Legacy repo-root 目錄如 `attachments/`、`avatars/`、`media/`、`uploads/`
 1. 看 [00_START_HERE.md](00_START_HERE.md)
 2. 跑 [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md)
 3. 若要 production，再看 [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md)
-4. 若要精準知道哪些能力依賴哪些 binary / key，就回到這份文件
+4. 套用 production service / proxy 前，讀 [../deploy/README.md](../deploy/README.md)
+5. 若要精準知道哪些能力依賴哪些 binary / key，就回到這份文件
 
 ## 8. Related Docs
 
 - [README.md](../README.md)
 - [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md)
 - [DEPLOYMENT.md](DEPLOYMENT.md)
+- [../deploy/README.md](../deploy/README.md)
 - [RELEASE_LAYOUT.md](RELEASE_LAYOUT.md)
 - [REPOSITORY_STRUCTURE.md](REPOSITORY_STRUCTURE.md)

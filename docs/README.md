@@ -25,7 +25,7 @@ operator guidance.
 
 | Track | Core Docs | Deep Docs |
 |---|---|---|
-| Deploy | [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md), [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md), [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md) | [DEPLOYMENT.md](DEPLOYMENT.md), [RELEASE_LAYOUT.md](RELEASE_LAYOUT.md), [REPOSITORY_STRUCTURE.md](REPOSITORY_STRUCTURE.md) |
+| Deploy | [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md), [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md), [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md) | [DEPLOYMENT.md](DEPLOYMENT.md), [../deploy/README.md](../deploy/README.md), [RELEASE_LAYOUT.md](RELEASE_LAYOUT.md), [REPOSITORY_STRUCTURE.md](REPOSITORY_STRUCTURE.md) |
 | Admin | [03_ADMIN_GUIDE.md](03_ADMIN_GUIDE.md), [06_SECURITY_MODEL.md](06_SECURITY_MODEL.md), [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md) | [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md), [security/PRE_RELEASE_CHECKLIST.md](security/PRE_RELEASE_CHECKLIST.md), [security/PRODUCTION_SIGNOFF_CHECKLIST.md](security/PRODUCTION_SIGNOFF_CHECKLIST.md) |
 | Developer | [For_developer.md](For_developer.md), [API_REFERENCE.md](API_REFERENCE.md), [WEB.md](WEB.md) | [architecture/DATABASE_LAYOUT.md](architecture/DATABASE_LAYOUT.md), [architecture/ASYNC_JOB_QUEUE_FEASIBILITY.md](architecture/ASYNC_JOB_QUEUE_FEASIBILITY.md), [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md) |
 | Security / QA | [11_QA_TESTING.md](11_QA_TESTING.md), [security/QA_ARCHITECTURE.md](security/QA_ARCHITECTURE.md), [SECURITY.md](SECURITY.md) | [security/FUNCTIONAL_SMOKE.md](security/FUNCTIONAL_SMOKE.md), [security/FUNCTIONAL_PERMISSION_PENTEST.md](security/FUNCTIONAL_PERMISSION_PENTEST.md), [security/PENTEST.md](security/PENTEST.md), [security/TRADING_STRESS_PENTEST.md](security/TRADING_STRESS_PENTEST.md), [security/secrets_scanning.md](security/secrets_scanning.md) |
@@ -58,6 +58,7 @@ operator guidance.
 - Video streaming architecture: [video/VIDEO_STREAMING_ARCHITECTURE.md](video/VIDEO_STREAMING_ARCHITECTURE.md)
 - Encryption runtime boundary: [ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md](ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md)
 - Runtime reset and recovery: [ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md)
+- Nginx / systemd production templates: [../deploy/README.md](../deploy/README.md)
 - Async job / Redis / queue feasibility: [architecture/ASYNC_JOB_QUEUE_FEASIBILITY.md](architecture/ASYNC_JOB_QUEUE_FEASIBILITY.md)
 - User profiles and friends: [social/USER_PROFILES_AND_FRIENDS.md](social/USER_PROFILES_AND_FRIENDS.md)
 - Server mode profile matrix: [server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md](server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md)

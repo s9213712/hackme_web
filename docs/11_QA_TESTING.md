@@ -102,6 +102,14 @@ python3 scripts/testing/playwright_platform_health_check.py
 scripts/security/pentest/run_pentest.sh --target https://127.0.0.1:5000
 ```
 
+若測正式部署，target 應是 Nginx 對外 URL，不是 Gunicorn loopback upstream：
+
+```bash
+scripts/security/pentest/run_pentest.sh --target https://<host>
+curl -ksS https://<host>/api/version
+curl -ksS https://<host>/readyz
+```
+
 若只跑 `whole-site-production-gate`，wrapper 會自動把 timeout floor 拉高到
 `900s`，避免舊版預設 `180s` 永遠先把 gate timeout 掉。
 

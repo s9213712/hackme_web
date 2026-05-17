@@ -8,7 +8,10 @@ matrix, see [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md).
 
 ## Direct Deployment
 
-正式部署改成直接走 `server.py`：
+正式部署不要把 Flask development server 直接暴露給使用者。單機正式部署請優先使用
+`deploy/nginx/` 與 `deploy/systemd/` 內的 Nginx + systemd + bounded Gunicorn 範本。
+
+手動直接啟動 `server.py` 只適合本機檢查或緊急維修：
 
 ```bash
 python3 server.py --doctor
@@ -17,6 +20,24 @@ python3 server.py
 
 `--doctor` 會先檢查 runtime 目錄是否存在且可寫；若環境缺失，會直接報錯，不會靜默幫你補建。
 如果你只是要本機開發，不要走這條，改用 repo root `./test_for_develop.sh`。
+
+## Nginx / systemd Templates
+
+可配置範本：
+
+- `deploy/nginx/hackme_web.conf.example`
+- `deploy/systemd/hackme-web.service.example`
+- `deploy/systemd/hackme-web.env.example`
+- `deploy/systemd/hackme-web.tmpfiles.example`
+
+完整套用順序與「不要這樣做」清單放在 [../deploy/README.md](../deploy/README.md)。
+
+部署重點：
+
+- Nginx 對外，Gunicorn 只綁 `127.0.0.1:8000`。
+- `/etc/hackme_web/hackme-web.env` 保存 production secrets，不進 git。
+- mutable runtime 放 `/var/lib/hackme_web/runtime` 與 `/var/log/hackme_web`。
+- web service 只跑 HTTP request；重型背景工作需獨立 worker service。
 
 Generated runtime files remain local and must not be committed:
 

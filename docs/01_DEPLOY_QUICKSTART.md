@@ -17,6 +17,18 @@
 - `python3`
 - `curl`
 
+最小 Python 依賴：
+
+```bash
+python3 -m pip install -r requirements-minimal.txt
+```
+
+若要跑 Playwright / pytest 類開發驗證，再加：
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
 若你需要完整依賴總表，而不是只看最短路線，請直接看
 [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md)。
 
@@ -41,11 +53,15 @@ python3 server.py --doctor
 python3 server.py
 ```
 
+這只適合本機 / staging / 緊急維修。正式對外服務請改走
+[02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md) 的 Nginx + systemd + Gunicorn
+流程，不要直接暴露 Flask development server。
+
 ### 第一次啟動後要確認
 
 1. 先看 server console 印出的實際 URL，不要先假設一定是 HTTP 或 HTTPS。
 2. 一般情況：
-   - `./test_for_develop.sh`：通常會是 `https://127.0.0.1:5000/`
+   - `./test_for_develop.sh`：通常會是 `https://127.0.0.1:<port>/`
    - `python3 server.py`：本機開發模式通常會自動準備本地 TLS，因此多半是
      `https://127.0.0.1:5000/`
 3. 若不確定，直接探測：
@@ -90,9 +106,12 @@ done
 ## 原理
 
 - `python3 server.py --doctor` 會先檢查 runtime 目錄是否存在且可寫，不會靜默補建。
+- `python3 server.py` 是本機手動啟動，不是正式對外 serving 架構。
 - `./test_for_develop.sh` 會把運行伺服器需要的原始碼複製到 `/tmp`，並關掉妨礙開發的安全限制。
   它不應複製大型 docs、reports、archive、cache、runtime 產物；若 `/tmp` 很快滿，先檢查是否有舊版腳本或殘留測試副本。
 - 正式部署的 env、runtime、依賴與權限仍應由部署者自己明確準備。
+- 正式部署請使用 `deploy/nginx/` 與 `deploy/systemd/` 範本，讓 Nginx 對外、
+  Gunicorn 只綁 loopback，並把長任務留給獨立 worker。
 - `BT/magnet` 遠端下載需要 `aria2c`，upload malware 掃描若要啟用則需
   `clamscan` 或 `clamdscan`；完整依賴請看
   [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md)。
@@ -124,6 +143,7 @@ done
 
 - [00_START_HERE.md](00_START_HERE.md)
 - [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md)
+- [../deploy/README.md](../deploy/README.md)
 - [03_ADMIN_GUIDE.md](03_ADMIN_GUIDE.md)
 - [11_QA_TESTING.md](11_QA_TESTING.md)
 - [12_TROUBLESHOOTING.md](12_TROUBLESHOOTING.md)

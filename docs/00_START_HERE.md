@@ -12,14 +12,19 @@
 
 1. [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md)
 2. [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md)
-3. [11_QA_TESTING.md](11_QA_TESTING.md)
-4. [12_TROUBLESHOOTING.md](12_TROUBLESHOOTING.md)
+3. [Production templates](../deploy/README.md)
+4. [11_QA_TESTING.md](11_QA_TESTING.md)
+5. [12_TROUBLESHOOTING.md](12_TROUBLESHOOTING.md)
 
 這條路線的目標是：
 
 - 先把站跑起來
-- 知道 runtime / HTTPS / cookie / backup / snapshot 的基本順序
+- 知道 runtime / HTTPS / cookie / Nginx / systemd / backup / snapshot 的基本順序
 - 上線前知道要驗什麼
+
+本機或 staging 可以先用 `server.py` / `test_for_develop.sh` 驗證；正式對外服務請走
+[02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md) 與 repo 內的 `deploy/` 範本，
+不要把 Flask development server 直接暴露給使用者。
 
 ## 如果你是 root / admin
 
@@ -59,6 +64,7 @@
 - [README.md（文件總索引）](README.md)
 - [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md)
 - [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md)
+- [Production templates](../deploy/README.md)
 - [03_ADMIN_GUIDE.md](03_ADMIN_GUIDE.md)
 - [04_USER_GUIDE.md](04_USER_GUIDE.md)
 - [05_FEATURES_OVERVIEW.md](05_FEATURES_OVERVIEW.md)

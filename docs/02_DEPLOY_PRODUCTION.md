@@ -13,10 +13,11 @@
 1. 先用 [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md) 完成本機或 staging 驗證。
 2. 先建立部署用環境變數與 runtime 目錄，再執行 `python3 server.py --doctor`。
 3. 確認 runtime 根目錄集中在部署目錄的 `runtime/`，或明確用 `HACKME_RUNTIME_DIR` 指到隔離資料區。
-4. 決定是否由反向代理處理 HTTPS。
-5. 建立上線前 snapshot。
-6. 跑功能 smoke、權限 pentest、壓力測試與必要的 production gate。
-7. 做文件新鮮度檢查：確認 README / API reference / Trading / Server Mode /
+4. 套用 repo 內 [deploy/README.md](../deploy/README.md) 的 Nginx / systemd 範本，並依主機調整 domain、憑證、路徑與 secrets。
+5. 決定是否由反向代理處理 HTTPS。
+6. 建立上線前 snapshot。
+7. 跑功能 smoke、權限 pentest、壓力測試與必要的 production gate。
+8. 做文件新鮮度檢查：確認 README / API reference / Trading / Server Mode /
    QA 文件描述的是目前 code，而不是研究草案或歷史報告。
 
 ### 重要部署決策
@@ -91,12 +92,130 @@
 
 ### 反向代理建議
 
-本 repo 不綁定單一代理實作，但部署者至少要做到：
+正式部署建議使用 Nginx + systemd + Gunicorn：
 
-- 只公開代理層入口，不讓 app 直接裸露在公網
-- 代理層正確傳遞 scheme / host
-- 若使用 `X-Forwarded-For`，app 僅信任受控 proxy IP
-- 保留 access log / error log 與應用 log 分層
+- Nginx 是唯一對外入口，負責 TLS、proxy headers、第一層 rate limit 與大型 request timeout。
+- Gunicorn 只綁 `127.0.0.1:8000`，不要直接裸露在公網。
+- App 只信任本機 proxy 的 `X-Forwarded-*`。
+- Web process 只負責 HTTP request lifecycle；交易 background engine、HLS、BT/direct link、
+  local AI generation 等長任務必須獨立成 worker service，不應塞回 request worker。
+
+repo 內提供可複製的範本：
+
+- `deploy/nginx/hackme_web.conf.example`
+- `deploy/systemd/hackme-web.service.example`
+- `deploy/systemd/hackme-web.env.example`
+- `deploy/systemd/hackme-web.tmpfiles.example`
+
+#### Nginx
+
+1. 複製範本：
+
+```bash
+sudo cp deploy/nginx/hackme_web.conf.example /etc/nginx/sites-available/hackme_web
+sudo ln -s /etc/nginx/sites-available/hackme_web /etc/nginx/sites-enabled/hackme_web
+```
+
+2. 編輯以下值：
+
+- `server_name hackme.example.com`
+- `ssl_certificate`
+- `ssl_certificate_key`
+- `client_max_body_size`
+- `limit_req_zone` rate / burst
+
+3. 驗證並 reload：
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+#### systemd web service
+
+1. 建立部署使用者與目錄：
+
+```bash
+sudo useradd --system --home /opt/hackme_web --shell /usr/sbin/nologin hackme
+sudo mkdir -p /opt/hackme_web /etc/hackme_web/secrets /var/lib/hackme_web/runtime /var/log/hackme_web
+sudo chown -R hackme:hackme /opt/hackme_web /var/lib/hackme_web /var/log/hackme_web
+sudo chown -R root:hackme /etc/hackme_web
+```
+
+2. 建立 venv，最小啟動只裝 runtime layer：
+
+```bash
+cd /opt/hackme_web
+python3 -m venv .venv
+.venv/bin/python3 -m pip install --upgrade pip
+.venv/bin/python3 -m pip install -r requirements-minimal.txt
+```
+
+若 production 需要 local Hugging Face / Diffusers 或圖片 metadata 檢查，再額外安裝：
+
+```bash
+.venv/bin/python3 -m pip install -r requirements-features.txt
+```
+
+3. 安裝 env 與 tmpfiles：
+
+```bash
+sudo install -m 0640 -o root -g hackme deploy/systemd/hackme-web.env.example /etc/hackme_web/hackme-web.env
+sudo install -m 0644 -o root -g root deploy/systemd/hackme-web.tmpfiles.example /etc/tmpfiles.d/hackme-web.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/hackme-web.conf
+```
+
+編輯 `/etc/hackme_web/hackme-web.env`，至少替換：
+
+- `SESSION_SECRET`
+- `CSRF_SECRET_KEY`
+- `ROOT_INTEGRITY_SIGNING_KEY`
+- `HTML_LEARNING_ROOT_PASSWORD`
+- `TRUSTED_PROXY_IPS`
+
+4. 安裝並啟動 service：
+
+```bash
+sudo install -m 0644 -o root -g root deploy/systemd/hackme-web.service.example /etc/systemd/system/hackme-web.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now hackme-web.service
+sudo systemctl status hackme-web.service
+```
+
+5. 驗證：
+
+```bash
+curl -ksS https://<host>/api/version
+curl -ksS https://<host>/readyz
+journalctl -u hackme-web.service -n 100 --no-pager
+```
+
+#### Proxy / cookie 必要設定
+
+若 TLS 在 Nginx 終止，env 必須一致：
+
+```env
+FORCE_HTTPS=true
+SESSION_COOKIE_SECURE=true
+USE_XFF=true
+TRUSTED_PROXY_IPS=127.0.0.1,::1
+GUNICORN_FORWARDED_ALLOW_IPS=127.0.0.1,::1
+HTML_LEARNING_HOST=127.0.0.1
+HTML_LEARNING_PORT=8000
+```
+
+如果你的 Nginx 不在同一台主機，`TRUSTED_PROXY_IPS` 與
+`GUNICORN_FORWARDED_ALLOW_IPS` 必須改成實際 proxy IP，不能填任意網段。
+
+#### Worker 邊界
+
+`gunicorn server:app` 不會執行 `server.py` 的 `__main__` 區塊，因此不會自動啟動
+舊式 in-process worker。這是正式部署應有的邊界：web service 不應擁有長任務生命週期。
+
+目前已可由 web route 產生或管理的外部工作包括 HLS preparation、remote download
+worker、Job Center 與 trading background queue；production 若要常駐處理這些工作，
+請在對應 daemon entrypoint 完成後另建 systemd service。不要用提高 Gunicorn
+workers/threads 的方式處理 HLS、BT、direct link、local AI generation 或交易常駐計算。
 
 ### 上線前必跑
 

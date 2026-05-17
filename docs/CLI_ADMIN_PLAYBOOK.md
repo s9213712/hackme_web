@@ -33,6 +33,14 @@ python3 server.py
 `server.py` 不接受 `--host` / `--port` CLI 參數；要改 bind 請用
 `HTML_LEARNING_HOST` / `HTML_LEARNING_PORT`。
 
+正式部署的 CLI 操作應打 Nginx 對外 URL，例如：
+
+```bash
+export BASE="https://your.domain"
+```
+
+不要把 Gunicorn 的 loopback upstream 或 Flask development server 直接開給使用者。
+
 ### 2. 共用變數
 
 ```bash

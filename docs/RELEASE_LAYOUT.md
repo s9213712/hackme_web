@@ -15,6 +15,7 @@ separate locations so a downloaded release starts cleanly.
 | `tests/` | Automated regression tests. |
 | `scripts/` | Operator, validation, security, and feature probe scripts. |
 | `docs/` | User, admin, security, API, deployment, and release documentation. |
+| `deploy/` | Production deployment templates for Nginx, systemd, and runtime directory policy. |
 
 ## Runtime Data
 

@@ -2,6 +2,16 @@
 
 This checklist is a release gate. Any failed item blocks production mode.
 
+## Serving Topology
+
+- [ ] Public traffic enters through Nginx or an equivalent reverse proxy.
+- [ ] Gunicorn binds only to loopback, for example `127.0.0.1:8000`.
+- [ ] The web service runs under systemd or an equivalent supervisor with bounded
+  workers, threads, timeout, and restart policy.
+- [ ] Flask's development server is not exposed to users.
+- [ ] The deployed host has reviewed [../../deploy/README.md](../../deploy/README.md)
+  and replaced every domain, path, TLS certificate, and secret placeholder.
+
 ## Server Mode Core Safety
 
 Status machine:
@@ -147,7 +157,7 @@ The aggregate check is:
 
 ```bash
 PYTHONPATH=. scripts/security/pentest/run_pentest.sh \
-  --target http://127.0.0.1:5000 \
+  --target https://<staging-or-production-host> \
   --only whole-site-production-gate
 ```
 
