@@ -30,6 +30,8 @@ from services.storage.quota_purchases import (
     storage_upgrade_product_from_catalog,
 )
 from services.storage.capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
+from services.media.streaming import ensure_media_stream_schema
+from services.media.e2ee_streaming import ensure_e2ee_stream_v2_schema
 
 
 def _conn():
@@ -309,6 +311,102 @@ def test_cloud_drive_usage_reports_used_and_remaining_quota():
         assert usage["remaining_bytes"] == 1024 * 1024 - 768
         assert usage["by_privacy_mode"]["standard_plain"]["count"] == 1
         assert usage["by_privacy_mode"]["e2ee"]["count"] == 1
+    finally:
+        conn.close()
+
+
+def test_cloud_drive_usage_excludes_video_streaming_service_cache_from_quota():
+    conn = _conn()
+    try:
+        create_uploaded_file_record(
+            conn,
+            owner_user_id=1,
+            storage_path="storage/public/video.mp4",
+            privacy_mode="standard_plain",
+            size_bytes=4096,
+            original_filename="video.mp4",
+            mime_type="video/mp4",
+            user={"effective_level": "trusted"},
+        )
+        create_uploaded_file_record(
+            conn,
+            owner_user_id=1,
+            storage_path="storage/e2ee/video.bin",
+            privacy_mode="e2ee",
+            size_bytes=2048,
+            original_filename="secret.mp4",
+            encrypted_metadata="sealed",
+            encrypted_file_key="sealed-key",
+            user={"effective_level": "trusted"},
+        )
+        plain_id = conn.execute("SELECT id FROM uploaded_files WHERE storage_path='storage/public/video.mp4'").fetchone()["id"]
+        e2ee_id = conn.execute("SELECT id FROM uploaded_files WHERE storage_path='storage/e2ee/video.bin'").fetchone()["id"]
+
+        ensure_media_stream_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO media_stream_assets (
+                uploaded_file_id, source_mode, media_type, status, storage_mode,
+                master_manifest_path, duration_seconds, source_mime_type,
+                source_size_bytes, error_message, created_at, updated_at
+            ) VALUES (?, 'standard_plain', 'video', 'ready', 'acl_protected_plain',
+                'media_derivatives/file/master.m3u8', 1.0, 'video/mp4', 4096, '',
+                '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+            """,
+            (plain_id,),
+        )
+        asset_id = conn.execute("SELECT id FROM media_stream_assets WHERE uploaded_file_id=?", (plain_id,)).fetchone()["id"]
+        conn.execute(
+            """
+            INSERT INTO media_stream_variants (
+                asset_id, name, width, height, bitrate, codec, playlist_path,
+                init_segment_path, created_at
+            ) VALUES (?, 'q720', 1280, 720, 2800000, 'h264',
+                'media_derivatives/file/q720/playlist.m3u8',
+                'media_derivatives/file/q720/init.mp4',
+                '2026-01-01T00:00:00')
+            """,
+            (asset_id,),
+        )
+        variant_id = conn.execute("SELECT id FROM media_stream_variants WHERE asset_id=?", (asset_id,)).fetchone()["id"]
+        conn.execute(
+            """
+            INSERT INTO media_stream_segments (
+                variant_id, sequence_number, filename, path, duration_seconds,
+                byte_size, created_at
+            ) VALUES
+                (?, 1, 'seg_00001.m4s', 'media_derivatives/file/q720/seg_00001.m4s', 1.0, 700, '2026-01-01T00:00:00'),
+                (?, 2, 'seg_00002.m4s', 'media_derivatives/file/q720/seg_00002.m4s', 1.0, 300, '2026-01-01T00:00:00')
+            """,
+            (variant_id, variant_id),
+        )
+
+        ensure_e2ee_stream_v2_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO media_e2ee_stream_v2_assets (
+                uploaded_file_id, stream_version, chunk_size, chunk_count,
+                manifest_path, bundle_path, content_type, duration_hint,
+                byte_range_hint_json, source_size_bytes, created_at, updated_at
+            ) VALUES (?, 2, 512, 4, 'e2ee_stream_v2/file/manifest.json',
+                'e2ee_stream_v2/file/bundle.bin', 'video/mp4', 1.0, '{}', 2048,
+                '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+            """,
+            (e2ee_id,),
+        )
+
+        usage = get_user_cloud_drive_usage(
+            conn,
+            {"id": 1, "role": "user", "effective_level": "trusted", "sanction_status": "none"},
+            member_rule={"can_upload_attachment": True, "attachment_quota_mb": 1, "max_attachment_size_mb": 1, "upload_rate_limit_per_day": 10},
+        )
+
+        assert usage["used_bytes"] == 4096 + 2048
+        assert usage["quota_counted_bytes"] == usage["used_bytes"]
+        assert usage["media_derivative_bytes_excluded_from_quota"] == 1000
+        assert usage["e2ee_stream_bytes_excluded_from_quota"] == 2048
+        assert usage["service_cache_bytes_excluded_from_quota"] == 3048
+        assert usage["service_cache_quota_exempt"] is True
     finally:
         conn.close()
 

@@ -47,6 +47,15 @@
     if (num < 1024 * 1024 * 1024) return `${(num / 1024 / 1024).toFixed(1)} MB`;
     return `${(num / 1024 / 1024 / 1024).toFixed(2)} GB`;
   }
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "\"": "&quot;",
+      "'": "&#39;",
+    }[ch] || ch));
+  }
   async function readBlobWithProgress(response, onProgress) {
     if (!response.body || typeof response.body.getReader !== "function") {
       return response.blob();
@@ -70,8 +79,55 @@
     const probe = document.createElement(mediaType === "audio" ? "audio" : "video");
     return !!(probe && typeof probe.canPlayType === "function" && probe.canPlayType("application/vnd.apple.mpegurl"));
   }
+  function sharedQualityOptions(playback={}) {
+    const variants = Array.isArray(playback?.variants)
+      ? playback.variants
+      : (Array.isArray(playback?.status?.variants) ? playback.status.variants : []);
+    return variants.filter((variant) => variant && variant.name).map((variant) => {
+      const height = Number(variant.height || 0);
+      const label = variant.label
+        || (variant.name === "original" ? (height ? `原畫質 ${height}p` : "原畫質") : (height ? `${height}p` : variant.name));
+      return {
+        name: String(variant.name || ""),
+        label: String(label || variant.name || ""),
+        height,
+        playlistUrl: String(variant.playlist_url || ""),
+      };
+    });
+  }
+  function preferredSharedQuality(playback={}) {
+    const options = sharedQualityOptions(playback);
+    if (!options.length) return null;
+    const preferredName = String(playback?.default_quality || playback?.quality_policy?.default_quality || "").trim();
+    if (preferredName) {
+      const named = options.find((option) => option.name === preferredName);
+      if (named) return named;
+    }
+    return options.find((option) => Number(option.height || 0) === 720)
+      || options.find((option) => Number(option.height || 0) === 480)
+      || options.find((option) => option.name !== "original" && option.name !== "audio")
+      || options[0]
+      || null;
+  }
+  function fallbackSharedQuality(playback={}) {
+    const options = sharedQualityOptions(playback);
+    const fallbackName = String(playback?.fallback_quality || playback?.quality_policy?.fallback_quality || "").trim();
+    if (fallbackName) {
+      const named = options.find((option) => option.name === fallbackName);
+      if (named) return named;
+    }
+    return options.find((option) => Number(option.height || 0) === 480) || null;
+  }
+  function selectedSharedQuality(playback={}) {
+    const select = $("quality-select");
+    const selected = String(select?.value || "").trim();
+    if (!selected || selected === "auto") return null;
+    return sharedQualityOptions(playback).find((option) => option.name === selected) || null;
+  }
   let sharedHls = null;
   let sharedHlsLoadPromise = null;
+  let sharedManualQualitySelection = false;
+  let sharedAutoQualityFallbackApplied = false;
   let shareSessionId = "";
   const SHARED_E2EE_STREAM_V2_MAX_RETRIES = 2;
   const SHARED_E2EE_STREAM_V2_CACHE_LIMIT = 16;
@@ -110,6 +166,78 @@
       try { sharedHls.destroy(); } catch (_) {}
     }
     sharedHls = null;
+  }
+  function renderSharedQualityControl(playback={}) {
+    const host = $("quality-host");
+    if (!host) return;
+    const options = sharedQualityOptions(playback);
+    if (options.length < 2) {
+      host.classList.add("hidden");
+      host.innerHTML = "";
+      return;
+    }
+    const preferred = preferredSharedQuality(playback);
+    host.innerHTML = `
+      <label for="quality-select">畫質</label>
+      <select id="quality-select">
+        <option value="auto"${preferred?.name ? "" : " selected"}>自動</option>
+        ${options.map((option) => `<option value="${escapeHtml(option.name)}"${option.name === preferred?.name ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+      </select>
+      <small>預設 720p；網路不穩時會嘗試退回 480p。串流衍生畫質不佔用分享者雲端硬碟容量。</small>
+    `;
+    host.classList.remove("hidden");
+    const select = $("quality-select");
+    if (select) {
+      select.addEventListener("change", () => {
+        sharedManualQualitySelection = true;
+        applySharedQualitySelection(playback);
+      });
+    }
+  }
+  function applySharedQualitySelection(playback={}) {
+    const player = $("shared-player");
+    if (!player) return;
+    const variant = selectedSharedQuality(playback);
+    if (sharedHls && Array.isArray(sharedHls.levels)) {
+      if (!variant) {
+        sharedHls.currentLevel = -1;
+        setMsg("畫質：自動；播放器會依網路狀況調整。");
+        return;
+      }
+      const levelIndex = sharedHls.levels.findIndex((level) => Number(level.height || 0) === Number(variant.height || 0));
+      if (levelIndex >= 0) {
+        sharedHls.currentLevel = levelIndex;
+        setMsg(`畫質：${variant.label}。`);
+        return;
+      }
+    }
+    const nextUrl = variant?.playlistUrl || playback.master_url || "";
+    if (!nextUrl) return;
+    const resumeAt = Number(player.currentTime || 0);
+    const wasPaused = player.paused;
+    player.src = nextUrl;
+    if (typeof player.load === "function") player.load();
+    player.addEventListener("loadedmetadata", () => {
+      try {
+        if (resumeAt > 0 && Number.isFinite(resumeAt)) player.currentTime = resumeAt;
+        if (!wasPaused && typeof player.play === "function") player.play().catch(() => {});
+      } catch (_err) {}
+    }, { once: true });
+    setMsg(variant ? `畫質：${variant.label}。` : "畫質：自動。");
+  }
+  function fallbackSharedPlaybackToLowerQuality(playback={}, reason="") {
+    if (sharedManualQualitySelection || sharedAutoQualityFallbackApplied) return false;
+    const fallback = fallbackSharedQuality(playback);
+    if (!fallback) return false;
+    const current = selectedSharedQuality(playback);
+    if (current && current.name === fallback.name) return false;
+    const select = $("quality-select");
+    if (!select) return false;
+    if (select) select.value = fallback.name;
+    sharedAutoQualityFallbackApplied = true;
+    applySharedQualitySelection(playback);
+    setMsg(`網路狀況不穩，已自動切換為 ${fallback.label}${reason ? `；${reason}` : ""}。`);
+    return true;
   }
   function clearSharedPlaybackAction() {
     const wrap = $("player-action");
@@ -498,6 +626,13 @@
     const player = $("shared-player");
     if (!player) return;
     destroySharedPlaybackArtifacts();
+    sharedManualQualitySelection = false;
+    sharedAutoQualityFallbackApplied = false;
+    const qualityHost = $("quality-host");
+    if (qualityHost) {
+      qualityHost.classList.add("hidden");
+      qualityHost.innerHTML = "";
+    }
     if (playback.mode === "e2ee_stream_v2") {
       $("e2ee-note").classList.remove("hidden");
       setMsg("這是 strict E2EE 分享影音。按下「開始 E2EE 播放」後，才會在瀏覽器端讀取 fragment 並解密。");
@@ -524,9 +659,20 @@
     }
     clearSharedPlaybackAction();
     const directFallbackAllowed = playback.direct_fallback_allowed !== false;
+    renderSharedQualityControl(playback);
+    const preferred = preferredSharedQuality(playback);
+    const preferredUrl = preferred?.playlistUrl || playback.master_url || "";
     if (playback.mode === "hls" && browserSupportsNativeHls(video.media_type)) {
-      player.src = playback.master_url || (directFallbackAllowed ? (playback.fallback_url || "") : "");
-      setMsg("Safari / 原生 HLS 已啟用。");
+      player.src = preferredUrl || (directFallbackAllowed ? (playback.fallback_url || "") : "");
+      player.addEventListener("stalled", () => fallbackSharedPlaybackToLowerQuality(playback, "原生 HLS 偵測到載入停滯"), { once: true });
+      player.addEventListener("waiting", () => fallbackSharedPlaybackToLowerQuality(playback, "原生 HLS 偵測到等待資料"), { once: true });
+      player.addEventListener("error", () => {
+        if (!fallbackSharedPlaybackToLowerQuality(playback, "原生 HLS 播放錯誤") && directFallbackAllowed) {
+          player.src = playback.fallback_url || playback.stream_url || "";
+          setMsg("HLS 播放失敗，已改用直接串流。", true);
+        }
+      }, { once: true });
+      setMsg(preferred ? `Safari / 原生 HLS 已啟用，預設 ${preferred.label}。` : "Safari / 原生 HLS 已啟用。");
       return;
     }
     if (playback.mode === "hls" && playback.master_url) {
@@ -536,7 +682,21 @@
           throw new Error("目前瀏覽器不支援 HLS.js 所需的 MediaSource");
         }
         sharedHls = new Hls({ enableWorker: true, backBufferLength: 30 });
+        sharedHls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (selectedSharedQuality(playback)) applySharedQualitySelection(playback);
+        });
         sharedHls.on(Hls.Events.ERROR, (_event, data) => {
+          const detail = data?.details ? String(data.details) : "";
+          const type = data?.type ? String(data.type) : "";
+          if (
+            (detail.toLowerCase().includes("buffer") || type.toLowerCase().includes("network") || data?.fatal)
+            && fallbackSharedPlaybackToLowerQuality(playback, detail ? detail : "已降低串流負擔")
+          ) {
+            if (data?.fatal && typeof sharedHls.recoverMediaError === "function") {
+              try { sharedHls.recoverMediaError(); } catch (_err) {}
+            }
+            return;
+          }
           if (!data?.fatal) return;
           destroySharedPlaybackArtifacts();
           if (directFallbackAllowed) {

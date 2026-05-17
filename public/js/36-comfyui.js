@@ -50,6 +50,7 @@ let comfyuiMaskEditorState = {
   pointerId: null,
   width: 0,
   height: 0,
+  hasSource: false,
 };
 let comfyuiImagePickerState = {
   open: false,
@@ -851,7 +852,9 @@ function renderComfyuiInputAsset(key) {
   if (editBtn) {
     const canEdit = comfyuiCanOpenMaskEditor();
     editBtn.disabled = !canEdit;
-    editBtn.title = canEdit ? "在來源圖片上直接畫出 inpaint 遮罩" : "請先選擇來源圖片，再開啟遮罩編輯器。";
+    editBtn.title = comfyuiAssetState("source").previewUrl
+      ? "在來源圖片上直接畫出 inpaint 遮罩"
+      : "尚未選來源圖時會開啟空白遮罩畫布。";
   }
   if (fileInput && !asset.file) fileInput.value = "";
 }
@@ -896,7 +899,7 @@ function clearComfyuiInputAsset(key) {
 }
 
 function comfyuiCanOpenMaskEditor() {
-  return !!comfyuiAssetState("source").previewUrl;
+  return true;
 }
 
 function comfyuiMaskEditorElements() {
@@ -908,6 +911,8 @@ function comfyuiMaskEditorElements() {
     meta: $("comfyui-mask-editor-meta"),
     brush: $("comfyui-mask-editor-brush"),
     brushLabel: $("comfyui-mask-editor-brush-label"),
+    widthInput: $("comfyui-mask-editor-width"),
+    heightInput: $("comfyui-mask-editor-height"),
     paintBtn: $("comfyui-mask-editor-paint-btn"),
     eraseBtn: $("comfyui-mask-editor-erase-btn"),
   };
@@ -935,10 +940,50 @@ function setComfyuiMaskEditorMode(mode) {
   updateComfyuiMaskEditorToolbar();
 }
 
-function resizeComfyuiMaskEditorCanvases(width, height) {
+function comfyuiMaskEditorDimension(value, fallback) {
+  const numeric = Number(value);
+  const base = Number.isFinite(numeric) ? numeric : fallback;
+  const rounded = Math.round(Number(base || 1024) / 8) * 8;
+  return Math.max(64, Math.min(2048, rounded || 1024));
+}
+
+function fillComfyuiMaskEditorBlankSource(width, height) {
+  const { sourceCanvas } = comfyuiMaskEditorElements();
+  if (!sourceCanvas) return;
+  const ctx = sourceCanvas.getContext("2d");
+  ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+  ctx.fillStyle = "#1f2937";
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = "rgba(255,255,255,.18)";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([12, 10]);
+  ctx.strokeRect(8, 8, Math.max(0, width - 16), Math.max(0, height - 16));
+  ctx.setLineDash([]);
+  ctx.fillStyle = "rgba(255,255,255,.72)";
+  ctx.font = `${Math.max(18, Math.min(34, Math.round(width / 28)))}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("空白遮罩畫布", width / 2, height / 2);
+}
+
+function setComfyuiMaskEditorDimensionInputs(width, height, disabled = false) {
+  const { widthInput, heightInput } = comfyuiMaskEditorElements();
+  if (widthInput) {
+    widthInput.value = String(width);
+    widthInput.disabled = !!disabled;
+    widthInput.title = disabled ? "已依來源圖片尺寸鎖定。" : "空白遮罩尺寸。";
+  }
+  if (heightInput) {
+    heightInput.value = String(height);
+    heightInput.disabled = !!disabled;
+    heightInput.title = disabled ? "已依來源圖片尺寸鎖定。" : "空白遮罩尺寸。";
+  }
+}
+
+function resizeComfyuiMaskEditorCanvases(width, height, options = {}) {
   const { sourceCanvas, maskCanvas } = comfyuiMaskEditorElements();
-  const safeWidth = Math.max(1, Math.floor(Number(width) || 1));
-  const safeHeight = Math.max(1, Math.floor(Number(height) || 1));
+  const safeWidth = comfyuiMaskEditorDimension(width, comfyuiDefaultWidth);
+  const safeHeight = comfyuiMaskEditorDimension(height, comfyuiDefaultHeight);
   [sourceCanvas, maskCanvas].forEach((canvas) => {
     if (!canvas) return;
     canvas.width = safeWidth;
@@ -946,6 +991,7 @@ function resizeComfyuiMaskEditorCanvases(width, height) {
   });
   comfyuiMaskEditorState.width = safeWidth;
   comfyuiMaskEditorState.height = safeHeight;
+  if (options.syncInputs !== false) setComfyuiMaskEditorDimensionInputs(safeWidth, safeHeight, !!options.lockInputs);
 }
 
 function drawComfyuiExistingMaskIntoEditor(maskImage) {
@@ -973,21 +1019,26 @@ function drawComfyuiExistingMaskIntoEditor(maskImage) {
 
 async function openComfyuiMaskEditor() {
   const sourceAsset = comfyuiAssetState("source");
-  if (!sourceAsset.previewUrl) {
-    setComfyuiMessage("請先選擇來源圖片，再開啟遮罩編輯器。", false);
-    return;
-  }
   const { modal, sourceCanvas, maskCanvas, meta } = comfyuiMaskEditorElements();
   if (!modal || !sourceCanvas || !maskCanvas) {
     setComfyuiMessage("遮罩編輯器尚未載入，請重新整理頁面。", false);
     return;
   }
   try {
-    const sourceImage = await loadComfyuiMaskEditorImage(sourceAsset.previewUrl);
-    const width = sourceImage.naturalWidth || sourceImage.width || comfyuiDefaultWidth;
-    const height = sourceImage.naturalHeight || sourceImage.height || comfyuiDefaultHeight;
-    resizeComfyuiMaskEditorCanvases(width, height);
-    sourceCanvas.getContext("2d").drawImage(sourceImage, 0, 0, width, height);
+    let width = comfyuiMaskEditorDimension($("comfyui-width")?.value || comfyuiDefaultWidth, comfyuiDefaultWidth);
+    let height = comfyuiMaskEditorDimension($("comfyui-height")?.value || comfyuiDefaultHeight, comfyuiDefaultHeight);
+    let sourceImage = null;
+    if (sourceAsset.previewUrl) {
+      sourceImage = await loadComfyuiMaskEditorImage(sourceAsset.previewUrl);
+      width = comfyuiMaskEditorDimension(sourceImage.naturalWidth || sourceImage.width || width, width);
+      height = comfyuiMaskEditorDimension(sourceImage.naturalHeight || sourceImage.height || height, height);
+    }
+    resizeComfyuiMaskEditorCanvases(width, height, { lockInputs: !!sourceImage });
+    if (sourceImage) {
+      sourceCanvas.getContext("2d").drawImage(sourceImage, 0, 0, width, height);
+    } else {
+      fillComfyuiMaskEditorBlankSource(width, height);
+    }
     maskCanvas.getContext("2d").clearRect(0, 0, width, height);
     const maskAsset = comfyuiAssetState("mask");
     if (maskAsset.previewUrl) {
@@ -997,12 +1048,15 @@ async function openComfyuiMaskEditor() {
       } catch (_) {}
     }
     if (meta) {
-      meta.textContent = `${width} x ${height}；白色區域會交給 inpaint 重繪。`;
+      meta.textContent = sourceImage
+        ? `${width} x ${height}；白色區域會交給 inpaint 重繪。`
+        : `${width} x ${height}；尚未選來源圖，請確認遮罩尺寸要和稍後來源圖一致。`;
     }
     comfyuiMaskEditorState.open = true;
     comfyuiMaskEditorState.drawing = false;
     comfyuiMaskEditorState.lastPoint = null;
     comfyuiMaskEditorState.pointerId = null;
+    comfyuiMaskEditorState.hasSource = !!sourceImage;
     setComfyuiMaskEditorMode("paint");
     modal.hidden = false;
     updateComfyuiMaskEditorToolbar();
@@ -1017,7 +1071,23 @@ function closeComfyuiMaskEditor() {
   comfyuiMaskEditorState.drawing = false;
   comfyuiMaskEditorState.lastPoint = null;
   comfyuiMaskEditorState.pointerId = null;
+  comfyuiMaskEditorState.hasSource = false;
   if (modal) modal.hidden = true;
+}
+
+function applyComfyuiMaskEditorSize() {
+  const { maskCanvas, meta, widthInput, heightInput } = comfyuiMaskEditorElements();
+  if (!maskCanvas || comfyuiMaskEditorState.hasSource) return;
+  const previous = document.createElement("canvas");
+  previous.width = maskCanvas.width || 1;
+  previous.height = maskCanvas.height || 1;
+  previous.getContext("2d").drawImage(maskCanvas, 0, 0);
+  const width = comfyuiMaskEditorDimension(widthInput?.value || comfyuiDefaultWidth, comfyuiDefaultWidth);
+  const height = comfyuiMaskEditorDimension(heightInput?.value || comfyuiDefaultHeight, comfyuiDefaultHeight);
+  resizeComfyuiMaskEditorCanvases(width, height, { lockInputs: false });
+  fillComfyuiMaskEditorBlankSource(width, height);
+  maskCanvas.getContext("2d").drawImage(previous, 0, 0, width, height);
+  if (meta) meta.textContent = `${width} x ${height}；空白遮罩畫布，請確認尺寸與來源圖一致。`;
 }
 
 function comfyuiMaskEditorPoint(event) {
@@ -2053,6 +2123,11 @@ function bindComfyuiAdvancedUi() {
   if (maskEditorBrush && maskEditorBrush.dataset.comfyuiBound !== "1") {
     maskEditorBrush.dataset.comfyuiBound = "1";
     maskEditorBrush.addEventListener("input", updateComfyuiMaskEditorToolbar);
+  }
+  const maskEditorResizeBtn = $("comfyui-mask-editor-resize-btn");
+  if (maskEditorResizeBtn && maskEditorResizeBtn.dataset.comfyuiBound !== "1") {
+    maskEditorResizeBtn.dataset.comfyuiBound = "1";
+    maskEditorResizeBtn.addEventListener("click", applyComfyuiMaskEditorSize);
   }
   const maskEditorClearBtn = $("comfyui-mask-editor-clear-btn");
   if (maskEditorClearBtn && maskEditorClearBtn.dataset.comfyuiBound !== "1") {

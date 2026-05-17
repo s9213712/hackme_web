@@ -71,7 +71,7 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "uploadVideoE2eeStreamV2Package" in videos_js
     assert "E2EE Streaming v2 密文分段上傳中" in videos_js
     assert "E2EE Streaming v2 manifest 儲存中" in videos_js
-    assert "上傳完成，伺服器端加密、掃描與 HLS 排程中" in videos_js
+    assert "上傳完成，伺服器端加密與掃描中；HLS 會在後台轉檔，進度可到任務中心查看" in videos_js
     assert 'share_wrapped_file_key_envelope' in videos_js
     assert 'share_expires_at' in videos_js
     assert 'share_max_views' in videos_js

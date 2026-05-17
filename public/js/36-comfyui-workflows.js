@@ -913,7 +913,7 @@ function renderComfyuiTemplateField(field, detail, ctx) {
         <div class="drive-card-sub" style="margin-top:.45rem;">${sanitize(metaText)}</div>
         <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.45rem;">
           <button class="btn btn-sm" type="button" data-comfyui-template-image-picker="${sanitize(binding.assetKey)}">選擇既有圖片</button>
-          ${binding.assetKey === "mask" ? `<button class="btn btn-sm" type="button" data-comfyui-template-mask-editor="1"${comfyuiCanOpenMaskEditor() ? "" : " disabled"}>編輯遮罩</button>` : ""}
+          ${binding.assetKey === "mask" ? `<button class="btn btn-sm" type="button" data-comfyui-template-mask-editor="1">編輯遮罩</button>` : ""}
           <button class="btn btn-sm" type="button" data-comfyui-template-image-clear="${sanitize(binding.assetKey)}">清除圖片</button>
         </div>
       </div>

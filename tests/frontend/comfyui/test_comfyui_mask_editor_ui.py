@@ -16,12 +16,18 @@ def test_index_html_exposes_mask_editor_controls():
     assert 'id="comfyui-mask-editor-modal"' in html
     assert 'id="comfyui-mask-editor-source-canvas"' in html
     assert 'id="comfyui-mask-editor-mask-canvas"' in html
+    assert 'id="comfyui-mask-editor-width"' in html
+    assert 'id="comfyui-mask-editor-height"' in html
+    assert 'id="comfyui-mask-editor-resize-btn"' in html
     assert 'id="comfyui-mask-editor-apply-btn"' in html
 
 
 def test_mask_editor_draws_and_exports_to_mask_image_file():
     js = _read("public/js/36-comfyui.js")
     assert "function openComfyuiMaskEditor()" in js
+    assert "function applyComfyuiMaskEditorSize()" in js
+    assert "fillComfyuiMaskEditorBlankSource" in js
+    assert "return true;" in js
     assert "function applyComfyuiMaskEditor()" in js
     assert "pointerdown" in js and "pointermove" in js
     assert '"destination-out"' in js
@@ -33,6 +39,7 @@ def test_mask_editor_draws_and_exports_to_mask_image_file():
 def test_template_mask_image_card_can_open_same_editor():
     workflow_js = _read("public/js/36-comfyui-workflows.js")
     assert 'data-comfyui-template-mask-editor="1"' in workflow_js
+    assert 'data-comfyui-template-mask-editor="1" disabled' not in workflow_js
     assert "openComfyuiMaskEditor()" in workflow_js
 
 

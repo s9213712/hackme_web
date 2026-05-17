@@ -179,8 +179,22 @@ def _fake_probe_payload(media_type="video"):
     }
 
 
-def _fake_hls_package(source_path, *, derivative_dir, media_type, ffmpeg_bin="ffmpeg", segment_seconds=4):
-    variant_name = "audio" if media_type == "audio" else "source"
+def _fake_hls_package(
+    source_path,
+    *,
+    derivative_dir,
+    media_type,
+    variant_name=None,
+    ffmpeg_bin="ffmpeg",
+    segment_seconds=4,
+    duration_seconds=0,
+    source_height=0,
+    target_height=0,
+    target_bitrate=0,
+    copy_codecs=False,
+    progress_callback=None,
+):
+    variant_name = variant_name or ("audio" if media_type == "audio" else "original")
     variant_dir = Path(derivative_dir) / variant_name
     variant_dir.mkdir(parents=True, exist_ok=True)
     (variant_dir / "init.mp4").write_bytes(b"init-segment")
@@ -197,6 +211,8 @@ def _fake_hls_package(source_path, *, derivative_dir, media_type, ffmpeg_bin="ff
         "#EXT-X-ENDLIST\n",
         encoding="utf-8",
     )
+    if progress_callback:
+        progress_callback(1.0)
     return variant_name, variant_dir / "playlist.m3u8", variant_dir / "init.mp4"
 
 
@@ -401,14 +417,89 @@ def test_prepare_stream_asset_builds_hls_derivatives_for_plain_video(tmp_path, m
     assert asset["status"] == "ready"
     assert asset["media_type"] == "video"
     assert asset["master_manifest_path"] == "media_derivatives/plain-video/master.m3u8"
-    assert len(asset["variants"]) == 1
-    assert asset["variants"][0]["name"] == "source"
+    assert [variant["name"] for variant in asset["variants"]] == ["original", "q480"]
     assert [seg["filename"] for seg in asset["variants"][0]["segments"]] == ["seg_00001.m4s", "seg_00002.m4s"]
     master = storage_root / "media_derivatives" / "plain-video" / "master.m3u8"
     assert master.exists()
     master_text = master.read_text(encoding="utf-8")
     assert 'CODECS="avc1.64001f,mp4a.40.2"' in master_text
     assert 'CODECS="h264"' not in master_text
+
+
+def test_prepare_stream_asset_hides_quality_derivative_larger_than_original(tmp_path, monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL,
+            storage_path TEXT NOT NULL,
+            privacy_mode TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            scan_status TEXT NOT NULL,
+            original_filename_plain_for_public TEXT,
+            mime_type_plain_for_public TEXT,
+            size_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            deleted_at TEXT
+        )
+        """
+    )
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_uploaded_file(
+        conn,
+        storage_root,
+        file_id="oversized-derivative-video",
+        owner_user_id=1,
+        filename="clip.mp4",
+        mime="video/mp4",
+        payload=b"x" * 4096,
+    )
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id='oversized-derivative-video'").fetchone()
+
+    def probe_payload(*_args, **_kwargs):
+        payload = _fake_probe_payload("video")
+        payload["streams"][0]["width"] = 3840
+        payload["streams"][0]["height"] = 2160
+        payload["streams"][0]["bit_rate"] = "12000000"
+        payload["format"]["bit_rate"] = "12000000"
+        return payload
+
+    def fake_hls(source_path, *, derivative_dir, media_type, variant_name=None, **kwargs):
+        variant_name, playlist_path, init_path = _fake_hls_package(
+            source_path,
+            derivative_dir=derivative_dir,
+            media_type=media_type,
+            variant_name=variant_name,
+            **kwargs,
+        )
+        if variant_name == "q720":
+            (Path(derivative_dir) / variant_name / "seg_00002.m4s").write_bytes(b"z" * 8192)
+        return variant_name, playlist_path, init_path
+
+    monkeypatch.setenv("HACKME_MEDIA_HLS_QUALITY_HEIGHTS", "720,480")
+    monkeypatch.setattr(media_streaming, "_run_probe", probe_payload)
+    monkeypatch.setattr(media_streaming, "_run_ffmpeg_hls", fake_hls)
+
+    asset = media_streaming.prepare_stream_asset(
+        conn,
+        file_row=row,
+        storage_root=storage_root,
+        server_file_fernet=None,
+    )
+
+    names = [variant["name"] for variant in asset["variants"]]
+    assert names == ["original", "q480"]
+    assert "q720" not in names
+    assert not (storage_root / "media_derivatives" / "oversized-derivative-video" / "q720").exists()
+    assert "720p" in asset["error_message"]
+    playback = media_streaming.stream_playback_payload(conn, file_row=row, video_id=9)
+    assert playback["default_quality"] == "q480"
+    assert playback["fallback_quality"] == "q480"
+    assert playback["quality_policy"]["derivatives_quota_exempt"] is True
 
 
 def test_prepare_stream_asset_decrypts_server_encrypted_media_before_packaging(tmp_path, monkeypatch):
@@ -482,21 +573,28 @@ def test_prepare_stream_asset_releases_sqlite_writer_before_ffmpeg(tmp_path, mon
 
         monkeypatch.setattr(media_streaming, "_run_probe", lambda *args, **kwargs: _fake_probe_payload("video"))
 
-        def fake_hls(source_path, *, derivative_dir, media_type, ffmpeg_bin="ffmpeg", segment_seconds=4):
+        def fake_hls(source_path, *, derivative_dir, media_type, ffmpeg_bin="ffmpeg", segment_seconds=4, **kwargs):
             other = sqlite3.connect(db_path, timeout=0.1)
             try:
                 other.execute("INSERT INTO lock_probe DEFAULT VALUES")
                 other.commit()
             finally:
                 other.close()
-            return _fake_hls_package(source_path, derivative_dir=derivative_dir, media_type=media_type, ffmpeg_bin=ffmpeg_bin, segment_seconds=segment_seconds)
+            return _fake_hls_package(
+                source_path,
+                derivative_dir=derivative_dir,
+                media_type=media_type,
+                ffmpeg_bin=ffmpeg_bin,
+                segment_seconds=segment_seconds,
+                **kwargs,
+            )
 
         monkeypatch.setattr(media_streaming, "_run_ffmpeg_hls", fake_hls)
 
         asset = media_streaming.prepare_stream_asset(conn, file_row=row, storage_root=storage_root, server_file_fernet=None)
 
         assert asset["status"] == "ready"
-        assert conn.execute("SELECT COUNT(*) FROM lock_probe").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM lock_probe").fetchone()[0] == len(asset["variants"])
     finally:
         conn.close()
 
@@ -507,13 +605,48 @@ def test_ffmpeg_hls_limits_video_transcode_threads_and_stdin(tmp_path, monkeypat
     derivative_dir = tmp_path / "derivatives"
     calls = []
 
-    def fake_run(cmd, **kwargs):
+    class FakeStdout:
+        def __init__(self):
+            self.lines = ["progress=end\n", ""]
+            self.done = False
+
+        def readline(self):
+            line = self.lines.pop(0) if self.lines else ""
+            if line == "":
+                self.done = True
+            return line
+
+    class FakeStderr:
+        def read(self):
+            return ""
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            self.stdout = FakeStdout()
+            self.stderr = FakeStderr()
+            self.returncode = 0
+            calls.append((cmd, kwargs, self))
+
+        def poll(self):
+            return 0 if self.stdout.done else None
+
+        def wait(self):
+            return 0
+
+        def kill(self):
+            self.stdout.done = True
+
+    def fake_select(readers, _writers, _errors, _timeout):
+        return readers, [], []
+
+    def fake_popen(cmd, **kwargs):
         calls.append((cmd, kwargs))
-        return media_streaming.subprocess.CompletedProcess(cmd, 0, "", "")
+        return FakePopen(cmd, **kwargs)
 
     monkeypatch.setenv("HACKME_MEDIA_FFMPEG_THREADS", "1")
     monkeypatch.setenv("HACKME_MEDIA_FFMPEG_TIMEOUT_SECONDS", "120")
-    monkeypatch.setattr(media_streaming.subprocess, "run", fake_run)
+    monkeypatch.setattr(media_streaming.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(media_streaming.select, "select", fake_select)
 
     media_streaming._run_ffmpeg_hls(source, derivative_dir=derivative_dir, media_type="video", ffmpeg_bin="ffmpeg")
 
@@ -523,7 +656,71 @@ def test_ffmpeg_hls_limits_video_transcode_threads_and_stdin(tmp_path, monkeypat
     assert "-loglevel" in cmd
     assert "-threads" in cmd
     assert cmd[cmd.index("-threads") + 1] == "1"
-    assert kwargs["timeout"] == 120
+    assert kwargs["stdin"] == media_streaming.subprocess.DEVNULL
+    assert kwargs["text"] is True
+
+
+def test_ffmpeg_hls_applies_target_bitrate_for_quality_variants(tmp_path, monkeypatch):
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"fake-video")
+    derivative_dir = tmp_path / "derivatives"
+    calls = []
+
+    class FakeStdout:
+        def __init__(self):
+            self.lines = iter(["progress=end\n"])
+            self.done = False
+
+        def readline(self):
+            try:
+                return next(self.lines)
+            except StopIteration:
+                self.done = True
+                return ""
+
+    class FakeStderr:
+        def read(self):
+            return ""
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            self.stdout = FakeStdout()
+            self.stderr = FakeStderr()
+            self.returncode = 0
+            calls.append((cmd, kwargs))
+
+        def poll(self):
+            return 0 if self.stdout.done else None
+
+        def wait(self):
+            return 0
+
+        def kill(self):
+            self.stdout.done = True
+
+    def fake_select(readers, _writers, _errors, _timeout):
+        return readers, [], []
+
+    monkeypatch.setenv("HACKME_MEDIA_FFMPEG_THREADS", "1")
+    monkeypatch.setattr(media_streaming.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(media_streaming.select, "select", fake_select)
+
+    media_streaming._run_ffmpeg_hls(
+        source,
+        derivative_dir=derivative_dir,
+        media_type="video",
+        target_height=720,
+        target_bitrate=2_800_000,
+        source_height=2160,
+        ffmpeg_bin="ffmpeg",
+    )
+
+    cmd, _kwargs = calls[0]
+    assert "-crf" not in cmd
+    assert cmd[cmd.index("-b:v") + 1] == "2800000"
+    assert cmd[cmd.index("-maxrate") + 1] == "3220000"
+    assert cmd[cmd.index("-bufsize") + 1] == "5600000"
+    assert cmd[cmd.index("-vf") + 1] == "scale=-2:720"
 
 
 def test_get_stream_status_marks_e2ee_media_unavailable(tmp_path):
@@ -612,15 +809,15 @@ def test_video_playback_and_hls_routes_use_ready_stream_asset(tmp_path, monkeypa
     assert 'CODECS="avc1.64001f,mp4a.40.2"' in master.get_data(as_text=True)
     assert 'CODECS="h264"' not in master.get_data(as_text=True)
 
-    playlist = client.get(f"/api/videos/{video_id}/hls/source/playlist.m3u8")
+    playlist = client.get(f"/api/videos/{video_id}/hls/original/playlist.m3u8")
     assert playlist.status_code == 200
     assert playlist.mimetype == "application/vnd.apple.mpegurl"
 
-    init_seg = client.get(f"/api/videos/{video_id}/hls/source/init.mp4")
+    init_seg = client.get(f"/api/videos/{video_id}/hls/original/init.mp4")
     assert init_seg.status_code == 200
     assert init_seg.mimetype == "video/mp4"
 
-    segment = client.get(f"/api/videos/{video_id}/hls/source/seg_00001.m4s")
+    segment = client.get(f"/api/videos/{video_id}/hls/original/seg_00001.m4s")
     assert segment.status_code == 200
     assert segment.mimetype == "video/mp4"
 
@@ -670,15 +867,15 @@ def test_shared_standard_video_playback_uses_shared_hls_and_stream_urls(tmp_path
     master = viewer.get(payload["master_url"])
     assert master.status_code == 200
     assert master.mimetype == "application/vnd.apple.mpegurl"
-    assert f"source/playlist.m3u8{share_session}" in master.get_data(as_text=True)
+    assert f"original/playlist.m3u8{share_session}" in master.get_data(as_text=True)
 
-    playlist = viewer.get(f"/api/videos/shared/{token}/hls/source/playlist.m3u8{share_session}")
+    playlist = viewer.get(f"/api/videos/shared/{token}/hls/original/playlist.m3u8{share_session}")
     assert playlist.status_code == 200
     playlist_text = playlist.get_data(as_text=True)
     assert f'URI="init.mp4{share_session}"' in playlist_text
     assert f"seg_00001.m4s{share_session}" in playlist_text
 
-    init_segment = viewer.get(f"/api/videos/shared/{token}/hls/source/init.mp4{share_session}")
+    init_segment = viewer.get(f"/api/videos/shared/{token}/hls/original/init.mp4{share_session}")
     assert init_segment.status_code == 200
     assert init_segment.mimetype == "video/mp4"
 
@@ -867,7 +1064,7 @@ def test_hls_prepare_worker_updates_job_center_until_ready(tmp_path, monkeypatch
             "SELECT event_type, stage FROM job_center_events WHERE job_uuid=? ORDER BY id",
             (job["job_uuid"],),
         ).fetchall()
-        assert ("created", "transcoding") in [(row["event_type"], row["stage"]) for row in events]
+        assert ("progress", "transcoding") in [(row["event_type"], row["stage"]) for row in events]
         assert ("progress", "ready") in [(row["event_type"], row["stage"]) for row in events]
     finally:
         conn.close()

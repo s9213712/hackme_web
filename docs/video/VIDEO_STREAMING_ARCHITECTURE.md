@@ -80,11 +80,11 @@ Today:
   - `GET /api/videos/<id>/hls/master.m3u8`
   - `GET /api/videos/<id>/hls/<variant>/playlist.m3u8`
   - `GET /api/videos/<id>/hls/<variant>/<segment>`
-- Current implementation packages a single prepared HLS variant and lets the
-  frontend prefer native-HLS playback when the derivative is ready. Browsers
-  without native HLS support still fall back to `/api/videos/<id>/stream`.
-- Auto-prepare is currently best-effort and synchronous in the publish path.
-  A failed derivative must not block the base video publish action.
+- Current implementation packages prepared HLS variants and lets the frontend
+  prefer native-HLS playback when derivatives are ready. Browsers without native
+  HLS support use hls.js where available.
+- Auto-prepare is best-effort and runs through an external HLS worker. A failed
+  derivative must not block the base video publish action.
 
 This design keeps those v1 rules, but adds a media-derivative pipeline for
 larger assets.
@@ -104,6 +104,15 @@ For this project, the default target should be:
 - HLS
 - CMAF / fragmented MP4 segments (`.m4s`)
 - multiple quality variants for larger videos
+- conservative default quality generation: `480p` then `720p`; `1080p` is
+  opt-in through `HACKME_MEDIA_HLS_QUALITY_HEIGHTS` because AV1 sources can be
+  smaller than a generated 1080p H.264 derivative
+- playback defaults to `720p` when available, then falls back to `480p` on poor
+  network conditions; original quality remains available as a user-selected
+  option
+- generated quality variants are compared against the original HLS package; if a
+  lower-quality derivative is larger than the original package, it is deleted
+  and omitted from the quality selector
 
 This gives better startup behavior, easier seeking, and a cleaner long-term path
 to CDN or cache acceleration.
@@ -163,6 +172,11 @@ Recommended product rule:
 - if the user wants platform-grade HLS / ABR streaming, they must explicitly
   create a separate streamable derivative with weaker privacy semantics such as
   `server_encrypted`
+- strict E2EE can achieve the same quota behavior through browser-side encrypted
+  streaming bundles: the service cache is quota-exempt, but the server still
+  must not decrypt and transcode into 480/720/1080 variants. True E2EE
+  multi-quality support requires the publisher's browser to create lower-quality
+  derivatives locally and upload them encrypted.
 
 That keeps the original E2EE promise intact instead of silently downgrading
 security while still allowing users to share E2EE media.
@@ -192,6 +206,9 @@ This keeps:
 
 - snapshot/restore compatibility
 - storage quota accounting compatibility
+- user quota accounting based on the original uploaded file only; HLS
+  derivatives and E2EE streaming bundles are service cache and do not count
+  against the user's Cloud Drive quota
 - predictable cleanup behavior
 - one canonical storage root
 
@@ -386,6 +403,7 @@ Root-configurable knobs should include:
 - max simultaneous transcode jobs
 - derivative segment duration
 - bitrate ladder presets
+- whether 1080p derivatives are generated automatically or only on demand
 - minimum file size / duration before HLS generation
 - whether Cloud Drive preview may use derivatives
 - whether users may create streamable derivatives from non-plain source modes
@@ -412,7 +430,7 @@ Root-configurable knobs should include:
 
 ### Phase C-2
 
-- multi-variant ABR ladder
+- multi-variant ABR ladder with bitrate-capped ffmpeg output
 - explicit queue/backoff and retry policy
 - remove any remaining whole-file decrypt bottlenecks from non-derivative
   playback paths

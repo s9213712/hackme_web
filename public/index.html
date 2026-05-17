@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260517-share-expiry-picker" />
+  <link rel="stylesheet" href="/styles.css?v=20260517-share-expiry-layout" />
   <link rel="stylesheet" href="/experiments.css?v=20260517-plane-view-angle" />
 </head>
 <body>
@@ -1144,7 +1144,7 @@
               <div class="field" style="grid-column:1/-1;">
                 <label>直接上傳影音</label>
                 <input type="file" id="video-upload-file" accept="video/*,audio/*" />
-                <div class="field-help">可直接發布影片或音樂；系統仍會存入你的 Cloud Drive，不建立第二套檔案系統。公開 / 持連結可看影片與伺服器端加密影音會優先嘗試建立 HLS 串流衍生檔。</div>
+                <div class="field-help">可直接發布影片或音樂；系統仍會存入你的 Cloud Drive，不建立第二套檔案系統。公開 / 持連結可看影片與伺服器端加密影音會優先嘗試建立 HLS 串流衍生檔；轉檔期間可以先做別的事，進度會顯示在任務中心，完成後會通知上傳者。</div>
               </div>
               <div class="field" style="grid-column:1/-1;">
                 <label>封面圖（選填）</label>
@@ -2132,6 +2132,15 @@
                   <input type="range" id="comfyui-mask-editor-brush" min="4" max="256" step="2" value="56" />
                   <span id="comfyui-mask-editor-brush-label">56px</span>
                 </label>
+                <label class="comfyui-mask-editor-size">
+                  寬
+                  <input type="number" id="comfyui-mask-editor-width" min="64" max="2048" step="8" value="1024" />
+                </label>
+                <label class="comfyui-mask-editor-size">
+                  高
+                  <input type="number" id="comfyui-mask-editor-height" min="64" max="2048" step="8" value="1024" />
+                </label>
+                <button class="btn btn-sm" id="comfyui-mask-editor-resize-btn" type="button">套用尺寸</button>
                 <button class="btn btn-sm" id="comfyui-mask-editor-clear-btn" type="button">清空</button>
                 <button class="btn btn-sm" id="comfyui-mask-editor-fill-btn" type="button">全選</button>
                 <button class="btn btn-sm" id="comfyui-mask-editor-invert-btn" type="button">反相</button>
@@ -2140,7 +2149,7 @@
                 <canvas id="comfyui-mask-editor-source-canvas"></canvas>
                 <canvas id="comfyui-mask-editor-mask-canvas"></canvas>
               </div>
-              <div class="drive-card-sub">在來源圖上拖曳即可畫出要重繪的位置；可用滑鼠、觸控筆或手機觸控操作。</div>
+              <div class="drive-card-sub">有來源圖時可疊著來源圖畫遮罩；尚未選來源圖時，會使用目前生圖尺寸開空白遮罩畫布。可用滑鼠、觸控筆或手機觸控操作。</div>
               <div class="drive-file-actions" style="justify-content:flex-end;margin-top:.65rem;">
                 <button class="btn" id="comfyui-mask-editor-cancel-btn" type="button">取消</button>
                 <button class="btn btn-primary" id="comfyui-mask-editor-apply-btn" type="button">套用遮罩</button>
@@ -6392,15 +6401,15 @@
 <script src="/js/35-drive.js?v=20260517-share-expiry-picker" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
 <!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
-<script src="/js/36-comfyui.js?v=20260514-comfyui-subtabs" defer></script>
-<script src="/js/36-comfyui-workflows.js?v=20260514-comfyui-subtabs" defer></script>
+<script src="/js/36-comfyui.js?v=20260518-comfyui-mask-editor" defer></script>
+<script src="/js/36-comfyui-workflows.js?v=20260518-comfyui-mask-editor" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/41-game-modules.js?v=20260514-game-user-scope" defer></script>
 <script src="/js/games/game-view-registry.js?v=20260513-legacy-modules" defer></script>
 <script src="/js/games/chess.js?v=20260515-stockfish-depth-toggle" defer></script>
-<script src="/js/38-games.js?v=20260514-open-world" defer></script>
-<script src="/js/42-experiments.js?v=20260517-plane-view-angle" defer></script>
-<script src="/js/39-videos.js?v=20260517-share-expiry-picker" defer></script>
+<script src="/js/38-games.js?v=20260517-bullet-dots" defer></script>
+<script src="/js/42-experiments.js?v=20260517-liquid-slosh" defer></script>
+<script src="/js/39-videos.js?v=20260518-hls-quality-defaults" defer></script>
 <script src="/js/40-auth-users.js?v=20260517-avatar-cropper" defer></script>
 <script src="/js/50-admin.js?v=20260504-fusion-coverage-v1" defer></script>
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>

@@ -282,8 +282,7 @@ def register_video_routes(app, deps):
                 if error_message:
                     updates["error_message"] = error_message
                     updates["error_stage"] = stage
-                defer_progress = status not in {"succeeded", "failed", "cancelled", "expired"}
-                job = update_platform_job(conn, existing["job_uuid"], defer_progress=defer_progress, **updates)
+                job = update_platform_job(conn, existing["job_uuid"], defer_progress=False, flush=True, **updates)
                 add_platform_job_event(
                     conn,
                     job["job_uuid"],
@@ -292,7 +291,8 @@ def register_video_routes(app, deps):
                     message=stage_detail or error_message or "HLS 任務狀態更新",
                     progress_percent=progress_percent,
                     payload=metadata,
-                    defer_progress=defer_progress,
+                    defer_progress=False,
+                    flush=True,
                 )
                 return job
             return create_platform_job(
@@ -461,7 +461,7 @@ def register_video_routes(app, deps):
 
     def _queue_stream_prepare(conn, *, file_row, video_id=None, title="", visibility="public", force=False):
         ensure_media_stream_schema(conn)
-        current = get_stream_status(conn, file_row=file_row)
+        current = get_stream_status(conn, file_row=file_row, include_segments=False)
         if not force and current and current.get("status") == "ready":
             return current, None, False
         if current and current.get("status") == "processing" and (not force or _stream_worker_is_active(file_row["id"])):
@@ -478,7 +478,7 @@ def register_video_routes(app, deps):
             status="running",
             progress_percent=5,
             stage="queued",
-            stage_detail="HLS 背景處理已排程，等待外部轉檔程序接手。",
+            stage_detail="HLS 背景處理已排程；你可以先做別的事，進度會顯示在任務中心，完成後會通知。",
         )
         return asset, None, True
 
@@ -507,7 +507,7 @@ def register_video_routes(app, deps):
             decision = should_auto_prepare_stream(file_row, visibility=video.get("visibility") or "public")
             if not decision.get("enabled"):
                 return True
-            asset = get_stream_status(conn, file_row=file_row)
+            asset = get_stream_status(conn, file_row=file_row, include_segments=False)
             return bool(asset and asset.get("status") == "ready")
         except Exception:
             return False
@@ -767,6 +767,9 @@ def register_video_routes(app, deps):
         ):
             if payload.get(key):
                 payload[key] = _url_with_share_session(payload[key], share_session_id)
+        for variant in payload.get("variants") or []:
+            if isinstance(variant, dict) and variant.get("playlist_url"):
+                variant["playlist_url"] = _url_with_share_session(variant["playlist_url"], share_session_id)
         return payload
 
     def _shared_video_error_response(reason):
@@ -888,7 +891,7 @@ def register_video_routes(app, deps):
                 "hls_js_url": "",
                 "player_strategy": "browser_e2ee_stream_v2" if available else "browser_e2ee_full_fallback",
                 "stream_warning": (
-                    "正在使用 E2EE Streaming v2：密文分段下載、瀏覽器端解密；伺服器無法看到明文。"
+                    "正在使用 E2EE Streaming v2：密文分段下載、瀏覽器端解密；伺服器無法看到明文，因此不會在伺服器產生 480/720/1080 明文轉檔。"
                     if available
                     else "此 strict E2EE 影音尚未建立 Streaming v2 manifest，將退回舊版完整解密播放。"
                 ),
@@ -898,6 +901,16 @@ def register_video_routes(app, deps):
                 "manifest_url": manifest_url,
                 "chunk_url_template": chunk_url_template,
                 "stream_v2_available": available,
+                "default_quality": "original",
+                "fallback_quality": "",
+                "quality_policy": {
+                    "default_quality": "original",
+                    "fallback_quality": "",
+                    "derivatives_quota_exempt": True,
+                    "larger_derivatives_hidden": True,
+                    "e2ee_original_only": True,
+                    "note": "strict E2EE 不允許伺服器解密轉檔；若要達到多畫質又維持 E2EE，需由發布端瀏覽器本機產生較低畫質後再上傳加密衍生包。這些 E2EE Streaming v2 服務分段不計入用戶雲端硬碟容量。",
+                },
             }
             return payload
         payload = stream_playback_payload(conn, file_row=row, video_id=video_id)
@@ -909,6 +922,9 @@ def register_video_routes(app, deps):
                 payload["stream_url"] = f"{shared_base}/stream"
             if payload.get("master_url"):
                 payload["master_url"] = f"{shared_base}/hls/master.m3u8"
+            for variant in payload.get("variants") or []:
+                if isinstance(variant, dict) and variant.get("name"):
+                    variant["playlist_url"] = f"{shared_base}/hls/{variant['name']}/playlist.m3u8"
         payload["high_performance_streaming"] = payload.get("mode") == "hls"
         return payload
 
@@ -938,6 +954,9 @@ def register_video_routes(app, deps):
     input[type=password] {{ width:100%; box-sizing:border-box; padding:.7rem .9rem; border-radius:12px; border:1px solid #39405c; background:#0f1422; color:#eef2ff; }}
     button {{ padding:.7rem 1rem; border-radius:12px; border:0; background:#3d78ff; color:#fff; cursor:pointer; }}
     button.secondary {{ background:#2b3148; }}
+    .quality-control {{ margin:.7rem 0 0; display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; color:#b8bfd8; }}
+    .quality-control select {{ min-height:2.35rem; border-radius:10px; border:1px solid #39405c; background:#0f1422; color:#eef2ff; padding:.45rem .7rem; }}
+    .quality-control small {{ flex:1 1 16rem; line-height:1.45; }}
     #player-host {{ width:100%; min-height:0; margin-top:.8rem; display:grid; place-items:center; }}
     #player-host video, #player-host audio {{ display:block; width:100%; max-width:100%; border-radius:14px; background:#070b15; }}
     #player-host video {{ inline-size:min(100%, calc((100dvh - 240px) * 16 / 9)); height:auto; max-height:min(64dvh, 560px); aspect-ratio:16 / 9; object-fit:contain; }}
@@ -974,12 +993,13 @@ def register_video_routes(app, deps):
         <button type="submit">解鎖影音</button>
       </form>
       <div id="player-host" class="hidden"></div>
+      <div id="quality-host" class="quality-control hidden"></div>
       <div id="player-action" class="hidden"></div>
       <div id="e2ee-note" class="meta hidden">此影音採端到端加密，只支援瀏覽器端解密播放，首次載入與快轉會較慢。</div>
     </div>
   </div>
   <script id="share-token" type="application/json">{share_token_json}</script>
-  <script src="/js/shared-video.js?v=20260515-hls-safe-fallback"></script>
+  <script src="/js/shared-video.js?v=20260518-hls-quality-defaults"></script>
 </body>
 </html>"""
 
@@ -1066,7 +1086,7 @@ def register_video_routes(app, deps):
                         status="running",
                         progress_percent=10,
                         stage="worker_started",
-                        stage_detail="HLS 外部轉檔程序已啟動。",
+                        stage_detail="HLS 外部轉檔程序已啟動；你可以先做別的事，進度會顯示在任務中心。",
                     )
                 conn.commit()
             audit(
@@ -1206,7 +1226,7 @@ def register_video_routes(app, deps):
                         status="running",
                         progress_percent=10,
                         stage="worker_started",
-                        stage_detail="HLS 外部轉檔程序已啟動。",
+                        stage_detail="HLS 外部轉檔程序已啟動；你可以先做別的事，進度會顯示在任務中心。",
                     )
                 conn.commit()
             audit(
@@ -1495,7 +1515,7 @@ def register_video_routes(app, deps):
                 return _shared_video_error_response(reason)
             share_session_id = _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
-            asset = get_stream_status(conn, file_row=file_row)
+            asset = get_stream_status(conn, file_row=file_row, include_segments=False)
             if not asset or asset.get("status") != "ready" or not asset.get("master_manifest_path"):
                 return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
             path = resolve_file_storage_path(storage_root, {"storage_path": asset["master_manifest_path"]})
@@ -1515,7 +1535,7 @@ def register_video_routes(app, deps):
                 return _shared_video_error_response(reason)
             share_session_id = _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
-            asset = get_stream_status(conn, file_row=file_row)
+            asset = get_stream_status(conn, file_row=file_row, include_segments=False)
             if not asset or asset.get("status") != "ready":
                 return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
             match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
@@ -1659,7 +1679,7 @@ def register_video_routes(app, deps):
                             if key in detail:
                                 video[key] = detail[key]
                     file_row = _load_stream_file(conn, file_id=video["cloud_file_id"])
-                    video["stream_asset"] = get_stream_status(conn, file_row=file_row)
+                    video["stream_asset"] = get_stream_status(conn, file_row=file_row, include_segments=False)
                 except Exception:
                     video["stream_asset"] = None
             summary = {
@@ -1872,7 +1892,7 @@ def register_video_routes(app, deps):
                 "asset": asset,
                 "queued": bool(stream_queued),
                 "stream_warning": stream_warning or "",
-                "msg": "HLS 串流已排入背景處理，完成後會通知上傳者。",
+                "msg": "HLS 串流已排入背景處理；你可以先做別的事，進度會顯示在任務中心，完成後會通知上傳者。",
             })
         except Exception as exc:
             conn.rollback()
@@ -2075,7 +2095,7 @@ def register_video_routes(app, deps):
             ensure_media_stream_schema(conn)
             row = _load_stream_file(conn, file_id=file_id)
             _assert_stream_prepare_allowed(actor, row)
-            return json_resp({"ok": True, "asset": get_stream_status(conn, file_row=row)})
+            return json_resp({"ok": True, "asset": get_stream_status(conn, file_row=row, include_segments=False)})
         except Exception as exc:
             return _error_response(exc)
         finally:
@@ -2157,7 +2177,7 @@ def register_video_routes(app, deps):
             if not video:
                 return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
             row = _load_stream_file(conn, file_id=video["cloud_file_id"])
-            asset = get_stream_status(conn, file_row=row)
+            asset = get_stream_status(conn, file_row=row, include_segments=False)
             if not asset or asset.get("status") != "ready" or not asset.get("master_manifest_path"):
                 return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
             path = resolve_file_storage_path(storage_root, {"storage_path": asset["master_manifest_path"]})
@@ -2180,7 +2200,7 @@ def register_video_routes(app, deps):
             if not video:
                 return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
             row = _load_stream_file(conn, file_id=video["cloud_file_id"])
-            asset = get_stream_status(conn, file_row=row)
+            asset = get_stream_status(conn, file_row=row, include_segments=False)
             if not asset or asset.get("status") != "ready":
                 return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
             match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)

@@ -297,6 +297,63 @@ def _count_grouped(conn, owner_user_id, field):
     return {row["name"]: {"count": int(row["count"] or 0), "bytes": int(row["bytes"] or 0)} for row in rows}
 
 
+def _media_derivative_usage_excluded_from_quota(conn, owner_user_id):
+    try:
+        row = conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(seg.byte_size), 0) AS bytes,
+                COUNT(DISTINCT variant.id) AS variant_count,
+                COUNT(DISTINCT asset.id) AS asset_count
+            FROM media_stream_segments seg
+            JOIN media_stream_variants variant ON variant.id = seg.variant_id
+            JOIN media_stream_assets asset ON asset.id = variant.asset_id
+            JOIN uploaded_files file ON file.id = asset.uploaded_file_id
+            WHERE file.owner_user_id=? AND file.deleted_at IS NULL
+            """,
+            (int(owner_user_id),),
+        ).fetchone()
+    except Exception:
+        return {
+            "bytes": 0,
+            "variant_count": 0,
+            "asset_count": 0,
+            "available": False,
+        }
+    return {
+        "bytes": int(row["bytes"] or 0) if row else 0,
+        "variant_count": int(row["variant_count"] or 0) if row else 0,
+        "asset_count": int(row["asset_count"] or 0) if row else 0,
+        "available": True,
+    }
+
+
+def _e2ee_stream_usage_excluded_from_quota(conn, owner_user_id):
+    try:
+        row = conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(asset.source_size_bytes), 0) AS bytes,
+                COUNT(*) AS asset_count
+            FROM media_e2ee_stream_v2_assets asset
+            JOIN uploaded_files file ON file.id = asset.uploaded_file_id
+            WHERE file.owner_user_id=? AND file.deleted_at IS NULL
+            """,
+            (int(owner_user_id),),
+        ).fetchone()
+    except Exception:
+        return {
+            "bytes": 0,
+            "asset_count": 0,
+            "available": False,
+        }
+    return {
+        "bytes": int(row["bytes"] or 0) if row else 0,
+        "asset_count": int(row["asset_count"] or 0) if row else 0,
+        "available": True,
+    }
+
+
 def _disk_usage_for_storage_root(storage_root):
     path = Path(storage_root or ".").expanduser()
     probe = path
@@ -333,6 +390,9 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
         server_mode = "test"
 
     used_bytes, file_count = _sum_uploaded_file_bytes(conn, user_id)
+    media_derivative_usage = _media_derivative_usage_excluded_from_quota(conn, user_id)
+    e2ee_stream_usage = _e2ee_stream_usage_excluded_from_quota(conn, user_id)
+    service_cache_bytes_excluded = int(media_derivative_usage.get("bytes") or 0) + int(e2ee_stream_usage.get("bytes") or 0)
     purchased_summary = purchased_storage_summary(conn, user_id) if user_id and not root_actor else {
         "purchased_extra_bytes": 0,
         "active_purchase_count": 0,
@@ -382,6 +442,15 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
         "purchased_extra_bytes": purchased_extra_bytes,
         "purchased_storage": purchased_summary,
         "used_bytes": used_bytes,
+        "quota_counted_bytes": used_bytes,
+        "service_cache_bytes_excluded_from_quota": service_cache_bytes_excluded,
+        "service_cache_quota_exempt": True,
+        "media_derivative_bytes_excluded_from_quota": int(media_derivative_usage.get("bytes") or 0),
+        "media_derivative_variants_excluded_from_quota": int(media_derivative_usage.get("variant_count") or 0),
+        "media_derivative_assets_excluded_from_quota": int(media_derivative_usage.get("asset_count") or 0),
+        "e2ee_stream_bytes_excluded_from_quota": int(e2ee_stream_usage.get("bytes") or 0),
+        "e2ee_stream_assets_excluded_from_quota": int(e2ee_stream_usage.get("asset_count") or 0),
+        "quota_exemption_note": "雲端硬碟配額只計算原始上傳檔案；HLS 480/720/1080 串流衍生檔與 E2EE Streaming v2 密文分段屬服務快取，不計入用戶雲端硬碟容量。",
         "total_bytes": total_bytes,
         "remaining_bytes": remaining_bytes,
         "percent_used": percent_used,

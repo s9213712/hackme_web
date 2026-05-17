@@ -11,6 +11,8 @@ const videoState = {
   currentObjectUrl: "",
   hlsLibraryPromise: null,
   playbackSessionId: 0,
+  manualQualitySelection: false,
+  autoQualityFallbackApplied: false,
 };
 let videoPublishDriveFiles = [];
 let videoPendingPublishSelection = null;
@@ -613,8 +615,8 @@ async function publishVideoFromDrive() {
     if (directFile) {
       const uploadPrivacyMode = $("video-upload-privacy-mode")?.value || "standard_plain";
       const uploadDoneStatus = uploadPrivacyMode === "server_encrypted"
-        ? "上傳完成，伺服器端加密、掃描與 HLS 排程中"
-        : "上傳完成，伺服器儲存、掃描與 HLS 排程中";
+        ? "上傳完成，伺服器端加密與掃描中；HLS 會在後台轉檔，進度可到任務中心查看"
+        : "上傳完成，伺服器儲存與掃描中；HLS 會在後台轉檔，進度可到任務中心查看";
       const form = new FormData();
       form.append("video", directFile);
       form.append("title", payload.title || directFile.name.replace(/\.[^.]+$/, ""));
@@ -625,7 +627,7 @@ async function publishVideoFromDrive() {
       form.append("share_max_views", payload.share_max_views);
       form.append("privacy_mode", uploadPrivacyMode);
       if (coverFile) form.append("cover", coverFile);
-      videoMsg("影音檔上傳中，請稍候...", true);
+      videoMsg("影音檔上傳中。上傳完成後若需要 HLS 轉檔，你可以先做別的事；進度會顯示在任務中心，完成後會通知上傳者。", true);
       setVideoUploadProgress({ visible: true, percent: 0, loaded: 0, total: directFile.size, status: `準備上傳 ${directFile.name}` });
       const upload = await videoUploadFormWithProgress(API + "/videos/upload", form, (event) => {
         if (event.lengthComputable) {
@@ -713,7 +715,7 @@ async function publishVideoFromDrive() {
     } else if (json.stream_asset?.status === "ready") {
       videoMsg("影音已發布，HLS 串流已就緒", true);
     } else if (json.stream_asset?.status === "processing") {
-      videoMsg("影音已發布，正在後台處理 HLS；完成前不會出現在影音列表，處理完成會通知上傳者。", true);
+      videoMsg("影音已發布，HLS 正在後台轉檔；你可以先做別的事，進度會顯示在任務中心，完成後會通知上傳者。", true);
     } else {
       videoMsg("影音已發布", true);
     }
@@ -825,11 +827,15 @@ function playbackSourceForVideo(video, playback) {
     };
   }
   const directFallbackAllowed = playback.direct_fallback_allowed !== false;
+  const preferredVariant = preferredVideoQualityVariant(playback);
+  const preferredHlsUrl = preferredVariant?.playlistUrl || playback.master_url || "";
   if (browserSupportsNativeHls(video.media_type)) {
     return {
       mode: "hls_native",
-      src: playback.master_url || (directFallbackAllowed ? (playback.fallback_url || videoStreamUrl(video)) : ""),
-      statusText: "Safari / 原生 HLS 已啟用。",
+      src: preferredHlsUrl || (directFallbackAllowed ? (playback.fallback_url || videoStreamUrl(video)) : ""),
+      statusText: preferredVariant
+        ? `Safari / 原生 HLS 已啟用，預設 ${preferredVariant.label}。`
+        : "Safari / 原生 HLS 已啟用。",
     };
   }
   if (playback.master_url) {
@@ -878,7 +884,7 @@ async function prepareVideoStream(fileId, videoId) {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
-    videoMsg(json.msg || "HLS 串流已排入背景處理，完成後會通知上傳者。", true);
+    videoMsg(json.msg || "HLS 串流已排入背景處理；你可以先做別的事，進度會顯示在任務中心，完成後會通知上傳者。", true);
     await openVideoDetail(videoId);
   } catch (err) {
     videoMsg(err.message || "HLS 串流準備失敗", false);
@@ -1340,6 +1346,136 @@ function fallbackVideoPlayerToDirect(player, playback, message, bad = false) {
   setVideoPlaybackStatus(message || "HLS 初始化失敗，已改用直接串流。", bad);
 }
 
+function videoPlaybackQualityOptions(playback = {}) {
+  const variants = Array.isArray(playback?.variants)
+    ? playback.variants
+    : (Array.isArray(playback?.status?.variants) ? playback.status.variants : []);
+  return variants
+    .filter((variant) => variant && variant.name)
+    .map((variant) => {
+      const height = Number(variant.height || 0);
+      const label = variant.label
+        || (variant.name === "original" ? (height ? `原畫質 ${height}p` : "原畫質") : (height ? `${height}p` : variant.name));
+      return {
+        name: String(variant.name || ""),
+        label: String(label || variant.name || ""),
+        height,
+        bitrate: Number(variant.bitrate || 0),
+        playlistUrl: String(variant.playlist_url || ""),
+      };
+    });
+}
+
+function preferredVideoQualityVariant(playback = {}) {
+  const options = videoPlaybackQualityOptions(playback);
+  if (!options.length) return null;
+  const preferredName = String(playback?.default_quality || playback?.quality_policy?.default_quality || "").trim();
+  if (preferredName) {
+    const named = options.find((option) => option.name === preferredName);
+    if (named) return named;
+  }
+  return options.find((option) => Number(option.height || 0) === 720)
+    || options.find((option) => Number(option.height || 0) === 480)
+    || options.find((option) => option.name !== "original" && option.name !== "audio")
+    || options[0]
+    || null;
+}
+
+function fallbackVideoQualityVariant(playback = {}) {
+  const options = videoPlaybackQualityOptions(playback);
+  const fallbackName = String(playback?.fallback_quality || playback?.quality_policy?.fallback_quality || "").trim();
+  if (fallbackName) {
+    const named = options.find((option) => option.name === fallbackName);
+    if (named) return named;
+  }
+  return options.find((option) => Number(option.height || 0) === 480) || null;
+}
+
+function renderVideoQualityControl(playback = {}) {
+  const options = videoPlaybackQualityOptions(playback);
+  if (options.length < 2) return "";
+  const preferred = preferredVideoQualityVariant(playback);
+  const preferredName = preferred?.name || "";
+  return `
+    <div class="video-quality-control" id="video-quality-control">
+      <label for="video-quality-select">畫質</label>
+      <select id="video-quality-select">
+        <option value="auto"${preferredName ? "" : " selected"}>自動</option>
+        ${options.map((option) => `<option value="${sanitize(option.name)}"${option.name === preferredName ? " selected" : ""}>${sanitize(option.label)}</option>`).join("")}
+      </select>
+      <span class="drive-card-sub">預設 720p；網路不穩時會嘗試退回 480p。串流衍生畫質不佔用你的雲端硬碟容量。</span>
+    </div>
+  `;
+}
+
+function selectedVideoQualityVariant(playback = {}) {
+  const select = $("video-quality-select");
+  const selected = String(select?.value || "auto");
+  if (!selected || selected === "auto") return null;
+  return videoPlaybackQualityOptions(playback).find((variant) => variant.name === selected) || null;
+}
+
+function applyVideoQualitySelection(playback = {}) {
+  const select = $("video-quality-select");
+  if (!select) return;
+  const variant = selectedVideoQualityVariant(playback);
+  if (videoState.currentHls && Array.isArray(videoState.currentHls.levels)) {
+    if (!variant) {
+      videoState.currentHls.currentLevel = -1;
+      setVideoPlaybackStatus("畫質：自動；播放器會依網路狀況調整。", false);
+      return;
+    }
+    const levelIndex = videoState.currentHls.levels.findIndex((level) => Number(level.height || 0) === Number(variant.height || 0));
+    if (levelIndex >= 0) {
+      videoState.currentHls.currentLevel = levelIndex;
+      setVideoPlaybackStatus(`畫質：${variant.label}。`, false);
+      return;
+    }
+  }
+  const player = $("video-player");
+  if (!player) return;
+  const nextUrl = variant?.playlistUrl || playback.master_url || "";
+  if (!nextUrl) return;
+  const resumeAt = Number(player.currentTime || 0);
+  const wasPaused = player.paused;
+  player.src = nextUrl;
+  if (typeof player.load === "function") player.load();
+  player.addEventListener("loadedmetadata", () => {
+    try {
+      if (resumeAt > 0 && Number.isFinite(resumeAt)) player.currentTime = resumeAt;
+      if (!wasPaused && typeof player.play === "function") player.play().catch(() => {});
+    } catch (_) {
+      // ignore native HLS seek restore failure
+    }
+  }, { once: true });
+  setVideoPlaybackStatus(variant ? `畫質：${variant.label}。` : "畫質：自動。", false);
+}
+
+function fallbackVideoPlaybackToLowerQuality(playback = {}, reason = "") {
+  if (videoState.manualQualitySelection || videoState.autoQualityFallbackApplied) return false;
+  const fallback = fallbackVideoQualityVariant(playback);
+  if (!fallback) return false;
+  const current = selectedVideoQualityVariant(playback);
+  if (current && current.name === fallback.name) return false;
+  const select = $("video-quality-select");
+  if (!select) return false;
+  if (select) select.value = fallback.name;
+  videoState.autoQualityFallbackApplied = true;
+  applyVideoQualitySelection(playback);
+  const suffix = reason ? `；${reason}` : "";
+  setVideoPlaybackStatus(`網路狀況不穩，已自動切換為 ${fallback.label}${suffix}。`, false);
+  return true;
+}
+
+function bindVideoQualityControl(playback = {}) {
+  const select = $("video-quality-select");
+  if (!select) return;
+  select.addEventListener("change", () => {
+    videoState.manualQualitySelection = true;
+    applyVideoQualitySelection(playback);
+  });
+}
+
 function clearVideoPlaybackAction() {
   const wrap = $("video-playback-action");
   if (wrap) wrap.innerHTML = "";
@@ -1392,13 +1528,25 @@ async function attachVideoHlsJsPlayer(player, playback, sessionId) {
   videoState.currentHls = hls;
   hls.on(HlsCtor.Events.MANIFEST_PARSED, () => {
     if (sessionId !== videoState.playbackSessionId) return;
-    setVideoPlaybackStatus(statusText, false);
+    if (selectedVideoQualityVariant(playback)) applyVideoQualitySelection(playback);
+    else setVideoPlaybackStatus(statusText, false);
   });
   hls.on(HlsCtor.Events.ERROR, (_event, data) => {
     if (sessionId !== videoState.playbackSessionId) return;
+    const detail = data?.details ? String(data.details) : "";
+    const type = data?.type ? String(data.type) : "";
+    if (
+      (detail.toLowerCase().includes("buffer") || type.toLowerCase().includes("network") || data?.fatal)
+      && fallbackVideoPlaybackToLowerQuality(playback, detail ? detail : "已降低串流負擔")
+    ) {
+      if (data?.fatal && typeof hls.recoverMediaError === "function") {
+        try { hls.recoverMediaError(); } catch (_) {}
+      }
+      return;
+    }
     if (!data?.fatal) return;
-    const detail = data?.details ? ` (${data.details})` : "";
-    fallbackVideoPlayerToDirect(player, playback, `HLS.js 播放失敗，已改用直接串流。${detail}`, true);
+    const detailText = detail ? ` (${detail})` : "";
+    fallbackVideoPlayerToDirect(player, playback, `HLS.js 播放失敗，已改用直接串流。${detailText}`, true);
   });
   hls.loadSource(playback.master_url || "");
   hls.attachMedia(player);
@@ -1435,12 +1583,28 @@ async function activateVideoPlaybackMode(video, playback, playbackSource, sessio
     return;
   }
   destroyCurrentVideoPlaybackArtifacts();
+  if (playbackSource?.mode === "hls_native") {
+    const stalledHandler = () => {
+      if (sessionId !== videoState.playbackSessionId) return;
+      fallbackVideoPlaybackToLowerQuality(playback, "原生 HLS 偵測到載入停滯");
+    };
+    player.addEventListener("stalled", stalledHandler, { once: true });
+    player.addEventListener("waiting", stalledHandler, { once: true });
+    player.addEventListener("error", () => {
+      if (sessionId !== videoState.playbackSessionId) return;
+      if (!fallbackVideoPlaybackToLowerQuality(playback, "原生 HLS 播放錯誤") && playback?.fallback_url) {
+        fallbackVideoPlayerToDirect(player, playback, "HLS 播放失敗，已改用直接串流。", true);
+      }
+    }, { once: true });
+  }
 }
 
 function renderVideoDetail(video, comments = [], playback = null) {
   const detail = $("video-detail");
   if (!detail) return;
   destroyCurrentVideoPlaybackArtifacts();
+  videoState.manualQualitySelection = false;
+  videoState.autoQualityFallbackApplied = false;
   videoState.playbackSessionId += 1;
   const playbackSessionId = videoState.playbackSessionId;
   videoState.current = video;
@@ -1448,13 +1612,16 @@ function renderVideoDetail(video, comments = [], playback = null) {
   const videoStatus = String(video.status || "ready");
   const videoPlayable = videoStatus === "ready";
   const processingText = videoStatus === "processing"
-    ? "影音正在後台處理 HLS，完成前不會出現在影音列表；處理完成會通知上傳者。"
+    ? "影音正在後台處理 HLS；你可以先做別的事，進度會顯示在任務中心，處理完成會通知上傳者。"
     : "影音目前不可播放。";
   const playbackSource = videoPlayable
     ? playbackSourceForVideo(video, playback)
     : { mode: "processing", src: "", statusText: processingText };
   const playbackStatus = playback?.status || {};
   const streamStatusText = humanVideoStreamStatus(playback) || String(playback?.stream_warning || "").trim();
+  const qualityControl = playbackSource?.mode && String(playbackSource.mode).startsWith("hls")
+    ? renderVideoQualityControl(playback || {})
+    : "";
   const streamActions = video.can_edit && playback?.mode !== "e2ee_direct"
     ? `
       <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.45rem;">
@@ -1541,6 +1708,7 @@ function renderVideoDetail(video, comments = [], playback = null) {
         <div class="drive-card-sub" id="video-playback-status">
           ${sanitize(playbackSource.statusText || streamStatusText || "")}
         </div>
+        ${qualityControl}
         <div class="drive-file-actions" id="video-playback-action" style="justify-content:flex-start;margin-top:.45rem;"></div>
         ${streamActions}
         ${shareInfo}
@@ -1599,7 +1767,8 @@ function renderVideoDetail(video, comments = [], playback = null) {
   `;
   if (videoPlayable) {
     bindVideoPlayerView(video.id);
-    activateVideoPlaybackMode(video, playback, playbackSource, playbackSessionId).catch((err) => {
+    bindVideoQualityControl(playback || {});
+    activateVideoPlaybackMode(video, playback || {}, playbackSource, playbackSessionId).catch((err) => {
       if (playbackSessionId !== videoState.playbackSessionId) return;
       const message = err?.message || "影音播放初始化失敗";
       setVideoPlaybackStatus(message, true);

@@ -1797,14 +1797,18 @@
     }
 
     .comfyui-mask-editor-size {
-      min-width: min(100%, 260px);
+      min-width: min(100%, 170px);
       color: var(--muted);
       font-size: .92rem;
     }
 
     .comfyui-mask-editor-size input {
-      min-width: 120px;
+      min-width: 96px;
       flex: 1;
+    }
+
+    .comfyui-mask-editor-size input[type="number"] {
+      max-width: 8.5rem;
     }
 
     .comfyui-mask-editor-stage {
@@ -2968,13 +2972,15 @@
       display: grid;
       gap: .34rem;
       width: 100%;
+      min-width: 0;
     }
 
     .expiry-picker-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.25fr) minmax(7.5rem, .8fr) auto;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
       gap: .5rem;
       align-items: end;
+      min-width: 0;
     }
 
     .expiry-picker-field {
@@ -2992,6 +2998,9 @@
 
     .expiry-picker input[type="date"],
     .expiry-picker input[type="time"] {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
       min-height: 2.45rem;
       padding: .5rem .68rem;
       cursor: pointer;
@@ -3000,6 +3009,8 @@
     .expiry-picker-clear {
       min-height: 2.45rem;
       align-self: end;
+      justify-self: start;
+      max-width: 100%;
       white-space: nowrap;
     }
 
@@ -6141,6 +6152,24 @@
     }
     #video-playback-status[data-state="info"] {
       color: #b9c2f0;
+    }
+    .video-quality-control {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: .5rem .75rem;
+      padding: .65rem .75rem;
+      border: 1px solid color-mix(in srgb, var(--muted) 28%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%);
+    }
+    .video-quality-control label {
+      font-weight: 700;
+      color: var(--text);
+    }
+    .video-quality-control select {
+      min-width: 140px;
+      max-width: 100%;
     }
     .video-audio-player {
       aspect-ratio: auto;
