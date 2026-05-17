@@ -613,10 +613,12 @@ function renderShareCenterEditForm(share = {}) {
   const type = String(share.share_type || "");
   const commonFields = (type === "file" || type === "video")
     ? `
-      <label class="field">
+      <div class="field">
         <span>到期時間</span>
-        <input type="datetime-local" data-share-edit-expires value="${shareCenterDateTimeLocal(share.expires_at)}" />
-      </label>
+        ${typeof shareExpiryPickerMarkup === "function"
+          ? shareExpiryPickerMarkup({ hiddenAttrs: "data-share-edit-expires", value: share.expires_at || "", help: "用日曆選擇日期；只選日期時預設當天 23:59 失效。" })
+          : `<input type="datetime-local" data-share-edit-expires value="${shareCenterDateTimeLocal(share.expires_at)}" />`}
+      </div>
       <label class="field">
         <span>最大存取次數</span>
         <input type="number" min="0" max="1000000" step="1" data-share-edit-max-views value="${sanitize(String(share.max_views || 0))}" />
@@ -790,6 +792,7 @@ async function saveShareCenterOptions(key) {
     payload.clear_password = clearPassword;
   }
   if (share.share_type === "file" || share.share_type === "video") {
+    if (typeof syncShareExpiryPickers === "function") syncShareExpiryPickers(form);
     payload.expires_at = form.querySelector("[data-share-edit-expires]")?.value || "";
     payload.max_views = form.querySelector("[data-share-edit-max-views]")?.value || "0";
   }
@@ -1161,6 +1164,7 @@ async function saveManagedVideoShareSettings(videoId, { regenerate = false } = {
   try {
     const canShare = await ensureManagedVideoCanShare(row, videoId, csrf);
     if (!canShare) return;
+    if (typeof syncShareExpiryPickers === "function") syncShareExpiryPickers(row);
     const payload = {
       share_expires_at: row.querySelector("[data-video-manage-share-expires]")?.value || "",
       share_max_views: row.querySelector("[data-video-manage-share-max-views]")?.value || ""

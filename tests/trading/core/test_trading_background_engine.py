@@ -256,6 +256,24 @@ def test_background_dev_ready_is_disabled_by_default(tmp_path):
     assert job["failure_count"] == 0
 
 
+def test_sitewide_metrics_refresh_runs_in_dev_ready_for_root_reports(tmp_path):
+    _points, trading = _services(tmp_path)
+
+    result = trading.run_background_job_once(
+        job_key="sitewide_metrics_refresh",
+        get_system_settings=_settings,
+        get_runtime_server_mode=lambda: "dev_ready",
+        owner="unit-test",
+        force=True,
+    )
+
+    assert result["status"] == "success"
+    assert "root_report" in result["result"]["snapshot_keys"]
+    snapshot = trading.get_root_trading_snapshot(snapshot_key="root_report")
+    assert snapshot["ok"] is True
+    assert snapshot["source_job_key"] == "sitewide_metrics_refresh"
+
+
 def test_background_dev_ready_can_be_enabled_for_isolated_qa(tmp_path):
     _points, trading = _services(tmp_path)
     _set_trading_setting(trading, "trading.background_worker_dev_ready_enabled", "true")

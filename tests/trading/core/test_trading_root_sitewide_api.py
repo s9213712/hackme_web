@@ -216,9 +216,10 @@ def test_root_sitewide_endpoints_require_snapshot_instead_of_inline_recompute(tm
     response = app.test_client().get("/api/root/trading/sitewide/user-positions")
     payload = response.get_json()
 
-    assert response.status_code == 503
+    assert response.status_code == 200
     assert payload["ok"] is False
     assert payload["snapshot"]["missing"] is True
+    assert payload["snapshot"]["required_job_key"] == "sitewide_metrics_refresh"
 
 
 def test_root_admin_report_reads_snapshot_only(tmp_path):
@@ -227,8 +228,9 @@ def test_root_admin_report_reads_snapshot_only(tmp_path):
     missing = app.test_client().get("/api/admin/trading/report")
     missing_payload = missing.get_json()
 
-    assert missing.status_code == 503
+    assert missing.status_code == 200
     assert missing_payload["snapshot"]["missing"] is True
+    assert missing_payload["snapshot"]["required_job_key"] == "sitewide_metrics_refresh"
 
     trading.refresh_root_trading_snapshots(source_job_key="unit-test", source_run_uuid="run-report-test")
     response = app.test_client().get("/api/admin/trading/report")

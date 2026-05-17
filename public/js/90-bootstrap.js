@@ -436,6 +436,7 @@ function bindUiEvents() {
   if (editSaveBtn)   editSaveBtn.addEventListener("click", submitEditUser);
   if (editCancelBtn) editCancelBtn.addEventListener("click", hideUserEditDialog);
   if (avatarUploadBtn) avatarUploadBtn.addEventListener("click", uploadUserAvatar);
+  if (typeof bindAvatarCropperUi === "function") bindAvatarCropperUi();
   if ($("theme-quick-toggle")) $("theme-quick-toggle").addEventListener("click", toggleUserThemeModeQuickly);
   if ($("edit-user-theme-mode")) $("edit-user-theme-mode").addEventListener("change", applyUserThemeModeSelection);
   if ($("edit-user-appearance-preset")) $("edit-user-appearance-preset").addEventListener("change", applyUserAppearancePresetSelection);

@@ -518,7 +518,7 @@ function tradingFriendlyErrorText(text, fallback = "操作失敗") {
 async function fetchTradingJson(url, options = {}) {
   const rawOptions = options || {};
   const method = String(rawOptions.method || "GET").toUpperCase();
-  const { forceCsrf = method !== "GET", ...requestOptions } = rawOptions;
+  const { forceCsrf = method !== "GET", allowMissingSnapshot = false, ...requestOptions } = rawOptions;
   await fetchCsrfToken({ force: !!forceCsrf });
   const headers = { ...(requestOptions.headers || {}), "X-CSRF-Token": getCsrfToken() || "" };
   if (requestOptions.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
@@ -530,6 +530,7 @@ async function fetchTradingJson(url, options = {}) {
   } catch (_) {
     json = {};
   }
+  if (allowMissingSnapshot && json?.snapshot?.missing) return json;
   if (!res.ok || !json.ok) {
     let fallback = `HTTP ${res.status}`;
     if (res.status === 404) fallback = `交易所 API 不存在：${url}。請確認伺服器已重啟且目前是包含交易所功能的分支。`;
@@ -5139,7 +5140,22 @@ async function loadTradingRootReport() {
     return;
   }
   try {
-    const json = await fetchTradingJson("/admin/trading/report");
+    const json = await fetchTradingJson("/admin/trading/report", { allowMissingSnapshot: true });
+    if (json?.snapshot?.missing) {
+      tradingState.rootReport = {};
+      renderTradingRootReport(tradingState.rootReport);
+      renderTradingRiskDashboard();
+      const queued = typeof enqueueTradingSnapshotRefreshOnce === "function"
+        ? await enqueueTradingSnapshotRefreshOnce("root_trading_report_missing_snapshot")
+        : { ok: false, msg: "背景刷新 helper 尚未載入" };
+      tradingSetMsg(
+        queued?.ok
+          ? "交易報表第一次開啟正在建立快照；已排入 sitewide_metrics_refresh，背景完成後會自動帶出報表。"
+          : `交易報表快照正在等待背景刷新；排程失敗：${queued?.msg || "請到 root 背景引擎檢查 worker"}`,
+        queued?.ok !== false,
+      );
+      return;
+    }
     tradingState.rootReport = json.report || {};
     renderTradingRootReport(tradingState.rootReport);
     renderTradingRiskDashboard();

@@ -123,12 +123,16 @@
   min-width: 0;
 }
 
-.experiment-control input {
+.experiment-control input,
+.experiment-control select {
   grid-column: 1 / -1;
   width: 100%;
   min-width: 0;
   max-width: calc(100% - 2px);
   justify-self: start;
+}
+
+.experiment-control input {
   accent-color: var(--accent);
 }
 

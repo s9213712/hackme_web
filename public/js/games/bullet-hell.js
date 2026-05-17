@@ -669,6 +669,7 @@
   function drawBulletHellHitbox(ctx, state) {
     const hitRadius = state.keys.focus ? 4.2 : 6.2;
     const grazeRadius = 22;
+    const pulse = 0.55 + Math.sin(state.tick * 0.12) * 0.18;
     ctx.save();
     ctx.setLineDash([4, 4]);
     ctx.strokeStyle = "rgba(56,189,248,.46)";
@@ -682,14 +683,15 @@
     ctx.beginPath();
     ctx.arc(state.player.x, state.player.y, hitRadius + 1.5, 0, Math.PI * 2);
     ctx.stroke();
+    ctx.strokeStyle = `rgba(254,240,138,${pulse})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(state.player.x, state.player.y, hitRadius + 5, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.fillStyle = "#fef08a";
     ctx.beginPath();
     ctx.arc(state.player.x, state.player.y, Math.max(2.6, hitRadius * 0.48), 0, Math.PI * 2);
     ctx.fill();
-    ctx.font = "700 10px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillStyle = "rgba(254,240,138,.95)";
-    ctx.fillText("判定點", state.player.x, state.player.y - grazeRadius - 6);
     ctx.restore();
   }
 
@@ -748,7 +750,7 @@
     ctx.fillText(`wave ${state.wave} score ${Number(Math.round(state.score)).toLocaleString()}`, 18, 20);
     ctx.fillText(`life ${state.lives} bomb ${state.bombs} P${state.shotLevel} H${state.homingLevel || 0} O${state.optionLevel || 0}`, 164, 20);
     ctx.fillStyle = "rgba(254,240,138,.9)";
-    ctx.fillText("黃點=中彈判定；藍圈=擦彈範圍", 18, HEIGHT - 18);
+    ctx.fillText("黃點=受擊核心；藍圈=擦彈範圍", 18, HEIGHT - 18);
     if (state.status === "finished") {
       ctx.fillStyle = "rgba(7,17,31,.76)";
       ctx.fillRect(34, 196, WIDTH - 68, 112);
@@ -872,7 +874,7 @@
         <button class="btn game-mini-btn" type="button" data-hold="right">右</button>
         <button class="btn game-mini-btn" type="button" data-hold="focus">精密</button>
         <button class="btn game-mini-btn btn-primary" type="button" data-bomb="1">Bomb</button>
-        <span class="game-control-note">黃點=中彈判定；藍圈=擦彈範圍</span>
+        <span class="game-control-note">黃點=受擊核心；藍圈=擦彈範圍</span>
       `);
       api.onAction = (action) => {
         if (action === "new") startBulletHell(api);

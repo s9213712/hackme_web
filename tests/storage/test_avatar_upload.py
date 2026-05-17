@@ -135,3 +135,5 @@ def test_user_can_upload_avatar_and_crop_metadata(tmp_path):
     avatar_res = client.get("/api/admin/users/1/avatar")
     assert avatar_res.status_code == 200
     assert avatar_res.mimetype == "image/jpeg"
+    cropped = Image.open(io.BytesIO(avatar_res.data))
+    assert cropped.size == (512, 512)

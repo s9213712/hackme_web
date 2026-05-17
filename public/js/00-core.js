@@ -59,6 +59,8 @@ let notificationPollTimer = null;
 let notificationsOpen = false;
 const lazyScriptPromises = new Map();
 const avatarCacheBustByUserId = new Map();
+let tradingSnapshotRefreshPromise = null;
+let tradingSnapshotRefreshLastAt = 0;
 const SITE_APPEARANCE_KEYS = [
   "site_theme_mode",
   "site_bg",
@@ -658,6 +660,186 @@ function sanitize(str) {
     .replace(/'/g, '&#x27;')
     .replace(/\//g, '&#x2F;');
 }
+
+function shareExpiryTodayDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function shareExpiryPartsFromValue(value) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})(?:[T\s](\d{2}:\d{2}))?/);
+  return {
+    date: match ? match[1] : "",
+    time: match && match[2] ? match[2] : "23:59",
+  };
+}
+
+function composeShareExpiryValue(dateValue, timeValue) {
+  const date = String(dateValue || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "";
+  const time = /^\d{2}:\d{2}$/.test(String(timeValue || "").trim())
+    ? String(timeValue || "").trim()
+    : "23:59";
+  return `${date}T${time}`;
+}
+
+function shareExpiryPickerMarkup(options = {}) {
+  const parts = shareExpiryPartsFromValue(options.value || "");
+  const hiddenId = String(options.hiddenId || "").trim();
+  const hiddenAttrs = String(options.hiddenAttrs || "").trim();
+  const targetAttr = hiddenId ? ` data-expiry-target="${sanitize(hiddenId)}"` : "";
+  const idAttr = hiddenId ? ` id="${sanitize(hiddenId)}"` : "";
+  const help = options.help
+    ? `<div class="expiry-picker-help">${sanitize(String(options.help))}</div>`
+    : "";
+  return `
+    <div class="expiry-picker" data-expiry-picker${targetAttr}>
+      <input type="hidden"${idAttr} ${hiddenAttrs} data-expiry-value value="${sanitize(composeShareExpiryValue(parts.date, parts.time))}" />
+      <div class="expiry-picker-grid">
+        <label class="expiry-picker-field">
+          <span>日期</span>
+          <input type="date" data-expiry-date min="${sanitize(shareExpiryTodayDate())}" value="${sanitize(parts.date)}" />
+        </label>
+        <label class="expiry-picker-field">
+          <span>時間</span>
+          <input type="time" data-expiry-time step="60" value="${sanitize(parts.time)}" />
+        </label>
+        <button class="btn btn-sm expiry-picker-clear" type="button" data-expiry-clear>清除</button>
+      </div>
+      ${help}
+    </div>
+  `;
+}
+
+function shareExpiryPickerForValueInput(valueInput) {
+  if (!valueInput) return null;
+  const direct = valueInput.closest?.("[data-expiry-picker]");
+  if (direct) return direct;
+  if (valueInput.id) {
+    return Array.from(document.querySelectorAll("[data-expiry-picker]"))
+      .find((picker) => picker.dataset.expiryTarget === valueInput.id) || null;
+  }
+  return null;
+}
+
+function syncShareExpiryPicker(picker) {
+  if (!picker) return "";
+  const hidden = picker.querySelector("[data-expiry-value]");
+  const dateInput = picker.querySelector("[data-expiry-date]");
+  const timeInput = picker.querySelector("[data-expiry-time]");
+  if (dateInput && !dateInput.min) dateInput.min = shareExpiryTodayDate();
+  const value = composeShareExpiryValue(dateInput?.value || "", timeInput?.value || "");
+  if (hidden) hidden.value = value;
+  return value;
+}
+
+function syncShareExpiryPickers(root = document) {
+  if (root.matches?.("[data-expiry-picker]")) syncShareExpiryPicker(root);
+  root.querySelectorAll?.("[data-expiry-picker]").forEach((picker) => syncShareExpiryPicker(picker));
+}
+
+function setShareExpiryPickerValue(targetOrInput, value = "") {
+  const input = typeof targetOrInput === "string" ? $(targetOrInput) : targetOrInput;
+  if (input) input.value = String(value || "").trim();
+  const picker = shareExpiryPickerForValueInput(input);
+  if (!picker) return input?.value || "";
+  const parts = shareExpiryPartsFromValue(value || "");
+  const dateInput = picker.querySelector("[data-expiry-date]");
+  const timeInput = picker.querySelector("[data-expiry-time]");
+  if (dateInput) {
+    dateInput.min = dateInput.min || shareExpiryTodayDate();
+    dateInput.value = parts.date;
+  }
+  if (timeInput) timeInput.value = parts.time;
+  return syncShareExpiryPicker(picker);
+}
+
+function getShareExpiryPickerValue(targetOrInput) {
+  const input = typeof targetOrInput === "string" ? $(targetOrInput) : targetOrInput;
+  const picker = shareExpiryPickerForValueInput(input);
+  if (picker) return syncShareExpiryPicker(picker);
+  return String(input?.value || "").trim();
+}
+
+function installShareExpiryPickerHandlers() {
+  if (document.body?.dataset.expiryPickerBound === "1") return;
+  if (document.body) document.body.dataset.expiryPickerBound = "1";
+  document.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!target?.matches?.("[data-expiry-date], [data-expiry-time]")) return;
+    syncShareExpiryPicker(target.closest("[data-expiry-picker]"));
+  });
+  document.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!target?.matches?.("[data-expiry-date], [data-expiry-time]")) return;
+    syncShareExpiryPicker(target.closest("[data-expiry-picker]"));
+  });
+  document.addEventListener("click", (event) => {
+    const clear = event.target?.closest?.("[data-expiry-clear]");
+    if (!clear) return;
+    const picker = clear.closest("[data-expiry-picker]");
+    const hidden = picker?.querySelector("[data-expiry-value]");
+    if (hidden) setShareExpiryPickerValue(hidden, "");
+  });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  installShareExpiryPickerHandlers();
+  syncShareExpiryPickers(document);
+});
+
+window.shareExpiryPickerMarkup = shareExpiryPickerMarkup;
+window.syncShareExpiryPickers = syncShareExpiryPickers;
+window.setShareExpiryPickerValue = setShareExpiryPickerValue;
+window.getShareExpiryPickerValue = getShareExpiryPickerValue;
+
+async function enqueueTradingSnapshotRefreshOnce(reason = "missing_snapshot") {
+  if (currentUser !== "root") return { ok: false, skipped: true, reason: "not_root" };
+  const now = Date.now();
+  if (tradingSnapshotRefreshPromise) return tradingSnapshotRefreshPromise;
+  if (now - tradingSnapshotRefreshLastAt < 15000) {
+    return { ok: true, throttled: true, reason: "recently_queued" };
+  }
+  tradingSnapshotRefreshLastAt = now;
+  tradingSnapshotRefreshPromise = (async () => {
+    await fetchCsrfToken({ force: true });
+    const res = await apiFetch(`${API}/root/trading/background/run-once`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": getCsrfToken() || "",
+      },
+      body: JSON.stringify({
+        job_key: "sitewide_metrics_refresh",
+        confirm: "RUN_TRADING_JOB_ONCE",
+        reason,
+      }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        msg: json.msg || `HTTP ${res.status}`,
+      };
+    }
+    return json;
+  })();
+  try {
+    return await tradingSnapshotRefreshPromise;
+  } finally {
+    window.setTimeout(() => {
+      tradingSnapshotRefreshPromise = null;
+    }, 500);
+  }
+}
+
+window.enqueueTradingSnapshotRefreshOnce = enqueueTradingSnapshotRefreshOnce;
 
 function avatarInitial(username) {
   const value = String(username || "").trim();
@@ -1661,6 +1843,7 @@ function hideUserEditDialog() {
   if (overlay) {
     overlay.classList.remove("show");
   }
+  if (typeof resetAvatarCropper === "function") resetAvatarCropper();
   editingUserId = null;
   editingUserIsSelf = false;
 }

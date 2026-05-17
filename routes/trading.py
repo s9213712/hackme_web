@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -80,6 +81,8 @@ def register_trading_routes(app, deps):
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
     get_system_settings = deps.get("get_system_settings", lambda: {})
     get_runtime_server_mode = deps.get("get_runtime_server_mode", lambda: "production")
+    background_queue_kick_lock = threading.Lock()
+    background_queue_kick_active = False
 
     def actor_value(actor, key, default=None):
         if not actor:
@@ -102,6 +105,39 @@ def register_trading_routes(app, deps):
         if actor_value(actor, "username") != "root":
             return None, json_resp({"ok": False, "msg": "只有 root 可執行此操作"}, 403)
         return actor, None
+
+    def kick_trading_background_queue(reason=""):
+        nonlocal background_queue_kick_active
+        with background_queue_kick_lock:
+            if background_queue_kick_active:
+                return False
+            background_queue_kick_active = True
+
+        def worker():
+            nonlocal background_queue_kick_active
+            try:
+                trading_service.run_due_background_jobs(
+                    get_system_settings=get_system_settings,
+                    get_runtime_server_mode=get_runtime_server_mode,
+                    owner=f"trading-bg-kick:{os.getpid()}",
+                    job_keys=[],
+                )
+            except Exception as exc:
+                audit(
+                    "TRADING_BACKGROUND_QUEUE_KICK_FAILED",
+                    "0.0.0.0",
+                    user="system",
+                    success=False,
+                    ua="background-queue-kick",
+                    detail=json.dumps({"reason": reason, "error": str(exc)[:1000]}, ensure_ascii=False),
+                )
+            finally:
+                with background_queue_kick_lock:
+                    background_queue_kick_active = False
+
+        thread = threading.Thread(target=worker, name="trading-background-queue-kick", daemon=True)
+        thread.start()
+        return True
 
     def manager_or_403():
         actor, err = actor_or_401()
@@ -1789,6 +1825,8 @@ def register_trading_routes(app, deps):
                 "snapshot": {
                     "snapshot_key": snapshot_key,
                     "missing": True,
+                    "required_job_key": "sitewide_metrics_refresh",
+                    "client_should_enqueue": True,
                 },
             })
         payload = snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {}
@@ -1883,6 +1921,8 @@ def register_trading_routes(app, deps):
                 requested_by=actor,
                 force=True,
             )
+            result["kick_started"] = kick_trading_background_queue(reason="root_run_once")
+            result.setdefault("msg", "已排入交易背景佇列，系統會在背景處理。")
             audit(
                 "TRADING_BACKGROUND_JOB_RUN_ONCE_ENQUEUED",
                 get_client_ip(),

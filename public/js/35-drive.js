@@ -1485,7 +1485,8 @@ function openDriveShareDialog(fileId, name = "", storageFileId = "") {
   if ($("drive-share-file-label")) $("drive-share-file-label").textContent = name || file.original_filename_plain_for_public || fileId;
   if ($("drive-share-scope")) $("drive-share-scope").value = "link";
   if ($("drive-share-account")) $("drive-share-account").value = "";
-  if ($("drive-share-expires-at")) $("drive-share-expires-at").value = "";
+  if (typeof setShareExpiryPickerValue === "function") setShareExpiryPickerValue("drive-share-expires-at", "");
+  else if ($("drive-share-expires-at")) $("drive-share-expires-at").value = "";
   if ($("drive-share-max-views")) $("drive-share-max-views").value = "0";
   if ($("drive-share-password")) $("drive-share-password").value = "";
   if ($("drive-share-result")) {
@@ -1639,7 +1640,9 @@ async function createDriveShareLink() {
   const scope = $("drive-share-scope")?.value || "link";
   const payload = {
     access_scope: scope,
-    expires_at: $("drive-share-expires-at")?.value || "",
+    expires_at: typeof getShareExpiryPickerValue === "function"
+      ? getShareExpiryPickerValue("drive-share-expires-at")
+      : $("drive-share-expires-at")?.value || "",
     max_views: Number($("drive-share-max-views")?.value || 0),
   };
   const sharePassword = ($("drive-share-password")?.value || "").trim();

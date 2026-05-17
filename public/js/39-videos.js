@@ -590,7 +590,9 @@ async function publishVideoFromDrive() {
     description: ($("video-publish-description")?.value || "").trim(),
     visibility: $("video-publish-visibility")?.value || "public",
     share_password: sharePassword,
-    share_expires_at: ($("video-share-expires-at")?.value || "").trim(),
+    share_expires_at: typeof getShareExpiryPickerValue === "function"
+      ? getShareExpiryPickerValue("video-share-expires-at")
+      : ($("video-share-expires-at")?.value || "").trim(),
     share_max_views: ($("video-share-max-views")?.value || "").trim(),
   };
   if (!directFile && !payload.cloud_file_id) return videoMsg("請選擇要直接上傳的影音檔，或選擇雲端硬碟中的影音檔", false);
@@ -693,7 +695,8 @@ async function publishVideoFromDrive() {
     const shareMaxViews = $("video-share-max-views");
     if (shareMaxViews) shareMaxViews.value = "";
     const shareExpiresAt = $("video-share-expires-at");
-    if (shareExpiresAt) shareExpiresAt.value = "";
+    if (typeof setShareExpiryPickerValue === "function") setShareExpiryPickerValue(shareExpiresAt || "video-share-expires-at", "");
+    else if (shareExpiresAt) shareExpiresAt.value = "";
     videoPendingPublishSelection = null;
     if (e2eeShare && json.video?.share_url) {
       rememberVideoShareFragment(json.video.share_url, e2eeShare.share_fragment_key);
@@ -938,7 +941,9 @@ async function saveVideoShareSettings(video, { clearPassword = false, regenerate
   const maxViewsInput = $("video-share-max-views-manage");
   const button = $("video-share-save-btn");
   const payload = {
-    share_expires_at: (expiresInput?.value || "").trim(),
+    share_expires_at: typeof getShareExpiryPickerValue === "function"
+      ? getShareExpiryPickerValue(expiresInput || "video-share-expires-at-manage")
+      : (expiresInput?.value || "").trim(),
     share_max_views: (maxViewsInput?.value || "").trim(),
   };
   if (clearPassword) {
@@ -1503,10 +1508,12 @@ function renderVideoDetail(video, comments = [], playback = null) {
               <span class="drive-card-sub">更新分享密碼</span>
               <input id="video-share-password-manage" type="password" autocomplete="new-password" placeholder="留空代表不變更" />
             </label>
-            <label>
+            <div class="field">
               <span class="drive-card-sub">到期時間</span>
-              <input id="video-share-expires-at-manage" type="datetime-local" value="${sanitize(String(video.share_expires_at || "").slice(0, 16))}" />
-            </label>
+              ${typeof shareExpiryPickerMarkup === "function"
+                ? shareExpiryPickerMarkup({ hiddenId: "video-share-expires-at-manage", value: video.share_expires_at || "", help: "用日曆選擇日期；只選日期時預設當天 23:59 失效。" })
+                : `<input id="video-share-expires-at-manage" type="datetime-local" value="${sanitize(String(video.share_expires_at || "").slice(0, 16))}" />`}
+            </div>
             <label>
               <span class="drive-card-sub">最大觀看次數</span>
               <input id="video-share-max-views-manage" type="number" min="0" step="1" value="${sanitize(String(video.share_max_views || 0))}" />

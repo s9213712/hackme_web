@@ -799,11 +799,13 @@ function renderEconomyAccountLookup(wallet, ledger) {
 }
 
 async function fetchEconomyJson(url, options = {}) {
+  const { allowMissingSnapshot = false, ...requestOptions } = options || {};
   await fetchCsrfToken({ force: true });
-  const headers = { ...(options.headers || {}), "X-CSRF-Token": getCsrfToken() || "" };
-  if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
-  const res = await apiFetch(API + url, { credentials: "same-origin", ...options, headers });
+  const headers = { ...(requestOptions.headers || {}), "X-CSRF-Token": getCsrfToken() || "" };
+  if (requestOptions.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+  const res = await apiFetch(API + url, { credentials: "same-origin", ...requestOptions, headers });
   const json = await res.json().catch(() => ({}));
+  if (allowMissingSnapshot && json?.snapshot?.missing) return json;
   if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
   return json;
 }
@@ -880,9 +882,23 @@ async function loadEconomyRootTradingReadOnly() {
   if (currentUser !== "root" || !economyPositionsAvailable()) return true;
   try {
     const [pools, positions] = await Promise.all([
-      fetchEconomyJson("/root/trading/sitewide/pools"),
-      fetchEconomyJson("/root/trading/sitewide/user-positions"),
+      fetchEconomyJson("/root/trading/sitewide/pools", { allowMissingSnapshot: true }),
+      fetchEconomyJson("/root/trading/sitewide/user-positions", { allowMissingSnapshot: true }),
     ]);
+    if (pools?.snapshot?.missing || positions?.snapshot?.missing) {
+      renderEconomyRootFundingPools({});
+      renderEconomyRootAllPositions({});
+      const queued = typeof enqueueTradingSnapshotRefreshOnce === "function"
+        ? await enqueueTradingSnapshotRefreshOnce("economy_trading_readonly_missing_snapshot")
+        : { ok: false, msg: "背景刷新 helper 尚未載入" };
+      economySetMsg(
+        queued?.ok
+          ? "交易資金池與全用戶倉位快照正在建立；已排入背景刷新，完成後重新整理即可查看。"
+          : `交易資金池與全用戶倉位快照尚未建立；排程失敗：${queued?.msg || "請確認背景 worker"}`,
+        queued?.ok !== false,
+      );
+      return true;
+    }
     renderEconomyRootFundingPools(pools.pools || {});
     renderEconomyRootAllPositions(positions.positions || {});
     return true;

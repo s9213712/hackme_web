@@ -402,15 +402,17 @@ def _should_skip_job(job_key, *, server_mode, settings):
         return f"server_mode_{server_mode}_paused"
     if server_mode in SHADOW_REQUIRES_TESTER_MODES:
         return "internal_test_background_worker_requires_explicit_tester_scope"
+    features = _background_features(settings)
+    if not features["economy_enabled"] or not features["trading_enabled"]:
+        return "feature_disabled"
+    if server_mode == "dev_ready" and job_key == "sitewide_metrics_refresh":
+        return ""
     if server_mode == "dev_ready":
         if not (
             _feature_enabled(settings, "background_worker_dev_ready_enabled", default=False)
             or _feature_enabled(settings, "trading.background_worker_dev_ready_enabled", default=False)
         ):
             return "server_mode_dev_ready_background_worker_disabled_by_default"
-    features = _background_features(settings)
-    if not features["economy_enabled"] or not features["trading_enabled"]:
-        return "feature_disabled"
     return ""
 
 
@@ -641,7 +643,7 @@ def get_root_trading_snapshot(service, *, snapshot_key):
             "missing": True,
             "snapshot_key": str(snapshot_key or ""),
             "payload": {},
-            "msg": "交易報表快照尚未產生，請等待背景引擎或由 root 佇列執行 sitewide_metrics_refresh。",
+            "msg": "交易報表第一次開啟正在建立快照；root 頁面會自動排入 sitewide_metrics_refresh，背景完成後即可顯示報表。",
         }
     try:
         payload = json.loads(row["payload_json"] or "{}")

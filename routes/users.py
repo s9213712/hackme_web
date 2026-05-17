@@ -1179,6 +1179,54 @@ def register_user_routes(app, deps):
             crop[key] = min(value, 10000)
         return crop if {"x", "y", "width", "height"} <= set(crop) else {}
 
+    def _avatar_crop_response(path, crop, mimetype):
+        if not crop:
+            return None
+        try:
+            from io import BytesIO
+            from PIL import Image, ImageOps
+        except Exception:
+            return None
+        try:
+            Image.MAX_IMAGE_PIXELS = 25_000_000
+            with Image.open(path) as img:
+                if getattr(img, "is_animated", False) or getattr(img, "n_frames", 1) > 1:
+                    return None
+                clean = ImageOps.exif_transpose(img)
+                image_width, image_height = clean.size
+                if image_width <= 0 or image_height <= 0:
+                    return None
+                x = max(0, min(int(crop.get("x", 0) or 0), image_width - 1))
+                y = max(0, min(int(crop.get("y", 0) or 0), image_height - 1))
+                crop_width = max(0, min(int(crop.get("width", 0) or 0), image_width - x))
+                crop_height = max(0, min(int(crop.get("height", 0) or 0), image_height - y))
+                side = min(crop_width, crop_height)
+                if side <= 0:
+                    return None
+                left = x + max(0, (crop_width - side) // 2)
+                top = y + max(0, (crop_height - side) // 2)
+                cropped = clean.crop((left, top, left + side, top + side))
+                resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC)
+                cropped = cropped.resize((512, 512), resample)
+                output = BytesIO()
+                use_png = "png" in str(mimetype or "").lower() or cropped.mode in {"RGBA", "LA", "P"}
+                if use_png:
+                    if cropped.mode not in {"RGBA", "LA"}:
+                        cropped = cropped.convert("RGBA")
+                    cropped.save(output, format="PNG", optimize=True)
+                    out_mimetype = "image/png"
+                    download_name = "avatar.png"
+                else:
+                    if cropped.mode not in {"RGB", "L"}:
+                        cropped = cropped.convert("RGB")
+                    cropped.save(output, format="JPEG", quality=90, optimize=True)
+                    out_mimetype = "image/jpeg"
+                    download_name = "avatar.jpg"
+                output.seek(0)
+                return send_file(output, mimetype=out_mimetype, download_name=download_name, max_age=3600)
+        except Exception:
+            return None
+
     @app.route("/api/admin/users/<int:user_id>/avatar", methods=["POST"])
     @require_csrf
     def user_avatar_upload(user_id):
@@ -1266,7 +1314,8 @@ def register_user_routes(app, deps):
             ensure_cloud_drive_attachment_schema(conn)
             row = conn.execute(
                 """
-                SELECT f.storage_path, f.mime_type_plain_for_public, f.scan_status, f.privacy_mode, f.deleted_at
+                SELECT f.storage_path, f.mime_type_plain_for_public, f.scan_status, f.privacy_mode, f.deleted_at,
+                       u.avatar_crop_json
                 FROM users u
                 JOIN uploaded_files f ON f.id=u.avatar_file_id
                 WHERE u.id=?
@@ -1280,6 +1329,10 @@ def register_user_routes(app, deps):
             path = resolve_file_storage_path(storage_root, row)
             if not path.exists() or not path.is_file():
                 return json_resp({"ok": False, "msg": "頭像檔案不存在"}), 404
+            crop = _parse_avatar_crop(row["avatar_crop_json"])
+            cropped = _avatar_crop_response(path, crop, row["mime_type_plain_for_public"])
+            if cropped is not None:
+                return cropped
             return send_file(path, mimetype=row["mime_type_plain_for_public"] or "application/octet-stream")
         finally:
             conn.close()
