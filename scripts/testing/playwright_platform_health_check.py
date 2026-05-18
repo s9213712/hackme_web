@@ -432,7 +432,12 @@ def check_job_center(rec: Recorder, page, base_url: str, normal_user: dict[str, 
             }"""
         )
         cancel_buttons.first.click(timeout=5000, force=True)
-        cancel_dialog_message = page.evaluate("() => window.__phase15ConfirmMessage || ''")
+        if page.locator("#app-dialog-overlay.show").count():
+            cancel_dialog_message = page.locator("#app-dialog-message").inner_text(timeout=3000)
+            page.click("#app-dialog-confirm", timeout=5000)
+            page.wait_for_selector("#app-dialog-overlay.show", state="detached", timeout=5000)
+        else:
+            cancel_dialog_message = page.evaluate("() => window.__phase15ConfirmMessage || ''")
         page.evaluate(
             """() => {
                 if (window.__phase15OriginalConfirm) window.confirm = window.__phase15OriginalConfirm;

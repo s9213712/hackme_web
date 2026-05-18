@@ -440,6 +440,8 @@ def attach_browser_error_handlers(page, record_error) -> None:
             return
         if "Failed to load resource: the server responded with a status of 403" in text:
             return
+        if "Failed to load resource: net::ERR_NETWORK_CHANGED" in text:
+            return
         record_error("console", f"{msg.type}: {text}")
 
     page.on("console", on_console)
@@ -876,7 +878,8 @@ def check_drive_e2ee_journey(rec: Recorder, page) -> dict[str, Any]:
     )
     files = fetch_json(page, "GET", "/api/storage/files")
     switch_module(page, "drive")
-    page.click("#drive-refresh-btn")
+    page.wait_for_selector("#module-drive.active #storage-refresh-btn", timeout=8000)
+    page.click("#storage-refresh-btn")
     page.wait_for_timeout(900)
     check_ui_quality(rec, page, "drive_e2ee_desktop")
     ok = standard["status"] == 200 and e2ee["status"] == 200 and files["status"] == 200
@@ -1067,7 +1070,11 @@ def check_economy_trading_journey(rec: Recorder, page, base_url: str) -> None:
 
 def check_games_journey(rec: Recorder, page) -> None:
     catalog = fetch_json(page, "GET", "/api/games/catalog")
-    created = fetch_json(page, "POST", "/api/games/chess/practice", {"difficulty": "normal", "side": "white"})
+    games = (catalog.get("body") or {}).get("games") or []
+    chess_game = next((item for item in games if item.get("key") == "chess"), {})
+    difficulties = chess_game.get("computer_difficulties") or []
+    difficulty = (difficulties[0] or {}).get("key") if difficulties else "experiment 0:minimax2ply"
+    created = fetch_json(page, "POST", "/api/games/chess/practice", {"difficulty": difficulty, "side": "white"})
     match_id = (created.get("body") or {}).get("match_id")
     detail_status = 0
     if match_id:
@@ -1096,6 +1103,8 @@ def check_games_journey(rec: Recorder, page) -> None:
         ok,
         f"catalog={catalog['status']}, chess={created['status']}, detail={detail_status}, solo={solo['status']}",
         match_id=match_id,
+        difficulty=difficulty,
+        created=created.get("body"),
         solo=solo.get("body"),
     )
 
