@@ -3,7 +3,6 @@
 (function setupExperimentArea() {
   const PLANE_PARTICLE_COUNT = 160;
   const LIQUID_PARTICLE_COUNT = 240;
-  const HUMMINGBIRD_PARTICLE_COUNT = 180;
   const TWO_PI = Math.PI * 2;
   let initialized = false;
   let rafId = 0;
@@ -13,9 +12,16 @@
   const canvasSizeCache = new Map();
 
   const state = {
-    plane: { particles: [] },
+    plane: {
+      particles: [],
+      scene3d: null,
+      sceneLoading: null,
+      sceneError: null,
+      orbitBound: false,
+      lastViewPreset: null,
+      view: { yaw: 0.82, pitch: 0.34, distance: 8.4, dragging: false, pointerId: null, lastX: 0, lastY: 0 },
+    },
     liquid: { particles: [], objects: [], shake: 0, stir: 0, spilled: 0 },
-    hummingbird: { particles: [] },
   };
 
   function $(id) {
@@ -99,8 +105,41 @@
     return resizeCanvas($(id), false);
   }
 
+  function planeCanvasSize() {
+    const canvas = $("experiment-plane-canvas");
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const fallbackWidth = canvas.parentElement ? canvas.parentElement.clientWidth : 640;
+    const width = Math.max(300, Math.round(rect.width || fallbackWidth || 640));
+    const height = Math.max(280, Math.round(rect.height || 420));
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.6);
+    if (!state.plane.scene3d) {
+      const targetWidth = Math.round(width * dpr);
+      const targetHeight = Math.round(height * dpr);
+      if (canvas.width !== targetWidth) canvas.width = targetWidth;
+      if (canvas.height !== targetHeight) canvas.height = targetHeight;
+    }
+    return { canvas, width, height, dpr };
+  }
+
+  function resizePlaneScene(force = false) {
+    const info = planeCanvasSize();
+    const plane = state.plane.scene3d;
+    if (!info || !plane) return info;
+    if (!force && plane.width === info.width && plane.height === info.height && plane.dpr === info.dpr) return info;
+    plane.width = info.width;
+    plane.height = info.height;
+    plane.dpr = info.dpr;
+    plane.renderer.setPixelRatio(info.dpr);
+    plane.renderer.setSize(info.width, info.height, false);
+    plane.camera.aspect = info.width / info.height;
+    plane.camera.updateProjectionMatrix();
+    return info;
+  }
+
   function resizeCanvases() {
-    ["experiment-plane-canvas", "experiment-liquid-canvas", "experiment-hummingbird-canvas"].forEach((id) => resizeCanvas($(id), true));
+    resizePlaneScene(true);
+    resizeCanvas($("experiment-liquid-canvas"), true);
   }
 
   function seedPlaneParticles() {
@@ -114,16 +153,17 @@
   }
 
   function seedLiquidParticles() {
-    const level = numberValue("experiment-liquid-level", 68) / 100;
-    const top = 1 - level;
     state.liquid.particles = Array.from({ length: LIQUID_PARTICLE_COUNT }, () => {
-      const x = randomRange(0.12, 0.88);
+      const x = randomRange(0.04, 0.96);
+      const y = randomRange(0.04, 0.96);
       return {
         x,
-        y: randomRange(top + 0.04, 0.95),
+        y,
         vx: randomRange(-0.002, 0.002),
-        vy: randomRange(-0.001, 0.002),
+        vy: randomRange(-0.002, 0.002),
         homeX: x,
+        homeY: y,
+        phase: Math.random() * TWO_PI,
         r: randomRange(1.4, 2.8),
       };
     });
@@ -131,16 +171,6 @@
     state.liquid.shake = 0;
     state.liquid.stir = 0;
     state.liquid.spilled = 0;
-  }
-
-  function seedHummingbirdParticles() {
-    state.hummingbird.particles = Array.from({ length: HUMMINGBIRD_PARTICLE_COUNT }, () => ({
-      x: randomRange(-0.38, 0.38),
-      y: randomRange(-0.15, 0.95),
-      phase: Math.random() * TWO_PI,
-      speed: randomRange(0.35, 1.15),
-      side: Math.random() < 0.5 ? -1 : 1,
-    }));
   }
 
   function drawArrow(ctx, fromX, fromY, toX, toY, color, label, options = {}) {
@@ -279,6 +309,355 @@
     setText("experiment-plane-lift", `${Math.round(metrics.lift)}`);
     setText("experiment-plane-drag", `${Math.round(metrics.drag)}`);
     setText("experiment-plane-stall", `${Math.round(metrics.stall)}%`);
+  }
+
+  function setPlaneOverlay(visible, title = "", detail = "") {
+    const overlay = $("experiment-plane-overlay");
+    if (!overlay) return;
+    overlay.hidden = !visible;
+    setText("experiment-plane-overlay-title", title);
+    setText("experiment-plane-overlay-detail", detail);
+  }
+
+  function planePresetAngles(view) {
+    if (view === "top") return { yaw: Math.PI / 2, pitch: 1.1 };
+    if (view === "front") return { yaw: 0.05, pitch: 0.18 };
+    if (view === "side") return { yaw: Math.PI / 2, pitch: 0.16 };
+    return { yaw: 0.82, pitch: 0.34 };
+  }
+
+  function applyPlaneViewPreset(view, force = false) {
+    const normalized = view || planeViewMode();
+    if (!force && state.plane.lastViewPreset === normalized) return;
+    const preset = planePresetAngles(normalized);
+    state.plane.view.yaw = preset.yaw;
+    state.plane.view.pitch = preset.pitch;
+    state.plane.lastViewPreset = normalized;
+  }
+
+  function orientThreeObject(THREE, object, direction) {
+    const from = new THREE.Vector3(0, 1, 0);
+    const to = direction.clone().normalize();
+    object.quaternion.setFromUnitVectors(from, to);
+  }
+
+  function createPlaneForceArrow(THREE, color) {
+    const group = new THREE.Group();
+    const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.88, depthWrite: false });
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1, 10), material);
+    const head = new THREE.Mesh(new THREE.ConeGeometry(0.105, 0.34, 14), material);
+    shaft.name = "shaft";
+    head.name = "head";
+    group.add(shaft, head);
+    return group;
+  }
+
+  function updatePlaneForceArrow(THREE, group, origin, direction, length) {
+    if (!group) return;
+    const shaft = group.getObjectByName("shaft");
+    const head = group.getObjectByName("head");
+    const safeLength = clamp(length, 0.2, 2.4);
+    group.visible = safeLength > 0.18;
+    group.position.copy(origin);
+    orientThreeObject(THREE, group, direction);
+    if (shaft) {
+      shaft.scale.set(1, safeLength, 1);
+      shaft.position.set(0, safeLength / 2, 0);
+    }
+    if (head) head.position.set(0, safeLength + 0.18, 0);
+  }
+
+  function createAirflowTriangles(THREE) {
+    const geometry = new THREE.ConeGeometry(0.085, 0.34, 3, 1, false);
+    const arrows = [];
+    const rows = [-1.0, -0.48, 0.08, 0.62, 1.12];
+    const lanes = [-2.55, -1.25, 0, 1.25, 2.55];
+    rows.forEach((baseY, rowIndex) => {
+      lanes.forEach((baseZ, laneIndex) => {
+        for (let step = 0; step < 4; step += 1) {
+          const material = new THREE.MeshBasicMaterial({
+            color: 0x76d2ff,
+            transparent: true,
+            opacity: 0.62,
+            depthWrite: false,
+          });
+          const mesh = new THREE.Mesh(geometry, material);
+          mesh.userData = {
+            baseX: step * 2.72 + rowIndex * 0.28 + laneIndex * 0.19,
+            baseY,
+            baseZ,
+            rowIndex,
+            laneIndex,
+            speed: randomRange(0.75, 1.28),
+            phase: randomRange(0, TWO_PI),
+          };
+          arrows.push(mesh);
+        }
+      });
+    });
+    return arrows;
+  }
+
+  function buildPlaneScene(THREE, canvas) {
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+      powerPreference: "high-performance",
+    });
+    renderer.setClearColor(0x000000, 0);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(44, 1, 0.1, 80);
+    const planeRoot = new THREE.Group();
+    scene.add(planeRoot);
+
+    scene.add(new THREE.HemisphereLight(0xd8f4ff, 0x253245, 1.9));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.35);
+    sun.position.set(4, 6, 3);
+    scene.add(sun);
+
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(12, 8),
+      new THREE.MeshBasicMaterial({ color: 0x123b44, transparent: true, opacity: 0.28, side: THREE.DoubleSide }),
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -1.45;
+    scene.add(ground);
+
+    const fuselageMaterial = new THREE.MeshStandardMaterial({ color: 0xe7eef8, metalness: 0.12, roughness: 0.42 });
+    const wingMaterial = new THREE.MeshStandardMaterial({ color: 0x98b7d9, metalness: 0.08, roughness: 0.48 });
+    const accentMaterial = new THREE.MeshStandardMaterial({ color: 0x4f9cff, metalness: 0.1, roughness: 0.42 });
+    const warningMaterial = new THREE.MeshStandardMaterial({ color: 0xff7b54, metalness: 0.04, roughness: 0.45 });
+    const glassMaterial = new THREE.MeshStandardMaterial({ color: 0x5fd7ff, transparent: true, opacity: 0.58, roughness: 0.1 });
+
+    const fuselage = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.31, 3.2, 22), fuselageMaterial);
+    fuselage.rotation.z = Math.PI / 2;
+    planeRoot.add(fuselage);
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.25, 0.62, 22), fuselageMaterial);
+    nose.rotation.z = -Math.PI / 2;
+    nose.position.x = 1.92;
+    planeRoot.add(nose);
+    const tailCone = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.5, 18), fuselageMaterial);
+    tailCone.rotation.z = Math.PI / 2;
+    tailCone.position.x = -1.84;
+    planeRoot.add(tailCone);
+    const cockpit = new THREE.Mesh(new THREE.SphereGeometry(0.27, 18, 10), glassMaterial);
+    cockpit.scale.set(1.25, 0.46, 0.64);
+    cockpit.position.set(0.72, 0.25, 0);
+    planeRoot.add(cockpit);
+
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.22, 0.075, 4.72), wingMaterial);
+    wing.position.set(-0.08, -0.02, 0);
+    planeRoot.add(wing);
+    const leftFlap = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.045, 1.72), accentMaterial);
+    leftFlap.position.set(-0.78, -0.06, -1.38);
+    const rightFlap = leftFlap.clone();
+    rightFlap.position.z = 1.38;
+    planeRoot.add(leftFlap, rightFlap);
+
+    const leftSpoiler = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.04, 1.1), warningMaterial);
+    leftSpoiler.position.set(-0.25, 0.055, -1.45);
+    const rightSpoiler = leftSpoiler.clone();
+    rightSpoiler.position.z = 1.45;
+    planeRoot.add(leftSpoiler, rightSpoiler);
+
+    const horizontalTail = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.055, 1.55), wingMaterial);
+    horizontalTail.position.set(-1.48, 0.05, 0);
+    planeRoot.add(horizontalTail);
+    const verticalTail = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.88, 0.07), wingMaterial);
+    verticalTail.position.set(-1.46, 0.42, 0);
+    verticalTail.rotation.z = -0.23;
+    planeRoot.add(verticalTail);
+
+    const airflowGroup = new THREE.Group();
+    const airflowArrows = createAirflowTriangles(THREE);
+    airflowArrows.forEach((arrow) => airflowGroup.add(arrow));
+    scene.add(airflowGroup);
+
+    const liftArrow = createPlaneForceArrow(THREE, 0x74f0b6);
+    const dragArrow = createPlaneForceArrow(THREE, 0xff9aa9);
+    scene.add(liftArrow, dragArrow);
+
+    const vortexGroup = new THREE.Group();
+    const vortexMaterial = new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.55, side: THREE.DoubleSide });
+    for (let i = 0; i < 8; i += 1) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.18 + i * 0.018, 0.012, 6, 24), vortexMaterial);
+      ring.userData = { side: i < 4 ? -1 : 1, step: i % 4 };
+      vortexGroup.add(ring);
+    }
+    scene.add(vortexGroup);
+
+    return {
+      THREE,
+      renderer,
+      scene,
+      camera,
+      planeRoot,
+      leftFlap,
+      rightFlap,
+      leftSpoiler,
+      rightSpoiler,
+      airflowArrows,
+      airflowGroup,
+      liftArrow,
+      dragArrow,
+      vortexGroup,
+      wingMaterial,
+      width: 0,
+      height: 0,
+      dpr: 0,
+    };
+  }
+
+  function updatePlaneCamera(plane) {
+    const { THREE, camera } = plane;
+    const view = state.plane.view;
+    const distance = view.distance;
+    const pitch = clamp(view.pitch, -0.18, 1.22);
+    const yaw = view.yaw;
+    camera.position.set(
+      Math.cos(pitch) * Math.cos(yaw) * distance,
+      Math.sin(pitch) * distance,
+      Math.cos(pitch) * Math.sin(yaw) * distance,
+    );
+    camera.lookAt(new THREE.Vector3(0, 0.05, 0));
+  }
+
+  function updateAirflowTriangles(plane, metrics, time) {
+    const { THREE } = plane;
+    const range = 10.9;
+    const shift = running ? (time * 0.00062 * Math.max(15, metrics.relativeWind)) : 0;
+    const vortices = checkedValue("experiment-plane-vortices");
+    plane.airflowArrows.forEach((arrow) => {
+      const data = arrow.userData;
+      const laneX = 5.1 - ((data.baseX + shift * data.speed) % range);
+      const wingInfluence = clamp(1 - Math.abs(laneX + 0.05) / 2.35, 0, 1) * clamp(1 - Math.abs(data.baseZ) / 2.85, 0, 1);
+      const tipInfluence = vortices ? clamp(1 - Math.abs(Math.abs(data.baseZ) - 2.38) / 0.78, 0, 1) * clamp(1 - Math.abs(laneX) / 2.7, 0, 1) : 0;
+      const stallNoise = metrics.stall > 44 ? (metrics.stall - 44) / 56 : 0;
+      const flutter = Math.sin(time * 0.006 + data.phase + data.rowIndex * 0.7) * (0.05 + stallNoise * 0.18 + (metrics.spoiler ? 0.08 : 0));
+      const downwash = -0.035 - wingInfluence * (metrics.effectiveAoa * 0.008 + metrics.flap * 0.004 + stallNoise * 0.15);
+      const side = data.baseZ >= 0 ? 1 : -1;
+      const swirl = tipInfluence * side * Math.sin(time * 0.01 + data.phase + laneX) * (0.12 + metrics.relativeWind / 430);
+      const direction = new THREE.Vector3(-1, downwash + flutter * wingInfluence, swirl).normalize();
+      const intensity = clamp((metrics.relativeWind / 92) * (0.68 + wingInfluence * 0.72 + tipInfluence * 0.42 + stallNoise * 0.32), 0.34, 2.15);
+      arrow.position.set(
+        laneX,
+        data.baseY + wingInfluence * downwash * 1.6 + flutter,
+        data.baseZ + tipInfluence * side * Math.sin(time * 0.011 + data.phase) * 0.26,
+      );
+      orientThreeObject(THREE, arrow, direction);
+      arrow.scale.setScalar(0.68 + intensity * 0.44);
+      arrow.material.opacity = clamp(0.34 + intensity * 0.27, 0.34, 0.92);
+      if (stallNoise > 0.35 && wingInfluence > 0.28) arrow.material.color.set(0xffb15f);
+      else if (tipInfluence > 0.35) arrow.material.color.set(0xfbd35f);
+      else arrow.material.color.set(0x76d2ff);
+    });
+  }
+
+  function updatePlaneModel(plane, metrics, time) {
+    const { THREE } = plane;
+    plane.planeRoot.rotation.z = metrics.aoa * Math.PI / 180 * 0.32;
+    const flapAngle = -metrics.flap * Math.PI / 180 * 0.86;
+    plane.leftFlap.rotation.z = flapAngle;
+    plane.rightFlap.rotation.z = flapAngle;
+    plane.leftSpoiler.visible = metrics.spoiler;
+    plane.rightSpoiler.visible = metrics.spoiler;
+    plane.leftSpoiler.rotation.z = metrics.spoiler ? Math.PI / 4 : 0;
+    plane.rightSpoiler.rotation.z = metrics.spoiler ? Math.PI / 4 : 0;
+    const stallTint = metrics.stall / 100;
+    plane.wingMaterial.color.set(stallTint > 0.62 ? 0xffaf6b : 0x98b7d9);
+    updateAirflowTriangles(plane, metrics, time);
+    updatePlaneForceArrow(THREE, plane.liftArrow, new THREE.Vector3(-0.12, 0.26, 0), new THREE.Vector3(0, 1, 0), metrics.lift / 88);
+    updatePlaneForceArrow(THREE, plane.dragArrow, new THREE.Vector3(-0.28, -0.26, 0), new THREE.Vector3(-1, -0.08, 0), metrics.drag / 118);
+    const showVortices = checkedValue("experiment-plane-vortices");
+    plane.vortexGroup.visible = showVortices;
+    plane.vortexGroup.children.forEach((ring) => {
+      const side = ring.userData.side;
+      const step = ring.userData.step;
+      ring.position.set(-1.35 - step * 0.34, -0.08 - step * 0.07, side * (2.36 + step * 0.06));
+      ring.rotation.set(Math.PI / 2 + time * 0.002 * side, time * 0.004 + step * 0.6, 0);
+      ring.scale.setScalar(1 + step * 0.14 + metrics.relativeWind / 360);
+    });
+    updatePlaneCamera(plane);
+  }
+
+  function renderPlaneScene(time, dt, metrics) {
+    const plane = state.plane.scene3d;
+    if (!plane) return false;
+    resizePlaneScene(false);
+    updatePlaneModel(plane, metrics, time + (dt || 0));
+    plane.renderer.render(plane.scene, plane.camera);
+    setPlaneOverlay(false);
+    return true;
+  }
+
+  function ensurePlaneScene() {
+    if (state.plane.scene3d) return Promise.resolve(state.plane.scene3d);
+    if (state.plane.sceneLoading) return state.plane.sceneLoading;
+    const canvas = $("experiment-plane-canvas");
+    if (!canvas) return Promise.resolve(null);
+    state.plane.sceneError = null;
+    setPlaneOverlay(true, "正在載入 3D 飛機模型", "載入完成後可用滑鼠拖曳或觸控滑動旋轉視角；三角形越大越亮，代表該處氣流越強。");
+    const loader = typeof ensureThreeJsLoaded === "function" ? ensureThreeJsLoaded() : Promise.resolve(window.THREE || null);
+    state.plane.sceneLoading = loader
+      .then((THREE) => {
+        if (!THREE) throw new Error("Three.js unavailable");
+        const scene3d = buildPlaneScene(THREE, canvas);
+        state.plane.scene3d = scene3d;
+        applyPlaneViewPreset(planeViewMode(), true);
+        resizePlaneScene(true);
+        renderPlaneScene(performance.now(), 16, planeMetrics());
+        return scene3d;
+      })
+      .catch((error) => {
+        state.plane.sceneError = error;
+        console.error("Experiment plane 3D scene failed to load", error);
+        setPlaneOverlay(true, "3D 飛機模型載入失敗", "目前瀏覽器無法建立 WebGL 場景，請確認瀏覽器或顯示卡設定。");
+        return null;
+      })
+      .finally(() => {
+        state.plane.sceneLoading = null;
+      });
+    return state.plane.sceneLoading;
+  }
+
+  function bindPlaneOrbitControls() {
+    const canvas = $("experiment-plane-canvas");
+    if (!canvas || state.plane.orbitBound) return;
+    state.plane.orbitBound = true;
+    const releaseDrag = () => {
+      state.plane.view.dragging = false;
+      state.plane.view.pointerId = null;
+      canvas.classList.remove("experiment-plane-dragging");
+    };
+    canvas.addEventListener("pointerdown", (event) => {
+      if (event.button !== undefined && event.button !== 0) return;
+      state.plane.view.dragging = true;
+      state.plane.view.pointerId = event.pointerId;
+      state.plane.view.lastX = event.clientX;
+      state.plane.view.lastY = event.clientY;
+      canvas.classList.add("experiment-plane-dragging");
+      try { canvas.setPointerCapture(event.pointerId); } catch (_) {}
+      if (state.plane.scene3d) renderPlaneScene(performance.now(), 16, planeMetrics());
+      else if (running) ensurePlaneScene();
+      else setPlaneOverlay(true, "按下開始載入 3D 飛機模型", "開始後可拖曳或滑動旋轉視角，氣流三角形會同步顯示方向與強度。");
+      event.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener("pointermove", (event) => {
+      const view = state.plane.view;
+      if (!view.dragging || view.pointerId !== event.pointerId) return;
+      const dx = event.clientX - view.lastX;
+      const dy = event.clientY - view.lastY;
+      view.lastX = event.clientX;
+      view.lastY = event.clientY;
+      view.yaw -= dx * 0.008;
+      view.pitch = clamp(view.pitch + dy * 0.006, -0.18, 1.22);
+      if (state.plane.scene3d) renderPlaneScene(performance.now(), 16, planeMetrics());
+      event.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener("pointerup", releaseDrag);
+    canvas.addEventListener("pointercancel", releaseDrag);
+    canvas.addEventListener("lostpointercapture", releaseDrag);
   }
 
   function drawPlaneSideView(ctx, width, height, time, dt, metrics, vortices) {
@@ -661,93 +1040,169 @@
   }
 
   function drawPlane(time, dt) {
-    const info = canvasInfo("experiment-plane-canvas");
-    if (!info) return;
-    const { ctx, width, height } = info;
     const metrics = planeMetrics();
-    const vortices = checkedValue("experiment-plane-vortices");
-    const view = planeViewMode();
-    drawPlaneBackdrop(ctx, width, height, planeViewLabel(view));
-    if (view === "top") drawPlaneTopView(ctx, width, height, time, dt, metrics, vortices);
-    else if (view === "front") drawPlaneFrontView(ctx, width, height, time, dt, metrics, vortices);
-    else if (view === "three-quarter") drawPlaneThreeQuarterView(ctx, width, height, time, dt, metrics, vortices);
-    else drawPlaneSideView(ctx, width, height, time, dt, metrics, vortices);
     updatePlaneKpis(metrics);
+    planeCanvasSize();
+    if (state.plane.lastViewPreset !== planeViewMode() && !state.plane.view.dragging) {
+      applyPlaneViewPreset(planeViewMode(), false);
+    }
+    if (state.plane.scene3d) {
+      renderPlaneScene(time, dt, metrics);
+      return;
+    }
+    if (state.plane.sceneLoading) {
+      setPlaneOverlay(true, "正在載入 3D 飛機模型", "載入後即可用滑鼠拖曳或觸控滑動控制視角。");
+      return;
+    }
+    if (state.plane.sceneError) {
+      setPlaneOverlay(true, "3D 飛機模型載入失敗", "目前瀏覽器無法建立 WebGL 場景，請確認瀏覽器或顯示卡設定。");
+      return;
+    }
+    if (running) {
+      ensurePlaneScene();
+      return;
+    }
+    setPlaneOverlay(true, "按下開始載入 3D 飛機模型", "飛機頁不會自動啟動 3D 模擬；開始後可拖曳或滑動視角，三角形代表氣流方向與強度。");
+  }
+
+  function liquidCupGeometry(width, height, tilt) {
+    const cupWidth = Math.min(width * 0.58, 390);
+    const cupHeight = Math.min(height * 0.74, 330);
+    const centerX = width * 0.5;
+    const centerY = height * 0.54;
+    const angle = tilt * Math.PI / 180 * 0.58;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const toScreen = (x, y) => ({
+      x: centerX + x * cos - y * sin,
+      y: centerY + x * sin + y * cos,
+    });
+    const points = [
+      toScreen(-cupWidth * 0.56, -cupHeight * 0.5),
+      toScreen(cupWidth * 0.56, -cupHeight * 0.5),
+      toScreen(cupWidth * 0.39, cupHeight * 0.5),
+      toScreen(-cupWidth * 0.39, cupHeight * 0.5),
+    ];
+    const ys = points.map((p) => p.y);
+    const xs = points.map((p) => p.x);
+    return {
+      centerX,
+      centerY,
+      cupWidth,
+      cupHeight,
+      angle,
+      points,
+      minX: Math.min(...xs),
+      maxX: Math.max(...xs),
+      minY: Math.min(...ys),
+      maxY: Math.max(...ys),
+    };
+  }
+
+  function buildPolygonPath(points) {
+    const path = new Path2D();
+    if (!points.length) return path;
+    path.moveTo(points[0].x, points[0].y);
+    points.slice(1).forEach((point) => path.lineTo(point.x, point.y));
+    path.closePath();
+    return path;
+  }
+
+  function polygonBoundsAtY(points, y) {
+    const hits = [];
+    for (let i = 0; i < points.length; i += 1) {
+      const a = points[i];
+      const b = points[(i + 1) % points.length];
+      if ((a.y <= y && b.y > y) || (b.y <= y && a.y > y)) {
+        const t = (y - a.y) / (b.y - a.y);
+        hits.push(a.x + (b.x - a.x) * t);
+      }
+    }
+    if (hits.length < 2) return null;
+    hits.sort((a, b) => a - b);
+    return { left: hits[0], right: hits[hits.length - 1] };
+  }
+
+  function liquidSurfaceY(geometry, level) {
+    const innerTop = geometry.minY + 10;
+    const innerBottom = geometry.maxY - 14;
+    return innerBottom - clamp(level, 0.05, 0.96) * (innerBottom - innerTop);
+  }
+
+  function liquidParticleScreenPosition(p, geometry, surfaceY, time) {
+    const ySpan = Math.max(24, geometry.maxY - surfaceY - 12);
+    const wave = Math.sin(time * 0.006 + (p.phase || 0)) * (state.liquid.shake * 4 + state.liquid.stir * 2.5) * (1 - p.y * 0.55);
+    const y = clamp(surfaceY + p.y * ySpan + wave, surfaceY + 6, geometry.maxY - 15);
+    const bounds = polygonBoundsAtY(geometry.points, y);
+    if (!bounds) return null;
+    const pad = 12;
+    const width = Math.max(4, bounds.right - bounds.left - pad * 2);
+    const x = bounds.left + pad + clamp(p.x, 0, 1) * width;
+    return { x, y };
   }
 
   function updateLiquid(time, dt) {
     const tilt = numberValue("experiment-liquid-tilt", 0);
     const viscosity = numberValue("experiment-liquid-viscosity", 0.45);
-    const level = numberValue("experiment-liquid-level", 68) / 100;
-    const top = 1 - level;
     const step = Math.min(dt || 16, 40) / 16.67;
     const tiltBias = Math.sin(tilt * Math.PI / 180);
-    const tiltForce = tiltBias * 0.00024;
-    const sloshShift = tiltBias * 0.18;
-    state.liquid.shake = Math.max(0, state.liquid.shake - 0.03 * step);
-    state.liquid.stir = Math.max(0, state.liquid.stir - 0.008 * step);
-    const stirCenterY = top + level * 0.52;
-    const stirStrength = state.liquid.stir * clamp(1.16 - viscosity * 0.45, 0.48, 1.12);
-    const fluidTop = top + 0.02;
-    const fluidBottom = 0.96;
-    const fluidHeight = Math.max(0.12, fluidBottom - fluidTop);
-    const thermalScale = clamp(0.0019 - viscosity * 0.0009 + state.liquid.shake * 0.001 + state.liquid.stir * 0.0012, 0.00045, 0.0032);
-    const spreadStrength = clamp(0.00105 - viscosity * 0.00045 + state.liquid.shake * 0.00018 + state.liquid.stir * 0.00025, 0.00042, 0.0012);
+    const damping = clamp(0.992 - viscosity * 0.05, 0.88, 0.985);
+    const thermalScale = clamp(0.0026 - viscosity * 0.0012 + state.liquid.shake * 0.0012 + state.liquid.stir * 0.0011, 0.00055, 0.004);
+    const homePull = clamp(0.0012 - viscosity * 0.00045, 0.00045, 0.00125);
+    const stirStrength = state.liquid.stir * clamp(1.18 - viscosity * 0.42, 0.55, 1.15);
     let energy = 0;
 
+    state.liquid.shake = Math.max(0, state.liquid.shake - 0.026 * step);
+    state.liquid.stir = Math.max(0, state.liquid.stir - 0.009 * step);
+
     state.liquid.particles.forEach((p, index) => {
-      const shakeForce = state.liquid.shake * Math.sin(index * 1.7 + time * 0.025) * 0.004;
+      if (!Number.isFinite(p.homeX)) p.homeX = clamp(p.x, 0.04, 0.96);
+      if (!Number.isFinite(p.homeY)) p.homeY = clamp(p.y, 0.04, 0.96);
+      if (!Number.isFinite(p.phase)) p.phase = index * 2.399;
       const dx = p.x - 0.5;
-      const dy = p.y - stirCenterY;
+      const dy = p.y - 0.52;
       const distance = Math.sqrt(dx * dx + dy * dy);
-      const swirl = clamp(1 - distance / 0.42, 0, 1) * stirStrength;
-      const phase = time * 0.003 + index * 12.989;
-      const verticalMix = (0.5 - (p.y - fluidTop) / fluidHeight) * 0.00028;
-      if (!Number.isFinite(p.homeX)) p.homeX = clamp(p.x, 0.12, 0.88);
-      const targetX = clamp(p.homeX + sloshShift + Math.sin(index * 2.17) * Math.abs(tiltBias) * 0.035, 0.09, 0.91);
-      const wallPressure = p.x < 0.13
-        ? (0.13 - p.x) * 0.0045
-        : p.x > 0.87
-          ? (0.87 - p.x) * 0.0045
-          : 0;
-      // Keep the educational slosh effect, but add a pressure-like return so tilt cannot collapse every particle onto one cup wall.
-      p.vx += (tiltForce + (targetX - p.x) * spreadStrength + wallPressure + shakeForce) * step;
-      p.vx += (-dy * swirl * 0.010 - dx * swirl * 0.0012) * step;
-      p.vy += (dx * swirl * 0.006 - dy * swirl * 0.0008) * step;
+      const swirl = clamp(1 - distance / 0.48, 0, 1) * stirStrength;
+      const phase = time * 0.0026 + p.phase;
+      const lowSideShift = tiltBias * 0.11 * (1 - p.y);
+      const targetX = clamp(p.homeX + lowSideShift + Math.sin(time * 0.002 + p.phase) * state.liquid.shake * 0.045, 0.03, 0.97);
+      const targetY = clamp(p.homeY + Math.cos(time * 0.0017 + p.phase) * state.liquid.shake * 0.035, 0.03, 0.97);
+      p.vx += (targetX - p.x) * homePull * step;
+      p.vy += (targetY - p.y) * homePull * 0.82 * step;
+      p.vx += tiltBias * (0.00022 + state.liquid.shake * 0.00038) * (1 - viscosity * 0.28) * step;
+      p.vx += (-dy * swirl * 0.009 - dx * swirl * 0.0015) * step;
+      p.vy += (dx * swirl * 0.006 - dy * swirl * 0.0018) * step;
       p.vx += Math.sin(phase) * thermalScale * step;
-      p.vy += (Math.cos(phase * 1.37) * thermalScale * 0.75 + verticalMix) * step;
-      const damping = clamp(0.995 - viscosity * 0.045, 0.88, 0.99);
+      p.vy += Math.cos(phase * 1.31) * thermalScale * 0.8 * step;
       p.vx *= damping;
       p.vy *= damping;
       p.x += p.vx * step;
       p.y += p.vy * step;
-      if (p.x < 0.06) {
-        p.x = 0.06;
-        p.vx = Math.abs(p.vx) * 0.48;
+      if (p.x < 0.018) {
+        p.x = 0.018;
+        p.vx = Math.abs(p.vx) * 0.52;
+      } else if (p.x > 0.982) {
+        p.x = 0.982;
+        p.vx = -Math.abs(p.vx) * 0.52;
       }
-      if (p.x > 0.94) {
-        p.x = 0.94;
-        p.vx = -Math.abs(p.vx) * 0.48;
-      }
-      if (p.y < fluidTop) {
-        p.y = fluidTop;
-        p.vy = Math.abs(p.vy) * 0.32;
-      }
-      if (p.y > fluidBottom) {
-        p.y = fluidBottom;
-        p.vy = -Math.abs(p.vy) * 0.42;
+      if (p.y < 0.018) {
+        p.y = 0.018;
+        p.vy = Math.abs(p.vy) * 0.48;
+      } else if (p.y > 0.982) {
+        p.y = 0.982;
+        p.vy = -Math.abs(p.vy) * 0.48;
       }
       energy += p.vx * p.vx + p.vy * p.vy;
     });
 
-    if (Math.abs(tilt) > 42 && state.liquid.particles.length > 60) {
+    if (running && Math.abs(tilt) > 49 && state.liquid.particles.length > 72) {
       const spillSide = tilt > 0 ? 1 : -1;
       let removed = 0;
       state.liquid.particles = state.liquid.particles.filter((p) => {
-        if (removed >= 2) return true;
-        const nearLowerRim = spillSide > 0 ? p.x > 0.86 : p.x < 0.14;
-        const nearSurface = p.y < top + 0.26;
-        if (nearLowerRim && nearSurface && Math.random() < 0.45) {
+        if (removed >= 3) return true;
+        const nearLowerRim = spillSide > 0 ? p.x > 0.78 : p.x < 0.22;
+        const nearSurface = p.y < 0.26;
+        if (nearLowerRim && nearSurface && Math.random() < 0.38) {
           removed += 1;
           return false;
         }
@@ -756,23 +1211,23 @@
       state.liquid.spilled += removed;
       if (removed > 0) {
         state.liquid.objects.forEach((obj) => {
-          obj.vx += spillSide * 0.006 * removed;
+          obj.vx += spillSide * 0.0045 * removed;
         });
       }
     }
 
     state.liquid.objects.forEach((obj) => {
       const dx = obj.x - 0.5;
-      const dy = obj.y - stirCenterY;
-      const swirl = clamp(1 - Math.sqrt(dx * dx + dy * dy) / 0.46, 0, 1) * stirStrength;
-      obj.vy += 0.0015 * step;
-      obj.vx += tiltForce * 0.7 * step;
-      obj.vx += -dy * swirl * 0.006 * step;
-      obj.vy += dx * swirl * 0.0035 * step;
+      const dy = obj.y - 0.54;
+      const swirl = clamp(1 - Math.sqrt(dx * dx + dy * dy) / 0.48, 0, 1) * stirStrength;
+      obj.vy += 0.0019 * step;
+      obj.vx += tiltBias * 0.0008 * step;
+      obj.vx += -dy * swirl * 0.0065 * step;
+      obj.vy += dx * swirl * 0.0038 * step;
       obj.vx *= 0.985;
-      obj.vy *= 0.985;
-      obj.x = clamp(obj.x + obj.vx * step, 0.1, 0.9);
-      obj.y = clamp(obj.y + obj.vy * step, top + 0.04, 0.93);
+      obj.vy *= 0.982;
+      obj.x = clamp(obj.x + obj.vx * step, 0.06, 0.94);
+      obj.y = clamp(obj.y + obj.vy * step, 0.08, 0.94);
     });
 
     const kinetic = Math.sqrt(energy / Math.max(1, state.liquid.particles.length)) * 1000;
@@ -785,10 +1240,16 @@
     updateLiquid(time, dt);
     const info = canvasInfo("experiment-liquid-canvas");
     if (!info) return;
-    const { ctx, width, height, dpr } = info;
+    const { ctx, width, height } = info;
     const tilt = numberValue("experiment-liquid-tilt", 0);
     const level = numberValue("experiment-liquid-level", 68) / 100;
-    const top = 1 - level;
+    const geometry = liquidCupGeometry(width, height, tilt);
+    const cupPath = buildPolygonPath(geometry.points);
+    const surfaceY = liquidSurfaceY(geometry, level);
+    const waterMinX = geometry.minX - 24;
+    const waterMaxX = geometry.maxX + 24;
+    const waveAmplitude = 3 + state.liquid.shake * 8 + state.liquid.stir * 5;
+
     ctx.clearRect(0, 0, width, height);
     const bg = ctx.createLinearGradient(0, 0, 0, height);
     bg.addColorStop(0, "#0d2334");
@@ -799,74 +1260,65 @@
     ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
     ctx.fillRect(0, height * 0.78, width, height * 0.22);
 
-    const cupWidth = Math.min(width * 0.54, 360);
-    const cupHeight = Math.min(height * 0.72, 320);
-    const centerX = width * 0.5;
-    const centerY = height * 0.52;
-    const cupX = -cupWidth / 2;
-    const cupY = -cupHeight / 2;
-    ctx.save();
-    ctx.translate(centerX, centerY);
-    ctx.rotate(tilt * Math.PI / 180 * 0.55);
-
-    const cupPath = new Path2D();
-    cupPath.moveTo(cupX - 20, cupY);
-    cupPath.lineTo(cupX + cupWidth + 20, cupY);
-    cupPath.lineTo(cupX + cupWidth - 18, cupY + cupHeight);
-    cupPath.lineTo(cupX + 18, cupY + cupHeight);
-    cupPath.closePath();
-
     ctx.save();
     ctx.clip(cupPath);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const waterTopY = centerY + (top - 0.5) * cupHeight;
-    const waterBottomY = centerY + cupHeight * 0.6;
-    const waterGradient = ctx.createLinearGradient(0, waterTopY, 0, waterBottomY);
-    waterGradient.addColorStop(0, "rgba(92, 225, 255, 0.28)");
+    const waterGradient = ctx.createLinearGradient(0, surfaceY, 0, geometry.maxY);
+    waterGradient.addColorStop(0, "rgba(92, 225, 255, 0.32)");
     waterGradient.addColorStop(1, "rgba(38, 140, 255, 0.2)");
     ctx.fillStyle = waterGradient;
-    ctx.fillRect(centerX - cupWidth * 0.72, waterTopY, cupWidth * 1.44, cupHeight * 1.1);
-    ctx.strokeStyle = "rgba(180, 245, 255, 0.92)";
+    ctx.beginPath();
+    for (let i = 0; i <= 44; i += 1) {
+      const x = waterMinX + (waterMaxX - waterMinX) * (i / 44);
+      const y = surfaceY + Math.sin(time * 0.008 + i * 0.62) * waveAmplitude;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.lineTo(waterMaxX, geometry.maxY + 28);
+    ctx.lineTo(waterMinX, geometry.maxY + 28);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "rgba(180, 245, 255, 0.9)";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    const waveLeft = centerX - cupWidth * 0.66;
-    const waveRight = centerX + cupWidth * 0.66;
-    for (let i = 0; i <= 34; i += 1) {
-      const x = waveLeft + (waveRight - waveLeft) * (i / 34);
-      const y = waterTopY + Math.sin(time * 0.009 + i * 0.65) * (3 + state.liquid.shake * 7 + state.liquid.stir * 5);
+    for (let i = 0; i <= 44; i += 1) {
+      const x = waterMinX + (waterMaxX - waterMinX) * (i / 44);
+      const y = surfaceY + Math.sin(time * 0.008 + i * 0.62) * waveAmplitude;
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
+
     state.liquid.particles.forEach((p) => {
-      const px = centerX + (p.x - 0.5) * cupWidth;
-      const py = centerY + (p.y - 0.5) * cupHeight;
+      const pos = liquidParticleScreenPosition(p, geometry, surfaceY, time);
+      if (!pos) return;
       ctx.strokeStyle = "rgba(183, 245, 255, 0.22)";
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(px - p.vx * 2400, py - p.vy * 2400);
-      ctx.lineTo(px, py);
+      ctx.moveTo(pos.x - p.vx * 2300, pos.y - p.vy * 2300);
+      ctx.lineTo(pos.x, pos.y);
       ctx.stroke();
-      ctx.fillStyle = "rgba(120, 225, 255, 0.82)";
+      ctx.fillStyle = "rgba(120, 225, 255, 0.84)";
       ctx.beginPath();
-      ctx.arc(px, py, p.r + 0.4, 0, TWO_PI);
+      ctx.arc(pos.x, pos.y, p.r + 0.4, 0, TWO_PI);
       ctx.fill();
     });
+
     state.liquid.objects.forEach((obj) => {
-      const px = centerX + (obj.x - 0.5) * cupWidth;
-      const py = centerY + (obj.y - 0.5) * cupHeight;
-      ctx.fillStyle = "rgba(255, 214, 102, 0.88)";
-      roundedRect(ctx, px - obj.size / 2, py - obj.size / 2, obj.size, obj.size, 4);
+      const pos = liquidParticleScreenPosition(obj, geometry, surfaceY, time);
+      if (!pos) return;
+      ctx.fillStyle = "rgba(255, 214, 102, 0.9)";
+      roundedRect(ctx, pos.x - obj.size / 2, pos.y - obj.size / 2, obj.size, obj.size, 4);
       ctx.fill();
       ctx.strokeStyle = "rgba(255, 255, 255, 0.45)";
       ctx.stroke();
     });
+
     if (state.liquid.stir > 0.02) {
       const stirVisual = state.liquid.stir;
-      const rodX = centerX + Math.sin(time * 0.008) * cupWidth * 0.08;
-      const rodTopY = waterTopY - cupHeight * 0.32;
-      const rodBottomY = waterTopY + cupHeight * 0.46;
-      const rodTilt = Math.sin(time * 0.006) * cupWidth * 0.08;
+      const rodX = geometry.centerX + Math.sin(time * 0.008) * geometry.cupWidth * 0.08;
+      const rodTopY = surfaceY - geometry.cupHeight * 0.32;
+      const rodBottomY = surfaceY + geometry.cupHeight * 0.48;
+      const rodTilt = Math.sin(time * 0.006) * geometry.cupWidth * 0.08;
       ctx.save();
       ctx.strokeStyle = "rgba(219, 242, 255, 0.58)";
       ctx.lineWidth = 9;
@@ -875,7 +1327,7 @@
       ctx.moveTo(rodX - rodTilt, rodTopY);
       ctx.lineTo(rodX + rodTilt, rodBottomY);
       ctx.stroke();
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.82)";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.84)";
       ctx.lineWidth = 2.5;
       ctx.beginPath();
       ctx.moveTo(rodX - rodTilt - 2, rodTopY + 8);
@@ -886,7 +1338,7 @@
       for (let i = 0; i < 4; i += 1) {
         const radius = 24 + i * 18 + Math.sin(time * 0.01 + i) * 3;
         ctx.beginPath();
-        ctx.ellipse(rodX, waterTopY + cupHeight * 0.24, radius, radius * 0.32, Math.sin(time * 0.006) * 0.25, time * 0.006 + i, time * 0.006 + i + Math.PI * 1.35);
+        ctx.ellipse(rodX, surfaceY + geometry.cupHeight * 0.24, radius, radius * 0.32, Math.sin(time * 0.006) * 0.25, time * 0.006 + i, time * 0.006 + i + Math.PI * 1.35);
         ctx.stroke();
       }
       ctx.restore();
@@ -899,23 +1351,22 @@
     ctx.strokeStyle = "rgba(255, 255, 255, 0.28)";
     ctx.lineWidth = 1;
     for (let i = 1; i <= 5; i += 1) {
-      const y = cupY + cupHeight * (i / 6);
+      const y = geometry.minY + (geometry.maxY - geometry.minY) * (i / 6);
+      const bounds = polygonBoundsAtY(geometry.points, y);
+      if (!bounds) continue;
       ctx.beginPath();
-      ctx.moveTo(cupX + 18, y);
-      ctx.lineTo(cupX + 38, y);
+      ctx.moveTo(bounds.left + 12, y);
+      ctx.lineTo(bounds.left + 34, y);
       ctx.stroke();
     }
-    ctx.fillStyle = "rgba(255, 255, 255, 0.78)";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText("杯壁", cupX - 4, cupY + cupHeight + 20);
-    ctx.restore();
 
-    drawLabel(ctx, "水平液面", centerX - cupWidth * 0.32, centerY + (top - 0.5) * cupHeight - 12, "#bae6fd");
+    drawLabel(ctx, "水平液面", geometry.centerX - geometry.cupWidth * 0.33, surfaceY - 12, "#bae6fd");
+    drawLabel(ctx, "杯壁會傾斜，液面仍接近水平", geometry.minX + 14, geometry.maxY + 18, "#e0f2fe");
     drawArrow(ctx, width - 64, 54, width - 64, 128, "#fbbf24", "重力", { labelX: width - 116, labelY: 92, width: 2 });
     if (Math.abs(tilt) > 35 || state.liquid.spilled > 0) {
       const side = tilt >= 0 ? 1 : -1;
-      const spillX = centerX + side * cupWidth * 0.42;
-      const spillY = centerY - cupHeight * 0.28;
+      const spillX = side > 0 ? geometry.maxX - 22 : geometry.minX + 22;
+      const spillY = geometry.minY + geometry.cupHeight * 0.26;
       ctx.save();
       ctx.strokeStyle = "rgba(96, 205, 255, 0.8)";
       ctx.lineWidth = 3;
@@ -927,12 +1378,12 @@
         ctx.stroke();
       }
       ctx.restore();
-      drawLabel(ctx, "傾角過大：液體倒出", spillX + side * 18, spillY + 8, "#93c5fd");
+      drawLabel(ctx, "傾角過大：運行時會逐步倒出", spillX + side * 18, spillY + 8, "#93c5fd");
     }
     drawLegend(ctx, [
-      { color: "#78e1ff", label: "藍點：懸浮液體分子" },
-      { color: "#ffd666", label: "黃色：丟入物品" },
-      { color: "#dbeafe", label: "半透明：玻璃棒" },
+      { color: "#78e1ff", label: "藍點：中性浮力懸浮分子" },
+      { color: "#ffd666", label: "黃色：丟入物品會下沉" },
+      { color: "#dbeafe", label: "半透明：玻璃棒攪拌" },
       { color: "#fbbf24", label: "箭頭：重力方向" },
     ], 14, 16);
     ctx.fillStyle = "rgba(255, 255, 255, 0.68)";
@@ -941,213 +1392,9 @@
     ctx.fillText(`杯子傾角 ${tilt.toFixed(0)}° · 可見粒子 ${state.liquid.particles.length} · 已倒出 ${state.liquid.spilled}${stirLabel}`, 16, height - 18);
   }
 
-  function hummingbirdMetrics(time) {
-    const frequency = numberValue("experiment-hummingbird-frequency", 52);
-    const amplitude = numberValue("experiment-hummingbird-amplitude", 58);
-    const stability = numberValue("experiment-hummingbird-stability", 72);
-    const visualHz = 1.2 + (frequency - 18) / (80 - 18) * 2.4;
-    const phase = (time / 1000 * visualHz) % 1;
-    const trueCycleMs = 1000 / Math.max(1, frequency);
-    const downwash = clamp(frequency * amplitude / (80 * 85) * 120, 0, 120);
-    const wobble = Math.abs(Math.sin(phase * TWO_PI)) * (100 - stability) * 0.18;
-    const balance = clamp(100 - (100 - stability) * 0.45 - wobble, 0, 100);
-    return { frequency, amplitude, stability, phase, visualHz, trueCycleMs, downwash, balance };
-  }
-
-  function drawHummingbird(time, dt) {
-    const info = canvasInfo("experiment-hummingbird-canvas");
-    if (!info) return;
-    const { ctx, width, height } = info;
-    const metrics = hummingbirdMetrics(time);
-    const showBrain = checkedValue("experiment-hummingbird-brain");
-    const step = Math.min(dt || 16, 40) / 16.67;
-    ctx.clearRect(0, 0, width, height);
-
-    const bg = ctx.createLinearGradient(0, 0, 0, height);
-    bg.addColorStop(0, "#10263b");
-    bg.addColorStop(1, "#081113");
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
-    for (let i = 0; i < 18; i += 1) {
-      ctx.beginPath();
-      ctx.arc((i * 97) % width, 28 + ((i * 43) % Math.max(80, height * 0.42)), 1.2, 0, TWO_PI);
-      ctx.fill();
-    }
-
-    const centerX = width * 0.47;
-    const centerY = height * 0.42 + Math.sin(time * 0.003) * (100 - metrics.stability) * 0.035;
-    state.hummingbird.particles.forEach((p) => {
-      p.y += (0.003 + metrics.downwash * 0.00012) * p.speed * step;
-      p.x += Math.sin(time * 0.006 + p.phase) * 0.0009 * p.side * step;
-      if (p.y > 1.05) {
-        p.y = randomRange(-0.2, 0.1);
-        p.x = randomRange(-0.36, 0.36);
-      }
-      const swirl = Math.sin(time * 0.018 + p.phase + p.y * 8) * 22 * (1 - Math.min(1, Math.abs(p.x)));
-      const px = centerX + p.x * width * 0.5 + swirl * 0.15;
-      const py = centerY + p.y * height * 0.62;
-      ctx.strokeStyle = `rgba(108, 231, 183, ${0.18 + metrics.downwash / 420})`;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(px, py - 20);
-      ctx.lineTo(px + swirl * 0.08, py + 14 + metrics.downwash * 0.12);
-      ctx.stroke();
-    });
-    for (let i = 0; i < 4; i += 1) {
-      const x = centerX - 74 + i * 48;
-      drawArrow(ctx, x, centerY + 54, x + Math.sin(time * 0.006 + i) * 8, centerY + 122 + metrics.downwash * 0.18, "rgba(108, 231, 183, 0.82)", "", { width: 2 });
-    }
-    drawLabel(ctx, "下洗氣流：翅膀把空氣往下推", centerX - 122, centerY + 150, "#a7f3d0");
-
-    ctx.save();
-    ctx.translate(width * 0.75, height * 0.42);
-    ctx.strokeStyle = "rgba(76, 175, 96, 0.78)";
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.moveTo(0, 30);
-    ctx.lineTo(0, height * 0.26);
-    ctx.stroke();
-    ctx.fillStyle = "rgba(72, 187, 120, 0.72)";
-    ctx.beginPath();
-    ctx.ellipse(-16, 78, 24, 9, -0.6, 0, TWO_PI);
-    ctx.fill();
-    ctx.fillStyle = "rgba(255, 98, 146, 0.9)";
-    for (let i = 0; i < 6; i += 1) {
-      ctx.save();
-      ctx.rotate(i * TWO_PI / 6);
-      ctx.beginPath();
-      ctx.ellipse(0, -22, 10, 22, 0, 0, TWO_PI);
-      ctx.fill();
-      ctx.restore();
-    }
-    ctx.fillStyle = "#ffd166";
-    ctx.beginPath();
-    ctx.arc(0, 0, 10, 0, TWO_PI);
-    ctx.fill();
-    ctx.restore();
-    drawLabel(ctx, "花朵目標", width * 0.75 - 28, height * 0.42 - 46, "#fecdd3");
-    ctx.save();
-    ctx.strokeStyle = "rgba(253, 186, 116, 0.75)";
-    ctx.setLineDash([5, 6]);
-    ctx.beginPath();
-    ctx.moveTo(centerX + 54, centerY - 38);
-    ctx.lineTo(width * 0.75 - 18, height * 0.42 - 8);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
-
-    const wingSwing = Math.sin(metrics.phase * TWO_PI) * metrics.amplitude;
-    const asymmetry = (100 - metrics.stability) * 0.18 * Math.sin(time * 0.004);
-    ctx.save();
-    ctx.translate(centerX, centerY);
-    ctx.shadowColor = "rgba(0, 0, 0, 0.28)";
-    ctx.shadowBlur = 12;
-    ctx.fillStyle = "rgba(67, 160, 118, 0.96)";
-    ctx.beginPath();
-    ctx.ellipse(0, 2, 20, 36, -0.2, 0, TWO_PI);
-    ctx.fill();
-    ctx.fillStyle = "rgba(236, 253, 245, 0.9)";
-    ctx.beginPath();
-    ctx.ellipse(8, 8, 8, 22, -0.12, 0, TWO_PI);
-    ctx.fill();
-    ctx.fillStyle = "rgba(16, 185, 129, 0.95)";
-    ctx.beginPath();
-    ctx.arc(4, -30, 14, 0, TWO_PI);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
-    ctx.beginPath();
-    ctx.arc(10, -34, 3.4, 0, TWO_PI);
-    ctx.fill();
-    ctx.fillStyle = "rgba(10, 20, 26, 0.95)";
-    ctx.beginPath();
-    ctx.arc(11, -34, 1.7, 0, TWO_PI);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.92)";
-    ctx.lineWidth = 5;
-    drawWing(ctx, -8, -10, -1, wingSwing - asymmetry, metrics.amplitude);
-    drawWing(ctx, 8, -10, 1, -wingSwing - asymmetry, metrics.amplitude);
-    ctx.strokeStyle = "rgba(255, 214, 102, 0.94)";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(14, -30);
-    ctx.lineTo(62, -38);
-    ctx.stroke();
-    ctx.fillStyle = "rgba(34, 197, 94, 0.82)";
-    ctx.beginPath();
-    ctx.moveTo(-10, 35);
-    ctx.lineTo(-38, 54);
-    ctx.lineTo(-20, 24);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-    drawLabel(ctx, "蜂鳥本體", centerX - 38, centerY - 58, "#bbf7d0");
-    if (metrics.stability < 55) {
-      drawArrow(ctx, 22, centerY - 18, 112, centerY - 18 + Math.sin(time * 0.01) * 10, "#facc15", "側風 / 漂移修正", { width: 2 });
-    }
-
-    if (showBrain) {
-      const panelW = Math.min(342, width - 28);
-      ctx.fillStyle = "rgba(7, 17, 22, 0.76)";
-      roundedRect(ctx, 14, 14, panelW, 124, 12);
-      ctx.fill();
-      ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
-      ctx.font = "12px system-ui, sans-serif";
-      ctx.fillText("即時估計", 28, 38);
-      [
-        "姿態誤差 / 視覺與前庭回授",
-        "花朵位置、距離與風造成的漂移",
-        "兩翼相位、振幅與左右不對稱修正",
-        "升力、側風、肌肉延遲與疲勞取捨",
-      ].forEach((line, index) => ctx.fillText(line, 28, 62 + index * 20));
-    }
-    drawLegend(ctx, [
-      { color: "#10b981", label: "綠色：蜂鳥身體" },
-      { color: "#a7f3d0", label: "綠線：下洗氣流" },
-      { color: "#fecdd3", label: "粉色：花朵目標" },
-    ], 14, Math.max(150, height - 106));
-    ctx.fillStyle = "rgba(255, 255, 255, 0.68)";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText(`慢動作顯示 ${metrics.visualHz.toFixed(1)} Hz · 真實翼拍 ${metrics.frequency.toFixed(0)} Hz`, 16, height - 18);
-
-    setText("experiment-hummingbird-downwash", `${Math.round(metrics.downwash)}`);
-    setText("experiment-hummingbird-balance", `${Math.round(metrics.balance)}%`);
-    setText("experiment-hummingbird-cycle", `${metrics.trueCycleMs.toFixed(1)} ms`);
-  }
-
-  function drawWing(ctx, rootX, rootY, side, swingDeg, amplitude) {
-    const length = 70 + amplitude * 0.55;
-    const angle = (-35 * side + swingDeg * 0.7) * Math.PI / 180;
-    const tipX = rootX + Math.cos(angle) * length * side;
-    const tipY = rootY + Math.sin(angle) * length;
-    ctx.save();
-    ctx.fillStyle = "rgba(167, 243, 208, 0.2)";
-    ctx.beginPath();
-    ctx.moveTo(rootX, rootY);
-    ctx.quadraticCurveTo(rootX + side * length * 0.38, rootY - 42, tipX, tipY);
-    ctx.quadraticCurveTo(rootX + side * length * 0.28, rootY + 10, rootX, rootY + 8);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-    ctx.beginPath();
-    ctx.moveTo(rootX, rootY);
-    ctx.quadraticCurveTo(rootX + side * length * 0.45, rootY - 24, tipX, tipY);
-    ctx.stroke();
-    ctx.strokeStyle = "rgba(108, 231, 183, 0.32)";
-    ctx.lineWidth = 14;
-    ctx.beginPath();
-    ctx.moveTo(rootX, rootY);
-    ctx.quadraticCurveTo(rootX + side * length * 0.45, rootY - 18, tipX, tipY);
-    ctx.stroke();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.92)";
-    ctx.lineWidth = 5;
-  }
-
   function drawActiveStage(time, dt) {
     if (activeStage === "plane") drawPlane(time, dt);
     else if (activeStage === "liquid") drawLiquid(time, dt);
-    else if (activeStage === "hummingbird") drawHummingbird(time, dt);
   }
 
   function isExperimentAreaActive() {
@@ -1224,6 +1471,7 @@
       syncControlValue(input);
       const redraw = () => {
         syncControlValue(input);
+        if (input.id === "experiment-plane-view") applyPlaneViewPreset(input.value, true);
         drawActiveStage(performance.now(), 16);
       };
       input.addEventListener("input", redraw);
@@ -1241,6 +1489,7 @@
         setSimulationRunning(!running, { drawPreview: true });
       });
     }
+    bindPlaneOrbitControls();
     const shakeButton = $("experiment-liquid-shake");
     if (shakeButton) {
       shakeButton.addEventListener("click", () => {
@@ -1308,7 +1557,6 @@
     if (!root) return;
     if (!state.plane.particles.length) seedPlaneParticles();
     if (!state.liquid.particles.length) seedLiquidParticles();
-    if (!state.hummingbird.particles.length) seedHummingbirdParticles();
     if (!initialized) {
       initialized = true;
       bindControls();

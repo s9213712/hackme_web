@@ -114,6 +114,68 @@
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 74%, #102235 26%), color-mix(in srgb, var(--surface) 86%, #071015 14%));
 }
 
+.experiment-viewport-wrap {
+  position: relative;
+  overflow: hidden;
+  border-radius: 10px;
+}
+
+.experiment-viewport-wrap .experiment-canvas {
+  cursor: grab;
+  touch-action: none;
+}
+
+.experiment-viewport-wrap .experiment-plane-dragging {
+  cursor: grabbing;
+}
+
+.experiment-plane-hud,
+.experiment-plane-overlay {
+  position: absolute;
+  left: 0.75rem;
+  right: 0.75rem;
+  z-index: 2;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(5, 13, 20, 0.68);
+  color: rgba(255, 255, 255, 0.88);
+  pointer-events: none;
+}
+
+.experiment-plane-hud {
+  bottom: 0.75rem;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.experiment-plane-overlay {
+  top: 50%;
+  display: grid;
+  gap: 0.35rem;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 0.85rem;
+  text-align: center;
+  transform: translateY(-50%);
+}
+
+.experiment-plane-overlay[hidden] {
+  display: none;
+}
+
+.experiment-plane-overlay strong {
+  display: block;
+  color: #ffffff;
+  font-size: 1rem;
+}
+
+.experiment-plane-overlay span {
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
 .experiment-control {
   display: grid;
   grid-template-columns: 1fr auto;
