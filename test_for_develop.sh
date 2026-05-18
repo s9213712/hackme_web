@@ -48,12 +48,13 @@ Usage:
   ./test_for_develop.sh [options]
 
 Purpose:
-  Copy the repo to /tmp by default, initialize a development-friendly runtime,
-  and launch server.py from the copied workspace so the repo never accumulates
-  runtime or cache pollution. Pass --in-place / --no-copy when you explicitly
-  want to launch from the current repo without copying source files while still
-  keeping runtime under --run-root. Pass --runtime-in-source / --deploy-in-place
-  when you intentionally want the current repo to own ./runtime directly.
+  Copy a lean runtime/development subset to /tmp by default, initialize a
+  development-friendly runtime, and launch server.py from the copied workspace
+  so the repo never accumulates runtime or cache pollution. Pass --in-place /
+  --no-copy when you explicitly want to launch from the current repo without
+  copying source files while still keeping runtime under --run-root. Pass
+  --runtime-in-source / --deploy-in-place when you intentionally want the
+  current repo to own ./runtime directly.
 
 Important:
   Without --cli, the script asks for workspace, host, port, server runner,
@@ -62,8 +63,10 @@ Important:
   With --cli, it never prompts and only uses command-line/env values.
 
   For server-mode / production-gate validation, HTML_LEARNING_GIT_REPO_DIR must
-  point at a real git repo with a readable .git directory. Do not point it at
-  the /tmp copied workspace unless that copy still preserves git metadata.
+  point at a real git repo with a readable .git directory. The /tmp copy is
+  intentionally source-only and excludes git metadata, docs, reference repos,
+  deployment examples, non-runtime README files, generated runtime/cache data,
+  and other non-runtime artifacts. Edit those files directly in the source repo.
 
 Options:
   --cli                    Run non-interactively from command/env options
@@ -957,27 +960,49 @@ prompt_runtime_config() {
 
 copy_repo() {
   mkdir -p "$COPY_ROOT"
-  # The tmp runtime only needs files required to run and develop the server.
-  # Keep scripts/tests/workflows, but skip documentation, generated reports,
-  # CI metadata and caches so large evidence/doc trees do not make startup hang.
+  # The tmp runtime only needs files required to run, develop, and smoke-test
+  # the app. Copy from an allowlist so docs/reference repos/deploy examples/git
+  # metadata and future large non-runtime artifacts never inflate isolated
+  # workspaces. Keep workflow/vendor README files because some shipped bundles
+  # and asset packs treat them as part of their completeness checks.
+  local copy_items=(
+    "server.py"
+    "bootstrap.schema.sql"
+    "pytest.ini"
+    "requirements.txt"
+    "requirements-dev.txt"
+    "requirements-features.txt"
+    "requirements-minimal.txt"
+    "test_for_develop.sh"
+    "public"
+    "routes"
+    "scripts"
+    "services"
+    "tests"
+    "workflows"
+  )
+  local existing_items=()
+  local item
+  for item in "${copy_items[@]}"; do
+    if [[ -e "$SOURCE_ROOT/$item" ]]; then
+      existing_items+=("$item")
+    fi
+  done
   tar -C "$SOURCE_ROOT" \
-    --exclude='./.git' \
-    --exclude='./.github' \
-    --exclude='./docs' \
-    --exclude='./reports' \
-    --exclude='./.pytest_cache' \
-    --exclude='./.venv' \
-    --exclude='./__pycache__' \
-    --exclude='./cache' \
-    --exclude='./runtime' \
-    --exclude='*/reports' \
-    --exclude='*/.pytest_cache' \
-    --exclude='*/__pycache__' \
-    --exclude='*/cache' \
     --exclude='*.log' \
     --exclude='*.out' \
     --exclude='*.pyc' \
-    -cf - . | tar -C "$COPY_ROOT" -xf -
+    --exclude='*.pyo' \
+    --exclude='.coverage' \
+    --exclude='*/reports' \
+    --exclude='*/.pytest_cache' \
+    --exclude='*/.ruff_cache' \
+    --exclude='*/.mypy_cache' \
+    --exclude='*/__pycache__' \
+    --exclude='*/cache' \
+    --exclude='*/runtime' \
+    -cf - "${existing_items[@]}" | tar -C "$COPY_ROOT" -xf -
+  find "$COPY_ROOT/scripts" "$COPY_ROOT/tests" -type f -name '*.md' -delete 2>/dev/null || true
 }
 
 ensure_official_workflows_source() {

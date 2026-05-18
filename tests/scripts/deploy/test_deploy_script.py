@@ -21,7 +21,15 @@ def test_dev_launcher_copies_repo_to_tmp_and_bootstraps_dev_friendly_runtime():
 
     assert 'RUN_ROOT="${RUN_ROOT:-/tmp/hackme_web_dev_' in script
     assert 'tar -C "$SOURCE_ROOT"' in script
-    assert '--exclude=\'./runtime\'' in script
+    assert 'local copy_items=(' in script
+    assert '"server.py"' in script
+    assert '"public"' in script
+    assert '"routes"' in script
+    assert '"services"' in script
+    assert '"workflows"' in script
+    assert 'reference repos/deploy examples/git' in script
+    assert '--exclude=\'*/runtime\'' in script
+    assert 'find "$COPY_ROOT/scripts" "$COPY_ROOT/tests" -type f -name \'*.md\' -delete' in script
     assert 'HTML_LEARNING_ROOT_PASSWORD="$ROOT_PASSWORD"' in script
     assert 'HTML_LEARNING_MANAGER_PASSWORD="$MANAGER_PASSWORD"' in script
     assert 'HTML_LEARNING_TEST_PASSWORD="$TEST_PASSWORD"' in script
