@@ -1,13 +1,21 @@
 {
   "default_params": {
+    "batch_size": 1,
     "cfg": 1,
+    "checkpoint": "",
+    "clip": "qwen_0.6b_ace15.safetensors",
+    "denoise_strength": 1,
+    "diffusion_model": "acestep_v1.5_turbo.safetensors",
     "generation_mode": "t2a",
     "height": 1024,
-    "model": "qwen_0.6b_ace15.safetensors",
+    "model": "acestep_v1.5_turbo.safetensors",
     "negative_prompt": "",
     "prompt": "synthwave, techno, synthpop, futuristic, electro, with liquid drum & bass drive.\nRestless, confident, dreamy mood at 128 BPM.\nAnalog bass, pulsating arps, percussive synth stabs, gated drums.\nQuick build,  then explosive drum burst, then clean fade.\nBreathy, rhythmic female vocals, minimal emotion, metallic echo.",
+    "sampler_name": "euler",
+    "scheduler": "simple",
     "seed": 561594583201063,
     "steps": 8,
+    "vae": "ace_1.5_vae.safetensors",
     "width": 1024
   },
   "description": "目前保留的 ACE-Step 1.5 text-to-audio/song 官方系統模組。",

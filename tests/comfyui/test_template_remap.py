@@ -2,6 +2,7 @@
 
 import pytest
 
+from routes.comfyui_sections.workflow_routes import _default_upload_callback
 from services.comfyui.template.remap import (
     PROTECTED_IMAGE_INPUTS,
     SafetyError,
@@ -289,6 +290,53 @@ def test_remap_rejects_upload_callback_returning_no_filename():
             run_id="r",
             upload_callback=_bad_callback,
             fetch_file_row=_stub_fetch(rows),
+        )
+
+
+def test_remap_converts_upload_callback_error_to_safety_error():
+    rows = {"f-1": _row()}
+
+    def _failing_callback(*, file_row, target_filename, run_id):
+        raise RuntimeError("connection reset")
+
+    with pytest.raises(SafetyError, match="上傳圖片到 ComfyUI 失敗"):
+        remap_load_image_to_cloud_file(
+            WORKFLOW_WITH_LOAD_IMAGE,
+            image_field_assignments={"1": "f-1"},
+            actor={"id": 7},
+            conn=None,
+            run_id="r",
+            upload_callback=_failing_callback,
+            fetch_file_row=_stub_fetch(rows),
+        )
+
+
+def test_default_workflow_upload_callback_surfaces_comfyui_errors(tmp_path):
+    source = tmp_path / "source.png"
+    source.write_bytes(b"png-bytes")
+
+    class _FailingClient:
+        def upload_image_bytes(self, *args, **kwargs):
+            raise RuntimeError("connection reset")
+
+    callback = _default_upload_callback(_FailingClient())
+    with pytest.raises(RuntimeError, match="connection reset"):
+        callback(
+            file_row={"storage_path": str(source)},
+            target_filename="target.png",
+            run_id="run1",
+        )
+
+
+def test_default_workflow_upload_callback_rejects_empty_source(tmp_path):
+    source = tmp_path / "empty.png"
+    source.write_bytes(b"")
+    callback = _default_upload_callback(object())
+    with pytest.raises(RuntimeError, match="內容為空"):
+        callback(
+            file_row={"storage_path": str(source)},
+            target_filename="target.png",
+            run_id="run1",
         )
 
 

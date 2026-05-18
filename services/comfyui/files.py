@@ -11,6 +11,20 @@ _COMFYUI_FILE_TYPES = {"output", "input", "temp"}
 _COMFYUI_VIEW_FALLBACK_TYPES = ("output", "temp")
 
 
+def _upload_timeout_seconds(default_timeout):
+    try:
+        configured = float(os.environ.get("HACKME_COMFYUI_UPLOAD_TIMEOUT_SECONDS", "0") or 0)
+    except Exception:
+        configured = 0.0
+    if configured > 0:
+        return max(5.0, min(configured, 600.0))
+    try:
+        base = float(default_timeout or 30)
+    except Exception:
+        base = 30.0
+    return max(60.0, min(base, 600.0))
+
+
 def _safe_path_parts(value, *, field_name, error_cls):
     raw = str(value or "").strip().replace("\\", "/")
     if "\x00" in raw:
@@ -93,6 +107,7 @@ def upload_image_bytes(client, data, filename, *, image_type="input", overwrite=
             "content_type": "application/octet-stream",
             "data": data or b"",
         }],
+        timeout=_upload_timeout_seconds(getattr(client, "timeout", 30)),
     )
     name = str(payload.get("name") or filename).strip()
     if not name:

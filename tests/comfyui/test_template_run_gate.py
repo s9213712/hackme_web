@@ -173,6 +173,30 @@ def test_gate2_missing_models_blocks():
     assert excinfo.value.stage == "gate2_models"
 
 
+def test_gate2_rechecks_model_fields_after_user_inputs():
+    """A stale template UI model override must fail before the job reaches ComfyUI."""
+    user_inputs = _full_user_inputs()
+    user_inputs["4"]["ckpt_name"] = "missing-after-patch.safetensors"
+    with pytest.raises(RunGateFailure) as excinfo:
+        run_workflow_through_gates(
+            raw_workflow=TXT2IMG,
+            user_inputs=user_inputs,
+            image_field_assignments={},
+            actor={"id": 1},
+            user_id=1,
+            run_id="r",
+            conn=None,
+            comfyui_client=_ok_client(),
+            upload_callback=_stub_upload,
+        )
+    assert excinfo.value.gate == 2
+    assert excinfo.value.stage == "gate2_models"
+    assert excinfo.value.audit_detail["post_user_inputs"] is True
+    assert excinfo.value.audit_detail["missing_models"] == {
+        "ckpt": ["missing-after-patch.safetensors"]
+    }
+
+
 def test_gate3_allowlist_blocks_unknown_class():
     """Unknown class type passes capability if local ComfyUI has it, but Gate 3 still rejects."""
     bad = {**TXT2IMG, "10": {"class_type": "FancyCommunityNode", "inputs": {}}}

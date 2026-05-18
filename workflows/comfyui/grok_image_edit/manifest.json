@@ -1,13 +1,21 @@
 {
   "default_params": {
+    "batch_size": 1,
     "cfg": 7,
+    "checkpoint": "",
+    "clip": "",
+    "denoise_strength": 0,
+    "diffusion_model": "",
     "generation_mode": "img2img",
     "height": 1024,
     "model": "grok-imagine-image-beta",
     "negative_prompt": "",
     "prompt": "Keep the original robot design and framing.\nTransform the scene into a cyberpunk night environment.\nReplace the lighting with high-contrast neon lighting, including blue and orange accent lights.\nAdd glowing light strips and illuminated panels on the robot’s body and fingers.\nDarken the background significantly, with subtle smoke and light bloom effects.\nEnhance metallic reflections and sharp edges to give a high-tech, futuristic feel.\n",
+    "sampler_name": "",
+    "scheduler": "",
     "seed": 42,
     "steps": 20,
+    "vae": "",
     "width": 1024
   },
   "description": "目前保留的 Grok image edit API 官方系統模組；需要本機 ComfyUI 具備對應 API node 與憑證設定。",

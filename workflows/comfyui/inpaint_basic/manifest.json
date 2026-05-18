@@ -1,13 +1,21 @@
 {
   "default_params": {
+    "batch_size": 1,
     "cfg": 7.5,
+    "checkpoint": "v1-5-pruned-emaonly-fp16.safetensors",
+    "clip": "",
+    "denoise_strength": 0.8,
+    "diffusion_model": "",
     "generation_mode": "inpaint",
     "height": 1024,
     "model": "v1-5-pruned-emaonly-fp16.safetensors",
-    "negative_prompt": "",
+    "negative_prompt": "low quality, blurry, watermark",
     "prompt": "a serene landscape painting, soft light",
+    "sampler_name": "euler",
+    "scheduler": "normal",
     "seed": 42,
     "steps": 20,
+    "vae": "",
     "width": 1024
   },
   "description": "LoadImage + LoadImageMask + VAEEncodeForInpaint，搭配 inpainting checkpoint。",

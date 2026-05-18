@@ -1,13 +1,21 @@
 {
   "default_params": {
+    "batch_size": 1,
     "cfg": 7.5,
+    "checkpoint": "v1-5-pruned-emaonly-fp16.safetensors",
+    "clip": "",
+    "denoise_strength": 1,
+    "diffusion_model": "",
     "generation_mode": "txt2img",
     "height": 512,
     "model": "v1-5-pruned-emaonly-fp16.safetensors",
     "negative_prompt": "",
     "prompt": "a serene landscape painting, soft light",
+    "sampler_name": "euler",
+    "scheduler": "normal",
     "seed": 42,
     "steps": 20,
+    "vae": "",
     "width": 512
   },
   "description": "txt2img + Canny preprocessor + ControlNetApplyAdvanced；強度 / start / end 可調。",

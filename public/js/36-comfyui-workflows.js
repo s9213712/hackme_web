@@ -592,20 +592,34 @@ function comfyuiTemplateSummaryMarkup(detail) {
 function comfyuiTemplateSelectOptions(targetId, field = {}) {
   const target = $(targetId);
   const options = [];
+  const seen = new Set();
+  const addOption = (value, label = value, disabled = false) => {
+    const cleanValue = String(value || "");
+    if (seen.has(cleanValue)) return;
+    seen.add(cleanValue);
+    options.push({
+      value: cleanValue,
+      label: String(label || cleanValue),
+      disabled: !!disabled,
+    });
+  };
   if (target && target.options && target.options.length) {
     Array.from(target.options).forEach((option) => {
-      options.push({
-        value: String(option.value || ""),
-        label: String(option.textContent || option.label || option.value || ""),
-        disabled: !!option.disabled,
-      });
+      addOption(
+        option.value || "",
+        option.textContent || option.label || option.value || "",
+        option.disabled
+      );
     });
+    if (field?.current_value !== undefined && field?.current_value !== null) {
+      addOption(field.current_value, field.current_value, false);
+    }
   } else if (Array.isArray(field?.constraints?.options)) {
     field.constraints.options.forEach((value) => {
-      options.push({ value: String(value), label: String(value), disabled: false });
+      addOption(value, value, false);
     });
   } else if (field?.current_value !== undefined && field?.current_value !== null) {
-    options.push({ value: String(field.current_value), label: String(field.current_value), disabled: false });
+    addOption(field.current_value, field.current_value, false);
   }
   return options;
 }
@@ -760,6 +774,16 @@ function comfyuiTemplateFieldBinding(field, detail, ctx) {
 function comfyuiTemplateFieldValue(binding, field = {}) {
   if (binding.kind === "field") {
     const el = $(binding.targetId);
+    if (
+      binding.targetId === "comfyui-vae-select" &&
+      field?.class_type === "VAELoader" &&
+      el &&
+      field?.current_value
+    ) {
+      const templateVae = String(field.current_value);
+      const hasTemplateVae = Array.from(el.options || []).some((option) => option.value === templateVae);
+      if (el.value === COMFYUI_VAE_BUILTIN || !hasTemplateVae) return templateVae;
+    }
     return el ? String(el.value || "") : String(field?.current_value ?? "");
   }
   if (binding.kind === "image") {
@@ -775,6 +799,16 @@ function comfyuiTemplateFieldValue(binding, field = {}) {
 function comfyuiTemplateRuntimeValue(binding, field = {}) {
   if (binding.kind === "field") {
     const el = $(binding.targetId);
+    if (
+      binding.targetId === "comfyui-vae-select" &&
+      field?.class_type === "VAELoader" &&
+      el &&
+      field?.current_value
+    ) {
+      const templateVae = String(field.current_value);
+      const hasTemplateVae = Array.from(el.options || []).some((option) => option.value === templateVae);
+      if (el.value === COMFYUI_VAE_BUILTIN || !hasTemplateVae) return templateVae;
+    }
     return el ? el.value : field?.current_value;
   }
   if (binding.kind === "lora") {

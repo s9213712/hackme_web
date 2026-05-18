@@ -12,36 +12,42 @@ from services.platform.settings import is_feature_enabled
 def _default_upload_callback(active_client):
     """Return an UploadCallback that pushes bytes into ComfyUI input/<run_id>/.
 
-    Falls back to a no-op (returns the synthetic filename) when no
-    ComfyUI client is available; the run gate will then surface the
-    capability blocker rather than silently swallowing the upload.
+    Upload errors are intentionally surfaced to Gate 5. Pretending an upload
+    succeeded leaves LoadImage pointing at a file ComfyUI never received.
     """
     def _cb(*, file_row, target_filename, run_id):
         if active_client is None:
-            return {"filename": target_filename, "subfolder": run_id, "type": "input"}
-        try:
-            from services.comfyui.files import upload_image_bytes
-            from services.comfyui.client import ComfyUIError
-        except Exception:  # pragma: no cover - defensive import guard
-            return {"filename": target_filename, "subfolder": run_id, "type": "input"}
+            raise RuntimeError("尚未連線到 ComfyUI，無法上傳 workflow 圖片")
         storage_path = file_row.get("storage_path") if hasattr(file_row, "get") else file_row["storage_path"]
         try:
             with open(storage_path, "rb") as fh:
                 data = fh.read()
-        except Exception:
-            data = b""
-        try:
-            return upload_image_bytes(
-                active_client,
+        except Exception as exc:
+            raise RuntimeError(f"讀取雲端圖片失敗：{exc}") from exc
+        if not data:
+            raise RuntimeError("雲端圖片內容為空，無法上傳到 ComfyUI")
+        if hasattr(active_client, "upload_image_bytes"):
+            return active_client.upload_image_bytes(
                 data,
                 target_filename,
                 image_type="input",
                 overwrite=False,
                 subfolder=run_id,
-                error_cls=ComfyUIError,
             )
-        except Exception:
-            return {"filename": target_filename, "subfolder": run_id, "type": "input"}
+        try:
+            from services.comfyui.files import upload_image_bytes
+            from services.comfyui.client import ComfyUIError
+        except Exception as exc:  # pragma: no cover - defensive import guard
+            raise RuntimeError(f"ComfyUI 上傳模組載入失敗：{exc}") from exc
+        return upload_image_bytes(
+            active_client,
+            data,
+            target_filename,
+            image_type="input",
+            overwrite=False,
+            subfolder=run_id,
+            error_cls=ComfyUIError,
+        )
     return _cb
 
 

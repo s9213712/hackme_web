@@ -1,13 +1,21 @@
 {
   "default_params": {
+    "batch_size": 1,
     "cfg": 4,
+    "checkpoint": "",
+    "clip": "mistral_3_small_flux2_bf16.safetensors",
+    "denoise_strength": 0,
+    "diffusion_model": "flux2_dev_fp8mixed.safetensors",
     "generation_mode": "img2img",
     "height": 1024,
-    "model": "flux2-vae.safetensors",
+    "model": "flux2_dev_fp8mixed.safetensors",
     "negative_prompt": "",
     "prompt": "The woman is wearing a small pale yellow knitted beanie, with a white fabric patch on the front right, embroidered with big gray text “FLUX.2 COMFY.” Keep the face",
+    "sampler_name": "euler",
+    "scheduler": "",
     "seed": 342971778941390,
     "steps": 20,
+    "vae": "flux2-vae.safetensors",
     "width": 1024
   },
   "description": "目前保留的 Flux.2 image edit 官方系統模組；workflow.json 是平台可執行格式。",

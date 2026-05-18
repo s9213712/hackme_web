@@ -1,13 +1,21 @@
 {
   "default_params": {
+    "batch_size": 1,
     "cfg": 8,
+    "checkpoint": "sd_xl_refiner_1.0.safetensors",
+    "clip": "",
+    "denoise_strength": 0,
+    "diffusion_model": "",
     "generation_mode": "txt2img",
     "height": 1024,
     "model": "sd_xl_refiner_1.0.safetensors",
-    "negative_prompt": "",
+    "negative_prompt": "text, watermark",
     "prompt": "evening sunset scenery blue sky nature, glass bottle with a galaxy in it",
+    "sampler_name": "euler",
+    "scheduler": "normal",
     "seed": 721897303308196,
     "steps": 25,
+    "vae": "",
     "width": 1024
   },
   "description": "目前保留的 SDXL 官方 simple example 系統模組。",

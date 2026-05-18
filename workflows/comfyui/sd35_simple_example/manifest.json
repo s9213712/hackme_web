@@ -1,13 +1,21 @@
 {
   "default_params": {
+    "batch_size": 1,
     "cfg": 4.01,
+    "checkpoint": "sd3.5_large_fp8_scaled.safetensors",
+    "clip": "",
+    "denoise_strength": 1,
+    "diffusion_model": "",
     "generation_mode": "txt2img",
     "height": 1024,
     "model": "sd3.5_large_fp8_scaled.safetensors",
     "negative_prompt": "",
     "prompt": "a bottle with a pink and red galaxy inside it on top of a wooden table on a table in the middle of a modern kitchen with a window to the outdoors mountain range bright sun clouds forest",
+    "sampler_name": "euler",
+    "scheduler": "sgm_uniform",
     "seed": 585483408983215,
     "steps": 20,
+    "vae": "",
     "width": 1024
   },
   "description": "目前保留的 SD3.5 官方 simple example 系統模組。",

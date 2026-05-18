@@ -1,13 +1,21 @@
 {
   "default_params": {
+    "batch_size": 1,
     "cfg": 7,
+    "checkpoint": "",
+    "clip": "",
+    "denoise_strength": 0,
+    "diffusion_model": "",
     "generation_mode": "txt2img",
     "height": 2048,
     "model": "seedream 5.0 lite",
     "negative_prompt": "",
     "prompt": "A beautiful woman, wearing an elegant red long dress, a wide-brimmed black straw hat, and bright red lips. Overlapping multi-layered plant shadows create a unique visual depth and dynamism. The main visual elements may have multiple different angles and transparencies to enhance the three-dimensionality and layering. The dark green background is simple, with a sense of art and storytelling. It is a poster integrated with shadow overlapping effects. The overall design is mysterious and full of artistic sense. Photography, masterful composition,",
+    "sampler_name": "",
+    "scheduler": "",
     "seed": 1161169574,
     "steps": 20,
+    "vae": "",
     "width": 2048
   },
   "description": "目前保留的 Seedream API 官方系統模組；需要本機 ComfyUI 具備對應 API node 與憑證設定。",

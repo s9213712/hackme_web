@@ -307,6 +307,41 @@ def run_workflow_through_gates(
     # ----- Gate 5: safety rewrite + image remap + apply user_inputs -------
     try:
         workflow = rewrite_save_image_prefix(workflow, user_id=int(user_id), run_id=run_id)
+        workflow = _apply_user_inputs(
+            workflow,
+            analysis=analysis,
+            user_inputs=user_inputs or {},
+        )
+        # Model fields are user-editable, so the raw-workflow capability check
+        # above is not enough. Re-check after applying user_inputs to catch stale
+        # UI state such as a template VAELoader being overwritten with a missing
+        # or sentinel VAE name before the job reaches ComfyUI.
+        analysis = analyze_workflow_json(workflow)
+        capability = check_workflow_capability(analysis, client=comfyui_client)
+        if capability.overall == "UNSUPPORTED":
+            stage, msg = template_errors.gate2_capability_msg(capability.unsupported)
+            raise RunGateFailure(
+                gate=2,
+                stage=stage,
+                msg=msg,
+                audit_detail={
+                    "unsupported": capability.unsupported,
+                    "blockers": capability.blockers,
+                    "post_user_inputs": True,
+                },
+            )
+        if capability.missing_models:
+            stage, msg = template_errors.gate2_models_msg(capability.missing_models)
+            raise RunGateFailure(
+                gate=2,
+                stage=stage,
+                msg=msg,
+                audit_detail={
+                    "missing_models": capability.missing_models,
+                    "post_user_inputs": True,
+                },
+            )
+        enforce_allowlist(analysis)
         if image_field_assignments:
             # Track temp dir for §10.3.2 sweeper before any upload happens —
             # this way even an upload-callback exception leaves an entry the
@@ -323,11 +358,6 @@ def run_workflow_through_gates(
             upload_scan_skip_allowed=upload_scan_skip_allowed,
             image_decoder=image_decoder,
             file_bytes_loader=file_bytes_loader,
-        )
-        workflow = _apply_user_inputs(
-            workflow,
-            analysis=analysis,
-            user_inputs=user_inputs or {},
         )
     except SafetyError as exc:
         stage, msg = template_errors.gate5_safety_msg(str(exc))

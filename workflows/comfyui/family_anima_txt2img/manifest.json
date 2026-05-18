@@ -1,13 +1,21 @@
 {
   "default_params": {
+    "batch_size": 1,
     "cfg": 4,
+    "checkpoint": "",
+    "clip": "qwen_3_06b_base.safetensors",
+    "denoise_strength": 1,
+    "diffusion_model": "anima-preview3-base.safetensors",
     "generation_mode": "txt2img",
     "height": 1024,
-    "model": "qwen_3_06b_base.safetensors",
-    "negative_prompt": "",
-    "prompt": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia",
+    "model": "anima-preview3-base.safetensors",
+    "negative_prompt": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia",
+    "prompt": "masterpiece, best quality, score_7, safe, anime, a close-up of a futuristic cyberpunk robotic eye, original close-up eye composition strictly preserved, encased in weathered metallic blue and chrome plating with exposed wiring, glowing orange indicator lights, hydraulic pistons, and panel seams wrapping around the eyelid, a chrome mechanical tear duct with fine circuit details, long dark anime-style eyelashes framing the eye, soft pink sclera. The dark pupil holds a complete, glowing Earth with blue atmosphere and white clouds as a reflection, while the surrounding iris reflects a vivid cosmic scene: a fiery red shooting star, wispy cyan nebula clouds, and tiny glowing star specks. No change to the original close-up eye framing, no additional elements outside the eye structure, neon accent lighting, high contrast cyberpunk color palette, intricate mechanical engineering, sharp line art, gritty futuristic sci-fi atmosphere.",
+    "sampler_name": "er_sde",
+    "scheduler": "simple",
     "seed": 875817230929465,
     "steps": 30,
+    "vae": "qwen_image_vae.safetensors",
     "width": 1024
   },
   "description": "目前保留的 Anima 官方系統模組；workflow.json 是平台可執行格式。",
@@ -106,7 +114,7 @@
           {
             "category": "MODEL",
             "class_type": "UNETLoader",
-            "current_value": "anima-preview.safetensors",
+            "current_value": "anima-preview3-base.safetensors",
             "id": "node:68:unet_name",
             "input_name": "unet_name",
             "input_type": "select",

@@ -246,11 +246,16 @@ def remap_load_image_to_cloud_file(
             file_bytes_loader=file_bytes_loader,
         )
         target_filename = f"{actor_id}_{safe_run}_{node_id}.png"
-        upload_result = upload_callback(
-            file_row=file_row,
-            target_filename=target_filename,
-            run_id=safe_run,
-        ) or {}
+        try:
+            upload_result = upload_callback(
+                file_row=file_row,
+                target_filename=target_filename,
+                run_id=safe_run,
+            ) or {}
+        except SafetyError:
+            raise
+        except Exception as exc:
+            raise SafetyError(f"node {node_id} 上傳圖片到 ComfyUI 失敗：{exc}") from exc
         comfy_filename = str(upload_result.get("filename") or "").strip()
         comfy_subfolder = str(upload_result.get("subfolder") or "").strip()
         if not comfy_filename:

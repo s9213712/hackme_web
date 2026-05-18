@@ -147,6 +147,20 @@ def test_current_official_model_bundles_are_seeded():
     } <= ids
 
 
+def test_anima_system_workflow_defaults_keep_model_stack_aligned():
+    workflow = json.loads((SYSTEM_DIR / "family_anima_txt2img" / "workflow.json").read_text(encoding="utf-8"))
+    manifest = json.loads((SYSTEM_DIR / "family_anima_txt2img" / "manifest.json").read_text(encoding="utf-8"))
+    defaults = manifest["default_params"]
+
+    assert workflow["68"]["inputs"]["unet_name"] == "anima-preview3-base.safetensors"
+    assert defaults["model"] == "anima-preview3-base.safetensors"
+    assert defaults["diffusion_model"] == "anima-preview3-base.safetensors"
+    assert defaults["clip"] == "qwen_3_06b_base.safetensors"
+    assert defaults["vae"] == "qwen_image_vae.safetensors"
+    assert defaults["prompt"].startswith("masterpiece, best quality")
+    assert defaults["negative_prompt"].startswith("worst quality, low quality")
+
+
 def test_removed_legacy_starters_are_not_registered():
     ids = set(_system_ids())
     assert not {"flux_txt2img_starter", "sd35_txt2img_starter", "wan_i2v_starter"} & ids

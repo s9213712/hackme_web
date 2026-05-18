@@ -172,28 +172,96 @@ def _first_input(analysis, *names):
     return None
 
 
-def _default_params(analysis, generation_mode):
+def _first_sampler(workflow):
+    for node_id, node in (workflow or {}).items():
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("class_type") or "") in {"KSampler", "KSamplerAdvanced"}:
+            return str(node_id), node
+    return None, None
+
+
+def _linked_node(workflow, value):
+    if not (isinstance(value, list) and len(value) == 2):
+        return None
+    node_id = str(value[0])
+    node = (workflow or {}).get(node_id)
+    return node if isinstance(node, dict) else None
+
+
+def _string_from_node_input(workflow, value, *, depth=0):
+    if isinstance(value, str):
+        return value
+    if depth > 4:
+        return None
+    node = _linked_node(workflow, value)
+    if not isinstance(node, dict):
+        return None
+    class_type = str(node.get("class_type") or "")
+    inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+    if class_type == "StringConcatenate":
+        parts = []
+        for key in ("string_a", "string_b"):
+            part = _string_from_node_input(workflow, inputs.get(key), depth=depth + 1)
+            if part:
+                parts.append(part)
+        delimiter = inputs.get("delimiter")
+        if not isinstance(delimiter, str):
+            delimiter = ""
+        return delimiter.join(parts)
+    return None
+
+
+def _text_for_conditioning_link(workflow, value):
+    node = _linked_node(workflow, value)
+    if not isinstance(node, dict):
+        return None
+    if str(node.get("class_type") or "") != "CLIPTextEncode":
+        return None
+    inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+    text = _string_from_node_input(workflow, inputs.get("text"))
+    return text if isinstance(text, str) else None
+
+
+def _prompt_pair(workflow, analysis):
+    _, sampler = _first_sampler(workflow)
+    if isinstance(sampler, dict):
+        inputs = sampler.get("inputs") if isinstance(sampler.get("inputs"), dict) else {}
+        prompt = _text_for_conditioning_link(workflow, inputs.get("positive"))
+        negative_prompt = _text_for_conditioning_link(workflow, inputs.get("negative"))
+        if prompt is not None or negative_prompt is not None:
+            return prompt or "", negative_prompt or ""
     prompt = _first_input(analysis, "prompt", "text", "string_b", "tags")
     negative_prompt = _first_input(analysis, "negative", "negative_prompt", "string_a")
-    model = _first_input(
-        analysis,
-        "ckpt_name",
-        "unet_name",
-        "model",
-        "clip_name",
-        "clip_name1",
-        "vae_name",
-    )
+    return prompt or "", negative_prompt or ""
+
+
+def _default_params(analysis, generation_mode, workflow):
+    prompt, negative_prompt = _prompt_pair(workflow, analysis)
+    checkpoint = _first_input(analysis, "ckpt_name")
+    diffusion_model = _first_input(analysis, "unet_name")
+    api_model = _first_input(analysis, "model")
+    clip = _first_input(analysis, "clip_name", "clip_name1")
+    vae = _first_input(analysis, "vae_name")
+    model = checkpoint or diffusion_model or api_model
     return {
         "generation_mode": generation_mode,
         "model": model or "",
+        "checkpoint": checkpoint or "",
+        "diffusion_model": diffusion_model or "",
+        "clip": clip or "",
+        "vae": vae or "",
         "prompt": prompt or "",
         "negative_prompt": negative_prompt or "",
         "width": _first_input(analysis, "width") or 1024,
         "height": _first_input(analysis, "height") or 1024,
+        "batch_size": _first_input(analysis, "batch_size") or 1,
         "steps": _first_input(analysis, "steps") or 20,
         "cfg": _first_input(analysis, "cfg", "cfg_scale", "guidance") or 7,
         "seed": _first_input(analysis, "seed", "noise_seed") or 42,
+        "sampler_name": _first_input(analysis, "sampler_name") or "",
+        "scheduler": _first_input(analysis, "scheduler") or "",
+        "denoise_strength": _first_input(analysis, "denoise") or 0,
     }
 
 
@@ -230,7 +298,7 @@ def _refresh_bundle(bundle: OfficialBundle):
         "workflow_file": "workflow.json",
         "source": "official",
         "output_kinds": _workflow_output_kinds(workflow),
-        "default_params": _default_params(analysis, bundle.generation_mode),
+        "default_params": _default_params(analysis, bundle.generation_mode, workflow),
         "ui": {
             "initial_collapsed": True,
             "panels": schema.to_dict()["panels"],

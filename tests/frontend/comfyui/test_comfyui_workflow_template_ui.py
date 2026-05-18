@@ -33,6 +33,13 @@ def test_direct_template_fields_are_editable_for_large_model_workflows():
     assert ".comfyui-template-direct-hint" in css
 
 
+def test_template_vae_loader_keeps_its_manifest_default_when_global_vae_is_builtin():
+    js = _read("public/js/36-comfyui-workflows.js")
+    assert 'field?.class_type === "VAELoader"' in js
+    assert 'el.value === COMFYUI_VAE_BUILTIN' in js
+    assert "addOption(field.current_value, field.current_value, false);" in js
+
+
 def test_comfyui_tools_are_split_into_subviews():
     html = _read("public/index.html")
     js = _read("public/js/36-comfyui.js")

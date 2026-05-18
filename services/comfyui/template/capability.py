@@ -106,13 +106,24 @@ class CapabilityCheck:
 # (class_type, input_name) pair we look up to enumerate what's available
 # locally. Aligned with services/comfyui/client.py helpers (get_models,
 # get_loras, get_vaes …).
-_MODEL_BUCKET_OBJECT_INFO_PATH: dict[str, tuple[str, str]] = {
-    "ckpt": ("CheckpointLoaderSimple", "ckpt_name"),
-    "vae": ("VAELoader", "vae_name"),
-    "lora": ("LoraLoader", "lora_name"),
-    "controlnet": ("ControlNetLoader", "control_net_name"),
-    "upscale_model": ("UpscaleModelLoader", "model_name"),
+_MODEL_BUCKET_OBJECT_INFO_PATHS: dict[str, tuple[tuple[str, str], ...]] = {
+    "ckpt": (("CheckpointLoaderSimple", "ckpt_name"),),
+    "vae": (("VAELoader", "vae_name"),),
+    "lora": (("LoraLoader", "lora_name"),),
+    "controlnet": (("ControlNetLoader", "control_net_name"),),
+    "upscale_model": (("UpscaleModelLoader", "model_name"),),
+    "diffusion_model": (("UNETLoader", "unet_name"),),
+    "clip": (
+        ("CLIPLoader", "clip_name"),
+        ("DualCLIPLoader", "clip_name1"),
+        ("DualCLIPLoader", "clip_name2"),
+        ("TripleCLIPLoader", "clip_name1"),
+        ("TripleCLIPLoader", "clip_name2"),
+        ("TripleCLIPLoader", "clip_name3"),
+    ),
 }
+
+_MODEL_BUCKETS_NOT_LOCAL_FILES = frozenset({"api_model"})
 
 
 def _node_input_options(info: dict[str, Any], class_type: str, input_name: str) -> list[str]:
@@ -185,12 +196,16 @@ def check_workflow_capability(
     # For each required model bucket the analyzer recorded, ask the local
     # ComfyUI which files it actually has and compute the diff.
     for bucket, names in (analysis.required_models or {}).items():
-        path = _MODEL_BUCKET_OBJECT_INFO_PATH.get(bucket)
-        if not path:
+        paths = _MODEL_BUCKET_OBJECT_INFO_PATHS.get(bucket)
+        if not paths:
+            if bucket in _MODEL_BUCKETS_NOT_LOCAL_FILES:
+                continue
             # Unknown bucket — fall back to MODEL bucket name as-is.
             cap.missing_models[bucket] = sorted(set(names))
             continue
-        local_options = _node_input_options(info, path[0], path[1])
+        local_options = []
+        for class_type, input_name in paths:
+            local_options.extend(_node_input_options(info, class_type, input_name))
         local_set = set(local_options)
         missing = sorted({n for n in names if n and n not in local_set})
         if missing:

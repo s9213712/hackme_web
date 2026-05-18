@@ -1,13 +1,21 @@
 {
   "default_params": {
+    "batch_size": 1,
     "cfg": 7,
+    "checkpoint": "",
+    "clip": "",
+    "denoise_strength": 0,
+    "diffusion_model": "",
     "generation_mode": "upscale",
     "height": 1024,
     "model": "",
     "negative_prompt": "",
     "prompt": "",
+    "sampler_name": "",
+    "scheduler": "",
     "seed": 42,
     "steps": 20,
+    "vae": "",
     "width": 1024
   },
   "description": "LoadImage + UpscaleModelLoader + ImageUpscaleWithModel。",

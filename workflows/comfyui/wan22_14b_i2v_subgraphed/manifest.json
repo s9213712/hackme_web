@@ -1,13 +1,21 @@
 {
   "default_params": {
+    "batch_size": 1,
     "cfg": 1,
+    "checkpoint": "",
+    "clip": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+    "denoise_strength": 0,
+    "diffusion_model": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
     "generation_mode": "i2v",
     "height": 720,
-    "model": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+    "model": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
     "negative_prompt": "",
     "prompt": "A felt-style little eagle cashier greeting, waving, and smiling at the camera.",
+    "sampler_name": "euler",
+    "scheduler": "simple",
     "seed": 42,
     "steps": 4,
+    "vae": "wan_2.1_vae.safetensors",
     "width": 720
   },
   "description": "目前保留的 Wan 2.2 14B image-to-video 官方系統模組。",

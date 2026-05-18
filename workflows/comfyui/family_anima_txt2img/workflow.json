@@ -94,7 +94,7 @@
   "68": {
     "class_type": "UNETLoader",
     "inputs": {
-      "unet_name": "anima-preview.safetensors",
+      "unet_name": "anima-preview3-base.safetensors",
       "weight_dtype": "default"
     }
   }

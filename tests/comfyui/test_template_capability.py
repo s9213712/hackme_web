@@ -111,6 +111,40 @@ def test_capability_partially_supported_when_only_models_missing():
     assert cap.unsupported == []
 
 
+def test_capability_checks_diffusion_model_and_clip_buckets():
+    info = {
+        "UNETLoader": {
+            "input": {"required": {"unet_name": [["anima-preview3-base.safetensors"]]}}
+        },
+        "CLIPLoader": {
+            "input": {"required": {"clip_name": [["qwen_3_06b_base.safetensors"]]}}
+        },
+    }
+    client = _StubClient(info)
+    analysis = _analysis(
+        class_types={"UNETLoader", "CLIPLoader"},
+        models={
+            "diffusion_model": ["anima-preview3-base.safetensors"],
+            "clip": ["qwen_3_06b_base.safetensors"],
+        },
+    )
+    cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "SUPPORTED"
+    assert cap.missing_models == {}
+
+
+def test_capability_ignores_paid_api_model_bucket_as_non_local_file():
+    info = {"ByteDanceSeedreamNode": {"input": {"required": {}}}}
+    client = _StubClient(info)
+    analysis = _analysis(
+        class_types={"ByteDanceSeedreamNode"},
+        models={"api_model": ["seedream-5-lite"]},
+    )
+    cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "SUPPORTED"
+    assert cap.missing_models == {}
+
+
 def test_capability_explicit_denied_class_treated_as_unsupported():
     """Per §4: denied classes never reach Run; capability surfaces them as UNSUPPORTED."""
     info = _local_payload(
