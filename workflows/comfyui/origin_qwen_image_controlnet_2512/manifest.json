@@ -24,7 +24,7 @@
       "type": ""
     },
     "denoise_strength": 1,
-    "diffusion_model": "",
+    "diffusion_model": "qwen_image_2512_fp8_e4m3fn.safetensors",
     "generation_mode": "txt2img",
     "height": 1024,
     "loras": [
@@ -34,7 +34,7 @@
         "strength_model": 1
       }
     ],
-    "model": "",
+    "model": "qwen_image_2512_fp8_e4m3fn.safetensors",
     "negative_prompt": "A woman with curly hair, wearing orange sunglasses, a white knit sweater with orange accents, and high-waisted orange trousers, stands confidently against a vibrant, clear blue sky. The photo has a warm, sunlit filter that amplifies the rich terracotta and burnt orange tones of her outfit, while the cool, deep blue background is intensified, creating a bold, saturated contrast that feels vivid and cinematic.",
     "prompt": "低分辨率，低画质，肢体畸形，手指畸形，画面过饱和，蜡像感，人脸无细节，过度光滑，画面具有AI感。构图混乱。文字模糊，扭曲",
     "sampler_name": "euler",
@@ -65,6 +65,10 @@
     }
   ],
   "required_models": [
+    {
+      "kind": "diffusion_model",
+      "name": "qwen_image_2512_fp8_e4m3fn.safetensors"
+    },
     {
       "kind": "clip",
       "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
@@ -317,6 +321,38 @@
             "input_name": "strength",
             "input_type": "number",
             "label": "ControlNet 強度",
+            "node_id": "131",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ControlNetApplyAdvanced",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 0,
+            "id": "node:131:start_percent",
+            "input_name": "start_percent",
+            "input_type": "number",
+            "label": "ControlNet 起始 %",
+            "node_id": "131",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ControlNetApplyAdvanced",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:131:end_percent",
+            "input_name": "end_percent",
+            "input_type": "number",
+            "label": "ControlNet 結束 %",
             "node_id": "131",
             "required": true
           },

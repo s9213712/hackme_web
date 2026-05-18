@@ -11,7 +11,7 @@
     "unknown_classes": []
   },
   "default_params": {
-    "batch_size": 1,
+    "batch_size": 16,
     "cfg": 7,
     "checkpoint": "sdpose_wholebody_fp16.safetensors",
     "clip": "",

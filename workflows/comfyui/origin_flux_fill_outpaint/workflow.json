@@ -86,6 +86,7 @@
         "46",
         0
       ],
+      "noise_mask": false,
       "pixels": [
         "44",
         0
@@ -112,10 +113,15 @@
   "44": {
     "class_type": "ImagePadForOutpaint",
     "inputs": {
+      "bottom": 400,
+      "feathering": 24,
       "image": [
         "17",
         0
-      ]
+      ],
+      "left": 400,
+      "right": 400,
+      "top": 0
     }
   },
   "46": {

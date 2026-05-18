@@ -1,0 +1,265 @@
+import importlib.util
+from types import SimpleNamespace
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PROBE_PATH = REPO_ROOT / "scripts" / "comfyui" / "official_workflow_probe.py"
+
+
+def _load_probe_module():
+    spec = importlib.util.spec_from_file_location("official_workflow_probe", PROBE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_preflight_ignores_model_inputs_connected_from_other_nodes():
+    probe = _load_probe_module()
+    object_info = {
+        "UNETLoader": {
+            "input": {
+                "required": {
+                    "unet_name": [["available.safetensors"], {}],
+                },
+            },
+        },
+    }
+    workflow = {
+        "1": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": ["122", 0]},
+        },
+    }
+
+    result = probe._preflight("linked_model_input", workflow, object_info)
+
+    assert result["runnable"] is True
+    assert result["missing_models"] == []
+
+
+def test_preflight_reports_literal_missing_model_inputs():
+    probe = _load_probe_module()
+    object_info = {
+        "UNETLoader": {
+            "input": {
+                "required": {
+                    "unet_name": [["available.safetensors"], {}],
+                },
+            },
+        },
+    }
+    workflow = {
+        "1": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "missing.safetensors"},
+        },
+    }
+
+    result = probe._preflight("missing_literal_model", workflow, object_info)
+
+    assert result["runnable"] is False
+    assert result["missing_models"] == [
+        {
+            "node_id": "1",
+            "class_type": "UNETLoader",
+            "input": "unet_name",
+            "value": "missing.safetensors",
+        },
+    ]
+
+
+def test_preflight_reads_combo_options_from_object_info_dict_shape():
+    probe = _load_probe_module()
+    object_info = {
+        "LoadVideo": {
+            "input": {
+                "required": {
+                    "file": ["COMBO", {"options": ["available.mp4"]}],
+                },
+            },
+        },
+    }
+    workflow = {
+        "1": {
+            "class_type": "LoadVideo",
+            "inputs": {"file": "missing.mp4"},
+        },
+    }
+
+    result = probe._preflight("missing_video", workflow, object_info)
+
+    assert result["runnable"] is False
+    assert result["missing_models"][0]["value"] == "missing.mp4"
+
+
+def test_formal_params_preserve_generation_inputs_but_remap_probe_files():
+    probe = _load_probe_module()
+    workflow = {
+        "1": {
+            "class_type": "KSampler",
+            "inputs": {
+                "steps": 30,
+                "seed": 123,
+                "cfg": 7.0,
+                "filename_prefix": "formal/original",
+            },
+        },
+        "2": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "original prompt"},
+        },
+        "3": {
+            "class_type": "LoadImage",
+            "inputs": {"image": "missing_input.png", "upload": "image"},
+        },
+    }
+
+    patched = probe._patch_for_probe(
+        workflow,
+        "formal_case",
+        width=256,
+        height=256,
+        steps=1,
+        prompt="smoke prompt",
+        negative_prompt="smoke negative",
+        checkpoint_model="",
+        source_image_name="probe_source.png",
+        mask_image_name="probe_mask.png",
+        parameter_mode="formal",
+    )
+
+    assert patched["1"]["inputs"]["steps"] == 30
+    assert patched["1"]["inputs"]["seed"] == 123
+    assert patched["1"]["inputs"]["cfg"] == 7.0
+    assert patched["2"]["inputs"]["text"] == "original prompt"
+    assert patched["1"]["inputs"]["filename_prefix"] == "probe/hackme_official_probe/formal_case"
+    assert patched["3"]["inputs"]["image"] == "probe_source.png"
+
+
+def test_custom_params_apply_only_explicit_overrides():
+    probe = _load_probe_module()
+    workflow = {
+        "1": {
+            "class_type": "KSampler",
+            "inputs": {
+                "steps": 30,
+                "seed": 123,
+                "cfg": 7.0,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+            },
+        },
+        "2": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "original prompt"},
+        },
+        "3": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "original.safetensors"},
+        },
+        "4": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+        },
+    }
+
+    patched = probe._patch_for_probe(
+        workflow,
+        "custom_case",
+        width=256,
+        height=256,
+        steps=1,
+        prompt="smoke prompt",
+        negative_prompt="smoke negative",
+        checkpoint_model="",
+        source_image_name="probe_source.png",
+        mask_image_name="probe_mask.png",
+        parameter_mode="custom",
+        custom_params={
+            "prompt": "custom prompt",
+            "seed": 999,
+            "steps": 12,
+            "checkpoint_model": "custom.safetensors",
+            "node_inputs": {"4": {"width": 768}},
+        },
+    )
+
+    assert patched["1"]["inputs"]["steps"] == 12
+    assert patched["1"]["inputs"]["seed"] == 999
+    assert patched["1"]["inputs"]["cfg"] == 7.0
+    assert patched["2"]["inputs"]["text"] == "custom prompt"
+    assert patched["3"]["inputs"]["ckpt_name"] == "custom.safetensors"
+    assert patched["4"]["inputs"]["width"] == 768
+    assert patched["4"]["inputs"]["height"] == 1024
+
+
+def test_custom_params_can_be_loaded_from_aliases_and_explicit_flags():
+    probe = _load_probe_module()
+    args = SimpleNamespace(
+        custom_params=True,
+        custom_param_file="",
+        custom_param_json='{"seed": 111, "class_inputs": {"KSampler": {"cfg": 5.5}}}',
+        prompt="alias prompt",
+        negative_prompt=None,
+        steps=9,
+        width=None,
+        height=None,
+        checkpoint_model="",
+        custom_prompt="explicit prompt",
+        custom_negative_prompt="explicit negative",
+        custom_seed=None,
+        custom_steps=None,
+        custom_width=640,
+        custom_height=None,
+        custom_cfg=None,
+        custom_sampler_name=None,
+        custom_scheduler=None,
+        custom_batch_size=None,
+        custom_checkpoint_model=None,
+        custom_diffusion_model=None,
+        custom_clip_model=None,
+        custom_vae_model=None,
+        custom_lora_model=None,
+        custom_lora_strength_model=None,
+        custom_lora_strength_clip=None,
+        custom_controlnet_model=None,
+        custom_upscale_model=None,
+    )
+
+    params = probe._load_custom_params(args)
+
+    assert params["prompt"] == "explicit prompt"
+    assert params["negative_prompt"] == "explicit negative"
+    assert params["steps"] == 9
+    assert params["width"] == 640
+    assert params["seed"] == 111
+    assert params["class_inputs"] == {"KSampler": {"cfg": 5.5}}
+
+
+def test_prompt_safety_blocks_sexualized_minor_or_age_ambiguous_prompt():
+    probe = _load_probe_module()
+    workflow = {
+        "83": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "A girl with cat ears wearing underwear laying on the bed."},
+        },
+    }
+
+    detail = probe._prompt_safety_issue(workflow)
+
+    assert detail
+    assert "83.text" in detail
+
+
+def test_prompt_safety_allows_explicit_adult_non_minor_prompt():
+    probe = _load_probe_module()
+    workflow = {
+        "83": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "An adult woman with cat ears wearing a cozy costume in a bedroom."},
+        },
+    }
+
+    assert probe._prompt_safety_issue(workflow) == ""

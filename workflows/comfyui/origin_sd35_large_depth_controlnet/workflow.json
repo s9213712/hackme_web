@@ -22,7 +22,9 @@
   },
   "46": {
     "class_type": "ControlNetLoader",
-    "inputs": {}
+    "inputs": {
+      "control_net_name": "sd3.5_large_controlnet_depth.safetensors"
+    }
   },
   "56": {
     "class_type": "KSampler",
@@ -77,6 +79,7 @@
         "46",
         0
       ],
+      "end_percent": 1,
       "image": [
         "90",
         0
@@ -89,6 +92,8 @@
         "57",
         0
       ],
+      "start_percent": 0,
+      "strength": 0.7000000000000002,
       "vae": [
         "4",
         2
@@ -98,12 +103,12 @@
   "70": {
     "class_type": "ImageScaleToTotalPixels",
     "inputs": {
-      "divisible_by": 1,
       "image": [
         "45",
         0
       ],
       "megapixels": 1,
+      "resolution_steps": 1,
       "upscale_method": "lanczos"
     }
   },
@@ -183,10 +188,13 @@
   "85": {
     "class_type": "BasicScheduler",
     "inputs": {
+      "denoise": 1,
       "model": [
         "92",
         0
-      ]
+      ],
+      "scheduler": "normal",
+      "steps": 1
     }
   },
   "86": {

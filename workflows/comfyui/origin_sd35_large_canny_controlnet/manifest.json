@@ -15,7 +15,14 @@
     "cfg": 4.5,
     "checkpoint": "sd3.5_large_fp8_scaled.safetensors",
     "clip": "",
-    "controlnet": null,
+    "controlnet": {
+      "end_percent": 1,
+      "model_name": "sd3.5_large_controlnet_canny.safetensors",
+      "preprocessor": "",
+      "start_percent": 0,
+      "strength": 1,
+      "type": "canny"
+    },
     "denoise_strength": 1,
     "diffusion_model": "",
     "generation_mode": "txt2img",
@@ -39,7 +46,12 @@
   "output_kinds": [
     "image"
   ],
-  "required_controlnets": [],
+  "required_controlnets": [
+    {
+      "name": "sd3.5_large_controlnet_canny.safetensors",
+      "type": "canny"
+    }
+  ],
   "required_custom_nodes": [],
   "required_loras": [],
   "required_models": [
@@ -132,6 +144,17 @@
             "input_type": "select",
             "label": "Checkpoint / 大模型",
             "node_id": "4",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "ControlNetLoader",
+            "current_value": "sd3.5_large_controlnet_canny.safetensors",
+            "id": "node:46:control_net_name",
+            "input_name": "control_net_name",
+            "input_type": "select",
+            "label": "ControlNet 模型",
+            "node_id": "46",
             "required": true
           }
         ],
@@ -280,6 +303,54 @@
             "input_type": "number",
             "label": "批次大小",
             "node_id": "33",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ControlNetApplyAdvanced",
+            "constraints": {
+              "max": 2.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 0.66,
+            "id": "node:51:strength",
+            "input_name": "strength",
+            "input_type": "number",
+            "label": "ControlNet 強度",
+            "node_id": "51",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ControlNetApplyAdvanced",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 0,
+            "id": "node:51:start_percent",
+            "input_name": "start_percent",
+            "input_type": "number",
+            "label": "ControlNet 起始 %",
+            "node_id": "51",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ControlNetApplyAdvanced",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:51:end_percent",
+            "input_name": "end_percent",
+            "input_type": "number",
+            "label": "ControlNet 結束 %",
+            "node_id": "51",
             "required": true
           }
         ],

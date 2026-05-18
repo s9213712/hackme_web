@@ -2,8 +2,9 @@
   "114": {
     "class_type": "SaveVideo",
     "inputs": {
+      "codec": "auto",
       "filename_prefix": "video/ComfyUI",
-      "fps": "auto",
+      "format": "auto",
       "video": [
         "140",
         0
@@ -12,16 +13,21 @@
   },
   "127": {
     "class_type": "LoadVideo",
-    "inputs": {}
+    "inputs": {
+      "file": "horse_running.mp4",
+      "upload": "image"
+    }
   },
   "128": {
     "class_type": "BasicScheduler",
     "inputs": {
+      "denoise": 1,
       "model": [
         "133",
         0
       ],
-      "steps": "simple"
+      "scheduler": "simple",
+      "steps": 20
     }
   },
   "129": {
@@ -106,10 +112,7 @@
   "135": {
     "class_type": "VAELoader",
     "inputs": {
-      "vae_name": [
-        "127",
-        0
-      ]
+      "vae_name": "hunyuanvideo15_vae_fp16.safetensors"
     }
   },
   "136": {
@@ -163,11 +166,14 @@
   },
   "141": {
     "class_type": "CLIPVisionLoader",
-    "inputs": {}
+    "inputs": {
+      "clip_name": "sigclip_vision_patch14_384.safetensors"
+    }
   },
   "142": {
     "class_type": "HunyuanVideo15ImageToVideo",
     "inputs": {
+      "batch_size": 1,
       "clip_vision_output": [
         "143",
         0
@@ -200,6 +206,7 @@
         "141",
         0
       ],
+      "crop": "center",
       "image": [
         "148",
         0
@@ -208,16 +215,22 @@
   },
   "144": {
     "class_type": "GetVideoComponents",
-    "inputs": {}
+    "inputs": {
+      "video": [
+        "127",
+        0
+      ]
+    }
   },
   "145": {
     "class_type": "ImageFromBatch",
     "inputs": {
+      "batch_index": 0,
       "image": [
         "144",
         0
       ],
-      "length": 0
+      "length": 121
     }
   },
   "148": {
@@ -227,8 +240,11 @@
         "145",
         0
       ],
+      "resize_type": "scale dimensions",
+      "resize_type.crop": "center",
       "resize_type.height": 960,
-      "resize_type.width": 960
+      "resize_type.width": 960,
+      "scale_method": "lanczos"
     }
   }
 }

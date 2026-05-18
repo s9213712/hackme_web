@@ -345,22 +345,6 @@
           },
           {
             "category": "NUMERIC",
-            "class_type": "ImageScaleToTotalPixels",
-            "constraints": {
-              "max": 256,
-              "min": 1,
-              "step": 1
-            },
-            "current_value": 1,
-            "id": "node:237:divisible_by",
-            "input_name": "divisible_by",
-            "input_type": "number",
-            "label": "尺寸整除",
-            "node_id": "237",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
             "class_type": "LoraLoaderModelOnly",
             "constraints": {
               "max": 2.0,

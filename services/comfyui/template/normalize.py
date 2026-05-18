@@ -44,8 +44,11 @@ _WIDGET_ORDER_OVERRIDES: dict[str, list[str]] = {
     "EmptyLatentImage": ["width", "height", "batch_size"],
     "EmptySD3LatentImage": ["width", "height", "batch_size"],
     "EmptyFlux2LatentImage": ["width", "height", "batch_size"],
-    "ImageScaleToTotalPixels": ["upscale_method", "megapixels", "divisible_by"],
+    "ImageScaleToTotalPixels": ["upscale_method", "megapixels", "resolution_steps"],
+    "ImageScale": ["upscale_method", "width", "height", "crop"],
+    "LatentUpscaleBy": ["upscale_method", "scale_by"],
     "WanImageToVideo": ["width", "height", "length", "batch_size"],
+    "WanVaceToVideo": ["width", "height", "length", "batch_size", "strength"],
     "ModelSamplingSD3": ["shift"],
     "ModelSamplingAuraFlow": ["shift"],
     "FluxGuidance": ["guidance"],
@@ -54,8 +57,56 @@ _WIDGET_ORDER_OVERRIDES: dict[str, list[str]] = {
     "RandomNoise": ["noise_seed", "_skip_control_after_generate"],
     "CreateVideo": ["fps"],
     "SaveImage": ["filename_prefix"],
-    "SaveVideo": ["filename_prefix", "fps"],
+    "SaveVideo": ["filename_prefix", "format", "codec"],
     "SaveAudioMP3": ["filename_prefix", "quality"],
+    "LoadVideo": ["file", "upload"],
+    "ControlNetLoader": ["control_net_name"],
+    "Canny": ["low_threshold", "high_threshold"],
+    "ControlNetApplyAdvanced": ["strength", "start_percent", "end_percent"],
+    "SDPoseKeypointExtractor": ["batch_size"],
+    "ImageBlend": ["blend_factor", "blend_mode"],
+    "CFGNorm": ["strength"],
+    "TextEncodeQwenImageEditPlus": ["prompt"],
+    "InpaintModelConditioning": ["noise_mask"],
+    "ImagePadForOutpaint": ["left", "top", "right", "bottom", "feathering"],
+    "UpscaleModelLoader": ["model_name"],
+    "LoraLoader": ["lora_name", "strength_model", "strength_clip"],
+    "ImageToMask": ["channel"],
+    "ImageCompositeMasked": ["x", "y", "resize_source"],
+    "ImageFromBatch": ["batch_index", "length"],
+    "CLIPVisionLoader": ["clip_name"],
+    "CLIPVisionEncode": ["crop"],
+    "HunyuanVideo15ImageToVideo": ["width", "height", "length", "batch_size"],
+    "BasicScheduler": ["scheduler", "steps", "denoise"],
+    "ComfyMathExpression": ["expression"],
+    "LTXAVTextEncoderLoader": ["text_encoder", "ckpt_name", "device"],
+    "CFGGuider": ["cfg"],
+    "ManualSigmas": ["sigmas"],
+    "EmptyLTXVLatentVideo": ["width", "height", "length", "batch_size"],
+    "EmptyAceStep1.5LatentAudio": ["seconds", "batch_size"],
+    "TextEncodeAceStepAudio1.5": [
+        "tags",
+        "lyrics",
+        "seed",
+        "_skip_control_after_generate",
+        "bpm",
+        "duration",
+        "timesignature",
+        "language",
+        "keyscale",
+        "generate_audio_codes",
+        "cfg_scale",
+        "temperature",
+        "top_p",
+        "top_k",
+        "min_p",
+    ],
+    "EmptyImage": ["width", "height", "batch_size", "color"],
+    "ResizeImagesByLongerEdge": ["longer_edge"],
+    "LTXVPreprocess": ["img_compression"],
+    "LTXVImgToVideoInplace": ["strength", "bypass"],
+    "LTXVEmptyLatentAudio": ["frames_number", "frame_rate", "batch_size"],
+    "VAEDecodeTiled": ["tile_size", "overlap", "temporal_size", "temporal_overlap"],
     # ComfyUI UI graph stores the "control_after_generate" widget in
     # widgets_values even though it is not part of the API prompt inputs.
     "KSampler": [
@@ -264,7 +315,7 @@ def _expand_one_subgraph_node(
     for link in _iter_link_records(subgraph.get("links")):
         link_id, src_node_id, src_slot, dst_node_id, dst_slot, link_type = link
         if src_node_id == "-10":
-            input_def = _node_input_at_slot(target_node, src_slot)
+            input_def = _node_input_for_subgraph_slot(target_node, subgraph, src_slot)
             external_link_id = input_def.get("link") if isinstance(input_def, dict) else None
             external_source = _link_source_by_id(external_link_id, root_link_sources)
             if external_source is None:
@@ -339,7 +390,7 @@ def _iter_link_records(raw_links: Any):
 
 
 def _link_record(link: Any) -> tuple[int, str, int, str, int, Any] | None:
-    if isinstance(link, list) and len(link) >= 5:
+    if isinstance(link, (list, tuple)) and len(link) >= 5:
         try:
             link_id = int(link[0])
             src_node_id = str(link[1]).strip()
@@ -418,6 +469,33 @@ def _node_input_at_slot(node: dict[str, Any], slot: int) -> dict[str, Any] | Non
         return None
     input_def = inputs[slot]
     return input_def if isinstance(input_def, dict) else None
+
+
+def _subgraph_input_name_at_slot(subgraph: dict[str, Any], slot: int) -> str:
+    inputs = subgraph.get("inputs")
+    if not isinstance(inputs, list) or slot < 0 or slot >= len(inputs):
+        return ""
+    input_def = inputs[slot]
+    if not isinstance(input_def, dict):
+        return ""
+    return str(input_def.get("name") or "").strip()
+
+
+def _node_input_for_subgraph_slot(
+    node: dict[str, Any],
+    subgraph: dict[str, Any],
+    slot: int,
+) -> dict[str, Any] | None:
+    wanted_name = _subgraph_input_name_at_slot(subgraph, slot)
+    inputs = node.get("inputs")
+    if wanted_name and isinstance(inputs, list):
+        for input_def in inputs:
+            if not isinstance(input_def, dict):
+                continue
+            if str(input_def.get("name") or "").strip() == wanted_name:
+                return input_def
+        return None
+    return _node_input_at_slot(node, slot)
 
 
 def _link_source_by_id(
@@ -545,6 +623,9 @@ def _widget_value_map(node: dict[str, Any]) -> dict[str, Any]:
         return {str(key).strip(): value for key, value in widgets.items() if str(key).strip()}
     if not isinstance(widgets, list):
         return {}
+    class_type = str(node.get("type") or "").strip()
+    if class_type == "ResizeImageMaskNode" and widgets:
+        return _resize_image_mask_widget_value_map(widgets)
     names = _widget_names_for_node(node)
     values: dict[str, Any] = {}
     for index, name in enumerate(names):
@@ -552,6 +633,36 @@ def _widget_value_map(node: dict[str, Any]) -> dict[str, Any]:
             break
         if not name or name.startswith("_skip_"):
             continue
+        values[name] = widgets[index]
+    return values
+
+
+def _resize_image_mask_widget_value_map(widgets: list[Any]) -> dict[str, Any]:
+    if not widgets:
+        return {}
+    resize_type = str(widgets[0] or "").strip()
+    values: dict[str, Any] = {"resize_type": widgets[0]}
+    if resize_type == "scale dimensions":
+        names = ["resize_type", "resize_type.width", "resize_type.height", "resize_type.crop", "scale_method"]
+    elif resize_type == "scale total pixels":
+        names = ["resize_type", "resize_type.megapixels", "scale_method"]
+    elif resize_type == "scale longer dimension":
+        names = ["resize_type", "resize_type.longer_size", "scale_method"]
+    elif resize_type == "scale shorter dimension":
+        names = ["resize_type", "resize_type.shorter_size", "scale_method"]
+    elif resize_type == "scale by multiplier":
+        names = ["resize_type", "resize_type.multiplier", "scale_method"]
+    elif resize_type == "scale width":
+        names = ["resize_type", "resize_type.width", "scale_method"]
+    elif resize_type == "scale height":
+        names = ["resize_type", "resize_type.height", "scale_method"]
+    elif resize_type == "scale to multiple":
+        names = ["resize_type", "resize_type.multiple", "scale_method"]
+    else:
+        names = ["resize_type", "scale_method"]
+    for index, name in enumerate(names):
+        if index >= len(widgets):
+            break
         values[name] = widgets[index]
     return values
 

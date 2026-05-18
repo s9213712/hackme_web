@@ -2,8 +2,9 @@
   "108": {
     "class_type": "SaveVideo",
     "inputs": {
+      "codec": "auto",
       "filename_prefix": "video/Wan2.2_image_to_video",
-      "fps": "auto",
+      "format": "auto",
       "video": [
         "148",
         0
@@ -132,8 +133,8 @@
       "cfg": 1,
       "end_at_step": 2,
       "latent_image": [
-        "148",
-        0
+        "141",
+        2
       ],
       "model": [
         "140",

@@ -12,14 +12,14 @@
   },
   "default_params": {
     "batch_size": 1,
-    "cfg": 7,
+    "cfg": 1,
     "checkpoint": "ltx-2.3-22b-dev-fp8.safetensors",
     "clip": "",
     "controlnet": null,
     "denoise_strength": 0,
     "diffusion_model": "",
     "generation_mode": "t2v",
-    "height": 1024,
+    "height": 512,
     "loras": [
       {
         "name": "ltx-2.3-22b-distilled-lora-384.safetensors",
@@ -36,7 +36,7 @@
     "steps": 20,
     "upscale_model": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
     "vae": "",
-    "width": 1024
+    "width": 512
   },
   "description": "LTX 2.3 text-to-video workflow converted from origin.",
   "id": "origin_ltx23_t2v",

@@ -9,10 +9,12 @@
   "122": {
     "class_type": "Canny",
     "inputs": {
+      "high_threshold": 0.35,
       "image": [
         "123",
         0
-      ]
+      ],
+      "low_threshold": 0.33
     }
   },
   "123": {
@@ -21,7 +23,10 @@
       "input": [
         "121",
         0
-      ]
+      ],
+      "resize_type": "scale total pixels",
+      "resize_type.megapixels": 1.6,
+      "scale_method": "area"
     }
   },
   "125": {
@@ -72,6 +77,11 @@
         "135",
         0
       ],
+      "end_percent": 1,
+      "image": [
+        "122",
+        0
+      ],
       "negative": [
         "145",
         0
@@ -80,6 +90,7 @@
         "146",
         0
       ],
+      "start_percent": 0,
       "strength": 1,
       "vae": [
         "143",
@@ -184,10 +195,7 @@
   "141": {
     "class_type": "UNETLoader",
     "inputs": {
-      "unet_name": [
-        "122",
-        0
-      ],
+      "unet_name": "qwen_image_2512_fp8_e4m3fn.safetensors",
       "weight_dtype": "default"
     }
   },

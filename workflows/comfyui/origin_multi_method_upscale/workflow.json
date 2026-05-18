@@ -6,7 +6,7 @@
         "87",
         1
       ],
-      "text": "anmi,masterpiece, 4k, highres, detail,\nfull body, solo, 1girl, loli, little girl, cat_girls, underwear,  bedroom,\nmasturbate, pussy_juice"
+      "text": "anime style, masterpiece, highres, full body, solo, adult cat-eared cosplayer wearing a modest casual outfit in a cozy bedroom, soft lighting, detailed eyes, clean lines"
     }
   },
   "3": {
@@ -93,7 +93,9 @@
       "samples": [
         "3",
         0
-      ]
+      ],
+      "scale_by": 2,
+      "upscale_method": "nearest-exact"
     }
   },
   "64": {
@@ -152,7 +154,9 @@
   },
   "77": {
     "class_type": "UpscaleModelLoader",
-    "inputs": {}
+    "inputs": {
+      "model_name": "ESRGAN\\OmniSR_X4_DIV2K.safetensors"
+    }
   },
   "8": {
     "class_type": "VAEDecode",
@@ -174,10 +178,13 @@
         "4",
         1
       ],
+      "lora_name": "SDXL\\Artists\\Anmi style\\anmi-000096.safetensors",
       "model": [
         "4",
         0
-      ]
+      ],
+      "strength_clip": 1,
+      "strength_model": 0.8
     }
   },
   "87": {
@@ -187,10 +194,13 @@
         "86",
         1
       ],
+      "lora_name": "SDXL\\illustrious\\TRexstyle-12V2Rev.safetensors",
       "model": [
         "86",
         0
-      ]
+      ],
+      "strength_clip": 1,
+      "strength_model": 0.9
     }
   },
   "93": {

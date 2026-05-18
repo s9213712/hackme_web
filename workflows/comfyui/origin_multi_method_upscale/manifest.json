@@ -20,15 +20,26 @@
     "diffusion_model": "",
     "generation_mode": "upscale",
     "height": 1024,
-    "loras": [],
+    "loras": [
+      {
+        "name": "SDXL\\illustrious\\TRexstyle-12V2Rev.safetensors",
+        "strength_clip": 1,
+        "strength_model": 0.9
+      },
+      {
+        "name": "SDXL\\Artists\\Anmi style\\anmi-000096.safetensors",
+        "strength_clip": 1,
+        "strength_model": 0.8
+      }
+    ],
     "model": "SDXL\\illustrious(IL)\\WAI系列\\waiIllustriousSDXL_v160.safetensors",
     "negative_prompt": "embedding:lazy series\\IL\\lazyneg",
-    "prompt": "anmi,masterpiece, 4k, highres, detail,\nfull body, solo, 1girl, loli, little girl, cat_girls, underwear,  bedroom,\nmasturbate, pussy_juice",
+    "prompt": "anime style, masterpiece, highres, full body, solo, adult cat-eared cosplayer wearing a modest casual outfit in a cozy bedroom, soft lighting, detailed eyes, clean lines",
     "sampler_name": "dpmpp_2m",
     "scheduler": "karras",
     "seed": 67742897374064,
     "steps": 30,
-    "upscale_model": "",
+    "upscale_model": "ESRGAN\\OmniSR_X4_DIV2K.safetensors",
     "vae": "",
     "width": 1024
   },
@@ -41,8 +52,23 @@
   ],
   "required_controlnets": [],
   "required_custom_nodes": [],
-  "required_loras": [],
+  "required_loras": [
+    {
+      "name": "SDXL\\illustrious\\TRexstyle-12V2Rev.safetensors",
+      "strength_clip": 1,
+      "strength_model": 0.9
+    },
+    {
+      "name": "SDXL\\Artists\\Anmi style\\anmi-000096.safetensors",
+      "strength_clip": 1,
+      "strength_model": 0.8
+    }
+  ],
   "required_models": [
+    {
+      "kind": "upscale",
+      "name": "ESRGAN\\OmniSR_X4_DIV2K.safetensors"
+    },
     {
       "kind": "embedding",
       "name": "lazy"
@@ -83,7 +109,7 @@
               "max_length": 2000,
               "rows": 4
             },
-            "current_value": "anmi,masterpiece, 4k, highres, detail,\nfull body, solo, 1girl, loli, little girl, cat_girls, underwear,  bedroom,\nmasturbate, pussy_juice",
+            "current_value": "anime style, masterpiece, highres, full body, solo, adult cat-eared cosplayer wearing a modest casual outfit in a cozy bedroom, soft lighting, detailed eyes, clean lines",
             "id": "node:16:text",
             "input_name": "text",
             "input_type": "textarea",
@@ -120,6 +146,28 @@
         "fields": [
           {
             "category": "MODEL",
+            "class_type": "UpscaleModelLoader",
+            "current_value": "ESRGAN\\OmniSR_X4_DIV2K.safetensors",
+            "id": "node:77:model_name",
+            "input_name": "model_name",
+            "input_type": "select",
+            "label": "放大 / Upscale 模型",
+            "node_id": "77",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "LoraLoader",
+            "current_value": "SDXL\\illustrious\\TRexstyle-12V2Rev.safetensors",
+            "id": "node:87:lora_name",
+            "input_name": "lora_name",
+            "input_type": "select",
+            "label": "LoRA 模型（Node 87）",
+            "node_id": "87",
+            "required": true
+          },
+          {
+            "category": "MODEL",
             "class_type": "CheckpointLoaderSimple",
             "current_value": "SDXL\\illustrious(IL)\\WAI系列\\waiIllustriousSDXL_v160.safetensors",
             "id": "node:4:ckpt_name",
@@ -127,6 +175,17 @@
             "input_type": "select",
             "label": "Checkpoint / 大模型",
             "node_id": "4",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "LoraLoader",
+            "current_value": "SDXL\\Artists\\Anmi style\\anmi-000096.safetensors",
+            "id": "node:86:lora_name",
+            "input_name": "lora_name",
+            "input_type": "select",
+            "label": "LoRA 模型（Node 86）",
+            "node_id": "86",
             "required": true
           }
         ],
@@ -361,6 +420,70 @@
             "input_type": "number",
             "label": "批次大小",
             "node_id": "56",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "LoraLoader",
+            "constraints": {
+              "max": 2.0,
+              "min": -2.0,
+              "step": 0.05
+            },
+            "current_value": 0.9,
+            "id": "node:87:strength_model",
+            "input_name": "strength_model",
+            "input_type": "number",
+            "label": "LoRA 強度（model）（Node 87）",
+            "node_id": "87",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "LoraLoader",
+            "constraints": {
+              "max": 2.0,
+              "min": -2.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:87:strength_clip",
+            "input_name": "strength_clip",
+            "input_type": "number",
+            "label": "LoRA 強度（clip）（Node 87）",
+            "node_id": "87",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "LoraLoader",
+            "constraints": {
+              "max": 2.0,
+              "min": -2.0,
+              "step": 0.05
+            },
+            "current_value": 0.8,
+            "id": "node:86:strength_model",
+            "input_name": "strength_model",
+            "input_type": "number",
+            "label": "LoRA 強度（model）（Node 86）",
+            "node_id": "86",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "LoraLoader",
+            "constraints": {
+              "max": 2.0,
+              "min": -2.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:86:strength_clip",
+            "input_name": "strength_clip",
+            "input_type": "number",
+            "label": "LoRA 強度（clip）（Node 86）",
+            "node_id": "86",
             "required": true
           }
         ],

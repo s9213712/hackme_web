@@ -16,7 +16,7 @@
     "checkpoint": "",
     "clip": "qwen_2.5_vl_7b.safetensors",
     "controlnet": null,
-    "denoise_strength": 0,
+    "denoise_strength": 1,
     "diffusion_model": "capybara_v0.1.safetensors",
     "generation_mode": "img2img",
     "height": 1024,
@@ -25,9 +25,9 @@
     "negative_prompt": "blurry, low quality, distorted, ugly, watermark, text",
     "prompt": "Keep the characters and fluttering costumes unchanged, replace the indoor scene with an outdoor grassland setting",
     "sampler_name": "euler",
-    "scheduler": "",
+    "scheduler": "simple",
     "seed": 1044901887090653,
-    "steps": "simple",
+    "steps": 20,
     "upscale_model": "",
     "vae": "hunyuanvideo15_vae_fp16.safetensors",
     "width": 1024
@@ -158,6 +158,17 @@
         "fields": [
           {
             "category": "SAMPLER",
+            "class_type": "BasicScheduler",
+            "current_value": "simple",
+            "id": "node:111:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器",
+            "node_id": "111",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
             "class_type": "KSamplerSelect",
             "current_value": "euler",
             "id": "node:126:sampler_name",
@@ -177,11 +188,22 @@
           {
             "category": "NUMERIC",
             "class_type": "BasicScheduler",
-            "current_value": "simple",
+            "current_value": 20,
             "id": "node:111:steps",
             "input_name": "steps",
             "input_type": "number",
             "label": "步數",
+            "node_id": "111",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "BasicScheduler",
+            "current_value": 1,
+            "id": "node:111:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise",
             "node_id": "111",
             "required": true
           },

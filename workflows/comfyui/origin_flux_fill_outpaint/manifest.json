@@ -238,6 +238,86 @@
             "label": "Flux Guidance",
             "node_id": "26",
             "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ImagePadForOutpaint",
+            "constraints": {
+              "max": 4096,
+              "min": 0,
+              "step": 8
+            },
+            "current_value": 400,
+            "id": "node:44:left",
+            "input_name": "left",
+            "input_type": "number",
+            "label": "外擴 - 左",
+            "node_id": "44",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ImagePadForOutpaint",
+            "constraints": {
+              "max": 4096,
+              "min": 0,
+              "step": 8
+            },
+            "current_value": 0,
+            "id": "node:44:top",
+            "input_name": "top",
+            "input_type": "number",
+            "label": "外擴 - 上",
+            "node_id": "44",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ImagePadForOutpaint",
+            "constraints": {
+              "max": 4096,
+              "min": 0,
+              "step": 8
+            },
+            "current_value": 400,
+            "id": "node:44:right",
+            "input_name": "right",
+            "input_type": "number",
+            "label": "外擴 - 右",
+            "node_id": "44",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ImagePadForOutpaint",
+            "constraints": {
+              "max": 4096,
+              "min": 0,
+              "step": 8
+            },
+            "current_value": 400,
+            "id": "node:44:bottom",
+            "input_name": "bottom",
+            "input_type": "number",
+            "label": "外擴 - 下",
+            "node_id": "44",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ImagePadForOutpaint",
+            "constraints": {
+              "max": 256,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 24,
+            "id": "node:44:feathering",
+            "input_name": "feathering",
+            "input_type": "number",
+            "label": "羽化",
+            "node_id": "44",
+            "required": true
           }
         ],
         "id": "numeric",

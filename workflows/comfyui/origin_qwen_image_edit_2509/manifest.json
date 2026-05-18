@@ -185,6 +185,39 @@
             "required": true
           },
           {
+            "category": "SAMPLER",
+            "class_type": "ComfySwitchNode",
+            "current_value": true,
+            "id": "node:483:switch",
+            "input_name": "switch",
+            "input_type": "select",
+            "label": "ComfySwitchNode.switch（Node 483）",
+            "node_id": "483",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ComfySwitchNode",
+            "current_value": true,
+            "id": "node:484:switch",
+            "input_name": "switch",
+            "input_type": "select",
+            "label": "ComfySwitchNode.switch（Node 484）",
+            "node_id": "484",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ComfySwitchNode",
+            "current_value": true,
+            "id": "node:485:switch",
+            "input_name": "switch",
+            "input_type": "select",
+            "label": "ComfySwitchNode.switch（Node 485）",
+            "node_id": "485",
+            "required": true
+          },
+          {
             "category": "NUMERIC",
             "class_type": "KSampler",
             "constraints": {

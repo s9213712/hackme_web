@@ -59,6 +59,19 @@ def interrupt(client, *, timeout_seconds=None):
     )
 
 
+def delete_queue_items(client, prompt_ids, *, timeout_seconds=None):
+    ids = [str(item) for item in (prompt_ids or []) if str(item or "").strip()]
+    if not ids:
+        return {}
+    return client._json_request(
+        "/queue",
+        method="POST",
+        payload={"delete": ids},
+        timeout=timeout_seconds,
+        allow_non_json=True,
+    )
+
+
 def emit_progress(progress_callback, snapshot):
     if not progress_callback:
         return

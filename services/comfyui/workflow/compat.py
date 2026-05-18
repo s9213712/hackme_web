@@ -68,6 +68,21 @@ def apply_workflow_compatibility_fixes(workflow: Any) -> Any:
     """
     if not isinstance(workflow, Mapping) or not workflow:
         return workflow
+    patched_defaults = None
+    for node_id, node in workflow.items():
+        if not isinstance(node, Mapping):
+            continue
+        if str(node.get("class_type") or "").strip() != "StringConcatenate":
+            continue
+        inputs = _node_inputs(node)
+        if "delimiter" in inputs:
+            continue
+        if patched_defaults is None:
+            patched_defaults = deepcopy(dict(workflow))
+        patched_defaults[str(node_id)].setdefault("inputs", {})["delimiter"] = ""
+    if patched_defaults is not None:
+        workflow = patched_defaults
+
     if not _workflow_uses_qwen_image_vae(workflow):
         return workflow
 

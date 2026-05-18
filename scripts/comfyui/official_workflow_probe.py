@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import re
 import struct
 import sys
 import time
@@ -39,6 +40,7 @@ MODEL_INPUTS = {
     "LoraLoaderModelOnly": {"lora_name": ("LoraLoaderModelOnly", "lora_name")},
     "ControlNetLoader": {"control_net_name": ("ControlNetLoader", "control_net_name")},
     "UpscaleModelLoader": {"model_name": ("UpscaleModelLoader", "model_name")},
+    "LoadVideo": {"file": ("LoadVideo", "file")},
 }
 
 HEAVY_WORKFLOWS = {
@@ -48,6 +50,27 @@ HEAVY_WORKFLOWS = {
     "origin_wan22_14b_i2v_subgraphed",
     "origin_ltx23_t2v",
 }
+
+SMOKE_DEFAULTS = {
+    "steps": 2,
+    "width": 512,
+    "height": 512,
+    "prompt": "hackme_web official workflow probe",
+    "negative_prompt": "low quality, blurry, watermark, child, minor",
+}
+
+MINOR_PROMPT_RE = re.compile(
+    r"\b(?:child|children|kid|kids|minor|underage|toddler|infant|baby|loli|lolita|schoolgirl|young\s+girl|girl)\b"
+    r"|(?:小女孩|幼女|未成年|蘿莉|萝莉)",
+    re.IGNORECASE,
+)
+AGE_UNDER_18_RE = re.compile(r"\b(?:[0-9]|1[0-7])\s*(?:-| )?\s*(?:year[- ]?old|yo)\b", re.IGNORECASE)
+SEXUALIZED_PROMPT_RE = re.compile(
+    r"\b(?:underwear|panties|bra|nude|naked|breast|breasts|nipple|nipples|vagina|vaginal|pubic|sex|sexual|erotic|nsfw|"
+    r"without\s+(?:a\s+)?bra|without\s+underwear|no\s+underwear|spread\s+legs|bed)\b"
+    r"|(?:內衣|内衣|裸體|裸体|胸部|乳頭|乳头|陰部|阴部|性化|沒穿內褲|没穿内裤|床上)",
+    re.IGNORECASE,
+)
 
 
 def _now():
@@ -84,7 +107,17 @@ def _node_options(object_info, node_class, input_name):
         first = raw[0]
         if isinstance(first, list):
             return {str(item) for item in first if str(item).strip()}
+        if isinstance(first, str) and len(raw) > 1 and isinstance(raw[1], dict):
+            options = raw[1].get("options")
+            if isinstance(options, list):
+                return {str(item) for item in options if str(item).strip()}
     return set()
+
+
+def _literal_model_name(value):
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
 
 
 def _preflight(bundle_id, workflow, object_info):
@@ -103,7 +136,7 @@ def _preflight(bundle_id, workflow, object_info):
             continue
         inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
         for input_name, option_ref in (MODEL_INPUTS.get(class_type) or {}).items():
-            value = str(inputs.get(input_name) or "").strip()
+            value = _literal_model_name(inputs.get(input_name))
             if not value:
                 continue
             options = _node_options(object_info, *option_ref)
@@ -122,6 +155,157 @@ def _preflight(bundle_id, workflow, object_info):
     }
 
 
+def _prompt_safety_issue(workflow):
+    unsafe_nodes = []
+    for node_id, node in sorted((workflow or {}).items(), key=lambda item: str(item[0])):
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        for input_name in ("text", "prompt"):
+            value = inputs.get(input_name)
+            if not isinstance(value, str):
+                continue
+            if not SEXUALIZED_PROMPT_RE.search(value):
+                continue
+            if MINOR_PROMPT_RE.search(value) or AGE_UNDER_18_RE.search(value):
+                unsafe_nodes.append(f"{node_id}.{input_name}")
+    if not unsafe_nodes:
+        return ""
+    return (
+        "blocked unsafe prompt before queueing: sexualized minor or age-ambiguous childlike content "
+        f"in node input(s) {', '.join(unsafe_nodes[:8])}"
+    )
+
+
+def _load_json_object(value, *, label):
+    raw = str(value or "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} must be a JSON object") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return payload
+
+
+def _load_custom_params(args):
+    params = {}
+    if getattr(args, "custom_param_file", ""):
+        path = Path(str(args.custom_param_file)).expanduser()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("--custom-param-file must contain a JSON object") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("--custom-param-file must contain a JSON object")
+        params.update(payload)
+    params.update(_load_json_object(getattr(args, "custom_param_json", ""), label="--custom-param-json"))
+    if getattr(args, "custom_params", False):
+        aliases = {
+            "prompt": getattr(args, "prompt", None),
+            "negative_prompt": getattr(args, "negative_prompt", None),
+            "steps": getattr(args, "steps", None),
+            "width": getattr(args, "width", None),
+            "height": getattr(args, "height", None),
+            "checkpoint_model": getattr(args, "checkpoint_model", None),
+        }
+        for key, value in aliases.items():
+            if value is not None and value != "":
+                params[key] = value
+    direct = {
+        "prompt": getattr(args, "custom_prompt", None),
+        "negative_prompt": getattr(args, "custom_negative_prompt", None),
+        "seed": getattr(args, "custom_seed", None),
+        "steps": getattr(args, "custom_steps", None),
+        "width": getattr(args, "custom_width", None),
+        "height": getattr(args, "custom_height", None),
+        "cfg": getattr(args, "custom_cfg", None),
+        "sampler_name": getattr(args, "custom_sampler_name", None),
+        "scheduler": getattr(args, "custom_scheduler", None),
+        "batch_size": getattr(args, "custom_batch_size", None),
+        "checkpoint_model": getattr(args, "custom_checkpoint_model", None),
+        "diffusion_model": getattr(args, "custom_diffusion_model", None),
+        "clip_model": getattr(args, "custom_clip_model", None),
+        "vae_model": getattr(args, "custom_vae_model", None),
+        "lora_model": getattr(args, "custom_lora_model", None),
+        "lora_strength_model": getattr(args, "custom_lora_strength_model", None),
+        "lora_strength_clip": getattr(args, "custom_lora_strength_clip", None),
+        "controlnet_model": getattr(args, "custom_controlnet_model", None),
+        "upscale_model": getattr(args, "custom_upscale_model", None),
+    }
+    for key, value in direct.items():
+        if value is not None and value != "":
+            params[key] = value
+    return params
+
+
+def _apply_generation_params_to_node(node_id, node, params, negative_node_ids):
+    if not isinstance(node, dict) or not isinstance(params, dict):
+        return
+    class_type = str(node.get("class_type") or "")
+    inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+    if "checkpoint_model" in params and class_type == "CheckpointLoaderSimple" and "ckpt_name" in inputs:
+        inputs["ckpt_name"] = params["checkpoint_model"]
+    if "diffusion_model" in params and class_type == "UNETLoader" and "unet_name" in inputs:
+        inputs["unet_name"] = params["diffusion_model"]
+    if "clip_model" in params and class_type == "CLIPLoader" and "clip_name" in inputs:
+        inputs["clip_name"] = params["clip_model"]
+    if "clip_model" in params and class_type in {"DualCLIPLoader", "TripleCLIPLoader"}:
+        for input_name in ("clip_name1", "clip_name2", "clip_name3"):
+            if input_name in inputs:
+                inputs[input_name] = params["clip_model"]
+    if "vae_model" in params and class_type == "VAELoader" and "vae_name" in inputs:
+        inputs["vae_name"] = params["vae_model"]
+    if "lora_model" in params and class_type in {"LoraLoader", "LoraLoaderModelOnly"} and "lora_name" in inputs:
+        inputs["lora_name"] = params["lora_model"]
+    if class_type in {"LoraLoader", "LoraLoaderModelOnly"}:
+        if "lora_strength_model" in params and "strength_model" in inputs:
+            inputs["strength_model"] = params["lora_strength_model"]
+        if "lora_strength_clip" in params and "strength_clip" in inputs:
+            inputs["strength_clip"] = params["lora_strength_clip"]
+    if "controlnet_model" in params and class_type == "ControlNetLoader" and "control_net_name" in inputs:
+        inputs["control_net_name"] = params["controlnet_model"]
+    if "upscale_model" in params and class_type == "UpscaleModelLoader" and "model_name" in inputs:
+        inputs["model_name"] = params["upscale_model"]
+    for input_name in ("seed", "steps", "width", "height", "cfg", "sampler_name", "scheduler", "batch_size"):
+        if input_name in params and input_name in inputs:
+            inputs[input_name] = params[input_name]
+    if "batch_size" in params:
+        for input_name in ("max_images", "number_of_images"):
+            if input_name in inputs:
+                inputs[input_name] = params["batch_size"]
+    if "width" in params and "height" in params and "size_preset" in inputs and isinstance(inputs.get("size_preset"), str):
+        inputs["size_preset"] = f"{int(params['width'])}x{int(params['height'])} (1:1)"
+    if "prompt" in params and "prompt" in inputs and isinstance(inputs.get("prompt"), str):
+        inputs["prompt"] = params["prompt"]
+    if "prompt" in params and "text" in inputs and isinstance(inputs.get("text"), str):
+        inputs["text"] = params.get("negative_prompt", inputs["text"]) if str(node_id) in negative_node_ids else params["prompt"]
+    if "negative_prompt" in params and "text" in inputs and isinstance(inputs.get("text"), str) and str(node_id) in negative_node_ids:
+        inputs["text"] = params["negative_prompt"]
+
+
+def _apply_explicit_node_overrides(patched, params):
+    class_inputs = params.get("class_inputs") if isinstance(params.get("class_inputs"), dict) else {}
+    for node in patched.values():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "")
+        overrides = class_inputs.get(class_type)
+        if isinstance(overrides, dict):
+            inputs = node.setdefault("inputs", {})
+            if isinstance(inputs, dict):
+                inputs.update(overrides)
+    node_inputs = params.get("node_inputs") if isinstance(params.get("node_inputs"), dict) else {}
+    for node_id, overrides in node_inputs.items():
+        node = patched.get(str(node_id))
+        if isinstance(node, dict) and isinstance(overrides, dict):
+            inputs = node.setdefault("inputs", {})
+            if isinstance(inputs, dict):
+                inputs.update(overrides)
+
+
 def _patch_for_probe(
     workflow,
     bundle_id,
@@ -134,8 +318,25 @@ def _patch_for_probe(
     checkpoint_model,
     source_image_name,
     mask_image_name,
+    parameter_mode,
+    custom_params=None,
 ):
     patched = copy.deepcopy(workflow)
+    custom_params = dict(custom_params or {})
+    if parameter_mode == "smoke":
+        generation_params = {
+            "steps": steps if steps is not None else SMOKE_DEFAULTS["steps"],
+            "width": width if width is not None else SMOKE_DEFAULTS["width"],
+            "height": height if height is not None else SMOKE_DEFAULTS["height"],
+            "prompt": prompt if prompt is not None else SMOKE_DEFAULTS["prompt"],
+            "negative_prompt": negative_prompt if negative_prompt is not None else SMOKE_DEFAULTS["negative_prompt"],
+        }
+        if checkpoint_model:
+            generation_params["checkpoint_model"] = checkpoint_model
+    elif parameter_mode == "custom":
+        generation_params = custom_params
+    else:
+        generation_params = {}
     negative_node_ids = set()
     for node in patched.values():
         if not isinstance(node, dict):
@@ -144,37 +345,12 @@ def _patch_for_probe(
         ref = inputs.get("negative")
         if isinstance(ref, list) and ref:
             negative_node_ids.add(str(ref[0]))
-    for node in patched.values():
+    for node_id, node in patched.items():
         if not isinstance(node, dict):
             continue
         class_type = str(node.get("class_type") or "")
         inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
-        if checkpoint_model and class_type == "CheckpointLoaderSimple" and "ckpt_name" in inputs:
-            inputs["ckpt_name"] = checkpoint_model
-        if "steps" in inputs:
-            try:
-                inputs["steps"] = min(int(inputs["steps"]), int(steps))
-            except Exception:
-                inputs["steps"] = int(steps)
-        if "width" in inputs and isinstance(inputs.get("width"), int):
-            inputs["width"] = min(int(inputs["width"]), int(width))
-        if "height" in inputs and isinstance(inputs.get("height"), int):
-            inputs["height"] = min(int(inputs["height"]), int(height))
-        if "size_preset" in inputs and isinstance(inputs.get("size_preset"), str):
-            inputs["size_preset"] = f"{int(width)}x{int(height)} (1:1)"
-        if "resolution" in inputs and isinstance(inputs.get("resolution"), str):
-            inputs["resolution"] = "1K" if max(int(width), int(height)) >= 1024 else "auto"
-        if "prompt" in inputs and isinstance(inputs.get("prompt"), str):
-            inputs["prompt"] = prompt
-        if "text" in inputs and isinstance(inputs.get("text"), str):
-            node_id = next((str(key) for key, value in patched.items() if value is node), "")
-            inputs["text"] = negative_prompt if node_id in negative_node_ids else prompt
-        if "batch_size" in inputs:
-            inputs["batch_size"] = 1
-        if "max_images" in inputs:
-            inputs["max_images"] = 1
-        if "number_of_images" in inputs:
-            inputs["number_of_images"] = 1
+        _apply_generation_params_to_node(node_id, node, generation_params, negative_node_ids)
         if "filename_prefix" in inputs:
             output_kind = "probe"
             if "audio" in class_type.lower():
@@ -188,6 +364,8 @@ def _patch_for_probe(
         elif class_type == "LoadImageMask":
             inputs["image"] = mask_image_name
             inputs["upload"] = "image"
+    if parameter_mode == "custom":
+        _apply_explicit_node_overrides(patched, custom_params)
     return patched
 
 
@@ -227,15 +405,18 @@ def run_probe(args):
     if args.only:
         wanted = {item.strip() for item in args.only.split(",") if item.strip()}
         bundle_ids = [item for item in bundle_ids if item in wanted]
+    custom_params = _load_custom_params(args)
+    parameter_mode = "custom" if args.custom_params or custom_params else ("formal" if args.formal_params else "smoke")
     results = []
     for bundle_id in bundle_ids:
         workflow = _load_workflow(bundle_id)
         preflight = _preflight(bundle_id, workflow, object_info)
         if not preflight["runnable"]:
-            results.append(_result(bundle_id, status="preflight_failed", preflight=preflight))
-            if not args.continue_on_fail:
-                break
-            continue
+            if args.preflight_only or not args.force_run:
+                results.append(_result(bundle_id, status="preflight_failed", preflight=preflight))
+                if not args.continue_on_fail:
+                    break
+                continue
         if args.preflight_only:
             results.append(_result(bundle_id, status="preflight_pass", preflight=preflight))
             continue
@@ -253,10 +434,48 @@ def run_probe(args):
             checkpoint_model=args.checkpoint_model,
             source_image_name=source_image_name,
             mask_image_name=mask_image_name,
+            parameter_mode=parameter_mode,
+            custom_params=custom_params,
         )
+        safety_issue = _prompt_safety_issue(patched)
+        if safety_issue:
+            results.append(_result(bundle_id, status="blocked_unsafe_prompt", detail=safety_issue, preflight=preflight))
+            if not args.continue_on_fail:
+                break
+            continue
         start = time.perf_counter()
         try:
-            output = client.generate_from_workflow(patched, timeout_seconds=args.timeout, expected_count=1)
+            if args.acceptance_only:
+                prompt_id = client.queue_prompt(patched)
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                interrupt_detail = ""
+                try:
+                    client.interrupt(timeout_seconds=args.request_timeout)
+                except Exception as exc:
+                    interrupt_detail = f"interrupt failed: {exc}"
+                try:
+                    client.delete_queue_items([prompt_id], timeout_seconds=args.request_timeout)
+                except Exception as exc:
+                    suffix = f"queue delete failed: {exc}"
+                    interrupt_detail = f"{interrupt_detail}; {suffix}" if interrupt_detail else suffix
+                detail = "accepted only; output intentionally skipped by --acceptance-only"
+                if interrupt_detail:
+                    detail = f"{detail}; {interrupt_detail}"
+                results.append(_result(
+                    bundle_id,
+                    status="accepted",
+                    detail=detail,
+                    preflight=preflight,
+                    elapsed_ms=elapsed_ms,
+                    output={"prompt_id": prompt_id},
+                ))
+                continue
+            output = client.generate_from_workflow(
+                patched,
+                timeout_seconds=args.timeout,
+                expected_count=1,
+                fetch_outputs=not args.no_fetch_outputs,
+            )
             elapsed_ms = (time.perf_counter() - start) * 1000
             media = output.get("media") if isinstance(output.get("media"), dict) else {}
             output_summary = {
@@ -275,8 +494,8 @@ def run_probe(args):
             if not args.continue_on_fail:
                 break
 
-    completed = sum(1 for item in results if item["status"] == "completed")
-    failed = sum(1 for item in results if item["status"] in {"preflight_failed", "run_failed"})
+    completed = sum(1 for item in results if item["status"] in {"completed", "accepted"})
+    failed = sum(1 for item in results if item["status"] in {"preflight_failed", "run_failed", "blocked_unsafe_prompt"})
     return {
         "ok": failed == 0,
         "summary": {
@@ -287,6 +506,12 @@ def run_probe(args):
             "failed": failed,
             "preflight_only": bool(args.preflight_only),
             "include_heavy": bool(args.include_heavy),
+            "formal_params": bool(args.formal_params),
+            "force_run": bool(args.force_run),
+            "parameter_mode": parameter_mode,
+            "custom_param_keys": sorted(key for key in custom_params.keys() if key not in {"node_inputs", "class_inputs"}),
+            "fetch_outputs": not bool(args.no_fetch_outputs),
+            "acceptance_only": bool(args.acceptance_only),
         },
         "results": results,
     }
@@ -297,17 +522,43 @@ def parse_args():
     parser.add_argument("--comfyui-url", default="http://127.0.0.1:8188")
     parser.add_argument("--timeout", type=int, default=240)
     parser.add_argument("--request-timeout", type=int, default=30)
-    parser.add_argument("--steps", type=int, default=2)
-    parser.add_argument("--width", type=int, default=512)
-    parser.add_argument("--height", type=int, default=512)
+    parser.add_argument("--steps", type=int, default=None, help="Smoke/custom override for node inputs named steps.")
+    parser.add_argument("--width", type=int, default=None, help="Smoke/custom override for node inputs named width.")
+    parser.add_argument("--height", type=int, default=None, help="Smoke/custom override for node inputs named height.")
     parser.add_argument("--image-size", type=int, default=128)
-    parser.add_argument("--prompt", default="hackme_web official workflow probe")
-    parser.add_argument("--negative-prompt", default="low quality, blurry, watermark, child, minor")
-    parser.add_argument("--checkpoint-model", default="", help="Override CheckpointLoaderSimple ckpt_name for smoke/acceptance probes.")
+    parser.add_argument("--prompt", default=None, help="Smoke/custom override for prompt text inputs.")
+    parser.add_argument("--negative-prompt", default=None, help="Smoke/custom override for negative prompt text inputs.")
+    parser.add_argument("--checkpoint-model", default="", help="Smoke/custom override for CheckpointLoaderSimple ckpt_name.")
     parser.add_argument("--only", default="", help="Comma-separated workflow ids to test.")
     parser.add_argument("--include-heavy", action="store_true", help="Also run audio/video heavy workflows.")
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--continue-on-fail", action="store_true")
+    parser.add_argument("--force-run", action="store_true", help="Queue workflows even when preflight reports missing nodes or models.")
+    parser.add_argument("--formal-params", action="store_true", help="Keep workflow generation parameters exactly as checked in; only remap probe input files/output prefixes.")
+    parser.add_argument("--custom-params", action="store_true", help="Start from the checked-in workflow and apply only explicitly supplied custom parameter overrides.")
+    parser.add_argument("--custom-param-json", default="", help="JSON object of custom parameter overrides.")
+    parser.add_argument("--custom-param-file", default="", help="Path to a JSON object of custom parameter overrides.")
+    parser.add_argument("--custom-prompt", default=None)
+    parser.add_argument("--custom-negative-prompt", default=None)
+    parser.add_argument("--custom-seed", type=int, default=None)
+    parser.add_argument("--custom-steps", type=int, default=None)
+    parser.add_argument("--custom-width", type=int, default=None)
+    parser.add_argument("--custom-height", type=int, default=None)
+    parser.add_argument("--custom-cfg", type=float, default=None)
+    parser.add_argument("--custom-sampler-name", default=None)
+    parser.add_argument("--custom-scheduler", default=None)
+    parser.add_argument("--custom-batch-size", type=int, default=None)
+    parser.add_argument("--custom-checkpoint-model", default=None)
+    parser.add_argument("--custom-diffusion-model", default=None)
+    parser.add_argument("--custom-clip-model", default=None)
+    parser.add_argument("--custom-vae-model", default=None)
+    parser.add_argument("--custom-lora-model", default=None)
+    parser.add_argument("--custom-lora-strength-model", type=float, default=None)
+    parser.add_argument("--custom-lora-strength-clip", type=float, default=None)
+    parser.add_argument("--custom-controlnet-model", default=None)
+    parser.add_argument("--custom-upscale-model", default=None)
+    parser.add_argument("--no-fetch-outputs", action="store_true", help="Validate execution and output references without downloading generated media bytes.")
+    parser.add_argument("--acceptance-only", action="store_true", help="Queue each prompt to validate ComfyUI accepts it, then interrupt instead of waiting for generated outputs.")
     parser.add_argument("--json-out", default="")
     return parser.parse_args()
 

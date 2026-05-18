@@ -16,7 +16,7 @@
     "checkpoint": "",
     "clip": "qwen_2.5_vl_7b.safetensors",
     "controlnet": null,
-    "denoise_strength": 0,
+    "denoise_strength": 1,
     "diffusion_model": "capybara_v0.1.safetensors",
     "generation_mode": "v2v",
     "height": 960,
@@ -25,11 +25,11 @@
     "negative_prompt": "blurry, low quality, distorted, ugly, watermark, text",
     "prompt": "Change the ocean background in the video to a grassland and make the horse run on the grassland.",
     "sampler_name": "euler",
-    "scheduler": "",
+    "scheduler": "simple",
     "seed": 908966882718651,
-    "steps": "simple",
+    "steps": 20,
     "upscale_model": "",
-    "vae": "",
+    "vae": "hunyuanvideo15_vae_fp16.safetensors",
     "width": 960
   },
   "description": "Capybara video-edit workflow converted from origin.",
@@ -55,6 +55,14 @@
     {
       "kind": "clip",
       "name": "byt5_small_glyphxl_fp16.safetensors"
+    },
+    {
+      "kind": "vae",
+      "name": "hunyuanvideo15_vae_fp16.safetensors"
+    },
+    {
+      "kind": "clip",
+      "name": "sigclip_vision_patch14_384.safetensors"
     }
   ],
   "schema_version": 1,
@@ -125,6 +133,17 @@
         "fields": [
           {
             "category": "SAMPLER",
+            "class_type": "BasicScheduler",
+            "current_value": "simple",
+            "id": "node:128:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器",
+            "node_id": "128",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
             "class_type": "KSamplerSelect",
             "current_value": "euler",
             "id": "node:137:sampler_name",
@@ -144,11 +163,22 @@
           {
             "category": "NUMERIC",
             "class_type": "BasicScheduler",
-            "current_value": "simple",
+            "current_value": 20,
             "id": "node:128:steps",
             "input_name": "steps",
             "input_type": "number",
             "label": "步數",
+            "node_id": "128",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "BasicScheduler",
+            "current_value": 1,
+            "id": "node:128:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise",
             "node_id": "128",
             "required": true
           },

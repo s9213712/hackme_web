@@ -24,7 +24,7 @@
         0
       ],
       "image": [
-        "697",
+        "687",
         0
       ]
     }
@@ -42,15 +42,19 @@
     "class_type": "ResizeImageMaskNode",
     "inputs": {
       "input": [
-        "693",
+        "679",
         0
       ],
-      "resize_type.longer_size": 1024
+      "resize_type": "scale longer dimension",
+      "resize_type.longer_size": 1024,
+      "scale_method": "lanczos"
     }
   },
   "690": {
     "class_type": "ImageBlend",
     "inputs": {
+      "blend_factor": 0.5,
+      "blend_mode": "normal",
       "image1": [
         "682",
         0
@@ -64,6 +68,7 @@
   "692": {
     "class_type": "SDPoseKeypointExtractor",
     "inputs": {
+      "batch_size": 16,
       "bboxes": [
         "697",
         0
@@ -77,8 +82,8 @@
         0
       ],
       "vae": [
-        "694",
-        0
+        "695",
+        2
       ]
     }
   },
@@ -89,11 +94,9 @@
         "679",
         0
       ],
-      "resize_type.longer_size": [
-        "697",
-        0
-      ],
-      "scale_method": 1024
+      "resize_type": "scale longer dimension",
+      "resize_type.longer_size": 1024,
+      "scale_method": "lanczos"
     }
   },
   "694": {

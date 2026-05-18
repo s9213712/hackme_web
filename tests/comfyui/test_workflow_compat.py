@@ -55,3 +55,17 @@ def test_sanitize_applies_qwen_image_vae_workflow_compatibility_fix():
     adapter_id = sanitized["66"]["inputs"]["model"][0]
 
     assert sanitized[adapter_id]["class_type"] == "ModelSamplingAuraFlow"
+
+
+def test_string_concatenate_gets_empty_delimiter_for_newer_comfyui():
+    workflow = {
+        "1": {
+            "class_type": "StringConcatenate",
+            "inputs": {"string_a": "hello", "string_b": "world"},
+        },
+    }
+
+    patched = apply_workflow_compatibility_fixes(workflow)
+
+    assert patched["1"]["inputs"]["delimiter"] == ""
+    assert "delimiter" not in workflow["1"]["inputs"]

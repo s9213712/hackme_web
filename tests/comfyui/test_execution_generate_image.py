@@ -174,3 +174,33 @@ def test_generate_from_workflow_can_skip_output_fetching(monkeypatch):
         "data": b"",
         "size_bytes": 0,
     }]
+
+
+def test_delete_queue_items_deletes_only_supplied_prompt_ids():
+    calls = []
+
+    class QueueClient:
+        def _json_request(self, path, *, method="GET", payload=None, timeout=None, allow_non_json=False):
+            calls.append({
+                "path": path,
+                "method": method,
+                "payload": payload,
+                "timeout": timeout,
+                "allow_non_json": allow_non_json,
+            })
+            return {}
+
+    result = comfy_execution.delete_queue_items(
+        QueueClient(),
+        ["prompt-1", "", None, "prompt-2"],
+        timeout_seconds=7,
+    )
+
+    assert result == {}
+    assert calls == [{
+        "path": "/queue",
+        "method": "POST",
+        "payload": {"delete": ["prompt-1", "prompt-2"]},
+        "timeout": 7,
+        "allow_non_json": True,
+    }]

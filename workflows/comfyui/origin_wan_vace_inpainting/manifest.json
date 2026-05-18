@@ -19,8 +19,13 @@
     "denoise_strength": 1,
     "diffusion_model": "wan2.1_vace_1.3B_fp16.safetensors",
     "generation_mode": "v2v",
-    "height": 1024,
+    "height": 720,
     "loras": [
+      {
+        "name": "Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
+        "strength_clip": 1,
+        "strength_model": 0.30000000000000004
+      },
       {
         "name": "Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
         "strength_clip": 1,
@@ -36,7 +41,7 @@
     "steps": 4,
     "upscale_model": "",
     "vae": "wan_2.1_vae.safetensors",
-    "width": 1024
+    "width": 720
   },
   "description": "WAN VACE video inpainting workflow converted from origin.",
   "id": "origin_wan_vace_inpainting",
@@ -49,6 +54,11 @@
   "required_controlnets": [],
   "required_custom_nodes": [],
   "required_loras": [
+    {
+      "name": "Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
+      "strength_clip": 1,
+      "strength_model": 0.30000000000000004
+    },
     {
       "name": "Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
       "strength_model": 0.30000000000000004
@@ -187,6 +197,17 @@
         "fields": [
           {
             "category": "MODEL",
+            "class_type": "LoraLoader",
+            "current_value": "Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
+            "id": "node:227:lora_name",
+            "input_name": "lora_name",
+            "input_type": "select",
+            "label": "LoRA 模型",
+            "node_id": "227",
+            "required": true
+          },
+          {
+            "category": "MODEL",
             "class_type": "LoraLoaderModelOnly",
             "current_value": "Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
             "id": "node:154:lora_name",
@@ -310,6 +331,38 @@
             "input_type": "number",
             "label": "Model Shift",
             "node_id": "48",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "LoraLoader",
+            "constraints": {
+              "max": 2.0,
+              "min": -2.0,
+              "step": 0.05
+            },
+            "current_value": 0.30000000000000004,
+            "id": "node:227:strength_model",
+            "input_name": "strength_model",
+            "input_type": "number",
+            "label": "LoRA 強度（model）",
+            "node_id": "227",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "LoraLoader",
+            "constraints": {
+              "max": 2.0,
+              "min": -2.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:227:strength_clip",
+            "input_name": "strength_clip",
+            "input_type": "number",
+            "label": "LoRA 強度（clip）",
+            "node_id": "227",
             "required": true
           },
           {

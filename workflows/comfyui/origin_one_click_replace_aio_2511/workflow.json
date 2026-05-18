@@ -28,12 +28,12 @@
   "237": {
     "class_type": "ImageScaleToTotalPixels",
     "inputs": {
-      "divisible_by": 1,
       "image": [
         "298",
         0
       ],
       "megapixels": 1,
+      "resolution_steps": 1,
       "upscale_method": "lanczos"
     }
   },
