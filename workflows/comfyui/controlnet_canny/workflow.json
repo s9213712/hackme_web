@@ -7,7 +7,7 @@
     }
   },
   "11": {
-    "class_type": "CannyEdgePreprocessor",
+    "class_type": "Canny",
     "inputs": {
       "image": [
         "10",
@@ -18,7 +18,7 @@
   "12": {
     "class_type": "ControlNetLoader",
     "inputs": {
-      "control_net_name": "control_canny.safetensors"
+      "control_net_name": "SD15\\control_v11p_sd15_canny.safetensors"
     }
   },
   "13": {
@@ -75,7 +75,7 @@
   "4": {
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
-      "ckpt_name": "v1-5-pruned.safetensors"
+      "ckpt_name": "v1-5-pruned-emaonly-fp16.safetensors"
     }
   },
   "5": {

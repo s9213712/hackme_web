@@ -106,7 +106,7 @@
           {
             "category": "MODEL",
             "class_type": "UNETLoader",
-            "current_value": "anima-preview3-base.safetensors",
+            "current_value": "anima-preview.safetensors",
             "id": "node:68:unet_name",
             "input_name": "unet_name",
             "input_type": "select",

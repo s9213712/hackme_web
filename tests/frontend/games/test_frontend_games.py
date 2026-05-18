@@ -69,15 +69,21 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'id="game-root-chess-pipeline-command"' in index_html
     assert 'id="game-root-chess-stage-btn"' in index_html
     assert 'id="game-root-chess-promote-btn"' in index_html
+    assert 'value="experiment 0:minimax2ply"' in index_html
+    assert 'value="experiment 1:search"' in index_html
     assert 'value="experiment 3:dl"' in index_html
     assert 'value="experiment 4:pv"' in index_html
     assert 'value="experiment 5:nnue"' in index_html
+    assert 'value="experiment 6:neuralnet"' in index_html
     assert 'value="stockfish"' not in index_html
     assert 'value="experiment 2:nn"' in index_html
+    assert "實驗 0：2 層物質 minimax" in index_html
+    assert "實驗 1：引擎搜尋 + 對局學習" in index_html
     assert "實驗 2：NN 評估" in index_html
     assert "實驗 3：DL 語義平衡學習" in index_html
     assert "實驗 4：Policy/Value + MCTS" in index_html
     assert "實驗 5：NNUE + AlphaBeta/PVS" in index_html
+    assert "實驗 6：Neural Network" in index_html
     assert 'id="sudoku-game-panel"' in index_html
     assert 'id="sudoku-board"' in index_html
     assert 'id="sudoku-assist-btn"' in index_html
@@ -553,6 +559,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "renderChessPracticeDifficultyOptions" in chess_module_js
     assert 'if (difficulty === "experiment 4:pv") return "實驗 4：Policy/Value + MCTS";' in chess_module_js
     assert 'if (difficulty === "experiment 5:nnue") return "實驗 5：NNUE + AlphaBeta/PVS";' in chess_module_js
+    assert 'if (difficulty === "experiment 6:neuralnet") return "實驗 6：Neural Network";' in chess_module_js
     assert 'if (difficulty === "stockfish") return "Stockfish（本機）";' in chess_module_js
     assert 'if (difficulty === "experiment 2:nn") return "實驗 2：NN";' not in chess_module_js
     assert 'if (difficulty === "experiment 3:dl") return "實驗 3：DL 語義平衡";' in chess_module_js
@@ -664,6 +671,10 @@ def test_game_zone_frontend_assets_are_wired():
     assert "fpsArenaRegisterHumanPart" in fps_js
     assert "breathOffset" in fps_js
     assert "FPS_ARENA_SCOPE_SWAY" in fps_js
+    assert "FPS_ARENA_SNIPER_FOV" in fps_js
+    assert "setFpsArenaSniperMode" in fps_js
+    assert "event.button === 2" in fps_js
+    assert 'document.addEventListener("contextmenu"' in fps_js
     assert "FPS_ARENA_BOT_FIRE_RANGE" in fps_js
     assert "FPS_ARENA_PLAYER_RADIUS" in fps_js
     assert "fpsArenaBuildCombatMap" in fps_js
@@ -763,6 +774,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert "--fps-shake-x" in styles_css
     assert "--fps-breathe-rot" in styles_css
     assert "--fps-breathe-scale" in styles_css
+    assert ".fps-arena-stage.is-sniper-mode" in styles_css
+    assert "clamp(170px, 34vw, 290px)" in styles_css
     assert "clamp(96px, 22vw, 150px)" in styles_css
     assert ".game-clock-panel" in styles_css
     assert ".board-game-clock" in styles_css

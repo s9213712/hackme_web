@@ -255,6 +255,8 @@ def test_choose_experiment_neural_move_returns_legal_move_from_start():
     move = chess.Move.from_uci(uci)
     assert move in board.legal_moves
     assert result.get("engine") == EXPERIMENT_NEURAL_DIFFICULTY
+    assert result.get("piece")
+    assert "captured" in result
 
 
 def test_choose_experiment_neural_move_detects_forced_mate_in_one():

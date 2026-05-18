@@ -118,6 +118,23 @@ SETTING_GROUPS = (
             "server_backpressure_fast_lane_reserved",
             "server_backpressure_retry_after_seconds",
             "server_backpressure_refresh_seconds",
+            "server_backpressure_traffic_refresh_seconds",
+            "server_output_refresh_seconds",
+            "security_test_job_poll_seconds",
+            "system_resource_board_refresh_seconds",
+            "job_center_refresh_seconds",
+            "economy_dashboard_refresh_seconds",
+            "trading_dashboard_refresh_seconds",
+            "trading_live_price_refresh_seconds",
+            "trading_reference_price_refresh_seconds",
+            "trading_reference_chart_refresh_seconds",
+            "comfyui_job_poll_seconds",
+            "notification_poll_seconds",
+            "game_invite_poll_active_seconds",
+            "game_invite_poll_idle_seconds",
+            "game_invite_poll_hidden_seconds",
+            "server_connection_monitor_seconds",
+            "drive_dashboard_lazy_refresh_seconds",
         ),
     },
     {
@@ -257,6 +274,74 @@ SETTING_DETAILS = {
     "server_backpressure_refresh_seconds": {
         "label": "跨 worker 設定刷新秒數",
         "description": "gunicorn 多 worker 下，每個 worker 重新讀取 root Backpressure 設定的最長間隔。",
+    },
+    "server_backpressure_traffic_refresh_seconds": {
+        "label": "流量折線圖更新頻率",
+        "description": "root 伺服器設定頁可見時才輪詢 backpressure 流量折線圖；預設每 4 秒。",
+    },
+    "server_output_refresh_seconds": {
+        "label": "伺服器即時輸出更新頻率",
+        "description": "root 安全 / server console 分頁可見時才輪詢即時輸出；預設每 3 秒。",
+    },
+    "security_test_job_poll_seconds": {
+        "label": "安全測試任務更新頻率",
+        "description": "安全測試任務執行中才輪詢狀態；預設每 3 秒。",
+    },
+    "system_resource_board_refresh_seconds": {
+        "label": "系統資源看板更新頻率",
+        "description": "root 系統環境頁可見時才輪詢 CPU/RAM/GPU/VRAM；預設每 5 秒，離開頁面即停止。",
+    },
+    "job_center_refresh_seconds": {
+        "label": "任務中心更新頻率",
+        "description": "任務中心頁面可見時才輪詢 job 狀態；預設每 3 秒。",
+    },
+    "economy_dashboard_refresh_seconds": {
+        "label": "積分錢包 dashboard 更新頻率",
+        "description": "積分錢包頁可見時自動刷新錢包 / 鏈狀態；預設每 30 秒。",
+    },
+    "trading_dashboard_refresh_seconds": {
+        "label": "交易 dashboard 更新頻率",
+        "description": "交易所頁可見時刷新帳戶、掛單、倉位與快照；預設每 5 秒，不影響 server background engine。",
+    },
+    "trading_live_price_refresh_seconds": {
+        "label": "交易即時價格更新頻率",
+        "description": "交易 / 積分頁可見時刷新目前市場 live price；預設每 2 秒。",
+    },
+    "trading_reference_price_refresh_seconds": {
+        "label": "交易參考價更新頻率",
+        "description": "交易所頁可見時刷新參考價格卡片；預設每 1 秒。",
+    },
+    "trading_reference_chart_refresh_seconds": {
+        "label": "交易 K 線圖更新頻率",
+        "description": "交易所頁可見時刷新 reference chart 最新 K 線；預設每 5 秒。",
+    },
+    "comfyui_job_poll_seconds": {
+        "label": "ComfyUI 工作進度更新頻率",
+        "description": "ComfyUI 產圖或 workflow 執行中才輪詢 job 進度；預設每 1 秒。",
+    },
+    "notification_poll_seconds": {
+        "label": "通知更新頻率",
+        "description": "登入後背景檢查通知未讀數；預設每 60 秒，頁面隱藏時暫停。",
+    },
+    "game_invite_poll_active_seconds": {
+        "label": "遊戲邀請 active 更新頻率",
+        "description": "遊戲頁或邀請視窗開啟時檢查多人邀請；預設每 5 秒。",
+    },
+    "game_invite_poll_idle_seconds": {
+        "label": "遊戲邀請 idle 更新頻率",
+        "description": "使用者在線但不在遊戲頁時檢查多人邀請；預設每 60 秒。",
+    },
+    "game_invite_poll_hidden_seconds": {
+        "label": "遊戲邀請背景頁更新頻率",
+        "description": "瀏覽器分頁隱藏時檢查多人邀請；預設每 180 秒。",
+    },
+    "server_connection_monitor_seconds": {
+        "label": "伺服器連線監測頻率",
+        "description": "前端連線狀態燈檢查 /api/version 的頻率；預設每 15 秒。",
+    },
+    "drive_dashboard_lazy_refresh_seconds": {
+        "label": "雲端硬碟 dashboard lazy refresh",
+        "description": "重複進入雲端硬碟時，多久內可沿用已載入狀態並只恢復背景任務；預設 10 秒。",
     },
     "video_e2ee_derivatives_enabled": {
         "label": "允許 strict E2EE 本機省流量版本",

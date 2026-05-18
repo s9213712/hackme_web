@@ -173,15 +173,30 @@ def _gpu_usage_snapshot():
     }
 
 
-def system_resource_usage_snapshot():
+def _resource_board_refresh_seconds(settings=None):
+    try:
+        value = int((settings or {}).get("system_resource_board_refresh_seconds", 5))
+    except Exception:
+        value = 5
+    return max(1, min(300, value))
+
+
+def system_resource_usage_snapshot(ttl_seconds=None):
+    try:
+        requested_ttl = float(ttl_seconds) if ttl_seconds is not None else _RESOURCE_USAGE_CACHE_TTL_SECONDS
+    except Exception:
+        requested_ttl = _RESOURCE_USAGE_CACHE_TTL_SECONDS
+    requested_ttl = max(1.0, min(300.0, requested_ttl))
     now_mono = time.monotonic()
     cached = _RESOURCE_USAGE_CACHE.get("value")
-    if cached and now_mono < float(_RESOURCE_USAGE_CACHE.get("expires_at") or 0):
+    cached_ttl = float(_RESOURCE_USAGE_CACHE.get("ttl_seconds") or 0)
+    if cached and abs(cached_ttl - requested_ttl) < 0.001 and now_mono < float(_RESOURCE_USAGE_CACHE.get("expires_at") or 0):
         return cached
     with _RESOURCE_USAGE_CACHE_LOCK:
         now_mono = time.monotonic()
         cached = _RESOURCE_USAGE_CACHE.get("value")
-        if cached and now_mono < float(_RESOURCE_USAGE_CACHE.get("expires_at") or 0):
+        cached_ttl = float(_RESOURCE_USAGE_CACHE.get("ttl_seconds") or 0)
+        if cached and abs(cached_ttl - requested_ttl) < 0.001 and now_mono < float(_RESOURCE_USAGE_CACHE.get("expires_at") or 0):
             return cached
         gpu = _gpu_usage_snapshot()
         snapshot = {
@@ -192,7 +207,8 @@ def system_resource_usage_snapshot():
             "vram": gpu["vram"],
         }
         _RESOURCE_USAGE_CACHE["value"] = snapshot
-        _RESOURCE_USAGE_CACHE["expires_at"] = now_mono + _RESOURCE_USAGE_CACHE_TTL_SECONDS
+        _RESOURCE_USAGE_CACHE["ttl_seconds"] = requested_ttl
+        _RESOURCE_USAGE_CACHE["expires_at"] = now_mono + requested_ttl
         return snapshot
 
 
@@ -341,6 +357,8 @@ def register_system_admin_security_routes(app, ctx):
         if actor["username"] != "root":
             return json_resp({"ok":False,"msg":"只有 root 可查看系統環境"}), 403
 
+        settings = get_system_settings()
+        refresh_seconds = _resource_board_refresh_seconds(settings)
         db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
         log_files = [name for name in os.listdir(LOG_DIR) if os.path.isfile(os.path.join(LOG_DIR, name))] if os.path.isdir(LOG_DIR) else []
         chat_files = [name for name in os.listdir(CHAT_DIR) if os.path.isfile(os.path.join(CHAT_DIR, name))] if os.path.isdir(CHAT_DIR) else []
@@ -361,7 +379,25 @@ def register_system_admin_security_routes(app, ctx):
                 "chat_files": len(chat_files),
                 "anchor_files": len(anchor_files),
             },
-            "resource_usage": system_resource_usage_snapshot(),
+            "resource_refresh_seconds": refresh_seconds,
+            "resource_usage": system_resource_usage_snapshot(ttl_seconds=refresh_seconds),
+        })
+
+    @app.route("/api/admin/environment/resources", methods=["GET"])
+    @require_csrf_safe
+    def admin_environment_resources():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if actor["username"] != "root":
+            return json_resp({"ok":False,"msg":"只有 root 可查看系統資源"}), 403
+
+        settings = get_system_settings()
+        refresh_seconds = _resource_board_refresh_seconds(settings)
+        return json_resp({
+            "ok": True,
+            "resource_refresh_seconds": refresh_seconds,
+            "resource_usage": system_resource_usage_snapshot(ttl_seconds=refresh_seconds),
         })
 
     @app.route("/api/admin/health/readiness", methods=["GET"])

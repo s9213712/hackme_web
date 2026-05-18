@@ -70,6 +70,12 @@ async function doLogin() {
     const me = await meRes.json();
     if (me.ok) setAuthState(me, true);
     else setAuthState({ username: user, role: "user", role_label: "一般用戶", nickname: "-" }, true);
+    if (json.birthday_gift?.created) {
+      const amount = Number(json.birthday_gift.amount || 500);
+      const message = `生日禮金 ${Number.isFinite(amount) ? amount : 500} 點已入帳`;
+      if (typeof showAppToast === "function") showAppToast(message, true);
+      else flash($("li-msg"), message, true);
+    }
   } catch (e) {
     flash($("li-msg"), "網路錯誤，請稍後再試", false);
   } finally {
@@ -299,7 +305,7 @@ const USER_APPEARANCE_THEME_PALETTES = {
 let editingUserOriginalAppearance = {};
 let userAppearanceResetPending = false;
 const AVATAR_CROPPER_MIN_ZOOM = 1;
-const AVATAR_CROPPER_MAX_ZOOM = 3;
+const AVATAR_CROPPER_MAX_ZOOM = 6;
 const avatarCropState = {
   bound: false,
   objectUrl: "",
@@ -376,7 +382,7 @@ function avatarCropStageMetrics() {
   const width = Math.max(0, rect.width || 0);
   const height = Math.max(0, rect.height || 0);
   if (!width || !height) return null;
-  const cropSize = Math.max(96, Math.min(width, height) * 0.72);
+  const cropSize = Math.max(132, Math.min(width, height) * 0.82);
   return {
     width,
     height,

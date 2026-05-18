@@ -273,7 +273,8 @@ async function loadDriveDashboard(options = {}) {
   if (!currentUser || !canAccessModule("privacy_uploads")) return;
   if (driveDashboardInFlight) return driveDashboardInFlight;
   const lazy = options && options.lazy === true;
-  if (lazy && driveDashboardLoadedAt && Date.now() - driveDashboardLoadedAt < DRIVE_DASHBOARD_LAZY_REFRESH_MS) {
+  const lazyRefreshMs = typeof driveDashboardLazyRefreshMs === "function" ? driveDashboardLazyRefreshMs() : DRIVE_DASHBOARD_LAZY_REFRESH_MS;
+  if (lazy && driveDashboardLoadedAt && Date.now() - driveDashboardLoadedAt < lazyRefreshMs) {
     if (typeof restoreDriveBackgroundTransfers === "function") return restoreDriveBackgroundTransfers();
     return restoreRemoteDownloadTasks();
   }

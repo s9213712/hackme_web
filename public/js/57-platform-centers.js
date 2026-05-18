@@ -58,6 +58,11 @@ const JOB_CENTER_POLL_INTERVAL_MS = 3000;
 const JOB_CENTER_LIVE_SYNC_LIMIT = 12;
 const JOB_CENTER_ACTIVE_STATUSES = new Set(["queued", "running", "waiting_external", "paused", "retry_wait"]);
 
+function jobCenterPollIntervalMs() {
+  const seconds = Number(siteConfig?.job_center_refresh_seconds || 3);
+  return Math.max(1, Math.min(300, Number.isFinite(seconds) ? seconds : 3)) * 1000;
+}
+
 function formatPlatformCenterNumber(value) {
   return new Intl.NumberFormat("zh-TW").format(Number(value || 0));
 }
@@ -450,7 +455,11 @@ function startJobCenterPolling({ immediate = true, force = false } = {}) {
     stopJobCenterPolling();
     return;
   }
-  const alreadyPolling = Boolean(jobCenterPollTimer);
+  let alreadyPolling = Boolean(jobCenterPollTimer);
+  if (force && alreadyPolling) {
+    stopJobCenterPolling();
+    alreadyPolling = false;
+  }
   if (immediate && (!alreadyPolling || force)) loadJobCenter({ quiet: false });
   if (alreadyPolling) return;
   jobCenterPollTimer = setInterval(() => {
@@ -459,7 +468,7 @@ function startJobCenterPolling({ immediate = true, force = false } = {}) {
       return;
     }
     loadJobCenter({ quiet: true });
-  }, JOB_CENTER_POLL_INTERVAL_MS);
+  }, jobCenterPollIntervalMs());
 }
 
 document.addEventListener("hackme:module-changed", (event) => {

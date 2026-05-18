@@ -108,7 +108,7 @@ def test_controlnet_canny_includes_preprocessor_and_apply():
     classes = {n["class_type"] for n in workflow.values()}
     assert "ControlNetLoader" in classes
     assert "ControlNetApplyAdvanced" in classes
-    assert "CannyEdgePreprocessor" in classes
+    assert {"Canny", "CannyEdgePreprocessor"} & classes
 
 
 def test_inpaint_basic_uses_inpaint_encoder():

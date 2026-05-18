@@ -105,6 +105,16 @@ class ComfyUIClient:
                     raise ComfyUIError("ComfyUI 回應不是 JSON") from exc
         except (TimeoutError, socket.timeout) as exc:
             raise ComfyUIError("ComfyUI 連線逾時") from exc
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                raw = exc.read().decode("utf-8", errors="replace")
+                if raw.strip():
+                    detail = raw.strip()[:800]
+            except Exception:
+                detail = ""
+            suffix = f"：{detail}" if detail else f"：{getattr(exc, 'reason', exc)}"
+            raise ComfyUIError(f"ComfyUI HTTP {exc.code}{suffix}") from exc
         except urllib.error.URLError as exc:
             raise ComfyUIError(f"ComfyUI 連線失敗：{getattr(exc, 'reason', exc)}") from exc
 
@@ -444,7 +454,16 @@ class ComfyUIClient:
             error_cls=ComfyUIError,
         )
 
-    def generate_from_workflow(self, workflow, *, timeout_seconds=1800, expected_count=1, progress_callback=None, extra_data=None):
+    def generate_from_workflow(
+        self,
+        workflow,
+        *,
+        timeout_seconds=1800,
+        expected_count=1,
+        progress_callback=None,
+        extra_data=None,
+        fetch_outputs=True,
+    ):
         return comfy_execution.generate_from_workflow(
             self,
             workflow,
@@ -452,18 +471,20 @@ class ComfyUIClient:
             expected_count=expected_count,
             progress_callback=progress_callback,
             extra_data=extra_data,
+            fetch_outputs=fetch_outputs,
             error_cls=ComfyUIError,
             websocket_module=websocket,
             image_fetcher=self.fetch_image,
         )
 
-    def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None, extra_data=None):
+    def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None, extra_data=None, fetch_outputs=True):
         return comfy_execution.generate_image(
             self,
             params,
             timeout_seconds=timeout_seconds,
             progress_callback=progress_callback,
             extra_data=extra_data,
+            fetch_outputs=fetch_outputs,
             error_cls=ComfyUIError,
             build_generation_workflow_func=self.build_generation_workflow,
             generate_from_workflow_func=self.generate_from_workflow,

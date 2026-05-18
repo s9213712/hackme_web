@@ -16,6 +16,7 @@ def test_avatar_upload_ui_is_wired():
     assert 'id="edit-user-avatar-file"' in index_html
     assert 'id="edit-user-avatar-upload"' in index_html
     assert 'id="edit-avatar-crop-width"' in index_html
+    assert 'id="edit-avatar-crop-zoom" min="1" max="6"' in index_html
     assert "async function uploadUserAvatar()" in auth_js
     assert "function selectedUserAvatarFile()" in auth_js
     assert "const avatarFile = selectedUserAvatarFile();" in auth_js

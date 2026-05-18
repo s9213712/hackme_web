@@ -3,7 +3,7 @@
     "cfg": 4,
     "generation_mode": "img2img",
     "height": 1024,
-    "model": "full_encoder_small_decoder.safetensors",
+    "model": "flux2-vae.safetensors",
     "negative_prompt": "",
     "prompt": "The woman is wearing a small pale yellow knitted beanie, with a white fabric patch on the front right, embroidered with big gray text “FLUX.2 COMFY.” Keep the face",
     "seed": 342971778941390,
@@ -93,7 +93,7 @@
           {
             "category": "MODEL",
             "class_type": "VAELoader",
-            "current_value": "full_encoder_small_decoder.safetensors",
+            "current_value": "flux2-vae.safetensors",
             "id": "node:72:vae_name",
             "input_name": "vae_name",
             "input_type": "select",
@@ -115,7 +115,7 @@
           {
             "category": "MODEL",
             "class_type": "LoraLoaderModelOnly",
-            "current_value": "Flux_2-Turbo-LoRA_comfyui.safetensors",
+            "current_value": "FLUX\\Flux_2-Turbo-LoRA_comfyui.safetensors",
             "id": "node:79:lora_name",
             "input_name": "lora_name",
             "input_type": "select",

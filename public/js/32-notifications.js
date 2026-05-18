@@ -6,6 +6,13 @@ const NOTIFICATION_INITIAL_DELAY_MS = 10000;
 let notificationInitialPollTimer = null;
 let notificationPollBusy = false;
 
+function notificationPollMs() {
+  if (typeof configRefreshSeconds === "function") {
+    return Math.round(configRefreshSeconds("notification_poll_seconds", NOTIFICATION_POLL_MS / 1000, 5, 600) * 1000);
+  }
+  return NOTIFICATION_POLL_MS;
+}
+
 function setNotificationBadge(count) {
   const badge = $("notification-badge");
   if (!badge) return;
@@ -193,7 +200,7 @@ function startNotificationPoll() {
   scheduleNotificationInitialPoll();
   notificationPollTimer = setInterval(() => {
     loadNotifications().catch(() => {});
-  }, NOTIFICATION_POLL_MS);
+  }, notificationPollMs());
 }
 
 function stopNotificationPoll() {
@@ -204,6 +211,19 @@ function stopNotificationPoll() {
   }
   closeNotificationPanel();
   setNotificationBadge(0);
+}
+
+function restartNotificationPoll() {
+  clearNotificationInitialPoll();
+  if (notificationPollTimer) {
+    clearInterval(notificationPollTimer);
+    notificationPollTimer = null;
+  }
+  if (!currentUser) return;
+  scheduleNotificationInitialPoll();
+  notificationPollTimer = setInterval(() => {
+    loadNotifications().catch(() => {});
+  }, notificationPollMs());
 }
 
 document.addEventListener("visibilitychange", () => {

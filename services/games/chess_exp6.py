@@ -198,9 +198,16 @@ def _to_neural_board(board_state, side: str) -> chess.Board:
 def _move_dict(board: chess.Board, move: chess.Move) -> dict:
     from_sq = chess.square_name(move.from_square)
     to_sq = chess.square_name(move.to_square)
+    piece = board.piece_at(move.from_square)
+    captured = board.piece_at(move.to_square)
+    if captured is None and board.is_en_passant(move):
+        capture_square = chess.square(chess.square_file(move.to_square), chess.square_rank(move.from_square))
+        captured = board.piece_at(capture_square)
     payload = {
         "from": from_sq,
         "to": to_sq,
+        "piece": piece.symbol() if piece else "",
+        "captured": captured.symbol() if captured else None,
         "engine": EXPERIMENT_NEURAL_DIFFICULTY,
     }
     if move.promotion is not None:
@@ -557,7 +564,20 @@ def _ensure_default_weights() -> Path:
     """
     path = default_neural_weights_path()
     if path.exists():
-        return path
+        try:
+            load_weights(path)
+            return path
+        except Exception:
+            # Older Exp6 snapshots used a smaller feature shape. Keeping
+            # those files around must not turn a web chess move into HTTP
+            # 500; replace the default runtime copy with a deterministic
+            # fresh model and let training produce a stronger candidate later.
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                save_weights(path, make_initial_weights())
+                return path
+            except Exception:
+                pass
     seed_path = bundled_neural_weights_path()
     seed_path.parent.mkdir(parents=True, exist_ok=True)
     save_weights(seed_path, make_initial_weights())

@@ -57,6 +57,7 @@ CORE_ALLOWLIST = frozenset(
 # CONTROLNET_TYPE_DEFINITIONS — extend in lockstep when adding controlnet types.
 CONTROLNET_PREPROCESSOR_ALLOWLIST = frozenset(
     {
+        "Canny",
         "CannyEdgePreprocessor",
         "DepthAnythingPreprocessor",
         "MiDaS-DepthMapPreprocessor",

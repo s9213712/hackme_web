@@ -76,6 +76,11 @@ const COMFYUI_CONTROLNET_TIPS = {
   tile: "適合局部細節補強與放大。",
 };
 
+function comfyuiJobPollMs() {
+  const seconds = Number(siteConfig?.comfyui_job_poll_seconds || 1);
+  return Math.max(1, Math.min(60, Number.isFinite(seconds) ? seconds : 1)) * 1000;
+}
+
 function comfyuiUserStorageKey(key) {
   if (typeof accountScopedStorageKey === "function") return accountScopedStorageKey(key);
   const id = Number(currentUserId || 0);
@@ -1236,6 +1241,43 @@ async function loadComfyuiImageRefPreview(imageRef) {
   return json.image || {};
 }
 
+function comfyuiImageRefCacheKey(imageRef) {
+  if (!imageRef?.filename) return "";
+  return [
+    String(imageRef.type || "output"),
+    String(imageRef.subfolder || ""),
+    String(imageRef.filename || ""),
+  ].join("/");
+}
+
+const comfyuiOutputPreviewCache = new Map();
+
+async function hydrateComfyuiOutputImage(image) {
+  if (!image || image.data_url || !image.image_ref?.filename) return image;
+  const cacheKey = comfyuiImageRefCacheKey(image.image_ref);
+  if (cacheKey && comfyuiOutputPreviewCache.has(cacheKey)) {
+    return { ...image, ...comfyuiOutputPreviewCache.get(cacheKey) };
+  }
+  await fetchCsrfToken();
+  const preview = await loadComfyuiImageRefPreview(image.image_ref);
+  const hydrated = {
+    data_url: preview.data_url || "",
+    mime_type: preview.mime_type || image.mime_type || "image/png",
+    size_bytes: Number(preview.size_bytes || image.size_bytes || 0),
+  };
+  if (cacheKey) comfyuiOutputPreviewCache.set(cacheKey, hydrated);
+  return { ...image, ...hydrated };
+}
+
+async function hydrateComfyuiGeneratedImages(images = []) {
+  const items = Array.isArray(images) ? images.filter(Boolean) : [];
+  const hydrated = [];
+  for (const image of items) {
+    hydrated.push(await hydrateComfyuiOutputImage(image));
+  }
+  return hydrated;
+}
+
 async function hydrateComfyuiInputAssetFromRef(key, imageRef) {
   if (!imageRef?.filename) {
     clearComfyuiInputAsset(key);
@@ -1580,7 +1622,7 @@ async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds) {
     applyComfyuiJobProgress(job.progress || {}, displayTimeoutSeconds);
     if (job.status === "completed" && job.result) return job.result;
     if (job.status === "error") throw new Error(job.error || job.progress?.detail || "ComfyUI 產圖失敗");
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await new Promise((resolve) => setTimeout(resolve, comfyuiJobPollMs()));
   }
   throw new Error("ComfyUI 進度查詢逾時");
 }
@@ -2495,7 +2537,8 @@ async function rerunComfyuiHistory(historyId) {
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 歷史重跑失敗（HTTP ${res.status}）`);
     const result = await pollComfyuiJobUntilDone(json.job?.job_id, controller, COMFYUI_GENERATION_TIMEOUT_SECONDS);
-    const images = Array.isArray(result.images) && result.images.length ? result.images : [result.image].filter(Boolean);
+    const rawImages = Array.isArray(result.images) && result.images.length ? result.images : [result.image].filter(Boolean);
+    const images = await hydrateComfyuiGeneratedImages(rawImages);
     comfyuiGeneratedImages = images;
     comfyuiGeneratedMedia = Array.isArray(result.media) ? result.media : [];
     renderComfyuiGeneratedImages(comfyuiGeneratedImages);
@@ -2583,14 +2626,20 @@ function renderComfyuiGeneratedImages(images) {
     return;
   }
   if (images.length === 1) {
-    preview.innerHTML = `<img src="${sanitize(images[0].data_url || "")}" alt="ComfyUI generated image" />`;
+    if (!images[0].data_url) {
+      preview.innerHTML = `<div class="drive-empty">圖片已完成，正在讀取預覽。</div>`;
+      return;
+    }
+    preview.innerHTML = `<img loading="lazy" src="${sanitize(images[0].data_url || "")}" alt="ComfyUI generated image" />`;
     return;
   }
   preview.innerHTML = `
     <div class="comfyui-batch-grid">
       ${images.map((image, index) => `
         <button class="comfyui-batch-item${index === comfyuiSelectedImageIndex ? " active" : ""}" type="button" data-comfyui-image-index="${index}" title="選擇第 ${index + 1} 張">
-          <img src="${sanitize(image.data_url || "")}" alt="ComfyUI generated image ${index + 1}" />
+          ${image.data_url
+            ? `<img loading="lazy" src="${sanitize(image.data_url || "")}" alt="ComfyUI generated image ${index + 1}" />`
+            : `<span class="drive-empty">讀取預覽中</span>`}
           <span>第 ${index + 1} 張</span>
         </button>
       `).join("")}
@@ -3132,7 +3181,8 @@ async function generateComfyuiImage() {
       const jobId = startJson.job?.job_id;
       if (!jobId) throw new Error("ComfyUI 未回傳工作編號");
       const json = await pollComfyuiJobUntilDone(jobId, controller, COMFYUI_GENERATION_TIMEOUT_SECONDS);
-      const runImages = Array.isArray(json.images) && json.images.length ? json.images : [json.image].filter(Boolean);
+      const rawRunImages = Array.isArray(json.images) && json.images.length ? json.images : [json.image].filter(Boolean);
+      const runImages = await hydrateComfyuiGeneratedImages(rawRunImages);
       comfyuiGeneratedMedia = Array.isArray(json.media) ? json.media : [];
       runImages.forEach((image) => {
         generated.push({ ...image, run_index: runIndex, batch_index: batchIndex, run_count: runCount });
@@ -3150,7 +3200,7 @@ async function generateComfyuiImage() {
     comfyuiGeneratedImages = generated;
     comfyuiGeneratedMedia = [];
     comfyuiCurrentImage = comfyuiGeneratedImages[0] || null;
-    if (!comfyuiCurrentImage?.data_url) throw new Error("ComfyUI 未回傳圖片");
+    if (!comfyuiCurrentImage?.image_ref) throw new Error("ComfyUI 未回傳圖片");
     renderComfyuiGeneratedImages(comfyuiGeneratedImages);
     setComfyuiSelectedImage(0);
     stopComfyuiProgress({ complete: true });

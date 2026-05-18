@@ -1237,17 +1237,10 @@ def register_user_routes(app, deps):
         is_self = int(actor["id"]) == int(user_id)
         if not is_self and role_rank(actor_role) < role_rank("super_admin"):
             return json_resp({"ok": False, "msg": "只有 root 可修改他人頭像"}), 403
-        if "file" not in request.files:
-            return json_resp({"ok": False, "msg": "缺少 file"}), 400
-        file_storage = request.files["file"]
-        mimetype = (getattr(file_storage, "mimetype", "") or "").lower()
-        if mimetype not in {"image/jpeg", "image/png", "image/gif"}:
-            return json_resp({"ok": False, "msg": "頭像僅支援 JPEG / PNG / GIF"}), 400
-        # Enforce extension allowlist (L-1: path traversal + extension validation)
-        filename = (getattr(file_storage, "filename", "") or "").lower()
-        allowed_exts = {".jpg", ".jpeg", ".png", ".gif"}
-        if not any(filename.endswith(ext) for ext in allowed_exts):
-            return json_resp({"ok": False, "msg": "頭像僅支援 JPEG / PNG / GIF 副檔名"}), 400
+        file_storage = request.files.get("file")
+        cloud_file_id = str(request.form.get("cloud_file_id") or request.form.get("existing_file_id") or "").strip()
+        if not file_storage and not cloud_file_id:
+            return json_resp({"ok": False, "msg": "缺少 file 或 cloud_file_id"}), 400
         conn = get_db()
         try:
             ensure_member_level_user_columns(conn)
@@ -1256,6 +1249,54 @@ def register_user_routes(app, deps):
             target = conn.execute("SELECT id, username, role, member_level, effective_level, sanction_status FROM users WHERE id=?", (user_id,)).fetchone()
             if not target:
                 return json_resp({"ok": False, "msg": "找不到帳號"}), 404
+            crop = _parse_avatar_crop(request.form.get("crop_json"))
+            if cloud_file_id:
+                file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=? AND deleted_at IS NULL", (cloud_file_id,)).fetchone()
+                if not file_row:
+                    return json_resp({"ok": False, "msg": "找不到雲端圖片"}), 404
+                if int(file_row["owner_user_id"]) != int(user_id):
+                    return json_resp({"ok": False, "msg": "只能選擇該帳號自己的雲端硬碟檔案"}), 403
+                mimetype = (file_row["mime_type_plain_for_public"] or "").lower()
+                filename = (file_row["original_filename_plain_for_public"] or "").lower()
+                allowed_mimetypes = {"image/jpeg", "image/png", "image/gif"}
+                allowed_exts = {".jpg", ".jpeg", ".png", ".gif"}
+                if mimetype not in allowed_mimetypes and not any(filename.endswith(ext) for ext in allowed_exts):
+                    return json_resp({"ok": False, "msg": "頭像僅支援 JPEG / PNG / GIF"}), 400
+                if file_row["scan_status"] not in {"clean", "not_required"}:
+                    return json_resp({"ok": False, "msg": "雲端圖片尚未通過安全掃描"}), 400
+                if file_row["privacy_mode"] != "standard_plain":
+                    return json_resp({"ok": False, "msg": "頭像是公開識別圖片，請選擇一般雲端圖片，不可使用加密檔案"}), 400
+                conn.execute(
+                    "UPDATE users SET avatar_file_id=?, avatar_crop_json=?, updated_at=? WHERE id=?",
+                    (cloud_file_id, json.dumps(crop, ensure_ascii=False), datetime.now().isoformat(), user_id),
+                )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO cloud_file_refs (
+                        id, file_id, owner_user_id, context_type, context_id, attached_by, created_at, permission_snapshot_json
+                    ) VALUES (?, ?, ?, 'avatar', ?, ?, ?, ?)
+                    """,
+                    (
+                        f"avatar_{user_id}_{cloud_file_id}",
+                        cloud_file_id,
+                        user_id,
+                        str(user_id),
+                        actor["id"],
+                        datetime.now().isoformat(),
+                        json.dumps({"public_avatar": True, "crop": crop, "source": "cloud_drive"}, ensure_ascii=False),
+                    ),
+                )
+                conn.commit()
+                audit("USER_AVATAR_CLOUD_SELECT", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"target_id={user_id},file_id={cloud_file_id}")
+                return json_resp({"ok": True, "avatar_file_id": cloud_file_id, "avatar_crop": crop, "file": dict(file_row)})
+            mimetype = (getattr(file_storage, "mimetype", "") or "").lower()
+            if mimetype not in {"image/jpeg", "image/png", "image/gif"}:
+                return json_resp({"ok": False, "msg": "頭像僅支援 JPEG / PNG / GIF"}), 400
+            # Enforce extension allowlist (L-1: path traversal + extension validation)
+            filename = (getattr(file_storage, "filename", "") or "").lower()
+            allowed_exts = {".jpg", ".jpeg", ".png", ".gif"}
+            if not any(filename.endswith(ext) for ext in allowed_exts):
+                return json_resp({"ok": False, "msg": "頭像僅支援 JPEG / PNG / GIF 副檔名"}), 400
             rule = get_member_level_rule(conn, target["effective_level"] or target["member_level"]) if get_member_level_rule else None
             result, msg = store_cloud_upload(
                 conn,
@@ -1272,7 +1313,6 @@ def register_user_routes(app, deps):
             if result.get("scan_status") not in {"clean", "not_required"}:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": "頭像未通過安全掃描"}), 400
-            crop = _parse_avatar_crop(request.form.get("crop_json"))
             conn.execute(
                 "UPDATE users SET avatar_file_id=?, avatar_crop_json=?, updated_at=? WHERE id=?",
                 (result["file_id"], json.dumps(crop, ensure_ascii=False), datetime.now().isoformat(), user_id),

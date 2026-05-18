@@ -26,6 +26,7 @@ SIGNUP_BONUS_POINTS = 100
 ADMIN_INITIAL_POINTS = 1000
 USER_INITIAL_POINTS = 100
 ADMIN_WEEKLY_SALARY_POINTS = 250
+BIRTHDAY_GIFT_POINTS = 500
 POINTS_CHAIN_SCHEMA_VERSION = 1
 DEFAULT_BACKUP_INTERVAL_MINUTES = 60
 DEFAULT_BACKUP_KEEP_RECENT = 5
@@ -47,6 +48,7 @@ DEFAULT_RULES = (
     ("game_daily_quest", "game_daily_quest", "credit", "soft", 10, 10, 10, 24 * 60 * 60, 0, 0, 0, 1, 0, {"label": "遊戲每日任務"}),
     ("marketplace_sale_income", "marketplace_sale_income", "credit", INTERNAL_CURRENCY, 0, 0, None, 0, 0, 1, 0, 1, 1, {"label": "商城收入"}),
     ("new_user_signup_bonus", "new_user_signup_bonus", "credit", INTERNAL_CURRENCY, SIGNUP_BONUS_POINTS, SIGNUP_BONUS_POINTS, SIGNUP_BONUS_POINTS, 0, 0, 0, 0, 1, 1, {"label": "新註冊禮"}),
+    ("birthday_gift", "birthday_gift", "credit", INTERNAL_CURRENCY, BIRTHDAY_GIFT_POINTS, BIRTHDAY_GIFT_POINTS, BIRTHDAY_GIFT_POINTS, 0, 0, 0, 0, 1, 1, {"label": "生日禮金"}),
     ("admin_initial_grant", "admin_initial_grant", "credit", INTERNAL_CURRENCY, ADMIN_INITIAL_POINTS, ADMIN_INITIAL_POINTS, ADMIN_INITIAL_POINTS, 0, 0, 0, 0, 1, 1, {"label": "管理帳號創始補助"}),
     ("user_initial_grant", "user_initial_grant", "credit", INTERNAL_CURRENCY, USER_INITIAL_POINTS, USER_INITIAL_POINTS, USER_INITIAL_POINTS, 0, 0, 0, 0, 1, 1, {"label": "一般帳號創始補助"}),
     ("admin_weekly_salary", "admin_weekly_salary", "credit", INTERNAL_CURRENCY, ADMIN_WEEKLY_SALARY_POINTS, ADMIN_WEEKLY_SALARY_POINTS, ADMIN_WEEKLY_SALARY_POINTS, 0, 0, 0, 0, 1, 1, {"label": "管理帳號週薪"}),

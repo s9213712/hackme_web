@@ -87,6 +87,13 @@ const DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
 const DRIVE_RESUMABLE_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
 const DRIVE_RESUMABLE_UPLOAD_STORAGE_PREFIX = "hackme_web.resumable_upload.";
 
+function driveDashboardLazyRefreshMs() {
+  if (typeof configRefreshSeconds === "function") {
+    return Math.round(configRefreshSeconds("drive_dashboard_lazy_refresh_seconds", DRIVE_DASHBOARD_LAZY_REFRESH_MS / 1000, 1, 300) * 1000);
+  }
+  return DRIVE_DASHBOARD_LAZY_REFRESH_MS;
+}
+
 function isDriveTransferActive(item = {}) {
   return !["completed", "failed", "paused", "cancelled", "waiting_resume"].includes(String(item.status || ""));
 }

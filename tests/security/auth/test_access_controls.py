@@ -45,6 +45,23 @@ def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, c
         "server_listen_port": 0,
         "server_ssl_enabled": True,
         "server_timezone": "UTC",
+        "server_backpressure_traffic_refresh_seconds": 4,
+        "server_output_refresh_seconds": 3,
+        "security_test_job_poll_seconds": 3,
+        "system_resource_board_refresh_seconds": 5,
+        "job_center_refresh_seconds": 3,
+        "economy_dashboard_refresh_seconds": 30,
+        "trading_dashboard_refresh_seconds": 5,
+        "trading_live_price_refresh_seconds": 2,
+        "trading_reference_price_refresh_seconds": 1,
+        "trading_reference_chart_refresh_seconds": 5,
+        "comfyui_job_poll_seconds": 1,
+        "notification_poll_seconds": 60,
+        "game_invite_poll_active_seconds": 5,
+        "game_invite_poll_idle_seconds": 60,
+        "game_invite_poll_hidden_seconds": 180,
+        "server_connection_monitor_seconds": 15,
+        "drive_dashboard_lazy_refresh_seconds": 10,
         "comfyui_connection_mode": "remote",
         "comfyui_remote_api_url": "",
         "comfyui_base_dir": "",
@@ -369,6 +386,58 @@ def test_root_can_configure_server_timezone_and_get_time_payload():
     assert state["server_timezone"] == "Asia/Taipei"
 
 
+def test_root_can_configure_system_resource_board_refresh_seconds():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"system_resource_board_refresh_seconds": 7})
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["ok"] is True
+    assert state["system_resource_board_refresh_seconds"] == 7
+    assert data["settings"]["system_resource_board_refresh_seconds"] == 7
+
+    bad = client.put("/api/admin/settings", json={"system_resource_board_refresh_seconds": 0})
+    assert bad.status_code == 400
+    assert state["system_resource_board_refresh_seconds"] == 7
+
+
+def test_root_can_configure_dashboard_refresh_seconds():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={
+        "server_backpressure_traffic_refresh_seconds": 8,
+        "server_output_refresh_seconds": 6,
+        "security_test_job_poll_seconds": 7,
+        "job_center_refresh_seconds": 4,
+        "economy_dashboard_refresh_seconds": 45,
+        "trading_dashboard_refresh_seconds": 9,
+        "trading_live_price_refresh_seconds": 3,
+        "trading_reference_price_refresh_seconds": 2,
+        "trading_reference_chart_refresh_seconds": 10,
+        "comfyui_job_poll_seconds": 2,
+        "notification_poll_seconds": 90,
+        "game_invite_poll_active_seconds": 6,
+        "game_invite_poll_idle_seconds": 80,
+        "game_invite_poll_hidden_seconds": 240,
+        "server_connection_monitor_seconds": 20,
+        "drive_dashboard_lazy_refresh_seconds": 12,
+    })
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["settings"]["job_center_refresh_seconds"] == 4
+    assert state["trading_live_price_refresh_seconds"] == 3
+    assert state["comfyui_job_poll_seconds"] == 2
+    assert state["notification_poll_seconds"] == 90
+    assert state["game_invite_poll_hidden_seconds"] == 240
+    assert state["drive_dashboard_lazy_refresh_seconds"] == 12
+
+    bad = client.put("/api/admin/settings", json={"trading_live_price_refresh_seconds": 0})
+    assert bad.status_code == 400
+    assert state["trading_live_price_refresh_seconds"] == 3
+
+
 def test_admin_settings_reject_invalid_boolean_strings_for_security_flags():
     app, state = _admin_app()
     state["integrity_guard_enabled"] = True
@@ -641,12 +710,26 @@ def test_admin_environment_exposes_relative_paths_and_pid():
     assert env["log_dir"] == "."
     assert env["chat_dir"] == "."
     resources = res.get_json()["resource_usage"]
+    assert res.get_json()["resource_refresh_seconds"] == 5
     assert {"cpu", "gpu", "vram", "ram", "sampled_at"} <= set(resources)
     assert resources["cpu"]["label"] == "CPU"
     assert resources["ram"]["label"] == "RAM"
     assert env["anchor_dir"] == "."
     for key in ("base_dir", "database_path", "log_dir", "chat_dir", "anchor_dir"):
         assert not str(env[key]).startswith("/")
+
+
+def test_admin_environment_resources_is_lightweight_resource_endpoint():
+    app, state = _admin_app({"system_resource_board_refresh_seconds": 9})
+    client = app.test_client()
+
+    res = client.get("/api/admin/environment/resources")
+
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["ok"] is True
+    assert body["resource_refresh_seconds"] == 9
+    assert {"cpu", "gpu", "vram", "ram", "sampled_at"} <= set(body["resource_usage"])
 
 
 def test_effective_server_bind_falls_back_to_environment():

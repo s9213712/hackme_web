@@ -42,8 +42,28 @@ let tradingActiveActionButton = null;
 const tradingGridExpandedBots = new Set();
 const TRADING_WORKFLOW_STORAGE_KEY = "hackme_trading_workflow_json";
 const TRADING_PERSONAL_FORM_STORAGE_KEY = "hackme_trading_personal_form_v1";
-const TRADING_LIVE_PRICE_REFRESH_MS = 2000;
 let tradingAccountScope = "";
+
+function tradingRefreshMs(key, fallbackSeconds, minSeconds = 1, maxSeconds = 300) {
+  const seconds = Number(siteConfig?.[key] || fallbackSeconds);
+  return Math.max(minSeconds, Math.min(maxSeconds, Number.isFinite(seconds) ? seconds : fallbackSeconds)) * 1000;
+}
+
+function tradingDashboardRefreshMs() {
+  return tradingRefreshMs("trading_dashboard_refresh_seconds", 5, 2, 300);
+}
+
+function tradingLivePriceRefreshMs() {
+  return tradingRefreshMs("trading_live_price_refresh_seconds", 2, 1, 60);
+}
+
+function tradingReferencePriceRefreshMs() {
+  return tradingRefreshMs("trading_reference_price_refresh_seconds", 1, 1, 60);
+}
+
+function tradingReferenceChartRefreshMs() {
+  return tradingRefreshMs("trading_reference_chart_refresh_seconds", 5, 2, 300);
+}
 
 function shouldRunTradingPolling(tab = currentModuleTab) {
   if (!currentUser || document.hidden) return false;
@@ -110,7 +130,7 @@ function startTradingModuleTimers() {
         } finally {
           tradingDashboardAutoBusy = false;
         }
-      }, 5000);
+      }, tradingDashboardRefreshMs());
     }
     if (!tradingTrialCountdownTimer) {
       tradingTrialCountdownTimer = setInterval(updateTradingTrialCountdown, 1000);
@@ -130,7 +150,7 @@ function startTradingModuleTimers() {
       } finally {
         tradingLivePriceBusy = false;
       }
-    }, TRADING_LIVE_PRICE_REFRESH_MS);
+    }, tradingLivePriceRefreshMs());
   }
 }
 
@@ -787,7 +807,7 @@ function renderTradingCurrentPrice(market, options = {}) {
   }
   if (marketEl) {
     marketEl.textContent = market
-      ? `${tradingDisplaySymbol(market.symbol)} · ${referenceContext?.source_label || market.price_source || "last_good_cache"} · ${TRADING_LIVE_PRICE_REFRESH_MS / 1000} 秒更新`
+      ? `${tradingDisplaySymbol(market.symbol)} · ${referenceContext?.source_label || market.price_source || "last_good_cache"} · ${Math.round(tradingLivePriceRefreshMs() / 1000)} 秒更新`
       : "-";
   }
   if (!market || !Number.isFinite(nextPrice)) {
@@ -825,7 +845,7 @@ function renderTradingCurrentPrice(market, options = {}) {
       deltaEl.classList.add("negative");
       deltaEl.classList.remove("positive");
     } else {
-      deltaEl.textContent = `即時輪詢 ${TRADING_LIVE_PRICE_REFRESH_MS / 1000} 秒`;
+      deltaEl.textContent = `即時輪詢 ${Math.round(tradingLivePriceRefreshMs() / 1000)} 秒`;
       deltaEl.classList.remove("positive", "negative");
     }
   }
@@ -2797,7 +2817,7 @@ function updateTradingReferenceTooltipFromTouch(event) {
 }
 
 function tradingReferenceAutoRefreshMs() {
-  return 1000;
+  return tradingReferencePriceRefreshMs();
 }
 
 function tradingReferenceChartLimit(interval) {
@@ -2867,7 +2887,7 @@ function restartTradingReferenceAutoRefresh() {
     } finally {
       tradingReferenceChartAutoBusy = false;
     }
-  }, 5000);
+  }, tradingReferenceChartRefreshMs());
 }
 
 async function loadTradingReferencePrices(options = {}) {

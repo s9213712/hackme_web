@@ -7,10 +7,12 @@ import sqlite3
 import time
 import unicodedata
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import argon2
 from flask import make_response, request, send_from_directory
 
+from services.points_chain import BIRTHDAY_GIFT_POINTS
 from services.security.access_controls import verify_internal_test_token
 from services.users.recovery import (
     create_password_reset_review_request,
@@ -23,7 +25,7 @@ from services.users.recovery import (
 )
 from services.security.captcha import create_captcha_challenge, normalize_captcha_mode, verify_captcha_response
 from services.server.backpressure import backpressure_status
-from services.platform.time_settings import server_time_payload
+from services.platform.time_settings import normalize_server_timezone, server_time_payload
 from services.users.profiles import clear_profile_appearance, get_profile_appearance, update_profile_appearance
 
 
@@ -112,6 +114,43 @@ def register_public_routes(app, deps):
                 target_user=username,
                 detail=f"new_ip_hash={ip_hash[:12]},ua={ua[:80]}",
             )
+
+    def server_local_date(settings):
+        timezone_name = normalize_server_timezone((settings or {}).get("server_timezone"))
+        try:
+            zone = ZoneInfo(timezone_name or "UTC")
+        except Exception:
+            zone = ZoneInfo("UTC")
+        return datetime.now(zone).date()
+
+    def maybe_award_birthday_gift(user_row, settings, ip, ua):
+        if not points_service or not user_row or user_row["username"] == "root":
+            return None
+        birthdate = parse_birthdate(decrypt_field(user_row["birthdate"] if "birthdate" in user_row.keys() else ""))
+        if not birthdate:
+            return None
+        try:
+            birthday = datetime.strptime(birthdate, "%Y-%m-%d").date()
+            today = server_local_date(settings)
+            if (birthday.month, birthday.day) != (today.month, today.day):
+                return None
+            result = points_service.award_birthday_gift(
+                user_id=user_row["id"],
+                birthday_year=today.year,
+                birthday_date=today.isoformat(),
+                actor={"id": user_row["id"], "username": user_row["username"], "role": user_row["role"]},
+            )
+            ledger = result.get("ledger") or {}
+            return {
+                "eligible": True,
+                "created": bool(result.get("created")),
+                "amount": int(ledger.get("amount") or BIRTHDAY_GIFT_POINTS),
+                "year": int(today.year),
+                "ledger_uuid": ledger.get("ledger_uuid") or "",
+            }
+        except Exception as exc:
+            audit("POINTS_BIRTHDAY_GIFT_FAILED", ip, user_row["username"], ua=ua, success=False, detail=str(exc))
+            return {"eligible": True, "created": False, "error": "award_failed"}
 
     def generic_recovery_response():
         return json_resp({"ok": True, "msg": "如果資料符合，系統會寄出後續操作通知"})
@@ -316,6 +355,7 @@ def register_public_routes(app, deps):
         additions = (
             ("email", "TEXT"),
             ("email_verified", "INTEGER NOT NULL DEFAULT 0"),
+            ("birthdate", "TEXT"),
             ("failed_login_count", "INTEGER NOT NULL DEFAULT 0"),
             ("locked_until", "TEXT"),
             ("last_login_at", "TEXT"),
@@ -405,6 +445,19 @@ def register_public_routes(app, deps):
                 "password_reset_mode": settings.get("password_reset_mode", "admin_review"),
                 "login_autofill_block_enabled": bool(settings.get("login_autofill_block_enabled", False)),
                 "maintenance_mode": bool(settings.get("maintenance_mode", False)),
+                "job_center_refresh_seconds": settings.get("job_center_refresh_seconds", 3),
+                "economy_dashboard_refresh_seconds": settings.get("economy_dashboard_refresh_seconds", 30),
+                "trading_dashboard_refresh_seconds": settings.get("trading_dashboard_refresh_seconds", 5),
+                "trading_live_price_refresh_seconds": settings.get("trading_live_price_refresh_seconds", 2),
+                "trading_reference_price_refresh_seconds": settings.get("trading_reference_price_refresh_seconds", 1),
+                "trading_reference_chart_refresh_seconds": settings.get("trading_reference_chart_refresh_seconds", 5),
+                "comfyui_job_poll_seconds": settings.get("comfyui_job_poll_seconds", 1),
+                "notification_poll_seconds": settings.get("notification_poll_seconds", 60),
+                "game_invite_poll_active_seconds": settings.get("game_invite_poll_active_seconds", 5),
+                "game_invite_poll_idle_seconds": settings.get("game_invite_poll_idle_seconds", 60),
+                "game_invite_poll_hidden_seconds": settings.get("game_invite_poll_hidden_seconds", 180),
+                "server_connection_monitor_seconds": settings.get("server_connection_monitor_seconds", 15),
+                "drive_dashboard_lazy_refresh_seconds": settings.get("drive_dashboard_lazy_refresh_seconds", 10),
                 **features,
             },
             "server_meta": {
@@ -695,7 +748,7 @@ def register_public_routes(app, deps):
             ensure_public_account_columns(conn)
             user_row = conn.execute(
                 "SELECT id, username, status, blocked_until, locked_until, failed_login_count, role, "
-                "email, email_verified, must_change_password, is_default_password FROM users WHERE username=?",
+                "email, email_verified, birthdate, must_change_password, is_default_password FROM users WHERE username=?",
                 (username,)
             ).fetchone()
 
@@ -819,6 +872,7 @@ def register_public_routes(app, deps):
                     record_login_location(conn, user_row["id"], username, ip, ua)
                 conn.commit()
 
+                birthday_gift = None
                 if (
                     points_service
                     and bool(settings.get("points_admin_weekly_salary_award_on_login", False))
@@ -832,6 +886,7 @@ def register_public_routes(app, deps):
                         )
                     except Exception as exc:
                         audit("POINTS_ADMIN_SALARY_FAILED", ip, username, ua=ua, success=False, detail=str(exc))
+                birthday_gift = maybe_award_birthday_gift(user_row, settings, ip, ua)
 
                 # Create token + save session to DB
                 token = make_token(username)
@@ -846,9 +901,13 @@ def register_public_routes(app, deps):
                 sync_official_room_membership(user_row["id"])
 
                 audit("LOGIN_OK", ip, username, ua=ua, success=True)
+                login_msg = "恭喜登入成功"
+                if birthday_gift and birthday_gift.get("created"):
+                    login_msg = f"恭喜登入成功，生日禮金 {birthday_gift.get('amount', BIRTHDAY_GIFT_POINTS)} 點已入帳"
                 resp = json_resp({
                     "ok": True,
-                    "msg": "恭喜登入成功",
+                    "msg": login_msg,
+                    "birthday_gift": birthday_gift,
                     "must_change_password": bool(user_row["must_change_password"] or 0),
                     "is_default_password": bool(user_row["is_default_password"] or 0),
                 })

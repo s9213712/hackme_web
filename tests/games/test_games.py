@@ -197,8 +197,12 @@ def test_game_matches_difficulty_enum_in_sync_across_bootstrap_and_runtime():
     bootstrap_sql = (Path(__file__).resolve().parents[2] / "bootstrap.schema.sql").read_text(encoding="utf-8")
     runtime_sql = game_schema_sql()
     for value in (
+        "'experiment 0:minimax2ply'",
+        "'experiment 1:search'",
+        "'experiment 2:nn'",
         "'experiment 4:pv'",
         "'experiment 5:nnue'",
+        "'experiment 6:neuralnet'",
         "'stockfish'",
         "computer_config_json",
     ):
@@ -239,12 +243,13 @@ def test_game_catalog_includes_solo_games(tmp_path):
         "chinese_chess",
     } <= set(by_key)
     assert [item["key"] for item in by_key["chess"]["computer_difficulties"]] == [
-        "normal",
-        "hard",
-        "experiment",
+        "experiment 0:minimax2ply",
+        "experiment 1:search",
+        "experiment 2:nn",
         "experiment 3:dl",
         "experiment 4:pv",
         "experiment 5:nnue",
+        "experiment 6:neuralnet",
     ]
     assert by_key["sudoku"]["supports_invites"] is False
     assert by_key["minesweeper"]["supports_computer"] is False
@@ -993,17 +998,19 @@ def test_chess_practice_difficulty_is_persisted_and_rejects_invalid_value(tmp_pa
     assert created.status_code == 200
     match_id = created.get_json()["match_id"]
     match = client.get(f"/api/games/chess/matches/{match_id}").get_json()["match"]
-    assert match["computer_difficulty"] == "hard"
+    assert match["computer_difficulty"] == "experiment 0:minimax2ply"
 
     experiment = client.post("/api/games/chess/practice", json={"difficulty": "experiment"})
     assert experiment.status_code == 200
     experiment_id = experiment.get_json()["match_id"]
     experiment_match = client.get(f"/api/games/chess/matches/{experiment_id}").get_json()["match"]
-    assert experiment_match["computer_difficulty"] == "experiment"
+    assert experiment_match["computer_difficulty"] == "experiment 1:search"
 
     experiment_nn = client.post("/api/games/chess/practice", json={"difficulty": "experiment 2:nn"})
-    assert experiment_nn.status_code == 400
-    assert "難度" in experiment_nn.get_json()["msg"]
+    assert experiment_nn.status_code == 200
+    experiment_nn_id = experiment_nn.get_json()["match_id"]
+    experiment_nn_match = client.get(f"/api/games/chess/matches/{experiment_nn_id}").get_json()["match"]
+    assert experiment_nn_match["computer_difficulty"] == "experiment 2:nn"
 
     experiment_dl = client.post("/api/games/chess/practice", json={"difficulty": "experiment 3:dl"})
     assert experiment_dl.status_code == 200
@@ -1022,6 +1029,25 @@ def test_chess_practice_difficulty_is_persisted_and_rejects_invalid_value(tmp_pa
     experiment_nnue_id = experiment_nnue.get_json()["match_id"]
     experiment_nnue_match = client.get(f"/api/games/chess/matches/{experiment_nnue_id}").get_json()["match"]
     assert experiment_nnue_match["computer_difficulty"] == "experiment 5:nnue"
+
+    with patch("routes.games.EXP6_DEFAULT_SEARCH_PROFILE", "fast"):
+        experiment_exp6 = client.post("/api/games/chess/practice", json={"difficulty": "experiment 6:neuralnet"})
+        assert experiment_exp6.status_code == 200
+        experiment_exp6_id = experiment_exp6.get_json()["match_id"]
+        experiment_exp6_match = client.get(f"/api/games/chess/matches/{experiment_exp6_id}").get_json()["match"]
+        assert experiment_exp6_match["computer_difficulty"] == "experiment 6:neuralnet"
+        experiment_exp6_move = client.post(f"/api/games/chess/matches/{experiment_exp6_id}/move", json={"from": "e2", "to": "e4"})
+        assert experiment_exp6_move.status_code == 200
+        exp6_history = experiment_exp6_move.get_json()["match"]["move_history"]
+        assert exp6_history[-1]["computer"] is True
+        assert exp6_history[-1]["piece"]
+
+        experiment_exp6_black = client.post("/api/games/chess/practice", json={"difficulty": "experiment 6:neuralnet", "side": "black"})
+        assert experiment_exp6_black.status_code == 200
+        exp6_black_id = experiment_exp6_black.get_json()["match_id"]
+        exp6_black_match = client.get(f"/api/games/chess/matches/{exp6_black_id}").get_json()["match"]
+        assert exp6_black_match["move_history"][0]["computer"] is True
+        assert exp6_black_match["move_history"][0]["piece"]
 
     with patch("routes.games.stockfish_available", return_value=False):
         stockfish_unavailable = client.post("/api/games/chess/practice", json={"difficulty": "stockfish"})

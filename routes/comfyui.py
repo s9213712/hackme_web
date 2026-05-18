@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import inspect
 import json
 import mimetypes
 import os
@@ -58,6 +59,7 @@ from services.comfyui.client import (
     ComfyUIClient,
     ComfyUIError,
 )
+from services.comfyui.files import normalize_file_ref as normalize_comfyui_file_ref
 from services.comfyui.huggingface import normalize_diffusers_variant, normalize_huggingface_repo_file
 from services.comfyui.workflows import (
     WorkflowValidationError,
@@ -302,18 +304,11 @@ def register_comfyui_routes(app, deps):
             return actor.get(key, default) if hasattr(actor, "get") else default
 
     def _image_ref_payload(image_ref):
-        if not isinstance(image_ref, dict):
+        try:
+            payload = normalize_comfyui_file_ref(image_ref, error_cls=ValueError, empty_label="ComfyUI 圖片")
+        except Exception:
             return None
-        filename = str(image_ref.get("filename") or "").strip()
-        image_type = str(image_ref.get("type") or "output").strip() or "output"
-        subfolder = str(image_ref.get("subfolder") or "").strip()
-        if not filename or "/" in filename or "\\" in filename or ".." in filename:
-            return None
-        if image_type not in {"input", "output", "temp"}:
-            return None
-        if subfolder.startswith("/") or subfolder.startswith("\\") or ".." in subfolder.replace("\\", "/").split("/"):
-            return None
-        return {"filename": filename, "subfolder": subfolder, "type": image_type}
+        return payload
 
     def _image_ref_key(image_ref):
         payload = _image_ref_payload(image_ref)
@@ -1498,6 +1493,57 @@ def register_comfyui_routes(app, deps):
             return value.strip().lower() in {"1", "true", "yes", "on", "y", "t"}
         return False
 
+    def _maybe_fetch_outputs_kwarg(func, **kwargs):
+        try:
+            signature = inspect.signature(func)
+            accepts_fetch_outputs = (
+                "fetch_outputs" in signature.parameters
+                or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+            )
+        except (TypeError, ValueError):
+            accepts_fetch_outputs = True
+        if not accepts_fetch_outputs:
+            kwargs.pop("fetch_outputs", None)
+        return kwargs
+
+    def _strip_comfyui_inline_data_urls(value):
+        if isinstance(value, list):
+            return [_strip_comfyui_inline_data_urls(item) for item in value]
+        if isinstance(value, dict):
+            cleaned = {}
+            for key, item in value.items():
+                if key == "data_url":
+                    continue
+                cleaned[key] = _strip_comfyui_inline_data_urls(item)
+            return cleaned
+        return value
+
+    def _prune_generation_job_inline_payloads(conn, *, limit=50):
+        try:
+            rows = conn.execute(
+                """
+                SELECT job_id, result_json
+                FROM comfyui_generation_jobs
+                WHERE result_json LIKE ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                ('%"data_url"%', int(limit)),
+            ).fetchall()
+        except Exception:
+            return
+        for row in rows:
+            result = _parse_json_field(row["result_json"], None)
+            if result is None:
+                continue
+            stripped = _strip_comfyui_inline_data_urls(result)
+            if stripped == result:
+                continue
+            conn.execute(
+                "UPDATE comfyui_generation_jobs SET result_json=? WHERE job_id=?",
+                (json.dumps(stripped, ensure_ascii=False, sort_keys=True), row["job_id"]),
+            )
+
     def _ensure_generation_job_schema(conn):
         if generation_jobs_schema_ready["ready"]:
             return
@@ -1523,6 +1569,7 @@ def register_comfyui_routes(app, deps):
                 "CREATE INDEX IF NOT EXISTS idx_comfyui_generation_jobs_owner "
                 "ON comfyui_generation_jobs(owner_user_id, updated_at DESC)"
             )
+            _prune_generation_job_inline_payloads(conn)
             conn.commit()
             generation_jobs_schema_ready["ready"] = True
 
@@ -1531,6 +1578,7 @@ def register_comfyui_routes(app, deps):
             return None
         progress = _parse_json_field(row["progress_json"], {}) or {}
         result = _parse_json_field(row["result_json"], None) if row["result_json"] else None
+        result = _strip_comfyui_inline_data_urls(result) if result is not None else None
         return {
             "job_id": row["job_id"],
             "owner_user_id": int(row["owner_user_id"]),
@@ -1546,6 +1594,7 @@ def register_comfyui_routes(app, deps):
     def _persist_generation_job(job):
         if not isinstance(job, dict) or not job.get("job_id"):
             return False
+        result_payload = _strip_comfyui_inline_data_urls(job.get("result")) if job.get("result") is not None else None
         conn = get_db()
         try:
             _ensure_generation_job_schema(conn)
@@ -1572,7 +1621,7 @@ def register_comfyui_routes(app, deps):
                     str(job.get("status") or "queued"),
                     str(job.get("error") or ""),
                     json.dumps(job.get("progress") or {}, ensure_ascii=False, sort_keys=True),
-                    json.dumps(job.get("result"), ensure_ascii=False, sort_keys=True) if job.get("result") is not None else None,
+                    json.dumps(result_payload, ensure_ascii=False, sort_keys=True) if result_payload is not None else None,
                     float(job.get("created_at") or time.time()),
                     float(job.get("updated_at") or time.time()),
                 ),
@@ -1709,6 +1758,8 @@ def register_comfyui_routes(app, deps):
             if not job:
                 return None
             for key, value in changes.items():
+                if key == "result":
+                    value = _strip_comfyui_inline_data_urls(value)
                 job[key] = value
             job["updated_at"] = time.time()
             updated = dict(job)
@@ -1865,7 +1916,7 @@ def register_comfyui_routes(app, deps):
             "status": job["status"],
             "progress": dict(job.get("progress") or {}),
             "error": job.get("error") or "",
-            "result": job.get("result"),
+            "result": _strip_comfyui_inline_data_urls(job.get("result")),
         }
         if payload["status"] in {"queued", "running"}:
             progress = payload["progress"]
@@ -2073,7 +2124,6 @@ def register_comfyui_routes(app, deps):
                 "image_ref": image_ref_item,
                 "mime_type": mime_type,
                 "size_bytes": len(raw_data),
-                "data_url": f"data:{mime_type};base64,{base64.b64encode(raw_data).decode('ascii')}",
                 "seed": params["seed"],
                 "model": params["model"],
                 "batch_size": params["batch_size"],
@@ -2099,12 +2149,12 @@ def register_comfyui_routes(app, deps):
             raw_data = item.get("data") or b""
             mime_type = item.get("mime_type") or result.get("mime_type") or "image/png"
             image_ref_item = item.get("image_ref") if isinstance(item.get("image_ref"), dict) else result["image_ref"]
+            size_bytes = int(item.get("size_bytes") or len(raw_data) or 0)
             images.append({
                 "prompt_id": result["prompt_id"],
                 "image_ref": image_ref_item,
                 "mime_type": mime_type,
-                "size_bytes": len(raw_data),
-                "data_url": f"data:{mime_type};base64,{base64.b64encode(raw_data).decode('ascii')}",
+                "size_bytes": size_bytes,
                 "seed": params["seed"],
                 "model": params["model"],
                 "batch_size": params["batch_size"],
@@ -2143,13 +2193,13 @@ def register_comfyui_routes(app, deps):
                 if not file_ref:
                     continue
                 mime_type = item.get("mime_type") or "application/octet-stream"
+                size_bytes = int(item.get("size_bytes") or len(raw_data) or 0)
                 items.append({
                     "prompt_id": result.get("prompt_id") or "",
                     "media_kind": "video" if media_kind == "videos" else ("audio" if media_kind == "audio" else "file"),
                     "file_ref": file_ref,
                     "mime_type": mime_type,
-                    "size_bytes": len(raw_data),
-                    "data_url": f"data:{mime_type};base64,{base64.b64encode(raw_data).decode('ascii')}" if raw_data else "",
+                    "size_bytes": size_bytes,
                     "batch_index": index,
                 })
         return items
@@ -2175,8 +2225,12 @@ def register_comfyui_routes(app, deps):
         try:
             result = active_client.generate_image(
                 params,
-                timeout_seconds=timeout_seconds,
-                progress_callback=lambda progress: _update_generation_job_progress(job_id, progress),
+                **_maybe_fetch_outputs_kwarg(
+                    active_client.generate_image,
+                    timeout_seconds=timeout_seconds,
+                    progress_callback=lambda progress: _update_generation_job_progress(job_id, progress),
+                    fetch_outputs=False,
+                ),
             )
             billing = {"charged": False, "exempt": "root"} if not quote else None
             if quote:
@@ -2328,6 +2382,7 @@ def register_comfyui_routes(app, deps):
             }
             if prompt_extra_data:
                 run_kwargs["extra_data"] = prompt_extra_data
+            run_kwargs = _maybe_fetch_outputs_kwarg(active_client.generate_from_workflow, **run_kwargs, fetch_outputs=False)
             result = active_client.generate_from_workflow(workflow_json, **run_kwargs)
             images = (
                 _finalize_generation_records(actor, default_params, result, backend_url=backend_binding.get("url"))

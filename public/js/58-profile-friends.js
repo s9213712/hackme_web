@@ -5,9 +5,13 @@ let profilePanelCache = null;
 let profileFriendsLoaded = false;
 const targetOptionCache = new Map();
 const PROFILE_AVATAR_CROPPER_MIN_ZOOM = 1;
-const PROFILE_AVATAR_CROPPER_MAX_ZOOM = 3;
+const PROFILE_AVATAR_CROPPER_MAX_ZOOM = 6;
+let profileAvatarCloudFiles = [];
+let profileAvatarCloudFilesLoadedAt = 0;
 const profileAvatarCropState = {
   objectUrl: "",
+  cloudFileId: "",
+  cloudFileName: "",
   hasImage: false,
   naturalWidth: 0,
   naturalHeight: 0,
@@ -71,6 +75,9 @@ function profileAvatarCropperElements() {
     zoom: $("profile-avatar-crop-zoom"),
     center: $("profile-avatar-crop-center"),
     file: $("profile-avatar-file"),
+    cloudSelect: $("profile-avatar-cloud-file"),
+    cloudRefresh: $("profile-avatar-cloud-refresh"),
+    cloudUse: $("profile-avatar-cloud-use"),
   };
 }
 
@@ -95,6 +102,8 @@ function resetProfileAvatarCropper({ keepFile = false } = {}) {
   const els = profileAvatarCropperElements();
   if (profileAvatarCropState.objectUrl) URL.revokeObjectURL(profileAvatarCropState.objectUrl);
   profileAvatarCropState.objectUrl = "";
+  profileAvatarCropState.cloudFileId = "";
+  profileAvatarCropState.cloudFileName = "";
   profileAvatarCropState.hasImage = false;
   profileAvatarCropState.naturalWidth = 0;
   profileAvatarCropState.naturalHeight = 0;
@@ -125,7 +134,7 @@ function profileAvatarStageMetrics() {
   const width = Math.max(0, rect.width || 0);
   const height = Math.max(0, rect.height || 0);
   if (!width || !height) return null;
-  const cropSize = Math.max(96, Math.min(width, height) * 0.72);
+  const cropSize = Math.max(132, Math.min(width, height) * 0.82);
   return {
     width,
     height,
@@ -208,9 +217,19 @@ function loadProfileAvatarFile(file) {
   }
   const els = profileAvatarCropperElements();
   if (!els.cropper || !els.image) return;
+  profileAvatarCropState.cloudFileId = "";
+  profileAvatarCropState.cloudFileName = "";
   const nextUrl = URL.createObjectURL(file);
+  loadProfileAvatarObjectUrl(nextUrl);
+}
+
+function loadProfileAvatarObjectUrl(nextUrl, cloudFile = null) {
+  const els = profileAvatarCropperElements();
+  if (!els.cropper || !els.image || !nextUrl) return;
   if (profileAvatarCropState.objectUrl) URL.revokeObjectURL(profileAvatarCropState.objectUrl);
   profileAvatarCropState.objectUrl = nextUrl;
+  profileAvatarCropState.cloudFileId = cloudFile ? String(cloudFile.id || cloudFile.file_id || "") : "";
+  profileAvatarCropState.cloudFileName = cloudFile ? profileAvatarCloudFileName(cloudFile) : "";
   profileAvatarCropState.hasImage = false;
   els.image.onload = () => {
     profileAvatarCropState.naturalWidth = els.image.naturalWidth || 1;
@@ -230,6 +249,111 @@ function loadProfileAvatarFile(file) {
   els.image.src = nextUrl;
 }
 
+function profileAvatarCloudFileName(file) {
+  return String(file?.display_name || file?.original_filename_plain_for_public || file?.filename || file?.file_id || file?.id || "雲端圖片");
+}
+
+function profileAvatarCloudFileIsUsable(file) {
+  const mime = String(file?.mime_type_plain_for_public || file?.mime_type || "").toLowerCase();
+  const name = profileAvatarCloudFileName(file).toLowerCase();
+  const privacyMode = String(file?.privacy_mode || "standard_plain");
+  const scanStatus = String(file?.scan_status || "");
+  return (
+    privacyMode === "standard_plain"
+    && ["clean", "not_required"].includes(scanStatus)
+    && (["image/jpeg", "image/png", "image/gif"].includes(mime) || /\.(png|jpe?g|gif)$/.test(name))
+  );
+}
+
+function profileAvatarCloudSizeText(file) {
+  if (typeof formatDriveBytes === "function") return formatDriveBytes(file?.size_bytes || 0);
+  const bytes = Number(file?.size_bytes || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${Math.round(bytes)} B`;
+}
+
+function renderProfileAvatarCloudOptions() {
+  const { cloudSelect } = profileAvatarCropperElements();
+  if (!cloudSelect) return;
+  const usable = profileAvatarCloudFiles.filter(profileAvatarCloudFileIsUsable);
+  if (!usable.length) {
+    cloudSelect.innerHTML = `<option value="">目前沒有可用的雲端圖片</option>`;
+    return;
+  }
+  cloudSelect.innerHTML = `<option value="">請選擇雲端圖片</option>` + usable.map((file) => {
+    const id = String(file.id || file.file_id || "");
+    const name = `${profileAvatarCloudFileName(file)} · ${profileAvatarCloudSizeText(file)}`;
+    return `<option value="${sanitize(id)}">${sanitize(name)}</option>`;
+  }).join("");
+}
+
+async function loadProfileAvatarCloudFiles({ force = false } = {}) {
+  const { cloudSelect } = profileAvatarCropperElements();
+  if (!currentUserId) return [];
+  const fresh = profileAvatarCloudFilesLoadedAt && Date.now() - profileAvatarCloudFilesLoadedAt < 30000;
+  if (!force && fresh) {
+    renderProfileAvatarCloudOptions();
+    return profileAvatarCloudFiles;
+  }
+  if (cloudSelect) cloudSelect.innerHTML = `<option value="">讀取雲端圖片中...</option>`;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + `/cloud-drive/files?user_id=${encodeURIComponent(currentUserId)}`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    profileAvatarCloudFiles = Array.isArray(json.files) ? json.files : [];
+    profileAvatarCloudFilesLoadedAt = Date.now();
+    renderProfileAvatarCloudOptions();
+    return profileAvatarCloudFiles;
+  } catch (err) {
+    profileAvatarCloudFiles = [];
+    profileAvatarCloudFilesLoadedAt = 0;
+    if (cloudSelect) cloudSelect.innerHTML = `<option value="">雲端圖片讀取失敗</option>`;
+    profileAvatarSetMsg(err.message || "雲端圖片讀取失敗", true);
+    return [];
+  }
+}
+
+async function useSelectedProfileCloudAvatar() {
+  const { cloudSelect, file } = profileAvatarCropperElements();
+  const selectedId = String(cloudSelect?.value || "");
+  if (!selectedId) {
+    profileAvatarSetMsg("請先選擇雲端圖片", true);
+    return;
+  }
+  const cloudFile = profileAvatarCloudFiles.find((item) => String(item.id || item.file_id || "") === selectedId);
+  if (!cloudFile || !profileAvatarCloudFileIsUsable(cloudFile)) {
+    profileAvatarSetMsg("這個雲端檔案不能作為公開頭像", true);
+    return;
+  }
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(selectedId)}/preview/content`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      throw new Error(json.msg || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const mime = String(blob.type || cloudFile.mime_type_plain_for_public || "").toLowerCase();
+    if (!/^image\/(png|jpe?g|gif)$/i.test(mime)) throw new Error("雲端檔案不是可用的頭像圖片");
+    if (file) file.value = "";
+    loadProfileAvatarObjectUrl(URL.createObjectURL(blob), cloudFile);
+    profileAvatarSetMsg(`已載入雲端圖片：${profileAvatarCloudFileName(cloudFile)}`);
+  } catch (err) {
+    profileAvatarSetMsg(err.message || "雲端圖片載入失敗", true);
+  }
+}
+
 function closeProfileAvatarUploader() {
   const { overlay } = profileAvatarCropperElements();
   if (overlay) {
@@ -247,6 +371,7 @@ function openProfileAvatarUploader({ pickFile = false } = {}) {
   profileAvatarSetMsg("");
   els.overlay.classList.add("show");
   els.overlay.setAttribute("aria-hidden", "false");
+  loadProfileAvatarCloudFiles().catch(() => {});
   if (pickFile && els.file && typeof els.file.click === "function") {
     els.file.click();
   } else if (els.file) {
@@ -286,12 +411,13 @@ function handleProfileAvatarPointerEnd(event) {
 
 async function uploadProfileAvatar() {
   const file = $("profile-avatar-file")?.files?.[0] || null;
+  const cloudFileId = profileAvatarCropState.cloudFileId || "";
   if (!currentUserId) {
     profileAvatarSetMsg("尚未登入，無法更新頭像", true);
     return;
   }
-  if (!file) {
-    profileAvatarSetMsg("請先選擇頭像圖片", true);
+  if (!file && !cloudFileId) {
+    profileAvatarSetMsg("請先選擇頭像圖片，或從雲端硬碟選一張圖片", true);
     return;
   }
   const button = $("profile-avatar-upload-btn");
@@ -303,7 +429,8 @@ async function uploadProfileAvatar() {
   try {
     const crop = currentProfileAvatarCropPayload();
     const form = new FormData();
-    form.append("file", file);
+    if (file) form.append("file", file);
+    else form.append("cloud_file_id", cloudFileId);
     form.append("crop_json", JSON.stringify(crop));
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
@@ -726,6 +853,12 @@ function bindProfileAvatarUploaderControls() {
   const els = profileAvatarCropperElements();
   if (els.file) {
     els.file.addEventListener("change", () => loadProfileAvatarFile(els.file.files?.[0] || null));
+  }
+  if (els.cloudRefresh) {
+    els.cloudRefresh.addEventListener("click", () => loadProfileAvatarCloudFiles({ force: true }));
+  }
+  if (els.cloudUse) {
+    els.cloudUse.addEventListener("click", useSelectedProfileCloudAvatar);
   }
   if (els.stage) {
     els.stage.addEventListener("pointerdown", handleProfileAvatarPointerStart);

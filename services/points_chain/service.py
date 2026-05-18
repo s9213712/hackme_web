@@ -711,6 +711,27 @@ class PointsLedgerService:
             actor=actor,
         )
 
+    def award_birthday_gift(self, *, user_id, birthday_year, birthday_date=None, actor=None):
+        year = int(birthday_year)
+        return self.record_transaction(
+            user_id=user_id,
+            currency_type=DISPLAY_CURRENCY,
+            direction="credit",
+            amount=BIRTHDAY_GIFT_POINTS,
+            action_type="birthday_gift",
+            reference_type="birthday_year",
+            reference_id=str(year),
+            idempotency_key=f"birthday_gift:{year}:{int(user_id)}",
+            reason=f"birthday gift {year}",
+            public_metadata={
+                "grant": "birthday_gift",
+                "birthday_year": year,
+                "birthday_date": str(birthday_date or ""),
+                "amount": BIRTHDAY_GIFT_POINTS,
+            },
+            actor=actor,
+        )
+
     def award_admin_initial_grant(self, *, user_id, actor=None):
         return self.record_transaction(
             user_id=user_id,
@@ -1599,10 +1620,11 @@ class PointsLedgerService:
                    OR l.action_type IN (
                        'admin_initial_grant',
                        'admin_weekly_salary',
-	                       'game_daily_challenge_reward',
-	                       'game_weekly_leaderboard_reward',
-	                       'trading_bot_weekly_competition_reward',
-	                       'new_user_signup_bonus',
+                       'birthday_gift',
+                       'game_daily_challenge_reward',
+                       'game_weekly_leaderboard_reward',
+                       'trading_bot_weekly_competition_reward',
+                       'new_user_signup_bonus',
                        'user_initial_grant'
                    )
                 ORDER BY l.id DESC LIMIT ?

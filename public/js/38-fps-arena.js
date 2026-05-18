@@ -83,6 +83,10 @@ let fpsArenaLastPointer = null;
 let fpsArenaTouchPointerId = null;
 let fpsArenaTouchMoved = false;
 let fpsArenaAudioContext = null;
+const FPS_ARENA_NORMAL_FOV = 72;
+const FPS_ARENA_SNIPER_FOV = 38;
+const FPS_ARENA_SNIPER_LOOK_SCALE = 0.42;
+const FPS_ARENA_SNIPER_SPREAD_SCALE = 0.34;
 const FPS_ARENA_SCOPE_SWAY = 0.0036;
 const FPS_ARENA_BOT_FIRE_RANGE = 18;
 const FPS_ARENA_PLAYER_RADIUS = 0.42;
@@ -265,6 +269,7 @@ function updateFpsArenaHud() {
     `<span>生命 ${Math.max(0, Math.ceil(state.health))}</span>`,
     `<span>防具 ${Math.max(0, Math.round(state.armor || 0))}</span>`,
     `<span>${sanitize(state.weapon?.label || "Rifle")} ${state.ammo}/${state.reserve}${state.reloadingUntil > performance.now() ? " 換彈" : ""}</span>`,
+    state.sniperMode ? "<span>狙擊模式</span>" : "",
     `<span>體力 ${Math.round(state.stamina ?? 100)}%</span>`,
     `<span>${sanitize(fpsArenaStanceMeta(state).label)}${state.coverState?.active ? " · 掩體" : ""}</span>`,
     `<span>時間 ${fpsArenaFormatTime(remaining)}</span>`,
@@ -310,6 +315,11 @@ function disposeFpsArenaScene() {
     fpsArenaState.renderer.dispose();
     const canvas = fpsArenaState.renderer.domElement;
     if (canvas?.parentNode) canvas.parentNode.removeChild(canvas);
+  }
+  const stage = $("fps-arena-stage");
+  if (stage) {
+    stage.classList.remove("is-sniper-mode");
+    stage.dataset.aim = "hip";
   }
 }
 
@@ -969,17 +979,31 @@ function fpsArenaUpdateWeaponView(state, now, stage) {
   if (!stage) return;
   const moving = state.keys.w || state.keys.a || state.keys.s || state.keys.d || state.keys.ArrowUp || state.keys.ArrowDown || state.keys.ArrowLeft || state.keys.ArrowRight;
   const stance = state.stance || "stand";
-  const bobScale = state.running ? 1.6 : moving ? 1 : 0.28;
+  const bobScale = state.sniperMode ? 0.12 : state.running ? 1.6 : moving ? 1 : 0.28;
   const stanceLift = stance === "prone" ? -18 : stance === "crouch" ? -8 : 0;
   const recoilLift = Math.min(34, (state.recoilKick || 0) * 430);
   const t = now * 0.006;
   stage.dataset.weapon = state.weapon?.key || "rifle";
   stage.dataset.stance = stance;
+  stage.dataset.aim = state.sniperMode ? "sniper" : "hip";
+  stage.classList.toggle("is-sniper-mode", Boolean(state.sniperMode));
   stage.classList.toggle("is-covered", Boolean(state.coverState?.active));
   stage.style.setProperty("--fps-weapon-x", `${Math.sin(t) * 4.5 * bobScale}px`);
   stage.style.setProperty("--fps-weapon-y", `${stanceLift + Math.abs(Math.cos(t * 0.72)) * 5.5 * bobScale - recoilLift}px`);
   stage.style.setProperty("--fps-weapon-rot", `${Math.sin(t * 0.82) * 1.6 * bobScale - recoilLift * 0.03}deg`);
   stage.style.setProperty("--fps-weapon-scale", stance === "prone" ? "1.08" : stance === "crouch" ? "1.03" : "1");
+}
+
+function fpsArenaUpdateSniperMode(state, dt) {
+  if (!state?.camera) return;
+  const targetFov = state.sniperMode ? FPS_ARENA_SNIPER_FOV : FPS_ARENA_NORMAL_FOV;
+  state.cameraFov = Number.isFinite(state.cameraFov) ? state.cameraFov : state.camera.fov || FPS_ARENA_NORMAL_FOV;
+  const nextFov = state.cameraFov + (targetFov - state.cameraFov) * Math.min(1, dt * 12);
+  if (Math.abs(nextFov - state.camera.fov) > 0.03) {
+    state.camera.fov = nextFov;
+    state.camera.updateProjectionMatrix();
+  }
+  state.cameraFov = nextFov;
 }
 
 function fpsArenaUpdateFeedback(state, now) {
@@ -1367,7 +1391,7 @@ function createFpsArenaWorld(mode) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(level.theme?.background || 0x08111f);
   scene.fog = new THREE.Fog(level.theme?.fog || 0x6f8494, 24, 72);
-  const camera = new THREE.PerspectiveCamera(72, 16 / 9, 0.1, 100);
+  const camera = new THREE.PerspectiveCamera(FPS_ARENA_NORMAL_FOV, 16 / 9, 0.1, 100);
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
   renderer.shadowMap.enabled = true;
@@ -1432,6 +1456,8 @@ function createFpsArenaWorld(mode) {
     hits: 0,
     yaw: 0,
     pitch: -0.03,
+    sniperMode: false,
+    cameraFov: FPS_ARENA_NORMAL_FOV,
     breathPhase: Math.random() * Math.PI * 2,
     breathOffset: new THREE.Vector2(0, 0),
     player: new THREE.Vector3(0, 1.65, 1.5),
@@ -1568,6 +1594,7 @@ async function startFpsArenaGame() {
 function finishFpsArenaGame(reason = "time") {
   const state = fpsArenaState;
   if (!state || state.status === "finished") return;
+  if (state.sniperMode) setFpsArenaSniperMode(false, { immediate: true });
   state.status = "finished";
   state.completedAt = Date.now();
   if (reason === "defused") state.score += 900 + Math.ceil(state.health * 3);
@@ -1597,6 +1624,7 @@ function finishFpsArenaGame(reason = "time") {
 function suspendFpsArenaGame() {
   const state = fpsArenaState;
   if (!state || state.status !== "active") return;
+  if (state.sniperMode) setFpsArenaSniperMode(false, { immediate: true });
   state.status = "paused";
   state.keys = {};
   if (fpsArenaRaf) {
@@ -1621,14 +1649,15 @@ function fpsArenaUpdateBreathing(state, now) {
   const moving = state.keys.w || state.keys.a || state.keys.s || state.keys.d || state.keys.ArrowUp || state.keys.ArrowDown || state.keys.ArrowLeft || state.keys.ArrowRight;
   const stanceScale = fpsArenaStanceMeta(state).breathe;
   const runScale = (state.running ? 2.85 : moving ? 1.8 : 1) * stanceScale;
-  const intensity = FPS_ARENA_SCOPE_SWAY * runScale;
+  const sniperScale = state.sniperMode ? 0.46 : 1;
+  const intensity = FPS_ARENA_SCOPE_SWAY * runScale * sniperScale;
   state.breathOffset.set(Math.sin(t) * intensity, Math.cos(t * 0.72) * intensity * 0.78);
   const stage = $("fps-arena-stage");
   if (stage) {
-    stage.style.setProperty("--fps-breathe-x", `${Math.sin(t) * (state.running ? 9.2 : moving ? 5.5 : 3.2) * stanceScale}px`);
-    stage.style.setProperty("--fps-breathe-y", `${Math.cos(t * 0.72) * (state.running ? 7.2 : moving ? 4.4 : 2.4) * stanceScale}px`);
-    stage.style.setProperty("--fps-breathe-rot", `${Math.sin(t * 0.48) * (state.running ? 2.8 : moving ? 1.8 : 1.1) * stanceScale}deg`);
-    stage.style.setProperty("--fps-breathe-scale", `${1 + Math.sin(t * 1.16) * (state.running ? 0.06 : moving ? 0.042 : 0.026) * stanceScale}`);
+    stage.style.setProperty("--fps-breathe-x", `${Math.sin(t) * (state.running ? 9.2 : moving ? 5.5 : 3.2) * stanceScale * sniperScale}px`);
+    stage.style.setProperty("--fps-breathe-y", `${Math.cos(t * 0.72) * (state.running ? 7.2 : moving ? 4.4 : 2.4) * stanceScale * sniperScale}px`);
+    stage.style.setProperty("--fps-breathe-rot", `${Math.sin(t * 0.48) * (state.running ? 2.8 : moving ? 1.8 : 1.1) * stanceScale * sniperScale}deg`);
+    stage.style.setProperty("--fps-breathe-scale", `${1 + Math.sin(t * 1.16) * (state.running ? 0.06 : moving ? 0.042 : 0.026) * stanceScale * sniperScale}`);
   }
 }
 
@@ -1680,10 +1709,10 @@ function fpsArenaMovePlayer(state, dt) {
   if (state.keys.a || state.keys.ArrowLeft) move.sub(right);
   const moving = move.lengthSq() > 0;
   const sprintKey = state.keys.Shift || state.keys.shift || state.mobileSprint;
-  const running = moving && sprintKey && state.stance === "stand" && state.stamina > 4;
+  const running = moving && !state.sniperMode && sprintKey && state.stance === "stand" && state.stamina > 4;
   state.running = running;
   if (moving) {
-    const speed = running ? 9.2 : stance.speed;
+    const speed = (running ? 9.2 : stance.speed) * (state.sniperMode ? 0.55 : 1);
     move.normalize().multiplyScalar(speed * dt);
     fpsArenaMoveWithCollision(state, move);
   }
@@ -1756,7 +1785,8 @@ function shootFpsArena() {
   state.recoilKick = Math.min(0.08, (state.recoilKick || 0) + weapon.recoil * 0.55);
   const raycaster = new THREE.Raycaster();
   const stanceSpread = state.stance === "prone" ? -0.0007 : state.stance === "crouch" ? -0.00035 : 0;
-  const spread = Math.max(0.0002, weapon.spread + stanceSpread + (state.running ? 0.006 : 0) + Math.min(0.01, (state.recoilKick || 0) * 0.12));
+  const aimSpreadScale = state.sniperMode ? FPS_ARENA_SNIPER_SPREAD_SCALE : 1;
+  const spread = Math.max(0.0002, (weapon.spread + stanceSpread) * aimSpreadScale + (state.running ? 0.006 : 0) + Math.min(0.01, (state.recoilKick || 0) * 0.12));
   raycaster.setFromCamera(new THREE.Vector2((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread), state.camera);
   const hit = raycaster.intersectObjects([...state.hittables, ...state.cover], false)[0];
   const hitCover = Boolean(hit && state.cover.includes(hit.object));
@@ -2082,6 +2112,7 @@ function fpsArenaLoop(now) {
     fpsArenaUpdateBreathing(state, now);
     fpsArenaUpdateFeedback(state, now);
     state.recoilKick = Math.max(0, (state.recoilKick || 0) - dt * 0.08);
+    fpsArenaUpdateSniperMode(state, dt);
     fpsArenaApplyCamera(state);
     fpsArenaUpdateTargets(state, dt, now);
     fpsArenaUpdateBotProjectiles(state, dt, now);
@@ -2174,8 +2205,29 @@ function handleFpsArenaTouchHold(action, pressed) {
 
 function fpsArenaApplyLookDelta(state, dx, dy) {
   if (!state || (!dx && !dy)) return;
-  state.yaw -= dx * 0.0024;
-  state.pitch = Math.max(-1.25, Math.min(1.05, state.pitch - dy * 0.0024));
+  const sensitivity = 0.0024 * (state.sniperMode ? FPS_ARENA_SNIPER_LOOK_SCALE : 1);
+  state.yaw -= dx * sensitivity;
+  state.pitch = Math.max(-1.25, Math.min(1.05, state.pitch - dy * sensitivity));
+}
+
+function setFpsArenaSniperMode(enabled, options = {}) {
+  const state = fpsArenaState;
+  if (!state || state.status !== "active") return;
+  const next = Boolean(enabled);
+  if (state.sniperMode === next) return;
+  state.sniperMode = next;
+  if (next) state.mobileSprint = false;
+  const stage = $("fps-arena-stage");
+  if (stage) {
+    stage.classList.toggle("is-sniper-mode", next);
+    stage.dataset.aim = next ? "sniper" : "hip";
+  }
+  if (options.immediate && state.camera) {
+    state.cameraFov = next ? FPS_ARENA_SNIPER_FOV : FPS_ARENA_NORMAL_FOV;
+    state.camera.fov = state.cameraFov;
+    state.camera.updateProjectionMatrix();
+  }
+  if (options.announce) updateFpsArenaStatus(next ? "狙擊模式。" : "恢復一般瞄準。");
 }
 
 function handleFpsArenaPointerMove(event) {
@@ -2231,7 +2283,8 @@ function handleFpsArenaTouchPointerEnd(event) {
 }
 
 document.addEventListener("mousemove", handleFpsArenaPointerMove);
-document.addEventListener("mouseup", () => {
+document.addEventListener("mouseup", (event) => {
+  if (event.button === 2 && fpsArenaState?.sniperMode) setFpsArenaSniperMode(false);
   fpsArenaPointerDragging = false;
   fpsArenaLastPointer = null;
 });
@@ -2243,6 +2296,15 @@ document.addEventListener("mousedown", (event) => {
   fpsArenaLastPointer = { x: event.clientX, y: event.clientY };
   if (stage.requestPointerLock && !document.pointerLockElement) stage.requestPointerLock();
   if (event.button === 0) shootFpsArena();
+  if (event.button === 2) setFpsArenaSniperMode(true, { announce: true });
+});
+document.addEventListener("contextmenu", (event) => {
+  if (!event.target?.closest?.("#fps-arena-stage")) return;
+  event.preventDefault();
+});
+window.addEventListener("blur", () => setFpsArenaSniperMode(false));
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) setFpsArenaSniperMode(false);
 });
 document.addEventListener("pointerdown", handleFpsArenaTouchPointerDown);
 document.addEventListener("pointermove", handleFpsArenaTouchPointerMove);

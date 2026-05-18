@@ -1547,7 +1547,7 @@
             <details class="drive-collapsible-panel game-rules-panel">
               <summary>3D 射擊場玩法說明</summary>
               <div class="drive-collapsible-body">
-                <p>選擇模式後按「開始」。滑鼠拖曳或滑鼠鎖定後移動視角，WASD 移動，左鍵或空白鍵射擊，E 可嘗試拆彈。瞄準鏡會有輕微呼吸晃動。</p>
+                <p>選擇模式後按「開始」。滑鼠拖曳或滑鼠鎖定後移動視角，WASD 移動，左鍵或空白鍵射擊，按住右鍵進入狙擊模式，E 可嘗試拆彈。瞄準鏡會有輕微呼吸晃動。</p>
                 <p>模式包含靶場、PvE、拆彈、Bot Match、Co-op PvE、PvP Duel 與 Battle Royale。關卡會逐步開出新地圖、Boss 橋段、敵人 AI、武器與地面物資。</p>
               </div>
             </details>
@@ -4624,6 +4624,80 @@
                     <input type="number" id="s-server-backpressure-refresh-seconds" min="1" max="60" />
                     <div class="field-hint">root 調整參數後，其他 gunicorn worker 最晚多久重新讀取設定。</div>
                   </div>
+                  <div class="field">
+                    <label>系統資源看板更新頻率（秒）</label>
+                    <input type="number" id="s-system-resource-board-refresh-seconds" min="1" max="300" step="1" value="5" />
+                    <div class="field-hint">預設 5 秒；只有 root 開啟「系統環境」頁時才輪詢，離開頁面即停止。</div>
+                  </div>
+                  <div class="field">
+                    <label>流量折線圖更新頻率（秒）</label>
+                    <input type="number" id="s-server-backpressure-traffic-refresh-seconds" min="1" max="300" step="1" value="4" />
+                  </div>
+                  <div class="field">
+                    <label>伺服器即時輸出更新頻率（秒）</label>
+                    <input type="number" id="s-server-output-refresh-seconds" min="1" max="300" step="1" value="3" />
+                  </div>
+                  <div class="field">
+                    <label>安全測試任務更新頻率（秒）</label>
+                    <input type="number" id="s-security-test-job-poll-seconds" min="1" max="300" step="1" value="3" />
+                  </div>
+                  <div class="field">
+                    <label>任務中心更新頻率（秒）</label>
+                    <input type="number" id="s-job-center-refresh-seconds" min="1" max="300" step="1" value="3" />
+                    <div class="field-hint">只在任務中心頁面可見時輪詢。</div>
+                  </div>
+                  <div class="field">
+                    <label>積分錢包 dashboard 更新頻率（秒）</label>
+                    <input type="number" id="s-economy-dashboard-refresh-seconds" min="5" max="600" step="1" value="30" />
+                  </div>
+                  <div class="field">
+                    <label>交易 dashboard 更新頻率（秒）</label>
+                    <input type="number" id="s-trading-dashboard-refresh-seconds" min="2" max="300" step="1" value="5" />
+                    <div class="field-hint">只影響前端交易 dashboard，不影響交易 background engine。</div>
+                  </div>
+                  <div class="field">
+                    <label>交易即時價格更新頻率（秒）</label>
+                    <input type="number" id="s-trading-live-price-refresh-seconds" min="1" max="60" step="1" value="2" />
+                  </div>
+                  <div class="field">
+                    <label>交易參考價更新頻率（秒）</label>
+                    <input type="number" id="s-trading-reference-price-refresh-seconds" min="1" max="60" step="1" value="1" />
+                  </div>
+                  <div class="field">
+                    <label>交易 K 線圖更新頻率（秒）</label>
+                    <input type="number" id="s-trading-reference-chart-refresh-seconds" min="2" max="300" step="1" value="5" />
+                  </div>
+                  <div class="field">
+                    <label>ComfyUI 工作進度更新頻率（秒）</label>
+                    <input type="number" id="s-comfyui-job-poll-seconds" min="1" max="60" step="1" value="1" />
+                  </div>
+                  <div class="field">
+                    <label>通知更新頻率（秒）</label>
+                    <input type="number" id="s-notification-poll-seconds" min="5" max="600" step="1" value="60" />
+                    <div class="field-hint">登入後檢查未讀通知；頁面隱藏時不主動輪詢。</div>
+                  </div>
+                  <div class="field">
+                    <label>遊戲邀請 active 更新頻率（秒）</label>
+                    <input type="number" id="s-game-invite-poll-active-seconds" min="2" max="300" step="1" value="5" />
+                    <div class="field-hint">遊戲頁或邀請視窗開啟時使用。</div>
+                  </div>
+                  <div class="field">
+                    <label>遊戲邀請 idle 更新頻率（秒）</label>
+                    <input type="number" id="s-game-invite-poll-idle-seconds" min="10" max="600" step="1" value="60" />
+                  </div>
+                  <div class="field">
+                    <label>遊戲邀請背景頁更新頻率（秒）</label>
+                    <input type="number" id="s-game-invite-poll-hidden-seconds" min="30" max="1800" step="1" value="180" />
+                  </div>
+                  <div class="field">
+                    <label>伺服器連線監測頻率（秒）</label>
+                    <input type="number" id="s-server-connection-monitor-seconds" min="5" max="300" step="1" value="15" />
+                  </div>
+                  <div class="field">
+                    <label>雲端硬碟 dashboard lazy refresh（秒）</label>
+                    <input type="number" id="s-drive-dashboard-lazy-refresh-seconds" min="1" max="300" step="1" value="10" />
+                    <div class="field-hint">短時間重回雲端硬碟時可沿用已載入狀態，只恢復背景任務。</div>
+                  </div>
                 </div>
               </div>
             </details>
@@ -5960,7 +6034,7 @@
         </div>
         <div class="avatar-cropper-tools">
           <label for="edit-avatar-crop-zoom">縮放</label>
-          <input type="range" id="edit-avatar-crop-zoom" min="1" max="3" step="0.01" value="1" />
+          <input type="range" id="edit-avatar-crop-zoom" min="1" max="6" step="0.01" value="1" />
           <button type="button" id="edit-avatar-crop-center" class="btn btn-sm">置中</button>
         </div>
         <div class="avatar-cropper-hint">拖曳圖片調整位置，圓形範圍會成為頭像顯示重點。</div>
@@ -6266,6 +6340,17 @@
       <label>頭像圖片（JPEG / PNG / GIF）</label>
       <input type="file" id="profile-avatar-file" accept="image/png,image/jpeg,image/gif" />
     </div>
+    <div class="field">
+      <label for="profile-avatar-cloud-file">或從雲端硬碟選擇圖片</label>
+      <div class="profile-avatar-cloud-row">
+        <select id="profile-avatar-cloud-file">
+          <option value="">讀取雲端圖片中...</option>
+        </select>
+        <button type="button" id="profile-avatar-cloud-refresh" class="btn btn-sm">刷新</button>
+        <button type="button" id="profile-avatar-cloud-use" class="btn btn-sm">使用</button>
+      </div>
+      <div class="drive-card-sub">僅列出你自己的雲端硬碟中可作為公開頭像的 JPEG / PNG / GIF 圖片。</div>
+    </div>
     <div class="avatar-cropper" id="profile-avatar-cropper" hidden>
       <div class="avatar-cropper-stage" id="profile-avatar-crop-stage" aria-label="頭像裁切輔助區">
         <img id="profile-avatar-crop-image" alt="頭像裁切預覽" draggable="false" />
@@ -6276,7 +6361,7 @@
       </div>
       <div class="avatar-cropper-tools">
         <label for="profile-avatar-crop-zoom">縮放</label>
-        <input type="range" id="profile-avatar-crop-zoom" min="1" max="3" step="0.01" value="1" />
+        <input type="range" id="profile-avatar-crop-zoom" min="1" max="6" step="0.01" value="1" />
         <button type="button" id="profile-avatar-crop-center" class="btn btn-sm">置中</button>
       </div>
       <div class="avatar-cropper-hint">不用輸入座標；拖曳圖片、調整縮放後直接上傳。</div>
@@ -6441,8 +6526,8 @@
 <script src="/js/35-drive.js?v=20260517-share-expiry-picker" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
 <!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
-<script src="/js/36-comfyui.js?v=20260518-comfyui-mask-editor" defer></script>
-<script src="/js/36-comfyui-workflows.js?v=20260518-comfyui-mask-editor" defer></script>
+<script src="/js/36-comfyui.js?v=20260518-comfyui-qos" defer></script>
+<script src="/js/36-comfyui-workflows.js?v=20260518-comfyui-qos" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/41-game-modules.js?v=20260518-game-ux" defer></script>
 <script src="/js/games/game-view-registry.js?v=20260513-legacy-modules" defer></script>

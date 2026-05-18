@@ -29,6 +29,17 @@ def test_comfyui_js_imports_history_and_drive_images_for_inputs():
     assert "function renderComfyuiGeneratedMedia(mediaItems" in js
 
 
+def test_comfyui_generation_results_lazy_load_output_previews():
+    js = _read("public/js/36-comfyui.js")
+    workflow_js = _read("public/js/36-comfyui-workflows.js")
+    assert "async function hydrateComfyuiGeneratedImages" in js
+    assert 'apiFetch(API + "/comfyui/image-preview"' in js
+    assert "const runImages = await hydrateComfyuiGeneratedImages(rawRunImages);" in js
+    assert "const images = await hydrateComfyuiGeneratedImages(rawImages);" in workflow_js
+    assert 'if (!comfyuiCurrentImage?.image_ref) throw new Error("ComfyUI 未回傳圖片");' in js
+    assert 'if (!comfyuiCurrentImage?.data_url) throw new Error("ComfyUI 未回傳圖片");' not in js
+
+
 def test_workflow_template_run_sends_image_field_assignments():
     workflow_js = _read("public/js/36-comfyui-workflows.js")
     assert "function collectComfyuiTemplateImageAssignments(detail)" in workflow_js

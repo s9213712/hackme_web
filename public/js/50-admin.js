@@ -36,6 +36,17 @@ let suppressNextSettingsStatusClear = false;
 let currentServerMode = "dev_ready";
 let settingsStatusAutoClearTimer = null;
 let backpressureTrafficPollTimer = null;
+let systemResourcePollTimer = null;
+let systemResourceRefreshSeconds = 5;
+let systemResourceRefreshInFlight = false;
+let backpressureTrafficRefreshSeconds = 4;
+let serverOutputRefreshSeconds = 3;
+let securityTestJobPollSeconds = 3;
+
+function adminRefreshSeconds(value, fallback = 5, min = 1, max = 300) {
+  const parsed = parseInt(value, 10);
+  return Math.max(min, Math.min(max, Number.isFinite(parsed) ? parsed : fallback));
+}
 
 function parseCloudDriveTransferLimits(raw) {
   if (!raw) return { ...DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS };
@@ -99,6 +110,7 @@ function switchServerTab(tab) {
   currentServerTab = tab;
   if (tab !== "security") stopServerOutputPoll();
   if (tab !== "settings") stopBackpressureTrafficPoll();
+  if (tab !== "env") stopSystemResourcePoll();
   ["security", "audit", "health", "integrity", "launch-check", "settings", "env"].forEach((name) => {
     const sec = $("sec-server-" + name);
     if (sec) sec.classList.toggle("active", name === tab);
@@ -122,7 +134,10 @@ function switchServerTab(tab) {
     loadServerMode();
     loadServerUpdateStatus(false);
   }
-  if (tab === "env") loadServerEnv();
+  if (tab === "env") {
+    loadServerEnv();
+    startSystemResourcePoll();
+  }
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
 }
 
@@ -331,7 +346,10 @@ function switchModuleTab(tab) {
   if (normTab === "announcements" && canAccessAnnouncements) {
     loadAnnouncements();
   }
-  if (normTab !== "server") stopServerOutputPoll();
+  if (normTab !== "server") {
+    stopServerOutputPoll();
+    stopSystemResourcePoll();
+  }
   if (normTab === "server" && canAccessServer) {
     switchServerTab(currentServerTab || "security");
   }
@@ -4292,7 +4310,7 @@ function stopBackpressureTrafficPoll() {
 function startBackpressureTrafficPoll() {
   stopBackpressureTrafficPoll();
   if (currentUser !== "root") return;
-  backpressureTrafficPollTimer = setInterval(refreshBackpressureTraffic, 4000);
+  backpressureTrafficPollTimer = setInterval(refreshBackpressureTraffic, backpressureTrafficRefreshSeconds * 1000);
 }
 
 async function refreshBackpressureTraffic() {
@@ -4362,6 +4380,26 @@ async function loadSettings() {
   if ($("s-server-backpressure-fast-lane-reserved")) $("s-server-backpressure-fast-lane-reserved").value = Number(s.server_backpressure_fast_lane_reserved || 0);
   if ($("s-server-backpressure-retry-after-seconds")) $("s-server-backpressure-retry-after-seconds").value = Number(s.server_backpressure_retry_after_seconds || 2);
   if ($("s-server-backpressure-refresh-seconds")) $("s-server-backpressure-refresh-seconds").value = Number(s.server_backpressure_refresh_seconds || 2);
+  backpressureTrafficRefreshSeconds = adminRefreshSeconds(s.server_backpressure_traffic_refresh_seconds, 4, 1, 300);
+  serverOutputRefreshSeconds = adminRefreshSeconds(s.server_output_refresh_seconds, 3, 1, 300);
+  securityTestJobPollSeconds = adminRefreshSeconds(s.security_test_job_poll_seconds, 3, 1, 300);
+  if ($("s-server-backpressure-traffic-refresh-seconds")) $("s-server-backpressure-traffic-refresh-seconds").value = backpressureTrafficRefreshSeconds;
+  if ($("s-server-output-refresh-seconds")) $("s-server-output-refresh-seconds").value = serverOutputRefreshSeconds;
+  if ($("s-security-test-job-poll-seconds")) $("s-security-test-job-poll-seconds").value = securityTestJobPollSeconds;
+  applySystemResourceRefreshSeconds(s.system_resource_board_refresh_seconds || 5, { restart: false });
+  if ($("s-job-center-refresh-seconds")) $("s-job-center-refresh-seconds").value = adminRefreshSeconds(s.job_center_refresh_seconds, 3, 1, 300);
+  if ($("s-economy-dashboard-refresh-seconds")) $("s-economy-dashboard-refresh-seconds").value = adminRefreshSeconds(s.economy_dashboard_refresh_seconds, 30, 5, 600);
+  if ($("s-trading-dashboard-refresh-seconds")) $("s-trading-dashboard-refresh-seconds").value = adminRefreshSeconds(s.trading_dashboard_refresh_seconds, 5, 2, 300);
+  if ($("s-trading-live-price-refresh-seconds")) $("s-trading-live-price-refresh-seconds").value = adminRefreshSeconds(s.trading_live_price_refresh_seconds, 2, 1, 60);
+  if ($("s-trading-reference-price-refresh-seconds")) $("s-trading-reference-price-refresh-seconds").value = adminRefreshSeconds(s.trading_reference_price_refresh_seconds, 1, 1, 60);
+  if ($("s-trading-reference-chart-refresh-seconds")) $("s-trading-reference-chart-refresh-seconds").value = adminRefreshSeconds(s.trading_reference_chart_refresh_seconds, 5, 2, 300);
+  if ($("s-comfyui-job-poll-seconds")) $("s-comfyui-job-poll-seconds").value = adminRefreshSeconds(s.comfyui_job_poll_seconds, 1, 1, 60);
+  if ($("s-notification-poll-seconds")) $("s-notification-poll-seconds").value = adminRefreshSeconds(s.notification_poll_seconds, 60, 5, 600);
+  if ($("s-game-invite-poll-active-seconds")) $("s-game-invite-poll-active-seconds").value = adminRefreshSeconds(s.game_invite_poll_active_seconds, 5, 2, 300);
+  if ($("s-game-invite-poll-idle-seconds")) $("s-game-invite-poll-idle-seconds").value = adminRefreshSeconds(s.game_invite_poll_idle_seconds, 60, 10, 600);
+  if ($("s-game-invite-poll-hidden-seconds")) $("s-game-invite-poll-hidden-seconds").value = adminRefreshSeconds(s.game_invite_poll_hidden_seconds, 180, 30, 1800);
+  if ($("s-server-connection-monitor-seconds")) $("s-server-connection-monitor-seconds").value = adminRefreshSeconds(s.server_connection_monitor_seconds, 15, 5, 300);
+  if ($("s-drive-dashboard-lazy-refresh-seconds")) $("s-drive-dashboard-lazy-refresh-seconds").value = adminRefreshSeconds(s.drive_dashboard_lazy_refresh_seconds, 10, 1, 300);
   updateBackpressureModeFields();
   if ($("s-comfyui-connection-mode")) $("s-comfyui-connection-mode").value = s.comfyui_connection_mode || "remote";
   if ($("s-comfyui-remote-api-url")) $("s-comfyui-remote-api-url").value = s.comfyui_remote_api_url || "";
@@ -5251,7 +5289,7 @@ async function loadSecurityTestJobs() {
     renderSecurityTestJobs(json.jobs || []);
     if ((json.jobs || []).some((job) => job.status === "running")) {
       clearTimeout(window.securityTestPollTimer);
-      window.securityTestPollTimer = setTimeout(loadSecurityTestJobs, 2500);
+      window.securityTestPollTimer = setTimeout(loadSecurityTestJobs, securityTestJobPollSeconds * 1000);
     }
   } catch (err) {
     securityTestMsg(`測試任務讀取失敗：${err.message || "請檢查伺服器連線"}`, false);
@@ -5399,7 +5437,7 @@ async function loadServerOutput() {
 function startServerOutputPoll() {
   if (currentUser !== "root" || currentModuleTab !== "server" || currentServerTab !== "security") return;
   if (serverOutputPollTimer) return;
-  serverOutputPollTimer = setInterval(loadServerOutput, 2500);
+  serverOutputPollTimer = setInterval(loadServerOutput, serverOutputRefreshSeconds * 1000);
 }
 
 function stopServerOutputPoll() {
@@ -6108,6 +6146,23 @@ async function saveSettings() {
     server_backpressure_fast_lane_reserved: parseInt($("s-server-backpressure-fast-lane-reserved")?.value || "0", 10) || 0,
     server_backpressure_retry_after_seconds: parseInt($("s-server-backpressure-retry-after-seconds")?.value || "2", 10) || 2,
     server_backpressure_refresh_seconds: parseInt($("s-server-backpressure-refresh-seconds")?.value || "2", 10) || 2,
+    server_backpressure_traffic_refresh_seconds: parseInt($("s-server-backpressure-traffic-refresh-seconds")?.value || "4", 10) || 4,
+    server_output_refresh_seconds: parseInt($("s-server-output-refresh-seconds")?.value || "3", 10) || 3,
+    security_test_job_poll_seconds: parseInt($("s-security-test-job-poll-seconds")?.value || "3", 10) || 3,
+    system_resource_board_refresh_seconds: parseInt($("s-system-resource-board-refresh-seconds")?.value || "5", 10) || 5,
+    job_center_refresh_seconds: parseInt($("s-job-center-refresh-seconds")?.value || "3", 10) || 3,
+    economy_dashboard_refresh_seconds: parseInt($("s-economy-dashboard-refresh-seconds")?.value || "30", 10) || 30,
+    trading_dashboard_refresh_seconds: parseInt($("s-trading-dashboard-refresh-seconds")?.value || "5", 10) || 5,
+    trading_live_price_refresh_seconds: parseInt($("s-trading-live-price-refresh-seconds")?.value || "2", 10) || 2,
+    trading_reference_price_refresh_seconds: parseInt($("s-trading-reference-price-refresh-seconds")?.value || "1", 10) || 1,
+    trading_reference_chart_refresh_seconds: parseInt($("s-trading-reference-chart-refresh-seconds")?.value || "5", 10) || 5,
+    comfyui_job_poll_seconds: parseInt($("s-comfyui-job-poll-seconds")?.value || "1", 10) || 1,
+    notification_poll_seconds: parseInt($("s-notification-poll-seconds")?.value || "60", 10) || 60,
+    game_invite_poll_active_seconds: parseInt($("s-game-invite-poll-active-seconds")?.value || "5", 10) || 5,
+    game_invite_poll_idle_seconds: parseInt($("s-game-invite-poll-idle-seconds")?.value || "60", 10) || 60,
+    game_invite_poll_hidden_seconds: parseInt($("s-game-invite-poll-hidden-seconds")?.value || "180", 10) || 180,
+    server_connection_monitor_seconds: parseInt($("s-server-connection-monitor-seconds")?.value || "15", 10) || 15,
+    drive_dashboard_lazy_refresh_seconds: parseInt($("s-drive-dashboard-lazy-refresh-seconds")?.value || "10", 10) || 10,
     comfyui_connection_mode: comfyuiMode,
     comfyui_remote_api_url: ($("s-comfyui-remote-api-url")?.value || "").trim(),
     comfyui_base_dir: ($("s-comfyui-base-dir")?.value || "").trim(),
@@ -6195,8 +6250,45 @@ async function saveSettings() {
     const activeServerTab = currentServerTab;
     const activeSettingsSection = currentSettingsSection;
     applySiteConfig(payload);
+    if (typeof stopTradingModuleTimers === "function" && typeof startTradingModuleTimers === "function") {
+      stopTradingModuleTimers();
+      startTradingModuleTimers();
+    } else if (typeof syncTradingModuleTimerLifecycle === "function") {
+      syncTradingModuleTimerLifecycle();
+    }
+    if (typeof stopEconomyAutoRefresh === "function" && typeof startEconomyAutoRefresh === "function") {
+      stopEconomyAutoRefresh();
+      startEconomyAutoRefresh();
+    }
+    if (typeof startJobCenterPolling === "function" && currentModuleTab === "jobs") {
+      startJobCenterPolling({ immediate: false, force: true });
+    }
+    if (typeof restartNotificationPoll === "function" && currentUser) {
+      restartNotificationPoll();
+    } else if (typeof stopNotificationPoll === "function" && typeof startNotificationPoll === "function" && currentUser) {
+      stopNotificationPoll();
+      startNotificationPoll();
+    }
+    if (typeof stopGameMultiplayerInvitePolling === "function" && typeof ensureGameMultiplayerInvitePolling === "function") {
+      stopGameMultiplayerInvitePolling();
+      ensureGameMultiplayerInvitePolling({ kickoff: false });
+    }
+    if (typeof startServerConnectionMonitor === "function") {
+      startServerConnectionMonitor();
+    }
     const warnings = buildFeatureAdvisories().filter((item) => item.missingRequired.length);
     const warningHint = warnings.length ? `；仍有父功能未齊：${warnings.map(formatFeatureAdvisoryLine).join("、")}` : "";
+    const trafficChanged = payload.server_backpressure_traffic_refresh_seconds !== backpressureTrafficRefreshSeconds;
+    const outputChanged = payload.server_output_refresh_seconds !== serverOutputRefreshSeconds;
+    backpressureTrafficRefreshSeconds = adminRefreshSeconds(payload.server_backpressure_traffic_refresh_seconds, 4, 1, 300);
+    serverOutputRefreshSeconds = adminRefreshSeconds(payload.server_output_refresh_seconds, 3, 1, 300);
+    securityTestJobPollSeconds = adminRefreshSeconds(payload.security_test_job_poll_seconds, 3, 1, 300);
+    if (trafficChanged && currentServerTab === "settings") startBackpressureTrafficPoll();
+    if (outputChanged && currentServerTab === "security") {
+      stopServerOutputPoll();
+      startServerOutputPoll();
+    }
+    applySystemResourceRefreshSeconds(payload.system_resource_board_refresh_seconds, { restart: true });
     setSettingsStatus(
       `${warnings.length ? "設定已儲存，但功能組合仍未完整" : "✅ 設定已儲存"}${restartHint}${warningHint}`,
       warnings.length ? null : true,
@@ -6513,6 +6605,57 @@ function renderSystemResourceBoard(resource = {}) {
   if (sampled) sampled.textContent = resource.sampled_at ? `最後採樣：${formatChatTime(resource.sampled_at)}` : "等待資料";
 }
 
+function normalizeSystemResourceRefreshSeconds(value) {
+  const parsed = parseInt(value, 10);
+  return Math.max(1, Math.min(300, Number.isFinite(parsed) ? parsed : 5));
+}
+
+function applySystemResourceRefreshSeconds(value, { restart = true } = {}) {
+  const next = normalizeSystemResourceRefreshSeconds(value);
+  const changed = next !== systemResourceRefreshSeconds;
+  systemResourceRefreshSeconds = next;
+  const input = $("s-system-resource-board-refresh-seconds");
+  if (input && String(input.value || "") !== String(next)) input.value = String(next);
+  if (changed && restart && currentUser === "root" && currentModuleTab === "server" && currentServerTab === "env") {
+    startSystemResourcePoll();
+  }
+  return next;
+}
+
+function stopSystemResourcePoll() {
+  if (systemResourcePollTimer) {
+    clearInterval(systemResourcePollTimer);
+    systemResourcePollTimer = null;
+  }
+}
+
+function startSystemResourcePoll() {
+  stopSystemResourcePoll();
+  if (currentUser !== "root" || currentModuleTab !== "server" || currentServerTab !== "env") return;
+  systemResourcePollTimer = setInterval(refreshSystemResourceBoard, systemResourceRefreshSeconds * 1000);
+}
+
+async function refreshSystemResourceBoard() {
+  if (systemResourceRefreshInFlight || currentUser !== "root" || currentModuleTab !== "server" || currentServerTab !== "env" || document.hidden) return;
+  systemResourceRefreshInFlight = true;
+  try {
+    const csrf = await fetchCsrfToken();
+    const res = await apiFetch(API + "/admin/environment/resources", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || "系統資源讀取失敗");
+    applySystemResourceRefreshSeconds(json.resource_refresh_seconds, { restart: true });
+    renderSystemResourceBoard(json.resource_usage || {});
+  } catch (err) {
+    const sampled = $("system-resource-sampled-at");
+    if (sampled) sampled.textContent = `資源看板更新失敗：${err.message || "請求失敗"}`;
+  } finally {
+    systemResourceRefreshInFlight = false;
+  }
+}
+
 async function loadServerEnv() {
   if (!currentUser || currentRole !== "super_admin") return;
   await fetchCsrfToken({ force: true });
@@ -6532,6 +6675,7 @@ async function loadServerEnv() {
     return;
   }
   const env = json.environment || {};
+  applySystemResourceRefreshSeconds(json.resource_refresh_seconds, { restart: true });
   renderSystemResourceBoard(json.resource_usage || {});
   const cards = [
     ["作業平台", env.platform || "-", "#82b1ff"],

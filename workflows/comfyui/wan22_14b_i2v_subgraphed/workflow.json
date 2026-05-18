@@ -71,7 +71,7 @@
   "138": {
     "class_type": "LoraLoaderModelOnly",
     "inputs": {
-      "lora_name": "wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+      "lora_name": "WAN\\wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
       "model": [
         "133",
         0
@@ -82,7 +82,7 @@
   "139": {
     "class_type": "LoraLoaderModelOnly",
     "inputs": {
-      "lora_name": "wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+      "lora_name": "WAN\\wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
       "model": [
         "134",
         0

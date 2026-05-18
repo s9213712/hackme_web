@@ -805,13 +805,27 @@ def test_comfyui_models_and_generate_routes(tmp_path):
         },
     )
     assert generated.status_code == 200
+    job_id = generated.get_json()["job"]["job_id"]
     body = _await_comfyui_result(client, generated)
     assert body["image"]["prompt_id"] == "prompt-1"
-    assert body["image"]["data_url"].startswith("data:image/png;base64,")
+    assert "data_url" not in body["image"]
     assert body["image"]["seed"] == 123
     assert body["image"]["batch_size"] == 1
     assert len(body["images"]) == 1
     assert body["images"][0]["image_ref"]["filename"] == "hackme_web_00001_.png"
+    preview = client.post("/api/comfyui/image-preview", json={"image_ref": body["image"]["image_ref"]})
+    assert preview.status_code == 200
+    assert preview.get_json()["image"]["data_url"].startswith("data:image/png;base64,")
+    conn = sqlite3.connect(db_path)
+    try:
+        stored_result = conn.execute(
+            "SELECT result_json FROM comfyui_generation_jobs WHERE job_id=?",
+            (job_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert '"data_url"' not in stored_result
+    assert len(stored_result) < 5000
     assert FakeComfyUIClient.last_timeout_seconds == 1800
     assert FakeComfyUIClient.last_params["loras"] == [{"name": "detail.safetensors", "strength_model": 0.8, "strength_clip": 0.7}]
     assert FakeComfyUIClient.last_params["vae"] == "sdxl_vae.safetensors"

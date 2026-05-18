@@ -22,6 +22,9 @@ def test_profile_friends_panel_is_wired_as_user_module():
     assert 'data-profile-tab="edit"' in index_html
     assert 'data-profile-tab="friends"' in index_html
     assert 'id="s-module-profile-min-role"' in index_html
+    assert 'id="profile-avatar-cloud-file"' in index_html
+    assert 'id="profile-avatar-cloud-use"' in index_html
+    assert 'id="profile-avatar-crop-zoom" min="1" max="6"' in index_html
     assert "/js/58-profile-friends.js" in index_html
     assert 'tabId: "tab-module-profile"' in core_js
     assert 'action: "profile:friends"' in core_js
@@ -49,5 +52,10 @@ def test_profile_friends_panel_is_wired_as_user_module():
     assert 'textarea.value = value' in profile_js
     assert 'button.textContent = "已複製"' in profile_js
     assert 'showActionFeedback(button || document.activeElement, "好友代碼已複製"' in profile_js
+    assert "profileAvatarCloudFileIsUsable" in profile_js
+    assert "cloud_file_id" in profile_js
+    assert "/cloud-drive/files?user_id=" in profile_js
+    assert "/preview/content" in profile_js
     assert '.profile-friend-columns' in css
+    assert '.profile-avatar-cloud-row' in css
     assert '.sidebar-user-card:hover' in css

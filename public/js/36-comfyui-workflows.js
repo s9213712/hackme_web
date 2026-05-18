@@ -1516,7 +1516,8 @@ async function runComfyuiWorkflowPreset(presetId) {
     }
     if (!res.ok || !json.ok) throw new Error(json.msg || `workflow 執行失敗（HTTP ${res.status}）`);
     const result = await pollComfyuiJobUntilDone(json.job?.job_id, controller, COMFYUI_GENERATION_TIMEOUT_SECONDS);
-    const images = Array.isArray(result.images) && result.images.length ? result.images : [result.image].filter(Boolean);
+    const rawImages = Array.isArray(result.images) && result.images.length ? result.images : [result.image].filter(Boolean);
+    const images = await hydrateComfyuiGeneratedImages(rawImages);
     const media = Array.isArray(result.media) ? result.media : [];
     comfyuiGeneratedImages = images;
     comfyuiGeneratedMedia = media;

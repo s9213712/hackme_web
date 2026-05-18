@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import base64
+import http.client
 import http.cookiejar
 import json
 import ssl
@@ -65,20 +66,26 @@ class WebClient:
     def login(self, username, password):
         self.fetch_csrf()
         payload = {"username": username, "password": password}
-        data = self.post_json("/api/login", payload, allow_http_error=True)
+        data = self.post_json("/api/login", payload, allow_http_error=True, refresh_csrf=False)
         if not data.get("ok"):
             raise ProbeError(f"登入失敗：{data.get('msg') or 'unknown error'}")
         self.fetch_csrf()
         return data
 
     def _request(self, path, *, method="GET", body=None, headers=None, allow_http_error=False):
+        def read_body(response):
+            try:
+                return response.read()
+            except http.client.IncompleteRead as exc:
+                return exc.partial or b""
+
         req = urllib.request.Request(self._url(path), data=body, method=method, headers=headers or {})
         try:
             with self.opener.open(req) as resp:
-                raw = resp.read()
+                raw = read_body(resp)
                 return resp.status, raw, dict(resp.headers)
         except urllib.error.HTTPError as exc:
-            raw = exc.read()
+            raw = read_body(exc)
             if not allow_http_error:
                 raise
             return exc.code, raw, dict(exc.headers)
@@ -89,10 +96,14 @@ class WebClient:
             payload = json.loads(raw.decode("utf-8", errors="replace"))
         except json.JSONDecodeError as exc:
             raise ProbeError(f"{path} 回應不是 JSON（HTTP {status}）") from exc
+        if not isinstance(payload, dict):
+            payload = {"ok": False, "msg": f"{path} 回應不是 JSON object", "raw": payload}
         payload["_http_status"] = status
         return payload
 
-    def post_json(self, path, payload, *, allow_http_error=False):
+    def post_json(self, path, payload, *, allow_http_error=False, refresh_csrf=True):
+        if refresh_csrf:
+            self.fetch_csrf()
         headers = {"Content-Type": "application/json"}
         if self.csrf_token:
             headers["X-CSRF-Token"] = self.csrf_token
@@ -107,10 +118,14 @@ class WebClient:
             data = json.loads(raw.decode("utf-8", errors="replace"))
         except json.JSONDecodeError as exc:
             raise ProbeError(f"{path} 回應不是 JSON（HTTP {status}）") from exc
+        if not isinstance(data, dict):
+            data = {"ok": False, "msg": f"{path} 回應不是 JSON object", "raw": data}
         data["_http_status"] = status
         return data
 
-    def post_multipart(self, path, *, fields=None, files=None, allow_http_error=False):
+    def post_multipart(self, path, *, fields=None, files=None, allow_http_error=False, refresh_csrf=True):
+        if refresh_csrf:
+            self.fetch_csrf()
         boundary = f"----HackmeWebProbe{int(time.time() * 1000)}"
         body = bytearray()
         for key, value in (fields or {}).items():
@@ -141,6 +156,8 @@ class WebClient:
             data = json.loads(raw.decode("utf-8", errors="replace"))
         except json.JSONDecodeError as exc:
             raise ProbeError(f"{path} 回應不是 JSON（HTTP {status}）") from exc
+        if not isinstance(data, dict):
+            data = {"ok": False, "msg": f"{path} 回應不是 JSON object", "raw": data}
         data["_http_status"] = status
         return data
 
@@ -158,6 +175,20 @@ def _probe_result(name, *, ok, status, detail="", payload=None):
         "payload": payload or {},
         "checked_at": _now(),
     }
+
+
+def _job(payload):
+    job = (payload or {}).get("job")
+    return job if isinstance(job, dict) else {}
+
+
+def _job_result(payload):
+    result = _job(payload).get("result")
+    return result if isinstance(result, dict) else {}
+
+
+def _job_error(payload):
+    return str((payload or {}).get("msg") or _job(payload).get("error") or "")
 
 
 def wait_for_job(client, job_id, *, timeout_seconds=180):
@@ -244,18 +275,18 @@ def run_probe(args):
     successful_history_id = None
 
     txt2img = client.post_json("/api/comfyui/generate", minimal_generate_json(model_name), allow_http_error=True)
-    if txt2img.get("ok") and txt2img.get("async") and (txt2img.get("job") or {}).get("job_id"):
-        txt2img = wait_for_job(client, txt2img["job"]["job_id"], timeout_seconds=args.timeout)
-    txt_ok = (txt2img.get("job") or {}).get("status") == "completed" or txt2img.get("ok") is True
+    if txt2img.get("ok") and txt2img.get("async") and _job(txt2img).get("job_id"):
+        txt2img = wait_for_job(client, _job(txt2img)["job_id"], timeout_seconds=args.timeout)
+    txt_ok = _job(txt2img).get("status") == "completed" or (txt2img.get("ok") is True and not _job(txt2img))
     if txt_ok:
-        successful_history_id = txt2img.get("history_id") or (txt2img.get("job") or {}).get("result", {}).get("history_id")
+        successful_history_id = txt2img.get("history_id") or _job_result(txt2img).get("history_id")
     results.append(
         _probe_result(
             "txt2img",
             ok=txt_ok,
             status="pass" if txt_ok else "fail",
-            detail=(txt2img.get("msg") or txt2img.get("job", {}).get("error") or ""),
-            payload={"http_status": txt2img.get("_http_status"), "job_status": (txt2img.get("job") or {}).get("status")},
+            detail=_job_error(txt2img),
+            payload={"http_status": txt2img.get("_http_status"), "job_status": _job(txt2img).get("status")},
         )
     )
 
@@ -268,16 +299,16 @@ def run_probe(args):
         files=common_files,
         allow_http_error=True,
     )
-    if img2img.get("ok") and img2img.get("async") and (img2img.get("job") or {}).get("job_id"):
-        img2img = wait_for_job(client, img2img["job"]["job_id"], timeout_seconds=args.timeout)
-    img_ok = (img2img.get("job") or {}).get("status") == "completed" or img2img.get("ok") is True
+    if img2img.get("ok") and img2img.get("async") and _job(img2img).get("job_id"):
+        img2img = wait_for_job(client, _job(img2img)["job_id"], timeout_seconds=args.timeout)
+    img_ok = _job(img2img).get("status") == "completed" or (img2img.get("ok") is True and not _job(img2img))
     results.append(
         _probe_result(
             "img2img",
             ok=img_ok,
             status="pass" if img_ok else "fail",
-            detail=(img2img.get("msg") or img2img.get("job", {}).get("error") or ""),
-            payload={"http_status": img2img.get("_http_status"), "job_status": (img2img.get("job") or {}).get("status")},
+            detail=_job_error(img2img),
+            payload={"http_status": img2img.get("_http_status"), "job_status": _job(img2img).get("status")},
         )
     )
 
@@ -289,16 +320,16 @@ def run_probe(args):
         ],
         allow_http_error=True,
     )
-    if inpaint.get("ok") and inpaint.get("async") and (inpaint.get("job") or {}).get("job_id"):
-        inpaint = wait_for_job(client, inpaint["job"]["job_id"], timeout_seconds=args.timeout)
-    inpaint_ok = (inpaint.get("job") or {}).get("status") == "completed" or inpaint.get("ok") is True
+    if inpaint.get("ok") and inpaint.get("async") and _job(inpaint).get("job_id"):
+        inpaint = wait_for_job(client, _job(inpaint)["job_id"], timeout_seconds=args.timeout)
+    inpaint_ok = _job(inpaint).get("status") == "completed" or (inpaint.get("ok") is True and not _job(inpaint))
     results.append(
         _probe_result(
             "inpaint",
             ok=inpaint_ok,
             status="pass" if inpaint_ok else "fail",
-            detail=(inpaint.get("msg") or inpaint.get("job", {}).get("error") or ""),
-            payload={"http_status": inpaint.get("_http_status"), "job_status": (inpaint.get("job") or {}).get("status")},
+            detail=_job_error(inpaint),
+            payload={"http_status": inpaint.get("_http_status"), "job_status": _job(inpaint).get("status")},
         )
     )
 
@@ -316,16 +347,16 @@ def run_probe(args):
         files=common_files,
         allow_http_error=True,
     )
-    if outpaint.get("ok") and outpaint.get("async") and (outpaint.get("job") or {}).get("job_id"):
-        outpaint = wait_for_job(client, outpaint["job"]["job_id"], timeout_seconds=args.timeout)
-    outpaint_ok = (outpaint.get("job") or {}).get("status") == "completed" or outpaint.get("ok") is True
+    if outpaint.get("ok") and outpaint.get("async") and _job(outpaint).get("job_id"):
+        outpaint = wait_for_job(client, _job(outpaint)["job_id"], timeout_seconds=args.timeout)
+    outpaint_ok = _job(outpaint).get("status") == "completed" or (outpaint.get("ok") is True and not _job(outpaint))
     results.append(
         _probe_result(
             "outpaint",
             ok=outpaint_ok,
             status="pass" if outpaint_ok else "fail",
-            detail=(outpaint.get("msg") or outpaint.get("job", {}).get("error") or ""),
-            payload={"http_status": outpaint.get("_http_status"), "job_status": (outpaint.get("job") or {}).get("status")},
+            detail=_job_error(outpaint),
+            payload={"http_status": outpaint.get("_http_status"), "job_status": _job(outpaint).get("status")},
         )
     )
 
@@ -336,16 +367,16 @@ def run_probe(args):
             files=common_files,
             allow_http_error=True,
         )
-        if upscale.get("ok") and upscale.get("async") and (upscale.get("job") or {}).get("job_id"):
-            upscale = wait_for_job(client, upscale["job"]["job_id"], timeout_seconds=args.timeout)
-        upscale_ok = (upscale.get("job") or {}).get("status") == "completed" or upscale.get("ok") is True
+        if upscale.get("ok") and upscale.get("async") and _job(upscale).get("job_id"):
+            upscale = wait_for_job(client, _job(upscale)["job_id"], timeout_seconds=args.timeout)
+        upscale_ok = _job(upscale).get("status") == "completed" or (upscale.get("ok") is True and not _job(upscale))
         results.append(
             _probe_result(
                 "upscale",
                 ok=upscale_ok,
                 status="pass" if upscale_ok else "fail",
-                detail=(upscale.get("msg") or upscale.get("job", {}).get("error") or ""),
-                payload={"http_status": upscale.get("_http_status"), "job_status": (upscale.get("job") or {}).get("status"), "upscale_model": upscale_model},
+                detail=_job_error(upscale),
+                payload={"http_status": upscale.get("_http_status"), "job_status": _job(upscale).get("status"), "upscale_model": upscale_model},
             )
         )
     else:
@@ -377,16 +408,16 @@ def run_probe(args):
     )
     control_msg = str(controlnet.get("msg") or "")
     control_available = bool(controlnet_models) and models.get("controlnet_types", {}).get(args.controlnet_type, {}).get("available") is True
-    if control_available and controlnet.get("ok") and controlnet.get("async") and (controlnet.get("job") or {}).get("job_id"):
-        controlnet = wait_for_job(client, controlnet["job"]["job_id"], timeout_seconds=args.timeout)
-        control_ok = (controlnet.get("job") or {}).get("status") == "completed" or controlnet.get("ok") is True
+    if control_available and controlnet.get("ok") and controlnet.get("async") and _job(controlnet).get("job_id"):
+        controlnet = wait_for_job(client, _job(controlnet)["job_id"], timeout_seconds=args.timeout)
+        control_ok = _job(controlnet).get("status") == "completed" or (controlnet.get("ok") is True and not _job(controlnet))
         results.append(
             _probe_result(
                 "controlnet",
                 ok=control_ok,
                 status="pass" if control_ok else "fail",
-                detail=(controlnet.get("msg") or controlnet.get("job", {}).get("error") or ""),
-                payload={"http_status": controlnet.get("_http_status"), "job_status": (controlnet.get("job") or {}).get("status"), "controlnet_type": args.controlnet_type},
+                detail=_job_error(controlnet),
+                payload={"http_status": controlnet.get("_http_status"), "job_status": _job(controlnet).get("status"), "controlnet_type": args.controlnet_type},
             )
         )
     else:
@@ -415,16 +446,16 @@ def run_probe(args):
     rerun_target = history_items[0]["id"] if history_items else successful_history_id
     if rerun_target:
         rerun = client.post_json(f"/api/comfyui/history/{int(rerun_target)}/rerun", {}, allow_http_error=True)
-        if rerun.get("ok") and (rerun.get("job") or {}).get("job_id"):
-            rerun = wait_for_job(client, rerun["job"]["job_id"], timeout_seconds=args.timeout)
-        rerun_ok = (rerun.get("job") or {}).get("status") == "completed" or rerun.get("ok") is True
+        if rerun.get("ok") and _job(rerun).get("job_id"):
+            rerun = wait_for_job(client, _job(rerun)["job_id"], timeout_seconds=args.timeout)
+        rerun_ok = _job(rerun).get("status") == "completed" or (rerun.get("ok") is True and not _job(rerun))
         results.append(
             _probe_result(
                 "history_rerun",
                 ok=rerun_ok,
                 status="pass" if rerun_ok else "fail",
-                detail=(rerun.get("msg") or rerun.get("job", {}).get("error") or ""),
-                payload={"http_status": rerun.get("_http_status"), "job_status": (rerun.get("job") or {}).get("status"), "history_id": rerun_target},
+                detail=_job_error(rerun),
+                payload={"http_status": rerun.get("_http_status"), "job_status": _job(rerun).get("status"), "history_id": rerun_target},
             )
         )
     else:

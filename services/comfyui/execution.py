@@ -16,6 +16,21 @@ OUTPUT_REF_KEYS = {
     "audio": "audio",
     "audios": "audio",
 }
+TRANSIENT_ERROR_MARKERS = (
+    "timed out",
+    "timeout",
+    "temporarily unavailable",
+    "connection reset",
+    "connection aborted",
+    "connection refused",
+    "network is unreachable",
+    "http 502",
+    "http 503",
+    "http 504",
+    "逾時",
+    "連線失敗",
+    "暫時",
+)
 
 
 def queue_prompt_with_client_id(client, workflow, *, client_id=None, extra_data=None, error_cls):
@@ -48,6 +63,13 @@ def emit_progress(progress_callback, snapshot):
     if not progress_callback:
         return
     progress_callback(dict(snapshot))
+
+
+def _is_transient_comfy_error(exc):
+    message = str(exc or "").strip().lower()
+    if not message:
+        return False
+    return any(marker in message for marker in TRANSIENT_ERROR_MARKERS)
 
 
 def _queued_deadline(now, *, start_time, deadline, extension_seconds=None, max_seconds=None):
@@ -230,6 +252,8 @@ def wait_for_outputs(
         "updated_at": time.time(),
     }
     next_history_poll = 0.0
+    history_error_count = 0
+    last_history_error = None
     while True:
         now = time.time()
         if snapshot.get("phase") == "running" and not running_started:
@@ -269,7 +293,31 @@ def wait_for_outputs(
                     emit_progress(progress_callback, snapshot)
         now = time.time()
         if now >= next_history_poll:
-            history = client._json_request(f"/history/{urllib.parse.quote(str(prompt_id))}", timeout=client.timeout)
+            try:
+                history = client._json_request(f"/history/{urllib.parse.quote(str(prompt_id))}", timeout=client.timeout)
+                history_error_count = 0
+                last_history_error = None
+                snapshot.pop("backend_unresponsive", None)
+                snapshot.pop("history_error_count", None)
+                snapshot.pop("last_history_error", None)
+            except error_cls as exc:
+                if not _is_transient_comfy_error(exc):
+                    raise
+                history_error_count += 1
+                last_history_error = str(exc)
+                snapshot["phase"] = "backend_unresponsive" if running_started else snapshot.get("phase", "queued")
+                snapshot["backend_unresponsive"] = True
+                snapshot["history_error_count"] = history_error_count
+                snapshot["last_history_error"] = last_history_error[:240]
+                snapshot["updated_at"] = time.time()
+                snapshot["detail"] = (
+                    "ComfyUI 暫時沒有回覆結果查詢，可能正在載入大模型或輸出檔案；"
+                    "已保留工作並持續補抓結果。"
+                )
+                emit_progress(progress_callback, snapshot)
+                next_history_poll = now + max(float(poll_interval), 1.0)
+                time.sleep(0.15)
+                continue
             record = history.get(prompt_id) if isinstance(history, dict) else None
             if record:
                 status = record.get("status") or {}
@@ -299,7 +347,12 @@ def wait_for_outputs(
                     return {**found, "prompt_id": str(prompt_id)}
             next_history_poll = now + float(poll_interval)
         time.sleep(0.15)
-    detail = f"；最後狀態：{last_status}" if last_status else ""
+    detail_parts = []
+    if last_status:
+        detail_parts.append(f"最後狀態：{last_status}")
+    if last_history_error:
+        detail_parts.append(f"最後 ComfyUI API 狀態：{last_history_error}")
+    detail = f"；{'；'.join(detail_parts)}" if detail_parts else ""
     raise error_cls(f"ComfyUI 產圖逾時{detail}")
 
 
@@ -315,6 +368,29 @@ def wait_for_first_image(client, prompt_id, *, timeout_seconds=1800, poll_interv
     )[0]
 
 
+def _fetch_output_with_retries(fetcher, file_ref, *, error_cls, progress_callback=None, label="輸出檔", max_attempts=3):
+    attempts = max(1, int(max_attempts or 1))
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fetcher(file_ref)
+        except error_cls as exc:
+            last_exc = exc
+            if attempt >= attempts or not _is_transient_comfy_error(exc):
+                raise
+            emit_progress(progress_callback, {
+                "phase": "fetching_output",
+                "percent": 99,
+                "completed": False,
+                "backend_unresponsive": True,
+                "detail": f"ComfyUI 已完成生成，但{label}讀取暫時失敗，正在重試 {attempt + 1}/{attempts}。",
+                "last_output_fetch_error": str(exc)[:240],
+                "updated_at": time.time(),
+            })
+            time.sleep(min(1.5 * attempt, 5.0))
+    raise last_exc
+
+
 def generate_from_workflow(
     client,
     workflow,
@@ -323,6 +399,7 @@ def generate_from_workflow(
     expected_count=1,
     progress_callback=None,
     extra_data=None,
+    fetch_outputs=True,
     error_cls,
     websocket_module=None,
     image_fetcher,
@@ -333,7 +410,7 @@ def generate_from_workflow(
         if progress_callback:
             try:
                 websocket_conn = client._open_progress_socket(client_id, timeout=min(5, client.timeout))
-            except error_cls:
+            except Exception:
                 websocket_conn = None
         queued = queue_prompt_with_client_id(
             client,
@@ -371,11 +448,62 @@ def generate_from_workflow(
                 websocket_conn.close()
         except Exception:
             pass
-    images = [image_fetcher(image_ref) for image_ref in output_refs.get("images") or []]
+    if not fetch_outputs:
+        image_refs = list(output_refs.get("images") or [])
+        media_refs = {key: list(output_refs.get(key) or []) for key in ("videos", "audio", "other")}
+        if not image_refs and not any(media_refs.values()):
+            raise error_cls("ComfyUI 沒有回傳可用輸出檔")
+        primary_ref = image_refs[0] if image_refs else next(item for values in media_refs.values() for item in values)
+        return {
+            "prompt_id": prompt_id,
+            "image_ref": primary_ref,
+            "mime_type": "image/png" if image_refs else "application/octet-stream",
+            "data": b"",
+            "images": [
+                {
+                    "image_ref": image_ref,
+                    "mime_type": "image/png",
+                    "data": b"",
+                    "size_bytes": 0,
+                }
+                for image_ref in image_refs
+            ],
+            "media": {
+                key: [
+                    {
+                        "file_ref": file_ref,
+                        "mime_type": "application/octet-stream",
+                        "data": b"",
+                        "size_bytes": 0,
+                    }
+                    for file_ref in values
+                ]
+                for key, values in media_refs.items()
+            },
+        }
+    images = [
+        _fetch_output_with_retries(
+            image_fetcher,
+            image_ref,
+            error_cls=error_cls,
+            progress_callback=progress_callback,
+            label="圖片",
+        )
+        for image_ref in output_refs.get("images") or []
+    ]
     media_outputs = {}
     for media_key in ("videos", "audio", "other"):
         fetcher = getattr(client, "fetch_file", None) or image_fetcher
-        media_outputs[media_key] = [fetcher(file_ref) for file_ref in output_refs.get(media_key) or []]
+        media_outputs[media_key] = [
+            _fetch_output_with_retries(
+                fetcher,
+                file_ref,
+                error_cls=error_cls,
+                progress_callback=progress_callback,
+                label="媒體輸出",
+            )
+            for file_ref in output_refs.get(media_key) or []
+        ]
     if not images and not any(media_outputs.values()):
         raise error_cls("ComfyUI 沒有回傳可用輸出檔")
     primary = images[0] if images else next(item for values in media_outputs.values() for item in values)
@@ -421,6 +549,7 @@ def generate_image(
     timeout_seconds=1800,
     progress_callback=None,
     extra_data=None,
+    fetch_outputs=True,
     build_generation_workflow_func,
     generate_from_workflow_func=None,
     error_cls,
@@ -446,6 +575,16 @@ def generate_image(
                 accepts_extra_data = True
             if accepts_extra_data:
                 kwargs["extra_data"] = extra_data
+        try:
+            signature = inspect.signature(generate_from_workflow_func)
+            accepts_fetch_outputs = (
+                "fetch_outputs" in signature.parameters
+                or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+            )
+        except (TypeError, ValueError):
+            accepts_fetch_outputs = True
+        if accepts_fetch_outputs:
+            kwargs["fetch_outputs"] = fetch_outputs
         return generate_from_workflow_func(workflow, **kwargs)
     if image_fetcher is None:
         raise TypeError("generate_image() requires image_fetcher when generate_from_workflow_func is not provided")
@@ -456,6 +595,7 @@ def generate_image(
         expected_count=expected_count,
         progress_callback=progress_callback,
         extra_data=extra_data,
+        fetch_outputs=fetch_outputs,
         error_cls=error_cls,
         websocket_module=websocket_module,
         image_fetcher=image_fetcher,

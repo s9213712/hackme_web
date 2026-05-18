@@ -21,6 +21,18 @@ const gameMultiplayerInviteSeenIds = new Set();
 const GAME_INVITE_POLL_ACTIVE_MS = 5000;
 const GAME_INVITE_POLL_VISIBLE_IDLE_MS = 60000;
 const GAME_INVITE_POLL_HIDDEN_MS = 180000;
+
+function gameInvitePollMs(kind) {
+  if (typeof configRefreshSeconds !== "function") {
+    if (kind === "hidden") return GAME_INVITE_POLL_HIDDEN_MS;
+    if (kind === "idle") return GAME_INVITE_POLL_VISIBLE_IDLE_MS;
+    return GAME_INVITE_POLL_ACTIVE_MS;
+  }
+  if (kind === "hidden") return Math.round(configRefreshSeconds("game_invite_poll_hidden_seconds", GAME_INVITE_POLL_HIDDEN_MS / 1000, 30, 1800) * 1000);
+  if (kind === "idle") return Math.round(configRefreshSeconds("game_invite_poll_idle_seconds", GAME_INVITE_POLL_VISIBLE_IDLE_MS / 1000, 10, 600) * 1000);
+  return Math.round(configRefreshSeconds("game_invite_poll_active_seconds", GAME_INVITE_POLL_ACTIVE_MS / 1000, 2, 300) * 1000);
+}
+
 const GAME_MULTIPLAYER_MODES = {
   fps_arena: [
     { key: "coop", label: "合作破關" },
@@ -339,7 +351,7 @@ function gameExperienceHint(key) {
     "1a2b": "1A2B：輸入 4 位不重複數字；A 是數字位置都對，B 是數字對但位置不同。",
     tetris: "俄羅斯方塊：方向鍵移動/旋轉，空白鍵落下，C Hold；手機下方按鍵可長按左右與加速。",
     space_shooter: "宇宙戰機：左右移動、空白鍵或發射鍵射擊；敵方閃避預設關閉，想提高難度再打開。",
-    fps_arena: "3D 射擊場：WASD 移動、滑鼠/拖曳瞄準；手機按住「前/左/右」會連續移動，不是一步一步點。",
+    fps_arena: "3D 射擊場：WASD 移動、滑鼠/拖曳瞄準，按住右鍵進入狙擊模式；手機按住「前/左/右」會連續移動，不是一步一步點。",
     open_world: "都市開放世界：WASD 或手機搖桿移動，靠近車輛可上車；路面目標光柱是任務方向。",
     bullet_hell: "彈幕遊戲：黃點是受擊核心，藍圈是擦彈範圍；按住「精密」會變慢並縮小受擊範圍。",
     stickman_shooter: "火柴人橫向射擊：按住移動鍵走位，射擊與跳躍要配合掩體；合作模式需要雙方配合機關。",
@@ -924,10 +936,10 @@ function ensureGameMultiplayerInvitePolling({ kickoff = true } = {}) {
     loadGlobalGameMultiplayerInvites().catch(() => null);
   };
   const delay = document.hidden
-    ? GAME_INVITE_POLL_HIDDEN_MS
+    ? gameInvitePollMs("hidden")
     : (currentModuleTab === "games" || gameMultiplayerInviteModalInvite)
-      ? GAME_INVITE_POLL_ACTIVE_MS
-      : GAME_INVITE_POLL_VISIBLE_IDLE_MS;
+      ? gameInvitePollMs("active")
+      : gameInvitePollMs("idle");
   gameMultiplayerInvitePollTimer = window.setInterval(tick, delay);
   if (kickoff) {
     gameMultiplayerInviteKickoffTimer = window.setTimeout(tick, 1200);

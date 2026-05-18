@@ -55,6 +55,7 @@ docs/games/evidence/**/_runtime/**/*.sqlite3
 !docs/games/experiments/**/*.stderr
 !docs/games/experiments/**/*.stdout
 external/
+reference_repos/Stockfish/
 secure_backups/
 !requirements.txt
 attack_test/

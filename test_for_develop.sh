@@ -980,6 +980,17 @@ copy_repo() {
     -cf - . | tar -C "$COPY_ROOT" -xf -
 }
 
+ensure_official_workflows_source() {
+  local root="$1"
+  local workflow_dir="$root/workflows/comfyui"
+  if [[ ! -f "$workflow_dir/txt2img_basic/workflow.json" || ! -f "$workflow_dir/txt2img_basic/manifest.json" ]]; then
+    die "official ComfyUI workflow bundles are missing under $workflow_dir; dev runtime cannot seed default official workflows"
+  fi
+  local count
+  count="$(find "$workflow_dir" -mindepth 2 -maxdepth 2 -name workflow.json 2>/dev/null | wc -l | tr -d ' ')"
+  say "[dev-tmp] workflows: found $count official ComfyUI workflow bundle(s)"
+}
+
 python_has_runtime_dependencies() {
   python3 - <<'PY' >/dev/null 2>&1 || return 1
 import argon2
@@ -1535,6 +1546,7 @@ else
   [[ ! -e "$COPY_ROOT" ]] || die "tmp copy already exists: $COPY_ROOT"
   copy_repo
 fi
+ensure_official_workflows_source "$COPY_ROOT"
 mkdir -p \
   "$RUNTIME_ROOT/database" \
   "$RUNTIME_ROOT/logs" \
@@ -1629,8 +1641,10 @@ HACKME_RUNTIME_OUTPUT_CAPTURE=0 "$PYTHON_BIN" - <<'PY'
 from datetime import datetime, timedelta
 import json
 import os
+from pathlib import Path
 import secrets
 import server
+from services.comfyui.template.seeding import seed_default_comfyui_workflows
 from services.server.startup import bootstrap_points_initial_grants_if_due
 from services.security.access_controls import (
     generate_internal_test_token,
@@ -2048,6 +2062,18 @@ try:
     conn.commit()
 finally:
     conn.close()
+
+try:
+    comfyui_seed = seed_default_comfyui_workflows(runtime_root=Path(os.environ["HACKME_RUNTIME_DIR"]))
+    print(
+        "[dev-tmp] workflows seeded: "
+        f"source={comfyui_seed.get('source_count', 0)} "
+        f"runtime={comfyui_seed.get('runtime_count', 0)} "
+        f"copied={len(comfyui_seed.get('copied') or [])} "
+        f"destination={comfyui_seed.get('destination')}"
+    )
+except Exception as exc:
+    print(f"[dev-tmp] warning: official ComfyUI workflow seed failed: {exc}")
 
 points_bootstrap = bootstrap_points_initial_grants_if_due(
     points_service=server.points_service,

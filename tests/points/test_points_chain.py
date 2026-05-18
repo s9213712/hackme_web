@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from services.points_chain import (
+    BIRTHDAY_GIFT_POINTS,
     DEFAULT_BACKUP_KEEP_DAILY,
     DEFAULT_BACKUP_KEEP_RECENT,
     DEFAULT_BACKUP_KEEP_WEEKLY,
@@ -261,6 +262,37 @@ def test_signup_bonus_is_single_currency_and_idempotent(tmp_path):
     assert second["created"] is False
     assert second["wallet"]["points_balance"] == 100
     assert second["ledger"]["currency_type"] == "points"
+
+
+def test_birthday_gift_is_once_per_member_per_year(tmp_path):
+    service = _service(tmp_path)
+
+    first = service.award_birthday_gift(
+        user_id=1,
+        birthday_year=2026,
+        birthday_date="2026-05-18",
+        actor={"id": 1, "username": "alice", "role": "user"},
+    )
+    second = service.award_birthday_gift(
+        user_id=1,
+        birthday_year=2026,
+        birthday_date="2026-05-18",
+        actor={"id": 1, "username": "alice", "role": "user"},
+    )
+    next_year = service.award_birthday_gift(
+        user_id=1,
+        birthday_year=2027,
+        birthday_date="2027-05-18",
+        actor={"id": 1, "username": "alice", "role": "user"},
+    )
+
+    assert first["created"] is True
+    assert second["created"] is False
+    assert next_year["created"] is True
+    assert first["ledger"]["action_type"] == "birthday_gift"
+    assert first["ledger"]["amount"] == BIRTHDAY_GIFT_POINTS
+    assert service.get_wallet(1)["points_balance"] == BIRTHDAY_GIFT_POINTS * 2
+    assert "birthday_gift" in [row["action_type"] for row in service.root_report()["adjustments"]]
 
 
 def test_initial_grants_create_genesis_block_once_for_default_accounts(tmp_path):

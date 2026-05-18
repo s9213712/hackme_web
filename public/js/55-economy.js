@@ -26,6 +26,11 @@ function shouldRunEconomyAutoRefresh() {
   return true;
 }
 
+function economyDashboardRefreshMs() {
+  const seconds = Number(siteConfig?.economy_dashboard_refresh_seconds || 30);
+  return Math.max(5, Math.min(600, Number.isFinite(seconds) ? seconds : 30)) * 1000;
+}
+
 function stopEconomyAutoRefresh() {
   if (economyAutoRefreshTimer) {
     clearInterval(economyAutoRefreshTimer);
@@ -43,7 +48,7 @@ function startEconomyAutoRefresh() {
     } finally {
       economyAutoRefreshBusy = false;
     }
-  }, 30000);
+  }, economyDashboardRefreshMs());
 }
 
 function syncEconomyAutoRefreshLifecycle() {
@@ -133,6 +138,7 @@ function formatEconomyLedgerAction(actionType) {
     game_weekly_leaderboard_reward: "遊戲週排行榜獎勵",
     trading_bot_weekly_competition_reward: "交易機器人週賽獎勵",
     new_user_signup_bonus: "註冊獎勵",
+    birthday_gift: "生日禮金",
     user_initial_grant: "會員初始配點",
   };
   if (labels[action]) return labels[action];

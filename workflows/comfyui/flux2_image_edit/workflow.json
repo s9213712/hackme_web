@@ -57,7 +57,7 @@
   "72": {
     "class_type": "VAELoader",
     "inputs": {
-      "vae_name": "full_encoder_small_decoder.safetensors"
+      "vae_name": "flux2-vae.safetensors"
     }
   },
   "73": {
@@ -135,7 +135,7 @@
   "79": {
     "class_type": "LoraLoaderModelOnly",
     "inputs": {
-      "lora_name": "Flux_2-Turbo-LoRA_comfyui.safetensors",
+      "lora_name": "FLUX\\Flux_2-Turbo-LoRA_comfyui.safetensors",
       "model": [
         "80",
         0

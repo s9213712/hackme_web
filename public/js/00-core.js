@@ -35,7 +35,7 @@ let chatRooms = [];
 let selectedChatRoomId = null;
 let chatPollTimer = null;
 let chatMessageCache = [];
-const CHAT_POLL_MS = 2500;
+const CHAT_POLL_DEFAULT_MS = 2500;
 const DEFAULT_INACTIVITY_LOGOUT_MS = 10 * 60 * 1000;
 const IDLE_TIMEOUT_LOGOUT_STORAGE_KEY = "hackme_web.idle_timeout_logout_pending";
 const AUTH_SESSION_HINT_STORAGE_KEY = "hackme_web.auth.session_hint";
@@ -54,7 +54,7 @@ let currentSettingsSection = "security";
 let serverConnectionFailures = 0;
 let serverConnectionSlowStreak = 0;
 let serverConnectionTimer = null;
-const SERVER_CONNECTION_MONITOR_MS = 15000;
+const SERVER_CONNECTION_MONITOR_DEFAULT_MS = 15000;
 let notificationPollTimer = null;
 let notificationsOpen = false;
 const lazyScriptPromises = new Map();
@@ -1063,6 +1063,20 @@ function applySiteConfig(config, options = {}) {
   renderEffectiveSiteConfig();
 }
 
+function configRefreshSeconds(key, fallback, min = 1, max = 300) {
+  const seconds = Number(siteConfig?.[key] ?? fallback);
+  const safe = Number.isFinite(seconds) ? seconds : fallback;
+  return Math.max(min, Math.min(max, safe));
+}
+
+function chatPollMs() {
+  return Math.round(configRefreshSeconds("chat_poll_seconds", CHAT_POLL_DEFAULT_MS / 1000, 1, 60) * 1000);
+}
+
+function serverConnectionMonitorMs() {
+  return Math.round(configRefreshSeconds("server_connection_monitor_seconds", SERVER_CONNECTION_MONITOR_DEFAULT_MS / 1000, 5, 300) * 1000);
+}
+
 function clearUserAppearanceConfig() {
   userSiteAppearanceConfig = {};
   renderEffectiveSiteConfig();
@@ -1179,7 +1193,7 @@ async function checkServerConnection() {
 function startServerConnectionMonitor() {
   if (serverConnectionTimer) clearInterval(serverConnectionTimer);
   checkServerConnection();
-  serverConnectionTimer = setInterval(checkServerConnection, SERVER_CONNECTION_MONITOR_MS);
+  serverConnectionTimer = setInterval(checkServerConnection, serverConnectionMonitorMs());
 }
 
 function getCsrfToken() { return _csrfToken; }
@@ -1688,7 +1702,7 @@ function startChatPoll() {
       return;
     }
     loadChatMessages(selectedChatRoomId, true);
-  }, CHAT_POLL_MS);
+  }, chatPollMs());
 }
 
 function syncChatPollLifecycle() {

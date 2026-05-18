@@ -302,7 +302,26 @@ def test_system_environment_has_resource_dashboard():
     assert 'class="system-resource-board"' in env_section
     assert 'id="system-resource-gauges"' in env_section
     assert 'id="system-resource-sampled-at"' in env_section
+    assert 'id="s-system-resource-board-refresh-seconds"' in index_html
+    assert 'id="s-job-center-refresh-seconds"' in index_html
+    assert 'id="s-trading-dashboard-refresh-seconds"' in index_html
+    assert 'id="s-comfyui-job-poll-seconds"' in index_html
+    assert 'id="s-notification-poll-seconds"' in index_html
+    assert 'id="s-game-invite-poll-active-seconds"' in index_html
+    assert 'id="s-server-connection-monitor-seconds"' in index_html
+    assert 'id="s-drive-dashboard-lazy-refresh-seconds"' in index_html
     assert "function renderSystemResourceBoard" in admin_js
+    assert "function startSystemResourcePoll" in admin_js
+    assert "function stopSystemResourcePoll" in admin_js
+    assert 'API + "/admin/environment/resources"' in admin_js
+    assert "system_resource_board_refresh_seconds" in admin_js
+    assert "server_backpressure_traffic_refresh_seconds" in admin_js
+    assert "trading_live_price_refresh_seconds" in admin_js
+    assert "comfyui_job_poll_seconds" in admin_js
+    assert "notification_poll_seconds" in admin_js
+    assert "game_invite_poll_hidden_seconds" in admin_js
+    assert "server_connection_monitor_seconds" in admin_js
+    assert "drive_dashboard_lazy_refresh_seconds" in admin_js
     assert "systemResourceGaugeMarkup" in admin_js
     assert "json.resource_usage" in admin_js
     assert 'envRefresh.addEventListener("click", loadServerEnv)' in bootstrap_js

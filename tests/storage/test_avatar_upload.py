@@ -137,3 +137,73 @@ def test_user_can_upload_avatar_and_crop_metadata(tmp_path):
     assert avatar_res.mimetype == "image/jpeg"
     cropped = Image.open(io.BytesIO(avatar_res.data))
     assert cropped.size == (512, 512)
+
+
+def test_user_can_select_existing_cloud_image_as_avatar(tmp_path):
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    db_path = tmp_path / "avatar.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_db(db_path)
+    existing_path = storage_root / "users" / "1" / "cloud-avatar.jpg"
+    existing_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (24, 24), color=(20, 80, 160)).save(existing_path, format="JPEG")
+    size_bytes = existing_path.stat().st_size
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO uploaded_files (
+                id, owner_user_id, storage_path, privacy_mode, risk_level, scan_status,
+                original_filename_plain_for_public, mime_type_plain_for_public,
+                size_bytes, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cloud-avatar",
+                1,
+                "users/1/cloud-avatar.jpg",
+                "standard_plain",
+                "low",
+                "clean",
+                "cloud-avatar.jpg",
+                "image/jpeg",
+                size_bytes,
+                "2026-05-18T00:00:00",
+                "2026-05-18T00:00:00",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    actor_box = {"actor": {"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"}}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+    res = client.post(
+        "/api/admin/users/1/avatar",
+        data={
+            "cloud_file_id": "cloud-avatar",
+            "crop_json": '{"x":2,"y":3,"width":18,"height":18}',
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["avatar_file_id"] == "cloud-avatar"
+    assert payload["avatar_crop"] == {"x": 2, "y": 3, "width": 18, "height": 18}
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        user = conn.execute("SELECT avatar_file_id, avatar_crop_json FROM users WHERE id=1").fetchone()
+        file_count = conn.execute("SELECT COUNT(*) AS count FROM uploaded_files").fetchone()["count"]
+        ref = conn.execute("SELECT context_type FROM cloud_file_refs WHERE file_id='cloud-avatar'").fetchone()
+    finally:
+        conn.close()
+    assert user["avatar_file_id"] == "cloud-avatar"
+    assert file_count == 1
+    assert ref["context_type"] == "avatar"

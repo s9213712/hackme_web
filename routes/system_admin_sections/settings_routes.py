@@ -218,6 +218,36 @@ def register_system_admin_settings_routes(app, ctx):
             if timezone_name is None:
                 return json_resp({"ok":False,"msg":"server_timezone 必須是有效的 IANA 時區名稱，例如 UTC、Asia/Taipei 或 America/New_York"}), 400
             data["server_timezone"] = timezone_name
+        if "system_resource_board_refresh_seconds" in data:
+            refresh_seconds = parse_int_in_range(data.get("system_resource_board_refresh_seconds"), 1, 300)
+            if refresh_seconds is None:
+                return json_resp({"ok":False,"msg":"system_resource_board_refresh_seconds 必須是 1-300 秒"}), 400
+            data["system_resource_board_refresh_seconds"] = refresh_seconds
+        refresh_ranges = {
+            "server_backpressure_traffic_refresh_seconds": (1, 300),
+            "server_output_refresh_seconds": (1, 300),
+            "security_test_job_poll_seconds": (1, 300),
+            "job_center_refresh_seconds": (1, 300),
+            "economy_dashboard_refresh_seconds": (5, 600),
+            "trading_dashboard_refresh_seconds": (2, 300),
+            "trading_live_price_refresh_seconds": (1, 60),
+            "trading_reference_price_refresh_seconds": (1, 60),
+            "trading_reference_chart_refresh_seconds": (2, 300),
+            "comfyui_job_poll_seconds": (1, 60),
+            "notification_poll_seconds": (5, 600),
+            "game_invite_poll_active_seconds": (2, 300),
+            "game_invite_poll_idle_seconds": (10, 600),
+            "game_invite_poll_hidden_seconds": (30, 1800),
+            "server_connection_monitor_seconds": (5, 300),
+            "drive_dashboard_lazy_refresh_seconds": (1, 300),
+        }
+        for key, (minimum, maximum) in refresh_ranges.items():
+            if key not in data:
+                continue
+            refresh_seconds = parse_int_in_range(data.get(key), minimum, maximum)
+            if refresh_seconds is None:
+                return json_resp({"ok":False,"msg":f"{key} 必須是 {minimum}-{maximum} 秒"}), 400
+            data[key] = refresh_seconds
         if "comfyui_connection_mode" in data:
             mode = str(data.get("comfyui_connection_mode") or "").strip().lower()
             if mode not in {"local", "remote", "diffusers"}:

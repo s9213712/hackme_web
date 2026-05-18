@@ -1,4 +1,6 @@
 import sqlite3
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, make_response
 from cryptography.fernet import Fernet
@@ -6,6 +8,7 @@ from cryptography.fernet import Fernet
 from routes.public import register_public_routes
 from services.security.captcha import create_captcha_challenge
 from services.server.database import get_auth_db
+from services.points_chain import BIRTHDAY_GIFT_POINTS, PointsLedgerService
 from services.users import auth as auth_service
 
 
@@ -115,7 +118,7 @@ def test_auth_service_writes_hot_auth_state_to_split_db_only(tmp_path):
     assert int(session_row["is_revoked"]) == 0
 
 
-def _build_public_auth_app(main_db_path, auth_db_path, *, ensure_membership=None):
+def _build_public_auth_app(main_db_path, auth_db_path, *, ensure_membership=None, points_service=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -214,6 +217,7 @@ def _build_public_auth_app(main_db_path, auth_db_path, *, ensure_membership=None
         "verify_csrf_double_submit": lambda value: True,
         "verify_csrf_token": auth_service.verify_csrf_token,
         "verify_password": auth_service.verify_password,
+        "points_service": points_service,
     })
     return app
 
@@ -321,6 +325,83 @@ def test_public_login_and_me_work_with_split_auth_db(tmp_path):
         main_conn.close()
 
     assert profile_count == 0
+
+
+def test_public_login_awards_birthday_gift_once_for_current_year(tmp_path):
+    main_db_path = tmp_path / "database.db"
+    auth_db_path = tmp_path / "auth.db"
+    today = datetime.now(ZoneInfo("UTC")).date()
+    birthdate = today.replace(year=2000).isoformat()
+
+    main_conn = sqlite3.connect(main_db_path)
+    try:
+        main_conn.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL DEFAULT 'active',
+                role TEXT NOT NULL DEFAULT 'user',
+                nickname TEXT,
+                birthdate TEXT,
+                avatar_file_id INTEGER,
+                blocked_until TEXT
+            );
+            CREATE TABLE user_passwords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE system_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+            """
+        )
+        password_hash = auth_service.hash_password("correct-horse-battery-staple")
+        main_conn.execute(
+            "INSERT INTO users (id, username, status, role, nickname, birthdate, avatar_file_id) VALUES (1, 'alice', 'active', 'user', 'Alice', ?, NULL)",
+            (birthdate,),
+        )
+        main_conn.execute(
+            "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (1, ?, '2026-05-09T00:00:00')",
+            (password_hash,),
+        )
+        main_conn.execute(
+            "INSERT INTO system_settings (key, value) VALUES ('server_security_epoch', '0')"
+        )
+        main_conn.commit()
+    finally:
+        main_conn.close()
+
+    def _get_main_db():
+        conn = sqlite3.connect(main_db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    points_service = PointsLedgerService(
+        get_db=_get_main_db,
+        chain_secret="test-secret",
+        backup_dir=tmp_path / "points_chain_backups",
+        mode_reader=lambda: "production",
+    )
+    app = _build_public_auth_app(main_db_path, auth_db_path, points_service=points_service)
+    client = app.test_client()
+
+    csrf_token = client.get("/api/csrf-token").get_json()["csrf_token"]
+    login_res = client.post(
+        "/api/login",
+        json={"username": "alice", "password": "correct-horse-battery-staple"},
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert login_res.status_code == 200
+    login_json = login_res.get_json()
+    assert login_json["ok"] is True
+    assert login_json["birthday_gift"]["created"] is True
+    assert login_json["birthday_gift"]["amount"] == BIRTHDAY_GIFT_POINTS
+    assert points_service.get_wallet(1)["points_balance"] == BIRTHDAY_GIFT_POINTS
 
 
 def test_public_login_survives_locked_official_room_membership_sync(tmp_path):

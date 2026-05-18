@@ -122,7 +122,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "手動加減分與待審核" in index_html
     assert "積分錢包" in index_html
     assert "積分交易所" in index_html
-    assert "/js/55-economy.js?v=20260515-root-bot-positions" in index_html
+    assert "/js/55-economy.js?v=" in index_html
     # Match any cache-bust version — Codex bumps these for browser
     # cache invalidation, the test should not break on each bump.
     assert "/js/50-admin.js?v=" in index_html
@@ -153,8 +153,8 @@ def test_root_points_page_is_chain_operations_console():
     assert 'else if (nextPage === "all-positions") title.textContent = "全用戶倉位管理";' in economy_js
     assert 'else title.textContent = nextPage === "chain" ? "積分私有鏈" : "積分餘額";' in economy_js
     assert 'fetchEconomyJson("/root/points/report")' in economy_js
-    assert 'fetchEconomyJson("/root/trading/sitewide/pools")' in economy_js
-    assert 'fetchEconomyJson("/root/trading/sitewide/user-positions")' in economy_js
+    assert 'fetchEconomyJson("/root/trading/sitewide/pools", { allowMissingSnapshot: true })' in economy_js
+    assert 'fetchEconomyJson("/root/trading/sitewide/user-positions", { allowMissingSnapshot: true })' in economy_js
     assert 'const shouldLoadRootTrading = rootMode && ["funding-pools", "all-positions"].includes(economyActivePage);' in economy_js
     assert "function renderEconomyRootBalanceSummary" in economy_js
     assert "function renderEconomyRootFundingPools" in economy_js
@@ -169,7 +169,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "bindEconomyInlineEvents" in economy_js
     assert "economyAutoRefreshTimer" in economy_js
     assert 'currentModuleTab !== "economy"' in economy_js
-    assert "}, 30000)" in economy_js
+    assert "function economyDashboardRefreshMs()" in economy_js
+    assert "}, economyDashboardRefreshMs())" in economy_js
     assert "economy-adjustment-list" in economy_js
     assert 'adminLedgerList.style.display = rootMode ? "none" : ""' in economy_js
     assert 'if (adjustPanel) adjustPanel.style.display = rootMode ? "" : "none";' in economy_js
@@ -658,6 +659,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "/trading/bots/${encodeURIComponent(botUuid)}/share" in trading_js
     assert "/trading/grid-bots/${encodeURIComponent(botUuid)}/share" in trading_js
     assert "trading_bot_weekly_competition_reward" in economy_js
+    assert "birthday_gift" in economy_js
+    assert "生日禮金" in economy_js
     assert "function increaseTradingBotMaxRuns" in trading_js
     assert "/trading/bots/${encodeURIComponent(botUuid)}/increase-runs" in trading_js
     assert 'id="trading-auto-bot-budget-points"' in trading_section
@@ -785,12 +788,12 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function loadTradingReferencePrices" in trading_js
     assert "function restartTradingReferenceAutoRefresh" in trading_js
     assert "function tradingReferenceAutoRefreshMs" in trading_js
-    assert "return 1000;" in trading_js
+    assert "return tradingReferencePriceRefreshMs();" in trading_js
     assert 'interval === "1s"' not in trading_js
     assert "loadTradingReferencePrices({ silent: true, priceOnly: true })" in trading_js
     assert "tradingReferenceChartAutoTimer" in trading_js
     assert "tradingReferenceChartAutoBusy" in trading_js
-    assert "}, 5000)" in trading_js
+    assert "}, tradingReferenceChartRefreshMs())" in trading_js
     assert "function tradingReferenceChartLimit" in trading_js
     assert "function mergeTradingReferenceLatestPayload" in trading_js
     assert "function tradingReferencePayloadHasCandles" in trading_js
@@ -861,7 +864,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-signal-light-risk"' in trading_section
     assert "交易訊號" in trading_section
     assert "交易控制台" not in trading_section
-    assert "TRADING_LIVE_PRICE_REFRESH_MS = 2000" in trading_js
+    assert "function tradingLivePriceRefreshMs()" in trading_js
+    assert 'return tradingRefreshMs("trading_live_price_refresh_seconds", 2, 1, 60);' in trading_js
     assert "function loadTradingLivePrice()" in trading_js
     assert "function renderTradingCurrentPrice" in trading_js
     assert "function renderTradingRiskDashboard" in trading_js
@@ -973,7 +977,10 @@ def test_trading_live_price_polling_uses_two_second_timer_and_health_badges():
     styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
     assert "tradingLivePriceTimer = setInterval" in trading_js
-    assert "TRADING_LIVE_PRICE_REFRESH_MS" in trading_js
+    assert "function tradingLivePriceRefreshMs()" in trading_js
+    assert "trading_live_price_refresh_seconds" in trading_js
+    assert "function tradingDashboardRefreshMs()" in trading_js
+    assert "function tradingReferenceChartRefreshMs()" in trading_js
     assert 'currentModuleTab !== "trading" && currentModuleTab !== "economy"' in trading_js
     assert "function tradingLivePriceTargetSymbols()" in trading_js
     assert "function refreshTradingWalletLiveMetrics()" in trading_js

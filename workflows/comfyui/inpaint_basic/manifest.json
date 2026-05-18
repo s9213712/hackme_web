@@ -3,7 +3,7 @@
     "cfg": 7.5,
     "generation_mode": "inpaint",
     "height": 1024,
-    "model": "v1-5-inpainting.safetensors",
+    "model": "v1-5-pruned-emaonly-fp16.safetensors",
     "negative_prompt": "",
     "prompt": "a serene landscape painting, soft light",
     "seed": 42,
@@ -147,7 +147,7 @@
           {
             "category": "MODEL",
             "class_type": "CheckpointLoaderSimple",
-            "current_value": "v1-5-inpainting.safetensors",
+            "current_value": "v1-5-pruned-emaonly-fp16.safetensors",
             "id": "node:4:ckpt_name",
             "input_name": "ckpt_name",
             "input_type": "select",
