@@ -47,6 +47,7 @@ from services.comfyui.template.remap import (
     remap_load_image_to_cloud_file,
 )
 from services.comfyui.template.preview_store import (
+    DatabasePreviewStore,
     InMemoryPreviewStore,
     PREVIEW_TOKEN_TTL_SECONDS,
     PreviewEntry,
@@ -86,6 +87,7 @@ __all__ = [
     "ALLOWED_IMAGE_EXTENSIONS",
     "ALLOWED_IMAGE_MIMES",
     "DEFAULT_MAX_IMAGE_BYTES",
+    "DatabasePreviewStore",
     "InMemoryPreviewStore",
     "PREVIEW_TOKEN_TTL_SECONDS",
     "PROTECTED_IMAGE_INPUTS",

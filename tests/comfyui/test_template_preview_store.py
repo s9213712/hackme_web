@@ -5,6 +5,7 @@ import time
 import pytest
 
 from services.comfyui.template.preview_store import (
+    DatabasePreviewStore,
     InMemoryPreviewStore,
     PreviewEntry,
     PREVIEW_TOKEN_TTL_SECONDS,
@@ -12,6 +13,7 @@ from services.comfyui.template.preview_store import (
     reset_default_preview_store,
     set_default_preview_store,
 )
+from services.core.sqlite_hardening import connect_sqlite
 
 
 class _FakeClock:
@@ -174,3 +176,43 @@ def test_concurrent_put_does_not_lose_entries():
         t.join()
     assert len(tokens) == 200
     assert len(set(tokens)) == 200, "tokens should all be unique"
+
+
+def _db_store(path, **kwargs):
+    return DatabasePreviewStore(lambda: connect_sqlite(path, timeout=15, row_factory=True, wal=True), **kwargs)
+
+
+def test_database_store_redeems_token_across_store_instances(tmp_path):
+    db_path = tmp_path / "preview_tokens.sqlite3"
+    preview_worker = _db_store(db_path)
+    import_worker = _db_store(db_path)
+
+    token = preview_worker.put(user_id=7, payload={"workflow": {"1": {"class_type": "KSampler"}}})
+    entry = import_worker.consume(token=token, user_id=7)
+
+    assert entry is not None
+    assert entry.user_id == 7
+    assert entry.payload["workflow"]["1"]["class_type"] == "KSampler"
+    assert preview_worker.consume(token=token, user_id=7) is None
+
+
+def test_database_store_wrong_user_does_not_consume(tmp_path):
+    db_path = tmp_path / "preview_tokens.sqlite3"
+    preview_worker = _db_store(db_path)
+    import_worker = _db_store(db_path)
+
+    token = preview_worker.put(user_id=7, payload={"x": 1})
+
+    assert import_worker.consume(token=token, user_id=8) is None
+    assert preview_worker.consume(token=token, user_id=7) is not None
+
+
+def test_database_store_expires_tokens(tmp_path):
+    clock = _FakeClock()
+    store = _db_store(tmp_path / "preview_tokens.sqlite3", ttl_seconds=10, clock=clock)
+
+    token = store.put(user_id=7, payload={"x": 1})
+    clock.advance(11)
+
+    assert store.get(token=token, user_id=7) is None
+    assert store.consume(token=token, user_id=7) is None

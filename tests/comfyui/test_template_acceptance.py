@@ -283,6 +283,7 @@ def test_acceptance_summary_phases_implemented():
         # Phase 3.5
         remap_load_image_to_cloud_file,
         # Phase 4a
+        DatabasePreviewStore,
         InMemoryPreviewStore,
         get_default_preview_store,
         # Phase 6
@@ -302,6 +303,7 @@ def test_acceptance_summary_phases_implemented():
     assert callable(enforce_allowlist)
     assert callable(rewrite_save_image_prefix)
     assert callable(remap_load_image_to_cloud_file)
+    assert callable(DatabasePreviewStore)
     assert callable(get_default_preview_store)
     assert callable(run_workflow_through_gates)
     assert callable(cleanup_run_temp_files)

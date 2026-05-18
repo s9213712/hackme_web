@@ -1630,6 +1630,52 @@ def test_comfyui_generate_async_job_captures_request_meta_before_thread_handoff(
     )
 
 
+def test_comfyui_async_job_status_survives_worker_handoff(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+
+    app_a = _build_app(
+        db_path,
+        storage_root,
+        extra_deps={
+            "comfyui_generation_jobs": {},
+            "comfyui_generation_jobs_lock": threading.Lock(),
+        },
+    )
+    app_b = _build_app(
+        db_path,
+        storage_root,
+        extra_deps={
+            "comfyui_generation_jobs": {},
+            "comfyui_generation_jobs_lock": threading.Lock(),
+        },
+    )
+
+    started = app_a.test_client().post(
+        "/api/comfyui/generate",
+        json={
+            "model": "dream.safetensors",
+            "prompt": "worker handoff generation",
+            "width": 512,
+            "height": 512,
+            "steps": 12,
+            "cfg": 6.5,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "seed": 123,
+            "batch_size": 1,
+            "confirm_billing": True,
+            "async_progress": True,
+        },
+    )
+
+    final_job = _await_comfyui_job(app_b.test_client(), started)
+    assert final_job["status"] == "completed"
+    assert final_job["result"]["image"]["image_ref"]["filename"] == "hackme_web_00001_.png"
+
+
 def test_comfyui_async_generation_worker_survives_logout_or_session_change(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"

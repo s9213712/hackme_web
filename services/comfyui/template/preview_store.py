@@ -1,4 +1,4 @@
-"""§8.2 / §8.2.1 preview-token store interface + default in-memory implementation.
+"""§8.2 / §8.2.1 preview-token store interface + implementations.
 
 The preview/import flow:
 
@@ -7,7 +7,7 @@ The preview/import flow:
    to the client beyond the UI schema; storing it server-side avoids
    round-trip tampering.
 
-2. ``POST /api/comfyui/workflows/import`` consumes the token, looks up
+2. ``POST /api/comfyui/templates/import`` consumes the token, looks up
    the stored workflow / analysis, applies user-filled inputs, and writes
    the final preset into the database.
 
@@ -20,11 +20,13 @@ Spec reference: docs/comfyui/COMFYUI_TEMPLATE_IMPORTER_PLAN.md §8.2 / §8.2.1.
 
 from __future__ import annotations
 
+import json
 import secrets
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Protocol
+from typing import Any, Callable, Iterable, Protocol
 
 
 PREVIEW_TOKEN_TTL_SECONDS = 30 * 60  # §8.2 — 30 minutes default
@@ -175,9 +177,225 @@ class InMemoryPreviewStore:
             return list(self._entries.keys())
 
 
-# Module-level singleton used by the route layer in single-process deployments.
-# Multi-worker deployments must replace this via ``set_default_preview_store``
-# at startup with a Redis/DB-backed implementation per §8.2.1.
+class DatabasePreviewStore:
+    """SQLite-backed preview-token store for real deployments.
+
+    The importer preview and import requests can land on different worker
+    processes. Keeping tokens in SQLite preserves the existing single-use +
+    TTL semantics while making the token visible across workers and restarts.
+    """
+
+    _TABLE_NAME = "comfyui_template_preview_tokens"
+
+    def __init__(
+        self,
+        get_db: Callable[[], Any],
+        *,
+        ttl_seconds: float = PREVIEW_TOKEN_TTL_SECONDS,
+        max_entries: int = 1024,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        if not callable(get_db):
+            raise TypeError("get_db must be callable")
+        if ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be positive")
+        if max_entries <= 0:
+            raise ValueError("max_entries must be positive")
+        self._get_db = get_db
+        self._ttl_seconds = float(ttl_seconds)
+        self._max_entries = int(max_entries)
+        self._clock = clock
+        self._schema_ready = False
+        self._schema_lock = threading.Lock()
+
+    def _ensure_schema(self, conn) -> None:
+        if self._schema_ready:
+            return
+        with self._schema_lock:
+            if self._schema_ready:
+                return
+            conn.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {self._TABLE_NAME} (
+                    token TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{self._TABLE_NAME}_user "
+                f"ON {self._TABLE_NAME}(user_id, expires_at)"
+            )
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{self._TABLE_NAME}_expires "
+                f"ON {self._TABLE_NAME}(expires_at)"
+            )
+            conn.commit()
+            self._schema_ready = True
+
+    def _expire_on_conn(self, conn, *, now: float) -> int:
+        cur = conn.execute(f"DELETE FROM {self._TABLE_NAME} WHERE expires_at <= ?", (float(now),))
+        return int(cur.rowcount or 0)
+
+    def _enforce_capacity_on_conn(self, conn) -> None:
+        row = conn.execute(f"SELECT COUNT(*) AS c FROM {self._TABLE_NAME}").fetchone()
+        count = int(row["c"] if row is not None else 0)
+        excess = count - self._max_entries
+        if excess <= 0:
+            return
+        rows = conn.execute(
+            f"SELECT token FROM {self._TABLE_NAME} ORDER BY created_at ASC LIMIT ?",
+            (int(excess),),
+        ).fetchall()
+        if rows:
+            conn.executemany(
+                f"DELETE FROM {self._TABLE_NAME} WHERE token=?",
+                [(str(row["token"]),) for row in rows],
+            )
+
+    def _entry_from_row(self, row) -> PreviewEntry | None:
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        return PreviewEntry(
+            user_id=int(row["user_id"]),
+            payload=payload,
+            created_at=float(row["created_at"]),
+            expires_at=float(row["expires_at"]),
+        )
+
+    def put(self, *, user_id: int, payload: dict[str, Any]) -> str:
+        if not isinstance(user_id, int) or user_id <= 0:
+            raise ValueError("user_id must be a positive int")
+        if not isinstance(payload, dict):
+            raise TypeError("payload must be a dict")
+        now = float(self._clock())
+        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        conn = self._get_db()
+        try:
+            self._ensure_schema(conn)
+            self._expire_on_conn(conn, now=now)
+            for _ in range(8):
+                token = _generate_token()
+                try:
+                    conn.execute(
+                        f"""
+                        INSERT INTO {self._TABLE_NAME}
+                            (token, user_id, payload_json, created_at, expires_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (token, int(user_id), payload_json, now, now + self._ttl_seconds),
+                    )
+                    self._enforce_capacity_on_conn(conn)
+                    conn.commit()
+                    return token
+                except sqlite3.IntegrityError:
+                    continue
+            raise RuntimeError("failed to allocate unique preview token")
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+    def get(self, *, token: str, user_id: int) -> PreviewEntry | None:
+        if not token or not isinstance(token, str):
+            return None
+        now = float(self._clock())
+        conn = self._get_db()
+        try:
+            self._ensure_schema(conn)
+            self._expire_on_conn(conn, now=now)
+            row = conn.execute(
+                f"""
+                SELECT token, user_id, payload_json, created_at, expires_at
+                FROM {self._TABLE_NAME}
+                WHERE token=? AND user_id=? AND expires_at > ?
+                """,
+                (token, int(user_id), now),
+            ).fetchone()
+            conn.commit()
+            return self._entry_from_row(row)
+        finally:
+            conn.close()
+
+    def consume(self, *, token: str, user_id: int) -> PreviewEntry | None:
+        if not token or not isinstance(token, str):
+            return None
+        now = float(self._clock())
+        conn = self._get_db()
+        try:
+            self._ensure_schema(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            self._expire_on_conn(conn, now=now)
+            row = conn.execute(
+                f"""
+                SELECT token, user_id, payload_json, created_at, expires_at
+                FROM {self._TABLE_NAME}
+                WHERE token=? AND user_id=? AND expires_at > ?
+                """,
+                (token, int(user_id), now),
+            ).fetchone()
+            entry = self._entry_from_row(row)
+            if entry is not None:
+                conn.execute(f"DELETE FROM {self._TABLE_NAME} WHERE token=?", (token,))
+            conn.commit()
+            return entry
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+    def expire(self) -> int:
+        now = float(self._clock())
+        conn = self._get_db()
+        try:
+            self._ensure_schema(conn)
+            dropped = self._expire_on_conn(conn, now=now)
+            conn.commit()
+            return dropped
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+    def clear(self) -> None:
+        conn = self._get_db()
+        try:
+            self._ensure_schema(conn)
+            conn.execute(f"DELETE FROM {self._TABLE_NAME}")
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+
+# Module-level fallback used by preview-only tests or integrations that do not
+# provide a DB connection. The normal app route uses DatabasePreviewStore.
 
 _default_store: PreviewStore = InMemoryPreviewStore()
 _default_store_lock = threading.Lock()
@@ -201,6 +419,7 @@ def reset_default_preview_store() -> None:
 
 
 __all__ = [
+    "DatabasePreviewStore",
     "InMemoryPreviewStore",
     "PREVIEW_TOKEN_TTL_SECONDS",
     "PreviewEntry",

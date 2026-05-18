@@ -279,6 +279,8 @@ def register_comfyui_routes(app, deps):
     active_generations_lock = deps.get("comfyui_active_generations_lock") or threading.Lock()
     generation_jobs = deps.get("comfyui_generation_jobs") or {}
     generation_jobs_lock = deps.get("comfyui_generation_jobs_lock") or threading.Lock()
+    generation_jobs_schema_lock = threading.Lock()
+    generation_jobs_schema_ready = {"ready": False}
     model_download_jobs = deps.get("comfyui_model_download_jobs") or {}
     model_download_jobs_lock = deps.get("comfyui_model_download_jobs_lock") or threading.Lock()
 
@@ -1496,6 +1498,116 @@ def register_comfyui_routes(app, deps):
             return value.strip().lower() in {"1", "true", "yes", "on", "y", "t"}
         return False
 
+    def _ensure_generation_job_schema(conn):
+        if generation_jobs_schema_ready["ready"]:
+            return
+        with generation_jobs_schema_lock:
+            if generation_jobs_schema_ready["ready"]:
+                return
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS comfyui_generation_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    owner_user_id INTEGER NOT NULL,
+                    owner_username TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    error TEXT NOT NULL DEFAULT '',
+                    progress_json TEXT NOT NULL DEFAULT '{}',
+                    result_json TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_comfyui_generation_jobs_owner "
+                "ON comfyui_generation_jobs(owner_user_id, updated_at DESC)"
+            )
+            conn.commit()
+            generation_jobs_schema_ready["ready"] = True
+
+    def _generation_job_from_row(row):
+        if not row:
+            return None
+        progress = _parse_json_field(row["progress_json"], {}) or {}
+        result = _parse_json_field(row["result_json"], None) if row["result_json"] else None
+        return {
+            "job_id": row["job_id"],
+            "owner_user_id": int(row["owner_user_id"]),
+            "owner_username": row["owner_username"] or "",
+            "status": row["status"] or "queued",
+            "error": row["error"] or "",
+            "progress": progress if isinstance(progress, dict) else {},
+            "result": result,
+            "created_at": float(row["created_at"] or 0),
+            "updated_at": float(row["updated_at"] or 0),
+        }
+
+    def _persist_generation_job(job):
+        if not isinstance(job, dict) or not job.get("job_id"):
+            return False
+        conn = get_db()
+        try:
+            _ensure_generation_job_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO comfyui_generation_jobs (
+                    job_id, owner_user_id, owner_username, status, error,
+                    progress_json, result_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    owner_user_id=excluded.owner_user_id,
+                    owner_username=excluded.owner_username,
+                    status=excluded.status,
+                    error=excluded.error,
+                    progress_json=excluded.progress_json,
+                    result_json=excluded.result_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    str(job["job_id"]),
+                    int(job.get("owner_user_id") or 0),
+                    str(job.get("owner_username") or ""),
+                    str(job.get("status") or "queued"),
+                    str(job.get("error") or ""),
+                    json.dumps(job.get("progress") or {}, ensure_ascii=False, sort_keys=True),
+                    json.dumps(job.get("result"), ensure_ascii=False, sort_keys=True) if job.get("result") is not None else None,
+                    float(job.get("created_at") or time.time()),
+                    float(job.get("updated_at") or time.time()),
+                ),
+            )
+            conn.commit()
+            return True
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            return False
+        finally:
+            conn.close()
+
+    def _load_generation_job_from_db(job_id):
+        job_id = str(job_id or "").strip()
+        if not job_id:
+            return None
+        conn = get_db()
+        try:
+            _ensure_generation_job_schema(conn)
+            row = conn.execute(
+                """
+                SELECT job_id, owner_user_id, owner_username, status, error,
+                       progress_json, result_json, created_at, updated_at
+                FROM comfyui_generation_jobs
+                WHERE job_id=?
+                """,
+                (job_id,),
+            ).fetchone()
+            return _generation_job_from_row(row)
+        finally:
+            conn.close()
+
     def _register_active_generation(actor, *, backend_url="", backend_scope="primary"):
         generation_key = secrets.token_hex(12)
         with active_generations_lock:
@@ -1538,6 +1650,7 @@ def register_comfyui_routes(app, deps):
         }
         with generation_jobs_lock:
             generation_jobs[job_id] = job
+        _persist_generation_job(job)
         try:
             from services.job_center import create_job as create_platform_job
 
@@ -1581,14 +1694,25 @@ def register_comfyui_routes(app, deps):
         }
 
     def _update_generation_job(job_id, **changes):
+        job_id = str(job_id or "")
         with generation_jobs_lock:
             job = generation_jobs.get(job_id)
+        if not job:
+            job = _load_generation_job_from_db(job_id)
+            if job:
+                with generation_jobs_lock:
+                    generation_jobs[job_id] = job
+        if not job:
+            return None
+        with generation_jobs_lock:
+            job = generation_jobs.get(job_id, job)
             if not job:
                 return None
             for key, value in changes.items():
                 job[key] = value
             job["updated_at"] = time.time()
             updated = dict(job)
+        _persist_generation_job(updated)
         try:
             from services.job_center import add_job_event, get_job_by_source, update_job as update_platform_job
 
@@ -1625,9 +1749,19 @@ def register_comfyui_routes(app, deps):
         return updated
 
     def _update_generation_job_progress(job_id, progress):
+        job_id = str(job_id or "")
         now = time.time()
         with generation_jobs_lock:
             job = generation_jobs.get(job_id)
+        if not job:
+            job = _load_generation_job_from_db(job_id)
+            if job:
+                with generation_jobs_lock:
+                    generation_jobs[job_id] = job
+        if not job:
+            return None
+        with generation_jobs_lock:
+            job = generation_jobs.get(job_id, job)
             if not job:
                 return None
             job["progress"] = {
@@ -1656,6 +1790,7 @@ def register_comfyui_routes(app, deps):
                 job["_last_platform_progress_at"] = now
                 job["_last_platform_progress_signature"] = progress_signature
             updated = dict(job)
+        _persist_generation_job(updated)
         if not should_write_platform_progress:
             return updated
         try:
@@ -1696,9 +1831,25 @@ def register_comfyui_routes(app, deps):
         return updated
 
     def _get_generation_job(job_id):
+        job_id = str(job_id or "")
         with generation_jobs_lock:
-            job = generation_jobs.get(str(job_id))
-            return dict(job) if job else None
+            job = generation_jobs.get(job_id)
+            if job and str(job.get("status") or "") not in {"queued", "running"}:
+                return dict(job)
+            cached_job = dict(job) if job else None
+        db_job = _load_generation_job_from_db(job_id)
+        if db_job:
+            with generation_jobs_lock:
+                current = generation_jobs.get(job_id)
+                if (
+                    not current
+                    or float(db_job.get("updated_at") or 0) >= float(current.get("updated_at") or 0)
+                    or str(current.get("status") or "") in {"queued", "running"}
+                ):
+                    generation_jobs[job_id] = db_job
+                    return dict(db_job)
+                return dict(current)
+        return cached_job
 
     def _assert_generation_job_owner(job_id, actor):
         job = _get_generation_job(job_id)

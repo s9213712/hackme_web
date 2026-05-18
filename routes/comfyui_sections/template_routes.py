@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from services.comfyui.template import (
+    DatabasePreviewStore,
     PREVIEW_TOKEN_TTL_SECONDS,
     REPO_SOURCE_DIR,
     analyze_workflow_json,
@@ -47,7 +48,8 @@ def register_comfyui_template_routes(app, ctx):
       - get_db, actor_value, upsert_workflow_preset, load_workflow_preset_row,
         workflow_preset_summary
     Optional ctx keys (override for tests):
-      - preview_store: PreviewStore instance (defaults to module singleton)
+      - preview_store: PreviewStore instance (defaults to DB-backed storage
+        when get_db is available, otherwise the module singleton)
     """
     actor_or_401 = ctx["actor_or_401"]
     json_resp = ctx["json_resp"]
@@ -58,16 +60,17 @@ def register_comfyui_template_routes(app, ctx):
     comfyui_binding = ctx["comfyui_binding"]
     client_for_url = ctx["client_for_url"]
     request = ctx["request"]
-    # Use `is None` check, not `or` — InMemoryPreviewStore has __len__ so an
-    # empty store evaluates falsy and would silently fall through to the
-    # module singleton.
-    preview_store = ctx.get("preview_store")
-    if preview_store is None:
-        preview_store = get_default_preview_store()
     # Optional integration with the existing preset upsert helpers; the import
     # endpoint short-circuits when these are missing so unit tests of the
     # preview endpoint can omit them.
     get_db = ctx.get("get_db")
+    # Use `is None` check, not `or` — InMemoryPreviewStore has __len__ so an
+    # empty store evaluates falsy and would silently fall through to another
+    # store. In production, prefer DB-backed storage so preview/import requests
+    # survive multi-worker routing and short server restarts.
+    preview_store = ctx.get("preview_store")
+    if preview_store is None:
+        preview_store = DatabasePreviewStore(get_db) if get_db is not None else get_default_preview_store()
     actor_value = ctx.get("actor_value")
     upsert_workflow_preset = ctx.get("upsert_workflow_preset")
     load_workflow_preset_row = ctx.get("load_workflow_preset_row")
