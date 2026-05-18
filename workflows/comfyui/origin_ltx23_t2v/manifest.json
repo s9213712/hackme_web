@@ -22,7 +22,7 @@
     "height": 512,
     "loras": [
       {
-        "name": "ltx-2.3-22b-distilled-lora-384.safetensors",
+        "name": "LTX\\ltx-2.3-22b-distilled-lora-384.safetensors",
         "strength_clip": 1,
         "strength_model": 0.5
       }
@@ -50,7 +50,7 @@
   "required_custom_nodes": [],
   "required_loras": [
     {
-      "name": "ltx-2.3-22b-distilled-lora-384.safetensors",
+      "name": "LTX\\ltx-2.3-22b-distilled-lora-384.safetensors",
       "strength_model": 0.5
     }
   ],
@@ -133,7 +133,7 @@
           {
             "category": "MODEL",
             "class_type": "LoraLoaderModelOnly",
-            "current_value": "ltx-2.3-22b-distilled-lora-384.safetensors",
+            "current_value": "LTX\\ltx-2.3-22b-distilled-lora-384.safetensors",
             "id": "node:277:lora_name",
             "input_name": "lora_name",
             "input_type": "select",

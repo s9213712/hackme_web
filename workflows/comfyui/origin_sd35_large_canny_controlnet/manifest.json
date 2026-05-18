@@ -17,7 +17,7 @@
     "clip": "",
     "controlnet": {
       "end_percent": 1,
-      "model_name": "sd3.5_large_controlnet_canny.safetensors",
+      "model_name": "SD35\\sd3.5_large_controlnet_canny.safetensors",
       "preprocessor": "",
       "start_percent": 0,
       "strength": 1,
@@ -48,7 +48,7 @@
   ],
   "required_controlnets": [
     {
-      "name": "sd3.5_large_controlnet_canny.safetensors",
+      "name": "SD35\\sd3.5_large_controlnet_canny.safetensors",
       "type": "canny"
     }
   ],
@@ -149,7 +149,7 @@
           {
             "category": "MODEL",
             "class_type": "ControlNetLoader",
-            "current_value": "sd3.5_large_controlnet_canny.safetensors",
+            "current_value": "SD35\\sd3.5_large_controlnet_canny.safetensors",
             "id": "node:46:control_net_name",
             "input_name": "control_net_name",
             "input_type": "select",

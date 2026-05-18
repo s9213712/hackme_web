@@ -14,7 +14,7 @@
     "batch_size": 1,
     "cfg": 1.6,
     "checkpoint": "ZIT-AIO\\Full-Red-Z-image_15AIO_ bf16.safetensors",
-    "clip": "Qwen\\qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
     "controlnet": null,
     "denoise_strength": 0.6,
     "diffusion_model": "qwen\\2511\\qwen_image_edit_2511_fp8mixed.safetensors",
@@ -22,7 +22,7 @@
     "height": 1024,
     "loras": [
       {
-        "name": "QWEN\\edit\\Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+        "name": "QWEN\\Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
         "strength_clip": 1,
         "strength_model": 1
       }
@@ -49,7 +49,7 @@
   "required_custom_nodes": [],
   "required_loras": [
     {
-      "name": "QWEN\\edit\\Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "name": "QWEN\\Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
       "strength_model": 1
     }
   ],
@@ -60,7 +60,7 @@
     },
     {
       "kind": "clip",
-      "name": "Qwen\\qwen_2.5_vl_7b_fp8_scaled.safetensors"
+      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
     },
     {
       "kind": "vae",
@@ -108,7 +108,7 @@
           {
             "category": "MODEL",
             "class_type": "LoraLoaderModelOnly",
-            "current_value": "QWEN\\edit\\Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+            "current_value": "QWEN\\Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
             "id": "node:319:lora_name",
             "input_name": "lora_name",
             "input_type": "select",

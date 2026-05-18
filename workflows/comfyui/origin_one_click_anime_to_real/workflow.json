@@ -179,7 +179,7 @@
   "319": {
     "class_type": "LoraLoaderModelOnly",
     "inputs": {
-      "lora_name": "QWEN\\edit\\Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "lora_name": "QWEN\\Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
       "model": [
         "349",
         0
@@ -291,7 +291,7 @@
   "340": {
     "class_type": "CLIPLoader",
     "inputs": {
-      "clip_name": "Qwen\\qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
       "device": "default",
       "type": "qwen_image"
     }

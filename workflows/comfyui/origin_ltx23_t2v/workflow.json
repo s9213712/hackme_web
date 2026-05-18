@@ -105,7 +105,7 @@
   "277": {
     "class_type": "LoraLoaderModelOnly",
     "inputs": {
-      "lora_name": "ltx-2.3-22b-distilled-lora-384.safetensors",
+      "lora_name": "LTX\\ltx-2.3-22b-distilled-lora-384.safetensors",
       "model": [
         "313",
         0

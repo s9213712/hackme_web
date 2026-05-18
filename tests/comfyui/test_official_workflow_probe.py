@@ -94,6 +94,37 @@ def test_preflight_reads_combo_options_from_object_info_dict_shape():
     assert result["missing_models"][0]["value"] == "missing.mp4"
 
 
+def test_preflight_reports_model_input_when_comfyui_option_list_is_empty():
+    probe = _load_probe_module()
+    object_info = {
+        "LatentUpscaleModelLoader": {
+            "input": {
+                "required": {
+                    "model_name": ["COMBO", {"options": []}],
+                },
+            },
+        },
+    }
+    workflow = {
+        "303": {
+            "class_type": "LatentUpscaleModelLoader",
+            "inputs": {"model_name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"},
+        },
+    }
+
+    result = probe._preflight("missing_latent_upscaler", workflow, object_info)
+
+    assert result["runnable"] is False
+    assert result["missing_models"] == [
+        {
+            "node_id": "303",
+            "class_type": "LatentUpscaleModelLoader",
+            "input": "model_name",
+            "value": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+        },
+    ]
+
+
 def test_formal_params_preserve_generation_inputs_but_remap_probe_files():
     probe = _load_probe_module()
     workflow = {

@@ -40,6 +40,7 @@ MODEL_INPUTS = {
     "LoraLoaderModelOnly": {"lora_name": ("LoraLoaderModelOnly", "lora_name")},
     "ControlNetLoader": {"control_net_name": ("ControlNetLoader", "control_net_name")},
     "UpscaleModelLoader": {"model_name": ("UpscaleModelLoader", "model_name")},
+    "LatentUpscaleModelLoader": {"model_name": ("LatentUpscaleModelLoader", "model_name")},
     "LoadVideo": {"file": ("LoadVideo", "file")},
 }
 
@@ -111,7 +112,7 @@ def _node_options(object_info, node_class, input_name):
             options = raw[1].get("options")
             if isinstance(options, list):
                 return {str(item) for item in options if str(item).strip()}
-    return set()
+    return None
 
 
 def _literal_model_name(value):
@@ -140,7 +141,7 @@ def _preflight(bundle_id, workflow, object_info):
             if not value:
                 continue
             options = _node_options(object_info, *option_ref)
-            if options and value not in options:
+            if options is not None and value not in options:
                 missing_models.append({
                     "node_id": node_id,
                     "class_type": class_type,

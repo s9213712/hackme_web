@@ -474,7 +474,7 @@
   "306": {
     "class_type": "CLIPLoader",
     "inputs": {
-      "clip_name": "Qwen\\qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
       "device": "default",
       "type": "lumina2"
     }

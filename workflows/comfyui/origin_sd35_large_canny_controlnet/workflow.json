@@ -50,7 +50,7 @@
   "46": {
     "class_type": "ControlNetLoader",
     "inputs": {
-      "control_net_name": "sd3.5_large_controlnet_canny.safetensors"
+      "control_net_name": "SD35\\sd3.5_large_controlnet_canny.safetensors"
     }
   },
   "47": {

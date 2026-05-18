@@ -41,7 +41,7 @@
   "154": {
     "class_type": "LoraLoaderModelOnly",
     "inputs": {
-      "lora_name": "Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
+      "lora_name": "WAN\\Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
       "model": [
         "140",
         0
@@ -159,7 +159,7 @@
   "227": {
     "class_type": "LoraLoader",
     "inputs": {
-      "lora_name": "Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
+      "lora_name": "WAN\\Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
       "model": [
         "228",
         0

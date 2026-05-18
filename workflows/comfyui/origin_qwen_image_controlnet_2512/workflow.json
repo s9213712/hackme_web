@@ -131,7 +131,7 @@
   "135": {
     "class_type": "ControlNetLoader",
     "inputs": {
-      "control_net_name": "Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"
+      "control_net_name": "QWEN\\Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"
     }
   },
   "136": {
@@ -184,7 +184,7 @@
   "140": {
     "class_type": "LoraLoaderModelOnly",
     "inputs": {
-      "lora_name": "Qwen-Image-Lightning-4steps-V1.0.safetensors",
+      "lora_name": "QWEN\\Qwen-Image-Lightning-4steps-V1.0.safetensors",
       "model": [
         "141",
         0

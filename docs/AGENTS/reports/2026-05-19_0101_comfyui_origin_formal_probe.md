@@ -25,12 +25,35 @@ python3 /home/s92137/hackme_web/scripts/comfyui/official_workflow_probe.py \
 - Initial full execution completed: 4
 - Initial ComfyUI validation/runtime failed: 16
 - Initial blocked before queueing by prompt safety gate: 4
-- Post-fix acceptance-only pass: 19 accepted, 5 failed
+- Latest model-path preflight recheck: 20 pass, 4 blocked
+- Latest model-path acceptance-only pass: 20 accepted, 4 preflight-blocked
 - Full-output sanity check after clarification: 1 completed (`origin_sam3_segmentation`)
 - Raw JSON report: `/tmp/comfyui_origin_run_formal_safe_20260519.json`
 - Post-fix acceptance JSON report: `/tmp/comfyui_origin_acceptance_all_final_20260519.json`
+- Model-path preflight JSON report: `/tmp/comfyui_origin_preflight_after_model_prefixes_v3_20260519.json`
+- Model-path acceptance JSON report: `/tmp/comfyui_origin_acceptance_after_model_prefixes_v3_20260519.json`
 - Full-output sanity JSON report: `/tmp/comfyui_origin_sam3_full_output_20260519.json`
 - Mode: formal workflow parameters, heavy workflows included, preflight failures force-queued once, generated output references validated without downloading media bytes.
+
+## Model Path Recheck
+
+The user report was correct: several models originally reported as missing were present in ComfyUI under subfolders, so the template values needed to match ComfyUI's exact option strings.
+
+Confirmed remaps:
+
+- Qwen 2512 ControlNet and lightning LoRA now use the `QWEN\...` names returned by ComfyUI.
+- SD3.5 canny/depth ControlNet templates now use the `SD35\...` names returned by ComfyUI.
+- Qwen Image Edit 2509 and 2511 LoRAs now use the `QWEN\...` names returned by ComfyUI.
+- Wan VACE LoRAs now use the `WAN\...` names returned by ComfyUI.
+- LTX 2.3 LoRA now uses the `LTX\...` name returned by ComfyUI.
+- The one-click Qwen CLIP loader values now use the root-level `qwen_2.5_vl_7b_fp8_scaled.safetensors` option returned by ComfyUI.
+
+Latest acceptance-only validation accepted 20/24 templates and left the ComfyUI queue empty (`queue_running=[]`, `queue_pending=[]`). The 4 remaining blocked templates are not generic folder-prefix misses:
+
+- `origin_one_click_anime_to_real`: missing LayerStyle/rgthree-style custom nodes plus unmatched ZIT checkpoint and Qwen edit diffusion model names.
+- `origin_one_click_replace_aio_2511`: missing multiple custom-node packs plus unmatched ControlNet, LoRA, and checkpoint names.
+- `origin_anima_txt2img`: `UNETLoader` does not list `anima-preview3-base.safetensors`; similarly named ANIMA files exist but are not exact matches.
+- `origin_ltx23_t2v`: `LatentUpscaleModelLoader` reports an empty model option list, so the latent upscaler is not registered for that node even though other LTX model paths are now remapped.
 
 ## Initial Full-Run Status
 
@@ -68,11 +91,11 @@ Acceptance-only means the prompt was accepted by ComfyUI validation and immediat
 | Workflow | Acceptance | Remaining issue |
 | --- | --- | --- |
 | `origin_audio_ace_step_15_xl_base` | Accepted | None in acceptance validation. |
-| `origin_qwen_image_controlnet_2512` | Accepted | Preflight still reports missing `Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors` and `Qwen-Image-Lightning-4steps-V1.0.safetensors`, but ComfyUI accepted the prompt after the resize mapping fix. |
-| `origin_sd35_large_canny_controlnet` | Accepted | Preflight reports local ControlNet name mismatch/missing file. |
-| `origin_sd35_large_depth_controlnet` | Accepted | Preflight reports local ControlNet name mismatch/missing file. |
+| `origin_qwen_image_controlnet_2512` | Accepted | Folder-prefixed ControlNet/LoRA names now match ComfyUI options. |
+| `origin_sd35_large_canny_controlnet` | Accepted | Folder-prefixed ControlNet name now matches ComfyUI options. |
+| `origin_sd35_large_depth_controlnet` | Accepted | Folder-prefixed ControlNet name now matches ComfyUI options. |
 | `origin_capybara_image_edit` | Accepted | None in acceptance validation. |
-| `origin_qwen_image_edit_2509` | Failed | Missing `Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors` LoRA files. |
+| `origin_qwen_image_edit_2509` | Accepted | Folder-prefixed LoRA name now matches ComfyUI options. |
 | `origin_one_click_anime_to_real` | Failed | Missing LayerStyle/rgthree-style custom nodes and related Qwen/ZIT model files. |
 | `origin_one_click_replace_aio_2511` | Failed | Missing ControlNet Aux, LayerStyle, Qwen edit helper nodes, rgthree node, and related model files. |
 | `origin_flux_fill_outpaint` | Accepted | None in acceptance validation. |
@@ -88,9 +111,9 @@ Acceptance-only means the prompt was accepted by ComfyUI validation and immediat
 | `origin_sam3_segmentation` | Accepted | None in acceptance validation. |
 | `origin_multi_method_upscale` | Accepted | Unsafe built-in prompt replaced with safe adult/non-explicit prompt. |
 | `origin_capybara_video_edit` | Accepted | Video input, scheduler, CLIP vision, resize, VAE, format/codec conversion fixed. |
-| `origin_wan_vace_inpainting` | Accepted | Preflight still reports missing Wan LoRA files, but ComfyUI accepted the prompt with force-run. |
+| `origin_wan_vace_inpainting` | Accepted | Folder-prefixed Wan LoRA names now match ComfyUI options. |
 | `origin_wan22_14b_i2v_subgraphed` | Accepted | Video latent/output conversion fixed. |
-| `origin_ltx23_t2v` | Failed | Missing `ltx-2.3-22b-distilled-lora-384.safetensors` and latent upscaler model. |
+| `origin_ltx23_t2v` | Failed | LTX LoRA is remapped; `LatentUpscaleModelLoader` still reports no available upscaler options. |
 
 ## Full-Output Sanity Check
 
@@ -109,11 +132,12 @@ To produce actual media output, do not use `--acceptance-only` and do not use `-
   - `--custom-params --custom-prompt "adult woman with cat ears in a cozy bedroom" --custom-steps 20`
   - `--custom-param-json '{"seed": 123, "node_inputs": {"3": {"steps": 12}}}'`
 - The probe now ignores model inputs that are graph links, so linked model nodes are not falsely reported as missing model filenames.
+- The probe now treats an explicit empty ComfyUI model option list as meaningful, so nodes such as `LatentUpscaleModelLoader` can report unregistered models instead of being silently skipped.
 - The probe blocks sexualized minor or age-ambiguous childlike prompts before queueing.
 
 ## Follow-Up
 
-1. Install or remap the missing Qwen Edit, ANIMA, LTX, and one-click workflow model files if those templates must fully execute on `192.168.18.19`.
-2. Install the missing custom-node packs for the one-click workflows, especially LayerStyle, ControlNet Aux, Qwen edit helper nodes, and rgthree.
-3. Re-run full generation only for the accepted templates that matter operationally; acceptance-only has already verified the API prompt structure.
-4. Keep user-provided test prompts unambiguously adult and non-explicit when bedroom/cat-ear/anime prompts are used.
+1. For ANIMA, either install/register the exact `anima-preview3-base.safetensors` UNET name or intentionally remap the template to a known-compatible ANIMA model after confirming equivalence.
+2. For LTX, place/register the latent upscaler where `LatentUpscaleModelLoader` scans, then restart/rescan ComfyUI; that node currently returns an empty option list.
+3. Install the missing custom-node packs for the one-click workflows, especially LayerStyle, ControlNet Aux, Qwen edit helper nodes, and rgthree.
+4. Re-run full generation only for the accepted templates that matter operationally; acceptance-only has already verified the API prompt structure.

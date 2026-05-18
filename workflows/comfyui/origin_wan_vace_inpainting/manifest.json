@@ -22,12 +22,12 @@
     "height": 720,
     "loras": [
       {
-        "name": "Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
+        "name": "WAN\\Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
         "strength_clip": 1,
         "strength_model": 0.30000000000000004
       },
       {
-        "name": "Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
+        "name": "WAN\\Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
         "strength_clip": 1,
         "strength_model": 0.30000000000000004
       }
@@ -55,12 +55,12 @@
   "required_custom_nodes": [],
   "required_loras": [
     {
-      "name": "Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
+      "name": "WAN\\Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
       "strength_clip": 1,
       "strength_model": 0.30000000000000004
     },
     {
-      "name": "Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
+      "name": "WAN\\Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
       "strength_model": 0.30000000000000004
     }
   ],
@@ -198,7 +198,7 @@
           {
             "category": "MODEL",
             "class_type": "LoraLoader",
-            "current_value": "Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
+            "current_value": "WAN\\Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
             "id": "node:227:lora_name",
             "input_name": "lora_name",
             "input_type": "select",
@@ -209,7 +209,7 @@
           {
             "category": "MODEL",
             "class_type": "LoraLoaderModelOnly",
-            "current_value": "Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
+            "current_value": "WAN\\Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
             "id": "node:154:lora_name",
             "input_name": "lora_name",
             "input_type": "select",

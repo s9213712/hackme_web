@@ -14,7 +14,7 @@
     "batch_size": 1,
     "cfg": 1,
     "checkpoint": "QWEN\\Qwen-Rapid-AIO-NSFW-v18.safetensors",
-    "clip": "Qwen\\qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
     "controlnet": {
       "end_percent": 1,
       "model_name": "InstantX_Qwen-Image-ControlNet-Union.safetensors",
@@ -71,7 +71,7 @@
     },
     {
       "kind": "clip",
-      "name": "Qwen\\qwen_2.5_vl_7b_fp8_scaled.safetensors"
+      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
     }
   ],
   "schema_version": 1,

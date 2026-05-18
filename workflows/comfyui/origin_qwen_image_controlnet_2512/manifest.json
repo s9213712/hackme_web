@@ -17,7 +17,7 @@
     "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
     "controlnet": {
       "end_percent": 1,
-      "model_name": "Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors",
+      "model_name": "QWEN\\Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors",
       "preprocessor": "",
       "start_percent": 0,
       "strength": 1,
@@ -29,7 +29,7 @@
     "height": 1024,
     "loras": [
       {
-        "name": "Qwen-Image-Lightning-4steps-V1.0.safetensors",
+        "name": "QWEN\\Qwen-Image-Lightning-4steps-V1.0.safetensors",
         "strength_clip": 1,
         "strength_model": 1
       }
@@ -54,13 +54,13 @@
   ],
   "required_controlnets": [
     {
-      "name": "Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"
+      "name": "QWEN\\Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"
     }
   ],
   "required_custom_nodes": [],
   "required_loras": [
     {
-      "name": "Qwen-Image-Lightning-4steps-V1.0.safetensors",
+      "name": "QWEN\\Qwen-Image-Lightning-4steps-V1.0.safetensors",
       "strength_model": 1
     }
   ],
@@ -172,7 +172,7 @@
           {
             "category": "MODEL",
             "class_type": "ControlNetLoader",
-            "current_value": "Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors",
+            "current_value": "QWEN\\Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors",
             "id": "node:135:control_net_name",
             "input_name": "control_net_name",
             "input_type": "select",
@@ -183,7 +183,7 @@
           {
             "category": "MODEL",
             "class_type": "LoraLoaderModelOnly",
-            "current_value": "Qwen-Image-Lightning-4steps-V1.0.safetensors",
+            "current_value": "QWEN\\Qwen-Image-Lightning-4steps-V1.0.safetensors",
             "id": "node:140:lora_name",
             "input_name": "lora_name",
             "input_type": "select",

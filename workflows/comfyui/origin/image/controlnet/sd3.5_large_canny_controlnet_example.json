@@ -93,14 +93,14 @@
         "Node name for S&R": "ControlNetLoader",
         "models": [
           {
-            "name": "sd3.5_large_controlnet_canny.safetensors",
-            "url": "https://huggingface.co/Comfy-Org/stable-diffusion-3.5-controlnets_ComfyUI_repackaged/resolve/main/split_files/controlnet/sd3.5_large_controlnet_canny.safetensors",
+            "name": "SD35\\sd3.5_large_controlnet_canny.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/stable-diffusion-3.5-controlnets_ComfyUI_repackaged/resolve/main/split_files/controlnet/SD35\\sd3.5_large_controlnet_canny.safetensors",
             "directory": "controlnet"
           }
         ]
       },
       "widgets_values": [
-        "sd3.5_large_controlnet_canny.safetensors"
+        "SD35\\sd3.5_large_controlnet_canny.safetensors"
       ]
     },
     {
@@ -443,7 +443,7 @@
       "title": "Note: Model links",
       "properties": {},
       "widgets_values": [
-        "\n## Model links\n\n**checkpoints**\n\n- [sd3.5_large_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/stable-diffusion-3.5-fp8/resolve/main/sd3.5_large_fp8_scaled.safetensors)\n\n**controlnet**\n\n- [sd3.5_large_controlnet_canny.safetensors](https://huggingface.co/Comfy-Org/stable-diffusion-3.5-controlnets_ComfyUI_repackaged/resolve/main/split_files/controlnet/sd3.5_large_controlnet_canny.safetensors)\n\n\nModel Storage Location\n\n```\n📂 ComfyUI/\n├── 📂 models/\n│   ├── 📂 checkpoints/\n│   │      └── sd3.5_large_fp8_scaled.safetensors\n│   └── 📂 controlnet/\n│          └── sd3.5_large_controlnet_canny.safetensors\n```\n"
+        "\n## Model links\n\n**checkpoints**\n\n- [sd3.5_large_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/stable-diffusion-3.5-fp8/resolve/main/sd3.5_large_fp8_scaled.safetensors)\n\n**controlnet**\n\n- [SD35\\sd3.5_large_controlnet_canny.safetensors](https://huggingface.co/Comfy-Org/stable-diffusion-3.5-controlnets_ComfyUI_repackaged/resolve/main/split_files/controlnet/SD35\\sd3.5_large_controlnet_canny.safetensors)\n\n\nModel Storage Location\n\n```\n📂 ComfyUI/\n├── 📂 models/\n│   ├── 📂 checkpoints/\n│   │      └── sd3.5_large_fp8_scaled.safetensors\n│   └── 📂 controlnet/\n│          └── SD35\\sd3.5_large_controlnet_canny.safetensors\n```\n"
       ],
       "color": "#432",
       "bgcolor": "#000"
