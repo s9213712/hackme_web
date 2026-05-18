@@ -8,7 +8,7 @@ CSRF tokens, strict CSP, full security headers, rate-limit amplification.
 import argparse
 import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl, subprocess, signal, sys, platform, smtplib, ssl, urllib.parse
 from ipaddress import ip_address
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, make_response
@@ -245,7 +245,7 @@ STARTUP_BIND = effective_server_bind()
 STARTUP_HOST = STARTUP_BIND["host"]
 STARTUP_PORT = STARTUP_BIND["port"]
 SERVER_BIND_STATE = {"host": STARTUP_HOST, "port": STARTUP_PORT}
-SERVER_STARTED_AT = datetime.now().isoformat()
+SERVER_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 SERVER_RELEASE_ID = APP_RELEASE_ID
 SERVER_VERSION = APP_RELEASE_ID
 

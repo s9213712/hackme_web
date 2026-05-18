@@ -1631,6 +1631,7 @@ import json
 import os
 import secrets
 import server
+from services.server.startup import bootstrap_points_initial_grants_if_due
 from services.security.access_controls import (
     generate_internal_test_token,
     hash_internal_test_token,
@@ -2047,6 +2048,20 @@ try:
     conn.commit()
 finally:
     conn.close()
+
+points_bootstrap = bootstrap_points_initial_grants_if_due(
+    points_service=server.points_service,
+    get_system_settings=server.get_system_settings,
+    get_runtime_server_mode=server.get_runtime_server_mode,
+    audit=server.audit,
+    env_value="1" if selected_server_mode in {"production", "dev_ready", "test"} else "",
+)
+if not points_bootstrap.get("ok"):
+    print(f"[dev-tmp] warning: default account point grants failed: {points_bootstrap.get('error')}")
+elif not points_bootstrap.get("skipped"):
+    genesis = points_bootstrap.get("genesis") or {}
+    if genesis.get("created_count"):
+        print(f"[dev-tmp] default account point grants created: {genesis.get('created_count')}")
 
 dev_tokens_path = os.environ.get("HACKME_DEV_TOKENS_FILE", "").strip()
 dev_tokens_payload = {

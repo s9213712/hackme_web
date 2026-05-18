@@ -40,7 +40,7 @@ def test_game_zone_frontend_assets_are_wired():
 
     assert 'id="tab-module-games"' in index_html
     assert 'id="module-games"' in index_html
-    assert "/js/38-games.js?v=20260514-open-world" in index_html
+    assert "/js/38-games.js?v=20260518-game-ux" in index_html
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
     assert 'id="game-practice-stockfish-depth"' in index_html
@@ -80,6 +80,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert "實驗 5：NNUE + AlphaBeta/PVS" in index_html
     assert 'id="sudoku-game-panel"' in index_html
     assert 'id="sudoku-board"' in index_html
+    assert 'id="sudoku-assist-btn"' in index_html
+    assert 'id="sudoku-candidate-panel"' in index_html
     assert 'id="minesweeper-game-panel"' in index_html
     assert 'id="minesweeper-board"' in index_html
     assert 'id="minesweeper-difficulty"' in index_html
@@ -87,6 +89,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'aria-pressed="false">插旗模式' in index_html
     assert 'id="onea2b-game-panel"' in index_html
     assert 'id="onea2b-guess-input"' in index_html
+    assert 'class="onea2b-keypad"' in index_html
+    assert 'data-onea2b-key="1"' in index_html
     assert 'placeholder="例如 1234"' in index_html
     assert 'placeholder="例如 0123"' not in index_html
     assert 'id="onea2b-history"' in index_html
@@ -116,29 +120,29 @@ def test_game_zone_frontend_assets_are_wired():
     assert "/js/three.min.js?v=0.160.0" not in index_html
     assert 'const THREE_JS_SRC = "/js/three.min.js?v=0.160.0";' in core_js
     assert "async function ensureThreeJsLoaded()" in core_js
-    assert "/js/41-game-modules.js?v=20260514-game-user-scope" in index_html
+    assert "/js/41-game-modules.js?v=20260518-game-ux" in index_html
     assert "/js/games/game-view-registry.js?v=20260513-legacy-modules" in index_html
     assert "/js/games/chess.js?v=20260515-stockfish-depth-toggle" in index_html
     lazy_game_scripts = [
         "/js/games/snake.js?v=20260513-game-modules",
         "/js/games/game-2048.js?v=20260513-game-modules",
         "/js/games/brick-breaker.js?v=20260513-game-modules",
-        "/js/games/bullet-hell.js?v=20260513-game-modules",
-        "/js/games/stickman-shooter.js?v=20260514-game-levels",
-        "/js/games/open-world.js?v=20260514-open-world",
+        "/js/games/bullet-hell.js?v=20260518-game-ux",
+        "/js/games/stickman-shooter.js?v=20260517-level-layouts",
+        "/js/games/open-world.js?v=20260518-game-ux",
         "/js/games/board-game-shared.js?v=20260513-game-modules",
-        "/js/games/real-tetris.js?v=20260513-game-modules",
+        "/js/games/real-tetris.js?v=20260518-game-ux",
         "/js/games/reversi.js?v=20260513-game-modules",
         "/js/games/go.js?v=20260513-game-modules",
         "/js/games/gomoku.js?v=20260513-game-modules",
         "/js/games/chinese-chess.js?v=20260513-game-modules",
-        "/js/games/sudoku.js?v=20260513-legacy-modules",
+        "/js/games/sudoku.js?v=20260518-game-ux",
         "/js/games/minesweeper.js?v=20260513-legacy-modules",
-        "/js/games/onea2b.js?v=20260513-legacy-modules",
+        "/js/games/onea2b.js?v=20260518-game-ux",
         "/js/games/tetris.js?v=20260513-legacy-modules",
-        "/js/games/space-shooter.js?v=20260513-legacy-modules",
+        "/js/games/space-shooter.js?v=20260518-game-ux",
         "/js/games/fps-arena.js?v=20260514-fps-stance-br",
-        "/js/38-fps-arena.js?v=20260514-fps-stance-br",
+        "/js/38-fps-arena.js?v=20260518-game-ux",
     ]
     for script in lazy_game_scripts:
         assert script not in index_html
@@ -164,23 +168,25 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'class="game-action-toolbar" id="local-module-game-actions"' in index_html
     assert 'id="local-module-game-root"' in index_html
     assert 'id="local-module-game-controls"' in index_html
-    assert "貪食蛇" in index_html
-    assert "2048" in index_html
-    assert "打磚塊" in index_html
-    assert "彈幕遊戲" in index_html
-    assert "火柴人橫向射擊" in index_html
+    assert "貪食蛇" in game_modules_js
+    assert "2048" in game_modules_js
+    assert "打磚塊" in game_modules_js
+    assert "彈幕遊戲" in game_modules_js
+    assert "火柴人橫向射擊" in game_modules_js
     assert "都市開放世界" in game_modules_js
-    assert "真實版俄羅斯方塊" in index_html
-    assert "黑白棋" in index_html
-    assert "圍棋" in index_html
-    assert "五子棋" in index_html
+    assert "真實版俄羅斯方塊" in game_modules_js
+    assert "99% 消線" in game_modules_js
+    assert "黑白棋" in game_modules_js
+    assert "圍棋" in game_modules_js
+    assert "五子棋" in game_modules_js
     assert 'id="game-multiplayer-panel"' in index_html
     assert 'id="game-multiplayer-invite-btn"' in index_html
     assert 'id="game-multiplayer-invite-modal"' in index_html
     assert 'id="game-multiplayer-invite-accept-btn"' in index_html
     assert 'id="game-multiplayer-invite-reject-btn"' in index_html
-    assert "3D 與火柴人支援多人邀請" in index_html
-    assert "使用下拉選單" in index_html
+    assert "邀請另一位玩家加入合作或對戰。" in index_html
+    assert 'id="game-multiplayer-user"' in index_html
+    assert 'id="game-multiplayer-mode"' in index_html
     assert "/game.html" not in index_html
     assert "/js/42-game-page.js" not in index_html
     assert "HACKME_GAME_CATALOG" in game_modules_js
@@ -220,6 +226,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'registerHackmeLocalGameModule("game_2048"' in local_2048_js
     assert 'registerHackmeLocalGameModule("brick_breaker"' in local_brick_js
     assert 'registerHackmeLocalGameModule("bullet_hell"' in local_bullet_js
+    assert "drawBulletHellShot" in local_bullet_js
+    assert "ctx.arc(shot.x, shot.y, radius" in local_bullet_js
     assert "updateBulletHellBulletPhysics" in local_bullet_js
     assert "bulletHellBulletVerticalInBounds" in local_bullet_js
     assert "BULLET_SIDE_WALL_LEFT" in local_bullet_js
@@ -234,6 +242,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "state.bullets = state.bullets.filter((bullet) => bulletHellBulletVerticalInBounds(bullet));" in local_bullet_js
     assert 'registerHackmeLocalGameModule("stickman_shooter"' in local_stickman_js
     assert 'registerHackmeLocalGameModule("open_world"' in local_open_world_js
+    assert "OPEN_WORLD_PLAYER_START" in local_open_world_js
     assert "OPEN_WORLD_MISSIONS" in local_open_world_js
     assert "OPEN_WORLD_BLOCK_CENTERS" in local_open_world_js
     assert "OPEN_WORLD_DIAGONAL_ROADS" in local_open_world_js
@@ -242,6 +251,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert "handleOpenWorldTrafficCollision" in local_open_world_js
     assert "rectTouchesDiagonalCorridor" in local_open_world_js
     assert "createOpenWorldRoadSegment" in local_open_world_js
+    assert "texture.repeat.set(6, 14)" in local_open_world_js
+    assert "applyOpenWorldMaterialTexture(THREE, material, OPEN_WORLD_TEXTURE_ASSETS.road" not in local_open_world_js
     assert "OPEN_WORLD_ASSET_SOURCES" in local_open_world_js
     assert "Kenney Graveyard Kit" in local_open_world_js
     assert "Kenney Blaster Kit" in local_open_world_js
@@ -342,7 +353,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "sticky" in local_real_tetris_js
     assert "smooth" in local_real_tetris_js
     assert "body.omega += (rx * ny - ry * nx)" in local_real_tetris_js
-    assert "RELAXED_LINE_FILL = 0.9" in local_real_tetris_js
+    assert "RELAXED_LINE_FILL = 0.99" in local_real_tetris_js
     assert 'api.setSwipeMode?.("hold");' in local_real_tetris_js
     assert 'api.setSwipeMode?.("hold");' in local_brick_js
     assert "showRealTetrisReady(api)" in local_real_tetris_js
@@ -388,8 +399,11 @@ def test_game_zone_frontend_assets_are_wired():
     assert "registerHackmeGameViewModule" in game_view_registry_js
     assert 'key: "chess"' in chess_module_js
     assert 'key: "sudoku"' in sudoku_module_js
+    assert "function sudokuCandidateNumbers" in sudoku_module_js
+    assert "data-sudoku-candidate" in sudoku_module_js
     assert 'key: "minesweeper"' in minesweeper_module_js
     assert 'key: "1a2b"' in onea2b_module_js
+    assert "function handleOneA2BKeypad" in onea2b_module_js
     assert 'key: "tetris"' in tetris_module_js
     assert "TETRIS_SIDE_REPEAT_MS" in tetris_module_js
     assert "tickTetrisInput" in tetris_module_js
@@ -400,6 +414,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert "combo" in tetris_module_js
     assert "refillTetrisBag" in tetris_module_js
     assert 'key: "space_shooter"' in shooter_module_js
+    assert "ctx.arc(bullet.x, bullet.y, 3.2" in shooter_module_js
+    assert "ctx.arc(bullet.x, bullet.y, 4.2" in shooter_module_js
     assert "spawnSpaceShooterBoss" in shooter_module_js
     assert "SPACE_SHOOTER_ENEMY_TYPES" in shooter_module_js
     assert "SPACE_SHOOTER_ASSET_SOURCES" in shooter_module_js
@@ -444,6 +460,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "currentFpsArenaDifficulty" in fps_module_js
     assert "#fps-arena-mode, #fps-arena-level" in fps_module_js
     assert "FPS_ARENA_LEVELS" in fps_js
+    assert "new THREE.GridHelper" not in fps_js
     assert "Rail Rifle" in fps_js
     assert "boss-encounter-" in fps_js
     assert "FPS_ARENA_STANCES" in fps_js
@@ -513,7 +530,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "current_check" in chess_module_js
     assert "current_king_square" in chess_module_js
     assert "Checkmate：王死，遊戲結束" in chess_module_js
-    assert "兵升變請輸入 q / r / b / n" in chess_module_js
+    assert "選擇兵升變" in chess_module_js
     assert "/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/offer-draw" in chess_module_js
     assert "/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/respond-draw" in chess_module_js
     assert "已提出和棋，等待對方回覆。" in chess_module_js

@@ -172,3 +172,49 @@ def test_admin_weekly_salary_schedule_uses_root_settings():
         },
         now=payout_time,
     ) is None
+
+
+def test_points_bootstrap_initial_grants_run_when_economy_enabled_in_dev_ready():
+    calls = []
+    audits = []
+
+    class PointsStub:
+        def bootstrap_admin_initial_grants(self, **kwargs):
+            calls.append(("genesis", kwargs))
+            return {"created_count": 2}
+
+        def award_admin_weekly_salaries(self, **kwargs):
+            calls.append(("salary", kwargs))
+            return {"created_count": 0, "salary_week": kwargs.get("salary_week")}
+
+    result = startup.bootstrap_points_initial_grants_if_due(
+        points_service=PointsStub(),
+        get_system_settings=lambda: {
+            "feature_economy_enabled": True,
+            "points_admin_weekly_salary_enabled": False,
+        },
+        get_runtime_server_mode=lambda: "dev_ready",
+        audit=lambda *args, **kwargs: audits.append((args, kwargs)),
+    )
+
+    assert result["ok"] is True
+    assert result["skipped"] is False
+    assert calls[0][0] == "genesis"
+    assert calls[0][1]["seal_genesis"] is False
+    assert audits and audits[0][0][0] == "POINTS_BOOTSTRAP_GRANTS"
+
+
+def test_points_bootstrap_initial_grants_skip_internal_test_without_force():
+    class PointsStub:
+        def bootstrap_admin_initial_grants(self, **kwargs):
+            raise AssertionError("should not write production ledger in internal_test")
+
+    result = startup.bootstrap_points_initial_grants_if_due(
+        points_service=PointsStub(),
+        get_system_settings=lambda: {"feature_economy_enabled": True},
+        get_runtime_server_mode=lambda: "internal_test",
+        audit=lambda *args, **kwargs: None,
+    )
+
+    assert result["skipped"] is True
+    assert result["mode"] == "internal_test"

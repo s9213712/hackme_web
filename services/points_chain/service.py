@@ -679,16 +679,18 @@ class PointsLedgerService:
             """
         ).fetchall()
 
-    def _genesis_user_account_rows(self, conn):
+    def _genesis_user_account_rows(self, conn, *, default_only=False):
         cols = table_columns(conn, "users")
         if "id" not in cols or "username" not in cols or "role" not in cols:
             return []
         status_filter = "AND COALESCE(status, 'active')='active'" if "status" in cols else ""
+        default_filter = "AND username='test'" if default_only else ""
         return conn.execute(
             f"""
             SELECT id, username, role FROM users
             WHERE username<>'root'
               AND role NOT IN ('manager', 'super_admin')
+              {default_filter}
               {status_filter}
             ORDER BY id ASC
             """
@@ -765,7 +767,10 @@ class PointsLedgerService:
             self.ensure_schema(conn)
             admins = [dict(row) for row in self._admin_account_rows(conn)]
             has_blocks = conn.execute("SELECT 1 FROM points_chain_blocks LIMIT 1").fetchone() is not None
-            users = [dict(row) for row in self._genesis_user_account_rows(conn)] if not has_blocks else []
+            users = [
+                dict(row)
+                for row in self._genesis_user_account_rows(conn, default_only=has_blocks)
+            ]
         finally:
             conn.close()
         created = []

@@ -1,9 +1,20 @@
+import hashlib
 import secrets
+import sqlite3
 from datetime import datetime
 
 
 def _now_text():
-    return datetime.utcnow().replace(microsecond=0).isoformat()
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _as_utc_client_time(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.endswith("Z") or "+" in text[10:] or "-" in text[10:]:
+        return text
+    return f"{text}Z"
 
 
 def ensure_share_access_event_schema(conn):
@@ -63,6 +74,66 @@ def log_share_access_event(conn, *, share_type, share_id, event_type="opened", i
     }
 
 
+def log_share_access_event_once(conn, *, share_type, share_id, dedupe_key, event_type="opened", ip="", user_agent=""):
+    share_type = str(share_type or "").strip()
+    share_id = str(share_id or "").strip()
+    dedupe_key = str(dedupe_key or "").strip()
+    if not share_type or not share_id or not dedupe_key:
+        return None, False
+    ensure_share_access_event_schema(conn)
+    event_type = str(event_type or "opened").strip() or "opened"
+    event_id = hashlib.sha256(
+        f"{share_type}\0{share_id}\0{event_type}\0{dedupe_key}".encode("utf-8")
+    ).hexdigest()
+    created_at = _now_text()
+    try:
+        conn.execute(
+            """
+            INSERT INTO share_access_events (
+                id, share_type, share_id, event_type, ip, user_agent, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                share_type,
+                share_id,
+                event_type,
+                str(ip or "").strip(),
+                str(user_agent or "").strip(),
+                created_at,
+            ),
+        )
+    except sqlite3.IntegrityError:
+        row = conn.execute(
+            """
+            SELECT id, share_type, share_id, event_type, ip, user_agent, created_at
+            FROM share_access_events
+            WHERE id=?
+            """,
+            (event_id,),
+        ).fetchone()
+        if not row:
+            return None, False
+        return {
+            "id": row["id"],
+            "share_type": row["share_type"],
+            "share_id": row["share_id"],
+            "event_type": row["event_type"],
+            "ip": row["ip"] or "",
+            "user_agent": row["user_agent"] or "",
+            "created_at": _as_utc_client_time(row["created_at"]),
+        }, False
+    return {
+        "id": event_id,
+        "share_type": share_type,
+        "share_id": share_id,
+        "event_type": event_type,
+        "ip": str(ip or "").strip(),
+        "user_agent": str(user_agent or "").strip(),
+        "created_at": created_at,
+    }, True
+
+
 def list_share_access_events(conn, *, share_type, share_id, limit=50):
     share_type = str(share_type or "").strip()
     share_id = str(share_id or "").strip()
@@ -73,16 +144,18 @@ def list_share_access_events(conn, *, share_type, share_id, limit=50):
         limit = max(1, min(int(limit), 200))
     except Exception:
         limit = 50
-    return [
-        dict(row)
-        for row in conn.execute(
-            """
-            SELECT event_type, ip, user_agent, created_at
-            FROM share_access_events
-            WHERE share_type=? AND share_id=?
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (share_type, share_id, limit),
-        ).fetchall()
-    ]
+    events = []
+    for row in conn.execute(
+        """
+        SELECT event_type, ip, user_agent, created_at
+        FROM share_access_events
+        WHERE share_type=? AND share_id=?
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (share_type, share_id, limit),
+    ).fetchall():
+        item = dict(row)
+        item["created_at"] = _as_utc_client_time(item.get("created_at"))
+        events.append(item)
+    return events

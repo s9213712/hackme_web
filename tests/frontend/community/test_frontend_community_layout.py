@@ -19,6 +19,10 @@ def test_community_composers_are_button_opened_not_permanent():
     assert 'id="community-board-request-cancel-btn"' in index_html
     assert 'id="community-thread-create-open-btn"' in index_html
     assert 'id="community-thread-create-cancel-btn"' in index_html
+    assert 'id="community-thread-media-input"' in index_html
+    assert 'data-community-media-picker="community-thread-content"' in index_html
+    assert 'id="community-reply-media-input"' in index_html
+    assert 'data-community-media-picker="community-reply-content"' in index_html
     assert 'id="community-moderator-open-btn" type="button" style="display:none;"' in index_html
     assert 'id="community-moderator-manager" class="community-panel" style="display:none;margin-bottom:.75rem;"' in index_html
     assert '<select id="community-moderator-user-id">' in index_html
@@ -32,7 +36,7 @@ def test_community_composers_are_button_opened_not_permanent():
     assert 'id="community-thread-creator" style="display:none;"' in index_html
     assert 'id="community-mod-can-pin-threads"' in index_html
     assert 'id="community-thread-sticky-toggle"' in index_html
-    assert "/js/25-community.js?v=20260504-announcement-edit" in index_html
+    assert "/js/25-community.js?v=20260518-inline-media" in index_html
 
     assert "communityAnnouncementEditorOpen = false" in community_js
     assert "communityAnnouncementEditingId = null" in community_js
@@ -64,6 +68,13 @@ def test_community_composers_are_button_opened_not_permanent():
     assert "penalizeCommunityPost" in community_js
     assert "can_pin_threads" in community_js
     assert "toggleCommunityThreadSticky" in community_js
+    assert "COMMUNITY_INLINE_MEDIA_TOKEN_RE" in community_js
+    assert "function uploadCommunityInlineMedia" in community_js
+    assert "function insertCommunityInlineMediaToken" in community_js
+    assert "/storage/share-links" in community_js
+    assert "community-media:${kind}:${token}" in community_js
+    assert "openCommunityInlineMediaPicker(btn)" in bootstrap_js
+    assert "uploadCommunityInlineMedia(input)" in bootstrap_js
     assert 'flash($("community-msg"), json.msg || "公告讀取失敗", false);' in community_js
     assert 'flash($("community-category-msg"), json.msg || "分類讀取失敗", false);' in community_js
     assert 'flash($("community-msg"), json.msg || "討論區清單讀取失敗", false);' in community_js

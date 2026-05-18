@@ -82,6 +82,19 @@ Current playback behavior:
   server-side HLS; when the owner publishes an unlisted E2EE video, the
   browser re-wraps the file key into a share envelope and stores the fragment
   key only in the URL fragment / local session state
+- strict E2EE multi-quality must not use server-side `ffmpeg`. If lower-quality
+  E2EE variants are needed, they are generated in the publisher's browser or
+  trusted client, encrypted there, and uploaded as encrypted derivative bundles.
+  The server stores only encrypted manifests/bundles and never receives raw file
+  keys, share keys, plaintext media, or fragment keys. Current browser support
+  creates best-effort encrypted variants for the root-allowed heights, defaults
+  to 720p when available, falls back to 480p on weak networks, and hides any
+  derivative whose encrypted bundle is not smaller than the original upload
+  when that root policy is enabled.
+- E2EE browser-side transcode/encrypt/upload progress appears as a local task
+  in the Job Center. If the publisher reloads the page during local E2EE work,
+  the browser cannot resume the original file handle, so the UI tells the user
+  to re-select the file and retry instead of silently losing the operation.
 - the video detail page now includes a share-management panel for unlisted
   videos, showing link state, remaining views, expiry, second-layer password
   status, fragment-loss warnings, and copy / regenerate / revoke controls
@@ -97,6 +110,17 @@ Rules:
 - E2EE files cannot be published as normal server-streamed videos.
 - E2EE files can be published as `持連結可看` shared videos when the browser
   creates a wrapped share envelope at publish time.
+- Calling `POST /api/media/<file_id>/prepare-stream` for strict E2EE media must
+  return an explicit `strict_e2ee_server_transcode_disabled` style error. It
+  must not enqueue an HLS worker or run server-side transcode.
+- Strict E2EE lower-quality upload uses
+  `POST /api/media/<file_id>/e2ee-stream-v2/variants/<variant_name>` with an
+  encrypted bundle and manifest only. Playback reads the corresponding
+  `/variants/<variant_name>/manifest` and `/chunks/<chunk_index>` endpoints,
+  including shared-link versions.
+- Root can configure strict E2EE derivative availability, allowed quality
+  heights, oversized-derivative rejection, and whether encrypted derivatives
+  are quota-exempt.
 - The server never accepts `raw_file_key`, `e2ee_password`, or the fragment
   key `vk`.
 - Blocked or quarantined files cannot be published.
@@ -152,11 +176,16 @@ GET    /api/videos/<id>/stream
 GET    /api/videos/<id>/hls/master.m3u8
 GET    /api/videos/<id>/hls/<variant>/playlist.m3u8
 GET    /api/videos/<id>/hls/<variant>/<segment>
+POST   /api/media/<file_id>/e2ee-stream-v2
+GET    /api/videos/<id>/e2ee-stream-v2/manifest
+GET    /api/videos/<id>/e2ee-stream-v2/chunks/<chunk_index>
 POST   /api/videos/shared/<token>/unlock
 GET    /api/videos/shared/<token>
 GET    /api/videos/shared/<token>/playback
 GET    /api/videos/shared/<token>/e2ee-key
 GET    /api/videos/shared/<token>/ciphertext
+GET    /api/videos/shared/<token>/e2ee-stream-v2/manifest
+GET    /api/videos/shared/<token>/e2ee-stream-v2/chunks/<chunk_index>
 POST   /api/videos/<id>/view
 POST   /api/videos/<id>/like
 DELETE /api/videos/<id>/like
@@ -248,7 +277,7 @@ Do not release a streaming build if any of the following are still broken:
 
 ## Explicit Non-Goals For v1 / Phase C-1
 
-- No multi-bitrate ABR ladder yet.
+- No server-side multi-bitrate ABR ladder for strict E2EE.
 - Auto-prepare is currently synchronous/best-effort, not a queued worker yet.
 - No CDN.
 - No recommendation algorithm.
@@ -261,6 +290,7 @@ Current note:
 - HLS-based large-media streaming is no longer only a paper design. Phase C-1
   provides prepare/status/playback/HLS routes and derivative packaging for
   plain or `server_encrypted` video, but direct `/stream` remains the fallback.
-  Strict `e2ee` still stays non-streamable on the server side and instead uses
-  browser-side decryption with a wrapped share key when published as an
-  unlisted shared video.
+  Strict `e2ee` still stays non-streamable on the server side; it uses
+  browser-side encrypted Streaming v2 plus optional browser-generated encrypted
+  720p / 480p derivatives when the publisher's device supports the required
+  client-side media APIs.

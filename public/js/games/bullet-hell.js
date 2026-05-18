@@ -528,30 +528,22 @@
 
   function drawBulletHellShot(ctx, shot) {
     ctx.save();
-    ctx.fillStyle = shot.color || "#86efac";
+    const color = shot.color || "#86efac";
+    const radius = shot.homing ? 4.4 : shot.option ? 3.1 : 3.7;
+    drawBulletHellGlow(ctx, shot.x, shot.y, shot.homing || shot.track ? 12 : 8, color, 0.14);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(shot.x, shot.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.82)";
+    ctx.beginPath();
+    ctx.arc(shot.x, shot.y, Math.max(1, radius * 0.34), 0, Math.PI * 2);
+    ctx.fill();
     if (shot.homing) {
-      drawBulletHellGlow(ctx, shot.x, shot.y - 4, shot.track ? 16 : 10, "#c4b5fd", 0.22);
-      if (drawBulletHellImage(ctx, "homing", shot.x, shot.y - 4, shot.track ? 18 : 14, shot.track ? 18 : 14, { alpha: 0.9 })) {
-        ctx.restore();
-        return;
-      }
-      ctx.beginPath();
-      ctx.arc(shot.x, shot.y - 4, 4.5, 0, Math.PI * 2);
-      ctx.fill();
       ctx.strokeStyle = "rgba(196,181,253,.62)";
       ctx.beginPath();
-      ctx.arc(shot.x, shot.y - 4, shot.track ? 8 : 6, 0, Math.PI * 2);
+      ctx.arc(shot.x, shot.y, shot.track ? 7 : 5.5, 0, Math.PI * 2);
       ctx.stroke();
-    } else {
-      drawBulletHellGlow(ctx, shot.x, shot.y - 5, shot.option ? 8 : 12, shot.option ? "#67e8f9" : "#86efac", 0.15);
-      const angle = Math.atan2(shot.vy || -1, shot.vx || 0) + Math.PI / 2;
-      if (drawBulletHellImage(ctx, "shot", shot.x, shot.y - 6, shot.option ? 8 : 11, shot.option ? 22 : 30, { rotation: angle, alpha: 0.86 })) {
-        ctx.restore();
-        return;
-      }
-      ctx.fillRect(shot.x - 2, shot.y - 12, shot.option ? 3 : 4, shot.option ? 11 : 15);
-      ctx.fillStyle = "rgba(255,255,255,.72)";
-      ctx.fillRect(shot.x - 0.8, shot.y - 10, 1.6, shot.option ? 7 : 10);
     }
     ctx.restore();
   }

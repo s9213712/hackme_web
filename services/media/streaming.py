@@ -29,6 +29,9 @@ DEFAULT_FFMPEG_PRESET = "ultrafast"
 DEFAULT_FFMPEG_MAX_VIDEO_HEIGHT = 0
 DEFAULT_HLS_QUALITY_HEIGHTS = "480,720"
 HLS_DERIVATIVES_QUOTA_EXEMPT = True
+STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON = (
+    "strict E2EE files cannot generate server-side HLS or server-side transcode derivatives"
+)
 
 
 def _now():
@@ -404,7 +407,7 @@ def mark_stream_asset_processing(conn, *, file_row, error_message=""):
     if not file_row or _row_value(file_row, "deleted_at"):
         raise ValueError("file not found")
     if is_e2ee_file(file_row):
-        return _mark_asset_unavailable(conn, file_row=file_row, reason="strict E2EE files cannot generate server-side HLS")
+        return _mark_asset_unavailable(conn, file_row=file_row, reason=STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON)
     asset = _upsert_asset_row(conn, file_row=file_row, status="processing", error_message=error_message)
     return serialize_stream_asset(conn, asset["uploaded_file_id"])
 
@@ -887,7 +890,7 @@ def prepare_stream_asset(
     if not file_row or _row_value(file_row, "deleted_at"):
         raise ValueError("file not found")
     if is_e2ee_file(file_row):
-        return _mark_asset_unavailable(conn, file_row=file_row, reason="strict E2EE files cannot generate server-side HLS")
+        return _mark_asset_unavailable(conn, file_row=file_row, reason=STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON)
     asset = _upsert_asset_row(conn, file_row=file_row, status="processing")
     started_at = _now()
     derivative_root_rel = _derivative_root_relpath(file_row["id"])
@@ -1077,7 +1080,7 @@ def get_stream_status(conn, *, file_row, include_segments=True):
             "duration_seconds": 0.0,
             "source_mime_type": str(file_row["mime_type_plain_for_public"] or mimetypes.guess_type(str(file_row["original_filename_plain_for_public"] or ""))[0] or ""),
             "source_size_bytes": _safe_int(file_row["size_bytes"], 0),
-            "error_message": "strict E2EE files cannot generate server-side HLS",
+            "error_message": STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON,
             "variants": [],
         }
     return {
@@ -1092,6 +1095,54 @@ def get_stream_status(conn, *, file_row, include_segments=True):
         "source_size_bytes": _safe_int(file_row["size_bytes"], 0),
         "error_message": "",
         "variants": [],
+    }
+
+
+def cleanup_stream_asset(conn, *, uploaded_file_id, storage_root):
+    ensure_media_stream_schema(conn)
+    file_id = str(uploaded_file_id or "").strip()
+    if not file_id:
+        return {"file_id": file_id, "removed": False}
+    asset_rows = conn.execute(
+        "SELECT id FROM media_stream_assets WHERE uploaded_file_id=?",
+        (file_id,),
+    ).fetchall()
+    asset_ids = [int(row["id"]) for row in asset_rows]
+    variant_count = 0
+    segment_count = 0
+    if asset_ids:
+        placeholders = ",".join("?" for _ in asset_ids)
+        variant_rows = conn.execute(
+            f"SELECT id FROM media_stream_variants WHERE asset_id IN ({placeholders})",
+            asset_ids,
+        ).fetchall()
+        variant_ids = [int(row["id"]) for row in variant_rows]
+        variant_count = len(variant_ids)
+        if variant_ids:
+            variant_placeholders = ",".join("?" for _ in variant_ids)
+            segment_count = conn.execute(
+                f"SELECT COUNT(*) AS c FROM media_stream_segments WHERE variant_id IN ({variant_placeholders})",
+                variant_ids,
+            ).fetchone()["c"]
+            conn.execute(
+                f"DELETE FROM media_stream_segments WHERE variant_id IN ({variant_placeholders})",
+                variant_ids,
+            )
+        conn.execute(f"DELETE FROM media_stream_variants WHERE asset_id IN ({placeholders})", asset_ids)
+        conn.execute(f"DELETE FROM media_stream_jobs WHERE asset_id IN ({placeholders})", asset_ids)
+        conn.execute(f"DELETE FROM media_stream_assets WHERE id IN ({placeholders})", asset_ids)
+    try:
+        root = resolve_storage_path(storage_root, _derivative_root_relpath(file_id))
+        if root.exists():
+            shutil.rmtree(root, ignore_errors=True)
+    except Exception:
+        pass
+    return {
+        "file_id": file_id,
+        "removed": bool(asset_ids),
+        "assets_removed": len(asset_ids),
+        "variants_removed": int(variant_count or 0),
+        "segments_removed": int(segment_count or 0),
     }
 
 
@@ -1132,6 +1183,9 @@ def stream_playback_payload(conn, *, file_row, video_id):
                 "height": height,
                 "bitrate": _safe_int(variant.get("bitrate"), 0),
                 "codec": str(variant.get("codec") or ""),
+                "size_bytes": _safe_int(variant.get("segments_total_bytes"), 0),
+                "segments_total_bytes": _safe_int(variant.get("segments_total_bytes"), 0),
+                "source_size_bytes": _safe_int(status.get("source_size_bytes"), 0),
                 "playlist_url": f"/api/videos/{int(video_id)}/hls/{name}/playlist.m3u8",
             })
         default_quality = _preferred_playback_quality_name(variants)

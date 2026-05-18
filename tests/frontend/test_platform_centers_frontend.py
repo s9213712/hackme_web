@@ -50,8 +50,8 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'data-video-manage-delete' in platform_js
     assert 'data-video-manage-boost' in platform_js
     assert 'loadTradingAssetOverview()' in platform_js
-    assert 'confirm("確定要取消這個任務？")' in platform_js
-    assert 'confirm("確定要取消這個下載任務？")' in platform_js
+    assert 'platformConfirm("確定要取消這個任務？"' in platform_js
+    assert 'platformConfirm("確定要取消這個下載任務？"' in platform_js
     assert 'data-job-remote-action="pause"' in platform_js
     assert 'data-job-remote-action="resume"' in platform_js
     assert 'updateJobCenterRemoteDownloadTask' in platform_js
@@ -69,6 +69,12 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'data-share-countdown-until' in platform_js
     assert 'data-share-edit="${sanitize(key)}"' in platform_js
     assert 'data-share-edit-save="${sanitize(key)}"' in platform_js
+    assert 'function shareCenterCanEdit' in platform_js
+    assert '["active", "expired", "view_limit_reached", "password_locked"]' in platform_js
+    assert '重新分享設定' in platform_js
+    assert 'function shareCenterReactivateHint' in platform_js
+    assert 'data-share-edit-reset-access-count' in platform_js
+    assert 'payload.reset_access_count' in platform_js
     assert 'async function saveShareCenterOptions(key)' in platform_js
     assert 'method: "PUT"' in platform_js
     assert '/shares/${encodeURIComponent(share.share_type)}/${encodeURIComponent(share.id)}' in platform_js

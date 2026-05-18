@@ -11,7 +11,7 @@ from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
 from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage.storage_albums import ensure_storage_album_schema
 from services.security.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
-from services.media.videos import get_video, publish_video
+from services.media.videos import get_video, list_videos, publish_video
 from tests.video.helpers.video_test_helpers import actor, seed_cloud_file, video_test_db
 
 
@@ -52,15 +52,14 @@ def test_publish_media_requires_owner_and_video_or_audio_mime():
         publish_video(conn, actor=actor(1, "owner"), cloud_file_id="text-1", title="not video")
 
 
-def test_publish_requires_share_envelope_for_e2ee_unlisted_and_allows_public():
+def test_publish_requires_share_envelope_for_e2ee_unlisted_and_blocks_public_direct_playback():
     conn = video_test_db()
     seed_cloud_file(conn, file_id="e2ee-video", owner_user_id=1, mime="video/mp4", privacy_mode="e2ee")
     with pytest.raises(ValueError, match="瀏覽器端分享授權"):
         publish_video(conn, actor=actor(1, "owner"), cloud_file_id="e2ee-video", title="secret", visibility="unlisted")
 
-    public_video = publish_video(conn, actor=actor(1, "owner"), cloud_file_id="e2ee-video", title="secret", visibility="public")
-    assert public_video["visibility"] == "public"
-    assert public_video["cloud_privacy_mode"] == "e2ee"
+    with pytest.raises(ValueError, match="公開列表直連播放"):
+        publish_video(conn, actor=actor(1, "owner"), cloud_file_id="e2ee-video", title="secret", visibility="public")
 
     video = publish_video(
         conn,
@@ -74,6 +73,27 @@ def test_publish_requires_share_envelope_for_e2ee_unlisted_and_allows_public():
     assert video["visibility"] == "unlisted"
     assert video["share_url"].startswith("/shared/videos/")
     assert video["share_requires_fragment_key"] is True
+
+
+def test_existing_public_e2ee_video_is_owner_only_until_shared_by_link():
+    conn = video_test_db()
+    seed_cloud_file(conn, file_id="legacy-e2ee-video", owner_user_id=1, mime="video/mp4", privacy_mode="e2ee")
+    conn.execute(
+        """
+        INSERT INTO videos (
+            video_uuid, owner_user_id, cloud_file_id, title, description,
+            visibility, status, created_at, updated_at
+        ) VALUES ('legacy-public-e2ee', 1, 'legacy-e2ee-video', 'Legacy E2EE', '', 'public', 'ready', '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+        """
+    )
+
+    owner_rows = list_videos(conn, actor=actor(1, "owner"))
+    viewer_rows = list_videos(conn, actor=actor(2, "viewer"))
+
+    assert any(row["cloud_file_id"] == "legacy-e2ee-video" for row in owner_rows)
+    assert all(row["cloud_file_id"] != "legacy-e2ee-video" for row in viewer_rows)
+    with pytest.raises(PermissionError):
+        get_video(conn, 1, actor=actor(2, "viewer"))
 
 
 def test_publish_accepts_server_encrypted_video_for_server_streaming():

@@ -11,6 +11,8 @@ import threading
 import time
 from datetime import datetime
 
+from services.platform.time_settings import normalize_server_timezone
+
 
 def _int_env(name, default, *, minimum=None, maximum=None):
     try:
@@ -48,7 +50,14 @@ def _scheduled_admin_salary_week(settings, now=None):
     settings = settings or {}
     if not _setting_bool(settings, "points_admin_weekly_salary_enabled", default=True):
         return None
-    now = now or datetime.now()
+    if now is None:
+        timezone_name = normalize_server_timezone(settings.get("server_timezone"))
+        if timezone_name:
+            from zoneinfo import ZoneInfo  # imported lazily to keep startup import light
+
+            now = datetime.now(ZoneInfo(timezone_name))
+        else:
+            now = datetime.now()
     try:
         weekday = int(settings.get("points_admin_weekly_salary_weekday", 1))
     except Exception:
@@ -92,6 +101,59 @@ def _startup_backtest_probe_enabled(get_system_settings):
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
     return bool(value)
+
+
+def _mode_allows_points_initial_grants(mode):
+    return str(mode or "").strip() in {"production", "dev_ready", "test"}
+
+
+def bootstrap_points_initial_grants_if_due(
+    *,
+    points_service,
+    get_system_settings,
+    get_runtime_server_mode=None,
+    audit=None,
+    env_value=None,
+):
+    settings = (get_system_settings() or {}) if callable(get_system_settings) else {}
+    mode = None
+    try:
+        if callable(get_runtime_server_mode):
+            mode = get_runtime_server_mode()
+    except Exception:
+        mode = None
+    env_enabled = str(
+        os.environ.get("HTML_LEARNING_BOOTSTRAP_POINTS_CHAIN", "") if env_value is None else env_value
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    economy_enabled = _setting_bool(settings, "feature_economy_enabled", default=False)
+    if not (env_enabled or (economy_enabled and _mode_allows_points_initial_grants(mode))):
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "economy_disabled_or_mode_not_allowed",
+            "mode": mode,
+        }
+    system_actor = {"username": "system", "role": "system"}
+    seal_genesis = str(mode or "").strip() == "production"
+    try:
+        genesis = points_service.bootstrap_admin_initial_grants(actor=system_actor, seal_genesis=seal_genesis)
+        salary_week = _scheduled_admin_salary_week(settings)
+        if salary_week:
+            salary = points_service.award_admin_weekly_salaries(salary_week=salary_week, actor=system_actor)
+        else:
+            salary = {"created_count": 0, "salary_week": ""}
+        if (genesis.get("created_count") or salary.get("created_count")) and callable(audit):
+            audit(
+                "POINTS_BOOTSTRAP_GRANTS",
+                "0.0.0.0",
+                success=True,
+                detail=f"genesis={genesis.get('created_count')}, weekly={salary.get('created_count')}, week={salary.get('salary_week')}, mode={mode}",
+            )
+        return {"ok": True, "skipped": False, "mode": mode, "genesis": genesis, "salary": salary}
+    except Exception as exc:
+        if callable(audit):
+            audit("POINTS_BOOTSTRAP_GRANTS_FAILED", "0.0.0.0", success=False, detail=str(exc))
+        return {"ok": False, "skipped": False, "mode": mode, "error": str(exc)}
 
 
 def _wait_or_stop(shutdown_event, seconds):
@@ -626,25 +688,12 @@ def run_server_main(
             )
     except Exception as exc:
         audit("SERVER_MODE_SUPERWEAK_STARTUP_RECOVERY_ERROR", "0.0.0.0", user="system", success=False, detail=str(exc))
-    if os.environ.get("HTML_LEARNING_BOOTSTRAP_POINTS_CHAIN", "").strip().lower() in {"1", "true", "yes", "on"}:
-        try:
-            system_actor = {"username": "system", "role": "system"}
-            genesis = points_service.bootstrap_admin_initial_grants(actor=system_actor, seal_genesis=True)
-            settings = get_system_settings() or {}
-            salary_week = _scheduled_admin_salary_week(settings)
-            if salary_week:
-                salary = points_service.award_admin_weekly_salaries(salary_week=salary_week, actor=system_actor)
-            else:
-                salary = {"created_count": 0, "salary_week": ""}
-            if genesis.get("created_count") or salary.get("created_count"):
-                audit(
-                    "POINTS_BOOTSTRAP_GRANTS",
-                    "0.0.0.0",
-                    success=True,
-                    detail=f"genesis={genesis.get('created_count')}, weekly={salary.get('created_count')}, week={salary.get('salary_week')}",
-                )
-        except Exception as exc:
-            audit("POINTS_BOOTSTRAP_GRANTS_FAILED", "0.0.0.0", success=False, detail=str(exc))
+    bootstrap_points_initial_grants_if_due(
+        points_service=points_service,
+        get_system_settings=get_system_settings,
+        get_runtime_server_mode=get_runtime_server_mode,
+        audit=audit,
+    )
     if get_system_settings().get("integrity_guard_enabled", True):
         integrity_status = integrity_guard.scan(actor="system-startup", create_initial_manifest=True)
         if get_system_settings().get("integrity_guard_strict_mode", False):

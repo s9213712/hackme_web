@@ -9,6 +9,7 @@
   const VEHICLE_RADIUS = 2.1;
   const OPEN_WORLD_ROADS = [-72, -48, -24, 0, 24, 48, 72];
   const OPEN_WORLD_BLOCK_CENTERS = [-60, -36, -12, 12, 36, 60];
+  const OPEN_WORLD_PLAYER_START = { x: 14, z: 14, angle: Math.PI * 0.25 };
   const OPEN_WORLD_DIAGONAL_ROADS = [
     { x1: -82, z1: -34, x2: -16, z2: -82, width: 10.5, color: "#3b4250" },
     { x1: -84, z1: 18, x2: 30, z2: 78, width: 10, color: "#343a46" },
@@ -265,15 +266,16 @@
     const texture = createOpenWorldCanvasTexture(THREE, 192, 192, (ctx, w, h) => {
       ctx.fillStyle = color;
       ctx.fillRect(0, 0, w, h);
-      ctx.fillStyle = "rgba(255,255,255,.05)";
-      for (let y = 8; y < h; y += 18) ctx.fillRect(0, y, w, 1);
-      ctx.fillStyle = "rgba(15,23,42,.22)";
-      for (let i = 0; i < 70; i += 1) ctx.fillRect((i * 37) % w, (i * 53) % h, 2, 2);
+      ctx.fillStyle = "rgba(255,255,255,.035)";
+      for (let y = 10; y < h; y += 34) ctx.fillRect(0, y, w, 1);
+      ctx.fillStyle = "rgba(15,23,42,.16)";
+      for (let i = 0; i < 90; i += 1) {
+        ctx.fillRect((i * 37) % w, (i * 53) % h, 1 + (i % 2), 1);
+      }
     });
     const material = makeMaterial(THREE, color, 0.94, 0);
-    if (applyOpenWorldMaterialTexture(THREE, material, OPEN_WORLD_TEXTURE_ASSETS.road, 24, 24)) return material;
     if (texture) {
-      texture.repeat.set(9, 9);
+      texture.repeat.set(6, 14);
       material.map = texture;
       material.needsUpdate = true;
     }
@@ -855,7 +857,7 @@
       return [mission.start, mission.target].filter(Boolean);
     });
     return [
-      { x: 0, z: 6, radius: 7 },
+      { x: OPEN_WORLD_PLAYER_START.x, z: OPEN_WORLD_PLAYER_START.z, radius: 7 },
       ...missionPoints.map((point) => ({ x: point.x, z: point.z, radius: 7 })),
       ...OPEN_WORLD_VEHICLE_SPAWNS.map((point) => ({ x: point.x, z: point.z, radius: 6 })),
       ...OPEN_WORLD_PICKUP_SPAWNS.map((point) => ({ x: point.x, z: point.z, radius: 5 })),
@@ -891,16 +893,18 @@
     const majorRoads = OPEN_WORLD_ROADS.filter((coord) => coord === 0 || Math.abs(coord) === 48);
     majorRoads.forEach((x) => {
       majorRoads.forEach((z) => {
-        for (let i = -2; i <= 2; i += 1) {
-          const northSouthStripe = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_WIDTH * 0.78, 0.36), material);
-          northSouthStripe.rotation.x = -Math.PI / 2;
-          northSouthStripe.position.set(x, 0.096, z + ROAD_WIDTH * 0.58 + i * 0.82);
-          scene.add(northSouthStripe);
-          const eastWestStripe = new THREE.Mesh(new THREE.PlaneGeometry(0.36, ROAD_WIDTH * 0.78), material);
-          eastWestStripe.rotation.x = -Math.PI / 2;
-          eastWestStripe.position.set(x + ROAD_WIDTH * 0.58 + i * 0.82, 0.098, z);
-          scene.add(eastWestStripe);
-        }
+        [-1, 1].forEach((side) => {
+          for (let i = -2; i <= 2; i += 1) {
+            const northSouthStripe = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_WIDTH * 0.82, 0.34), material);
+            northSouthStripe.rotation.x = -Math.PI / 2;
+            northSouthStripe.position.set(x, 0.096, z + side * (ROAD_WIDTH * 0.72) + i * 0.78);
+            scene.add(northSouthStripe);
+            const eastWestStripe = new THREE.Mesh(new THREE.PlaneGeometry(0.34, ROAD_WIDTH * 0.82), material);
+            eastWestStripe.rotation.x = -Math.PI / 2;
+            eastWestStripe.position.set(x + side * (ROAD_WIDTH * 0.72) + i * 0.78, 0.098, z);
+            scene.add(eastWestStripe);
+          }
+        });
       });
     });
   }
@@ -2066,9 +2070,9 @@
       distanceDriven: 0,
       distanceWalked: 0,
       player: {
-        x: 0,
-        z: 6,
-        angle: 0,
+        x: OPEN_WORLD_PLAYER_START.x,
+        z: OPEN_WORLD_PLAYER_START.z,
+        angle: OPEN_WORLD_PLAYER_START.angle,
         speed: 0,
         walkCycle: 0,
         mesh: null,
@@ -2165,9 +2169,9 @@
     state.nextTrafficHitAt = 0;
     state.projectiles.forEach((shot) => disposeOpenWorldObject(shot.mesh));
     state.projectiles = [];
-    state.player.x = 0;
-    state.player.z = 6;
-    state.player.angle = 0;
+    state.player.x = OPEN_WORLD_PLAYER_START.x;
+    state.player.z = OPEN_WORLD_PLAYER_START.z;
+    state.player.angle = OPEN_WORLD_PLAYER_START.angle;
     state.player.speed = 0;
     if (state.player.inVehicle) {
       state.player.inVehicle.occupied = false;

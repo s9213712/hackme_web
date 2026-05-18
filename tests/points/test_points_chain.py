@@ -286,6 +286,56 @@ def test_initial_grants_create_genesis_block_once_for_default_accounts(tmp_path)
     assert "user_initial_grant" in actions
 
 
+def test_initial_grants_backfill_default_accounts_after_existing_block(tmp_path):
+    path = tmp_path / "points-backfill.db"
+
+    def get_db():
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        from services.platform.db_mode_triggers import register_app_mode_function
+        register_app_mode_function(conn, mode_reader=lambda: "production")
+        return conn
+
+    conn = get_db()
+    conn.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, role TEXT NOT NULL DEFAULT 'user', status TEXT NOT NULL DEFAULT 'active')"
+    )
+    conn.execute(
+        "INSERT INTO users (username, role, status) VALUES "
+        "('alice', 'user', 'active'), "
+        "('admin', 'manager', 'active'), "
+        "('root', 'super_admin', 'active'), "
+        "('test', 'user', 'active')"
+    )
+    ensure_points_economy_schema(conn)
+    conn.commit()
+    conn.close()
+    service = PointsLedgerService(
+        get_db=get_db,
+        chain_secret="test-secret",
+        backup_dir=tmp_path / "points_chain_backups",
+        mode_reader=lambda: "production",
+    )
+
+    service.record_transaction(
+        user_id=3,
+        currency_type="points",
+        direction="credit",
+        amount=1,
+        action_type="preexisting_root_credit",
+        idempotency_key="preexisting:block",
+    )
+    service.seal_block(actor={"username": "root", "role": "super_admin"}, limit=100)
+    result = service.bootstrap_admin_initial_grants(actor={"username": "system", "role": "system"}, seal_genesis=True)
+
+    assert result["created_count"] == 2
+    assert {item["username"] for item in result["created"]} == {"admin", "test"}
+    assert service.get_wallet(2)["points_balance"] == 1000
+    assert service.get_wallet(4)["points_balance"] == 100
+    assert service.get_wallet(1)["points_balance"] == 0
+
+
 def test_admin_weekly_salary_is_idempotent_by_week(tmp_path):
     service = _service(tmp_path)
 

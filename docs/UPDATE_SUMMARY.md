@@ -1,6 +1,22 @@
 # Update Summary
 
-Release ID: `2026.05.17-158`
+Release ID: `2026.05.18-159`
+
+## 2026.05.18-159
+
+- Added root-configurable server application timezone support. The admin
+  settings page now lets root choose an IANA timezone such as `UTC` or
+  `Asia/Taipei`, shows the server local/UTC time, and compares server clock
+  drift against the browser clock through `/api/version`.
+- Made runtime version metadata timezone-explicit: `SERVER_STARTED_AT` is now
+  emitted as UTC with a `Z` suffix, and `/api/site-config`, `/api/version`, and
+  `/readyz` include a structured `server_time` payload.
+- Bumped the published release id so login/sidebar version badges reflect the
+  code currently being served.
+- Fixed default account point seeding: when the economy module is enabled,
+  startup/dev bootstrap now idempotently backfills the default `admin` manager
+  grant and `test` user grant, including runtimes that already have existing
+  PointsChain blocks.
 
 ## 2026.05.17-158
 

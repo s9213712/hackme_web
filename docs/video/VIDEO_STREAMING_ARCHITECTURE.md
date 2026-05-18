@@ -158,10 +158,14 @@ Not allowed:
 
 - transparent server-side transcoding of the original file
 - normal server-side HLS from the original ciphertext
+- server access to the raw file key, share key, URL fragment key, or decrypted
+  media bytes
+- server-side `ffmpeg` packaging of strict E2EE originals into 480p / 720p /
+  1080p derivatives
 
 Recommended product rule:
 
-- strict E2EE files remain non-publishable for server-streamed video / HLS
+- strict E2EE files remain unavailable for server-streamed video / HLS
 - unlisted E2EE video shares may use browser-side decryption only:
   - owner enters the original E2EE password once at publish time
   - browser unwraps the original file key locally
@@ -169,17 +173,105 @@ Recommended product rule:
   - browser re-wraps the file key with AES-GCM and stores only the wrapped
     envelope on the server
   - the share key travels only in the URL fragment `#vk=...`
-- if the user wants platform-grade HLS / ABR streaming, they must explicitly
-  create a separate streamable derivative with weaker privacy semantics such as
-  `server_encrypted`
-- strict E2EE can achieve the same quota behavior through browser-side encrypted
-  streaming bundles: the service cache is quota-exempt, but the server still
-  must not decrypt and transcode into 480/720/1080 variants. True E2EE
-  multi-quality support requires the publisher's browser to create lower-quality
-  derivatives locally and upload them encrypted.
+- strict E2EE can achieve quota-exempt streaming behavior through browser-side
+  encrypted streaming bundles: the service cache is quota-exempt, but the server
+  still must not decrypt and transcode into 480p / 720p / 1080p variants.
 
 That keeps the original E2EE promise intact instead of silently downgrading
 security while still allowing users to share E2EE media.
+
+## Strict E2EE Multi-Quality Boundary
+
+Strict E2EE multi-quality is allowed only in this shape:
+
+```text
+publisher browser/client
+  decrypts or reads the local original
+  transcodes 720p / 480p locally
+  encrypts each derivative locally
+  uploads encrypted derivative bundles + manifests
+
+server
+  stores encrypted bundles and manifests only
+  never receives plaintext media
+  never receives raw file keys or share keys
+  never runs ffmpeg on the strict E2EE original
+```
+
+The platform therefore distinguishes three runtime modes:
+
+| Mode | Server HLS / Transcode | Playback | Notes |
+| --- | --- | --- | --- |
+| `plain/server_encrypted` | allowed | HLS / direct fallback according to policy | server-encrypted files may be decrypted only inside controlled worker flow |
+| `strict_e2ee_original_only` | disabled | encrypted original / E2EE Streaming v2 | baseline strict E2EE mode |
+| `strict_e2ee_derivatives` | disabled for server; client-side only | encrypted client-generated variants | implemented for browser-generated 720p / 480p encrypted variants when supported |
+
+Derivative metadata must be explicit and auditable. Each encrypted derivative
+needs at least:
+
+- parent video / uploaded file id
+- resolution and intended bitrate
+- encrypted chunk manifest
+- encrypted content hash or encrypted bundle digest
+- parent-original ciphertext digest reference, not a plaintext media digest
+- created-by user and created-at timestamp
+
+The server must reject normal stream preparation for strict E2EE media. The
+expected response for server HLS attempts is a visible error such as
+`strict_e2ee_server_transcode_disabled`, not silent fallback to server
+transcode.
+
+Playback policy:
+
+- plain/server-encrypted media can default to 720p, fall back to 480p, and
+  expose original quality when available
+- strict E2EE without client-generated derivatives uses original encrypted
+  streaming
+- strict E2EE with encrypted derivatives may default to 720p and fall back to
+  480p, but missing derivatives must fall back to the encrypted original instead
+  of failing playback
+
+Quota policy:
+
+- original uploads count against the user Cloud Drive quota
+- HLS derivatives and strict E2EE encrypted streaming bundles are service cache
+  and do not count against Cloud Drive quota by default
+- root can enable/disable strict E2EE browser-generated derivatives, choose the
+  allowed quality heights, decide whether oversized derivatives are rejected,
+  and override whether those encrypted derivatives are quota-exempt
+- generated derivatives are bound to the original and are removed when the
+  original is permanently purged from Cloud Drive trash
+
+Implemented E2EE derivative endpoints:
+
+```text
+POST /api/media/<file_id>/e2ee-stream-v2/variants/<variant_name>
+GET  /api/videos/<id>/e2ee-stream-v2/variants/<variant_name>/manifest
+GET  /api/videos/<id>/e2ee-stream-v2/variants/<variant_name>/chunks/<chunk_index>
+GET  /api/videos/shared/<token>/e2ee-stream-v2/variants/<variant_name>/manifest
+GET  /api/videos/shared/<token>/e2ee-stream-v2/variants/<variant_name>/chunks/<chunk_index>
+```
+
+The server accepts only encrypted Streaming v2 bundle data and manifest
+metadata for root-allowed derivative heights such as `q720` / `q480`. By
+default it rejects oversized encrypted derivatives that are not smaller than
+the original upload, so larger "compressed" versions are not shown as
+selectable qualities.
+
+The browser-side E2EE derivative step is visible in the Job Center as a local
+task. It reports local password unlock, browser transcode, local encryption,
+original encrypted stream upload, and derivative upload stages. Because this
+work happens in the browser, a page reload cannot continue the same local file
+handle; the next visit shows a clear reminder to re-select the original file
+and run the publish / derivative step again.
+
+Required failure messages for client-side E2EE derivative creation:
+
+- wrong E2EE password
+- browser codec / MediaRecorder / WebCodecs not supported
+- browser memory pressure or storage pressure
+- local transcode interrupted
+- encrypted derivative upload failed
 
 ## Storage Model
 

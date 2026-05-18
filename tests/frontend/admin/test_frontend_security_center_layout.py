@@ -276,6 +276,22 @@ def test_settings_area_uses_collapsible_groups_to_reduce_clutter():
     assert ".settings-collapse.danger-collapse" in css
 
 
+def test_root_server_time_timezone_controls_are_wired():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
+    server_settings = index_html.split('id="sec-settings-system"', 1)[1].split('id="sec-settings-billing"', 1)[0]
+
+    assert 'id="s-server-timezone"' in server_settings
+    assert 'id="server-time-check-btn"' in server_settings
+    assert 'id="server-time-status"' in server_settings
+    assert 'value="Asia/Taipei"' in server_settings
+    assert 'server_timezone: ($("s-server-timezone")?.value || "UTC").trim() || "UTC"' in admin_js
+    assert 'renderServerTimeStatus(json.server_time)' in admin_js
+    assert 'apiFetch(API + "/version"' in admin_js
+    assert 'serverTimeCheckBtn.addEventListener("click", refreshServerTimeStatus)' in bootstrap_js
+
+
 def test_system_environment_has_resource_dashboard():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")

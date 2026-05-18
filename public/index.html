@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260517-share-expiry-layout" />
+  <link rel="stylesheet" href="/styles.css?v=20260518-inline-media" />
   <link rel="stylesheet" href="/experiments.css?v=20260517-plane-view-angle" />
 </head>
 <body>
@@ -793,6 +793,11 @@
               <div class="field">
                 <label>內容</label>
                 <textarea id="community-thread-content" data-markdown-editor="1" rows="4" maxlength="4000" placeholder="輸入主題內容"></textarea>
+                <div class="community-inline-media-tools">
+                  <button class="btn community-mini-btn" type="button" data-community-media-picker="community-thread-content" data-community-media-input="community-thread-media-input">插入圖片/影音</button>
+                  <span class="drive-card-sub">會上傳到雲端硬碟並建立可預覽分享，用於內嵌顯示。</span>
+                </div>
+                <input type="file" id="community-thread-media-input" data-community-media-input="1" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/ogg,audio/mpeg,audio/mp4,audio/ogg,audio/wav" />
               </div>
               <div class="community-actions">
                 <button class="btn btn-primary" id="community-thread-submit" type="button">發布主題</button>
@@ -825,6 +830,11 @@
               <div class="field">
                 <label>留言回覆</label>
                 <textarea id="community-reply-content" data-markdown-editor="1" rows="4" maxlength="3000" placeholder="輸入回覆內容"></textarea>
+                <div class="community-inline-media-tools">
+                  <button class="btn community-mini-btn" type="button" data-community-media-picker="community-reply-content" data-community-media-input="community-reply-media-input">插入圖片/影音</button>
+                  <span class="drive-card-sub">圖片與影音會插入在目前游標位置。</span>
+                </div>
+                <input type="file" id="community-reply-media-input" data-community-media-input="1" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/ogg,audio/mpeg,audio/mp4,audio/ogg,audio/wav" />
               </div>
               <button class="btn btn-primary" id="community-reply-submit" type="button">送出留言</button>
             </div>
@@ -1206,7 +1216,7 @@
               <div class="field" style="grid-column:1/-1;">
                 <label>描述</label>
                 <textarea id="video-publish-description" rows="3" maxlength="2000" placeholder="影音說明、章節或注意事項"></textarea>
-                <div class="field-help">E2EE 影音可設公開；公開播放時需輸入原始 E2EE 密碼並在瀏覽器端解密。持連結分享會改用片段金鑰授權；若遺失完整分享連結中的片段金鑰，伺服器無法復原，只能重新產生分享。</div>
+                <div class="field-help">E2EE 影音對外觀看會改用「持連結可看」與片段金鑰授權；觀看者使用完整分享連結即可在瀏覽器端解密，不需要知道原始 E2EE 密碼。若遺失完整分享連結中的片段金鑰，伺服器無法復原，只能重新產生分享。</div>
               </div>
               <div class="field">
                 <label>&nbsp;</label>
@@ -1398,10 +1408,12 @@
                 <button class="btn game-mini-btn" id="sudoku-new-btn" type="button">開始</button>
                 <button class="btn btn-primary game-mini-btn" id="sudoku-check-btn" type="button">檢查</button>
                 <button class="btn game-mini-btn" id="sudoku-note-btn" type="button" aria-pressed="false">筆記</button>
+                <button class="btn game-mini-btn" id="sudoku-assist-btn" type="button" aria-pressed="true">輔導開</button>
                 <button class="btn game-mini-btn" id="sudoku-hint-btn" type="button">提示</button>
               </div>
             </div>
             <div id="sudoku-board" class="sudoku-board" aria-label="數獨棋盤"></div>
+            <div id="sudoku-candidate-panel" class="sudoku-candidate-panel" hidden></div>
           </div>
           <div id="minesweeper-game-panel" class="single-game-panel" style="display:none;">
             <details class="drive-collapsible-panel game-rules-panel">
@@ -1458,6 +1470,20 @@
                 <label>&nbsp;</label>
                 <button class="btn btn-primary game-mini-btn" id="onea2b-guess-btn" type="button">送出</button>
               </div>
+            </div>
+            <div class="onea2b-keypad" aria-label="1A2B 數字鍵盤">
+              <button class="btn game-mini-btn" type="button" data-onea2b-key="1">1</button>
+              <button class="btn game-mini-btn" type="button" data-onea2b-key="2">2</button>
+              <button class="btn game-mini-btn" type="button" data-onea2b-key="3">3</button>
+              <button class="btn game-mini-btn" type="button" data-onea2b-key="4">4</button>
+              <button class="btn game-mini-btn" type="button" data-onea2b-key="5">5</button>
+              <button class="btn game-mini-btn" type="button" data-onea2b-key="6">6</button>
+              <button class="btn game-mini-btn" type="button" data-onea2b-key="7">7</button>
+              <button class="btn game-mini-btn" type="button" data-onea2b-key="8">8</button>
+              <button class="btn game-mini-btn" type="button" data-onea2b-key="9">9</button>
+              <button class="btn game-mini-btn" type="button" data-onea2b-key="back">退格</button>
+              <button class="btn game-mini-btn" type="button" data-onea2b-key="0">0</button>
+              <button class="btn game-mini-btn btn-primary" type="button" data-onea2b-key="enter">送出</button>
             </div>
             <div id="onea2b-history" class="onea2b-history" aria-label="1A2B 猜測紀錄"></div>
           </div>
@@ -4514,6 +4540,46 @@
             </div>
               </div>
             </details>
+            <details class="drive-collapsible-panel settings-collapse" open>
+              <summary>
+                <div>
+                  <div class="drive-card-title">伺服器時間與時區</div>
+                  <div class="drive-card-sub">root 可設定應用層時區，並檢查伺服器時間是否與瀏覽器時間明顯偏移。</div>
+                </div>
+              </summary>
+              <div class="drive-collapsible-body">
+                <div class="settings-option-grid">
+                  <div class="field">
+                    <label>伺服器應用時區</label>
+                    <input type="text" id="s-server-timezone" list="server-timezone-options" placeholder="UTC / Asia/Taipei / America/New_York" autocomplete="off" />
+                    <datalist id="server-timezone-options">
+                      <option value="UTC"></option>
+                      <option value="Asia/Taipei"></option>
+                      <option value="Asia/Tokyo"></option>
+                      <option value="Asia/Seoul"></option>
+                      <option value="Asia/Shanghai"></option>
+                      <option value="Asia/Hong_Kong"></option>
+                      <option value="Asia/Singapore"></option>
+                      <option value="America/Los_Angeles"></option>
+                      <option value="America/Denver"></option>
+                      <option value="America/Chicago"></option>
+                      <option value="America/New_York"></option>
+                      <option value="Europe/London"></option>
+                      <option value="Europe/Paris"></option>
+                      <option value="Europe/Berlin"></option>
+                      <option value="Australia/Sydney"></option>
+                    </datalist>
+                    <div class="field-hint">使用 IANA 時區名稱。這是 hackme_web 的應用設定，不會修改作業系統時區。</div>
+                  </div>
+                  <div class="field">
+                    <label>時間檢查</label>
+                    <button class="btn" id="server-time-check-btn" type="button">重新檢查伺服器時間</button>
+                    <div class="field-hint">會比較 `/api/version` 回傳的 server clock 與目前瀏覽器時間。</div>
+                  </div>
+                </div>
+                <div id="server-time-status" class="drive-card-sub" style="margin-top:.6rem;">尚未檢查伺服器時間。</div>
+              </div>
+            </details>
             <details class="drive-collapsible-panel settings-collapse">
               <summary>
                 <div>
@@ -4850,6 +4916,21 @@
               <div class="field">
                 <label>影音投幣最低點數</label>
                 <input type="number" id="s-video-tip-min-points" min="1" step="1" value="1" />
+              </div>
+              <div class="field">
+                <label><input type="checkbox" id="s-video-e2ee-derivatives-enabled" /> 允許 E2EE 本機省流量版本</label>
+                <div class="field-hint">發布者瀏覽器本機轉檔並加密上傳；伺服器仍不解密、不跑 ffmpeg。</div>
+              </div>
+              <div class="field">
+                <label>E2EE 省流量畫質</label>
+                <input type="text" id="s-video-e2ee-derivative-heights" placeholder="720,480" />
+                <div class="field-hint">允許值：1080, 720, 480, 360。前端可嘗試，後端依 root 設定接受或拒絕。</div>
+              </div>
+              <div class="field">
+                <label><input type="checkbox" id="s-video-e2ee-derivative-reject-larger-than-original" /> 壓縮後較大就拒收並隱藏</label>
+              </div>
+              <div class="field">
+                <label><input type="checkbox" id="s-video-e2ee-derivative-quota-exempt" /> E2EE 衍生畫質不計入用戶雲端硬碟容量</label>
               </div>
             </div>
             <div class="settings-option-grid billing-editor-grid">
@@ -6394,29 +6475,29 @@
 <script src="/js/01-root-quick-settings.js?v=20260514-root-quick-settings" defer></script>
 <script src="/js/10-users.js?v=20260503-account-delete-feedback" defer></script>
 <script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
-<script src="/js/25-community.js?v=20260504-announcement-edit" defer></script>
+<script src="/js/25-community.js?v=20260518-inline-media" defer></script>
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
-<script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
+<script src="/js/34-markdown-editor.js?v=20260518-inline-media" defer></script>
 <script src="/js/35-drive.js?v=20260517-share-expiry-picker" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
 <!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
 <script src="/js/36-comfyui.js?v=20260518-comfyui-mask-editor" defer></script>
 <script src="/js/36-comfyui-workflows.js?v=20260518-comfyui-mask-editor" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
-<script src="/js/41-game-modules.js?v=20260514-game-user-scope" defer></script>
+<script src="/js/41-game-modules.js?v=20260518-game-ux" defer></script>
 <script src="/js/games/game-view-registry.js?v=20260513-legacy-modules" defer></script>
 <script src="/js/games/chess.js?v=20260515-stockfish-depth-toggle" defer></script>
-<script src="/js/38-games.js?v=20260517-bullet-dots" defer></script>
+<script src="/js/38-games.js?v=20260518-game-ux" defer></script>
 <script src="/js/42-experiments.js?v=20260517-liquid-slosh" defer></script>
-<script src="/js/39-videos.js?v=20260518-hls-quality-defaults" defer></script>
+<script src="/js/39-videos.js?v=20260518-video-overview" defer></script>
 <script src="/js/40-auth-users.js?v=20260517-avatar-cropper" defer></script>
-<script src="/js/50-admin.js?v=20260504-fusion-coverage-v1" defer></script>
+<script src="/js/50-admin.js?v=20260518-server-time" defer></script>
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>
 <script src="/js/55-economy.js?v=20260517-trading-snapshot-warmup" defer></script>
 <script src="/js/56-trading.js?v=20260517-trading-snapshot-warmup" defer></script>
 <script src="/js/57-platform-centers.js?v=20260517-share-expiry-picker" defer></script>
 <script src="/js/58-profile-friends.js?v=20260517-profile-avatar-upload" defer></script>
-<script src="/js/90-bootstrap.js?v=20260517-avatar-cropper" defer></script>
+<script src="/js/90-bootstrap.js?v=20260518-video-overview" defer></script>
 </body>
 </html>

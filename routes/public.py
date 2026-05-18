@@ -23,6 +23,7 @@ from services.users.recovery import (
 )
 from services.security.captcha import create_captcha_challenge, normalize_captcha_mode, verify_captcha_response
 from services.server.backpressure import backpressure_status
+from services.platform.time_settings import server_time_payload
 from services.users.profiles import clear_profile_appearance, get_profile_appearance, update_profile_appearance
 
 
@@ -411,6 +412,7 @@ def register_public_routes(app, deps):
                 "release_id": SERVER_RELEASE_ID,
                 "version": SERVER_VERSION,
                 "started_at": SERVER_STARTED_AT,
+                "server_time": server_time_payload(settings),
             },
         })
 
@@ -421,12 +423,18 @@ def register_public_routes(app, deps):
             if callable(get_cached_system_setting)
             else False
         )
+        settings = {
+            "server_timezone": get_cached_system_setting("server_timezone", "UTC")
+            if callable(get_cached_system_setting)
+            else "UTC"
+        }
         return json_resp({
             "ok": True,
             "app": SERVER_APP_NAME,
             "release_id": SERVER_RELEASE_ID,
             "version": SERVER_VERSION,
             "started_at": SERVER_STARTED_AT,
+            "server_time": server_time_payload(settings),
             "maintenance_mode": bool(maintenance_mode),
         })
 
@@ -462,6 +470,11 @@ def register_public_routes(app, deps):
             "app": SERVER_APP_NAME,
             "release_id": SERVER_RELEASE_ID,
             "started_at": SERVER_STARTED_AT,
+            "server_time": server_time_payload({
+                "server_timezone": get_cached_system_setting("server_timezone", "UTC")
+                if callable(get_cached_system_setting)
+                else "UTC"
+            }),
             "checks": {
                 "db": {
                     "ok": db_ok,

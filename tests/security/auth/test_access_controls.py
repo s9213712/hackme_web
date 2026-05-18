@@ -44,6 +44,7 @@ def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, c
         "server_listen_host": "",
         "server_listen_port": 0,
         "server_ssl_enabled": True,
+        "server_timezone": "UTC",
         "comfyui_connection_mode": "remote",
         "comfyui_remote_api_url": "",
         "comfyui_base_dir": "",
@@ -347,6 +348,25 @@ def test_invalid_server_bind_settings_are_rejected():
     assert bad_port.status_code == 400
     assert state["server_listen_host"] == ""
     assert state["server_listen_port"] == 0
+
+
+def test_root_can_configure_server_timezone_and_get_time_payload():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"server_timezone": "Asia/Taipei"})
+    data = res.get_json()
+
+    assert res.status_code == 200
+    assert state["server_timezone"] == "Asia/Taipei"
+    assert data["settings"]["server_timezone"] == "Asia/Taipei"
+    assert data["server_time"]["timezone"] == "Asia/Taipei"
+    assert data["server_time"]["utc_offset_label"] == "UTC+08:00"
+
+    bad = client.put("/api/admin/settings", json={"server_timezone": "Mars/Base"})
+
+    assert bad.status_code == 400
+    assert state["server_timezone"] == "Asia/Taipei"
 
 
 def test_admin_settings_reject_invalid_boolean_strings_for_security_flags():

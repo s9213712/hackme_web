@@ -39,6 +39,20 @@ def register_share_management_routes(app, deps):
     def now_text():
         return datetime.utcnow().replace(microsecond=0).isoformat()
 
+    def utc_client_time(value):
+        text = str(value or "").strip()
+        if not text:
+            return text
+        if text.endswith("Z") or "+" in text[10:] or "-" in text[10:]:
+            return text
+        return f"{text}Z"
+
+    def share_row_time(data, key, share_type):
+        value = data.get(key)
+        if share_type == "video" and key in {"created_at", "last_accessed_at", "revoked_at"}:
+            return utc_client_time(value)
+        return value
+
     def share_status(row):
         if row.get("revoked_at"):
             return "revoked"
@@ -50,6 +64,32 @@ def register_share_management_routes(app, deps):
         if max_views > 0 and access_count >= max_views:
             return "view_limit_reached"
         return "active"
+
+    def share_status_label(status):
+        return {
+            "active": "可使用",
+            "expired": "已到期",
+            "view_limit_reached": "次數已用完",
+            "revoked": "已撤銷",
+        }.get(str(status or ""), "狀態未知")
+
+    def share_reactivation_hint(status):
+        if status == "expired":
+            return "請選擇未來到期時間，或清空到期時間。"
+        if status == "view_limit_reached":
+            return "請把最大存取次數提高到目前累計存取次數以上，或填 0 表示不限次數。"
+        if status == "revoked":
+            return "已撤銷的分享不能直接復活，請從原檔案或影音重新建立分享。"
+        return ""
+
+    def share_update_message(previous_status, current_status):
+        if previous_status in {"expired", "view_limit_reached"} and current_status == "active":
+            return "分享設定已更新，分享連結已重新啟用"
+        if current_status != "active":
+            hint = share_reactivation_hint(current_status)
+            suffix = f"；{hint}" if hint else ""
+            return f"分享設定已更新，但分享仍{share_status_label(current_status)}{suffix}"
+        return "分享設定已更新"
 
     def row_int(row, key, default=0):
         try:
@@ -87,9 +127,9 @@ def register_share_management_routes(app, deps):
             "expires_at": data.get("expires_at"),
             "max_views": row_int(data, "max_views"),
             "access_count": row_int(data, "access_count"),
-            "last_accessed_at": data.get("last_accessed_at"),
-            "created_at": data.get("created_at"),
-            "revoked_at": data.get("revoked_at"),
+            "last_accessed_at": share_row_time(data, "last_accessed_at", "file"),
+            "created_at": share_row_time(data, "created_at", "file"),
+            "revoked_at": share_row_time(data, "revoked_at", "file"),
             "status": share_status(data),
             "share_url": f"/shared/files/{token}" if token else "",
             "requires_fragment_key": bool(str(data.get("wrapped_file_key_envelope") or "").strip()),
@@ -110,9 +150,9 @@ def register_share_management_routes(app, deps):
             "expires_at": None,
             "max_views": 0,
             "access_count": row_int(data, "access_count"),
-            "last_accessed_at": data.get("last_accessed_at"),
-            "created_at": data.get("created_at"),
-            "revoked_at": data.get("revoked_at"),
+            "last_accessed_at": share_row_time(data, "last_accessed_at", "album"),
+            "created_at": share_row_time(data, "created_at", "album"),
+            "revoked_at": share_row_time(data, "revoked_at", "album"),
             "status": share_status(data),
             "share_url": f"/shared/albums/{data.get('token')}" if data.get("token") else "",
         }
@@ -132,9 +172,9 @@ def register_share_management_routes(app, deps):
             "expires_at": data.get("expires_at"),
             "max_views": row_int(data, "max_views"),
             "access_count": row_int(data, "access_count"),
-            "last_accessed_at": data.get("last_accessed_at"),
-            "created_at": data.get("created_at"),
-            "revoked_at": data.get("revoked_at"),
+            "last_accessed_at": share_row_time(data, "last_accessed_at", "video"),
+            "created_at": share_row_time(data, "created_at", "video"),
+            "revoked_at": share_row_time(data, "revoked_at", "video"),
             "status": share_status(data),
             "share_url": f"/shared/videos/{data.get('token')}" if data.get("token") else "",
         }
@@ -186,22 +226,22 @@ def register_share_management_routes(app, deps):
             events.append({
                 "event_type": "created",
                 "label": "分享已建立",
-                "created_at": data.get("created_at"),
+                "created_at": share_row_time(data, "created_at", share_type),
                 "detail": "分享連結建立成功。",
             })
         if data.get("last_accessed_at"):
             events.append({
                 "event_type": "accessed",
                 "label": "最近一次存取",
-                "created_at": data.get("last_accessed_at"),
-                "opened_at": data.get("last_accessed_at"),
+                "created_at": share_row_time(data, "last_accessed_at", share_type),
+                "opened_at": share_row_time(data, "last_accessed_at", share_type),
                 "detail": f"累計存取 {row_int(data, 'access_count')} 次。",
             })
         if status == "view_limit_reached":
             events.append({
                 "event_type": "ended",
                 "label": "分享次數已用完",
-                "created_at": data.get("last_accessed_at") or data.get("created_at"),
+                "created_at": share_row_time(data, "last_accessed_at", share_type) or share_row_time(data, "created_at", share_type),
                 "detail": f"最大可觀看次數 {row_int(data, 'max_views')} 次。",
             })
         elif status == "expired":
@@ -215,7 +255,7 @@ def register_share_management_routes(app, deps):
             events.append({
                 "event_type": "revoked",
                 "label": "分享已撤銷",
-                "created_at": data.get("revoked_at"),
+                "created_at": share_row_time(data, "revoked_at", share_type),
                 "detail": "分享連結已由擁有者撤銷。",
             })
         return sorted(events, key=lambda item: str(item.get("created_at") or ""), reverse=True)
@@ -296,6 +336,11 @@ def register_share_management_routes(app, deps):
                 row["id"],
             ),
         )
+        if truthy(data.get("reset_access_count")):
+            conn.execute(
+                "UPDATE storage_share_links SET access_count=0, last_accessed_at=NULL WHERE id=?",
+                (row["id"],),
+            )
         password_provided = "share_password" in data
         clear_password = truthy(data.get("clear_password"))
         if password_provided or clear_password:
@@ -339,6 +384,11 @@ def register_share_management_routes(app, deps):
         )
         if msg:
             raise ValueError(msg)
+        if truthy(data.get("reset_access_count")) and share_link:
+            conn.execute(
+                "UPDATE video_share_links SET access_count=0, last_accessed_at=NULL WHERE id=?",
+                (share_link["id"],),
+            )
         return conn.execute("SELECT * FROM video_share_links WHERE id=?", (share_link["id"] if share_link else row["id"],)).fetchone()
 
     @app.route("/api/shares", methods=["GET"])
@@ -453,6 +503,12 @@ def register_share_management_routes(app, deps):
             err, status_code = require_share_access(actor, row)
             if err:
                 return err, status_code
+            previous_status = share_status(dict(row))
+            if previous_status == "revoked":
+                return json_resp({
+                    "ok": False,
+                    "msg": "已撤銷的分享不能直接復活，請從原檔案或影音重新建立分享。",
+                }), 400
             try:
                 if share_type == "file":
                     updated = update_file_share(conn, actor, row, data)
@@ -469,7 +525,8 @@ def register_share_management_routes(app, deps):
             conn.commit()
             audit("SHARE_LINK_UPDATED", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"type={share_type},id={share_id}")
             payload = share_payload_for_type(share_type, updated)
-            return json_resp({"ok": True, "msg": "分享設定已更新", "share": payload})
+            current_status = payload.get("status") if payload else ""
+            return json_resp({"ok": True, "msg": share_update_message(previous_status, current_status), "share": payload})
         finally:
             conn.close()
 

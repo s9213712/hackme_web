@@ -80,6 +80,15 @@ const COMMUNITY_MODERATOR_PRESETS = {
   },
 };
 
+const COMMUNITY_INLINE_MEDIA_TOKEN_RE = /\[\[community-media:(image|video|audio|file):([A-Za-z0-9_-]+)(?:\|([^\]\n]{0,160}))?\]\]/g;
+const COMMUNITY_LEGACY_COMFYUI_IMAGE_TOKEN_RE = /\[\[comfyui-image:([A-Za-z0-9_-]+)\]\]/g;
+const COMMUNITY_INLINE_MEDIA_ACCEPTED_EXTENSIONS = {
+  image: new Set(["png", "jpg", "jpeg", "webp", "gif"]),
+  video: new Set(["mp4", "webm", "ogg", "ogv", "m4v", "mov"]),
+  audio: new Set(["mp3", "m4a", "aac", "ogg", "oga", "wav", "webm"]),
+};
+const COMMUNITY_ANY_INLINE_MEDIA_TOKEN_RE = /\[\[comfyui-image:([A-Za-z0-9_-]+)\]\]|\[\[community-media:(image|video|audio|file):([A-Za-z0-9_-]+)(?:\|([^\]\n]{0,160}))?\]\]/g;
+
 function canOpenCommunityReviewMode() {
   return currentRole === "manager" || currentRole === "super_admin" || canReviewCommunityThreads;
 }
@@ -389,7 +398,10 @@ function communityThreadReactionButton(thread, value, label) {
 }
 
 function communityPlainContent(content) {
-  return String(content || "").replace(/\n?\[\[comfyui-image:[A-Za-z0-9_-]+\]\]\n?/g, "\n").trim();
+  return String(content || "")
+    .replace(/\n?\[\[comfyui-image:[A-Za-z0-9_-]+\]\]\n?/g, "\n")
+    .replace(/\n?\[\[community-media:(?:image|video|audio|file):[A-Za-z0-9_-]+(?:\|[^\]\n]{0,160})?\]\]\n?/g, "\n")
+    .trim();
 }
 
 function communityPreviewContentUrl(fileId) {
@@ -398,12 +410,218 @@ function communityPreviewContentUrl(fileId) {
 
 function renderCommunityBody(content) {
   const raw = String(content || "");
-  const match = raw.match(/\[\[comfyui-image:([A-Za-z0-9_-]+)\]\]/);
-  const cleaned = communityPlainContent(raw);
-  const image = match
-    ? `<div class="community-share-image"><img src="${sanitize(communityPreviewContentUrl(match[1]))}" alt="ComfyUI shared image" loading="lazy" /></div>`
-    : "";
-  return `${image}<div class="community-body">${sanitize(cleaned)}</div>`;
+  if (typeof markdownToSafeHtml === "function") {
+    return `<div class="community-body markdown-rendered">${markdownToSafeHtml(raw)}</div>`;
+  }
+  let lastIndex = 0;
+  const parts = [];
+  raw.replace(COMMUNITY_ANY_INLINE_MEDIA_TOKEN_RE, (match, comfyuiFileId, kind, token, name, offset) => {
+    parts.push(sanitize(raw.slice(lastIndex, offset)));
+    if (comfyuiFileId) {
+      parts.push(`<div class="community-share-image"><img src="${sanitize(communityPreviewContentUrl(comfyuiFileId))}" alt="ComfyUI shared image" loading="lazy" /></div>`);
+    } else {
+      parts.push(communityInlineMediaHtml(kind, token, name));
+    }
+    lastIndex = offset + match.length;
+    return match;
+  });
+  parts.push(sanitize(raw.slice(lastIndex)));
+  return `<div class="community-body">${parts.join("")}</div>`;
+}
+
+function communityInlineMediaHtml(kind, token, name = "") {
+  const mediaKind = ["image", "video", "audio", "file"].includes(kind) ? kind : "file";
+  const safeToken = String(token || "").match(/^[A-Za-z0-9_-]+$/) ? String(token) : "";
+  if (!safeToken) return "";
+  const safeName = sanitize(name || "討論區媒體");
+  const contentUrl = `${API}/storage/shared/${encodeURIComponent(safeToken)}/preview/content`;
+  const pageUrl = `/shared/files/${encodeURIComponent(safeToken)}`;
+  if (mediaKind === "image") {
+    return `<figure class="community-inline-media community-inline-media-image"><img src="${sanitize(contentUrl)}" alt="${safeName}" loading="lazy" /><figcaption>${safeName}</figcaption></figure>`;
+  }
+  if (mediaKind === "video") {
+    return `<figure class="community-inline-media community-inline-media-video"><video src="${sanitize(contentUrl)}" controls preload="metadata"></video><figcaption>${safeName}</figcaption></figure>`;
+  }
+  if (mediaKind === "audio") {
+    return `<figure class="community-inline-media community-inline-media-audio"><audio src="${sanitize(contentUrl)}" controls preload="metadata"></audio><figcaption>${safeName}</figcaption></figure>`;
+  }
+  return `<figure class="community-inline-media community-inline-media-file"><a href="${sanitize(pageUrl)}" target="_blank" rel="noopener noreferrer">${safeName}</a></figure>`;
+}
+
+function communityInlineMediaKind(file) {
+  const type = String(file?.type || "").toLowerCase();
+  const ext = String(file?.name || "").split(".").pop().toLowerCase();
+  if (type.startsWith("image/") && type !== "image/svg+xml") return "image";
+  if (type.startsWith("video/")) return "video";
+  if (type.startsWith("audio/")) return "audio";
+  if (COMMUNITY_INLINE_MEDIA_ACCEPTED_EXTENSIONS.image.has(ext)) return "image";
+  if (COMMUNITY_INLINE_MEDIA_ACCEPTED_EXTENSIONS.video.has(ext)) return "video";
+  if (COMMUNITY_INLINE_MEDIA_ACCEPTED_EXTENSIONS.audio.has(ext)) return "audio";
+  return "";
+}
+
+function communityInlineMediaSafeName(file) {
+  return String(file?.name || "media")
+    .replace(/[\[\]\|\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120) || "media";
+}
+
+function communityInlineMediaVirtualPath(file) {
+  const safeName = communityInlineMediaSafeName(file);
+  return `/Community/Inline/${Date.now()}-${safeName}`;
+}
+
+function insertCommunityInlineMediaToken(textarea, tokenText) {
+  if (!textarea || !tokenText) return;
+  const start = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : textarea.value.length;
+  const end = Number.isFinite(textarea.selectionEnd) ? textarea.selectionEnd : start;
+  const before = textarea.value.slice(0, start);
+  const after = textarea.value.slice(end);
+  const prefix = before && !before.endsWith("\n") ? "\n" : "";
+  const suffix = after && !after.startsWith("\n") ? "\n" : "";
+  const insert = `${prefix}${tokenText}\n${suffix}`;
+  textarea.value = before + insert + after;
+  const cursor = before.length + insert.length;
+  textarea.focus();
+  textarea.setSelectionRange(cursor, cursor);
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function setCommunityMediaButtonsBusy(targetTextareaId, busy) {
+  document.querySelectorAll("[data-community-media-picker]").forEach((btn) => {
+    if (String(btn.dataset.communityMediaPicker || "") !== String(targetTextareaId || "")) return;
+    if (!btn.dataset.originalLabel) btn.dataset.originalLabel = btn.textContent || "插入圖片/影音";
+    btn.disabled = !!busy;
+    btn.textContent = busy ? "上傳中..." : (btn.dataset.originalLabel || "插入圖片/影音");
+  });
+}
+
+function openCommunityInlineMediaPicker(button) {
+  const textareaId = button?.dataset?.communityMediaPicker || "";
+  const inputId = button?.dataset?.communityMediaInput || "";
+  const input = $(inputId);
+  const textarea = $(textareaId);
+  if (!input || !textarea) {
+    flash($("community-msg"), "找不到討論區編輯器", false);
+    return;
+  }
+  input.dataset.communityMediaTarget = textareaId;
+  input.value = "";
+  input.click();
+}
+
+async function uploadCommunityInlineMediaFile(file, textarea, csrf) {
+  const kind = communityInlineMediaKind(file);
+  if (!kind) throw new Error(`「${file?.name || "檔案"}」不是可內嵌的圖片、影片或音訊格式`);
+  if (typeof preflightDriveUploadSize === "function") {
+    const ok = await preflightDriveUploadSize(file.size, `討論區媒體「${file.name || "media"}」`);
+    if (!ok) throw new Error("檔案大小超出目前可上傳限制");
+  }
+  const filename = communityInlineMediaSafeName(file);
+  const virtualPath = communityInlineMediaVirtualPath(file);
+  let uploadJson = null;
+  if (
+    typeof shouldUseDriveResumableUpload === "function"
+    && typeof uploadDriveBlobResumable === "function"
+    && shouldUseDriveResumableUpload(file)
+  ) {
+    const transferId = typeof addDriveTransferRow === "function"
+      ? addDriveTransferRow({
+        kind: "resumable_upload",
+        name: filename,
+        loaded_bytes: 0,
+        total_bytes: file.size,
+        progress_percent: 0,
+        msg: "討論區媒體等待分段上傳",
+      })
+      : "";
+    uploadJson = await uploadDriveBlobResumable({
+      blob: file,
+      sourceFile: file,
+      filename,
+      mimeType: file.type || "application/octet-stream",
+      privacyMode: "standard_plain",
+      target: "cloud_drive",
+      virtualPath,
+      transferId,
+      csrf,
+      label: filename,
+    });
+  } else if (typeof xhrUploadWithProgress === "function") {
+    const form = new FormData();
+    form.append("file", file, filename);
+    form.append("privacy_mode", "standard_plain");
+    form.append("virtual_path", virtualPath);
+    const upload = await xhrUploadWithProgress(`${API}/cloud-drive/upload`, form, csrf, null);
+    uploadJson = upload.json || {};
+    if (upload.status < 200 || upload.status >= 300 || !uploadJson.ok) {
+      throw new Error(uploadJson.msg || `討論區媒體上傳失敗（HTTP ${upload.status}）`);
+    }
+  } else {
+    const form = new FormData();
+    form.append("file", file, filename);
+    form.append("privacy_mode", "standard_plain");
+    form.append("virtual_path", virtualPath);
+    const upload = await apiFetch(`${API}/cloud-drive/upload`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+      body: form,
+    });
+    uploadJson = await upload.json().catch(() => ({}));
+    if (!upload.ok || !uploadJson.ok) throw new Error(uploadJson.msg || "討論區媒體上傳失敗");
+  }
+  const fileId = uploadJson?.file?.file_id || uploadJson?.file?.id || "";
+  if (!fileId) throw new Error("討論區媒體上傳完成，但伺服器未回傳 file_id");
+  const shareRes = await apiFetch(`${API}/storage/share-links`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrf || "",
+    },
+    body: JSON.stringify({
+      file_id: fileId,
+      can_preview: true,
+      access_scope: "link",
+      max_views: 0,
+    }),
+  });
+  const shareJson = await shareRes.json().catch(() => ({}));
+  if (!shareRes.ok || !shareJson.ok) throw new Error(shareJson.msg || "討論區媒體分享連結建立失敗");
+  const token = shareJson?.share_link?.token || "";
+  if (!token) throw new Error("討論區媒體分享連結缺少 token");
+  insertCommunityInlineMediaToken(textarea, `[[community-media:${kind}:${token}|${filename}]]`);
+  return { fileId, token, kind, filename };
+}
+
+async function uploadCommunityInlineMedia(input) {
+  const textarea = $(input?.dataset?.communityMediaTarget || "");
+  const files = Array.from(input?.files || []);
+  if (!textarea || !files.length) return;
+  setCommunityMediaButtonsBusy(textarea.id, true);
+  let inserted = 0;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken() || "";
+    for (const file of files) {
+      try {
+        await uploadCommunityInlineMediaFile(file, textarea, csrf);
+        inserted += 1;
+      } catch (err) {
+        flash($("community-msg"), err.message || "討論區媒體插入失敗", false);
+      }
+    }
+    if (inserted > 0) {
+      flash($("community-msg"), `已插入 ${inserted} 個討論區媒體`, true);
+      if (typeof loadDriveDashboard === "function") loadDriveDashboard().catch(() => {});
+    }
+  } finally {
+    input.value = "";
+    setCommunityMediaButtonsBusy(textarea.id, false);
+  }
 }
 
 function renderCommunityAnnouncements() {

@@ -92,12 +92,20 @@
         label: String(label || variant.name || ""),
         height,
         playlistUrl: String(variant.playlist_url || ""),
+        manifestUrl: String(variant.manifest_url || ""),
+        chunkUrlTemplate: String(variant.chunk_url_template || ""),
       };
     });
   }
   function preferredSharedQuality(playback={}) {
     const options = sharedQualityOptions(playback);
     if (!options.length) return null;
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (connection?.saveData || Number(connection?.downlink || 0) > 0 && Number(connection.downlink) < 2) {
+      const low = options.find((option) => Number(option.height || 0) === 480)
+        || options.find((option) => Number(option.height || 0) === 360);
+      if (low) return low;
+    }
     const preferredName = String(playback?.default_quality || playback?.quality_policy?.default_quality || "").trim();
     if (preferredName) {
       const named = options.find((option) => option.name === preferredName);
@@ -128,7 +136,12 @@
   let sharedHlsLoadPromise = null;
   let sharedManualQualitySelection = false;
   let sharedAutoQualityFallbackApplied = false;
+  let sharedUserSeeking = false;
+  let sharedLastSeekAt = 0;
+  let sharedLastSeekTarget = 0;
   let shareSessionId = "";
+  let sharedE2eeFragmentKey = "";
+  let sharedE2eeStreamCleanup = null;
   const SHARED_E2EE_STREAM_V2_MAX_RETRIES = 2;
   const SHARED_E2EE_STREAM_V2_CACHE_LIMIT = 16;
   function withShareSession(url) {
@@ -159,9 +172,19 @@
     ].forEach((key) => {
       if (playback[key]) playback[key] = withShareSession(playback[key]);
     });
+    for (const variant of playback.variants || []) {
+      if (!variant || typeof variant !== "object") continue;
+      ["playlist_url", "manifest_url", "chunk_url_template"].forEach((key) => {
+        if (variant[key]) variant[key] = withShareSession(variant[key]);
+      });
+    }
     return playback;
   }
   function destroySharedPlaybackArtifacts() {
+    if (sharedE2eeStreamCleanup) {
+      try { sharedE2eeStreamCleanup(); } catch (_) {}
+      sharedE2eeStreamCleanup = null;
+    }
     if (sharedHls && typeof sharedHls.destroy === "function") {
       try { sharedHls.destroy(); } catch (_) {}
     }
@@ -198,6 +221,19 @@
     const player = $("shared-player");
     if (!player) return;
     const variant = selectedSharedQuality(playback);
+    if (playback?.mode === "e2ee_stream_v2") {
+      if (!sharedE2eeFragmentKey) {
+        setMsg(variant ? `已選擇 ${variant.label}；按下「開始 E2EE 播放」後套用。` : "已切回自動畫質；按下「開始 E2EE 播放」後套用。");
+        return;
+      }
+      const resumeAt = sharedPlaybackResumeTime(player);
+      const wasPaused = player.paused;
+      attachSharedE2eeStreamV2(player, playback, sharedE2eeFragmentKey, {
+        resumeAt,
+        autoplay: !wasPaused,
+      }).catch((err) => setMsg(err.message || "E2EE 畫質切換失敗", true));
+      return;
+    }
     if (sharedHls && Array.isArray(sharedHls.levels)) {
       if (!variant) {
         sharedHls.currentLevel = -1;
@@ -213,7 +249,7 @@
     }
     const nextUrl = variant?.playlistUrl || playback.master_url || "";
     if (!nextUrl) return;
-    const resumeAt = Number(player.currentTime || 0);
+    const resumeAt = sharedPlaybackResumeTime(player);
     const wasPaused = player.paused;
     player.src = nextUrl;
     if (typeof player.load === "function") player.load();
@@ -225,8 +261,47 @@
     }, { once: true });
     setMsg(variant ? `畫質：${variant.label}。` : "畫質：自動。");
   }
+  function bindSharedSeekProtection(player) {
+    if (!player || player.dataset.sharedSeekProtectionBound === "1") return;
+    player.dataset.sharedSeekProtectionBound = "1";
+    player.addEventListener("seeking", () => {
+      sharedUserSeeking = true;
+      sharedLastSeekAt = Date.now();
+      sharedLastSeekTarget = Number(player.currentTime || 0);
+    });
+    const clearSeeking = () => {
+      sharedLastSeekAt = Date.now();
+      sharedLastSeekTarget = Number(player.currentTime || sharedLastSeekTarget || 0);
+      window.setTimeout(() => {
+        if (Date.now() - Number(sharedLastSeekAt || 0) >= 900) {
+          sharedUserSeeking = false;
+        }
+      }, 950);
+    };
+    player.addEventListener("seeked", clearSeeking);
+    player.addEventListener("playing", clearSeeking);
+  }
+  function sharedQualityFallbackDeferredForSeek(player) {
+    if (!player) return false;
+    const recentSeek = Date.now() - Number(sharedLastSeekAt || 0) < 1500;
+    return !!(player.seeking || sharedUserSeeking || recentSeek);
+  }
+  function sharedPlaybackResumeTime(player) {
+    if (!player) return 0;
+    const seekTarget = Number(sharedLastSeekTarget || 0);
+    if (sharedQualityFallbackDeferredForSeek(player) && Number.isFinite(seekTarget) && seekTarget > 0) {
+      return seekTarget;
+    }
+    const current = Number(player.currentTime || 0);
+    return Number.isFinite(current) ? current : 0;
+  }
   function fallbackSharedPlaybackToLowerQuality(playback={}, reason="") {
     if (sharedManualQualitySelection || sharedAutoQualityFallbackApplied) return false;
+    const player = $("shared-player");
+    if (sharedQualityFallbackDeferredForSeek(player)) {
+      setMsg("正在跳轉到指定時間，暫不自動切換畫質。");
+      return false;
+    }
     const fallback = fallbackSharedQuality(playback);
     if (!fallback) return false;
     const current = selectedSharedQuality(playback);
@@ -461,15 +536,50 @@
       }, { once: true });
     }
   }
-  async function attachSharedE2eeStreamV2(player, playback, fragmentKey) {
+  function sharedE2eeQualityOptions(playback={}) {
+    return sharedQualityOptions(playback).filter((option) => option.manifestUrl && option.chunkUrlTemplate);
+  }
+  function preferredSharedE2eeQuality(playback={}, preferOriginal=false) {
+    const options = sharedE2eeQualityOptions(playback);
+    if (!options.length) return null;
+    if (preferOriginal) {
+      return options.find((option) => option.name === "original") || options[0] || null;
+    }
+    const selected = selectedSharedQuality(playback);
+    if (selected && selected.manifestUrl && selected.chunkUrlTemplate) return selected;
+    const preferred = preferredSharedQuality({ ...playback, variants: options });
+    return preferred || options.find((option) => option.name === "original") || options[0] || null;
+  }
+  async function attachSharedE2eeStreamV2(player, playback, fragmentKey, options={}) {
     if (!browserSupportsE2eeStreamV2()) {
       await fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, "目前裝置不支援 E2EE Streaming v2，已退回舊版完整解密播放。");
       return;
     }
-    setMsg("正在讀取 E2EE 分享授權：strict E2EE 仍由瀏覽器端持有 fragment 與解密能力。");
-    const manifestRes = await fetch(withShareSession(playback.manifest_url), { credentials: "same-origin" });
+    if (sharedE2eeStreamCleanup) {
+      try { sharedE2eeStreamCleanup(); } catch (_) {}
+      sharedE2eeStreamCleanup = null;
+    }
+    const activeVariant = preferredSharedE2eeQuality(playback, !!options.preferOriginal);
+    const activeManifestUrl = activeVariant?.manifestUrl || playback.manifest_url || "";
+    const activeChunkUrlTemplate = activeVariant?.chunkUrlTemplate || playback.chunk_url_template || "";
+    if (!activeManifestUrl || !activeChunkUrlTemplate) {
+      await fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, "此 strict E2EE 影音尚未建立可用的 encrypted streaming manifest，已退回舊版完整解密播放。");
+      return;
+    }
+    setMsg(`正在讀取 E2EE 分享授權：strict E2EE 仍由瀏覽器端持有 fragment 與解密能力。${activeVariant?.label ? `畫質：${activeVariant.label}。` : ""}`);
+    const manifestRes = await fetch(withShareSession(activeManifestUrl), { credentials: "same-origin" });
     const manifestJson = await manifestRes.json().catch(() => ({}));
     if (!manifestRes.ok || manifestJson.available === false) {
+      if (activeVariant?.name !== "original" && playback.manifest_url && playback.chunk_url_template) {
+        const select = $("quality-select");
+        if (select) select.value = "original";
+        setMsg(`${activeVariant?.label || "所選畫質"}暫不可用，改用原畫質 encrypted stream。`);
+        await attachSharedE2eeStreamV2(player, playback, fragmentKey, {
+          ...options,
+          preferOriginal: true,
+        });
+        return;
+      }
       await fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, manifestJson.msg || "此 strict E2EE 影音尚未建立 Streaming v2 manifest，已退回舊版完整解密播放。");
       return;
     }
@@ -477,7 +587,17 @@
     const mediaSource = new MediaSource();
     const objectUrl = URL.createObjectURL(mediaSource);
     player.src = objectUrl;
-    setMsg("正在使用 E2EE Streaming v2：密文分段下載、瀏覽器端 Web Worker 解密，伺服器無法看到明文。");
+    const resumeAt = Number(options.resumeAt || 0);
+    const autoplay = !!options.autoplay;
+    if (resumeAt > 0 || autoplay) {
+      player.addEventListener("loadedmetadata", () => {
+        try {
+          if (resumeAt > 0 && Number.isFinite(resumeAt)) player.currentTime = resumeAt;
+          if (autoplay && typeof player.play === "function") player.play().catch(() => {});
+        } catch (_) {}
+      }, { once: true });
+    }
+    setMsg(`正在使用 E2EE Streaming v2：${activeVariant?.label || "自動畫質"}，密文分段下載、瀏覽器端 Web Worker 解密，伺服器無法看到明文。`);
     const worker = createSharedE2eeWorker();
     let nextChunk = 0;
     let sourceBuffer = null;
@@ -488,7 +608,10 @@
       if (closed) return;
       closed = true;
       try { worker.terminate(); } catch (_) {}
+      try { URL.revokeObjectURL(objectUrl); } catch (_) {}
+      if (sharedE2eeStreamCleanup === cleanup) sharedE2eeStreamCleanup = null;
     };
+    sharedE2eeStreamCleanup = cleanup;
     const fallback = async (message, seekTarget = null) => {
       cleanup();
       await fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, message, seekTarget);
@@ -519,7 +642,7 @@
             try { mediaSource.endOfStream(); } catch (_) {}
           }
           cleanup();
-          setMsg("正在使用 E2EE Streaming v2；若裝置或格式不支援快轉，系統會退回舊版完整解密播放。");
+          setMsg(`正在使用 E2EE Streaming v2：${activeVariant?.label || "自動畫質"}；若裝置或格式不支援快轉，系統會退回舊版完整解密播放。`);
           return;
         }
         const meta = manifestJson.chunks?.[nextChunk];
@@ -529,7 +652,7 @@
         }
         let plain = chunkCache.get(Number(meta.chunk_index));
         if (!plain) {
-          const cipher = await fetchSharedE2eeChunkWithRetry(playback.chunk_url_template.replace("__INDEX__", String(meta.chunk_index)));
+          const cipher = await fetchSharedE2eeChunkWithRetry(activeChunkUrlTemplate.replace("__INDEX__", String(meta.chunk_index)));
           plain = await decryptSharedChunkWithWorker(worker, new Uint8Array(rawKey), meta.nonce, cipher);
           chunkCache.set(Number(meta.chunk_index), plain);
           pruneSharedE2eeChunkCache(chunkCache, Number(meta.chunk_index));
@@ -538,7 +661,7 @@
         nextChunk += 1;
         if (pendingSeekChunk !== null && nextChunk > pendingSeekChunk) pendingSeekChunk = null;
         const seekNote = pendingSeekChunk !== null ? "，正在追上快轉目標" : "";
-        setMsg(`正在使用 E2EE Streaming v2：已解密分段 ${nextChunk} / ${manifestJson.chunk_count}${seekNote}。`);
+        setMsg(`正在使用 E2EE Streaming v2：${activeVariant?.label || "自動畫質"}，已解密分段 ${nextChunk} / ${manifestJson.chunk_count}${seekNote}。`);
         queueMicrotask(() => {
           pump().catch((err) => fallback(`E2EE Streaming v2 分段播放失敗，已退回舊版完整解密播放。 (${err.message || "unknown"})`));
         });
@@ -628,6 +751,11 @@
     destroySharedPlaybackArtifacts();
     sharedManualQualitySelection = false;
     sharedAutoQualityFallbackApplied = false;
+    sharedUserSeeking = false;
+    sharedLastSeekAt = 0;
+    sharedLastSeekTarget = 0;
+    sharedE2eeFragmentKey = "";
+    bindSharedSeekProtection(player);
     const qualityHost = $("quality-host");
     if (qualityHost) {
       qualityHost.classList.add("hidden");
@@ -635,12 +763,14 @@
     }
     if (playback.mode === "e2ee_stream_v2") {
       $("e2ee-note").classList.remove("hidden");
+      renderSharedQualityControl(playback);
       setMsg("這是 strict E2EE 分享影音。按下「開始 E2EE 播放」後，才會在瀏覽器端讀取 fragment 並解密。");
       showSharedPlaybackAction("開始 E2EE 播放", async () => {
         const fragmentKey = shareKeyFromFragment();
         if (!fragmentKey) {
           throw new Error("此 E2EE 分享影音缺少連結片段金鑰，無法復原。請向分享者重新取得完整連結；若分享者也遺失，只能重新產生分享。");
         }
+        sharedE2eeFragmentKey = fragmentKey;
         await attachSharedE2eeStreamV2(player, playback, fragmentKey);
       }, "未按下播放前，不會主動要求密碼或開始解密。");
       return;
@@ -664,9 +794,13 @@
     const preferredUrl = preferred?.playlistUrl || playback.master_url || "";
     if (playback.mode === "hls" && browserSupportsNativeHls(video.media_type)) {
       player.src = preferredUrl || (directFallbackAllowed ? (playback.fallback_url || "") : "");
-      player.addEventListener("stalled", () => fallbackSharedPlaybackToLowerQuality(playback, "原生 HLS 偵測到載入停滯"), { once: true });
-      player.addEventListener("waiting", () => fallbackSharedPlaybackToLowerQuality(playback, "原生 HLS 偵測到等待資料"), { once: true });
+      player.addEventListener("stalled", () => fallbackSharedPlaybackToLowerQuality(playback, "原生 HLS 偵測到載入停滯"));
+      player.addEventListener("waiting", () => fallbackSharedPlaybackToLowerQuality(playback, "原生 HLS 偵測到等待資料"));
       player.addEventListener("error", () => {
+        if (sharedQualityFallbackDeferredForSeek(player)) {
+          setMsg("正在跳轉到指定時間，暫不因播放錯誤切換來源。");
+          return;
+        }
         if (!fallbackSharedPlaybackToLowerQuality(playback, "原生 HLS 播放錯誤") && directFallbackAllowed) {
           player.src = playback.fallback_url || playback.stream_url || "";
           setMsg("HLS 播放失敗，已改用直接串流。", true);
@@ -688,10 +822,15 @@
         sharedHls.on(Hls.Events.ERROR, (_event, data) => {
           const detail = data?.details ? String(data.details) : "";
           const type = data?.type ? String(data.type) : "";
-          if (
-            (detail.toLowerCase().includes("buffer") || type.toLowerCase().includes("network") || data?.fatal)
-            && fallbackSharedPlaybackToLowerQuality(playback, detail ? detail : "已降低串流負擔")
-          ) {
+          const shouldTryAutoFallback = detail.toLowerCase().includes("buffer") || type.toLowerCase().includes("network") || data?.fatal;
+          if (shouldTryAutoFallback && sharedQualityFallbackDeferredForSeek(player)) {
+            setMsg("正在跳轉到指定時間，暫不因緩衝等待切換畫質。");
+            if (data?.fatal && typeof sharedHls.recoverMediaError === "function") {
+              try { sharedHls.recoverMediaError(); } catch (_err) {}
+            }
+            return;
+          }
+          if (shouldTryAutoFallback && fallbackSharedPlaybackToLowerQuality(playback, detail ? detail : "已降低串流負擔")) {
             if (data?.fatal && typeof sharedHls.recoverMediaError === "function") {
               try { sharedHls.recoverMediaError(); } catch (_err) {}
             }

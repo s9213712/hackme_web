@@ -4134,6 +4134,71 @@ function updateBackpressureModeFields() {
   });
 }
 
+function formatServerTimeSkew(ms) {
+  const absMs = Math.abs(Number(ms) || 0);
+  if (absMs < 1000) return `${Math.round(absMs)} ms`;
+  if (absMs < 60000) return `${(absMs / 1000).toFixed(1)} 秒`;
+  return `${(absMs / 60000).toFixed(1)} 分鐘`;
+}
+
+function renderServerTimeStatus(serverTime, { sampledAtMs = Date.now() } = {}) {
+  const status = $("server-time-status");
+  if (!status) return;
+  if (!serverTime || typeof serverTime !== "object") {
+    status.textContent = "尚未取得伺服器時間。";
+    status.style.color = "var(--muted)";
+    return;
+  }
+  const serverMs = Number(serverTime.server_time_unix_ms || Date.parse(serverTime.server_time_utc || ""));
+  if (!Number.isFinite(serverMs)) {
+    status.textContent = "伺服器時間格式無法解析，請檢查 /api/version 回傳。";
+    status.style.color = "#ff8a80";
+    return;
+  }
+  const skewMs = serverMs - Number(sampledAtMs || Date.now());
+  const absMs = Math.abs(skewMs);
+  const tone = absMs <= 3000 ? "ok" : (absMs <= 30000 ? "warn" : "bad");
+  const browserText = new Date(Number(sampledAtMs || Date.now())).toLocaleString();
+  const direction = skewMs >= 0 ? "快" : "慢";
+  status.textContent = [
+    `伺服器：${serverTime.server_time_local || serverTime.server_time_utc || "-"}（${serverTime.timezone || "UTC"}，${serverTime.utc_offset_label || ""}）`,
+    `UTC：${serverTime.server_time_utc || "-"}`,
+    `瀏覽器：${browserText}`,
+    `差距：伺服器約${direction} ${formatServerTimeSkew(skewMs)}`,
+    tone === "ok" ? "時間看起來正常" : (tone === "warn" ? "有輕微偏移，建議確認主機 NTP" : "偏移明顯，請檢查主機時間/NTP 與時區設定"),
+  ].join("；");
+  status.style.color = tone === "ok" ? "var(--muted)" : (tone === "warn" ? "#ffb74d" : "#ff8a80");
+}
+
+async function refreshServerTimeStatus() {
+  const status = $("server-time-status");
+  if (status) {
+    status.textContent = "正在檢查伺服器時間...";
+    status.style.color = "var(--muted)";
+  }
+  try {
+    const requestStartedAtMs = Date.now();
+    const res = await apiFetch(API + "/version", {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    const responseReceivedAtMs = Date.now();
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || "版本 API 讀取失敗");
+    renderServerTimeStatus(json.server_time, {
+      sampledAtMs: Math.round((requestStartedAtMs + responseReceivedAtMs) / 2),
+    });
+    if (json.server_time?.timezone && $("s-server-timezone") && !$("s-server-timezone").value) {
+      $("s-server-timezone").value = json.server_time.timezone;
+    }
+  } catch (err) {
+    if (status) {
+      status.textContent = `伺服器時間檢查失敗：${err.message || "請求失敗"}`;
+      status.style.color = "#ff8a80";
+    }
+  }
+}
+
 function renderBackpressureStatus(backpressure) {
   const status = $("server-backpressure-status");
   if (!status) return;
@@ -4285,6 +4350,8 @@ async function loadSettings() {
   if ($("s-server-ssl-enabled")) $("s-server-ssl-enabled").checked = !!s.server_ssl_enabled;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
+  if ($("s-server-timezone")) $("s-server-timezone").value = s.server_timezone || "UTC";
+  renderServerTimeStatus(json.server_time);
   if ($("s-server-backpressure-enabled")) $("s-server-backpressure-enabled").checked = s.server_backpressure_enabled !== false;
   if ($("s-server-backpressure-mode")) $("s-server-backpressure-mode").value = s.server_backpressure_mode || "auto";
   if ($("s-server-backpressure-thread-capacity")) $("s-server-backpressure-thread-capacity").value = Number(s.server_backpressure_thread_capacity || 0);
@@ -4371,6 +4438,10 @@ async function loadSettings() {
   if ($("s-module-videos-min-role")) $("s-module-videos-min-role").value = s.module_videos_min_role || "user";
   if ($("s-video-tip-fee-percent")) $("s-video-tip-fee-percent").value = s.video_tip_fee_percent ?? 5;
   if ($("s-video-tip-min-points")) $("s-video-tip-min-points").value = s.video_tip_min_points ?? 1;
+  if ($("s-video-e2ee-derivatives-enabled")) $("s-video-e2ee-derivatives-enabled").checked = s.video_e2ee_derivatives_enabled !== false;
+  if ($("s-video-e2ee-derivative-heights")) $("s-video-e2ee-derivative-heights").value = s.video_e2ee_derivative_heights || "720,480";
+  if ($("s-video-e2ee-derivative-reject-larger-than-original")) $("s-video-e2ee-derivative-reject-larger-than-original").checked = s.video_e2ee_derivative_reject_larger_than_original !== false;
+  if ($("s-video-e2ee-derivative-quota-exempt")) $("s-video-e2ee-derivative-quota-exempt").checked = s.video_e2ee_derivative_quota_exempt !== false;
   if ($("s-site-bg")) $("s-site-bg").value = s.site_bg || "#11131d";
   if ($("s-site-theme-mode")) $("s-site-theme-mode").value = s.site_theme_mode || "dark";
   if ($("s-site-surface")) $("s-site-surface").value = s.site_surface || "#1b2030";
@@ -6026,6 +6097,7 @@ async function saveSettings() {
     server_ssl_enabled: $("s-server-ssl-enabled") ? !!$("s-server-ssl-enabled").checked : true,
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
+    server_timezone: ($("s-server-timezone")?.value || "UTC").trim() || "UTC",
     server_backpressure_enabled: $("s-server-backpressure-enabled") ? !!$("s-server-backpressure-enabled").checked : true,
     server_backpressure_mode: $("s-server-backpressure-mode")?.value || "auto",
     server_backpressure_thread_capacity: parseInt($("s-server-backpressure-thread-capacity")?.value || "0", 10) || 0,
@@ -6073,6 +6145,10 @@ async function saveSettings() {
     module_videos_min_role: $("s-module-videos-min-role")?.value || "user",
     video_tip_fee_percent: Number($("s-video-tip-fee-percent")?.value || 5),
     video_tip_min_points: parseInt($("s-video-tip-min-points")?.value || "1"),
+    video_e2ee_derivatives_enabled: $("s-video-e2ee-derivatives-enabled") ? !!$("s-video-e2ee-derivatives-enabled").checked : true,
+    video_e2ee_derivative_heights: ($("s-video-e2ee-derivative-heights")?.value || "720,480").trim(),
+    video_e2ee_derivative_reject_larger_than_original: $("s-video-e2ee-derivative-reject-larger-than-original") ? !!$("s-video-e2ee-derivative-reject-larger-than-original").checked : true,
+    video_e2ee_derivative_quota_exempt: $("s-video-e2ee-derivative-quota-exempt") ? !!$("s-video-e2ee-derivative-quota-exempt").checked : true,
     site_theme_mode: $("s-site-theme-mode")?.value || "dark",
     site_bg: $("s-site-bg")?.value || "#11131d",
     site_surface: $("s-site-surface")?.value || "#1b2030",
@@ -6105,6 +6181,7 @@ async function saveSettings() {
   const ssl = json.server_ssl || {};
   const driveStorage = json.cloud_drive_storage || {};
   renderBackpressureStatus(json.backpressure);
+  renderServerTimeStatus(json.server_time);
   const restartParts = [];
   if (bind.restart_required) restartParts.push("listen IP/port");
   if (ssl.restart_required) restartParts.push("HTTPS 開關");

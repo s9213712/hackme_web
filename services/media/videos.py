@@ -21,6 +21,9 @@ VIDEO_STATUSES = {"processing", "ready", "blocked"}
 VIDEO_TITLE_MAX = 120
 VIDEO_DESCRIPTION_MAX = 2000
 VIDEO_COMMENT_MAX = 1000
+VIDEO_DANMAKU_MAX = 80
+VIDEO_DANMAKU_WINDOW_MAX_MS = 120_000
+VIDEO_DANMAKU_TIME_MAX_MS = 24 * 60 * 60 * 1000
 VIDEO_VIEW_DEDUP_HOURS = 6
 VIDEO_VIEW_MIN_SECONDS = 5
 VIDEO_TIP_MIN_POINTS = 1
@@ -39,6 +42,9 @@ VIDEO_SHARE_WRAP_ALGORITHM = "AES-GCM"
 VIDEO_SHARE_WRAP_VERSION = 1
 _VIDEO_SHARE_UNSET = object()
 UNSAFE_COMMENT_RE = re.compile(r"(<\s*script\b|on[a-z]+\s*=|javascript\s*:)", re.IGNORECASE)
+VIDEO_DANMAKU_MODES = {"scroll", "top", "bottom"}
+VIDEO_DANMAKU_SIZES = {"small", "normal", "large"}
+VIDEO_DANMAKU_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 VIDEO_FILENAME_EXTENSIONS = {".mp4", ".m4v", ".mov", ".webm", ".ogv", ".avi", ".mkv"}
 AUDIO_FILENAME_EXTENSIONS = {".mp3", ".m4a", ".aac", ".flac", ".wav", ".weba", ".opus", ".oga", ".ogg"}
 MEDIA_FILENAME_EXTENSIONS = VIDEO_FILENAME_EXTENSIONS | AUDIO_FILENAME_EXTENSIONS
@@ -72,6 +78,11 @@ def _actor_value(actor, key, default=None):
 
 def _actor_owns(actor, owner_user_id):
     return bool(actor and _safe_int(_actor_value(actor, "id")) == _safe_int(owner_user_id))
+
+
+def _actor_is_video_moderator(actor):
+    role = str(_actor_value(actor, "role", "") or "").strip().lower()
+    return role in {"root", "super_admin", "admin", "manager"}
 
 
 def _as_dict(row):
@@ -221,6 +232,26 @@ def ensure_video_schema(conn):
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS video_danmaku (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            time_ms INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            mode TEXT NOT NULL DEFAULT 'scroll',
+            color TEXT NOT NULL DEFAULT '#ffffff',
+            size TEXT NOT NULL DEFAULT 'normal',
+            status TEXT NOT NULL DEFAULT 'visible',
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            CHECK (mode IN ('scroll', 'top', 'bottom')),
+            CHECK (size IN ('small', 'normal', 'large')),
+            CHECK (status IN ('visible', 'hidden', 'deleted', 'pending'))
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS video_tips (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
@@ -293,6 +324,8 @@ def ensure_video_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_boost ON videos(boost_expires_at, boost_points_total)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_views_video_created ON video_views(video_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_comments_video_created ON video_comments(video_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_video_danmaku_video_time ON video_danmaku(video_id, status, time_ms, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_video_danmaku_user_created ON video_danmaku(user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_tips_video_created ON video_tips(video_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_share_links_video_created ON video_share_links(video_id, created_at)")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_video_tips_idempotency ON video_tips(idempotency_key) WHERE idempotency_key IS NOT NULL")
@@ -818,6 +851,37 @@ def normalize_comment(value):
     return content
 
 
+def normalize_danmaku_content(value):
+    content = re.sub(r"\s+", " ", str(value or "").replace("\x00", " ").strip())
+    if not content:
+        raise ValueError("danmaku content is required")
+    if len(content) > VIDEO_DANMAKU_MAX:
+        raise ValueError(f"danmaku content must be {VIDEO_DANMAKU_MAX} characters or fewer")
+    if UNSAFE_COMMENT_RE.search(content):
+        raise ValueError("danmaku content contains unsafe markup")
+    return content
+
+
+def normalize_danmaku_mode(value):
+    mode = str(value or "scroll").strip().lower()
+    return mode if mode in VIDEO_DANMAKU_MODES else "scroll"
+
+
+def normalize_danmaku_size(value):
+    size = str(value or "normal").strip().lower()
+    return size if size in VIDEO_DANMAKU_SIZES else "normal"
+
+
+def normalize_danmaku_color(value):
+    color = str(value or "#ffffff").strip()
+    return color.lower() if VIDEO_DANMAKU_COLOR_RE.match(color) else "#ffffff"
+
+
+def normalize_danmaku_time_ms(value):
+    time_ms = max(0, min(VIDEO_DANMAKU_TIME_MAX_MS, _safe_int(value, 0)))
+    return time_ms
+
+
 def _cloud_file_row(conn, cloud_file_id):
     return conn.execute("SELECT * FROM uploaded_files WHERE id=?", (str(cloud_file_id or ""),)).fetchone()
 
@@ -890,6 +954,8 @@ def publish_video(
     file_row = validate_publishable_cloud_file(conn, actor=actor, cloud_file_id=cloud_file_id)
     cover_row = validate_video_cover_file(conn, actor=actor, cover_file_id=cover_file_id)
     normalized_visibility = normalize_visibility(visibility)
+    if normalized_visibility == "public" and is_e2ee_file(file_row):
+        raise ValueError("E2EE 影音不能以公開列表直連播放；請改用持連結可看並建立瀏覽器端分享授權")
     now = utc_now()
     existing = conn.execute("SELECT * FROM videos WHERE cloud_file_id=?", (file_row["id"],)).fetchone()
     if existing:
@@ -966,6 +1032,8 @@ def can_view_video(actor, video_row, *, for_stream=False):
         return bool(_actor_owns(actor, video_row["owner_user_id"]) and not for_stream)
     visibility = video_row["visibility"]
     if visibility == "public":
+        if str(_row_get(video_row, "cloud_privacy_mode", "") or "").strip().lower() == "e2ee":
+            return _actor_owns(actor, video_row["owner_user_id"])
         return True
     if visibility == "unlisted":
         return _actor_owns(actor, video_row["owner_user_id"])
@@ -1016,11 +1084,12 @@ def list_videos(conn, *, actor=None, sort="new", page=1, page_size=24, query="")
     params = []
     order_params = []
     where = ["v.status='ready'", "v.deleted_at IS NULL", "f.deleted_at IS NULL"]
+    public_direct_clause = "(v.visibility='public' AND COALESCE(f.privacy_mode,'')!='e2ee')"
     if actor:
-        where.append("(v.visibility='public' OR v.owner_user_id=?)")
+        where.append(f"({public_direct_clause} OR v.owner_user_id=?)")
         params.append(int(_actor_value(actor, "id")))
     else:
-        where.append("v.visibility='public'")
+        where.append(public_direct_clause)
     if search_terms:
         for term in search_terms:
             pattern = _sqlite_like_pattern(term)
@@ -1475,6 +1544,107 @@ def list_video_comments(conn, *, actor=None, video_id, limit=100):
         (int(video_id), min(200, max(1, _safe_int(limit, 100)))),
     ).fetchall()
     return [serialize_comment(row) for row in rows]
+
+
+def serialize_danmaku(row, *, actor=None, video_owner_user_id=None):
+    data = _as_dict(row)
+    if not data:
+        return None
+    for key in ("id", "video_id", "user_id", "time_ms"):
+        if key in data and data[key] is not None:
+            data[key] = int(data[key])
+    owner_id = video_owner_user_id if video_owner_user_id is not None else data.get("video_owner_user_id")
+    data["can_delete"] = bool(
+        _actor_owns(actor, data.get("user_id"))
+        or _actor_owns(actor, owner_id)
+        or _actor_is_video_moderator(actor)
+    )
+    return data
+
+
+def add_video_danmaku(conn, *, actor, video_id, time_ms, content, mode="scroll", color="#ffffff", size="normal"):
+    ensure_video_schema(conn)
+    if not actor:
+        raise PermissionError("login required")
+    video = get_video(conn, video_id, actor=actor)
+    if not video:
+        raise ValueError("video not found")
+    if str(video.get("media_type") or "video") != "video":
+        raise ValueError("danmaku is only available for video media")
+    now = utc_now()
+    cur = conn.execute(
+        """
+        INSERT INTO video_danmaku (video_id, user_id, time_ms, content, mode, color, size, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'visible', ?, ?)
+        """,
+        (
+            int(video_id),
+            int(_actor_value(actor, "id")),
+            normalize_danmaku_time_ms(time_ms),
+            normalize_danmaku_content(content),
+            normalize_danmaku_mode(mode),
+            normalize_danmaku_color(color),
+            normalize_danmaku_size(size),
+            now,
+            now,
+        ),
+    )
+    return get_video_danmaku(conn, cur.lastrowid, actor=actor, video_owner_user_id=video.get("owner_user_id"))
+
+
+def get_video_danmaku(conn, danmaku_id, *, actor=None, video_owner_user_id=None):
+    row = conn.execute(
+        """
+        SELECT d.*, u.username, u.nickname
+        FROM video_danmaku d
+        LEFT JOIN users u ON u.id=d.user_id
+        WHERE d.id=?
+        """,
+        (int(danmaku_id),),
+    ).fetchone()
+    return serialize_danmaku(row, actor=actor, video_owner_user_id=video_owner_user_id)
+
+
+def list_video_danmaku(conn, *, actor=None, video_id, from_ms=0, to_ms=60000, limit=300):
+    ensure_video_schema(conn)
+    video = get_video(conn, video_id, actor=actor)
+    start = normalize_danmaku_time_ms(from_ms)
+    requested_end = normalize_danmaku_time_ms(to_ms)
+    end = max(start, min(requested_end, start + VIDEO_DANMAKU_WINDOW_MAX_MS))
+    rows = conn.execute(
+        """
+        SELECT d.*, u.username, u.nickname
+        FROM video_danmaku d
+        LEFT JOIN users u ON u.id=d.user_id
+        WHERE d.video_id=? AND d.status='visible' AND d.time_ms>=? AND d.time_ms<=?
+        ORDER BY d.time_ms ASC, d.id ASC
+        LIMIT ?
+        """,
+        (int(video_id), start, end, min(500, max(1, _safe_int(limit, 300)))),
+    ).fetchall()
+    return [serialize_danmaku(row, actor=actor, video_owner_user_id=video.get("owner_user_id")) for row in rows]
+
+
+def delete_video_danmaku(conn, *, actor, video_id, danmaku_id):
+    ensure_video_schema(conn)
+    if not actor:
+        raise PermissionError("login required")
+    video = get_video(conn, video_id, actor=actor)
+    row = conn.execute("SELECT * FROM video_danmaku WHERE id=? AND video_id=?", (int(danmaku_id), int(video_id))).fetchone()
+    if not row:
+        raise ValueError("danmaku not found")
+    if not (
+        _actor_owns(actor, row["user_id"])
+        or _actor_owns(actor, video.get("owner_user_id"))
+        or _actor_is_video_moderator(actor)
+    ):
+        raise PermissionError("cannot delete this danmaku")
+    now = utc_now()
+    conn.execute(
+        "UPDATE video_danmaku SET status='deleted', updated_at=? WHERE id=?",
+        (now, int(danmaku_id)),
+    )
+    return {"ok": True, "danmaku_id": int(danmaku_id), "status": "deleted"}
 
 
 def calculate_tip_fee(amount, fee_percent):

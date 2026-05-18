@@ -9,6 +9,7 @@ from services.platform.settings_metadata import (
     SETTING_DETAILS,
     setting_groups_payload,
 )
+from services.platform.time_settings import COMMON_SERVER_TIMEZONES, normalize_server_timezone, server_time_payload
 from services.server.backpressure import apply_backpressure_settings, backpressure_status
 from services.security.captcha import normalize_captcha_mode
 from services.storage.global_capacity import parse_global_capacity_limit_mb
@@ -182,6 +183,8 @@ def register_system_admin_settings_routes(app, ctx):
                 "server_ssl": server_ssl_payload(settings),
                 "cloud_drive_storage": cloud_drive_storage_payload(settings),
                 "backpressure": backpressure_status(app),
+                "server_time": server_time_payload(settings),
+                "server_timezones": list(COMMON_SERVER_TIMEZONES),
             })
 
         try:
@@ -210,6 +213,11 @@ def register_system_admin_settings_routes(app, ctx):
             if port is None:
                 return json_resp({"ok":False,"msg":"server_listen_port 必須是 1-65535，或 0/空值沿用環境變數"}), 400
             data["server_listen_port"] = port
+        if "server_timezone" in data:
+            timezone_name = normalize_server_timezone(data.get("server_timezone"))
+            if timezone_name is None:
+                return json_resp({"ok":False,"msg":"server_timezone 必須是有效的 IANA 時區名稱，例如 UTC、Asia/Taipei 或 America/New_York"}), 400
+            data["server_timezone"] = timezone_name
         if "comfyui_connection_mode" in data:
             mode = str(data.get("comfyui_connection_mode") or "").strip().lower()
             if mode not in {"local", "remote", "diffusers"}:
@@ -378,6 +386,18 @@ def register_system_admin_settings_routes(app, ctx):
             if minimum_points is None:
                 return json_resp({"ok":False,"msg":"video_tip_min_points 必須是 1-1000000"}), 400
             data["video_tip_min_points"] = minimum_points
+        if "video_e2ee_derivative_heights" in data:
+            allowed = []
+            for part in str(data.get("video_e2ee_derivative_heights") or "").replace(";", ",").split(","):
+                try:
+                    height = int(str(part or "").strip().lower().replace("p", ""))
+                except Exception:
+                    continue
+                if height in {360, 480, 720, 1080} and height not in allowed:
+                    allowed.append(height)
+            if not allowed:
+                return json_resp({"ok":False,"msg":"video_e2ee_derivative_heights 至少要包含 360、480、720 或 1080 其中一種"}), 400
+            data["video_e2ee_derivative_heights"] = ",".join(str(item) for item in allowed)
         if "security_log_tail_lines" in data:
             tail_lines = parse_int_in_range(data.get("security_log_tail_lines"), 1, 10_000)
             if tail_lines is None:
@@ -431,6 +451,8 @@ def register_system_admin_settings_routes(app, ctx):
             "server_ssl": server_ssl_payload(get_system_settings()),
             "cloud_drive_storage": cloud_drive_storage_payload(get_system_settings()),
             "backpressure": backpressure_status(app) if backpressure_state else {},
+            "server_time": server_time_payload(get_system_settings()),
+            "server_timezones": list(COMMON_SERVER_TIMEZONES),
         })
 
     @app.route("/api/root/backpressure", methods=["GET", "PUT", "POST"])

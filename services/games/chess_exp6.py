@@ -116,7 +116,9 @@ _SEARCH_PROFILES: dict[str, dict] = {
 EXP6_DEFAULT_SEARCH_PROFILE = "balanced"
 
 _OPENING_PRINCIPLE_ENV = "EXP6_OPENING_PRINCIPLES"
-_OPENING_PRINCIPLE_DEFAULT = "0"
+_OPENING_PRINCIPLE_DEFAULT = "1"
+_CONVERSION_FILTER_ENV = "EXP6_CONVERSION_FILTERS"
+_CONVERSION_FILTER_DEFAULT = "0"
 _PIECE_ORDER_VALUE_CP = {
     chess.PAWN: 100,
     chess.KNIGHT: 320,
@@ -238,6 +240,57 @@ def _opening_principles_enabled() -> bool:
     return value not in {"", "0", "false", "no", "off"}
 
 
+def _conversion_filters_enabled() -> bool:
+    value = os.environ.get(_CONVERSION_FILTER_ENV, _CONVERSION_FILTER_DEFAULT).strip().lower()
+    return value not in {"", "0", "false", "no", "off"}
+
+
+def _material_margin_for_color(board: chess.Board, color: chess.Color) -> int:
+    margin = 0
+    for piece in board.piece_map().values():
+        value = _PIECE_ORDER_VALUE_CP.get(piece.piece_type, 0)
+        margin += value if piece.color == color else -value
+    return int(margin)
+
+
+def _after_move(board: chess.Board, move: chess.Move, *, stack: bool = True) -> chess.Board:
+    after = board.copy(stack=stack)
+    after.push(move)
+    return after
+
+
+def _would_stalemate(board: chess.Board, move: chess.Move) -> bool:
+    try:
+        return _after_move(board, move, stack=False).is_stalemate()
+    except Exception:
+        return False
+
+
+def _opponent_mate_in_one_moves(board: chess.Board) -> list[chess.Move]:
+    mates: list[chess.Move] = []
+    for reply in board.legal_moves:
+        board.push(reply)
+        try:
+            if board.is_checkmate():
+                mates.append(reply)
+        finally:
+            board.pop()
+    return mates
+
+
+def _is_repetition_risk(board: chess.Board) -> bool:
+    return board.can_claim_threefold_repetition() or board.is_repetition(2)
+
+
+def _opponent_repetition_replies(board: chess.Board) -> list[chess.Move]:
+    replies: list[chess.Move] = []
+    for reply in board.legal_moves:
+        after = _after_move(board, reply, stack=True)
+        if _is_repetition_risk(after):
+            replies.append(reply)
+    return replies
+
+
 def _opening_principle_score(board: chess.Board, move: chess.Move) -> int:
     if board.fullmove_number > 12 or board.is_check():
         return 0
@@ -322,6 +375,165 @@ def _opening_principle_filter(board: chess.Board, best_move: chess.Move | None) 
     if candidate != best_move and candidate_score >= max(450, best_score + 500):
         return candidate
     return best_move
+
+
+def _score_move_for_side(
+    board: chess.Board,
+    move: chess.Move,
+    *,
+    evaluator: NeuralEvaluator,
+    ai_color: chess.Color,
+    move_order_fn,
+) -> int:
+    try:
+        after = _after_move(board, move, stack=False)
+    except Exception:
+        return -10_000_000
+    if after.is_checkmate():
+        return 10_000_000
+    if after.is_stalemate():
+        return -30_000
+    cp = int(evaluator(after))
+    if after.turn != ai_color:
+        cp = -cp
+    return cp + int(move_order_fn(board, move, 0) // 100)
+
+
+def _avoid_claimable_repetition_filter(
+    board: chess.Board,
+    best_move: chess.Move | None,
+    *,
+    score_move,
+) -> chess.Move | None:
+    if best_move is None or len(board.move_stack) < 6:
+        return best_move
+    after_best = _after_move(board, best_move, stack=True)
+    if after_best.is_checkmate() or not _is_repetition_risk(after_best):
+        return best_move
+
+    color = board.turn
+    margin = _material_margin_for_color(board, color)
+    if margin < -250:
+        return best_move
+
+    chosen_score = int(score_move(best_move))
+    allowed_score_drop = 900 if margin >= 900 else (600 if margin >= 200 else 220)
+    allowed_material_drop = 320 if margin >= 900 else (220 if margin >= 200 else 80)
+    candidates: list[tuple[int, int, str, chess.Move]] = []
+    for candidate in board.legal_moves:
+        if candidate == best_move or _would_stalemate(board, candidate):
+            continue
+        after = _after_move(board, candidate, stack=True)
+        if after.is_checkmate():
+            return candidate
+        if _is_repetition_risk(after):
+            continue
+        if _opponent_mate_in_one_moves(after):
+            continue
+        candidate_margin = _material_margin_for_color(after, color)
+        if candidate_margin < margin - allowed_material_drop:
+            continue
+        score = int(score_move(candidate))
+        if score < chosen_score - allowed_score_drop:
+            continue
+        candidates.append((score, candidate_margin, candidate.uci(), candidate))
+    if not candidates:
+        return best_move
+    return sorted(candidates, reverse=True)[0][3]
+
+
+def _avoid_reversible_cycle_when_ahead_filter(
+    board: chess.Board,
+    best_move: chess.Move | None,
+    *,
+    score_move,
+) -> chess.Move | None:
+    if best_move is None or len(board.move_stack) < 2:
+        return best_move
+    color = board.turn
+    margin = _material_margin_for_color(board, color)
+    if margin < -150:
+        return best_move
+    own_previous = board.move_stack[-2]
+    if not (
+        own_previous.from_square == best_move.to_square
+        and own_previous.to_square == best_move.from_square
+        and best_move.promotion is None
+        and not board.is_capture(best_move)
+        and not board.gives_check(best_move)
+    ):
+        return best_move
+
+    chosen_score = int(score_move(best_move))
+    candidates: list[tuple[int, int, str, chess.Move]] = []
+    for candidate in board.legal_moves:
+        if candidate == best_move or _would_stalemate(board, candidate):
+            continue
+        if (
+            own_previous.from_square == candidate.to_square
+            and own_previous.to_square == candidate.from_square
+            and candidate.promotion is None
+            and not board.is_capture(candidate)
+            and not board.gives_check(candidate)
+        ):
+            continue
+        after = _after_move(board, candidate, stack=True)
+        if after.is_checkmate():
+            return candidate
+        if _is_repetition_risk(after) or _opponent_mate_in_one_moves(after):
+            continue
+        candidate_margin = _material_margin_for_color(after, color)
+        if candidate_margin < margin - 220:
+            continue
+        score = int(score_move(candidate))
+        if score < chosen_score - 500:
+            continue
+        candidates.append((score, candidate_margin, candidate.uci(), candidate))
+    if not candidates:
+        return best_move
+    return sorted(candidates, reverse=True)[0][3]
+
+
+def _avoid_enabling_opponent_repetition_when_ahead_filter(
+    board: chess.Board,
+    best_move: chess.Move | None,
+    *,
+    score_move,
+) -> chess.Move | None:
+    if best_move is None or len(board.move_stack) < 6:
+        return best_move
+    color = board.turn
+    margin = _material_margin_for_color(board, color)
+    if margin < -150:
+        return best_move
+    after_best = _after_move(board, best_move, stack=True)
+    if after_best.is_checkmate() or not _opponent_repetition_replies(after_best):
+        return best_move
+
+    chosen_score = int(score_move(best_move))
+    allowed_score_drop = 1000 if margin >= 900 else (650 if margin >= 200 else 260)
+    allowed_material_drop = 360 if margin >= 900 else (240 if margin >= 200 else 100)
+    candidates: list[tuple[int, int, str, chess.Move]] = []
+    for candidate in board.legal_moves:
+        if candidate == best_move or _would_stalemate(board, candidate):
+            continue
+        after = _after_move(board, candidate, stack=True)
+        if after.is_checkmate():
+            return candidate
+        if _is_repetition_risk(after):
+            continue
+        if _opponent_repetition_replies(after) or _opponent_mate_in_one_moves(after):
+            continue
+        candidate_margin = _material_margin_for_color(after, color)
+        if candidate_margin < margin - allowed_material_drop:
+            continue
+        score = int(score_move(candidate))
+        if score < chosen_score - allowed_score_drop:
+            continue
+        candidates.append((score, candidate_margin, candidate.uci(), candidate))
+    if not candidates:
+        return best_move
+    return sorted(candidates, reverse=True)[0][3]
 
 
 def _ensure_default_weights() -> Path:
@@ -416,6 +628,17 @@ def choose_experiment_neural_move(
     )
     if opening_principles:
         best_move = _opening_principle_filter(board, best_move)
+    if _conversion_filters_enabled():
+        score_move = lambda move: _score_move_for_side(
+            board,
+            move,
+            evaluator=evaluator,
+            ai_color=ai_color,
+            move_order_fn=move_order_fn,
+        )
+        best_move = _avoid_claimable_repetition_filter(board, best_move, score_move=score_move)
+        best_move = _avoid_reversible_cycle_when_ahead_filter(board, best_move, score_move=score_move)
+        best_move = _avoid_enabling_opponent_repetition_when_ahead_filter(board, best_move, score_move=score_move)
     if best_move is None:
         return None
     return _move_dict(board, best_move)

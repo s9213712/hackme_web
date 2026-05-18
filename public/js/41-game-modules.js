@@ -12,7 +12,7 @@
     { key: "open_world", title: "都市開放世界", subtitle: "3D 城市探索 / 駕車任務 / 警戒追逐" },
     { key: "bullet_hell", title: "彈幕遊戲", subtitle: "閃避密集彈幕並反擊" },
     { key: "stickman_shooter", title: "火柴人橫向射擊", subtitle: "2D 側捲平台射擊 / 合作解謎" },
-    { key: "real_tetris", title: "真實版俄羅斯方塊", subtitle: "剛體物理與 90% 消線" },
+    { key: "real_tetris", title: "真實版俄羅斯方塊", subtitle: "剛體物理與 99% 消線" },
     { key: "snake", title: "貪食蛇", subtitle: "滑動或方向鍵控制蛇吃食物" },
     { key: "game_2048", title: "2048", subtitle: "合併數字方塊，挑戰最高分" },
     { key: "brick_breaker", title: "打磚塊", subtitle: "移動擋板反彈球打掉磚塊" },
@@ -177,7 +177,7 @@
     real_tetris: [
       { id: "physics-600", label: "物理版 600 分", target: 600, metric: "score" },
       { id: "collapse-2", label: "觸發 2 次倒塌", target: 2, metric: "collapse" },
-      { id: "line-2", label: "90% 消線 2 行", target: 2, metric: "lines" },
+      { id: "line-2", label: "99% 消線 2 行", target: 2, metric: "lines" },
     ],
     space_shooter: [
       { id: "score-1500", label: "出擊 1500 分", target: 1500, metric: "score" },

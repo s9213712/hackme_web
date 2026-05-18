@@ -176,6 +176,44 @@ function useOneA2BHint() {
   updateOneA2BStatus();
 }
 
+function handleOneA2BKeypad(key) {
+  if (!oneA2BState) startOneA2BGame();
+  if (!oneA2BState || oneA2BState.completedAt) return;
+  const input = $("onea2b-guess-input");
+  if (!input) return;
+  const current = normalizeOneA2BGuess(input.value || "");
+  if (key === "enter") {
+    submitOneA2BGuess();
+    return;
+  }
+  if (key === "back") {
+    input.value = current.slice(0, -1);
+    input.focus();
+    return;
+  }
+  if (key === "clear") {
+    input.value = "";
+    input.focus();
+    return;
+  }
+  if (!/^\d$/.test(String(key || ""))) return;
+  if (!current && key === "0") {
+    setOneA2BNotice("首位不可為 0。");
+    updateOneA2BStatus();
+    input.focus();
+    return;
+  }
+  if (current.includes(key)) {
+    setOneA2BNotice("同一組猜測不能重複使用數字。");
+    updateOneA2BStatus();
+    input.focus();
+    return;
+  }
+  input.value = normalizeOneA2BGuess(`${current}${key}`);
+  input.focus();
+  if (input.value.length >= 4) updateOneA2BStatus("已輸入 4 位，可送出。");
+}
+
 (function () {
   window.registerHackmeGameViewModule?.({
     key: "1a2b",
@@ -210,6 +248,11 @@ function useOneA2BHint() {
       }
       if (type === "click" && event.target?.closest?.("#onea2b-guess-btn")) {
         submitOneA2BGuess();
+        return true;
+      }
+      const keypadBtn = type === "click" ? event.target?.closest?.("[data-onea2b-key]") : null;
+      if (keypadBtn) {
+        handleOneA2BKeypad(keypadBtn.dataset.onea2bKey || "");
         return true;
       }
       const guessInput = event.target?.closest?.("#onea2b-guess-input");

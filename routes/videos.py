@@ -1,4 +1,7 @@
 from pathlib import Path
+import base64
+import hashlib
+import hmac
 import html
 import mimetypes
 import json
@@ -27,13 +30,18 @@ from services.media.streaming import (
     mark_stream_asset_processing,
     repair_hls_master_manifest_text,
     should_auto_prepare_stream,
+    STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON,
     stream_playback_payload,
 )
 from services.media.e2ee_streaming import (
     ensure_e2ee_stream_v2_schema,
     get_e2ee_stream_v2_status,
+    list_e2ee_stream_v2_variants,
     resolve_e2ee_chunk_response,
+    resolve_e2ee_variant_chunk_response,
     serialize_manifest_for_client,
+    serialize_variant_manifest_for_client,
+    upsert_e2ee_stream_v2_variant,
     upsert_e2ee_stream_v2_asset,
 )
 from services.job_center import (
@@ -44,16 +52,19 @@ from services.job_center import (
 )
 from services.storage.storage_albums import create_storage_file_entry, ensure_storage_album_schema
 from services.security.upload_security import safe_public_filename
-from services.share_access_events import log_share_access_event
+from services.share_access_events import log_share_access_event_once
 from services.media.videos import (
     add_video_comment,
+    add_video_danmaku,
     boost_owner_video,
+    delete_video_danmaku,
     delete_owner_video,
     ensure_video_schema,
     ensure_video_share_link,
     get_video,
     list_owner_videos,
     list_video_comments,
+    list_video_danmaku,
     list_videos,
     mark_video_share_link_accessed,
     publish_video,
@@ -568,6 +579,8 @@ def register_video_routes(app, deps):
         if current and current.get("status") == "processing" and (not force or _stream_worker_is_active(file_row["id"])):
             return current, None, False
         asset = mark_stream_asset_processing(conn, file_row=file_row)
+        if asset and asset.get("status") == "unavailable":
+            return asset, asset.get("error_message") or "HLS 串流不可用", False
         if video_id:
             _mark_video_stream_processing(conn, file_id=file_row["id"], video_id=video_id)
         _sync_hls_platform_job(
@@ -658,6 +671,32 @@ def register_video_routes(app, deps):
             "HACKME_E2EE_STREAM_BUNDLE_MAX_MB",
             128 * 1024 * 1024,
         )
+
+    def _bool_setting(settings, key, default=True):
+        value = (settings or {}).get(key, default)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+    def _e2ee_derivative_policy():
+        settings = get_system_settings() or {}
+        raw_heights = str(settings.get("video_e2ee_derivative_heights") or "720,480")
+        allowed = []
+        for part in raw_heights.replace(";", ",").split(","):
+            try:
+                height = int(str(part or "").strip().lower().replace("p", ""))
+            except Exception:
+                continue
+            if height in {360, 480, 720, 1080} and height not in allowed:
+                allowed.append(height)
+        if not allowed:
+            allowed = [720, 480]
+        return {
+            "enabled": _bool_setting(settings, "video_e2ee_derivatives_enabled", True),
+            "allowed_heights": allowed,
+            "reject_larger_than_original": _bool_setting(settings, "video_e2ee_derivative_reject_larger_than_original", True),
+            "quota_exempt": _bool_setting(settings, "video_e2ee_derivative_quota_exempt", True),
+        }
 
     def _default_media_title(file_storage):
         filename = safe_public_filename(getattr(file_storage, "filename", "") or "media")
@@ -794,10 +833,85 @@ def register_video_routes(app, deps):
     def _shared_video_request_session_id():
         return str(request.headers.get("X-Video-Share-Session") or request.args.get("share_session") or "").strip()
 
+    def _shared_video_session_secret():
+        secret = str(app.config.get("SECRET_KEY") or "").strip()
+        return secret.encode("utf-8") if secret else b"hackme-web-shared-video-session"
+
+    def _shared_video_session_token_digest(token):
+        return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+    def _shared_video_session_signature(payload_text):
+        return hmac.new(
+            _shared_video_session_secret(),
+            str(payload_text or "").encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def _encode_shared_video_session_payload(payload):
+        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    def _decode_shared_video_session_payload(payload_text):
+        padded = str(payload_text or "") + ("=" * (-len(str(payload_text or "")) % 4))
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        data = json.loads(raw.decode("utf-8"))
+        return data if isinstance(data, dict) else None
+
+    def _signed_shared_video_session_id(token, *, password_verified=False, hours=8):
+        expires_at = (datetime.utcnow() + timedelta(hours=max(1, int(hours)))).replace(microsecond=0).isoformat()
+        payload_text = _encode_shared_video_session_payload({
+            "v": 1,
+            "token_digest": _shared_video_session_token_digest(token),
+            "password_verified": bool(password_verified),
+            "expires_at": expires_at,
+            "nonce": secrets.token_urlsafe(18),
+        })
+        signature = _shared_video_session_signature(payload_text)
+        return f"sv1.{payload_text}.{signature}"
+
+    def _verified_shared_video_session(share_session_id, token):
+        parts = str(share_session_id or "").split(".")
+        if len(parts) != 3 or parts[0] != "sv1":
+            return None
+        payload_text, signature = parts[1], parts[2]
+        expected = _shared_video_session_signature(payload_text)
+        if not hmac.compare_digest(signature, expected):
+            return None
+        try:
+            payload = _decode_shared_video_session_payload(payload_text)
+        except Exception:
+            return None
+        if not payload:
+            return None
+        if str(payload.get("token_digest") or "") != _shared_video_session_token_digest(token):
+            return None
+        expires_at = str(payload.get("expires_at") or "").strip()
+        now = datetime.utcnow().replace(microsecond=0).isoformat()
+        if not expires_at or expires_at <= now:
+            return None
+        return {
+            "token": str(token or ""),
+            "password_verified": bool(payload.get("password_verified")),
+            "counted": True,
+            "expires_at": expires_at,
+            "signed": True,
+        }
+
     def _shared_video_session_for_request(token):
         share_session_id = _shared_video_request_session_id()
         if not share_session_id:
+            state = _store_shared_video_session_state(_shared_video_session_state())
+            for candidate_id, item in state.items():
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("token") or "") != str(token or ""):
+                    continue
+                signed = _verified_shared_video_session(candidate_id, token)
+                return candidate_id, signed or item
             return "", None
+        signed = _verified_shared_video_session(share_session_id, token)
+        if signed:
+            return share_session_id, signed
         state = _store_shared_video_session_state(_shared_video_session_state())
         item = state.get(share_session_id)
         if not isinstance(item, dict):
@@ -807,13 +921,14 @@ def register_video_routes(app, deps):
         return share_session_id, item
 
     def _create_shared_video_session(token, *, password_verified=False, hours=8):
+        share_session_id = _signed_shared_video_session_id(token, password_verified=password_verified, hours=hours)
         state = _store_shared_video_session_state(_shared_video_session_state())
-        share_session_id = secrets.token_urlsafe(24)
         state[share_session_id] = {
             "token": str(token or ""),
             "password_verified": bool(password_verified),
-            "counted": False,
+            "counted": True,
             "expires_at": (datetime.utcnow() + timedelta(hours=max(1, int(hours)))).replace(microsecond=0).isoformat(),
+            "signed": True,
         }
         session["video_share_sessions"] = state
         session.modified = True
@@ -835,8 +950,16 @@ def register_video_routes(app, deps):
         if counted_in_session:
             return True
         share_id = row["share_id"] if "share_id" in row.keys() else row["id"]
-        mark_video_share_link_accessed(conn, share_id)
-        log_share_access_event(conn, share_type="video", share_id=share_id, ip=get_client_ip(), user_agent=get_ua())
+        _event, inserted = log_share_access_event_once(
+            conn,
+            share_type="video",
+            share_id=share_id,
+            dedupe_key=share_session_id,
+            ip=get_client_ip(),
+            user_agent=get_ua(),
+        )
+        if inserted:
+            mark_video_share_link_accessed(conn, share_id)
         _mark_shared_video_session_counted(share_session_id)
         return True
 
@@ -869,8 +992,18 @@ def register_video_routes(app, deps):
             if payload.get(key):
                 payload[key] = _url_with_share_session(payload[key], share_session_id)
         for variant in payload.get("variants") or []:
-            if isinstance(variant, dict) and variant.get("playlist_url"):
-                variant["playlist_url"] = _url_with_share_session(variant["playlist_url"], share_session_id)
+            if not isinstance(variant, dict):
+                continue
+            for key in ("playlist_url", "manifest_url", "chunk_url_template"):
+                if variant.get(key):
+                    variant[key] = _url_with_share_session(variant[key], share_session_id)
+        if payload.get("e2ee_variants") is not payload.get("variants"):
+            for variant in payload.get("e2ee_variants") or []:
+                if not isinstance(variant, dict):
+                    continue
+                for key in ("manifest_url", "chunk_url_template"):
+                    if variant.get(key):
+                        variant[key] = _url_with_share_session(variant[key], share_session_id)
         return payload
 
     def _shared_video_error_response(reason):
@@ -963,6 +1096,40 @@ def register_video_routes(app, deps):
             "variants": [],
         }
 
+    def _e2ee_playback_variants(conn, *, row, video_id, shared_token, original_available):
+        if shared_token:
+            base = f"/api/videos/shared/{shared_token}/e2ee-stream-v2"
+        else:
+            base = f"/api/videos/{video_id}/e2ee-stream-v2"
+        variants = []
+        if original_available:
+            variants.append({
+                "name": "original",
+                "label": "原畫質",
+                "height": 0,
+                "bitrate": 0,
+                "manifest_url": f"{base}/manifest",
+                "chunk_url_template": f"{base}/chunks/__INDEX__",
+                "source_size_bytes": int(row["size_bytes"] or 0),
+                "encrypted_size_bytes": int(row["size_bytes"] or 0),
+            })
+        for item in list_e2ee_stream_v2_variants(conn, file_row=row, storage_root=storage_root):
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            variants.append({
+                **item,
+                "manifest_url": f"{base}/variants/{name}/manifest",
+                "chunk_url_template": f"{base}/variants/{name}/chunks/__INDEX__",
+            })
+        preferred = next((item["name"] for item in variants if int(item.get("height") or 0) == 720), "")
+        if not preferred:
+            preferred = next((item["name"] for item in variants if int(item.get("height") or 0) == 480), "")
+        if not preferred and variants:
+            preferred = variants[0]["name"]
+        fallback = next((item["name"] for item in variants if int(item.get("height") or 0) == 480), "")
+        return variants, preferred, fallback
+
     def _playback_payload_for_file(conn, *, row, video_id, shared_token=None):
         media_type = "audio" if str(row["original_filename_plain_for_public"] or "").lower().endswith((".mp3", ".m4a", ".aac", ".flac", ".wav", ".weba", ".opus", ".oga", ".ogg")) else "video"
         if is_e2ee_file(row):
@@ -979,8 +1146,17 @@ def register_video_routes(app, deps):
                 chunk_url_template = f"/api/videos/{video_id}/e2ee-stream-v2/chunks/__INDEX__"
             stream_v2 = get_e2ee_stream_v2_status(conn, file_row=row, storage_root=storage_root)
             available = bool(stream_v2 and stream_v2.get("available"))
+            e2ee_variants, default_quality, fallback_quality = _e2ee_playback_variants(
+                conn,
+                row=row,
+                video_id=video_id,
+                shared_token=shared_token,
+                original_available=available,
+            )
+            derivative_policy = _e2ee_derivative_policy()
+            derivatives_available = any(str(item.get("name") or "") != "original" for item in e2ee_variants)
             payload = {
-                "mode": "e2ee_stream_v2" if available else "e2ee_direct",
+                "mode": "e2ee_stream_v2" if (available or derivatives_available) else "e2ee_direct",
                 "media_type": media_type,
                 "source_mode": "e2ee",
                 "fallback_url": ciphertext_url,
@@ -990,26 +1166,33 @@ def register_video_routes(app, deps):
                 "requires_fragment_key": bool(shared_token),
                 "master_url": "",
                 "hls_js_url": "",
-                "player_strategy": "browser_e2ee_stream_v2" if available else "browser_e2ee_full_fallback",
+                "player_strategy": "browser_e2ee_stream_v2" if (available or derivatives_available) else "browser_e2ee_full_fallback",
                 "stream_warning": (
                     "正在使用 E2EE Streaming v2：密文分段下載、瀏覽器端解密；伺服器無法看到明文，因此不會在伺服器產生 480/720/1080 明文轉檔。"
-                    if available
+                    if (available or derivatives_available)
                     else "此 strict E2EE 影音尚未建立 Streaming v2 manifest，將退回舊版完整解密播放。"
                 ),
-                "streaming_ready": available,
+                "streaming_ready": bool(available or derivatives_available),
                 "high_performance_streaming": False,
                 "status": stream_v2 if stream_v2 else _e2ee_direct_status(row),
                 "manifest_url": manifest_url,
                 "chunk_url_template": chunk_url_template,
                 "stream_v2_available": available,
-                "default_quality": "original",
-                "fallback_quality": "",
+                "e2ee_derivatives_available": derivatives_available,
+                "variants": e2ee_variants,
+                "e2ee_variants": e2ee_variants,
+                "default_quality": default_quality or "original",
+                "fallback_quality": fallback_quality,
                 "quality_policy": {
-                    "default_quality": "original",
-                    "fallback_quality": "",
-                    "derivatives_quota_exempt": True,
-                    "larger_derivatives_hidden": True,
-                    "e2ee_original_only": True,
+                    "default_quality": default_quality or "original",
+                    "fallback_quality": fallback_quality,
+                    "derivatives_enabled": derivative_policy["enabled"],
+                    "allowed_derivative_heights": derivative_policy["allowed_heights"],
+                    "derivatives_quota_exempt": derivative_policy["quota_exempt"],
+                    "larger_derivatives_hidden": derivative_policy["reject_larger_than_original"],
+                    "e2ee_original_only": not derivatives_available,
+                    "server_transcode_allowed": False,
+                    "strict_e2ee_derivatives_mode": "client_side_transcode_then_encrypt",
                     "note": "strict E2EE 不允許伺服器解密轉檔；若要達到多畫質又維持 E2EE，需由發布端瀏覽器本機產生較低畫質後再上傳加密衍生包。這些 E2EE Streaming v2 服務分段不計入用戶雲端硬碟容量。",
                 },
             }
@@ -1100,7 +1283,7 @@ def register_video_routes(app, deps):
     </div>
   </div>
   <script id="share-token" type="application/json">{share_token_json}</script>
-  <script src="/js/shared-video.js?v=20260518-hls-quality-defaults"></script>
+  <script src="/js/shared-video.js?v=20260518-hls-seek-guard"></script>
 </body>
 </html>"""
 
@@ -1480,7 +1663,7 @@ def register_video_routes(app, deps):
     def shared_video_page(token):
         conn = get_db()
         try:
-            row, reason = resolve_video_share_token(conn, token, password="", password_verified=False, counted_in_session=False)
+            row, reason, _password_verified, _counted_in_session, _share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
             if not row and reason != "password_required":
                 status = 400 if reason == "forbidden_fragment_transport" else 410
                 return Response(_shared_video_ended_html(reason), status=status, mimetype="text/html")
@@ -1675,6 +1858,25 @@ def register_video_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/videos/shared/<token>/e2ee-stream-v2/variants/<variant_name>/manifest", methods=["GET"])
+    def shared_video_e2ee_stream_v2_variant_manifest(token, variant_name):
+        conn = get_db()
+        try:
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            if not is_e2ee_file(file_row):
+                return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
+            payload = serialize_variant_manifest_for_client(conn, file_row=file_row, storage_root=storage_root, variant_name=variant_name)
+            conn.commit()
+            return json_resp(payload)
+        finally:
+            conn.close()
+
     @app.route("/api/videos/shared/<token>/e2ee-stream-v2/chunks/<int:chunk_index>", methods=["GET"])
     def shared_video_e2ee_stream_v2_chunk(token, chunk_index):
         conn = get_db()
@@ -1689,6 +1891,37 @@ def register_video_routes(app, deps):
             if not is_e2ee_file(file_row):
                 return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
             resolved, error = resolve_e2ee_chunk_response(conn, file_row=file_row, storage_root=storage_root, chunk_index=chunk_index)
+            if error:
+                status = 404 if error.get("error") == "chunk_not_found" else 409
+                return json_resp(error), status
+            conn.commit()
+            response = Response(resolved["payload"], status=200, mimetype=resolved.get("content_type") or "application/octet-stream")
+            response.headers["Content-Length"] = str(len(resolved["payload"]))
+            response.headers["Cache-Control"] = "private, max-age=0, no-store"
+            return response
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>/e2ee-stream-v2/variants/<variant_name>/chunks/<int:chunk_index>", methods=["GET"])
+    def shared_video_e2ee_stream_v2_variant_chunk(token, variant_name, chunk_index):
+        conn = get_db()
+        try:
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            if not is_e2ee_file(file_row):
+                return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
+            resolved, error = resolve_e2ee_variant_chunk_response(
+                conn,
+                file_row=file_row,
+                storage_root=storage_root,
+                variant_name=variant_name,
+                chunk_index=chunk_index,
+            )
             if error:
                 status = 404 if error.get("error") == "chunk_not_found" else 409
                 return json_resp(error), status
@@ -2054,7 +2287,13 @@ def register_video_routes(app, deps):
             row = _load_stream_file(conn, file_id=file_id)
             _assert_stream_prepare_allowed(actor, row)
             if is_e2ee_file(row):
-                return json_resp({"ok": False, "msg": "E2EE 影音只支援瀏覽器端解密播放，不建立伺服器端串流衍生檔", "error": "e2ee_direct_only"}), 409
+                return json_resp({
+                    "ok": False,
+                    "msg": "strict E2EE 影音不可由伺服器解密、HLS 或轉檔；請使用原始密文分段播放，或由發布端瀏覽器本機產生較低畫質後加密上傳。",
+                    "error": "strict_e2ee_server_transcode_disabled",
+                    "reason": STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON,
+                    "allowed_mode": "client_side_transcode_then_encrypt",
+                }), 409
             video_row = conn.execute(
                 "SELECT id, title, owner_user_id, visibility FROM videos WHERE cloud_file_id=? AND deleted_at IS NULL LIMIT 1",
                 (row["id"],),
@@ -2191,6 +2430,91 @@ def register_video_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/media/<file_id>/e2ee-stream-v2/variants/<variant_name>", methods=["POST"])
+    @require_csrf
+    def media_prepare_e2ee_stream_v2_variant(file_id, variant_name):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_e2ee_stream_v2_schema(conn)
+            row = _load_stream_file(conn, file_id=file_id)
+            _assert_stream_prepare_allowed(actor, row)
+            if not is_e2ee_file(row):
+                return json_resp({"ok": False, "msg": "只有 strict E2EE 影音可建立 encrypted derivative", "error": "not_e2ee"}), 400
+            derivative_policy = _e2ee_derivative_policy()
+            if not derivative_policy["enabled"]:
+                return json_resp({
+                    "ok": False,
+                    "msg": "root 已停用 strict E2EE 本機省流量畫質上傳；原始 encrypted stream 仍可播放。",
+                    "error": "e2ee_derivatives_disabled",
+                }), 403
+            try:
+                requested_height = int(str(variant_name or "").lower().replace("q", "").replace("p", ""))
+            except Exception:
+                requested_height = 0
+            if requested_height not in derivative_policy["allowed_heights"]:
+                return json_resp({
+                    "ok": False,
+                    "msg": f"root 目前只允許 E2EE 省流量畫質：{', '.join(str(h) + 'p' for h in derivative_policy['allowed_heights'])}",
+                    "error": "e2ee_derivative_height_disabled",
+                    "allowed_heights": derivative_policy["allowed_heights"],
+                }), 400
+            if request.is_json:
+                return json_resp({"ok": False, "msg": "E2EE encrypted derivative 需要 multipart bundle 上傳", "error": "multipart_required"}), 400
+            bundle = request.files.get("bundle")
+            manifest_json = request.form.get("manifest_json") or ""
+            if not bundle or not getattr(bundle, "filename", ""):
+                return json_resp({"ok": False, "msg": "缺少 E2EE encrypted derivative bundle", "error": "missing_bundle"}), 400
+            bundle_size = _file_storage_size(bundle)
+            bundle_limit = _e2ee_stream_bundle_max_bytes()
+            if bundle_limit > 0 and bundle_size > bundle_limit:
+                return json_resp({
+                    "ok": False,
+                    "msg": f"E2EE encrypted derivative bundle 超過伺服器即時處理上限（{max(1, bundle_limit // (1024 * 1024))} MB）。",
+                    "error": "e2ee_derivative_bundle_too_large",
+                    "max_bytes": bundle_limit,
+                }), 413
+            if not manifest_json.strip():
+                return json_resp({"ok": False, "msg": "缺少 E2EE encrypted derivative manifest", "error": "missing_manifest"}), 400
+            try:
+                manifest_payload = json.loads(manifest_json)
+            except Exception:
+                return json_resp({"ok": False, "msg": "E2EE encrypted derivative manifest JSON 不正確", "error": "invalid_manifest_json"}), 400
+            sensitive = _reject_sensitive_share_fields(manifest_payload)
+            if sensitive:
+                return sensitive
+            variant = upsert_e2ee_stream_v2_variant(
+                conn,
+                file_row=row,
+                storage_root=storage_root,
+                variant_name=variant_name,
+                manifest_payload=manifest_payload,
+                bundle_bytes=bundle.read(),
+                label=request.form.get("label") or "",
+                width=request.form.get("width") or 0,
+                height=request.form.get("height") or 0,
+                bitrate=request.form.get("bitrate") or 0,
+                derived_from_original_sha256=request.form.get("derived_from_original_sha256") or "",
+                reject_larger_than_original=derivative_policy["reject_larger_than_original"],
+            )
+            conn.commit()
+            audit(
+                "MEDIA_E2EE_STREAM_V2_DERIVATIVE_PREPARE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"file_id={file_id},variant={variant.get('name')},chunks={variant.get('chunk_count', 0)}",
+            )
+            return json_resp({"ok": True, "variant": variant})
+        except Exception as exc:
+            conn.rollback()
+            return _error_response(exc)
+        finally:
+            conn.close()
+
     @app.route("/api/videos/<int:video_id>/e2ee-stream-v2/manifest", methods=["GET"])
     @require_csrf
     def video_e2ee_stream_v2_manifest(video_id):
@@ -2212,6 +2536,27 @@ def register_video_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/videos/<int:video_id>/e2ee-stream-v2/variants/<variant_name>/manifest", methods=["GET"])
+    @require_csrf
+    def video_e2ee_stream_v2_variant_manifest(video_id, variant_name):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            ensure_e2ee_stream_v2_schema(conn)
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            if not is_e2ee_file(row):
+                return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
+            return json_resp(serialize_variant_manifest_for_client(conn, file_row=row, storage_root=storage_root, variant_name=variant_name))
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
     @app.route("/api/videos/<int:video_id>/e2ee-stream-v2/chunks/<int:chunk_index>", methods=["GET"])
     @require_csrf
     def video_e2ee_stream_v2_chunk(video_id, chunk_index):
@@ -2226,6 +2571,40 @@ def register_video_routes(app, deps):
             if not is_e2ee_file(row):
                 return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
             resolved, error = resolve_e2ee_chunk_response(conn, file_row=row, storage_root=storage_root, chunk_index=chunk_index)
+            if error:
+                status = 404 if error.get("error") == "chunk_not_found" else 409
+                return json_resp(error), status
+            response = Response(resolved["payload"], status=200, mimetype=resolved.get("content_type") or "application/octet-stream")
+            response.headers["Content-Length"] = str(len(resolved["payload"]))
+            response.headers["Cache-Control"] = "private, max-age=0, no-store"
+            return response
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/e2ee-stream-v2/variants/<variant_name>/chunks/<int:chunk_index>", methods=["GET"])
+    @require_csrf
+    def video_e2ee_stream_v2_variant_chunk(video_id, variant_name, chunk_index):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            ensure_e2ee_stream_v2_schema(conn)
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            if not is_e2ee_file(row):
+                return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
+            resolved, error = resolve_e2ee_variant_chunk_response(
+                conn,
+                file_row=row,
+                storage_root=storage_root,
+                variant_name=variant_name,
+                chunk_index=chunk_index,
+            )
             if error:
                 status = 404 if error.get("error") == "chunk_not_found" else 409
                 return json_resp(error), status
@@ -2597,6 +2976,80 @@ def register_video_routes(app, deps):
     @require_csrf
     def video_comment_alias(video_id):
         return video_comments(video_id)
+
+    @app.route("/api/videos/<int:video_id>/danmaku", methods=["GET", "POST"])
+    @require_csrf
+    def video_danmaku(video_id):
+        actor = get_current_user_ctx()
+        if request.method == "POST":
+            actor, err = _actor_or_401()
+            if err:
+                return err
+            data, err, status = _parse_json_body()
+            if err:
+                return err, status
+        conn = get_db()
+        try:
+            if request.method == "GET":
+                items = list_video_danmaku(
+                    conn,
+                    actor=actor,
+                    video_id=video_id,
+                    from_ms=request.args.get("from_ms") or 0,
+                    to_ms=request.args.get("to_ms") or 60000,
+                    limit=request.args.get("limit") or 300,
+                )
+                return json_resp({"ok": True, "danmaku": items})
+            item = add_video_danmaku(
+                conn,
+                actor=actor,
+                video_id=video_id,
+                time_ms=data.get("time_ms") or 0,
+                content=data.get("content"),
+                mode=data.get("mode") or "scroll",
+                color=data.get("color") or "#ffffff",
+                size=data.get("size") or "normal",
+            )
+            conn.commit()
+            audit(
+                "VIDEO_DANMAKU",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"video_id={video_id},danmaku_id={item['id']},time_ms={item['time_ms']}",
+            )
+            return json_resp({"ok": True, "danmaku": item})
+        except Exception as exc:
+            conn.rollback()
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/danmaku/<int:danmaku_id>", methods=["DELETE"])
+    @require_csrf
+    def video_danmaku_delete(video_id, danmaku_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            result = delete_video_danmaku(conn, actor=actor, video_id=video_id, danmaku_id=danmaku_id)
+            conn.commit()
+            audit(
+                "VIDEO_DANMAKU_DELETE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"video_id={video_id},danmaku_id={danmaku_id}",
+            )
+            return json_resp({"ok": True, **result})
+        except Exception as exc:
+            conn.rollback()
+            return _error_response(exc)
+        finally:
+            conn.close()
 
     @app.route("/api/videos/<int:video_id>/tip", methods=["POST"])
     @require_csrf

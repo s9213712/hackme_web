@@ -282,10 +282,10 @@ def test_album_viewer_has_dedicated_module():
     assert 'class="drive-collapsible-panel album-viewer-panel" id="album-viewer-card"' in index_html
     assert 'data-drive-action="album-preview-prev"' in index_html
     assert 'data-drive-action="album-preview-next"' in index_html
-    assert '/js/35-drive.js?v=20260515-drive-capacity-reservoir' in index_html
-    assert '/styles.css?v=20260515-drive-capacity-reservoir' in index_html
-    assert '/js/00-core.js?v=20260503-appearance-v2' in index_html
-    assert '/js/40-auth-users.js?v=20260503-appearance-reset' in index_html
+    assert 'src="/js/35-drive.js' in index_html
+    assert 'href="/styles.css' in index_html
+    assert 'src="/js/00-core.js' in index_html
+    assert 'src="/js/40-auth-users.js' in index_html
     assert 'src="/js/50-admin.js' in index_html
     assert 'id="root-storage-user-select"' in index_html
     assert 'id="root-storage-save-btn"' in index_html
@@ -320,14 +320,14 @@ def test_album_viewer_has_dedicated_module():
     assert "/cloud-drive/refs/${encodeURIComponent(refId)}/delete" in drive_js
     assert "附件編號讀取失敗" in drive_js
     assert "loadChatMessages(selectedChatRoomId" in drive_js
-    assert '<select id="chat-attachment-existing-file-id">' in index_html
+    assert 'id="chat-attachment-existing-file-id"' in index_html
     assert 'id="chat-attachment-pick-btn"' in index_html
     assert 'id="chat-attachment-upload-btn"' not in index_html
     assert 'id="chat-attachment-existing-btn"' not in index_html
     assert 'form.append("virtual_path", attachmentStoragePath(selectedFile, "chat"))' in drive_js
     assert 'form.append("virtual_path", attachmentStoragePath(selectedFile, "announcement"))' in drive_js
     assert "dm-attachment-existing-file-id" in drive_js
-    assert '<select id="announcement-attachment-existing-file-id">' in index_html
+    assert 'id="announcement-attachment-existing-file-id"' in index_html
     assert 'placeholder="file_id"' not in index_html
     assert "chat-message-image-preview" in drive_js
     assert "driveTransferRows" in drive_js

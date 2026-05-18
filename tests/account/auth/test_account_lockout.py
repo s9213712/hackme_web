@@ -45,6 +45,7 @@ def _build_app(
         "encrypt_field": lambda value: value,
         "ensure_user_official_room_membership": lambda *args, **kwargs: None,
         "get_client_ip": lambda: (ip_box or {"ip": "127.0.0.1"})["ip"],
+        "get_cached_system_setting": lambda key, default=None: settings.get(key, default),
         "get_current_user_ctx": lambda: None,
         "get_db": get_db,
         "get_feature_settings": lambda: {},
@@ -119,7 +120,7 @@ def test_idle_timeout_logout_requires_idle_confirmation_header(tmp_path):
 
 
 def test_public_version_endpoints_expose_release_id(tmp_path):
-    client = _build_app(tmp_path / "release.db", {}).test_client()
+    client = _build_app(tmp_path / "release.db", {"server_timezone": "Asia/Taipei"}).test_client()
 
     site_config = client.get("/api/site-config")
     version = client.get("/api/version")
@@ -127,9 +128,12 @@ def test_public_version_endpoints_expose_release_id(tmp_path):
     assert site_config.status_code == 200
     assert site_config.get_json()["server_meta"]["release_id"] == "test-release"
     assert site_config.get_json()["server_meta"]["version"] == "test"
+    assert site_config.get_json()["server_meta"]["server_time"]["timezone"] == "Asia/Taipei"
     assert site_config.get_json()["site_config"]["server_mode"] == "test"
     assert version.status_code == 200
     assert version.get_json()["release_id"] == "test-release"
+    assert version.get_json()["server_time"]["timezone"] == "Asia/Taipei"
+    assert "server_time_unix_ms" in version.get_json()["server_time"]
 
 
 def _seed_db(db_path):

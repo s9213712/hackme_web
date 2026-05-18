@@ -611,21 +611,65 @@ function shareCenterDateTimeLocal(value) {
   return sanitize(String(value || "").slice(0, 16));
 }
 
+function shareCenterCanEdit(share = {}) {
+  return ["active", "expired", "view_limit_reached", "password_locked"].includes(String(share.status || ""));
+}
+
+function shareCenterCanCopy(share = {}) {
+  return !["expired", "view_limit_reached", "revoked"].includes(String(share.status || ""));
+}
+
+function shareCenterCanRevoke(share = {}) {
+  return String(share.status || "") !== "revoked";
+}
+
+function shareCenterEditExpiresValue(share = {}) {
+  const expiresAt = String(share.expires_at || "").trim();
+  if (String(share.status || "") === "expired") {
+    const timestamp = parseShareCenterExpiresAt(expiresAt);
+    if (!timestamp || timestamp <= Date.now()) return "";
+  }
+  return shareCenterDateTimeLocal(expiresAt);
+}
+
+function shareCenterEditMaxViewsValue(share = {}) {
+  const maxViews = Number(share.max_views || 0);
+  const accessCount = Number(share.access_count || 0);
+  if (String(share.status || "") === "view_limit_reached" && maxViews > 0 && accessCount >= maxViews) {
+    return String(Math.min(1000000, accessCount + 1));
+  }
+  return String(maxViews || 0);
+}
+
+function shareCenterReactivateHint(share = {}) {
+  const status = String(share.status || "");
+  if (status === "expired") {
+    return "這個分享已到期。儲存時會清除過期時間；你也可以改選新的未來到期日。";
+  }
+  if (status === "view_limit_reached") {
+    return `這個分享已用完次數。最大存取次數需大於目前 ${Number(share.access_count || 0)} 次，或填 0 表示不限次數。`;
+  }
+  return "";
+}
+
 function renderShareCenterEditForm(share = {}) {
   const key = shareCenterItemKey(share);
   const type = String(share.share_type || "");
+  const reactivateHint = shareCenterReactivateHint(share);
   const commonFields = (type === "file" || type === "video")
     ? `
       <div class="field">
         <span>到期時間</span>
         ${typeof shareExpiryPickerMarkup === "function"
-          ? shareExpiryPickerMarkup({ hiddenAttrs: "data-share-edit-expires", value: share.expires_at || "", help: "用日曆選擇日期；只選日期時預設當天 23:59 失效。" })
-          : `<input type="datetime-local" data-share-edit-expires value="${shareCenterDateTimeLocal(share.expires_at)}" />`}
+          ? shareExpiryPickerMarkup({ hiddenAttrs: "data-share-edit-expires", value: shareCenterEditExpiresValue(share), help: "用日曆選擇日期；只選日期時預設當天 23:59 失效。清空代表不設定到期時間。" })
+          : `<input type="datetime-local" data-share-edit-expires value="${shareCenterEditExpiresValue(share)}" />`}
       </div>
       <label class="field">
         <span>最大存取次數</span>
-        <input type="number" min="0" max="1000000" step="1" data-share-edit-max-views value="${sanitize(String(share.max_views || 0))}" />
+        <input type="number" min="0" max="1000000" step="1" data-share-edit-max-views value="${sanitize(shareCenterEditMaxViewsValue(share))}" />
+        <small>目前已使用 ${sanitize(String(share.access_count || 0))} 次；填 0 表示不限次數。</small>
       </label>
+      ${Number(share.access_count || 0) > 0 ? '<label class="field checkbox-field"><input type="checkbox" data-share-edit-reset-access-count /> 重置已使用次數</label>' : ""}
     `
     : "";
   const fileFields = type === "file"
@@ -656,6 +700,7 @@ function renderShareCenterEditForm(share = {}) {
     : "";
   return `
     <div class="share-center-edit-form" data-share-edit-key="${sanitize(key)}">
+      ${reactivateHint ? `<div class="drive-card-sub">${sanitize(reactivateHint)}</div>` : ""}
       <div class="settings-option-grid">
         ${fileFields}
         ${passwordFields}
@@ -695,12 +740,12 @@ function renderShareCenter(shares = []) {
     const link = shareCenterLinkUrl(share);
     const url = link.url;
     const missingFragment = link.missingFragment;
-    const copy = url ? `<button class="btn" type="button" data-share-copy="${sanitize(url)}" data-share-missing-fragment="${missingFragment ? "1" : "0"}">複製</button>` : "";
-    const edit = share.status === "active"
-      ? `<button class="btn" type="button" data-share-edit="${sanitize(key)}">編輯</button>`
+    const copy = url && shareCenterCanCopy(share) ? `<button class="btn" type="button" data-share-copy="${sanitize(url)}" data-share-missing-fragment="${missingFragment ? "1" : "0"}">複製</button>` : "";
+    const edit = shareCenterCanEdit(share)
+      ? `<button class="btn" type="button" data-share-edit="${sanitize(key)}">${share.status === "active" ? "編輯" : "重新分享設定"}</button>`
       : "";
     const events = `<button class="btn" type="button" data-share-events-type="${sanitize(share.share_type)}" data-share-events-id="${sanitize(share.id)}">紀錄</button>`;
-    const revoke = share.status === "active"
+    const revoke = shareCenterCanRevoke(share)
       ? `<button class="btn btn-danger" type="button" data-share-revoke-type="${sanitize(share.share_type)}" data-share-revoke-id="${sanitize(share.id)}">撤銷</button>`
       : "";
     const countdown = share.expires_at
@@ -709,6 +754,9 @@ function renderShareCenter(shares = []) {
     const scopeText = share.access_scope === "account"
       ? `指定帳戶：${share.required_username || share.required_user_id || "-"}`
       : "知道連結即可存取";
+    const endedHint = ["expired", "view_limit_reached"].includes(String(share.status || ""))
+      ? `<div class="drive-card-sub">此連結目前不可存取。請先按「重新分享設定」，調整到期時間或存取次數後再複製給對方。</div>`
+      : "";
     return `
       <div class="drive-file-row">
         <div>
@@ -716,6 +764,7 @@ function renderShareCenter(shares = []) {
           <div class="drive-card-sub">${sanitize(share.share_type || "-")} · 建立 ${sanitize(formatChatTime(share.created_at || ""))}</div>
           <div class="drive-card-sub">${sanitize(scopeText)} · 到期 ${sanitize(share.expires_at || "無")} · 次數 ${sanitize(String(share.access_count || 0))}${share.max_views ? " / " + sanitize(String(share.max_views)) : ""} · 密碼 ${share.password_required ? "是" : "否"}</div>
           ${countdown}
+          ${endedHint}
           ${url ? `<div class="drive-card-sub drive-share-link">${sanitize(url)}</div>` : ""}
           ${missingFragment ? '<div class="drive-card-sub">E2EE 分享連結缺少瀏覽器片段金鑰，請重新產生分享連結後再複製。</div>' : ""}
         </div>
@@ -798,6 +847,7 @@ async function saveShareCenterOptions(key) {
     if (typeof syncShareExpiryPickers === "function") syncShareExpiryPickers(form);
     payload.expires_at = form.querySelector("[data-share-edit-expires]")?.value || "";
     payload.max_views = form.querySelector("[data-share-edit-max-views]")?.value || "0";
+    payload.reset_access_count = !!form.querySelector("[data-share-edit-reset-access-count]")?.checked;
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
@@ -813,7 +863,7 @@ async function saveShareCenterOptions(key) {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || "分享設定更新失敗");
-    platformCenterSetMsg("share-center-msg", "分享選項已更新", true);
+    platformCenterSetMsg("share-center-msg", json.msg || "分享選項已更新", true);
     shareCenterEditingKey = "";
     await loadShareCenterLinks();
   } catch (err) {

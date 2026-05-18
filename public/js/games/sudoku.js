@@ -31,6 +31,8 @@ function startSudokuGame() {
     fixed: item.puzzle.split("").map((value) => value !== "0"),
     notes: Array.from({ length: 81 }, () => ""),
     noteMode: false,
+    assistMode: true,
+    selectedIndex: null,
     mistakes: 0,
     mistakeLimit: 3,
     hintsUsed: 0,
@@ -55,15 +57,18 @@ function renderSudokuBoard() {
   if (!sudokuState) {
     board.innerHTML = '<div class="single-game-placeholder">按「開始」後才會出現題目並開始計時。</div>';
     updateSudokuNoteButton();
+    updateSudokuAssistButton();
     updateSudokuHintButton();
+    renderSudokuCandidatePanel();
     return;
   }
   board.innerHTML = sudokuState.values.map((value, index) => {
     const fixed = sudokuState.fixed[index];
+    const selected = Number(sudokuState.selectedIndex) === index;
     const row = Math.floor(index / 9);
     const col = index % 9;
     return `
-      <input class="sudoku-cell ${fixed ? "fixed" : ""} ${sudokuState.notes[index] ? "has-notes" : ""}" inputmode="numeric" maxlength="1"
+      <input class="sudoku-cell ${fixed ? "fixed" : ""} ${selected ? "selected" : ""} ${sudokuState.notes[index] ? "has-notes" : ""}" inputmode="numeric" maxlength="1"
              aria-label="數獨第 ${row + 1} 列第 ${col + 1} 欄"
              title="${sanitize(sudokuState.notes[index] ? `筆記 ${sudokuState.notes[index]}` : "")}"
              placeholder="${sanitize(sudokuState.notes[index] || "")}"
@@ -71,7 +76,9 @@ function renderSudokuBoard() {
     `;
   }).join("");
   updateSudokuNoteButton();
+  updateSudokuAssistButton();
   updateSudokuHintButton();
+  renderSudokuCandidatePanel();
 }
 
 function updateSudokuCell(index, value) {
@@ -92,6 +99,7 @@ function updateSudokuCell(index, value) {
   if (normalized) sudokuState.notes[index] = "";
   const input = document.querySelector(`[data-sudoku-index="${index}"]`);
   if (input && input.value !== normalized) input.value = normalized;
+  renderSudokuCandidatePanel();
 }
 
 function updateSudokuNoteButton() {
@@ -101,6 +109,15 @@ function updateSudokuNoteButton() {
   btn.classList.toggle("btn-primary", enabled);
   btn.setAttribute("aria-pressed", enabled ? "true" : "false");
   btn.textContent = enabled ? "筆記中" : "筆記";
+}
+
+function updateSudokuAssistButton() {
+  const btn = $("sudoku-assist-btn");
+  if (!btn) return;
+  const enabled = sudokuState?.assistMode !== false;
+  btn.classList.toggle("btn-primary", enabled);
+  btn.setAttribute("aria-pressed", enabled ? "true" : "false");
+  btn.textContent = enabled ? "輔導開" : "輔導關";
 }
 
 function updateSudokuHintButton() {
@@ -134,6 +151,61 @@ function updateSudokuStatus(prefix = "") {
     return;
   }
   status.textContent = `${prefix ? `${prefix} ` : ""}目前時間 ${time}${penalty ? ` · 加時 ${penalty} 秒` : ""} · 錯誤 ${sudokuState.mistakes}/${sudokuState.mistakeLimit} · 提示剩 ${hintsRemaining}${sudokuState.noteMode ? " · 筆記模式" : ""}`;
+}
+
+function sudokuCandidateNumbers(index) {
+  if (!sudokuState || sudokuState.fixed[index] || sudokuState.values[index]) return [];
+  const row = Math.floor(index / 9);
+  const col = index % 9;
+  const used = new Set();
+  for (let i = 0; i < 9; i += 1) {
+    if (sudokuState.values[row * 9 + i]) used.add(sudokuState.values[row * 9 + i]);
+    if (sudokuState.values[i * 9 + col]) used.add(sudokuState.values[i * 9 + col]);
+  }
+  const boxRow = Math.floor(row / 3) * 3;
+  const boxCol = Math.floor(col / 3) * 3;
+  for (let r = boxRow; r < boxRow + 3; r += 1) {
+    for (let c = boxCol; c < boxCol + 3; c += 1) {
+      const value = sudokuState.values[r * 9 + c];
+      if (value) used.add(value);
+    }
+  }
+  return "123456789".split("").filter((digit) => !used.has(digit));
+}
+
+function showSudokuCandidates(index) {
+  if (!sudokuState || sudokuState.completedAt || sudokuState.failed) return;
+  sudokuState.selectedIndex = Number(index);
+  renderSudokuBoard();
+}
+
+function renderSudokuCandidatePanel(message = "") {
+  const panel = $("sudoku-candidate-panel");
+  if (!panel) return;
+  if (!sudokuState || sudokuState.assistMode === false || sudokuState.selectedIndex === null || sudokuState.completedAt || sudokuState.failed) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  const index = Number(sudokuState.selectedIndex);
+  if (!Number.isInteger(index) || index < 0 || index >= 81 || sudokuState.fixed[index] || sudokuState.values[index]) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  const row = Math.floor(index / 9) + 1;
+  const col = (index % 9) + 1;
+  const candidates = sudokuCandidateNumbers(index);
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div class="sudoku-candidate-title">第 ${row} 列第 ${col} 欄可填數字</div>
+    <div class="sudoku-candidate-list">
+      ${candidates.length
+        ? candidates.map((digit) => `<button class="btn game-mini-btn" type="button" data-sudoku-candidate="${digit}">${digit}</button>`).join("")
+        : '<span class="drive-card-sub">目前沒有合法候選，請先檢查同列、同欄或同宮格是否有衝突。</span>'}
+    </div>
+    ${message ? `<div class="drive-card-sub">${sanitize(message)}</div>` : ""}
+  `;
 }
 
 function checkSudokuGame() {
@@ -195,6 +267,27 @@ function toggleSudokuNotes() {
   updateSudokuStatus();
 }
 
+function toggleSudokuAssist() {
+  if (!sudokuState) startSudokuGame();
+  if (!sudokuState) return;
+  sudokuState.assistMode = sudokuState.assistMode === false;
+  updateSudokuAssistButton();
+  renderSudokuCandidatePanel(sudokuState.assistMode ? "點按空白格會顯示目前可用數字。" : "");
+  updateSudokuStatus(sudokuState.assistMode ? "輔導模式已開啟。" : "輔導模式已關閉。");
+}
+
+function chooseSudokuCandidate(value) {
+  if (!sudokuState || sudokuState.selectedIndex === null) return;
+  const index = Number(sudokuState.selectedIndex);
+  if (!sudokuCandidateNumbers(index).includes(String(value || ""))) {
+    renderSudokuCandidatePanel("這個數字目前不符合列、欄、宮格限制。");
+    return;
+  }
+  updateSudokuCell(index, String(value || ""));
+  renderSudokuBoard();
+  updateSudokuStatus(`已填入 ${value}。`);
+}
+
 function fillSudokuHint() {
   if (!sudokuState || sudokuState.completedAt || sudokuState.failed) return;
   const limit = Number(sudokuState.hintLimit || SUDOKU_HINT_LIMIT);
@@ -246,8 +339,22 @@ function fillSudokuHint() {
         toggleSudokuNotes();
         return true;
       }
+      if (type === "click" && event.target?.closest?.("#sudoku-assist-btn")) {
+        toggleSudokuAssist();
+        return true;
+      }
       if (type === "click" && event.target?.closest?.("#sudoku-hint-btn")) {
         fillSudokuHint();
+        return true;
+      }
+      const candidateBtn = type === "click" ? event.target?.closest?.("[data-sudoku-candidate]") : null;
+      if (candidateBtn) {
+        chooseSudokuCandidate(candidateBtn.dataset.sudokuCandidate || "");
+        return true;
+      }
+      const clickedSudokuInput = type === "click" ? event.target?.closest?.("[data-sudoku-index]") : null;
+      if (clickedSudokuInput) {
+        showSudokuCandidates(Number(clickedSudokuInput.dataset.sudokuIndex || 0));
         return true;
       }
       const sudokuInput = type === "input" ? event.target?.closest?.("[data-sudoku-index]") : null;

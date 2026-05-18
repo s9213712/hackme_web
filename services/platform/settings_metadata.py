@@ -94,12 +94,13 @@ SETTING_GROUPS = (
     },
     {
         "key": "server_bind",
-        "title": "Server 綁定 / SSL",
-        "description": "Listen host/port 與 SSL 開關。改動後需要重啟 server。",
+        "title": "Server 綁定 / SSL / 時間",
+        "description": "Listen host/port、SSL 開關與應用層時區。Listen / SSL 改動後需要重啟 server。",
         "settings": (
             "server_listen_host",
             "server_listen_port",
             "server_ssl_enabled",
+            "server_timezone",
         ),
     },
     {
@@ -179,11 +180,15 @@ SETTING_GROUPS = (
     },
     {
         "key": "video",
-        "title": "影音 / 打賞",
-        "description": "影音打賞抽成比例與最低門檻。",
+        "title": "影音 / 打賞 / E2EE 串流",
+        "description": "影音打賞抽成、strict E2EE 本機省流量版本與快取配額政策。",
         "settings": (
             "video_tip_fee_percent",
             "video_tip_min_points",
+            "video_e2ee_derivatives_enabled",
+            "video_e2ee_derivative_heights",
+            "video_e2ee_derivative_reject_larger_than_original",
+            "video_e2ee_derivative_quota_exempt",
         ),
     },
     {
@@ -208,6 +213,10 @@ SETTING_DETAILS = {
     "site_theme_mode": {
         "label": "站點快速色系",
         "description": "全站預設的淺色 / 夜色 / 自訂色盤模式；使用者仍可在個人外觀中覆寫自己的畫面。",
+    },
+    "server_timezone": {
+        "label": "伺服器應用時區",
+        "description": "root 設定的 IANA 時區，例如 UTC 或 Asia/Taipei；用於管理頁時間檢查與後續排程顯示，不會修改作業系統時區。",
     },
     "server_backpressure_enabled": {
         "label": "Backpressure 啟用",
@@ -248,6 +257,22 @@ SETTING_DETAILS = {
     "server_backpressure_refresh_seconds": {
         "label": "跨 worker 設定刷新秒數",
         "description": "gunicorn 多 worker 下，每個 worker 重新讀取 root Backpressure 設定的最長間隔。",
+    },
+    "video_e2ee_derivatives_enabled": {
+        "label": "允許 strict E2EE 本機省流量版本",
+        "description": "開啟後，發布者瀏覽器可本機產生 720p/480p 等 encrypted derivatives；伺服器仍不得解密或轉檔。",
+    },
+    "video_e2ee_derivative_heights": {
+        "label": "E2EE 省流量畫質清單",
+        "description": "逗號分隔，允許 1080,720,480,360。前端可嘗試上傳，後端會依此白名單接受或拒絕。",
+    },
+    "video_e2ee_derivative_reject_larger_than_original": {
+        "label": "拒收比原檔大的 E2EE 衍生版本",
+        "description": "避免壓縮反而增加儲存與流量負擔；關閉後仍不會讓伺服器取得明文。",
+    },
+    "video_e2ee_derivative_quota_exempt": {
+        "label": "E2EE 衍生版本不計入雲端硬碟配額",
+        "description": "作為服務端串流快取處理；原檔仍計入使用者容量。",
     },
     "audit_chain_enabled": {
         "label": "Audit Chain 簽章鏈",
@@ -307,7 +332,7 @@ SETTING_DETAILS = {
     },
     "points_admin_weekly_salary_time": {
         "label": "管理員週薪時間",
-        "description": "HH:MM，依伺服器本地時間判斷。",
+        "description": "HH:MM，依 root 設定的伺服器應用時區判斷。",
     },
     "points_admin_weekly_salary_award_on_login": {
         "label": "登入時補發管理員週薪",

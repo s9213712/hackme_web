@@ -81,6 +81,7 @@ function bindUiEvents() {
   const adminReportsBulkRejectBtn = $("admin-reports-bulk-reject");
   const settingsSave = $("settings-save-btn");
   const settingsPanel = $("sec-server-settings");
+  const serverTimeCheckBtn = $("server-time-check-btn");
   const comfyuiTestConnectionBtn = $("comfyui-test-connection-btn");
   const cloudDrivePolicySave = $("cloud-drive-policy-save-btn");
   const rootCatalogNew = $("root-catalog-new-btn");
@@ -239,7 +240,10 @@ function bindUiEvents() {
   if (tabModuleCommunity) tabModuleCommunity.addEventListener("click", () => switchModuleTab("community"));
   if (tabModuleDrive) tabModuleDrive.addEventListener("click", () => switchModuleTab("drive"));
   if (tabModuleAlbums) tabModuleAlbums.addEventListener("click", () => switchModuleTab("albums"));
-  if (tabModuleVideos) tabModuleVideos.addEventListener("click", () => switchModuleTab("videos"));
+  if (tabModuleVideos) tabModuleVideos.addEventListener("click", () => {
+    if (typeof openVideoOverview === "function") openVideoOverview();
+    else switchModuleTab("videos");
+  });
   if (tabModuleGames) tabModuleGames.addEventListener("click", () => switchModuleTab("games"));
   if (tabModuleExperiments) tabModuleExperiments.addEventListener("click", () => switchModuleTab("experiments"));
   if (tabModuleJobs) tabModuleJobs.addEventListener("click", () => switchModuleTab("jobs"));
@@ -345,6 +349,12 @@ function bindUiEvents() {
   if (communityThreadCreateCancelBtn) communityThreadCreateCancelBtn.addEventListener("click", () => toggleCommunityThreadCreator(false));
   if (communityThreadSubmitBtn) communityThreadSubmitBtn.addEventListener("click", createCommunityThread);
   if (communityReplySubmitBtn) communityReplySubmitBtn.addEventListener("click", replyCommunityThread);
+  document.querySelectorAll("[data-community-media-picker]").forEach((btn) => {
+    btn.addEventListener("click", () => openCommunityInlineMediaPicker(btn));
+  });
+  document.querySelectorAll("input[data-community-media-input]").forEach((input) => {
+    input.addEventListener("change", () => uploadCommunityInlineMedia(input));
+  });
   if (communityThreadPrevBtn) communityThreadPrevBtn.addEventListener("click", () => {
     if (!selectedCommunityBoardId || communityThreadPage <= 0) return;
     communityThreadPage -= 1;
@@ -520,6 +530,7 @@ function bindUiEvents() {
       el.addEventListener("change", clearHandler);
     });
   }
+  if (serverTimeCheckBtn) serverTimeCheckBtn.addEventListener("click", refreshServerTimeStatus);
   if (comfyuiTestConnectionBtn) comfyuiTestConnectionBtn.addEventListener("click", testComfyuiConnection);
   if ($("s-captcha-mode")) $("s-captcha-mode").addEventListener("change", updateCaptchaModeFields);
   if ($("s-comfyui-connection-mode")) $("s-comfyui-connection-mode").addEventListener("change", updateComfyuiConnectionModeFields);

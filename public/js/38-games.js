@@ -55,21 +55,21 @@ const GAME_RUNTIME_SCRIPT_SRCS = Object.freeze([
   "/js/games/snake.js?v=20260513-game-modules",
   "/js/games/game-2048.js?v=20260513-game-modules",
   "/js/games/brick-breaker.js?v=20260513-game-modules",
-  "/js/games/bullet-hell.js?v=20260517-bullet-dots",
+  "/js/games/bullet-hell.js?v=20260518-game-ux",
   "/js/games/stickman-shooter.js?v=20260517-level-layouts",
-  "/js/games/open-world.js?v=20260517-city-districts",
+  "/js/games/open-world.js?v=20260518-game-ux",
   "/js/games/board-game-shared.js?v=20260513-game-modules",
   "/js/games/reversi.js?v=20260513-game-modules",
   "/js/games/go.js?v=20260513-game-modules",
   "/js/games/gomoku.js?v=20260513-game-modules",
   "/js/games/chinese-chess.js?v=20260513-game-modules",
-  "/js/games/real-tetris.js?v=20260513-game-modules",
-  "/js/games/sudoku.js?v=20260513-legacy-modules",
+  "/js/games/real-tetris.js?v=20260518-game-ux",
+  "/js/games/sudoku.js?v=20260518-game-ux",
   "/js/games/minesweeper.js?v=20260513-legacy-modules",
-  "/js/games/onea2b.js?v=20260513-legacy-modules",
+  "/js/games/onea2b.js?v=20260518-game-ux",
   "/js/games/tetris.js?v=20260513-legacy-modules",
-  "/js/games/space-shooter.js?v=20260513-legacy-modules",
-  "/js/38-fps-arena.js?v=20260517-level-scenes",
+  "/js/games/space-shooter.js?v=20260518-game-ux",
+  "/js/38-fps-arena.js?v=20260518-game-ux",
   "/js/games/fps-arena.js?v=20260514-fps-stance-br",
 ]);
 let gameRuntimeScriptsLoaded = false;
@@ -287,7 +287,7 @@ function gameSubtitle(game) {
   if (game.key === "minesweeper") return "單人推理挑戰";
   if (game.key === "1a2b") return "單人猜數字";
   if (game.key === "tetris") return "高分消除挑戰";
-  if (game.key === "real_tetris") return "剛體物理與 90% 消線";
+  if (game.key === "real_tetris") return "剛體物理與 99% 消線";
   if (game.key === "space_shooter") return "高分射擊挑戰";
   if (game.key === "fps_arena") return "3D 射擊訓練 / 合作 / PvP";
   if (game.key === "open_world") return "3D 城市探索 / 駕車任務 / 警戒追逐";

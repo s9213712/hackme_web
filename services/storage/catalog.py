@@ -855,6 +855,7 @@ def purge_storage_file(conn, *, actor, storage_file_id):
         """,
         (now, now, storage_file_id, int(actor["id"])),
     )
+    purged_file_ids = []
     if row.get("trash_source") == "cloud_drive_delete":
         conn.execute(
             """
@@ -864,6 +865,7 @@ def purge_storage_file(conn, *, actor, storage_file_id):
             """,
             (now, row["file_id"], int(actor["id"])),
         )
+        purged_file_ids.append(row["file_id"])
     summary = sync_user_storage_summary(
         conn,
         actor["id"],
@@ -871,7 +873,7 @@ def purge_storage_file(conn, *, actor, storage_file_id):
         source="trash",
         reason="storage_file_purged",
     )
-    return {"id": storage_file_id, "storage": summary}, None
+    return {"id": storage_file_id, "file_id": row["file_id"], "purged_file_ids": purged_file_ids, "storage": summary}, None
 
 
 def restore_storage_trash(conn, *, actor):
@@ -906,6 +908,7 @@ def purge_storage_trash(conn, *, actor):
         """,
         (int(actor["id"]),),
     ).fetchall()
+    cloud_file_ids = []
     if rows:
         conn.executemany(
             """
@@ -932,7 +935,7 @@ def purge_storage_trash(conn, *, actor):
         source="trash",
         reason="storage_trash_purged",
     )
-    return {"purged": len(rows), "storage": summary}, None
+    return {"purged": len(rows), "purged_file_ids": cloud_file_ids, "storage": summary}, None
 
 def _hash_share_token(token):
     return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()

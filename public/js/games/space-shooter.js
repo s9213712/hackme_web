@@ -696,18 +696,24 @@ function renderSpaceShooterBoard() {
     ctx.lineWidth = 1;
   }
   drawSpaceShooterPlayerShip(ctx, state.playerX, 452, state.tick);
-  ctx.fillStyle = "#22c79a";
   state.bullets.forEach((bullet) => {
-    if (!drawSpaceShooterImage(ctx, "playerLaser", bullet.x, bullet.y - 4, 10, 24)) {
-      ctx.fillRect(bullet.x - 2, bullet.y - 10, 4, 12);
-    }
+    ctx.fillStyle = "#86efac";
+    ctx.beginPath();
+    ctx.arc(bullet.x, bullet.y, 3.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.86)";
+    ctx.beginPath();
+    ctx.arc(bullet.x, bullet.y, 1.15, 0, Math.PI * 2);
+    ctx.fill();
   });
   state.enemyBullets.forEach((bullet) => {
-    const angle = Math.atan2(bullet.vy || 1, bullet.vx || 0) + Math.PI / 2;
-    if (drawSpaceShooterImage(ctx, "enemyLaser", bullet.x, bullet.y, 12, 22, { rotation: angle })) return;
     ctx.fillStyle = bullet.color || "#facc15";
     ctx.beginPath();
-    ctx.arc(bullet.x, bullet.y, 4.5, 0, Math.PI * 2);
+    ctx.arc(bullet.x, bullet.y, 4.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.88)";
+    ctx.beginPath();
+    ctx.arc(bullet.x, bullet.y, 1.35, 0, Math.PI * 2);
     ctx.fill();
   });
   state.enemies.forEach((enemy) => drawSpaceShooterEnemyShip(ctx, enemy, state.tick));

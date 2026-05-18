@@ -13,7 +13,12 @@ from flask import Flask, jsonify, make_response
 
 import routes.videos as video_routes
 import scripts.media.hls_prepare_worker as hls_prepare_worker
-from services.media.e2ee_streaming import _normalize_manifest, resolve_e2ee_chunk_response
+from services.media.e2ee_streaming import (
+    _normalize_manifest,
+    cleanup_e2ee_stream_v2_assets,
+    resolve_e2ee_chunk_response,
+    upsert_e2ee_stream_v2_variant,
+)
 from services.media import streaming as media_streaming
 from services.job_center import get_job_by_source
 from routes.videos import register_video_routes
@@ -23,7 +28,7 @@ from services.system.audit import configure_audit_service
 from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage.storage_albums import ensure_storage_album_schema
 from services.security.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
-from services.media.videos import publish_video
+from services.media.videos import ensure_video_schema, publish_video
 
 
 def _json_resp(payload, status=200):
@@ -793,6 +798,10 @@ def test_video_playback_and_hls_routes_use_ready_stream_asset(tmp_path, monkeypa
     assert payload["hls_js_url"] == "/js/hls.light.min.js?v=20260505-hlsjs"
     assert payload["master_url"].endswith(f"/api/videos/{video_id}/hls/master.m3u8")
     assert payload["fallback_url"].endswith(f"/api/videos/{video_id}/stream")
+    assert payload["variants"]
+    assert all(int(item["size_bytes"]) > 0 for item in payload["variants"])
+    assert all(int(item["segments_total_bytes"]) == int(item["size_bytes"]) for item in payload["variants"])
+    assert all(int(item["source_size_bytes"]) > 0 for item in payload["variants"])
 
     master_path = storage_root / "media_derivatives" / "video-1" / "master.m3u8"
     master_path.write_text(
@@ -839,6 +848,7 @@ def test_shared_standard_video_playback_uses_shared_hls_and_stream_urls(tmp_path
             title="Shared Movie",
             visibility="unlisted",
             share_password="SharePass123",
+            share_max_views=1,
         )
         row = conn.execute("SELECT * FROM uploaded_files WHERE id='shared-video-1'").fetchone()
         monkeypatch.setattr(media_streaming, "_run_probe", lambda *args, **kwargs: _fake_probe_payload("video"))
@@ -882,6 +892,31 @@ def test_shared_standard_video_playback_uses_shared_hls_and_stream_urls(tmp_path
     stream = viewer.get(payload["stream_url"])
     assert stream.status_code == 200
     assert stream.mimetype == "video/mp4"
+
+    stateless_viewer = _build_app(db_path, storage_root, fernet, current_user=None).test_client()
+    stateless_master = stateless_viewer.get(payload["master_url"])
+    assert stateless_master.status_code == 200
+    stateless_playlist = stateless_viewer.get(f"/api/videos/shared/{token}/hls/original/playlist.m3u8{share_session}")
+    assert stateless_playlist.status_code == 200
+    stateless_segment = stateless_viewer.get(f"/api/videos/shared/{token}/hls/original/init.mp4{share_session}")
+    assert stateless_segment.status_code == 200
+
+    verify_conn = sqlite3.connect(db_path)
+    verify_conn.row_factory = sqlite3.Row
+    try:
+        share_row = verify_conn.execute("SELECT access_count FROM video_share_links WHERE video_id=?", (video["id"],)).fetchone()
+        assert share_row["access_count"] == 1
+        event_count = verify_conn.execute(
+            "SELECT COUNT(*) AS total FROM share_access_events WHERE share_type='video'",
+        ).fetchone()["total"]
+        assert event_count == 1
+    finally:
+        verify_conn.close()
+
+    second_viewer = _build_app(db_path, storage_root, fernet, current_user=None).test_client()
+    second_unlock = second_viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"})
+    assert second_unlock.status_code == 410
+    assert second_unlock.get_json()["reason"] == "view_limit_reached"
 
 
 def test_media_prepare_stream_route_requires_owner(tmp_path, monkeypatch):
@@ -1291,7 +1326,75 @@ def test_prepare_stream_auto_policy_distinguishes_plain_server_encrypted_and_e2e
     assert media_streaming.should_auto_prepare_stream(e2ee, visibility="public")["enabled"] is False
 
 
-def test_public_e2ee_video_exposes_video_scoped_ciphertext_and_owner_key(tmp_path):
+def test_strict_e2ee_prepare_stream_service_marks_unavailable_without_ffmpeg(tmp_path, monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL,
+            storage_path TEXT NOT NULL,
+            privacy_mode TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            scan_status TEXT NOT NULL,
+            original_filename_plain_for_public TEXT,
+            mime_type_plain_for_public TEXT,
+            size_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            deleted_at TEXT
+        )
+        """
+    )
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_uploaded_file(conn, storage_root, file_id="e2ee-video", owner_user_id=1, filename="secret.mp4", mime="video/mp4", privacy_mode="e2ee")
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id='e2ee-video'").fetchone()
+
+    monkeypatch.setattr(media_streaming, "_run_probe", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("strict E2EE must not probe plaintext")))
+    asset = media_streaming.prepare_stream_asset(conn, file_row=row, storage_root=storage_root)
+
+    assert asset["status"] == "unavailable"
+    assert "server-side HLS or server-side transcode" in asset["error_message"]
+    assert asset["variants"] == []
+
+
+def test_strict_e2ee_prepare_stream_route_rejects_server_transcode_without_worker(tmp_path, monkeypatch):
+    db_path = tmp_path / "e2ee-prepare-route.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    owner = {"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"}
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(conn, storage_root, file_id="e2ee-video", owner_user_id=1, filename="secret.mp4", mime="video/mp4", privacy_mode="e2ee")
+        conn.commit()
+    finally:
+        conn.close()
+
+    def fail_popen(*_args, **_kwargs):
+        raise AssertionError("strict E2EE must not launch HLS worker")
+
+    monkeypatch.setattr(video_routes.subprocess, "Popen", fail_popen)
+    client = _build_app(
+        db_path,
+        storage_root,
+        Fernet(Fernet.generate_key()),
+        current_user=owner,
+        extra_deps={"DB_PATH": str(db_path), "LOG_DIR": str(tmp_path / "logs")},
+    ).test_client()
+
+    response = client.post("/api/media/e2ee-video/prepare-stream")
+
+    assert response.status_code == 409
+    body = response.get_json()
+    assert body["error"] == "strict_e2ee_server_transcode_disabled"
+    assert body["allowed_mode"] == "client_side_transcode_then_encrypt"
+
+
+def test_legacy_owner_e2ee_video_exposes_video_scoped_ciphertext_and_owner_key(tmp_path):
     db_path = tmp_path / "public-e2ee.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
@@ -1301,6 +1404,7 @@ def test_public_e2ee_video_exposes_video_scoped_ciphertext_and_owner_key(tmp_pat
     try:
         _seed_uploaded_file(owner_conn, storage_root, file_id="e2ee-public", owner_user_id=1, filename="public-secret.mp4", mime="video/mp4", privacy_mode="e2ee", payload=b"ciphertext-video")
         _mark_file_as_e2ee(owner_conn, "e2ee-public")
+        ensure_video_schema(owner_conn)
         owner_conn.execute(
             """
             INSERT INTO encrypted_file_keys (
@@ -1308,24 +1412,32 @@ def test_public_e2ee_video_exposes_video_scoped_ciphertext_and_owner_key(tmp_pat
             ) VALUES ('owner-key-public', 'e2ee-public', 1, 'owner-passphrase-wrapped-key', 'owner_passphrase', 1, '2026-01-01T00:00:00')
             """
         )
-        video = publish_video(
-            owner_conn,
-            actor={"id": 1, "username": "alice", "role": "user"},
-            cloud_file_id="e2ee-public",
-            title="Public E2EE",
-            visibility="public",
+        owner_conn.execute(
+            """
+            INSERT INTO videos (
+                video_uuid, owner_user_id, cloud_file_id, title, description,
+                visibility, status, created_at, updated_at
+            ) VALUES ('legacy-owner-e2ee', 1, 'e2ee-public', 'Owner E2EE', '', 'public', 'ready', '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+            """
         )
         owner_conn.commit()
-        video_id = video["id"]
+        video_id = owner_conn.execute("SELECT id FROM videos WHERE cloud_file_id='e2ee-public'").fetchone()["id"]
     finally:
         owner_conn.close()
 
-    client = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    client = _build_app(
+        db_path,
+        storage_root,
+        Fernet(Fernet.generate_key()),
+        current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
     playback = client.get(f"/api/videos/{video_id}/playback")
     assert playback.status_code == 200
     playback_json = playback.get_json()
     assert playback_json["mode"] == "e2ee_direct"
     assert playback_json["requires_fragment_key"] is False
+    assert playback_json["quality_policy"]["server_transcode_allowed"] is False
+    assert playback_json["quality_policy"]["strict_e2ee_derivatives_mode"] == "client_side_transcode_then_encrypt"
     assert playback_json["e2ee_key_url"] == f"/api/videos/{video_id}/e2ee-key"
     assert playback_json["ciphertext_url"] == f"/api/videos/{video_id}/ciphertext"
 
@@ -1544,9 +1656,8 @@ def test_shared_video_password_lock_max_views_and_revoke_routes(tmp_path):
     same_session_detail = first_viewer.get(f"/api/videos/shared/{new_token}{share_session}")
     assert same_session_detail.status_code == 200
     exhausted_page_same_viewer = first_viewer.get(f"/shared/videos/{new_token}")
-    assert exhausted_page_same_viewer.status_code == 410
-    assert "分享已結束" in exhausted_page_same_viewer.get_data(as_text=True)
-    assert "最大觀看次數" in exhausted_page_same_viewer.get_data(as_text=True)
+    assert exhausted_page_same_viewer.status_code == 200
+    assert "share-password-form" in exhausted_page_same_viewer.get_data(as_text=True)
 
     second_viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
     second_unlock = second_viewer.post(f"/api/videos/shared/{new_token}/unlock", json={"password": "SharePass123"})
@@ -1739,6 +1850,22 @@ def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(t
     )
     assert prepared.status_code == 200
     assert prepared.get_json()["asset"]["available"] is True
+    variant_prepared = owner_client.post(
+        "/api/media/e2ee-video/e2ee-stream-v2/variants/q480",
+        data={
+            "manifest_json": json.dumps({**manifest, "content_type": "video/webm"}),
+            "bundle": (io.BytesIO(b"abcdeWXYZ"), "q480.bundle"),
+            "label": "480p",
+            "width": "854",
+            "height": "480",
+            "bitrate": "800000",
+            "derived_from_original_sha256": "d" * 64,
+        },
+        content_type="multipart/form-data",
+    )
+    assert variant_prepared.status_code == 200
+    assert variant_prepared.get_json()["variant"]["name"] == "q480"
+    assert variant_prepared.get_json()["variant"]["height"] == 480
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
@@ -1772,6 +1899,12 @@ def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(t
     assert playback_json["hls_js_url"] == ""
     assert "manifest_url" in playback_json
     assert "chunk_url_template" in playback_json
+    assert playback_json["quality_policy"]["strict_e2ee_derivatives_mode"] == "client_side_transcode_then_encrypt"
+    assert playback_json["e2ee_derivatives_available"] is True
+    assert playback_json["default_quality"] == "q480"
+    assert [variant["name"] for variant in playback_json["variants"]] == ["original", "q480"]
+    assert "/variants/q480/manifest" in playback_json["variants"][1]["manifest_url"]
+    assert "share_session=" in playback_json["variants"][1]["manifest_url"]
 
     shared_manifest = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/manifest{share_session}")
     assert shared_manifest.status_code == 200
@@ -1793,9 +1926,27 @@ def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(t
     assert missing_chunk.status_code == 404
     assert missing_chunk.get_json()["error"] == "chunk_not_found"
 
+    shared_variant_manifest = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/variants/q480/manifest{share_session}")
+    assert shared_variant_manifest.status_code == 200
+    shared_variant_manifest_json = shared_variant_manifest.get_json()
+    assert shared_variant_manifest_json["available"] is True
+    assert shared_variant_manifest_json["variant_name"] == "q480"
+    assert shared_variant_manifest_json["height"] == 480
+    assert shared_variant_manifest_json["content_type"] == "video/webm"
+    assert shared_variant_manifest_json["encrypted_size_bytes"] == 9
+    assert "ciphertext_offset" not in shared_variant_manifest_json["chunks"][0]
+
+    shared_variant_chunk = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/variants/q480/chunks/1{share_session}")
+    assert shared_variant_chunk.status_code == 200
+    assert shared_variant_chunk.data == b"WXYZ"
+
     direct_manifest = owner_client.get(f"/api/videos/{video_id}/e2ee-stream-v2/manifest")
     assert direct_manifest.status_code == 200
     assert direct_manifest.get_json()["available"] is True
+
+    direct_variant_manifest = owner_client.get(f"/api/videos/{video_id}/e2ee-stream-v2/variants/q480/manifest")
+    assert direct_variant_manifest.status_code == 200
+    assert direct_variant_manifest.get_json()["variant_name"] == "q480"
 
 
 def test_e2ee_stream_v2_manifest_rejects_bundle_size_mismatch():
@@ -1829,6 +1980,227 @@ def test_e2ee_stream_v2_manifest_rejects_bundle_size_mismatch():
 
     with pytest.raises(ValueError, match="bundle 大小與 chunk metadata 不一致"):
         _normalize_manifest(manifest, bundle_size=10)
+
+
+def test_e2ee_stream_v2_variant_rejects_oversized_derivative(tmp_path):
+    db_path = tmp_path / "e2ee-stream-v2-variant-oversized.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(
+            conn,
+            storage_root,
+            file_id="e2ee-video",
+            owner_user_id=1,
+            filename="secret.mp4",
+            mime="video/mp4",
+            privacy_mode="e2ee",
+            payload=b"0123456789",
+        )
+        _mark_file_as_e2ee(conn, "e2ee-video")
+        file_row = conn.execute("SELECT * FROM uploaded_files WHERE id='e2ee-video'").fetchone()
+        manifest = {
+            "e2ee_stream_version": 2,
+            "chunk_size": 16,
+            "chunk_count": 1,
+            "content_type": "video/webm",
+            "duration_hint": 1.0,
+            "chunks": [
+                {
+                    "chunk_index": 0,
+                    "nonce": "AAAAAAAAAAAAAAAA",
+                    "ciphertext_offset": 0,
+                    "ciphertext_size": 10,
+                    "plaintext_offset": 0,
+                    "plaintext_size": 8,
+                    "ciphertext_sha256": hashlib.sha256(b"0123456789").hexdigest(),
+                },
+            ],
+        }
+        with pytest.raises(ValueError, match="不應大於或等於原檔"):
+            upsert_e2ee_stream_v2_variant(
+                conn,
+                file_row=file_row,
+                storage_root=storage_root,
+                variant_name="q480",
+                manifest_payload=manifest,
+                bundle_bytes=b"0123456789",
+                height=480,
+            )
+    finally:
+        conn.close()
+
+
+def test_e2ee_stream_v2_variant_route_respects_root_policy(tmp_path):
+    db_path = tmp_path / "e2ee-stream-v2-variant-policy.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(
+            conn,
+            storage_root,
+            file_id="e2ee-video",
+            owner_user_id=1,
+            filename="secret.mp4",
+            mime="video/mp4",
+            privacy_mode="e2ee",
+            payload=b"0123456789abcdef",
+        )
+        _mark_file_as_e2ee(conn, "e2ee-video")
+        conn.commit()
+    finally:
+        conn.close()
+
+    owner = {"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"}
+    manifest = {
+        "e2ee_stream_version": 2,
+        "chunk_size": 16,
+        "chunk_count": 1,
+        "content_type": "video/webm",
+        "duration_hint": 1.0,
+        "chunks": [
+            {
+                "chunk_index": 0,
+                "nonce": "AAAAAAAAAAAAAAAA",
+                "ciphertext_offset": 0,
+                "ciphertext_size": 8,
+                "plaintext_offset": 0,
+                "plaintext_size": 6,
+                "ciphertext_sha256": hashlib.sha256(b"abcdefgh").hexdigest(),
+            },
+        ],
+    }
+
+    disabled_client = _build_app(
+        db_path,
+        storage_root,
+        Fernet(Fernet.generate_key()),
+        current_user=owner,
+        extra_deps={"get_system_settings": lambda: {"video_e2ee_derivatives_enabled": False}},
+    ).test_client()
+    disabled = disabled_client.post(
+        "/api/media/e2ee-video/e2ee-stream-v2/variants/q480",
+        data={
+            "manifest_json": json.dumps(manifest),
+            "bundle": (io.BytesIO(b"abcdefgh"), "q480.bundle"),
+            "height": "480",
+        },
+        content_type="multipart/form-data",
+    )
+    assert disabled.status_code == 403
+    assert disabled.get_json()["error"] == "e2ee_derivatives_disabled"
+
+    whitelist_client = _build_app(
+        db_path,
+        storage_root,
+        Fernet(Fernet.generate_key()),
+        current_user=owner,
+        extra_deps={"get_system_settings": lambda: {"video_e2ee_derivative_heights": "720"}},
+    ).test_client()
+    rejected_height = whitelist_client.post(
+        "/api/media/e2ee-video/e2ee-stream-v2/variants/q480",
+        data={
+            "manifest_json": json.dumps(manifest),
+            "bundle": (io.BytesIO(b"abcdefgh"), "q480.bundle"),
+            "height": "480",
+        },
+        content_type="multipart/form-data",
+    )
+    assert rejected_height.status_code == 400
+    assert rejected_height.get_json()["error"] == "e2ee_derivative_height_disabled"
+    assert rejected_height.get_json()["allowed_heights"] == [720]
+
+    accepted_height = whitelist_client.post(
+        "/api/media/e2ee-video/e2ee-stream-v2/variants/q720",
+        data={
+            "manifest_json": json.dumps(manifest),
+            "bundle": (io.BytesIO(b"abcdefgh"), "q720.bundle"),
+            "label": "720p",
+            "width": "1280",
+            "height": "720",
+            "bitrate": "1200000",
+            "derived_from_original_sha256": "b" * 64,
+        },
+        content_type="multipart/form-data",
+    )
+    assert accepted_height.status_code == 200
+    assert accepted_height.get_json()["variant"]["name"] == "q720"
+
+
+def test_e2ee_stream_v2_cleanup_removes_original_and_derivative_cache(tmp_path):
+    db_path = tmp_path / "e2ee-stream-v2-cleanup.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(
+            conn,
+            storage_root,
+            file_id="e2ee-video",
+            owner_user_id=1,
+            filename="secret.mp4",
+            mime="video/mp4",
+            privacy_mode="e2ee",
+            payload=b"ciphertext-video-payload",
+        )
+        _mark_file_as_e2ee(conn, "e2ee-video")
+        file_row = conn.execute("SELECT * FROM uploaded_files WHERE id='e2ee-video'").fetchone()
+        manifest = {
+            "e2ee_stream_version": 2,
+            "chunk_size": 16,
+            "chunk_count": 1,
+            "content_type": "video/webm",
+            "duration_hint": 1.0,
+            "chunks": [
+                {
+                    "chunk_index": 0,
+                    "nonce": "AAAAAAAAAAAAAAAA",
+                    "ciphertext_offset": 0,
+                    "ciphertext_size": 9,
+                    "plaintext_offset": 0,
+                    "plaintext_size": 7,
+                    "ciphertext_sha256": hashlib.sha256(b"abcdefghi").hexdigest(),
+                },
+            ],
+        }
+        video_routes.upsert_e2ee_stream_v2_asset(
+            conn,
+            file_row=file_row,
+            storage_root=storage_root,
+            manifest_payload=manifest,
+            bundle_bytes=b"abcdefghi",
+        )
+        upsert_e2ee_stream_v2_variant(
+            conn,
+            file_row=file_row,
+            storage_root=storage_root,
+            variant_name="q480",
+            manifest_payload=manifest,
+            bundle_bytes=b"abcdefghi",
+            height=480,
+        )
+        conn.commit()
+        assert (storage_root / "e2ee_stream_v2" / "e2ee-video" / "bundle.bin").exists()
+        assert (storage_root / "e2ee_stream_v2" / "e2ee-video" / "derivatives" / "q480" / "bundle.bin").exists()
+
+        cleanup = cleanup_e2ee_stream_v2_assets(conn, uploaded_file_id="e2ee-video", storage_root=storage_root)
+        conn.commit()
+
+        assert cleanup["assets_removed"] == 1
+        assert cleanup["variants_removed"] == 1
+        assert not (storage_root / "e2ee_stream_v2" / "e2ee-video").exists()
+        assert conn.execute("SELECT COUNT(*) FROM media_e2ee_stream_v2_assets").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM media_e2ee_stream_v2_variants").fetchone()[0] == 0
+    finally:
+        conn.close()
 
 
 def test_e2ee_stream_v2_chunk_route_reports_bundle_truncated_when_bundle_shrinks(tmp_path):

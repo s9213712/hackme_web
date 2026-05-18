@@ -58,6 +58,8 @@ from services.storage.remote_downloads import (
     validate_torrent_file_trackers,
     validate_remote_url,
 )
+from services.media.e2ee_streaming import cleanup_e2ee_stream_v2_assets
+from services.media.streaming import cleanup_stream_asset
 from services.storage.storage_albums import (
     add_album_file,
     create_album,
@@ -149,6 +151,15 @@ def register_file_routes(app, deps):
     points_service = deps.get("points_service")
     server_file_fernet = deps.get("server_file_fernet")
     get_system_settings = deps.get("get_system_settings", lambda: {})
+
+    def _cleanup_media_derivatives_for_file_ids(conn, file_ids):
+        cleaned = []
+        for file_id in sorted({str(item or "").strip() for item in (file_ids or []) if str(item or "").strip()}):
+            hls = cleanup_stream_asset(conn, uploaded_file_id=file_id, storage_root=storage_root)
+            e2ee = cleanup_e2ee_stream_v2_assets(conn, uploaded_file_id=file_id, storage_root=storage_root)
+            if hls.get("removed") or e2ee.get("removed"):
+                cleaned.append({"file_id": file_id, "hls": hls, "e2ee": e2ee})
+        return cleaned
 
     def _actor_or_401():
         actor = get_current_user_ctx()
@@ -3011,6 +3022,8 @@ def register_file_routes(app, deps):
             if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 400
+            media_cleanup = _cleanup_media_derivatives_for_file_ids(conn, result.get("purged_file_ids") or [])
+            result["media_cleanup"] = media_cleanup
             conn.commit()
             audit("STORAGE_TRASH_PURGE_ALL", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"purged={result['purged']}")
             return json_resp({"ok": True, "trash": result})
@@ -3065,6 +3078,8 @@ def register_file_routes(app, deps):
             if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 404
+            media_cleanup = _cleanup_media_derivatives_for_file_ids(conn, result.get("purged_file_ids") or [])
+            result["media_cleanup"] = media_cleanup
             conn.commit()
             audit("STORAGE_FILE_PURGE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"storage_file_id={storage_file_id}")
             return json_resp({"ok": True, "purged": result})

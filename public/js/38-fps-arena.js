@@ -22,7 +22,7 @@ const FPS_ARENA_LEVELS = [
   {
     key: "warehouse",
     label: "第 1 關 貨櫃倉庫",
-    theme: { background: 0x08111f, floor: 0x162033, grid: 0x38bdf8, fog: 0x08111f },
+    theme: { background: 0x52616f, floor: 0x3f4c5c, grid: 0x38bdf8, fog: 0x6f8494 },
     weapons: ["rifle", "smg"],
     roles: ["raider", "assault", "flanker"],
     spawnInterval: 2700,
@@ -34,7 +34,7 @@ const FPS_ARENA_LEVELS = [
   {
     key: "reactor",
     label: "第 2 關 反應爐中庭",
-    theme: { background: 0x071b22, floor: 0x12313a, grid: 0x22d3ee, fog: 0x071b22 },
+    theme: { background: 0x385a62, floor: 0x25505a, grid: 0x22d3ee, fog: 0x5f8e97 },
     weapons: ["rifle", "smg", "shotgun"],
     roles: ["assault", "flanker", "marksman", "engineer"],
     spawnInterval: 2250,
@@ -46,7 +46,7 @@ const FPS_ARENA_LEVELS = [
   {
     key: "subway",
     label: "第 3 關 地鐵月台",
-    theme: { background: 0x111827, floor: 0x1f2937, grid: 0xfacc15, fog: 0x111827 },
+    theme: { background: 0x4a4b50, floor: 0x3e424b, grid: 0xfacc15, fog: 0x77736a },
     weapons: ["rifle", "smg", "marksman", "shotgun"],
     roles: ["flanker", "marksman", "engineer", "raider"],
     spawnInterval: 2050,
@@ -58,7 +58,7 @@ const FPS_ARENA_LEVELS = [
   {
     key: "citadel",
     label: "第 4 關 核心堡壘",
-    theme: { background: 0x170f1f, floor: 0x25173a, grid: 0xc4b5fd, fog: 0x170f1f },
+    theme: { background: 0x51445e, floor: 0x433456, grid: 0xc4b5fd, fog: 0x7d6f91 },
     weapons: ["rifle", "smg", "marksman", "shotgun", "rail"],
     roles: ["juggernaut", "engineer", "marksman", "flanker"],
     spawnInterval: 1750,
@@ -1366,27 +1366,27 @@ function createFpsArenaWorld(mode) {
   stage.querySelectorAll("canvas").forEach((canvas) => canvas.remove());
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(level.theme?.background || 0x08111f);
-  scene.fog = new THREE.Fog(level.theme?.fog || 0x08111f, 12, 42);
+  scene.fog = new THREE.Fog(level.theme?.fog || 0x6f8494, 24, 72);
   const camera = new THREE.PerspectiveCamera(72, 16 / 9, 0.1, 100);
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
   renderer.shadowMap.enabled = true;
   stage.prepend(renderer.domElement);
 
-  scene.add(new THREE.HemisphereLight(0xdbeafe, 0x111827, 1.1));
-  const key = new THREE.DirectionalLight(0xffffff, 1.8);
+  scene.add(new THREE.HemisphereLight(0xf8fafc, 0x64748b, 1.65));
+  const key = new THREE.DirectionalLight(0xffffff, 2.25);
   key.position.set(4, 8, 5);
   key.castShadow = true;
   scene.add(key);
+  const fill = new THREE.DirectionalLight(0xdbeafe, 0.82);
+  fill.position.set(-6, 4.5, -8);
+  scene.add(fill);
 
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(22, 42), fpsArenaMaterial(level.theme?.floor || 0x162033, 0.9, 0.02));
   floor.rotation.x = -Math.PI / 2;
   floor.position.z = -13;
   floor.receiveShadow = true;
   scene.add(floor);
-  const grid = new THREE.GridHelper(22, 22, level.theme?.grid || 0x38bdf8, 0x26364f);
-  grid.position.z = -13;
-  scene.add(grid);
   const map = fpsArenaBuildCombatMap(scene, level);
 
   const state = {

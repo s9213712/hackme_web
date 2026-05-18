@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[3]
 def test_video_platform_accepts_audio_media_in_ui():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     videos_js = (ROOT / "public" / "js" / "39-videos.js").read_text(encoding="utf-8")
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
     assert 'accept="video/*,audio/*"' in index_html
@@ -58,6 +59,18 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "/js/vendor/hls.light.min.js" not in videos_js
     assert "HLS.js" in videos_js
     assert "HLS 串流" in videos_js
+    assert "function videoQualitySizeBytes" in videos_js
+    assert "sizeLabel ? `${label} · ${sizeLabel}`" in videos_js
+    assert "function bindVideoSeekProtection" in videos_js
+    assert "function videoQualityFallbackDeferredForSeek" in videos_js
+    assert "正在跳轉到指定時間，暫不自動切換畫質。" in videos_js
+    assert "video-danmaku-layer" in videos_js
+    assert "function startVideoDanmakuLoop" in videos_js
+    assert "function sendVideoDanmaku" in videos_js
+    assert "/danmaku?from_ms=" in videos_js
+    assert "data-video-danmaku-send" in videos_js
+    assert ".video-danmaku-layer" in styles
+    assert "@keyframes video-danmaku-scroll" in styles
     assert "function humanVideoStreamStatus" in videos_js
     assert "data-video-prepare-stream" in videos_js
     assert "prepareVideoStream" in videos_js
@@ -69,12 +82,37 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "prepareVideoE2eeShareArtifacts" in videos_js
     assert "buildVideoE2eeStreamV2Package" in videos_js
     assert "uploadVideoE2eeStreamV2Package" in videos_js
+    assert "buildVideoE2eeDerivativePackages" in videos_js
+    assert "uploadVideoE2eeDerivativePackages" in videos_js
+    assert "originalCiphertextDigest" in videos_js
+    assert "e2ee?.ciphertext_sha256" in videos_js
+    derivative_fn = videos_js.split("async function buildVideoE2eeDerivativePackages", 1)[1].split("async function prepareVideoE2eeShareArtifacts", 1)[0]
+    assert "await decryptedBlob.arrayBuffer()" not in derivative_fn
+    assert "VIDEO_E2EE_LOCAL_TASK_STORAGE_KEY" in videos_js
+    assert "hackme_web.video_e2ee_local_task" in videos_js
+    assert "video.e2ee_derivatives.client" in videos_js
+    assert "warnInterruptedVideoE2eeLocalTask" in videos_js
+    assert "beforeunload" in videos_js
+    assert "VIDEO_E2EE_DERIVATIVE_TARGET_HEIGHTS" in videos_js
+    assert "/e2ee-stream-v2/variants/" in videos_js
+    assert "正在瀏覽器端產生 E2EE" in videos_js
+    assert "derivative.blob.size >= sourceSize" in videos_js
+    assert "renderVideoE2eeQualityControl" in videos_js
+    assert "selectedVideoE2eeQualityVariant" in videos_js
     assert "E2EE Streaming v2 密文分段上傳中" in videos_js
+    assert "E2EE 省流量版本" in videos_js
     assert "E2EE Streaming v2 manifest 儲存中" in videos_js
+    assert 'payload.visibility = "unlisted";' in videos_js
+    assert "E2EE 影音對外觀看已改用" in videos_js
+    assert "不需要知道原始 E2EE 密碼" in index_html
     assert "上傳完成，伺服器端加密與掃描中；HLS 會在後台轉檔，進度可到任務中心查看" in videos_js
     assert 'share_wrapped_file_key_envelope' in videos_js
     assert 'share_expires_at' in videos_js
     assert 'share_max_views' in videos_js
+    assert "video_e2ee_derivatives_enabled" in admin_js
+    assert "video_e2ee_derivative_heights" in admin_js
+    assert "s-video-e2ee-derivatives-enabled" in index_html
+    assert "s-video-e2ee-derivative-heights" in index_html
     assert 'remaining_views' in videos_js
     assert 'state_message' in videos_js
     assert 'password_locked_until' in videos_js
@@ -97,6 +135,8 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert '伺服器無法復原，只能重新產生分享' in videos_js
     assert '重新產生此分享時，瀏覽器會要求發布者再次輸入原始 E2EE 密碼' in videos_js
     assert ".video-audio-player" in styles
+    assert ".video-quality-control select" in styles
+    assert "max-width: 11.5rem" in styles
     assert ".video-thumb-image" in styles
     assert ".video-share-manage-grid" in styles
     assert ".video-search-bar" in styles
@@ -106,12 +146,16 @@ def test_video_platform_accepts_audio_media_in_ui():
 def test_video_platform_uses_separate_watch_view_and_mobile_layout():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     videos_js = (ROOT / "public" / "js" / "39-videos.js").read_text(encoding="utf-8")
+    bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
     assert 'id="video-browse-view"' in index_html
     assert 'id="video-watch-view"' in index_html
     assert "function showVideoBrowseView" in videos_js
     assert "function showVideoWatchView" in videos_js
+    assert "function openVideoOverview" in videos_js
+    assert 'history.pushState(null, "", `${location.pathname}${location.search}#videos`);' in videos_js
+    assert 'if (typeof openVideoOverview === "function") openVideoOverview();' in bootstrap_js
     assert "/playback" in videos_js
     assert "video-back-btn" in videos_js
     assert "#videos/" in videos_js
@@ -154,7 +198,15 @@ def test_video_share_copy_and_shared_page_guardrails_are_visible_in_ui_code():
     assert "fetchSharedE2eeChunkWithRetry" in shared_page
     assert "pruneSharedE2eeChunkCache" in shared_page
     assert "sharedE2eeChunkIndexForTime" in shared_page
+    assert "sharedE2eeQualityOptions" in shared_page
+    assert "preferredSharedE2eeQuality" in shared_page
+    assert "sharedE2eeFragmentKey" in shared_page
+    assert "activeChunkUrlTemplate" in shared_page
+    assert "variant.manifest_url" in shared_page
     assert "正在追上快轉目標" in shared_page
+    assert "function bindSharedSeekProtection" in shared_page
+    assert "function sharedQualityFallbackDeferredForSeek" in shared_page
+    assert "正在跳轉到指定時間，暫不自動切換畫質。" in shared_page
     assert "/js/vendor/hls.light.min.js" not in shared_page
     assert "/js/workers/e2ee-stream-v2-worker.js" not in shared_page
 

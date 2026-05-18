@@ -11,7 +11,7 @@
   const FLOOR = 528;
   const TOP = 24;
   const GRAVITY = 1180;
-  const RELAXED_LINE_FILL = 0.9;
+  const RELAXED_LINE_FILL = 0.99;
   const LINE_TOLERANCE = CELL * 0.68;
   const ACTIVE_LOCK_MIN_SECONDS = 0.82;
   const ACTIVE_LOCK_MAX_SECONDS = 1.55;
@@ -948,7 +948,7 @@
     const elapsed = window.soloElapsedMs ? window.formatSoloGameTime(window.soloElapsedMs(state)) : "";
     const mode = state.paused ? "暫停中" : state.status === "finished" ? "已結束" : "物理模擬中";
     const score = Math.max(0, Math.round(Number(state.score || 0)));
-    api.status(`${prefix ? `${prefix} ` : ""}${realTetrisModeLabel(state.mode)} · ${mode} · 分數 ${score.toLocaleString()} · 90% 消線 ${state.lines} 行 · 倒塌 ${state.collapseEvents || 0} · ${elapsed}`);
+    api.status(`${prefix ? `${prefix} ` : ""}${realTetrisModeLabel(state.mode)} · ${mode} · 分數 ${score.toLocaleString()} · 99% 消線 ${state.lines} 行 · 倒塌 ${state.collapseEvents || 0} · ${elapsed}`);
   }
 
   function finishRealTetrisGame(api) {
