@@ -708,8 +708,8 @@ def test_comfyui_workflow_list_syncs_only_builtin_runtime_bundles_as_official_pr
     runtime_dir.mkdir(parents=True)
     _write_runtime_workflow_bundle(
         runtime_dir,
-        "txt2img_basic",
-        name="Text-to-Image（基礎）",
+        "origin_sdxl_txt2img",
+        name="SDXL Text-to-Image",
         description="builtin bundle",
     )
     _write_runtime_workflow_bundle(
@@ -724,25 +724,25 @@ def test_comfyui_workflow_list_syncs_only_builtin_runtime_bundles_as_official_pr
         first = client.get("/api/comfyui/workflows")
         assert first.status_code == 200
         first_body = first.get_json()
-        assert [item["system_bundle_id"] for item in first_body["official_presets"]] == ["txt2img_basic"]
-        assert first_body["official_presets"][0]["title"] == "Text-to-Image（基礎）"
+        assert [item["system_bundle_id"] for item in first_body["official_presets"]] == ["origin_sdxl_txt2img"]
+        assert first_body["official_presets"][0]["title"] == "SDXL Text-to-Image"
         assert first_body["official_presets"][0]["manifest_summary"]["available"] is True
-        assert first_body["official_presets"][0]["manifest_summary"]["id"] == "txt2img_basic"
+        assert first_body["official_presets"][0]["manifest_summary"]["id"] == "origin_sdxl_txt2img"
 
         second = client.get("/api/comfyui/workflows")
         assert second.status_code == 200
         second_body = second.get_json()
-        assert [item["system_bundle_id"] for item in second_body["official_presets"]] == ["txt2img_basic"]
+        assert [item["system_bundle_id"] for item in second_body["official_presets"]] == ["origin_sdxl_txt2img"]
         detail = client.get(f"/api/comfyui/workflows/{second_body['official_presets'][0]['id']}")
         assert detail.status_code == 200
-        assert detail.get_json()["preset"]["manifest_json"]["id"] == "txt2img_basic"
+        assert detail.get_json()["preset"]["manifest_json"]["id"] == "origin_sdxl_txt2img"
 
     conn = sqlite3.connect(db_path)
     rows = conn.execute(
         "SELECT system_bundle_id, is_official FROM comfyui_workflow_presets ORDER BY id ASC"
     ).fetchall()
     conn.close()
-    assert rows == [("txt2img_basic", 1)]
+    assert rows == [("origin_sdxl_txt2img", 1)]
 
 
 def test_comfyui_models_and_generate_routes(tmp_path):
@@ -1500,7 +1500,7 @@ def test_comfyui_input_image_candidates_import_history_and_drive_images(tmp_path
     assert len(FakeComfyUIClient.uploaded_images) >= 2
 
 
-def test_comfyui_generate_rejects_unsupported_lora_base_model(tmp_path):
+def test_comfyui_generate_allows_unsupported_lora_base_model_with_warning_only(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
@@ -1517,14 +1517,19 @@ def test_comfyui_generate_rejects_unsupported_lora_base_model(tmp_path):
         "/api/comfyui/generate",
         json={
             "model": "dream.safetensors",
-            "prompt": "reject flux lora",
+            "prompt": "allow flux lora",
             "loras": [{"name": "anime-style.safetensors", "strength_model": 1, "strength_clip": 1}],
             "confirm_billing": True,
         },
     )
 
-    assert generated.status_code == 400
-    assert "Flux LoRA 目前不支援" in generated.get_json()["msg"]
+    assert generated.status_code == 200, generated.get_json()
+    _await_comfyui_result(client, generated)
+    assert FakeComfyUIClient.last_params["loras"] == [{
+        "name": "anime-style.safetensors",
+        "strength_model": 1.0,
+        "strength_clip": 1.0,
+    }]
 
 
 def test_comfyui_generate_async_job_reports_progress_and_result(tmp_path):
@@ -4328,7 +4333,7 @@ def test_comfyui_frontend_is_wired():
     assert "if (modelsTab) modelsTab.hidden = !showLocalModels;" in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
     assert "/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" in index_html
-    assert "/styles.css?v=20260515-drive-capacity-reservoir" in index_html
+    assert "/styles.css?v=20260518-lora-hints" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert ".comfyui-root-details" in css
@@ -4500,17 +4505,21 @@ def test_comfyui_frontend_is_wired():
     assert 'renderComfyuiEmbeddingShortcuts(json.embeddings || []);' in comfyui_js
     assert 'comfyuiLoraDetails = json.lora_details' in comfyui_js
     assert "function pruneUnsupportedComfyuiSelectedLoras" in comfyui_js
-    assert 'disabled="disabled"' in comfyui_js
-    assert 'detail.supported !== true' in comfyui_js
+    assert "function comfyuiLoraCompatibilityHint(name)" in comfyui_js
+    assert "可能需要搭配同系列模型" in comfyui_js
+    assert "若模型不相容，ComfyUI 可能產圖失敗或效果異常" in comfyui_js
+    assert "comfyui-lora-compat-hint" in comfyui_js
+    assert ".comfyui-lora-compat-hint" in css
+    assert 'detail.supported !== true' not in comfyui_js
     assert 'const insertedTerms = applyComfyuiPromptTerms(detail.trained_words || []);' in comfyui_js
-    assert '已加入 LoRA，並自動補上 trigger words' in comfyui_js
+    assert 'const triggerText = insertedTerms.length' in comfyui_js
+    assert '並自動補上 trigger words' in comfyui_js
     assert 'clearSelectedComfyuiLoras();' in comfyui_js
     assert 'removeComfyuiSelectedLoraByIndex(index);' in comfyui_js
     assert 'removeComfyuiPromptTerms(removableTerms, { promptType: "prompt" });' in comfyui_js
     assert 'normalized.includes("negative") || normalized.includes("neg")' in comfyui_js
     assert '已把 ${cleanName} 插入${promptType === "negative" ? "負面" : "正向"}提示詞。' in comfyui_js
     assert '已從${promptType === "negative" ? "負面" : "正向"}提示詞移除 ${cleanName}。' in comfyui_js
-    assert '目前只允許 SDXL、Pony、Illustrious、Noob 系列' in comfyui_js
     assert '<embeddings:' in comfyui_js
     assert "trigger words" in comfyui_js
     assert "comfyuiConnectionMode !== \"local\"" in comfyui_js
@@ -4589,7 +4598,7 @@ def test_comfyui_frontend_is_wired():
     assert "communityPreviewContentUrl" in community_js
     assert "csrf_token=${encodeURIComponent(token)}" not in community_js
     assert "/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content" in community_js
-    assert "/js/25-community.js?v=20260504-announcement-edit" in index_html
+    assert "/js/25-community.js?v=20260518-inline-media" in index_html
     assert 'isComfyuiAvailableForNavigation' in admin_js
     assert '"feature_comfyui_enabled": False' in platform_settings_py
     assert '"comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost")' in comfyui_settings_py

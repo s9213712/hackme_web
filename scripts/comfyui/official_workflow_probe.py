@@ -41,7 +41,13 @@ MODEL_INPUTS = {
     "UpscaleModelLoader": {"model_name": ("UpscaleModelLoader", "model_name")},
 }
 
-HEAVY_WORKFLOWS = {"ace_step_15_t2a_song", "wan22_14b_i2v_subgraphed"}
+HEAVY_WORKFLOWS = {
+    "origin_audio_ace_step_15_xl_base",
+    "origin_capybara_video_edit",
+    "origin_wan_vace_inpainting",
+    "origin_wan22_14b_i2v_subgraphed",
+    "origin_ltx23_t2v",
+}
 
 
 def _now():

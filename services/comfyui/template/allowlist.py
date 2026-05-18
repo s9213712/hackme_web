@@ -149,6 +149,90 @@ MEDIA_WORKFLOW_ALLOWLIST = frozenset(
 )
 
 
+ORIGIN_WORKFLOW_ALLOWLIST = frozenset(
+    {
+        # ComfyUI core / common utility nodes used by checked-in origin workflows.
+        "PreviewImage",
+        "ImageScale",
+        "ImageInvert",
+        "ImageCompositeMasked",
+        "ImageToMask",
+        "InvertMask",
+        "MaskToImage",
+        "ImageFromBatch",
+        "RebatchImages",
+        "RepeatImageBatch",
+        "LatentUpscaleBy",
+        "VAEDecodeTiled",
+        "DisableNoise",
+        "SetFirstSigma",
+        "ManualSigmas",
+        "DifferentialDiffusion",
+        "InpaintModelConditioning",
+        "CFGGuider",
+        "CFGNorm",
+        "EmptyImage",
+        # Origin workflow custom nodes. Runtime capability checks still require
+        # the connected ComfyUI instance to actually expose each class.
+        "AIO_Preprocessor",
+        "ResizeImageMaskNode",
+        "LotusConditioning",
+        "HunyuanVideo15ImageToVideo",
+        "TextEncodeQwenImageEditPlus",
+        "TextEncodeQwenImageEditPlusCustom_lrzjason",
+        "QwenEditConfigPreparer",
+        "SetNode",
+        "SetUnionControlNetType",
+        "ControlNetApplySD3",
+        "CR Prompt Text",
+        "CR Text",
+        "Fast Groups Bypasser (rgthree)",
+        "INTConstant",
+        "ImpactInt",
+        "ProcessString",
+        "Qwen3_VQA",
+        "RAMCleanup",
+        "VRAMCleanup",
+        "ShowText|pysssss",
+        "SomethingToString",
+        "LayerUtility: ImageReel",
+        "LayerUtility: ImageReelComposit",
+        "LayerUtility: ImageScaleByAspectRatio V2",
+        "LayerUtility: ColorImage V2",
+        "LayerUtility: ImageBlendAdvance",
+        "LayerMask: BiRefNetUltraV2",
+        "LayerMask: LoadBiRefNetModelV2",
+        "LayerMask: MaskGrow",
+        "Mask Fill Holes",
+        "MaskFastGrow",
+        "DrawBBoxes",
+        "ImageBlend",
+        "RTDETR_detect",
+        "SDPoseDrawKeypoints",
+        "SDPoseKeypointExtractor",
+        "JoinImageWithAlpha",
+        "MaskPreview",
+        "SAM3_Detect",
+        "TrimVideoLatent",
+        "ComfyMathExpression",
+        "EmptyLTXVLatentVideo",
+        "LTXAVTextEncoderLoader",
+        "LTXVAudioVAEDecode",
+        "LTXVAudioVAELoader",
+        "LTXVConcatAVLatent",
+        "LTXVConditioning",
+        "LTXVCropGuides",
+        "LTXVEmptyLatentAudio",
+        "LTXVImgToVideoInplace",
+        "LTXVLatentUpsampler",
+        "LTXVPreprocess",
+        "LTXVSeparateAVLatent",
+        "LatentUpscaleModelLoader",
+        "ResizeImagesByLongerEdge",
+    }
+)
+
+
 # §4.3 explicitly denied class types (kept short; the regex below handles families).
 # These are notable enough that we want named-deny instead of regex catch-all
 # so audit / error messages can call them out by name.
@@ -192,6 +276,7 @@ def is_allowed_class(class_type: str) -> bool:
         class_type in CORE_ALLOWLIST
         or class_type in CONTROLNET_PREPROCESSOR_ALLOWLIST
         or class_type in MEDIA_WORKFLOW_ALLOWLIST
+        or class_type in ORIGIN_WORKFLOW_ALLOWLIST
     )
 
 
@@ -209,6 +294,7 @@ __all__ = [
     "CORE_ALLOWLIST",
     "CONTROLNET_PREPROCESSOR_ALLOWLIST",
     "MEDIA_WORKFLOW_ALLOWLIST",
+    "ORIGIN_WORKFLOW_ALLOWLIST",
     "EXPLICIT_DENYLIST",
     "is_allowed_class",
     "is_explicitly_denied_class",

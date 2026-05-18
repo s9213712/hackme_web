@@ -88,6 +88,57 @@ body {
     h1 { margin: 0; font-size: 1.08rem; }
     .subtitle { margin-top: .18rem; color: var(--muted); font-size: .88rem; }
     .top-actions, .row-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: flex-end; }
+    .top-action-menu {
+      position: relative;
+      flex: 0 0 auto;
+    }
+    .top-action-menu > summary {
+      list-style: none;
+      cursor: pointer;
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: .32rem;
+      padding: .45rem .64rem;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #0b1220;
+      color: var(--text);
+      font: inherit;
+    }
+    .top-action-menu > summary::-webkit-details-marker {
+      display: none;
+    }
+    .top-action-menu > summary::after {
+      content: "›";
+      color: var(--muted);
+      font-size: .95rem;
+      line-height: 1;
+      transition: transform .15s ease;
+    }
+    .top-action-menu[open] > summary::after {
+      transform: rotate(90deg);
+    }
+    .top-action-menu-body {
+      position: absolute;
+      right: 0;
+      z-index: 35;
+      display: grid;
+      gap: .38rem;
+      min-width: 180px;
+      margin-top: .42rem;
+      padding: .5rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(15, 23, 42, .98);
+      box-shadow: var(--shadow);
+    }
+    .top-action-menu-body button {
+      width: 100%;
+      justify-content: flex-start;
+      text-align: left;
+    }
     .editor-shell {
       display: grid;
       grid-template-columns: 270px minmax(460px, 1fr) 410px;
@@ -143,9 +194,52 @@ body {
     .field label, label.field { color: var(--muted); font-size: .82rem; }
     .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; }
     .three-col { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; }
-    .tool-group { margin-bottom: .95rem; }
-    .tool-title { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .45rem; font-weight: 700; font-size: .9rem; }
+    .tool-group {
+      margin-bottom: .62rem;
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 8px;
+      background: rgba(11, 18, 32, .42);
+      overflow: hidden;
+    }
+    .tool-group > summary {
+      list-style: none;
+      cursor: pointer;
+    }
+    .tool-group > summary::-webkit-details-marker {
+      display: none;
+    }
+    .tool-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .5rem;
+      margin: 0;
+      min-height: 2.2rem;
+      padding: .5rem .62rem;
+      font-weight: 700;
+      font-size: .9rem;
+      background: rgba(21, 31, 46, .72);
+    }
+    .tool-title::before {
+      content: "›";
+      color: var(--muted);
+      font-size: 1.1rem;
+      line-height: 1;
+      transition: transform .15s ease;
+    }
+    .tool-group[open] > .tool-title::before {
+      transform: rotate(90deg);
+    }
+    .tool-count {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: .76rem;
+      font-weight: 600;
+    }
     .tool-grid { display: grid; gap: .42rem; }
+    .tool-group > .tool-grid {
+      margin: .55rem .62rem;
+    }
     .tool-grid button { text-align: left; display: grid; gap: .12rem; }
     .tool-grid b { font-size: .88rem; }
     .tool-grid span { color: var(--muted); font-size: .76rem; line-height: 1.35; }
@@ -168,6 +262,7 @@ body {
     .badge.err { color: #fecdd3; border-color: rgba(244,63,94,.45); background: rgba(127,29,29,.45); }
     .branch-tabs {
       display: flex;
+      align-items: flex-start;
       gap: .45rem;
       overflow-x: auto;
       padding-bottom: .45rem;
@@ -183,6 +278,46 @@ body {
       white-space: nowrap;
     }
     .branch-tab.active { border-color: var(--blue); background: rgba(14,116,144,.35); }
+    .branch-action-menu {
+      position: relative;
+      flex: 0 0 auto;
+    }
+    .branch-action-menu > summary {
+      list-style: none;
+      cursor: pointer;
+    }
+    .branch-action-menu > summary::-webkit-details-marker {
+      display: none;
+    }
+    .branch-action-menu > summary::after {
+      content: "›";
+      color: var(--muted);
+      font-size: .95rem;
+      line-height: 1;
+      transition: transform .15s ease;
+    }
+    .branch-action-menu[open] > summary::after {
+      transform: rotate(90deg);
+    }
+    .branch-action-menu-body {
+      position: absolute;
+      left: 0;
+      z-index: 16;
+      display: grid;
+      gap: .35rem;
+      min-width: 170px;
+      margin-top: .42rem;
+      padding: .48rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(15, 23, 42, .98);
+      box-shadow: var(--shadow);
+    }
+    .branch-action-menu-body .branch-tab {
+      min-width: 0;
+      width: 100%;
+      justify-content: flex-start;
+    }
     .branch {
       margin-bottom: .86rem;
       overflow: hidden;
@@ -500,9 +635,17 @@ body {
         width: 100%;
       }
 
-      .top-actions button {
+      .top-actions button,
+      .top-action-menu,
+      .top-action-menu > summary {
         width: 100%;
         padding-inline: .45rem;
+      }
+
+      .top-action-menu-body {
+        position: static;
+        min-width: 0;
+        width: 100%;
       }
 
       .palette,
@@ -544,6 +687,15 @@ body {
 
       .branch-tab {
         min-width: 8rem;
+      }
+
+      .branch-action-menu {
+        flex: 1 0 auto;
+      }
+
+      .branch-action-menu-body {
+        position: static;
+        min-width: 0;
       }
 
       .row-actions {

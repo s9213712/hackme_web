@@ -92,7 +92,6 @@ function comfyuiUserStorageKey(key) {
 const COMFYUI_DRAFT_FIELD_IDS = [
   "comfyui-model-download-type",
   "comfyui-model-relative-path",
-  "comfyui-generation-mode",
   "comfyui-diffusers-model-repo",
   "comfyui-diffusers-model-variant",
   "comfyui-diffusers-gguf-base-repo",
@@ -107,6 +106,7 @@ const COMFYUI_DRAFT_FIELD_IDS = [
   "comfyui-batch-size",
   "comfyui-run-count",
   "comfyui-seed",
+  "comfyui-seed-after-generate",
   "comfyui-sampler",
   "comfyui-scheduler",
   "comfyui-denoise-strength",
@@ -125,8 +125,6 @@ const COMFYUI_DRAFT_FIELD_IDS = [
   "comfyui-outpaint-feathering",
   "comfyui-save-path",
   "comfyui-album-select",
-  "comfyui-share-title",
-  "comfyui-share-note",
 ];
 const COMFYUI_DYNAMIC_SELECT_IDS = [
   "comfyui-model-select",
@@ -139,6 +137,8 @@ const COMFYUI_DYNAMIC_SELECT_IDS = [
   "comfyui-controlnet-preprocessor",
   "comfyui-upscale-model",
 ];
+const COMFYUI_RANDOM_SEED_MAX = 0xFFFFFFFF;
+const COMFYUI_UI_SEED_MAX = Number.MAX_SAFE_INTEGER;
 const COMFYUI_INPUT_ASSET_META = {
   source: {
     fileInputId: "comfyui-source-image-file",
@@ -368,8 +368,52 @@ function applyComfyuiRuntimeLimits(payload = {}) {
   updateComfyuiRootPanelVisibility();
 }
 
+function comfyuiHasInputAsset(key) {
+  const asset = comfyuiAssetState(key);
+  return !!asset?.file || !!asset?.imageRef;
+}
+
+function comfyuiSelectedTemplateMode() {
+  const detail = comfyuiSelectedTemplateDetail;
+  if (detail && Number(detail?.id || 0) === Number(comfyuiSelectedTemplatePresetId || 0)) {
+    const mode = String(detail?.default_params?.generation_mode || detail?.purpose || "").trim().toLowerCase();
+    if (mode && mode !== "custom") return normalizeComfyuiGenerationModeAlias(mode);
+    const outputs = Array.isArray(detail?.output_kinds) ? detail.output_kinds.map((item) => String(item || "").toLowerCase()) : [];
+    if (outputs.includes("audio")) return outputs.includes("video") ? "t2sv" : "t2s";
+    if (outputs.includes("video")) return comfyuiHasInputAsset("source") ? "i2v" : "t2v";
+  }
+  return "";
+}
+
+function comfyuiExplicitSpecialMode() {
+  const mode = normalizeComfyuiGenerationModeAlias($("comfyui-generation-mode")?.value || "");
+  return mode === "outpaint" ? mode : "";
+}
+
+function inferComfyuiGenerationMode() {
+  const templateMode = comfyuiSelectedTemplateMode();
+  if (templateMode) return templateMode;
+  const explicit = comfyuiExplicitSpecialMode();
+  if (explicit) return explicit;
+  if (comfyuiHasInputAsset("source")) {
+    if (comfyuiHasInputAsset("mask")) return "inpaint";
+    if (String($("comfyui-upscale-model")?.value || "").trim()) return "upscale";
+    return "img2img";
+  }
+  return "txt2img";
+}
+
+function syncComfyuiGenerationMode() {
+  const mode = inferComfyuiGenerationMode();
+  const field = $("comfyui-generation-mode");
+  if (field && field.value !== mode) field.value = mode;
+  const auto = $("comfyui-generation-mode-auto");
+  if (auto) auto.textContent = `系統判斷：${comfyuiReadableModeLabel(mode)}`;
+  return mode;
+}
+
 function comfyuiGenerationMode() {
-  return String($("comfyui-generation-mode")?.value || "txt2img").trim().toLowerCase() || "txt2img";
+  return syncComfyuiGenerationMode();
 }
 
 function isComfyuiDiffusersMode(mode = comfyuiConnectionMode) {
@@ -530,9 +574,20 @@ function comfyuiModeUsesUpscale(mode = comfyuiGenerationMode()) {
   return String(mode || "").trim().toLowerCase() === "upscale";
 }
 
+function normalizeComfyuiGenerationModeAlias(mode) {
+  const normalized = String(mode || "").trim().toLowerCase();
+  return {
+    t2a: "t2s",
+    text2audio: "t2s",
+    "text-to-audio": "t2s",
+    text2speech: "t2s",
+    "text-to-speech": "t2s",
+  }[normalized] || normalized;
+}
+
 function comfyuiModeRequiresWorkflowTemplate(mode = comfyuiGenerationMode()) {
   if (isComfyuiDiffusersMode()) return false;
-  return ["t2v", "i2v", "v2v", "t2s", "t2sv"].includes(String(mode || "").trim().toLowerCase());
+  return ["t2v", "i2v", "v2v", "t2s", "t2sv"].includes(normalizeComfyuiGenerationModeAlias(mode));
 }
 
 function isComfyuiControlnetEnabled() {
@@ -550,9 +605,9 @@ function comfyuiModeTip(mode = comfyuiGenerationMode()) {
     case "upscale":
       return "放大修復：使用 scale model 先放大，再保留原圖細節。";
     case "t2v":
-      return "文字生影片：請在 workflow 模板區匯入或選擇 Wan / AnimateDiff / 影片模型工作流後執行。";
+      return "文字生影片：請在上方 Workflow 模板選擇 Wan / AnimateDiff / 影片模型工作流後執行。";
     case "i2v":
-      return "圖生影片：先選來源圖片，再用支援 I2V 的 workflow 模板執行。";
+      return "圖生影片：先選來源圖片，再在上方 Workflow 模板選擇支援 I2V 的工作流後執行。";
     case "v2v":
       return "影片生影片：需使用含影片讀取節點的 workflow 模板，目前一般產圖按鈕不直接建立影片工作流。";
     case "t2s":
@@ -565,7 +620,7 @@ function comfyuiModeTip(mode = comfyuiGenerationMode()) {
 }
 
 function comfyuiReadableModeLabel(mode = comfyuiGenerationMode()) {
-  const normalized = String(mode || "").trim().toLowerCase();
+  const normalized = normalizeComfyuiGenerationModeAlias(mode);
   const hit = comfyuiGenerationModes.find((item) => String(item?.key || "").trim().toLowerCase() === normalized);
   if (hit?.label) return String(hit.label);
   return {
@@ -779,10 +834,11 @@ function fillComfyuiUpscaleModels(values = []) {
   if (!select) return;
   const previous = select.value || "";
   const options = comfyuiUpscaleModels.length
-    ? comfyuiUpscaleModels.map((value) => `<option value="${sanitize(value)}">${sanitize(value)}</option>`)
+    ? ['<option value="">不使用放大模型</option>'].concat(comfyuiUpscaleModels.map((value) => `<option value="${sanitize(value)}">${sanitize(value)}</option>`))
     : ['<option value="">目前沒有可用的放大模型</option>'];
   select.innerHTML = options.join("");
   if (previous && comfyuiUpscaleModels.includes(previous)) select.value = previous;
+  updateComfyuiModeVisibility();
 }
 
 function updateComfyuiControlnetTip() {
@@ -796,7 +852,7 @@ function updateComfyuiControlnetTip() {
 }
 
 function updateComfyuiModeVisibility() {
-  const mode = comfyuiGenerationMode();
+  const mode = syncComfyuiGenerationMode();
   const modeTip = $("comfyui-generation-mode-tip");
   const denoiseField = $("comfyui-denoise-field");
   const upscaleField = $("comfyui-upscale-model-field");
@@ -807,10 +863,10 @@ function updateComfyuiModeVisibility() {
   const maskCard = $(COMFYUI_INPUT_ASSET_META.mask.cardId);
   if (modeTip) modeTip.textContent = comfyuiModeTip(mode);
   if (denoiseField) denoiseField.style.display = mode === "txt2img" || mode === "upscale" ? "none" : "";
-  if (upscaleField) upscaleField.style.display = comfyuiModeUsesUpscale(mode) ? "" : "none";
+  if (upscaleField) upscaleField.style.display = comfyuiHasInputAsset("source") || comfyuiModeUsesUpscale(mode) ? "" : "none";
   if (outpaintPanel) outpaintPanel.style.display = comfyuiModeUsesOutpaint(mode) ? "" : "none";
-  if (sourceCard) sourceCard.style.display = comfyuiModeUsesSourceImage(mode) ? "" : "none";
-  if (maskCard) maskCard.style.display = comfyuiModeUsesMaskImage(mode) ? "" : "none";
+  if (sourceCard) sourceCard.style.display = "";
+  if (maskCard) maskCard.style.display = comfyuiHasInputAsset("source") || comfyuiHasInputAsset("mask") || comfyuiModeUsesMaskImage(mode) ? "" : "none";
   if (controlFields) controlFields.style.display = isComfyuiControlnetEnabled() ? "" : "none";
   if (controlCard) controlCard.style.display = isComfyuiControlnetEnabled() ? "" : "none";
   updateComfyuiControlnetTip();
@@ -876,6 +932,7 @@ function setComfyuiInputAssetFromFile(key, file) {
   };
   renderComfyuiInputAsset(key);
   if (key === "source") renderComfyuiInputAsset("mask");
+  updateComfyuiModeVisibility();
   if (typeof queueRenderSelectedComfyuiTemplate === "function") queueRenderSelectedComfyuiTemplate();
 }
 
@@ -891,6 +948,7 @@ function setComfyuiInputAssetFromRef(key, imageRef, previewUrl = "", filename = 
   };
   renderComfyuiInputAsset(key);
   if (key === "source") renderComfyuiInputAsset("mask");
+  updateComfyuiModeVisibility();
   if (typeof queueRenderSelectedComfyuiTemplate === "function") queueRenderSelectedComfyuiTemplate();
 }
 
@@ -900,6 +958,7 @@ function clearComfyuiInputAsset(key) {
   comfyuiInputAssets[key] = { file: null, imageRef: null, previewUrl: "", filename: "", cloudFileId: "" };
   renderComfyuiInputAsset(key);
   if (key === "source") renderComfyuiInputAsset("mask");
+  updateComfyuiModeVisibility();
   if (typeof queueRenderSelectedComfyuiTemplate === "function") queueRenderSelectedComfyuiTemplate();
 }
 
@@ -1732,24 +1791,28 @@ function renderComfyuiSelectedLoras() {
     box.innerHTML = '<span class="drive-card-sub">尚未選擇 LoRA</span>';
     return;
   }
-  box.innerHTML = comfyuiSelectedLoras.map((item, index) => `
-    <div class="comfyui-lora-chip" title="${sanitize(item.name)}">
-      <div class="comfyui-lora-chip-head">
-        <span>${sanitize(item.name)}</span>
-        <button type="button" data-comfyui-remove-lora="${index}" aria-label="移除 ${sanitize(item.name)}">×</button>
+  box.innerHTML = comfyuiSelectedLoras.map((item, index) => {
+    const hint = comfyuiLoraCompatibilityHint(item?.name);
+    return `
+      <div class="comfyui-lora-chip" title="${sanitize(item.name)}">
+        <div class="comfyui-lora-chip-head">
+          <span>${sanitize(item.name)}</span>
+          <button type="button" data-comfyui-remove-lora="${index}" aria-label="移除 ${sanitize(item.name)}">×</button>
+        </div>
+        <div class="comfyui-lora-weight-grid">
+          <label>
+            <span>Model</span>
+            <input type="number" min="-2" max="2" step="0.05" data-comfyui-lora-strength-model="${index}" value="${sanitize(String(item.strength_model ?? 1))}" />
+          </label>
+          <label>
+            <span>CLIP</span>
+            <input type="number" min="-2" max="2" step="0.05" data-comfyui-lora-strength-clip="${index}" value="${sanitize(String(item.strength_clip ?? 1))}" />
+          </label>
+        </div>
+        ${hint ? `<div class="comfyui-lora-compat-hint">提醒：${sanitize(hint)}</div>` : ""}
       </div>
-      <div class="comfyui-lora-weight-grid">
-        <label>
-          <span>Model</span>
-          <input type="number" min="-2" max="2" step="0.05" data-comfyui-lora-strength-model="${index}" value="${sanitize(String(item.strength_model ?? 1))}" />
-        </label>
-        <label>
-          <span>CLIP</span>
-          <input type="number" min="-2" max="2" step="0.05" data-comfyui-lora-strength-clip="${index}" value="${sanitize(String(item.strength_clip ?? 1))}" />
-        </label>
-      </div>
-    </div>
-  `).join("");
+    `;
+  }).join("");
   box.querySelectorAll("[data-comfyui-remove-lora]").forEach((button) => {
     button.addEventListener("click", () => {
       const index = Number(button.getAttribute("data-comfyui-remove-lora"));
@@ -1783,32 +1846,28 @@ function fillComfyuiLoraSelect(values = []) {
   if (!select) return;
   const options = ['<option value="">不使用 LoRA（可略過）</option>']
     .concat(comfyuiAvailableLoras.map((value) => {
-      const detail = comfyuiLoraDetails?.[value] || {};
-      const supported = detail.supported === true;
-      const reason = detail.base_model
-        ? `${detail.base_model} 不支援`
-        : "base model 未知，暫不可用";
-      const label = supported ? value : `${value}（不可用：${reason}）`;
-      return `<option value="${sanitize(value)}"${supported ? "" : ' disabled="disabled"'}>${sanitize(label)}</option>`;
+      const hint = comfyuiLoraCompatibilityHint(value);
+      const label = hint ? `${value}（提醒：${hint}）` : value;
+      return `<option value="${sanitize(value)}">${sanitize(label)}</option>`;
     }));
   select.innerHTML = options.join("");
 }
 
 function pruneUnsupportedComfyuiSelectedLoras({ notify = false } = {}) {
-  const removed = [];
-  comfyuiSelectedLoras = comfyuiSelectedLoras.filter((item) => {
-    const detail = comfyuiLoraDetails?.[item?.name] || {};
-    const keep = detail.supported === true;
-    if (!keep && item?.name) removed.push(String(item.name));
-    return keep;
-  });
-  if (!removed.length) return removed;
-  renderComfyuiSelectedLoras();
-  writeComfyuiDraft();
   if (notify) {
-    setComfyuiMessage(`已移除不支援的 LoRA：${removed.join(", ")}。目前只允許 SDXL、Pony、Illustrious、Noob 系列。`, false);
+    const warnings = comfyuiSelectedLoras
+      .map((item) => item?.name ? comfyuiLoraCompatibilityHint(item.name) : "")
+      .filter(Boolean);
+    if (warnings.length) setComfyuiMessage(`已保留已選 LoRA；提醒：${warnings.slice(0, 3).join("；")}`, false);
   }
-  return removed;
+  return [];
+}
+
+function comfyuiLoraCompatibilityHint(name) {
+  const detail = comfyuiLoraDetails?.[String(name || "").trim()] || {};
+  if (!name || detail.supported === true) return "";
+  if (detail.base_model) return `${detail.base_model} LoRA 可能需要搭配同系列模型`;
+  return "base model metadata 未知，請確認和目前模型相容";
 }
 
 function applyComfyuiPromptTerms(terms = []) {
@@ -1981,17 +2040,14 @@ function addSelectedComfyuiLora() {
     return;
   }
   const detail = comfyuiLoraDetails?.[name] || {};
-  if (detail.supported !== true) {
-    setComfyuiMessage(detail.support_message || "這個 LoRA 目前不支援；只允許 SDXL、Pony、Illustrious、Noob 系列。", false);
-    return;
-  }
+  const hint = comfyuiLoraCompatibilityHint(name);
   comfyuiSelectedLoras.push({ name, strength_model: 1, strength_clip: 1 });
   const insertedTerms = applyComfyuiPromptTerms(detail.trained_words || []);
   renderComfyuiSelectedLoras();
   writeComfyuiDraft();
-  if (insertedTerms.length) {
-    setComfyuiMessage(`已加入 LoRA，並自動補上 trigger words：${insertedTerms.join(", ")}`, true);
-  }
+  const triggerText = insertedTerms.length ? `，並自動補上 trigger words：${insertedTerms.join(", ")}` : "。";
+  const warningText = hint ? `提醒：${hint}；若模型不相容，ComfyUI 可能產圖失敗或效果異常。` : "";
+  setComfyuiMessage(`已加入 LoRA${triggerText}${warningText ? ` ${warningText}` : ""}`, !hint);
 }
 
 function bindComfyuiDraftPersistence() {
@@ -2059,6 +2115,14 @@ function bindComfyuiAdvancedUi() {
       fillComfyuiControlnetModelOptions();
       fillComfyuiControlnetPreprocessorOptions();
       updateComfyuiControlnetTip();
+      writeComfyuiDraft();
+    });
+  }
+  const upscaleModel = $("comfyui-upscale-model");
+  if (upscaleModel && upscaleModel.dataset.comfyuiBound !== "1") {
+    upscaleModel.dataset.comfyuiBound = "1";
+    upscaleModel.addEventListener("change", () => {
+      updateComfyuiModeVisibility();
       writeComfyuiDraft();
     });
   }
@@ -2372,8 +2436,21 @@ async function loadComfyuiAlbums({ force = false } = {}) {
   }
 }
 
+function comfyuiHistoryItemId(item) {
+  const id = Number(item?.id ?? item?.history_id ?? item?.historyId);
+  return Number.isFinite(id) && id > 0 ? id : 0;
+}
+
 function comfyuiHistoryItemById(historyId) {
-  return comfyuiHistoryItems.find((item) => Number(item?.id) === Number(historyId)) || null;
+  const targetId = Number(historyId);
+  if (!Number.isFinite(targetId) || targetId <= 0) return null;
+  return comfyuiHistoryItems.find((item) => comfyuiHistoryItemId(item) === targetId) || null;
+}
+
+function setComfyuiHistoryActionMessage(text, ok = true) {
+  const status = $("comfyui-history-status");
+  if (status && text) status.textContent = text;
+  setComfyuiMessage(text, ok);
 }
 
 function renderComfyuiHistory() {
@@ -2387,6 +2464,7 @@ function renderComfyuiHistory() {
   }
   if (status) status.textContent = `最近 ${comfyuiHistoryItems.length} 筆 ComfyUI 歷史紀錄，可直接套回或重跑。`;
   list.innerHTML = comfyuiHistoryItems.map((item) => {
+    const historyId = comfyuiHistoryItemId(item);
     const payload = item?.payload || {};
     const control = item?.controlnet || {};
     const mode = comfyuiReadableModeLabel(item?.generation_mode || payload?.generation_mode || "txt2img");
@@ -2394,32 +2472,40 @@ function renderComfyuiHistory() {
     const model = payload?.model ? ` · ${payload.model}` : "";
     const prompt = sanitize(String(payload?.prompt || "").slice(0, 140) || "（無提示詞）");
     const createdAt = sanitize(String(item?.created_at || "").replace("T", " ").slice(0, 16));
+    const disabled = historyId ? "" : " disabled";
+    const idLabel = historyId ? `ID #${historyId}` : "ID 未取得";
     return `
       <div class="comfyui-history-item">
         <div class="comfyui-history-head">
           <strong>${sanitize(mode)}</strong>
           <span>${createdAt}</span>
         </div>
-        <div class="drive-card-sub">${sanitize(`ID #${item.id}${model}${controlLabel}`)}</div>
+        <div class="drive-card-sub">${sanitize(`${idLabel}${model}${controlLabel}`)}</div>
         <div class="comfyui-history-prompt">${prompt}</div>
         <div class="drive-card-sub">
           ${sanitize(`步數 ${payload.steps || "-"} · CFG ${payload.cfg || "-"} · Seed ${payload.seed ?? "random"} · 張數 ${payload.batch_size || 1}`)}
         </div>
         <div class="drive-file-actions" style="justify-content:flex-start;">
-          <button class="btn btn-sm" type="button" data-comfyui-history-apply="${item.id}">套回表單</button>
-          <button class="btn btn-sm" type="button" data-comfyui-history-rerun="${item.id}">一鍵重跑</button>
+          <button class="btn btn-sm" type="button" data-comfyui-history-apply="${historyId}"${disabled}>套回表單</button>
+          <button class="btn btn-sm" type="button" data-comfyui-history-rerun="${historyId}"${disabled}>一鍵重跑</button>
         </div>
       </div>
     `;
   }).join("");
   list.querySelectorAll("[data-comfyui-history-apply]").forEach((button) => {
     button.addEventListener("click", () => {
-      applyComfyuiHistoryToForm(Number(button.getAttribute("data-comfyui-history-apply")));
+      const historyId = Number(button.getAttribute("data-comfyui-history-apply") || 0);
+      applyComfyuiHistoryToForm(historyId).catch((err) => {
+        setComfyuiHistoryActionMessage(err.message || "ComfyUI 歷史套回表單失敗", false);
+      });
     });
   });
   list.querySelectorAll("[data-comfyui-history-rerun]").forEach((button) => {
     button.addEventListener("click", () => {
-      rerunComfyuiHistory(Number(button.getAttribute("data-comfyui-history-rerun")));
+      const historyId = Number(button.getAttribute("data-comfyui-history-rerun") || 0);
+      rerunComfyuiHistory(historyId).catch((err) => {
+        setComfyuiHistoryActionMessage(err.message || "ComfyUI 歷史重跑失敗", false);
+      });
     });
   });
 }
@@ -2461,9 +2547,10 @@ async function applyComfyuiHistoryAssets(inputAssets = {}) {
 async function applyComfyuiHistoryToForm(historyId) {
   const item = comfyuiHistoryItemById(historyId);
   if (!item) {
-    setComfyuiMessage("找不到這筆 ComfyUI 歷史紀錄。", false);
+    setComfyuiHistoryActionMessage("找不到這筆 ComfyUI 歷史紀錄，請重新整理歷史。", false);
     return;
   }
+  const displayId = comfyuiHistoryItemId(item) || historyId;
   const payload = item.payload || {};
   const controlnet = item.controlnet || {};
   const loras = Array.isArray(payload.loras) ? payload.loras : [];
@@ -2512,11 +2599,17 @@ async function applyComfyuiHistoryToForm(historyId) {
   await applyComfyuiHistoryAssets(item.input_assets || {});
   updateComfyuiModeVisibility();
   writeComfyuiDraft();
-  setComfyuiMessage(`已套回第 ${historyId} 筆 ComfyUI 歷史，可直接再調整後重跑。`, true);
+  setComfyuiView("generate");
+  setComfyuiMessage(`已套回第 ${displayId} 筆 ComfyUI 歷史，可直接再調整後重跑。`, true);
 }
 
 async function rerunComfyuiHistory(historyId) {
-  if (!historyId) return;
+  const targetId = Number(historyId);
+  if (!Number.isFinite(targetId) || targetId <= 0) {
+    setComfyuiHistoryActionMessage("這筆 ComfyUI 歷史缺少可重跑 ID，請重新整理歷史。", false);
+    return;
+  }
+  setComfyuiView("generate");
   await fetchCsrfToken({ force: true });
   setComfyuiBusy(true);
   setComfyuiMessage("正在建立 ComfyUI 重跑工作...", true);
@@ -2524,7 +2617,7 @@ async function rerunComfyuiHistory(historyId) {
   const controller = new AbortController();
   comfyuiGenerateAbortController = controller;
   try {
-    const res = await apiFetch(API + `/comfyui/history/${encodeURIComponent(historyId)}/rerun`, {
+    const res = await apiFetch(API + `/comfyui/history/${encodeURIComponent(targetId)}/rerun`, {
       method: "POST",
       credentials: "same-origin",
       signal: controller.signal,
@@ -2546,7 +2639,7 @@ async function rerunComfyuiHistory(historyId) {
     stopComfyuiProgress({ complete: true });
     updateComfyuiResultButtons(true);
     loadComfyuiHistory().catch(() => {});
-    setComfyuiMessage(`已重跑第 ${historyId} 筆 ComfyUI 歷史。`, true);
+    setComfyuiMessage(`已重跑第 ${targetId} 筆 ComfyUI 歷史。`, true);
   } catch (err) {
     stopComfyuiProgress({ error: err.message || "ComfyUI 歷史重跑失敗" });
     setComfyuiMessage(err.message || "ComfyUI 歷史重跑失敗", false);
@@ -2852,6 +2945,47 @@ function comfyuiNumberValue(id, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function normalizeComfyuiSeedForUi(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const seed = Math.trunc(Number(value));
+  if (!Number.isFinite(seed)) return null;
+  return Math.max(0, Math.min(COMFYUI_UI_SEED_MAX, seed));
+}
+
+function randomComfyuiSeedForUi() {
+  if (globalThis.crypto?.getRandomValues) {
+    const values = new Uint32Array(1);
+    globalThis.crypto.getRandomValues(values);
+    return values[0];
+  }
+  return Math.floor(Math.random() * (COMFYUI_RANDOM_SEED_MAX + 1));
+}
+
+function applyComfyuiSeedAfterGenerate(completedSeed = null) {
+  const seedInput = $("comfyui-seed");
+  if (!seedInput) return;
+  const mode = $("comfyui-seed-after-generate")?.value || "fixed";
+  if (mode === "fixed") return;
+  let nextSeed = null;
+  if (mode === "random") {
+    nextSeed = randomComfyuiSeedForUi();
+  } else {
+    const baseSeed = normalizeComfyuiSeedForUi(completedSeed)
+      ?? normalizeComfyuiSeedForUi(comfyuiCurrentImage?.seed)
+      ?? normalizeComfyuiSeedForUi(seedInput.value)
+      ?? randomComfyuiSeedForUi();
+    if (mode === "increment") nextSeed = Math.min(COMFYUI_UI_SEED_MAX, baseSeed + 1);
+    else if (mode === "decrement") nextSeed = Math.max(0, baseSeed - 1);
+  }
+  if (nextSeed === null) return;
+  seedInput.value = String(nextSeed);
+  if (typeof updateSelectedComfyuiTemplateSeedFields === "function") {
+    updateSelectedComfyuiTemplateSeedFields(nextSeed);
+  }
+  writeComfyuiDraft();
+  if (typeof queueRenderSelectedComfyuiTemplate === "function") queueRenderSelectedComfyuiTemplate();
+}
+
 function comfyuiPayload() {
   const vae = $("comfyui-vae-select")?.value || COMFYUI_VAE_BUILTIN;
   const mode = comfyuiGenerationMode();
@@ -2936,7 +3070,7 @@ function comfyuiValidatePayloadForUi(payload) {
     }
   }
   if (comfyuiModeRequiresWorkflowTemplate(mode)) {
-    return `「${comfyuiReadableModeLabel(mode)}」需要使用 ComfyUI workflow 模板執行；請在 workflow 模板區匯入或選擇支援的大模型工作流。`;
+    return `「${comfyuiReadableModeLabel(mode)}」需要使用 ComfyUI workflow 模板執行；請在上方 Workflow 模板選擇支援的大模型工作流。`;
   }
   const needsSource = comfyuiModeUsesSourceImage(mode);
   const needsMask = comfyuiModeUsesMaskImage(mode);
@@ -3103,7 +3237,32 @@ async function generateComfyuiImage() {
       payload = comfyuiPayload();
     }
   }
+  const selectedTemplateId = Number(comfyuiSelectedTemplatePresetId || $("comfyui-template-select")?.value || 0);
+  if (!isComfyuiDiffusersMode() && selectedTemplateId) {
+    if (typeof runSelectedComfyuiWorkflowTemplateFromGenerate !== "function") {
+      setComfyuiMessage("已選擇 Workflow 模板，但模板執行模組尚未載入。請重新整理頁面後再試。", false);
+      return;
+    }
+    try {
+      await runSelectedComfyuiWorkflowTemplateFromGenerate(payload.generation_mode);
+    } catch (err) {
+      setComfyuiMessage(err.message || "Workflow 模板執行失敗", false);
+    }
+    return;
+  }
   const validationMessage = comfyuiValidatePayloadForUi(payload);
+  if (comfyuiModeRequiresWorkflowTemplate(payload.generation_mode)) {
+    if (typeof runSelectedComfyuiWorkflowTemplateFromGenerate !== "function") {
+      setComfyuiMessage(`「${comfyuiReadableModeLabel(payload.generation_mode)}」需要使用 Workflow 模板執行，但模板模組尚未載入。請重新整理頁面後再試。`, false);
+      return;
+    }
+    try {
+      await runSelectedComfyuiWorkflowTemplateFromGenerate(payload.generation_mode);
+    } catch (err) {
+      setComfyuiMessage(err.message || "Workflow 模板執行失敗", false);
+    }
+    return;
+  }
   if (validationMessage) {
     setComfyuiMessage(validationMessage, false);
     return;
@@ -3205,6 +3364,7 @@ async function generateComfyuiImage() {
     setComfyuiSelectedImage(0);
     stopComfyuiProgress({ complete: true });
     updateComfyuiResultButtons(true);
+    applyComfyuiSeedAfterGenerate(generated[generated.length - 1]?.seed);
     loadComfyuiHistory().catch(() => {});
     const billingText = totalCharged > 0
       ? `已扣 ${totalCharged} 點。`
@@ -3367,6 +3527,8 @@ async function shareComfyuiToCommunity() {
     setComfyuiMessage("目前沒有可分享的產圖結果", false);
     return;
   }
+  const shareMeta = promptComfyuiShareMetadata();
+  if (!shareMeta) return;
   const shareBtn = $("comfyui-share-btn");
   if (shareBtn) {
     shareBtn.disabled = true;
@@ -3388,8 +3550,8 @@ async function shareComfyuiToCommunity() {
         ...comfyuiSaveRequestPayload(),
         file_id: savedFile.file_id || "",
         storage_file_id: savedStorageFile.id || "",
-        title: $("comfyui-share-title")?.value || "",
-        note: $("comfyui-share-note")?.value || "",
+        title: shareMeta.title,
+        note: shareMeta.note,
         generation: comfyuiShareGenerationPayload()
       })
     });
@@ -3414,6 +3576,19 @@ async function shareComfyuiToCommunity() {
       shareBtn.textContent = "分享到 ComfyUI 專區";
     }
   }
+}
+
+function promptComfyuiShareMetadata() {
+  const defaultTitle = "ComfyUI 產圖分享";
+  const title = window.prompt("分享標題", defaultTitle);
+  if (title === null) return null;
+  const cleanTitle = String(title || "").trim().slice(0, 120) || defaultTitle;
+  const note = window.prompt("心得留言（可留空）", "");
+  if (note === null) return null;
+  return {
+    title: cleanTitle,
+    note: String(note || "").trim().slice(0, 900),
+  };
 }
 
 function formatComfyuiCivitaiFileSize(file) {
@@ -4109,10 +4284,16 @@ const ComfyUITemplateImporter = (() => {
     const cleanName = String(name || "").trim();
     if (!cleanName) return;
     const textInputs = Array.from(modalEl.querySelectorAll("[data-comfyui-template-importer-input='1']"))
-      .filter((el) => el.dataset.classType === "CLIPTextEncode" && el.dataset.inputName === "text");
+      .filter((el) => el.dataset.category === "TEXT" && el.dataset.inputName !== "filename_prefix");
     if (!textInputs.length) return;
     const promptType = typeof isNegativeComfyuiEmbedding === "function" && isNegativeComfyuiEmbedding(cleanName) ? "negative" : "prompt";
-    const target = promptType === "negative" && textInputs.length > 1 ? textInputs[1] : textInputs[0];
+    const looksNegative = (el) => {
+      const text = `${el?.dataset?.label || ""} ${el?.value || ""}`.toLowerCase();
+      return text.includes("負") || text.includes("negative") || text.includes("low quality") || text.includes("worst quality");
+    };
+    const target = promptType === "negative"
+      ? (textInputs.find((el) => looksNegative(el)) || textInputs[1] || textInputs[0])
+      : (textInputs.find((el) => !looksNegative(el)) || textInputs[0]);
     const embeddingTag = `<embeddings:${cleanName}>`;
     const raw = target.value || "";
     const start = Number.isInteger(target.selectionStart) ? target.selectionStart : raw.length;
@@ -4197,6 +4378,8 @@ const ComfyUITemplateImporter = (() => {
         inputEl.dataset.nodeId = field.node_id || "";
         inputEl.dataset.classType = field.class_type || "";
         inputEl.dataset.inputName = field.input_name || "";
+        inputEl.dataset.category = field.category || "";
+        inputEl.dataset.label = field.label || "";
         inputEl.value = field.current_value != null ? String(field.current_value) : "";
         inputEl.style.flex = "1";
         inputEl.style.padding = "4px 8px";

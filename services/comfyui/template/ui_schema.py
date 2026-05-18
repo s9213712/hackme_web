@@ -104,29 +104,82 @@ _FIELD_CONSTRAINT_HINTS: dict[tuple[str, str], dict[str, Any]] = {
 }
 
 
-def _label_zh(field_obj: InputField) -> str:
+_GENERIC_NODE_TITLES = {
+    "",
+    "load model",
+    "model loader",
+    "load checkpoint",
+    "載入模型",
+    "模型載入",
+    "文字輸入",
+    "text input",
+    "prompt",
+}
+
+
+def _clean_title(title: str) -> str:
+    text = str(title or "").strip()
+    return "" if text.lower() in _GENERIC_NODE_TITLES else text
+
+
+def _prompt_role_label(field_obj: InputField, label_context: dict[str, Any] | None) -> str | None:
+    roles = set((label_context or {}).get("prompt_roles", {}).get(field_obj.node_id, []))
+    title = f"{field_obj.node_title} {field_obj.raw_value}".lower()
+    if "negative" in roles or "負" in title or "negative" in title or "neg" in title:
+        return "負面提示詞"
+    if "positive" in roles or "正" in title or "positive" in title or "pos" in title:
+        return "正向提示詞"
+    if any(token in title for token in ("low quality", "worst quality", "bad anatomy", "blurry", "deformed")):
+        return "負面提示詞"
+    return None
+
+
+def _model_noise_label(field_obj: InputField) -> str:
+    text = f"{field_obj.node_title} {field_obj.raw_value}".lower()
+    if "high_noise" in text or "high noise" in text or "高噪" in text:
+        return "High Noise"
+    if "low_noise" in text or "low noise" in text or "低噪" in text:
+        return "Low Noise"
+    return ""
+
+
+def _model_label_with_role(field_obj: InputField, base_label: str) -> str:
+    role = _model_noise_label(field_obj)
+    title = _clean_title(field_obj.node_title)
+    if role:
+        return f"{base_label}（{role}）"
+    if title and title not in base_label:
+        return f"{base_label}（{title}）"
+    return base_label
+
+
+def _label_zh(field_obj: InputField, label_context: dict[str, Any] | None = None) -> str:
     """Best-effort 繁中 label; falls back to the raw input name."""
+    prompt_role = _prompt_role_label(field_obj, label_context)
+    if prompt_role and field_obj.class_type in {"CLIPTextEncode", "CLIPTextEncodeFlux"} and field_obj.input_name == "text":
+        return prompt_role
     table: dict[tuple[str, str], str] = {
         ("CLIPTextEncode", "text"): "提示詞",
+        ("CLIPTextEncodeFlux", "text"): "提示詞",
         ("LoadImage", "image"): "上傳圖片",
         ("LoadImageMask", "image"): "上傳遮罩",
         ("LoadImageMask", "channel"): "遮罩通道",
-        ("CheckpointLoaderSimple", "ckpt_name"): "Checkpoint 模型",
+        ("CheckpointLoaderSimple", "ckpt_name"): "Checkpoint / 大模型",
         ("VAELoader", "vae_name"): "VAE",
-        ("CLIPLoader", "clip_name"): "CLIP / 文字編碼器模型檔名",
-        ("DualCLIPLoader", "clip_name1"): "CLIP-L 模型檔名",
-        ("DualCLIPLoader", "clip_name2"): "T5 / 第二文字編碼器檔名",
-        ("TripleCLIPLoader", "clip_name1"): "CLIP-L 模型檔名",
-        ("TripleCLIPLoader", "clip_name2"): "CLIP-G 模型檔名",
-        ("TripleCLIPLoader", "clip_name3"): "T5 / 第三文字編碼器檔名",
-        ("UNETLoader", "unet_name"): "Diffusion / UNet 模型檔名",
+        ("CLIPLoader", "clip_name"): "CLIP / 文字編碼器",
+        ("DualCLIPLoader", "clip_name1"): "CLIP-L 文字編碼器",
+        ("DualCLIPLoader", "clip_name2"): "T5 / 第二文字編碼器",
+        ("TripleCLIPLoader", "clip_name1"): "CLIP-L 文字編碼器",
+        ("TripleCLIPLoader", "clip_name2"): "CLIP-G 文字編碼器",
+        ("TripleCLIPLoader", "clip_name3"): "T5 / 第三文字編碼器",
+        ("UNETLoader", "unet_name"): "Diffusion / UNet 大模型",
         ("LoraLoader", "lora_name"): "LoRA 模型",
-        ("LoraLoaderModelOnly", "lora_name"): "LoRA 模型",
+        ("LoraLoaderModelOnly", "lora_name"): "LoRA 模型（Model-only）",
         ("LoraLoader", "strength_model"): "LoRA 強度（model）",
         ("LoraLoader", "strength_clip"): "LoRA 強度（clip）",
         ("LoraLoaderModelOnly", "strength_model"): "LoRA 強度",
         ("ControlNetLoader", "control_net_name"): "ControlNet 模型",
-        ("UpscaleModelLoader", "model_name"): "放大模型",
+        ("UpscaleModelLoader", "model_name"): "放大 / Upscale 模型",
         ("KSampler", "seed"): "種子",
         ("KSampler", "steps"): "步數",
         ("KSampler", "cfg"): "CFG",
@@ -178,7 +231,7 @@ def _label_zh(field_obj: InputField) -> str:
         ("SaveImage", "filename_prefix"): "輸出檔名前綴（系統會改寫）",
         ("SaveVideo", "filename_prefix"): "影片輸出檔名前綴（系統會改寫）",
         ("SaveAudioMP3", "filename_prefix"): "音訊輸出檔名前綴（系統會改寫）",
-        ("ByteDanceSeedreamNode", "prompt"): "提示詞",
+        ("ByteDanceSeedreamNode", "prompt"): "生成提示詞",
         ("ByteDanceSeedreamNode", "model"): "Seedream 模型",
         ("ByteDanceSeedreamNode", "size_preset"): "尺寸預設",
         ("ByteDanceSeedreamNode", "width"): "寬度",
@@ -209,26 +262,42 @@ def _label_zh(field_obj: InputField) -> str:
         ("ImageScaleToTotalPixels", "divisible_by"): "尺寸整除",
         ("CreateVideo", "fps"): "FPS",
     }
-    return table.get(
+    label = table.get(
         (field_obj.class_type, field_obj.input_name),
         f"{field_obj.class_type}.{field_obj.input_name}",
     )
+    if field_obj.category == FieldCategory.MODEL:
+        return _model_label_with_role(field_obj, label)
+    return label
 
 
-def _serialize_field(field_obj: InputField) -> dict[str, Any]:
+def _field_disambiguation(field_obj: InputField) -> str:
+    title = _clean_title(field_obj.node_title)
+    if title:
+        return title
+    return f"Node {field_obj.node_id}"
+
+
+def _serialize_field(field_obj: InputField, label_context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build the §9.1 panel-field record for one InputField."""
     constraints = dict(_FIELD_CONSTRAINT_HINTS.get((field_obj.class_type, field_obj.input_name), {}))
+    label = _label_zh(field_obj, label_context)
+    label_counts = (label_context or {}).get("label_counts", {})
+    if label_counts.get(label, 0) > 1:
+        label = f"{label}（{_field_disambiguation(field_obj)}）"
     payload = {
         "id": _field_id(field_obj),
         "node_id": field_obj.node_id,
         "class_type": field_obj.class_type,
         "input_name": field_obj.input_name,
         "category": field_obj.category.value,
-        "label": _label_zh(field_obj),
+        "label": label,
         "input_type": _input_type_for_category(field_obj.category),
         "required": True,
         "current_value": _safe_current_value(field_obj.raw_value),
     }
+    if field_obj.node_title:
+        payload["node_title"] = field_obj.node_title
     if constraints:
         payload["constraints"] = constraints
     return payload
@@ -262,6 +331,61 @@ def _safe_current_value(raw_value: Any) -> Any:
         return raw_value
     except (TypeError, ValueError):
         return str(raw_value)
+
+
+_SYSTEM_REWRITTEN_FIELDS = {
+    ("SaveImage", "filename_prefix"),
+    ("SaveVideo", "filename_prefix"),
+    ("SaveAudioMP3", "filename_prefix"),
+}
+
+
+_TEMPLATE_LOCKED_MODEL_FIELDS = {
+    ("VAELoader", "vae_name"),
+    ("CLIPLoader", "clip_name"),
+    ("DualCLIPLoader", "clip_name1"),
+    ("DualCLIPLoader", "clip_name2"),
+    ("TripleCLIPLoader", "clip_name1"),
+    ("TripleCLIPLoader", "clip_name2"),
+    ("TripleCLIPLoader", "clip_name3"),
+    ("UNETLoader", "unet_name"),
+}
+
+
+def _is_template_locked_model_field(field_obj: InputField) -> bool:
+    return (field_obj.class_type, field_obj.input_name) in _TEMPLATE_LOCKED_MODEL_FIELDS
+
+
+def _is_user_visible_field(field_obj: InputField) -> bool:
+    if (field_obj.class_type, field_obj.input_name) in _SYSTEM_REWRITTEN_FIELDS:
+        return False
+    if _is_template_locked_model_field(field_obj):
+        return False
+    return field_obj.category != FieldCategory.UNKNOWN
+
+
+def _build_label_context(analysis: WorkflowAnalysis) -> dict[str, Any]:
+    prompt_roles: dict[str, set[str]] = {}
+    for node in analysis.nodes:
+        for input_field in node.inputs:
+            if not input_field.is_link or input_field.input_name not in {"positive", "negative"}:
+                continue
+            source_node = str(input_field.raw_value[0]) if isinstance(input_field.raw_value, list) and input_field.raw_value else ""
+            if source_node:
+                prompt_roles.setdefault(source_node, set()).add(input_field.input_name)
+
+    context: dict[str, Any] = {
+        "prompt_roles": {key: sorted(value) for key, value in prompt_roles.items()},
+        "label_counts": {},
+    }
+    label_counts: dict[str, int] = {}
+    for field_obj in analysis.user_inputs:
+        if not _is_user_visible_field(field_obj) or _panel_key_for_field(field_obj) is None:
+            continue
+        label = _label_zh(field_obj, context)
+        label_counts[label] = label_counts.get(label, 0) + 1
+    context["label_counts"] = label_counts
+    return context
 
 
 # ----------------------------------------------------------------------------
@@ -308,25 +432,19 @@ def build_ui_schema(
     """
     schema = UISchema()
     by_panel: dict[str, list[dict[str, Any]]] = {key: [] for key, _, _ in _PANEL_ORDER}
+    label_context = _build_label_context(analysis)
 
     for field_obj in analysis.user_inputs:
         # Output filename prefixes are overwritten by §7.2; not user-editable.
-        if (field_obj.class_type, field_obj.input_name) in {
-            ("SaveImage", "filename_prefix"),
-            ("SaveVideo", "filename_prefix"),
-            ("SaveAudioMP3", "filename_prefix"),
-        }:
+        if not _is_user_visible_field(field_obj):
             continue
         panel_key = _panel_key_for_field(field_obj)
         if panel_key is None:
             continue
-        by_panel[panel_key].append(_serialize_field(field_obj))
+        by_panel[panel_key].append(_serialize_field(field_obj, label_context))
 
     text_fields = by_panel.get("text", [])
-    if any(
-        field.get("class_type") == "CLIPTextEncode" and field.get("input_name") == "text"
-        for field in text_fields
-    ):
+    if text_fields:
         text_fields.append(_embedding_shortcuts_field(text_fields))
 
     for key, _category, label in _PANEL_ORDER:
@@ -396,13 +514,7 @@ def required_user_inputs(analysis: WorkflowAnalysis) -> list[str]:
     """Field IDs that must be filled in before /run; consumed by §10 Gate 4."""
     ids: list[str] = []
     for field_obj in analysis.user_inputs:
-        if (field_obj.class_type, field_obj.input_name) in {
-            ("SaveImage", "filename_prefix"),
-            ("SaveVideo", "filename_prefix"),
-            ("SaveAudioMP3", "filename_prefix"),
-        }:
-            continue
-        if field_obj.category == FieldCategory.UNKNOWN:
+        if not _is_user_visible_field(field_obj):
             continue
         ids.append(_field_id(field_obj))
     return ids

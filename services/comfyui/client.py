@@ -61,6 +61,17 @@ def _node_input_options_from_info(info, node_class, input_name):
     return [str(item) for item in values if str(item).strip()]
 
 
+def _clean_option_list(values):
+    cleaned = []
+    for item in values or []:
+        if isinstance(item, dict):
+            item = item.get("name") or item.get("filename") or item.get("value") or ""
+        text = str(item or "").strip()
+        if text:
+            cleaned.append(text)
+    return cleaned
+
+
 @dataclass
 class ComfyUIImage:
     filename: str
@@ -230,12 +241,19 @@ class ComfyUIClient:
         if isinstance(data, list):
             values = data
         elif isinstance(data, dict):
-            values = data.get("embeddings") or data.get("items") or []
+            values = (
+                data.get("embeddings")
+                or data.get("embedding")
+                or data.get("items")
+                or data.get("textual_inversions")
+                or data.get("textual_inversion")
+                or []
+            )
         else:
             values = []
         if not isinstance(values, list):
             values = []
-        return [str(item) for item in values if str(item).strip()]
+        return _clean_option_list(values)
 
     def health_check(self, *, timeout=3):
         stats = self._json_request("/system_stats", timeout=timeout)
@@ -272,6 +290,18 @@ class ComfyUIClient:
         models = _node_input_options_from_info(object_info, "CheckpointLoaderSimple", "ckpt_name")
         loras = _node_input_options_from_info(object_info, "LoraLoader", "lora_name") if "LoraLoader" in available_nodes else []
         vaes = _node_input_options_from_info(object_info, "VAELoader", "vae_name") if "VAELoader" in available_nodes else []
+        diffusion_models = _node_input_options_from_info(object_info, "UNETLoader", "unet_name") if "UNETLoader" in available_nodes else []
+        clip_models = []
+        for class_type, input_name in (
+            ("CLIPLoader", "clip_name"),
+            ("DualCLIPLoader", "clip_name1"),
+            ("DualCLIPLoader", "clip_name2"),
+            ("TripleCLIPLoader", "clip_name1"),
+            ("TripleCLIPLoader", "clip_name2"),
+            ("TripleCLIPLoader", "clip_name3"),
+        ):
+            if class_type in available_nodes:
+                clip_models.extend(_node_input_options_from_info(object_info, class_type, input_name))
         controlnet_models = _node_input_options_from_info(object_info, "ControlNetLoader", "control_net_name") if "ControlNetLoader" in available_nodes else []
         upscale_models = _node_input_options_from_info(object_info, "UpscaleModelLoader", "model_name") if "UpscaleModelLoader" in available_nodes else []
         samplers = _node_input_options_from_info(object_info, "KSampler", "sampler_name")
@@ -309,6 +339,8 @@ class ComfyUIClient:
             "models": models,
             "loras": loras,
             "vaes": vaes,
+            "diffusion_models": sorted(set(diffusion_models)),
+            "clip_models": sorted(set(clip_models)),
             "samplers": samplers,
             "schedulers": schedulers,
             "controlnet_models": controlnet_models,
@@ -326,7 +358,7 @@ class ComfyUIClient:
                 }
                 for key, value in GENERATION_MODE_DEFINITIONS.items()
             ],
-            "model_families": detect_model_families([*models, *loras, *vaes, *controlnet_models, *upscale_models]),
+            "model_families": detect_model_families([*models, *loras, *vaes, *diffusion_models, *clip_models, *controlnet_models, *upscale_models]),
         }
 
     def upload_image_bytes(self, data, filename, *, image_type="input", overwrite=False, subfolder=""):

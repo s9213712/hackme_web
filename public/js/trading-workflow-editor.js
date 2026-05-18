@@ -105,12 +105,13 @@
     return workflowPreviewCsrfToken;
   }
 
-  async function fetchWorkflowPreviewJson(path, options = {}) {
+  async function fetchWorkflowPreviewJson(path, options = {}, retryOnCsrf = true) {
     const requestOptions = { ...(options || {}) };
     const method = String(requestOptions.method || "GET").toUpperCase();
     const headers = { ...(requestOptions.headers || {}) };
-    if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
-      headers["X-CSRF-Token"] = await fetchWorkflowPreviewCsrfToken();
+    const needsCsrf = !["GET", "HEAD", "OPTIONS"].includes(method);
+    if (needsCsrf) {
+      headers["X-CSRF-Token"] = await fetchWorkflowPreviewCsrfToken({ force: true });
       if (requestOptions.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
     }
     const res = await fetch(apiPath(path), {
@@ -125,6 +126,10 @@
       json = raw ? JSON.parse(raw) : {};
     } catch (_) {
       json = {};
+    }
+    if (!res.ok && retryOnCsrf && needsCsrf && json && json.error === "csrf_invalid") {
+      workflowPreviewCsrfToken = "";
+      return fetchWorkflowPreviewJson(path, options, false);
     }
     if (!res.ok || !json.ok) {
       throw new Error(String(json.msg || json.message || raw || `HTTP ${res.status}` || "操作失敗").slice(0, 240));
@@ -597,10 +602,15 @@
     if (!target) return;
     target.innerHTML = `
       <button class="branch-tab active" type="button">Node Graph</button>
-      <button class="branch-tab" type="button" data-add-node="logic:AND">新增 AND</button>
-      <button class="branch-tab" type="button" data-add-node="logic:OR">新增 OR</button>
-      <button class="branch-tab" type="button" data-add-node="control:cooldown">新增控制</button>
-      <button class="branch-tab" type="button" data-auto-layout>自動整理</button>
+      <details class="branch-action-menu">
+        <summary class="branch-tab">圖表操作</summary>
+        <div class="branch-action-menu-body">
+          <button class="branch-tab" type="button" data-add-node="logic:AND">新增 AND</button>
+          <button class="branch-tab" type="button" data-add-node="logic:OR">新增 OR</button>
+          <button class="branch-tab" type="button" data-add-node="control:cooldown">新增控制</button>
+          <button class="branch-tab" type="button" data-auto-layout>自動整理</button>
+        </div>
+      </details>
     `;
   }
 

@@ -1,0 +1,245 @@
+{
+  "conversion": {
+    "allowlist_message": "",
+    "allowlist_status": "allowlisted",
+    "class_count": 10,
+    "denied_classes": [],
+    "node_count": 10,
+    "source_format": "ui_graph",
+    "source_path": "audio/t2a/audio_ace_step1_5_xl_base.json",
+    "structural_status": "pass",
+    "unknown_classes": []
+  },
+  "default_params": {
+    "batch_size": 1,
+    "cfg": 6,
+    "checkpoint": "",
+    "clip": "qwen_0.6b_ace15.safetensors",
+    "controlnet": null,
+    "denoise_strength": 1,
+    "diffusion_model": "acestep_v1.5_xl_base_bf16.safetensors",
+    "generation_mode": "t2s",
+    "height": 1024,
+    "loras": [],
+    "model": "acestep_v1.5_xl_base_bf16.safetensors",
+    "negative_prompt": "",
+    "prompt": "",
+    "sampler_name": "euler",
+    "scheduler": "simple",
+    "seed": 42,
+    "steps": 50,
+    "upscale_model": "",
+    "vae": "ace_1.5_vae.safetensors",
+    "width": 1024
+  },
+  "description": "ACE-Step 1.5 text-to-audio / music workflow converted from origin.",
+  "id": "origin_audio_ace_step_15_xl_base",
+  "name": "ACE-Step 1.5 XL Base（T2A）",
+  "origin_source_path": "audio/t2a/audio_ace_step1_5_xl_base.json",
+  "output_kinds": [
+    "music"
+  ],
+  "required_controlnets": [],
+  "required_custom_nodes": [],
+  "required_loras": [],
+  "required_models": [
+    {
+      "kind": "diffusion_model",
+      "name": "acestep_v1.5_xl_base_bf16.safetensors"
+    },
+    {
+      "kind": "vae",
+      "name": "ace_1.5_vae.safetensors"
+    },
+    {
+      "kind": "clip",
+      "name": "qwen_0.6b_ace15.safetensors"
+    },
+    {
+      "kind": "clip",
+      "name": "qwen_4b_ace15.safetensors"
+    }
+  ],
+  "schema_version": 1,
+  "source": "official_origin",
+  "source_format": "ui_graph",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 0,
+            "id": "node:3:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "種子",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 150,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 50,
+            "id": "node:3:steps",
+            "input_name": "steps",
+            "input_type": "number",
+            "label": "步數",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 30.0,
+              "min": 0.5,
+              "step": 0.1
+            },
+            "current_value": 6,
+            "id": "node:3:cfg",
+            "input_name": "cfg",
+            "input_type": "number",
+            "label": "CFG",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "euler",
+            "id": "node:3:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "simple",
+            "id": "node:3:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:3:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise",
+            "node_id": "3",
+            "required": true
+          }
+        ],
+        "id": "sampler",
+        "label": "採樣設定"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptyAceStep1.5LatentAudio",
+            "constraints": {
+              "max": 600,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 120,
+            "id": "node:98:seconds",
+            "input_name": "seconds",
+            "input_type": "number",
+            "label": "音訊秒數",
+            "node_id": "98",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "TextEncodeAceStepAudio1.5",
+            "current_value": 0,
+            "id": "node:94:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "TextEncodeAceStepAudio1.5.seed",
+            "node_id": "94",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "TextEncodeAceStepAudio1.5",
+            "constraints": {
+              "max": 600,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 120,
+            "id": "node:94:duration",
+            "input_name": "duration",
+            "input_type": "number",
+            "label": "秒數",
+            "node_id": "94",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ModelSamplingAuraFlow",
+            "constraints": {
+              "max": 20.0,
+              "min": 0.0,
+              "step": 0.1
+            },
+            "current_value": 3,
+            "id": "node:78:shift",
+            "input_name": "shift",
+            "input_type": "number",
+            "label": "Model Shift",
+            "node_id": "78",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "進階數值參數"
+      },
+      {
+        "collapsed_default": false,
+        "fields": [],
+        "id": "compatibility",
+        "label": "相容性報告",
+        "read_only": true
+      },
+      {
+        "collapsed_default": true,
+        "fields": [],
+        "id": "raw",
+        "label": "原始 workflow",
+        "read_only": true
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

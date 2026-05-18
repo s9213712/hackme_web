@@ -1,0 +1,225 @@
+{
+  "102": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Capybara_v0.1",
+      "images": [
+        "117",
+        0
+      ]
+    }
+  },
+  "111": {
+    "class_type": "BasicScheduler",
+    "inputs": {
+      "model": [
+        "118",
+        0
+      ],
+      "steps": "simple"
+    }
+  },
+  "112": {
+    "class_type": "CFGGuider",
+    "inputs": {
+      "cfg": 6,
+      "model": [
+        "116",
+        0
+      ],
+      "negative": [
+        "114",
+        1
+      ],
+      "positive": [
+        "114",
+        0
+      ]
+    }
+  },
+  "113": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "guider": [
+        "112",
+        0
+      ],
+      "latent_image": [
+        "114",
+        2
+      ],
+      "noise": [
+        "127",
+        0
+      ],
+      "sampler": [
+        "126",
+        0
+      ],
+      "sigmas": [
+        "111",
+        0
+      ]
+    }
+  },
+  "114": {
+    "class_type": "HunyuanVideo15ImageToVideo",
+    "inputs": {
+      "clip_vision_output": [
+        "123",
+        0
+      ],
+      "height": [
+        "122",
+        1
+      ],
+      "length": [
+        "122",
+        2
+      ],
+      "negative": [
+        "125",
+        0
+      ],
+      "positive": [
+        "115",
+        0
+      ],
+      "start_image": [
+        "124",
+        0
+      ],
+      "vae": [
+        "120",
+        0
+      ],
+      "width": [
+        "122",
+        0
+      ]
+    }
+  },
+  "115": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "119",
+        0
+      ],
+      "text": "Keep the characters and fluttering costumes unchanged, replace the indoor scene with an outdoor grassland setting"
+    }
+  },
+  "116": {
+    "class_type": "ModelSamplingSD3",
+    "inputs": {
+      "model": [
+        "118",
+        0
+      ],
+      "shift": 7
+    }
+  },
+  "117": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "113",
+        0
+      ],
+      "vae": [
+        "120",
+        0
+      ]
+    }
+  },
+  "118": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "capybara_v0.1.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "119": {
+    "class_type": "DualCLIPLoader",
+    "inputs": {
+      "clip_name1": "qwen_2.5_vl_7b.safetensors",
+      "clip_name2": "byt5_small_glyphxl_fp16.safetensors",
+      "device": "default",
+      "type": "hunyuan_video_15"
+    }
+  },
+  "120": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "hunyuanvideo15_vae_fp16.safetensors"
+    }
+  },
+  "121": {
+    "class_type": "CLIPVisionLoader",
+    "inputs": {
+      "clip_name": "sigclip_vision_patch14_384.safetensors"
+    }
+  },
+  "122": {
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "124",
+        0
+      ]
+    }
+  },
+  "123": {
+    "class_type": "CLIPVisionEncode",
+    "inputs": {
+      "clip_vision": [
+        "121",
+        0
+      ],
+      "image": [
+        "124",
+        0
+      ]
+    }
+  },
+  "124": {
+    "class_type": "ResizeImageMaskNode",
+    "inputs": {
+      "input": [
+        "80",
+        0
+      ],
+      "resize_type.height": 1024,
+      "resize_type.width": "scale dimensions"
+    }
+  },
+  "125": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "119",
+        0
+      ],
+      "text": "blurry, low quality, distorted, ugly, watermark, text"
+    }
+  },
+  "126": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "127": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 1044901887090653
+    }
+  },
+  "80": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "wind_woman.png",
+      "upload": "image"
+    }
+  }
+}

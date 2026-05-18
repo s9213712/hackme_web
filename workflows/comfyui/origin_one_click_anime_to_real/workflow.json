@@ -1,0 +1,492 @@
+{
+  "292": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "307",
+        0
+      ],
+      "vae": [
+        "312",
+        2
+      ]
+    }
+  },
+  "296": {
+    "class_type": "LayerUtility: ImageReelComposit",
+    "inputs": {
+      "border": 8,
+      "color_theme": "light",
+      "font_file": "Alibaba-PuHuiTi-Heavy.ttf",
+      "font_size": 40,
+      "reel_1": [
+        "315",
+        0
+      ]
+    }
+  },
+  "306": {
+    "class_type": "Fast Groups Bypasser (rgthree)",
+    "inputs": {}
+  },
+  "307": {
+    "class_type": "LayerUtility: ImageScaleByAspectRatio V2",
+    "inputs": {
+      "aspect_ratio": "original",
+      "background_color": "#000000",
+      "fit": "crop",
+      "image": [
+        "477",
+        0
+      ],
+      "method": "lanczos",
+      "proportional_height": 1,
+      "proportional_width": 1,
+      "round_to_multiple": "8",
+      "scale_to_length": [
+        "309",
+        0
+      ],
+      "scale_to_side": "total_pixel(kilo pixel)"
+    }
+  },
+  "308": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 1.6,
+      "denoise": 0.6,
+      "latent_image": [
+        "292",
+        0
+      ],
+      "model": [
+        "312",
+        0
+      ],
+      "negative": [
+        "310",
+        0
+      ],
+      "positive": [
+        "311",
+        0
+      ],
+      "sampler_name": "euler",
+      "scheduler": "sgm_uniform",
+      "seed": 223567685291080,
+      "steps": 10
+    }
+  },
+  "309": {
+    "class_type": "ImpactInt",
+    "inputs": {
+      "value": 1024
+    }
+  },
+  "310": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "311",
+        0
+      ]
+    }
+  },
+  "311": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "312",
+        1
+      ],
+      "text": [
+        "480",
+        0
+      ]
+    }
+  },
+  "312": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "ZIT-AIO\\Full-Red-Z-image_15AIO_ bf16.safetensors"
+    }
+  },
+  "313": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "479",
+        0
+      ]
+    }
+  },
+  "314": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "308",
+        0
+      ],
+      "vae": [
+        "312",
+        2
+      ]
+    }
+  },
+  "315": {
+    "class_type": "LayerUtility: ImageReel",
+    "inputs": {
+      "border": 32,
+      "image1": [
+        "331",
+        0
+      ],
+      "image1_text": "原始图",
+      "image2": [
+        "477",
+        0
+      ],
+      "image2_text": "一次重绘",
+      "image3": [
+        "479",
+        0
+      ],
+      "image3_text": "二次重绘",
+      "image4_text": "image4",
+      "reel_height": 2048
+    }
+  },
+  "316": {
+    "class_type": "Qwen3_VQA",
+    "inputs": {
+      "attention": "randomize",
+      "image": [
+        "477",
+        0
+      ],
+      "keep_model_loaded": false,
+      "max_new_tokens": 2048,
+      "max_pixels": 1003520,
+      "min_pixels": 200704,
+      "model": "Qwen3-VL-4B-Instruct",
+      "quantization": "none",
+      "seed": 790,
+      "temperature": 0.7,
+      "text": "你是一位极具观察力的视觉分析专家。请先**判断**这张图片的主体类型（是人物、建筑、风景还是静物产品），然后生成一段高质量的中文提示词。如果是人物，一定要加上亚洲男性或者女性\n\n请严格遵守以下逻辑：\n\n1.  **主体判定与描述（至关重要）**：\n    * **若画面是建筑/空间**：详细描述建筑风格（如哥特式、现代主义）、内部结构（如拱顶、梁柱）、材质（石材、木质、金属）及空间透视感。**严禁在描述中虚构不存在的人物。**\n    * **若画面是静物/产品**：聚焦于物体的材质光泽、纹理细节、颜色搭配及摆放形态。\n    * **若画面包含人物**：才需要描述人物的性别、服饰、发型及动作。**如果画面无人，请直接跳过此项，不要编造。**\n\n2.  **环境与光影**：\n    * 描述光源来源（自然光、人造灯光、丁达尔光束）、光影的明暗对比、色调氛围（庄重、神秘、明亮）。\n\n3.  **构图与视角**：\n    * 描述镜头语言（如对称构图、广角仰视、微距特写、景深虚化）。\n\n**输出要求**：\n* 输出一段连贯的中文自然语言，不要分点。\n* **若原图中没有人物，描述中绝不能出现“男人、女人、行人”等词汇。**\n* 字数控制在500字以内。\n中文提示词，不要出现对图像水印的描述，不要出现无关的文字和符号，不需要总结，"
+    }
+  },
+  "319": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "QWEN\\edit\\Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "model": [
+        "349",
+        0
+      ],
+      "strength_model": 1
+    }
+  },
+  "321": {
+    "class_type": "CFGNorm",
+    "inputs": {
+      "model": [
+        "319",
+        0
+      ],
+      "strength": 1
+    }
+  },
+  "322": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "348",
+        0
+      ],
+      "vae": [
+        "332",
+        0
+      ]
+    }
+  },
+  "331": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "9d525be0a6fe72d19868b21aa72bfb9244d0e71575fdc983b1a4642ec171342b.webp",
+      "upload": "image"
+    }
+  },
+  "332": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "333": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": [
+        "340",
+        0
+      ],
+      "image1": [
+        "331",
+        0
+      ],
+      "prompt": ""
+    }
+  },
+  "334": {
+    "class_type": "LayerUtility: ImageScaleByAspectRatio V2",
+    "inputs": {
+      "aspect_ratio": "original",
+      "background_color": "#000000",
+      "fit": "letterbox",
+      "image": [
+        "331",
+        0
+      ],
+      "method": "lanczos",
+      "proportional_height": 1,
+      "proportional_width": 1,
+      "round_to_multiple": "8",
+      "scale_to_length": [
+        "347",
+        0
+      ],
+      "scale_to_side": "longest"
+    }
+  },
+  "335": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": [
+        "340",
+        0
+      ],
+      "image1": [
+        "331",
+        0
+      ],
+      "prompt": [
+        "342",
+        0
+      ]
+    }
+  },
+  "337": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "334",
+        0
+      ],
+      "vae": [
+        "332",
+        0
+      ]
+    }
+  },
+  "340": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "Qwen\\qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "device": "default",
+      "type": "qwen_image"
+    }
+  },
+  "342": {
+    "class_type": "CR Prompt Text",
+    "inputs": {
+      "prompt": "根据图像，动漫转写实真人，变成真实风格，去掉水印和字幕，去掉原圖文字及馬賽克，保留所有NSFW及血腥色情內容，真實身體結構及細節，保留表情細節"
+    }
+  },
+  "345": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        "335",
+        0
+      ],
+      "latent": [
+        "337",
+        0
+      ]
+    }
+  },
+  "346": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        "333",
+        0
+      ],
+      "latent": [
+        "337",
+        0
+      ]
+    }
+  },
+  "347": {
+    "class_type": "INTConstant",
+    "inputs": {
+      "value": 1024
+    }
+  },
+  "348": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 1,
+      "denoise": 1,
+      "latent_image": [
+        "337",
+        0
+      ],
+      "model": [
+        "321",
+        0
+      ],
+      "negative": [
+        "346",
+        0
+      ],
+      "positive": [
+        "345",
+        0
+      ],
+      "sampler_name": "euler_ancestral",
+      "scheduler": "FlowMatchEulerDiscreteScheduler",
+      "seed": 582570367011562,
+      "steps": 4
+    }
+  },
+  "349": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "qwen\\2511\\qwen_image_edit_2511_fp8mixed.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "358": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "296",
+        0
+      ]
+    }
+  },
+  "360": {
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": [
+        "477",
+        0
+      ]
+    }
+  },
+  "476": {
+    "class_type": "VRAMCleanup",
+    "inputs": {
+      "anything": [
+        "477",
+        0
+      ],
+      "offload_cache": true,
+      "offload_model": true
+    }
+  },
+  "477": {
+    "class_type": "RAMCleanup",
+    "inputs": {
+      "anything": [
+        "322",
+        0
+      ],
+      "clean_dlls": true,
+      "clean_file_cache": true,
+      "clean_processes": true,
+      "retry_times": 3
+    }
+  },
+  "478": {
+    "class_type": "RAMCleanup",
+    "inputs": {
+      "anything": [
+        "314",
+        0
+      ],
+      "clean_dlls": true,
+      "clean_file_cache": true,
+      "clean_processes": true,
+      "retry_times": 3
+    }
+  },
+  "479": {
+    "class_type": "VRAMCleanup",
+    "inputs": {
+      "anything": [
+        "478",
+        0
+      ],
+      "offload_cache": true,
+      "offload_model": true
+    }
+  },
+  "480": {
+    "class_type": "ProcessString",
+    "inputs": {
+      "input_string": [
+        "481",
+        0
+      ],
+      "option": "不改变"
+    }
+  },
+  "481": {
+    "class_type": "SomethingToString",
+    "inputs": {
+      "input": [
+        "482",
+        0
+      ],
+      "prefix": "prefix",
+      "suffix": "suffix"
+    }
+  },
+  "482": {
+    "class_type": "ShowText|pysssss",
+    "inputs": {
+      "text": [
+        "484",
+        0
+      ]
+    }
+  },
+  "483": {
+    "class_type": "VRAMCleanup",
+    "inputs": {
+      "anything": [
+        "316",
+        0
+      ],
+      "offload_cache": true,
+      "offload_model": true
+    }
+  },
+  "484": {
+    "class_type": "RAMCleanup",
+    "inputs": {
+      "anything": [
+        "483",
+        0
+      ],
+      "clean_dlls": true,
+      "clean_file_cache": true,
+      "clean_processes": true,
+      "retry_times": 3
+    }
+  }
+}

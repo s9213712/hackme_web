@@ -17,6 +17,7 @@ from services.comfyui.template.allowlist import (
     CONTROLNET_PREPROCESSOR_ALLOWLIST,
     CORE_ALLOWLIST,
     MEDIA_WORKFLOW_ALLOWLIST,
+    ORIGIN_WORKFLOW_ALLOWLIST,
 )
 from services.comfyui.template.analyzer import WorkflowAnalysis
 
@@ -37,6 +38,7 @@ def enforce_allowlist(analysis: WorkflowAnalysis) -> None:
         - CORE_ALLOWLIST
         - CONTROLNET_PREPROCESSOR_ALLOWLIST
         - MEDIA_WORKFLOW_ALLOWLIST
+        - ORIGIN_WORKFLOW_ALLOWLIST
     )
     if not_allowed:
         raise SafetyError(

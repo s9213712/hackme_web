@@ -1624,6 +1624,23 @@
       word-break: break-word;
     }
 
+    .comfyui-auto-generation-mode-field select[hidden] {
+      display: none !important;
+    }
+
+    .comfyui-auto-mode-display {
+      display: inline-flex;
+      align-items: center;
+      min-height: 2.25rem;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: rgba(255,255,255,.045);
+      padding: .45rem .7rem;
+      color: var(--text);
+      font-size: .88rem;
+      font-weight: 700;
+    }
+
     .comfyui-title-row {
       display: flex;
       flex-wrap: wrap;
@@ -1994,6 +2011,14 @@
       font-size: .82rem;
     }
 
+    .comfyui-lora-compat-hint {
+      border-top: 1px dashed rgba(255,255,255,.12);
+      padding-top: .35rem;
+      color: #ffe08a;
+      font-size: .72rem;
+      line-height: 1.4;
+    }
+
     .comfyui-embedding-shortcuts {
       display: flex;
       flex-wrap: wrap;
@@ -2314,6 +2339,70 @@
       background: rgba(255,255,255,.025);
     }
 
+    .comfyui-workflow-action-bar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: .45rem;
+      flex-wrap: wrap;
+      margin-top: .65rem;
+    }
+
+    .comfyui-workflow-primary-actions {
+      justify-content: flex-start;
+    }
+
+    .comfyui-workflow-action-menu {
+      position: relative;
+      flex: 0 0 auto;
+    }
+
+    .comfyui-workflow-action-menu > summary {
+      list-style: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: .32rem;
+    }
+
+    .comfyui-workflow-action-menu > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .comfyui-workflow-action-menu > summary::after {
+      content: "›";
+      display: inline-block;
+      color: var(--muted);
+      font-size: .95rem;
+      line-height: 1;
+      transition: transform .15s ease;
+    }
+
+    .comfyui-workflow-action-menu[open] > summary::after {
+      transform: rotate(90deg);
+    }
+
+    .comfyui-workflow-action-menu-body {
+      position: absolute;
+      right: 0;
+      z-index: 25;
+      display: grid;
+      gap: .35rem;
+      min-width: 220px;
+      margin-top: .42rem;
+      padding: .5rem;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: rgba(15, 23, 42, .98);
+      box-shadow: 0 14px 36px rgba(0,0,0,.32);
+    }
+
+    .comfyui-workflow-action-menu-body .btn {
+      width: 100%;
+      justify-content: flex-start;
+      text-align: left;
+    }
+
     .comfyui-workflow-builder-panel {
       margin: .75rem 0;
       padding: .75rem;
@@ -2349,6 +2438,43 @@
       justify-content: space-between;
       gap: .6rem;
       flex-wrap: wrap;
+    }
+
+    .comfyui-workflow-item > summary {
+      list-style: none;
+      cursor: pointer;
+    }
+
+    .comfyui-workflow-item > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .comfyui-workflow-item-summary {
+      display: grid;
+      grid-template-columns: 1rem minmax(0, 1fr);
+      align-items: start;
+      gap: .45rem;
+      margin: -.1rem;
+      padding: .1rem;
+    }
+
+    .comfyui-workflow-expand-indicator::before {
+      content: "›";
+      display: inline-block;
+      color: var(--muted);
+      font-size: 1.1rem;
+      line-height: 1.25;
+      transition: transform .15s ease;
+    }
+
+    .comfyui-workflow-item[open] .comfyui-workflow-expand-indicator::before {
+      transform: rotate(90deg);
+    }
+
+    .comfyui-workflow-item-body {
+      margin-top: .65rem;
+      padding-top: .65rem;
+      border-top: 1px solid rgba(255,255,255,.08);
     }
 
     .comfyui-workflow-item-title {
@@ -2447,6 +2573,26 @@
       .comfyui-workflow-item .drive-file-actions .btn {
         flex: 1 1 44%;
         min-height: 44px;
+      }
+
+      .comfyui-workflow-action-bar,
+      .comfyui-workflow-primary-actions {
+        width: 100%;
+      }
+
+      .comfyui-workflow-primary-actions .btn,
+      .comfyui-workflow-action-menu {
+        flex: 1 1 100%;
+      }
+
+      .comfyui-workflow-more-summary,
+      .comfyui-workflow-action-menu-body {
+        width: 100%;
+      }
+
+      .comfyui-workflow-action-menu-body {
+        position: static;
+        min-width: 0;
       }
 
       .comfyui-civitai-search-card {

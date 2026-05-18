@@ -181,6 +181,14 @@
   let lastImportWarnings = [];
   let nodeCatalog = [];
   let workflow = loadState();
+  const AUTO_LAYOUT_X = 70;
+  const AUTO_LAYOUT_Y = 80;
+  const AUTO_LAYOUT_COLUMN_GAP = 300;
+  const AUTO_LAYOUT_ROW_GAP = 165;
+  const AUTO_LAYOUT_NODE_WIDTH = 220;
+  const AUTO_LAYOUT_NODE_HEIGHT = 132;
+  const AUTO_LAYOUT_MIN_WIDTH = 1480;
+  const AUTO_LAYOUT_MIN_HEIGHT = 820;
 
   function isUnknownNode(node) {
     return node?.type === UNKNOWN_NODE_TYPE;
@@ -846,6 +854,7 @@
     saveState();
     if ($("workflowName")) $("workflowName").value = workflow.name || "";
     if ($("workflowDescription")) $("workflowDescription").value = workflow.description || "";
+    fitCanvasToWorkflow();
     renderNodes();
     renderEdges();
     renderInspector();
@@ -1095,19 +1104,91 @@
     render();
   }
 
+  function workflowFlowLayers() {
+    const ids = workflow.nodes.map((node) => node.id);
+    const idSet = new Set(ids);
+    const originalIndex = new Map(ids.map((id, index) => [id, index]));
+    const incomingCount = new Map(ids.map((id) => [id, 0]));
+    const outgoing = new Map(ids.map((id) => [id, []]));
+    workflow.edges.forEach((edge) => {
+      if (!idSet.has(edge.from) || !idSet.has(edge.to) || edge.from === edge.to) return;
+      outgoing.get(edge.from).push(edge);
+      incomingCount.set(edge.to, (incomingCount.get(edge.to) || 0) + 1);
+    });
+    outgoing.forEach((edges) => {
+      edges.sort((a, b) =>
+        (originalIndex.get(a.to) ?? 0) - (originalIndex.get(b.to) ?? 0) ||
+        String(a.output || "").localeCompare(String(b.output || "")) ||
+        String(a.input || "").localeCompare(String(b.input || "")));
+    });
+    const remainingIncoming = new Map(incomingCount);
+    const depth = new Map(ids.map((id) => [id, 0]));
+    const processed = new Set();
+    const queue = ids.filter((id) => (incomingCount.get(id) || 0) === 0);
+    const sortByFlow = (a, b) => (depth.get(a) || 0) - (depth.get(b) || 0) || (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0);
+    while (queue.length) {
+      queue.sort(sortByFlow);
+      const id = queue.shift();
+      if (!id || processed.has(id)) continue;
+      processed.add(id);
+      (outgoing.get(id) || []).forEach((edge) => {
+        const next = edge.to;
+        depth.set(next, Math.max(depth.get(next) || 0, (depth.get(id) || 0) + 1));
+        remainingIncoming.set(next, Math.max(0, (remainingIncoming.get(next) || 0) - 1));
+        if ((remainingIncoming.get(next) || 0) === 0) queue.push(next);
+      });
+    }
+    ids.filter((id) => !processed.has(id)).sort((a, b) => (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0)).forEach((id) => {
+      const upstreamDepth = workflow.edges
+        .filter((edge) => edge.to === id && idSet.has(edge.from) && edge.from !== id)
+        .map((edge) => (depth.get(edge.from) || 0) + 1);
+      if (upstreamDepth.length) depth.set(id, Math.max(depth.get(id) || 0, ...upstreamDepth));
+      processed.add(id);
+    });
+    const layers = new Map();
+    ids.forEach((id) => {
+      const layer = Math.max(0, depth.get(id) || 0);
+      if (!layers.has(layer)) layers.set(layer, []);
+      layers.get(layer).push(id);
+    });
+    return Array.from(layers.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([, layerIds]) => layerIds.sort((a, b) => (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0)));
+  }
+
+  function fitCanvasToWorkflow() {
+    const canvas = $("canvas");
+    if (!canvas) return;
+    if (!workflow.nodes.length) {
+      canvas.style.removeProperty("width");
+      canvas.style.removeProperty("min-height");
+      return;
+    }
+    const maxX = Math.max(...workflow.nodes.map((node) => Number(node.x) || 0));
+    const maxY = Math.max(...workflow.nodes.map((node) => Number(node.y) || 0));
+    const desiredWidth = Math.ceil(maxX + AUTO_LAYOUT_NODE_WIDTH + 110);
+    const desiredHeight = Math.ceil(maxY + AUTO_LAYOUT_NODE_HEIGHT + 110);
+    if (desiredWidth > AUTO_LAYOUT_MIN_WIDTH) canvas.style.width = `${desiredWidth}px`;
+    else canvas.style.removeProperty("width");
+    if (desiredHeight > AUTO_LAYOUT_MIN_HEIGHT) canvas.style.minHeight = `${desiredHeight}px`;
+    else canvas.style.removeProperty("min-height");
+  }
+
   function autoLayoutNodes() {
     if (!workflow.nodes.length) return;
-    const order = workflow.nodes.slice().sort((a, b) => {
-      const aIncoming = workflow.edges.filter((edge) => edge.to === a.id).length;
-      const bIncoming = workflow.edges.filter((edge) => edge.to === b.id).length;
-      return aIncoming - bIncoming || workflow.nodes.indexOf(a) - workflow.nodes.indexOf(b);
+    const layers = workflowFlowLayers();
+    layers.forEach((layer, layerIndex) => {
+      layer.forEach((id, rowIndex) => {
+        const node = nodeById(id);
+        if (!node) return;
+        node.x = AUTO_LAYOUT_X + layerIndex * AUTO_LAYOUT_COLUMN_GAP;
+        node.y = AUTO_LAYOUT_Y + rowIndex * AUTO_LAYOUT_ROW_GAP;
+      });
     });
-    order.forEach((node, index) => {
-      node.x = 70 + (index % 4) * 290;
-      node.y = 80 + Math.floor(index / 4) * 190;
-    });
+    const nodeMap = new Map(workflow.nodes.map((node) => [node.id, node]));
+    workflow.nodes = layers.flat().map((id) => nodeMap.get(id)).filter(Boolean);
     render();
-    setStatus("已重新排列節點，連線會重新貼齊節點。");
+    setStatus(`已依 workflow 流程順序整理 ${workflow.nodes.length} 個節點：來源在左、輸出在右。`);
   }
 
   function canvasPoint(event) {
@@ -1766,11 +1847,30 @@
       .slice(0, 120);
     group.hidden = !nodeCatalog.length;
     group.classList.toggle("is-hidden", !items.length && !!query);
-    list.innerHTML = items.length ? items.map((node) => `
-      <button data-add-catalog-node="${html(node.class_type)}" type="button" class="${node.paid_api_required ? "warn" : ""}">
-        <b>${html(node.display_name || node.class_type)}</b>
-        <span>${html(node.class_type)}${node.category ? ` · ${html(node.category)}` : ""}${node.paid_api_required ? " · 付費/API" : ""}</span>
-      </button>
+    if (query && items.length) group.open = true;
+    const count = $("dynamicNodeCatalogCount");
+    if (count) count.textContent = String(query ? items.length : nodeCatalog.length);
+    const groups = new Map();
+    items.forEach((node) => {
+      const category = String(node.category || "未分類").trim() || "未分類";
+      if (!groups.has(category)) groups.set(category, []);
+      groups.get(category).push(node);
+    });
+    list.innerHTML = items.length ? Array.from(groups.entries()).map(([category, categoryItems]) => `
+      <details class="catalog-category"${query ? " open" : ""}>
+        <summary><span>${html(category)}</span><span class="tool-count">${html(String(categoryItems.length))}</span></summary>
+        <div class="tool-grid">
+          ${categoryItems.map((node) => {
+            const searchText = `${node.class_type || ""} ${node.display_name || ""} ${category}`;
+            return `
+            <button data-add-catalog-node="${html(node.class_type)}" data-search-text="${html(searchText)}" type="button" class="${node.paid_api_required ? "warn" : ""}">
+              <b>${html(node.display_name || node.class_type)}</b>
+              <span>${html(node.class_type)}${node.paid_api_required ? " · 付費/API" : ""}</span>
+            </button>
+          `;
+          }).join("")}
+        </div>
+      </details>
     `).join("") : '<div class="empty">沒有符合搜尋的 ComfyUI 節點。</div>';
     list.querySelectorAll("[data-add-catalog-node]").forEach((button) => {
       button.addEventListener("click", () => addCatalogNode(button.getAttribute("data-add-catalog-node")));
@@ -1805,17 +1905,28 @@
   function filterNodePalette() {
     const query = String($("nodeSearchInput")?.value || "").trim().toLowerCase();
     let visibleCount = 0;
+    renderNodeCatalogList();
     document.querySelectorAll("[data-add-node], [data-add-catalog-node]").forEach((button) => {
-      const haystack = `${button.getAttribute("data-add-node") || ""} ${button.getAttribute("data-add-catalog-node") || ""} ${button.textContent || ""}`.toLowerCase();
+      const groupTitle = button.closest(".tool-group")?.querySelector(".tool-title")?.textContent || "";
+      const categoryTitle = button.closest(".catalog-category")?.querySelector("summary")?.textContent || "";
+      const haystack = [
+        button.getAttribute("data-add-node") || "",
+        button.getAttribute("data-add-catalog-node") || "",
+        button.getAttribute("data-search-text") || "",
+        groupTitle,
+        categoryTitle,
+        button.textContent || "",
+      ].join(" ").toLowerCase();
       const visible = !query || haystack.includes(query);
       button.classList.toggle("is-hidden", !visible);
       if (visible) visibleCount += 1;
     });
     document.querySelectorAll(".tool-group").forEach((group) => {
       if (group.classList.contains("catalog-loader")) return;
-      group.classList.toggle("is-hidden", !group.querySelector("[data-add-node]:not(.is-hidden), [data-add-catalog-node]:not(.is-hidden)"));
+      const hasVisible = !!group.querySelector("[data-add-node]:not(.is-hidden), [data-add-catalog-node]:not(.is-hidden)");
+      group.classList.toggle("is-hidden", !hasVisible);
+      if (query && hasVisible) group.open = true;
     });
-    renderNodeCatalogList();
     if (query) setStatus(visibleCount ? `節點搜尋：${visibleCount} 個結果。` : "節點搜尋沒有結果。", !!visibleCount);
   }
 

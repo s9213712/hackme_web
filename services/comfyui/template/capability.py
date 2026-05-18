@@ -196,6 +196,17 @@ def check_workflow_capability(
     # For each required model bucket the analyzer recorded, ask the local
     # ComfyUI which files it actually has and compute the diff.
     for bucket, names in (analysis.required_models or {}).items():
+        if bucket == "embedding":
+            try:
+                local_options = client.get_embeddings() if hasattr(client, "get_embeddings") else []
+            except Exception:
+                local_options = []
+            local_set = set(str(item) for item in local_options)
+            missing = sorted({n for n in names if n and n not in local_set})
+            if missing:
+                cap.missing_models[bucket] = missing
+                cap.blockers.append(f"本地 ComfyUI 缺少 embedding：{missing}")
+            continue
         paths = _MODEL_BUCKET_OBJECT_INFO_PATHS.get(bucket)
         if not paths:
             if bucket in _MODEL_BUCKETS_NOT_LOCAL_FILES:

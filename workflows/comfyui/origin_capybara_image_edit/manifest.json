@@ -1,0 +1,236 @@
+{
+  "conversion": {
+    "allowlist_message": "",
+    "allowlist_status": "allowlisted",
+    "class_count": 18,
+    "denied_classes": [],
+    "node_count": 19,
+    "source_format": "ui_graph",
+    "source_path": "image/edit/Image_capybara_v0_1_image_edit.json",
+    "structural_status": "pass",
+    "unknown_classes": []
+  },
+  "default_params": {
+    "batch_size": 1,
+    "cfg": 6,
+    "checkpoint": "",
+    "clip": "qwen_2.5_vl_7b.safetensors",
+    "controlnet": null,
+    "denoise_strength": 0,
+    "diffusion_model": "capybara_v0.1.safetensors",
+    "generation_mode": "img2img",
+    "height": 1024,
+    "loras": [],
+    "model": "capybara_v0.1.safetensors",
+    "negative_prompt": "blurry, low quality, distorted, ugly, watermark, text",
+    "prompt": "Keep the characters and fluttering costumes unchanged, replace the indoor scene with an outdoor grassland setting",
+    "sampler_name": "euler",
+    "scheduler": "",
+    "seed": 1044901887090653,
+    "steps": "simple",
+    "upscale_model": "",
+    "vae": "hunyuanvideo15_vae_fp16.safetensors",
+    "width": 1024
+  },
+  "description": "Capybara image-edit workflow converted from origin.",
+  "id": "origin_capybara_image_edit",
+  "name": "Capybara v0.1 Image Edit",
+  "origin_source_path": "image/edit/Image_capybara_v0_1_image_edit.json",
+  "output_kinds": [
+    "image",
+    "video"
+  ],
+  "required_controlnets": [],
+  "required_custom_nodes": [],
+  "required_loras": [],
+  "required_models": [
+    {
+      "kind": "diffusion_model",
+      "name": "capybara_v0.1.safetensors"
+    },
+    {
+      "kind": "clip",
+      "name": "qwen_2.5_vl_7b.safetensors"
+    },
+    {
+      "kind": "clip",
+      "name": "byt5_small_glyphxl_fp16.safetensors"
+    },
+    {
+      "kind": "vae",
+      "name": "hunyuanvideo15_vae_fp16.safetensors"
+    },
+    {
+      "kind": "clip",
+      "name": "sigclip_vision_patch14_384.safetensors"
+    }
+  ],
+  "schema_version": 1,
+  "source": "official_origin",
+  "source_format": "ui_graph",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "Keep the characters and fluttering costumes unchanged, replace the indoor scene with an outdoor grassland setting",
+            "id": "node:115:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "正向提示詞",
+            "node_id": "115",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "blurry, low quality, distorted, ugly, watermark, text",
+            "id": "node:125:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "負面提示詞",
+            "node_id": "125",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "EmbeddingShortcuts",
+            "constraints": {
+              "target_field_ids": [
+                "node:115:text",
+                "node:125:text"
+              ],
+              "token_prefix": "<embeddings:"
+            },
+            "current_value": "",
+            "id": "text:embeddings",
+            "input_name": "embeddings",
+            "input_type": "embedding_shortcuts",
+            "label": "Embedding 快速插入",
+            "node_id": "",
+            "parent_category": "text",
+            "required": false,
+            "synthetic": true
+          }
+        ],
+        "id": "text",
+        "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "IMAGE",
+            "class_type": "LoadImage",
+            "constraints": {
+              "accept_mime": [
+                "image/png",
+                "image/jpeg",
+                "image/webp"
+              ]
+            },
+            "current_value": "wind_woman.png",
+            "id": "node:80:image",
+            "input_name": "image",
+            "input_type": "file_picker",
+            "label": "上傳圖片",
+            "node_id": "80",
+            "required": true
+          }
+        ],
+        "id": "image",
+        "label": "圖片輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "SAMPLER",
+            "class_type": "KSamplerSelect",
+            "current_value": "euler",
+            "id": "node:126:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器",
+            "node_id": "126",
+            "required": true
+          }
+        ],
+        "id": "sampler",
+        "label": "採樣設定"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "BasicScheduler",
+            "current_value": "simple",
+            "id": "node:111:steps",
+            "input_name": "steps",
+            "input_type": "number",
+            "label": "步數",
+            "node_id": "111",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ModelSamplingSD3",
+            "constraints": {
+              "max": 20.0,
+              "min": 0.0,
+              "step": 0.1
+            },
+            "current_value": 7,
+            "id": "node:116:shift",
+            "input_name": "shift",
+            "input_type": "number",
+            "label": "Model Shift",
+            "node_id": "116",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "RandomNoise",
+            "current_value": 1044901887090653,
+            "id": "node:127:noise_seed",
+            "input_name": "noise_seed",
+            "input_type": "number",
+            "label": "種子",
+            "node_id": "127",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "進階數值參數"
+      },
+      {
+        "collapsed_default": false,
+        "fields": [],
+        "id": "compatibility",
+        "label": "相容性報告",
+        "read_only": true
+      },
+      {
+        "collapsed_default": true,
+        "fields": [],
+        "id": "raw",
+        "label": "原始 workflow",
+        "read_only": true
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

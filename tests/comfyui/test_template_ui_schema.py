@@ -52,6 +52,14 @@ def test_ui_schema_groups_text_inputs_onto_text_panel():
     assert "node:7:text" in field_ids
 
 
+def test_ui_schema_labels_positive_and_negative_prompt_fields_by_sampler_links():
+    schema = build_ui_schema(analysis=analyze_workflow_json(TXT2IMG))
+    text_panel = next(p for p in schema.panels if p["id"] == "text")
+    labels = {f["id"]: f["label"] for f in text_panel["fields"]}
+    assert labels["node:6:text"] == "正向提示詞"
+    assert labels["node:7:text"] == "負面提示詞"
+
+
 def test_ui_schema_adds_embeddings_as_text_child_when_prompt_fields_exist():
     schema = build_ui_schema(analysis=analyze_workflow_json(TXT2IMG))
     text_panel = next(p for p in schema.panels if p["id"] == "text")
@@ -60,6 +68,17 @@ def test_ui_schema_adds_embeddings_as_text_child_when_prompt_fields_exist():
     assert embedding_field["synthetic"] is True
     assert embedding_field["parent_category"] == "text"
     assert embedding_field["constraints"]["target_field_ids"] == ["node:6:text", "node:7:text"]
+
+
+def test_ui_schema_adds_embeddings_for_flux_text_fields():
+    workflow = {
+        "1": {"class_type": "CLIPTextEncodeFlux", "inputs": {"text": "cat", "clip": ["2", 0]}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "clip.safetensors"}},
+    }
+    schema = build_ui_schema(analysis=analyze_workflow_json(workflow))
+    text_panel = next(p for p in schema.panels if p["id"] == "text")
+    embedding_field = next(f for f in text_panel["fields"] if f["id"] == "text:embeddings")
+    assert embedding_field["constraints"]["target_field_ids"] == ["node:1:text"]
 
 
 def test_ui_schema_routes_ksampler_numeric_to_sampler_panel():
@@ -161,6 +180,56 @@ def test_ui_schema_image_panel_has_accept_mime():
     image_panel = next(p for p in schema.panels if p["id"] == "image")
     img_field = next(f for f in image_panel["fields"] if f["id"] == "node:10:image")
     assert "image/png" in img_field["constraints"]["accept_mime"]
+
+
+def test_ui_schema_hides_template_locked_model_loader_fields_from_manual_panel():
+    workflow = {
+        **TXT2IMG,
+        "20": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"},
+            "_meta": {"title": "載入模型"},
+        },
+        "21": {
+            "class_type": "CLIPLoader",
+            "inputs": {"clip_name": "qwen_3_06b_base.safetensors"},
+        },
+        "22": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "qwen_image_vae.safetensors"},
+        },
+    }
+    schema = build_ui_schema(analysis=analyze_workflow_json(workflow))
+    all_field_ids = {f["id"] for p in schema.panels for f in p.get("fields", [])}
+    ids = required_user_inputs(analyze_workflow_json(workflow))
+
+    assert "node:20:unet_name" not in all_field_ids
+    assert "node:21:clip_name" not in all_field_ids
+    assert "node:22:vae_name" not in all_field_ids
+    assert "node:20:unet_name" not in ids
+    assert "node:21:clip_name" not in ids
+    assert "node:22:vae_name" not in ids
+
+
+def test_ui_schema_model_labels_distinguish_large_lora_and_upscale_models():
+    workflow = {
+        **TXT2IMG,
+        "22": {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {"lora_name": "WAN/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors", "strength_model": 1},
+        },
+        "23": {
+            "class_type": "UpscaleModelLoader",
+            "inputs": {"model_name": "4x-UltraSharp.pth"},
+        },
+    }
+    schema = build_ui_schema(analysis=analyze_workflow_json(workflow))
+    model_panel = next(p for p in schema.panels if p["id"] == "model")
+    labels = {f["id"]: f["label"] for f in model_panel["fields"]}
+
+    assert labels["node:4:ckpt_name"] == "Checkpoint / 大模型"
+    assert labels["node:22:lora_name"] == "LoRA 模型（Model-only）（High Noise）"
+    assert labels["node:23:model_name"] == "放大 / Upscale 模型"
 
 
 def test_required_user_inputs_excludes_save_image_prefix():

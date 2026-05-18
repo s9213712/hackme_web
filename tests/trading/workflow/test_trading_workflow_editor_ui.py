@@ -12,6 +12,13 @@ def test_trading_workflow_editor_has_full_node_editor_surface():
     assert "策略檢查" in html
     assert "回測預覽" in html
     assert "可讀 JSON" in html
+    assert '<details class="top-action-menu">' in html
+    assert '<div class="top-action-menu-body">' in html
+    assert '<details class="tool-group" open>' in html
+    assert '<summary class="tool-title">Graph 節點 <span class="tool-count">3</span></summary>' in html
+    assert '<summary class="tool-title">條件節點 <span class="tool-count">8</span></summary>' in html
+    assert '<summary class="tool-title">行為節點 <span class="tool-count">5</span></summary>' in html
+    assert '<summary class="tool-title">控制節點 <span class="tool-count">1</span></summary>' in html
     assert 'href="/trading-workflow-editor.css?v=20260506-workflow-preview"' in html
     assert 'src="/js/trading-workflow-editor.js?v=20260506-workflow-preview"' in html
     assert 'id="workflow-preview-market"' in html
@@ -24,6 +31,13 @@ def test_trading_workflow_editor_has_full_node_editor_surface():
     assert "<style>" not in html
     assert 'style="' not in html
     assert "workflow_graph" in js
+    assert '<details class="branch-action-menu">' in js
+    assert '<summary class="branch-tab">圖表操作</summary>' in js
+    assert '<div class="branch-action-menu-body">' in js
+    assert "async function fetchWorkflowPreviewJson(path, options = {}, retryOnCsrf = true)" in js
+    assert 'headers["X-CSRF-Token"] = await fetchWorkflowPreviewCsrfToken({ force: true });' in js
+    assert 'json && json.error === "csrf_invalid"' in js
+    assert "return fetchWorkflowPreviewJson(path, options, false);" in js
     assert "data-port-node" in js
     assert "graph-edge-layer" in js
     assert "renderGraphEdgeLayer" in js
@@ -52,6 +66,9 @@ def test_trading_workflow_editor_has_full_node_editor_surface():
 
     css = (ROOT / "public" / "trading-workflow-editor.css").read_text(encoding="utf-8")
     assert ".graph-edge-layer" in css
+    assert ".top-action-menu-body" in css
+    assert ".tool-group[open] > .tool-title::before" in css
+    assert ".branch-action-menu-body" in css
     assert ".graph-edge.positive" in css
     assert ".node-inline-controls" in css
     assert ".preview-metrics" in css

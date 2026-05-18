@@ -16,14 +16,18 @@ from services.comfyui.template.capability import (
 class _StubClient:
     """Minimal /object_info double; counts call sites for cache assertions."""
 
-    def __init__(self, payload, *, base_url="http://stub"):
+    def __init__(self, payload, *, base_url="http://stub", embeddings=None):
         self._payload = payload
         self.base_url = base_url
+        self._embeddings = list(embeddings or [])
         self.calls = 0
 
     def get_object_info(self):
         self.calls += 1
         return self._payload
+
+    def get_embeddings(self):
+        return list(self._embeddings)
 
 
 def _local_payload(*, classes, models=None, samplers=None, schedulers=None):
@@ -143,6 +147,18 @@ def test_capability_ignores_paid_api_model_bucket_as_non_local_file():
     cap = check_workflow_capability(analysis, client=client)
     assert cap.overall == "SUPPORTED"
     assert cap.missing_models == {}
+
+
+def test_capability_checks_embedding_bucket_with_embedding_catalog():
+    info = _local_payload(classes={"CLIPTextEncode"})
+    client = _StubClient(info, embeddings=["easynegative.safetensors"])
+    analysis = _analysis(
+        class_types={"CLIPTextEncode"},
+        models={"embedding": ["easynegative.safetensors", "badhandv4.pt"]},
+    )
+    cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "PARTIALLY_SUPPORTED"
+    assert cap.missing_models == {"embedding": ["badhandv4.pt"]}
 
 
 def test_capability_explicit_denied_class_treated_as_unsupported():

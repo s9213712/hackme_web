@@ -1,0 +1,250 @@
+{
+  "conversion": {
+    "allowlist_message": "",
+    "allowlist_status": "allowlisted",
+    "class_count": 28,
+    "denied_classes": [],
+    "node_count": 40,
+    "source_format": "ui_graph",
+    "source_path": "video/t2v/video_ltx2_3_t2v.json",
+    "structural_status": "pass",
+    "unknown_classes": []
+  },
+  "default_params": {
+    "batch_size": 1,
+    "cfg": 7,
+    "checkpoint": "ltx-2.3-22b-dev-fp8.safetensors",
+    "clip": "",
+    "controlnet": null,
+    "denoise_strength": 0,
+    "diffusion_model": "",
+    "generation_mode": "t2v",
+    "height": 1024,
+    "loras": [
+      {
+        "name": "ltx-2.3-22b-distilled-lora-384.safetensors",
+        "strength_clip": 1,
+        "strength_model": 0.5
+      }
+    ],
+    "model": "ltx-2.3-22b-dev-fp8.safetensors",
+    "negative_prompt": "pc game, console game, video game, cartoon, childish, ugly",
+    "prompt": "Dynamic cinematic close-up of high-tech modular machinery self-assembling in midair, precision robotic parts, magnetic connectors, and glowing circuits clicking together, subtle smoke and light flares, extremely detailed titanium textures. The final product displays a clean, clear surface with large glowing engraved text “LTX-2.3” centered and unobstructed, dramatic lighting, photorealism, 8K, sharp focus.\n",
+    "sampler_name": "euler_cfg_pp",
+    "scheduler": "",
+    "seed": 42,
+    "steps": 20,
+    "upscale_model": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+    "vae": "",
+    "width": 1024
+  },
+  "description": "LTX 2.3 text-to-video workflow converted from origin.",
+  "id": "origin_ltx23_t2v",
+  "name": "LTX 2.3 Text-to-Video",
+  "origin_source_path": "video/t2v/video_ltx2_3_t2v.json",
+  "output_kinds": [
+    "video",
+    "music"
+  ],
+  "required_controlnets": [],
+  "required_custom_nodes": [],
+  "required_loras": [
+    {
+      "name": "ltx-2.3-22b-distilled-lora-384.safetensors",
+      "strength_model": 0.5
+    }
+  ],
+  "required_models": [
+    {
+      "kind": "checkpoint",
+      "name": "ltx-2.3-22b-dev-fp8.safetensors"
+    },
+    {
+      "kind": "upscale",
+      "name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+    }
+  ],
+  "schema_version": 1,
+  "source": "official_origin",
+  "source_format": "ui_graph",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "Dynamic cinematic close-up of high-tech modular machinery self-assembling in midair, precision robotic parts, magnetic connectors, and glowing circuits clicking together, subtle smoke and light flares, extremely detailed titanium textures. The final product displays a clean, clear surface with large glowing engraved text “LTX-2.3” centered and unobstructed, dramatic lighting, photorealism, 8K, sharp focus.\n",
+            "id": "node:295:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "正向提示詞",
+            "node_id": "295",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "pc game, console game, video game, cartoon, childish, ugly",
+            "id": "node:305:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "負面提示詞",
+            "node_id": "305",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "EmbeddingShortcuts",
+            "constraints": {
+              "target_field_ids": [
+                "node:295:text",
+                "node:305:text"
+              ],
+              "token_prefix": "<embeddings:"
+            },
+            "current_value": "",
+            "id": "text:embeddings",
+            "input_name": "embeddings",
+            "input_type": "embedding_shortcuts",
+            "label": "Embedding 快速插入",
+            "node_id": "",
+            "parent_category": "text",
+            "required": false,
+            "synthetic": true
+          }
+        ],
+        "id": "text",
+        "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "LoraLoaderModelOnly",
+            "current_value": "ltx-2.3-22b-distilled-lora-384.safetensors",
+            "id": "node:277:lora_name",
+            "input_name": "lora_name",
+            "input_type": "select",
+            "label": "LoRA 模型（Model-only）",
+            "node_id": "277",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CheckpointLoaderSimple",
+            "current_value": "ltx-2.3-22b-dev-fp8.safetensors",
+            "id": "node:313:ckpt_name",
+            "input_name": "ckpt_name",
+            "input_type": "select",
+            "label": "Checkpoint / 大模型",
+            "node_id": "313",
+            "required": true
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "SAMPLER",
+            "class_type": "KSamplerSelect",
+            "current_value": "euler_cfg_pp",
+            "id": "node:272:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器（Node 272）",
+            "node_id": "272",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSamplerSelect",
+            "current_value": "euler_ancestral_cfg_pp",
+            "id": "node:283:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器（Node 283）",
+            "node_id": "283",
+            "required": true
+          }
+        ],
+        "id": "sampler",
+        "label": "採樣設定"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "RandomNoise",
+            "current_value": 42,
+            "id": "node:268:noise_seed",
+            "input_name": "noise_seed",
+            "input_type": "number",
+            "label": "種子（Node 268）",
+            "node_id": "268",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "RandomNoise",
+            "current_value": 554471341201606,
+            "id": "node:269:noise_seed",
+            "input_name": "noise_seed",
+            "input_type": "number",
+            "label": "種子（Node 269）",
+            "node_id": "269",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "LoraLoaderModelOnly",
+            "constraints": {
+              "max": 2.0,
+              "min": -2.0,
+              "step": 0.05
+            },
+            "current_value": 0.5,
+            "id": "node:277:strength_model",
+            "input_name": "strength_model",
+            "input_type": "number",
+            "label": "LoRA 強度",
+            "node_id": "277",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "進階數值參數"
+      },
+      {
+        "collapsed_default": false,
+        "fields": [],
+        "id": "compatibility",
+        "label": "相容性報告",
+        "read_only": true
+      },
+      {
+        "collapsed_default": true,
+        "fields": [],
+        "id": "raw",
+        "label": "原始 workflow",
+        "read_only": true
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

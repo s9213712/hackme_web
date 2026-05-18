@@ -3320,7 +3320,7 @@ def test_remote_download_torrent_upload_rejects_non_torrent(tmp_path):
     assert ".torrent" in res.get_json()["msg"]
 
 
-def test_remote_download_torrent_upload_rejects_private_tracker(tmp_path, monkeypatch):
+def test_remote_download_torrent_upload_accepts_and_excludes_private_tracker(tmp_path, monkeypatch):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
@@ -3338,6 +3338,16 @@ def test_remote_download_torrent_upload_rejects_private_tracker(tmp_path, monkey
         b"d8:announce" + str(len(tracker)).encode("ascii") + b":" + tracker +
         b"4:infod4:name4:test12:piece lengthi16384e6:pieces0:ee"
     )
+    source = tmp_path / "torrent-result.txt"
+    source.write_text("torrent task content", encoding="utf-8")
+
+    class FakeDownloaded:
+        path = str(source)
+        filename = "torrent-result.txt"
+        mimetype = "text/plain"
+        cleanup_dir = None
+
+    monkeypatch.setattr("routes.files.download_torrent_file_with_aria2", lambda *args, **kwargs: FakeDownloaded())
     monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
 
     res = client.post(
@@ -3345,5 +3355,5 @@ def test_remote_download_torrent_upload_rejects_private_tracker(tmp_path, monkey
         data={"torrent_file": (io.BytesIO(payload), "bad.torrent")},
     )
 
-    assert res.status_code == 400
-    assert "不安全 tracker" in res.get_json()["msg"]
+    assert res.status_code == 202
+    assert res.get_json()["task"]["source_type"] == "torrent_file"

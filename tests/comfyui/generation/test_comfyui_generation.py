@@ -7,7 +7,7 @@ from tests.comfyui._integration_suite import (
     test_comfyui_async_generation_worker_survives_logout_or_session_change,
     test_comfyui_generate_rejects_controlnet_strength_out_of_range,
     test_comfyui_generate_rejects_invalid_control_image_format,
-    test_comfyui_generate_rejects_unsupported_lora_base_model,
+    test_comfyui_generate_allows_unsupported_lora_base_model_with_warning_only,
     test_comfyui_generate_rejects_when_controlnet_model_missing,
     test_comfyui_generate_rejects_when_workflow_node_missing,
     test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes,

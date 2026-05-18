@@ -15,6 +15,7 @@ from services.comfyui.validation.rules import (
     WORKFLOW_URL_RE,
     WorkflowValidationError,
 )
+from services.comfyui.workflow.compat import apply_workflow_compatibility_fixes
 from services.comfyui.workflow.summary import extract_workflow_summary
 
 
@@ -105,6 +106,7 @@ def sanitize_workflow_json(workflow_json):
         sanitized[safe_node_id] = safe_node
     if len(_canonical_json(sanitized).encode("utf-8")) > WORKFLOW_MAX_JSON_BYTES:
         raise WorkflowValidationError("workflow JSON 過大")
+    sanitized = apply_workflow_compatibility_fixes(sanitized)
     summary = extract_workflow_summary(sanitized)
     workflow_hash = hashlib.sha256(_canonical_json(sanitized).encode("utf-8")).hexdigest()
     return {

@@ -1,0 +1,399 @@
+{
+  "conversion": {
+    "allowlist_message": "",
+    "allowlist_status": "allowlisted",
+    "class_count": 33,
+    "denied_classes": [],
+    "node_count": 40,
+    "source_format": "ui_graph",
+    "source_path": "image/edit/【70】一键换万物超级精准-AIO-2511版本.json",
+    "structural_status": "pass",
+    "unknown_classes": []
+  },
+  "default_params": {
+    "batch_size": 1,
+    "cfg": 1,
+    "checkpoint": "QWEN\\Qwen-Rapid-AIO-NSFW-v18.safetensors",
+    "clip": "Qwen\\qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "controlnet": {
+      "end_percent": 1,
+      "model_name": "InstantX_Qwen-Image-ControlNet-Union.safetensors",
+      "preprocessor": "",
+      "start_percent": 0,
+      "strength": 1,
+      "type": ""
+    },
+    "denoise_strength": 1,
+    "diffusion_model": "",
+    "generation_mode": "img2img",
+    "height": 1024,
+    "loras": [
+      {
+        "name": "角色置景_RoleScene Blend.safetensors",
+        "strength_clip": 1,
+        "strength_model": 0.9
+      }
+    ],
+    "model": "QWEN\\Qwen-Rapid-AIO-NSFW-v18.safetensors",
+    "negative_prompt": "(worst quality, low quality:1.4), (zombie, sketch, interlocked fingers, comic),\n(bad anatomy), (deformed), (disfigured), (bad proportions), (extra limbs), (cloned face), (missing legs), (missing arms), (extra legs), (extra arms), (fused fingers), (too many fingers), (long neck),\n(text, signature, watermark, username, artist name, logo, copyright name, title, date:1.4),\nlowres, bad hands, error, missing fingers, extra digit, fewer fingers, cropped, jpeg artifacts, blurry, mutation, body horror, multiple breasts, mutated hands, bad feet, fused feet, poorly drawn hands, poorly drawn face,\n3d, realistic, photorealistic, lip, nose",
+    "prompt": "把图1的人物融入图2白色区域，并补全场景和光影",
+    "sampler_name": "euler_ancestral",
+    "scheduler": "simple",
+    "seed": 213827812982380,
+    "steps": 4,
+    "upscale_model": "",
+    "vae": "",
+    "width": 1024
+  },
+  "description": "One-click object/person replacement workflow converted from origin.",
+  "id": "origin_one_click_replace_aio_2511",
+  "name": "One-Click Replace AIO 2511",
+  "origin_source_path": "image/edit/【70】一键换万物超级精准-AIO-2511版本.json",
+  "output_kinds": [
+    "image"
+  ],
+  "required_controlnets": [
+    {
+      "name": "InstantX_Qwen-Image-ControlNet-Union.safetensors"
+    }
+  ],
+  "required_custom_nodes": [],
+  "required_loras": [
+    {
+      "name": "角色置景_RoleScene Blend.safetensors",
+      "strength_model": 0.9
+    }
+  ],
+  "required_models": [
+    {
+      "kind": "checkpoint",
+      "name": "QWEN\\Qwen-Rapid-AIO-NSFW-v18.safetensors"
+    },
+    {
+      "kind": "clip",
+      "name": "Qwen\\qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    }
+  ],
+  "schema_version": 1,
+  "source": "official_origin",
+  "source_format": "ui_graph",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "masterpiece, best quality, 1girl, fern \\(sousou no frieren\\), sousou no frieren, @izei1337, purple hair, black robe, lips, sidelocks, feet out of frame, very long hair, puffy sleeves, white dress, butterfly on hand, eyelashes, simple background, closed mouth, mage staff, arm at side, straight hair, blush, solo, purple eyes, chromatic aberration, purple pupils, looking at viewer, hand up, standing, bug, robe, black background, signature, bright pupils, black coat, coat, long sleeves, blue butterfly, upturned eyes, wide sleeves, blunt bangs, from above, dress, blunt ends, long hair, purple butterfly, butterfly, tsurime, half updo",
+            "id": "node:326:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "提示詞",
+            "node_id": "326",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "(worst quality, low quality:1.4), (zombie, sketch, interlocked fingers, comic),\n(bad anatomy), (deformed), (disfigured), (bad proportions), (extra limbs), (cloned face), (missing legs), (missing arms), (extra legs), (extra arms), (fused fingers), (too many fingers), (long neck),\n(text, signature, watermark, username, artist name, logo, copyright name, title, date:1.4),\nlowres, bad hands, error, missing fingers, extra digit, fewer fingers, cropped, jpeg artifacts, blurry, mutation, body horror, multiple breasts, mutated hands, bad feet, fused feet, poorly drawn hands, poorly drawn face,\n3d, realistic, photorealistic, lip, nose",
+            "id": "node:327:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "負面提示詞",
+            "node_id": "327",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "EmbeddingShortcuts",
+            "constraints": {
+              "target_field_ids": [
+                "node:326:text",
+                "node:327:text"
+              ],
+              "token_prefix": "<embeddings:"
+            },
+            "current_value": "",
+            "id": "text:embeddings",
+            "input_name": "embeddings",
+            "input_type": "embedding_shortcuts",
+            "label": "Embedding 快速插入",
+            "node_id": "",
+            "parent_category": "text",
+            "required": false,
+            "synthetic": true
+          }
+        ],
+        "id": "text",
+        "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "IMAGE",
+            "class_type": "LoadImage",
+            "constraints": {
+              "accept_mime": [
+                "image/png",
+                "image/jpeg",
+                "image/webp"
+              ]
+            },
+            "current_value": "clipspace/clipspace-painted-masked-1770195775914.png [input]",
+            "id": "node:298:image",
+            "input_name": "image",
+            "input_type": "file_picker",
+            "label": "上傳圖片（Node 298）",
+            "node_id": "298",
+            "required": true
+          },
+          {
+            "category": "IMAGE",
+            "class_type": "LoadImage",
+            "constraints": {
+              "accept_mime": [
+                "image/png",
+                "image/jpeg",
+                "image/webp"
+              ]
+            },
+            "current_value": "小桂子（到处乱逛版）_79762610_人间限定第一弹-假如南宫婉是总裁夫人……这期是我定制的富家太太#凡人二创#南宫婉#穿搭#日常拍照#御姐_20251201222103_3.jpg",
+            "id": "node:280:image",
+            "input_name": "image",
+            "input_type": "file_picker",
+            "label": "上傳圖片（Node 280）",
+            "node_id": "280",
+            "required": true
+          }
+        ],
+        "id": "image",
+        "label": "圖片輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "ControlNetLoader",
+            "current_value": "InstantX_Qwen-Image-ControlNet-Union.safetensors",
+            "id": "node:233:control_net_name",
+            "input_name": "control_net_name",
+            "input_type": "select",
+            "label": "ControlNet 模型",
+            "node_id": "233",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CheckpointLoaderSimple",
+            "current_value": "QWEN\\Qwen-Rapid-AIO-NSFW-v18.safetensors",
+            "id": "node:304:ckpt_name",
+            "input_name": "ckpt_name",
+            "input_type": "select",
+            "label": "Checkpoint / 大模型",
+            "node_id": "304",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "LoraLoaderModelOnly",
+            "current_value": "角色置景_RoleScene Blend.safetensors",
+            "id": "node:263:lora_name",
+            "input_name": "lora_name",
+            "input_type": "select",
+            "label": "LoRA 模型（Model-only）",
+            "node_id": "263",
+            "required": true
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "SAMPLER",
+            "class_type": "ImageScaleToTotalPixels",
+            "current_value": "lanczos",
+            "id": "node:237:upscale_method",
+            "input_name": "upscale_method",
+            "input_type": "select",
+            "label": "縮放方式",
+            "node_id": "237",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 213827812982380,
+            "id": "node:249:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "種子",
+            "node_id": "249",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 150,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 4,
+            "id": "node:249:steps",
+            "input_name": "steps",
+            "input_type": "number",
+            "label": "步數",
+            "node_id": "249",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 30.0,
+              "min": 0.5,
+              "step": 0.1
+            },
+            "current_value": 1,
+            "id": "node:249:cfg",
+            "input_name": "cfg",
+            "input_type": "number",
+            "label": "CFG",
+            "node_id": "249",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "euler_ancestral",
+            "id": "node:249:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器",
+            "node_id": "249",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "simple",
+            "id": "node:249:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器",
+            "node_id": "249",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:249:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise",
+            "node_id": "249",
+            "required": true
+          }
+        ],
+        "id": "sampler",
+        "label": "採樣設定"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "ImageScaleToTotalPixels",
+            "constraints": {
+              "max": 64.0,
+              "min": 0.1,
+              "step": 0.1
+            },
+            "current_value": 1,
+            "id": "node:237:megapixels",
+            "input_name": "megapixels",
+            "input_type": "number",
+            "label": "目標百萬像素",
+            "node_id": "237",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ImageScaleToTotalPixels",
+            "constraints": {
+              "max": 256,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 1,
+            "id": "node:237:divisible_by",
+            "input_name": "divisible_by",
+            "input_type": "number",
+            "label": "尺寸整除",
+            "node_id": "237",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "LoraLoaderModelOnly",
+            "constraints": {
+              "max": 2.0,
+              "min": -2.0,
+              "step": 0.05
+            },
+            "current_value": 0.9,
+            "id": "node:263:strength_model",
+            "input_name": "strength_model",
+            "input_type": "number",
+            "label": "LoRA 強度",
+            "node_id": "263",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "進階數值參數"
+      },
+      {
+        "collapsed_default": false,
+        "fields": [],
+        "id": "compatibility",
+        "label": "相容性報告",
+        "read_only": true
+      },
+      {
+        "collapsed_default": true,
+        "fields": [],
+        "id": "raw",
+        "label": "原始 workflow",
+        "read_only": true
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

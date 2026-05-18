@@ -6,6 +6,7 @@ from services.comfyui.template.run_gate import (
     RunGateFailure,
     run_workflow_through_gates,
 )
+from services.comfyui.workflow.compat import apply_workflow_compatibility_fixes
 from services.platform.settings import is_feature_enabled
 
 
@@ -397,7 +398,7 @@ def register_comfyui_workflow_routes(app, ctx):
             dependency_status = workflow_dependency_status(active_client, row) if active_client is not None else None
             recent_runs = list_workflow_runs(conn, preset_id=preset_id, limit=ctx["COMFYUI_WORKFLOW_RUN_LIMIT"])
             payload = workflow_preset_summary(row, dependency_status=dependency_status, recent_runs=recent_runs, actor=actor)
-            workflow_json = parse_json_field(row["workflow_json"], {}) or {}
+            workflow_json = apply_workflow_compatibility_fixes(parse_json_field(row["workflow_json"], {}) or {})
             payload["workflow_json"] = workflow_json
             payload["layout_json"] = parse_json_field(row["layout_json"], {}) or {}
             payload["manifest_json"] = workflow_manifest_for_row(row) if workflow_manifest_for_row else None
@@ -549,7 +550,7 @@ def register_comfyui_workflow_routes(app, ctx):
                 stage = "unknown_node" if dependency_status.get("missing_nodes") else "missing_model"
                 return json_resp({"ok": False, "msg": dependency_msg, "stage": stage, "dependency_status": dependency_status}), 409
             default_params = parse_json_field(row["default_params_json"], {}) or {}
-            workflow_json = parse_json_field(row["workflow_json"], {}) or {}
+            workflow_json = apply_workflow_compatibility_fixes(parse_json_field(row["workflow_json"], {}) or {})
 
             # 5-gate enforcement before any job is created — failed gates
             # never produce a job_id so the user gets immediate feedback
@@ -658,7 +659,7 @@ def register_comfyui_workflow_routes(app, ctx):
             row, err_resp = load_workflow_preset(conn, preset_id=preset_id, actor=actor)
             if err_resp:
                 return err_resp
-            workflow_json = parse_json_field(row["workflow_json"], {}) or {}
+            workflow_json = apply_workflow_compatibility_fixes(parse_json_field(row["workflow_json"], {}) or {})
             package = _workflow_preset_export_package(row, workflow_json)
         finally:
             conn.close()

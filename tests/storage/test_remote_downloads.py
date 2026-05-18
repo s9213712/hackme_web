@@ -238,14 +238,52 @@ def test_bt_stalled_download_uses_idle_timeout_message(monkeypatch):
     assert "停滯逾時" in str(exc.value)
 
 
-def test_magnet_trackers_reject_private_hosts(monkeypatch):
+def test_magnet_trackers_exclude_private_hosts_without_blocking_bt(monkeypatch):
     def fake_getaddrinfo(host, port, **kwargs):
         return [(2, 1, 6, "", ("127.0.0.1", int(port or 80)))]
 
     monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
 
-    with pytest.raises(RemoteDownloadError, match="localhost"):
-        validate_remote_url("magnet:?xt=urn:btih:abc&tr=http%3A%2F%2Flocalhost%3A8080%2Fannounce")
+    parsed = validate_remote_url("magnet:?xt=urn:btih:abc&tr=http%3A%2F%2Flocalhost%3A8080%2Fannounce")
+    assert parsed["kind"] == "magnet"
+
+
+def test_magnet_download_excludes_private_trackers(monkeypatch):
+    tracker = "http://localhost:8080/announce"
+    magnet = "magnet:?xt=urn:btih:abc&tr=http%3A%2F%2Flocalhost%3A8080%2Fannounce"
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            self.cmd = cmd
+            self.returncode = None
+            self.stdout = ""
+            self.stderr = ""
+            assert "--bt-exclude-tracker" in cmd
+            assert cmd[cmd.index("--bt-exclude-tracker") + 1] == tracker
+            target = Path(cmd[cmd.index("--dir") + 1]) / "magnet-result.bin"
+            target.write_bytes(b"ok")
+            log_path = cmd[cmd.index("--log") + 1]
+            Path(log_path).write_text("done\n", encoding="utf-8")
+
+        def poll(self):
+            self.returncode = 0
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr("services.storage.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
+    monkeypatch.setattr("services.storage.remote_downloads.subprocess.Popen", FakePopen)
+
+    downloaded = download_magnet_with_aria2(magnet)
+    try:
+        assert downloaded.filename == "magnet-result.bin"
+        assert Path(downloaded.path).read_bytes() == b"ok"
+    finally:
+        shutil.rmtree(downloaded.cleanup_dir, ignore_errors=True)
 
 
 def test_magnet_tracker_dns_failure_does_not_block_bt(monkeypatch):
@@ -281,6 +319,16 @@ def test_resolver_accepts_public_candidate_when_private_candidate_exists(monkeyp
 
     parsed = validate_remote_url("https://downloads.example/file.torrent?token=abc")
     assert parsed["kind"] == "torrent_url"
+
+
+def test_direct_download_still_rejects_private_only_dns(monkeypatch):
+    def fake_getaddrinfo(host, port=None, **kwargs):
+        return [(2, 1, 6, "", ("10.0.0.5", int(port or 80)))]
+
+    monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+
+    with pytest.raises(RemoteDownloadError, match="保留位址"):
+        validate_remote_url("https://downloads.example/file.zip")
 
 
 def test_direct_mode_saves_torrent_file_itself(monkeypatch, tmp_path):
@@ -345,7 +393,7 @@ def test_torrent_url_mode_downloads_payload_with_aria2(monkeypatch, tmp_path):
     assert captured["display_name"] == "payload.torrent"
 
 
-def test_torrent_file_trackers_reject_private_hosts(tmp_path, monkeypatch):
+def test_torrent_file_trackers_report_private_hosts_without_rejecting(tmp_path, monkeypatch):
     def fake_getaddrinfo(host, port, **kwargs):
         return [(2, 1, 6, "", ("10.0.0.5", int(port or 80)))]
 
@@ -355,8 +403,9 @@ def test_torrent_file_trackers_reject_private_hosts(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
 
-    with pytest.raises(RemoteDownloadError, match="localhost"):
-        validate_torrent_file_trackers(torrent)
+    report = validate_torrent_file_trackers(torrent)
+    assert report["blocked"][0]["url"] == "http://tracker.example/announce"
+    assert "保留位址" in report["blocked"][0]["reason"]
 
 
 def test_torrent_file_allows_udp_tracker_when_dns_is_unavailable(tmp_path, monkeypatch):
@@ -377,7 +426,7 @@ def test_torrent_file_allows_udp_tracker_when_dns_is_unavailable(tmp_path, monke
     assert report["trackers"] == [tracker.decode("ascii")]
 
 
-def test_torrent_download_rejects_private_trackers(tmp_path, monkeypatch):
+def test_torrent_download_excludes_private_trackers(tmp_path, monkeypatch):
     tracker = b"http://tracker.example/announce"
     torrent = tmp_path / "bad-tracker.torrent"
     torrent.write_bytes(
@@ -393,8 +442,41 @@ def test_torrent_download_rejects_private_trackers(tmp_path, monkeypatch):
 
     report = inspect_torrent_file_trackers(torrent)
     assert report["blocked"][0]["url"] == tracker.decode("ascii")
-    with pytest.raises(RemoteDownloadError, match="不安全 tracker"):
-        download_torrent_file_with_aria2(torrent)
+    result = tmp_path / "result.bin"
+    result.write_bytes(b"ok")
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            self.cmd = cmd
+            self.returncode = None
+            self.stdout = ""
+            self.stderr = ""
+            assert "--bt-exclude-tracker" in cmd
+            assert cmd[cmd.index("--bt-exclude-tracker") + 1] == tracker.decode("ascii")
+            target = Path(cmd[cmd.index("--dir") + 1]) / "result.bin"
+            target.write_bytes(result.read_bytes())
+            log_path = cmd[cmd.index("--log") + 1]
+            Path(log_path).write_text("done\n", encoding="utf-8")
+
+        def poll(self):
+            self.returncode = 0
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr("services.storage.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
+    monkeypatch.setattr("services.storage.remote_downloads.subprocess.Popen", FakePopen)
+
+    downloaded = download_torrent_file_with_aria2(torrent)
+    try:
+        assert downloaded.filename == "result.bin"
+        assert Path(downloaded.path).read_bytes() == b"ok"
+    finally:
+        shutil.rmtree(downloaded.cleanup_dir, ignore_errors=True)
 
 
 def test_torrent_file_bdecode_depth_is_limited(tmp_path):

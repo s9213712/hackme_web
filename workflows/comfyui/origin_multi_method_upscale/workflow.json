@@ -1,0 +1,215 @@
+{
+  "16": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "87",
+        1
+      ],
+      "text": "anmi,masterpiece, 4k, highres, detail,\nfull body, solo, 1girl, loli, little girl, cat_girls, underwear,  bedroom,\nmasturbate, pussy_juice"
+    }
+  },
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 6,
+      "denoise": 1,
+      "latent_image": [
+        "56",
+        0
+      ],
+      "model": [
+        "87",
+        0
+      ],
+      "negative": [
+        "40",
+        0
+      ],
+      "positive": [
+        "16",
+        0
+      ],
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "seed": 616879224443392,
+      "steps": 30
+    }
+  },
+  "4": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "SDXL\\illustrious(IL)\\WAI系列\\waiIllustriousSDXL_v160.safetensors"
+    }
+  },
+  "40": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "87",
+        1
+      ],
+      "text": "embedding:lazy series\\IL\\lazyneg"
+    }
+  },
+  "56": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "batch_size": 1,
+      "height": 1024,
+      "width": 1024
+    }
+  },
+  "61": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 6.5,
+      "denoise": 0.7,
+      "latent_image": [
+        "63",
+        0
+      ],
+      "model": [
+        "4",
+        0
+      ],
+      "negative": [
+        "40",
+        0
+      ],
+      "positive": [
+        "16",
+        0
+      ],
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "seed": 67742897374064,
+      "steps": 30
+    }
+  },
+  "63": {
+    "class_type": "LatentUpscaleBy",
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ]
+    }
+  },
+  "64": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "61",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    }
+  },
+  "66": {
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": [
+        "64",
+        0
+      ]
+    }
+  },
+  "71": {
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "image": [
+        "64",
+        0
+      ],
+      "upscale_model": [
+        "77",
+        0
+      ]
+    }
+  },
+  "73": {
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": [
+        "71",
+        0
+      ]
+    }
+  },
+  "76": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "71",
+        0
+      ]
+    }
+  },
+  "77": {
+    "class_type": "UpscaleModelLoader",
+    "inputs": {}
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    }
+  },
+  "86": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "clip": [
+        "4",
+        1
+      ],
+      "model": [
+        "4",
+        0
+      ]
+    }
+  },
+  "87": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "clip": [
+        "86",
+        1
+      ],
+      "model": [
+        "86",
+        0
+      ]
+    }
+  },
+  "93": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "test",
+      "images": [
+        "8",
+        0
+      ]
+    }
+  },
+  "94": {
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ]
+    }
+  }
+}

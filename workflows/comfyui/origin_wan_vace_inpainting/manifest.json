@@ -1,0 +1,352 @@
+{
+  "conversion": {
+    "allowlist_message": "",
+    "allowlist_status": "allowlisted",
+    "class_count": 24,
+    "denied_classes": [],
+    "node_count": 29,
+    "source_format": "ui_graph",
+    "source_path": "video/edit/video_wan_vace_inpainting.json",
+    "structural_status": "pass",
+    "unknown_classes": []
+  },
+  "default_params": {
+    "batch_size": 1,
+    "cfg": 1,
+    "checkpoint": "",
+    "clip": "umt5_xxl_fp16.safetensors",
+    "controlnet": null,
+    "denoise_strength": 1,
+    "diffusion_model": "wan2.1_vace_1.3B_fp16.safetensors",
+    "generation_mode": "v2v",
+    "height": 1024,
+    "loras": [
+      {
+        "name": "Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
+        "strength_clip": 1,
+        "strength_model": 0.30000000000000004
+      }
+    ],
+    "model": "wan2.1_vace_1.3B_fp16.safetensors",
+    "negative_prompt": "过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走,过曝，",
+    "prompt": "A little boy and a dog are hiking in the forest. The puppy runs around the boy cheerfully.\n",
+    "sampler_name": "uni_pc",
+    "scheduler": "simple",
+    "seed": 584027519362099,
+    "steps": 4,
+    "upscale_model": "",
+    "vae": "wan_2.1_vae.safetensors",
+    "width": 1024
+  },
+  "description": "WAN VACE video inpainting workflow converted from origin.",
+  "id": "origin_wan_vace_inpainting",
+  "name": "WAN VACE Video Inpainting",
+  "origin_source_path": "video/edit/video_wan_vace_inpainting.json",
+  "output_kinds": [
+    "image",
+    "video"
+  ],
+  "required_controlnets": [],
+  "required_custom_nodes": [],
+  "required_loras": [
+    {
+      "name": "Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
+      "strength_model": 0.30000000000000004
+    }
+  ],
+  "required_models": [
+    {
+      "kind": "diffusion_model",
+      "name": "wan2.1_vace_1.3B_fp16.safetensors"
+    },
+    {
+      "kind": "clip",
+      "name": "umt5_xxl_fp16.safetensors"
+    },
+    {
+      "kind": "diffusion_model",
+      "name": "wan2.1_vace_14B_fp16.safetensors"
+    },
+    {
+      "kind": "clip",
+      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+    },
+    {
+      "kind": "vae",
+      "name": "wan_2.1_vae.safetensors"
+    }
+  ],
+  "schema_version": 1,
+  "source": "official_origin",
+  "source_format": "ui_graph",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "A little boy and a dog are hiking in the forest. The puppy runs around the boy cheerfully.\n",
+            "id": "node:6:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "正向提示詞",
+            "node_id": "6",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走,过曝，",
+            "id": "node:7:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "負面提示詞",
+            "node_id": "7",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "EmbeddingShortcuts",
+            "constraints": {
+              "target_field_ids": [
+                "node:6:text",
+                "node:7:text"
+              ],
+              "token_prefix": "<embeddings:"
+            },
+            "current_value": "",
+            "id": "text:embeddings",
+            "input_name": "embeddings",
+            "input_type": "embedding_shortcuts",
+            "label": "Embedding 快速插入",
+            "node_id": "",
+            "parent_category": "text",
+            "required": false,
+            "synthetic": true
+          }
+        ],
+        "id": "text",
+        "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "IMAGE",
+            "class_type": "LoadImage",
+            "constraints": {
+              "accept_mime": [
+                "image/png",
+                "image/jpeg",
+                "image/webp"
+              ]
+            },
+            "current_value": "video_wan_vace_inpainting_1st_frame_and_mask.png",
+            "id": "node:215:image",
+            "input_name": "image",
+            "input_type": "file_picker",
+            "label": "上傳圖片（Node 215）",
+            "node_id": "215",
+            "required": true
+          },
+          {
+            "category": "IMAGE",
+            "class_type": "LoadImage",
+            "constraints": {
+              "accept_mime": [
+                "image/png",
+                "image/jpeg",
+                "image/webp"
+              ]
+            },
+            "current_value": "api_bfl_flux_1_kontext_multiple_images_input_dog.jpg",
+            "id": "node:162:image",
+            "input_name": "image",
+            "input_type": "file_picker",
+            "label": "上傳圖片（Node 162）",
+            "node_id": "162",
+            "required": true
+          }
+        ],
+        "id": "image",
+        "label": "圖片輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "LoraLoaderModelOnly",
+            "current_value": "Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
+            "id": "node:154:lora_name",
+            "input_name": "lora_name",
+            "input_type": "select",
+            "label": "LoRA 模型（Model-only）",
+            "node_id": "154",
+            "required": true
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 584027519362099,
+            "id": "node:3:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "種子",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 150,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 4,
+            "id": "node:3:steps",
+            "input_name": "steps",
+            "input_type": "number",
+            "label": "步數",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 30.0,
+              "min": 0.5,
+              "step": 0.1
+            },
+            "current_value": 1,
+            "id": "node:3:cfg",
+            "input_name": "cfg",
+            "input_type": "number",
+            "label": "CFG",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "uni_pc",
+            "id": "node:3:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "simple",
+            "id": "node:3:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:3:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise",
+            "node_id": "3",
+            "required": true
+          }
+        ],
+        "id": "sampler",
+        "label": "採樣設定"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "ModelSamplingSD3",
+            "constraints": {
+              "max": 20.0,
+              "min": 0.0,
+              "step": 0.1
+            },
+            "current_value": 5,
+            "id": "node:48:shift",
+            "input_name": "shift",
+            "input_type": "number",
+            "label": "Model Shift",
+            "node_id": "48",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "LoraLoaderModelOnly",
+            "constraints": {
+              "max": 2.0,
+              "min": -2.0,
+              "step": 0.05
+            },
+            "current_value": 0.30000000000000004,
+            "id": "node:154:strength_model",
+            "input_name": "strength_model",
+            "input_type": "number",
+            "label": "LoRA 強度",
+            "node_id": "154",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "進階數值參數"
+      },
+      {
+        "collapsed_default": false,
+        "fields": [],
+        "id": "compatibility",
+        "label": "相容性報告",
+        "read_only": true
+      },
+      {
+        "collapsed_default": true,
+        "fields": [],
+        "id": "raw",
+        "label": "原始 workflow",
+        "read_only": true
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

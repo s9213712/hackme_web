@@ -23,7 +23,7 @@
         </select>
       </div>
       <button id="starterTxt2ImgBtn" type="button">txt2img 起始版</button>
-      <button id="autoLayoutBtn" type="button">重新排列節點</button>
+      <button id="autoLayoutBtn" type="button">依流程自動整理</button>
       <label class="file-action">匯入 JSON <input id="importJsonFile" type="file" accept="application/json,.json" /></label>
       <button id="clearBtn" type="button">清空</button>
       <button class="primary" id="sendBackBtn" type="button">送回主頁</button>
@@ -44,26 +44,26 @@
           <label class="field palette-search">搜尋節點
             <input id="nodeSearchInput" type="search" placeholder="例如 checkpoint、inpaint、upscale、control">
           </label>
-          <div class="tool-group catalog-loader">
-            <div class="tool-title">目前 ComfyUI 節點</div>
+          <details class="tool-group catalog-loader" open>
+            <summary class="tool-title">目前 ComfyUI 節點</summary>
             <button id="loadNodeCatalogBtn" type="button"><b>載入節點目錄</b><span>從 /object_info 取得已安裝 custom nodes</span></button>
             <div class="palette-status" id="nodeCatalogStatus">尚未載入；固定節點可先使用。</div>
-          </div>
-          <div class="tool-group" id="dynamicNodeCatalogGroup" hidden>
-            <div class="tool-title">已安裝節點目錄</div>
-            <div class="tool-grid" id="dynamicNodeCatalogList"></div>
-          </div>
-          <div class="tool-group">
-            <div class="tool-title">模型 / 文字</div>
+          </details>
+          <details class="tool-group" id="dynamicNodeCatalogGroup" hidden>
+            <summary class="tool-title">已安裝節點目錄 <span class="tool-count" id="dynamicNodeCatalogCount">0</span></summary>
+            <div class="catalog-category-list" id="dynamicNodeCatalogList"></div>
+          </details>
+          <details class="tool-group" open>
+            <summary class="tool-title">模型 / 文字</summary>
             <div class="tool-grid">
               <button data-add-node="CheckpointLoaderSimple" type="button"><b>Checkpoint Loader</b><span>輸出 MODEL / CLIP / VAE</span></button>
               <button data-add-node="CLIPTextEncode" type="button"><b>Prompt Encoder</b><span>正向或負向提示詞</span></button>
               <button data-add-node="LoraLoader" type="button"><b>LoRA Loader</b><span>接在 MODEL / CLIP 後</span></button>
               <button data-add-node="VAELoader" type="button"><b>VAE Loader</b><span>指定外部 VAE</span></button>
             </div>
-          </div>
-          <div class="tool-group">
-            <div class="tool-title">影像 / Latent / Inpaint</div>
+          </details>
+          <details class="tool-group">
+            <summary class="tool-title">影像 / Latent / Inpaint</summary>
             <div class="tool-grid">
               <button data-add-node="EmptyLatentImage" type="button"><b>Empty Latent</b><span>txt2img 畫布尺寸</span></button>
               <button data-add-node="LoadImage" type="button"><b>Load Image</b><span>img2img / inpaint 輸入圖</span></button>
@@ -76,22 +76,22 @@
               <button data-add-node="VAEDecode" type="button"><b>VAE Decode</b><span>latent 轉圖片</span></button>
               <button data-add-node="SaveImage" type="button"><b>Save Image</b><span>輸出圖片</span></button>
             </div>
-          </div>
-          <div class="tool-group">
-            <div class="tool-title">Control / Upscale</div>
+          </details>
+          <details class="tool-group">
+            <summary class="tool-title">Control / Upscale</summary>
             <div class="tool-grid">
               <button data-add-node="ControlNetLoader" type="button"><b>ControlNet Loader</b><span>讀取 ControlNet 模型</span></button>
               <button data-add-node="ControlNetApplyAdvanced" type="button"><b>ControlNet Apply Advanced</b><span>套用控制圖</span></button>
               <button data-add-node="UpscaleModelLoader" type="button"><b>Upscale Loader</b><span>讀取放大模型</span></button>
               <button data-add-node="ImageUpscaleWithModel" type="button"><b>Image Upscale</b><span>圖片放大節點</span></button>
             </div>
-          </div>
-          <div class="tool-group">
-            <div class="tool-title">Custom / API</div>
+          </details>
+          <details class="tool-group">
+            <summary class="tool-title">Custom / API</summary>
             <div class="tool-grid">
               <button data-add-node="__UnknownCustomNode__" type="button"><b>Custom / API Node</b><span>手動填 class_type 與 inputs；API Key 由後端注入</span></button>
             </div>
-          </div>
+          </details>
         </div>
       </div>
     </aside>

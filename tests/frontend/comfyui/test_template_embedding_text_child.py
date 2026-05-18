@@ -20,7 +20,8 @@ def test_selected_template_renders_embedding_shortcuts_under_text_panel():
     assert 'field?.input_type === "embedding_shortcuts"' in workflow_js
     assert "renderComfyuiTemplateEmbeddingShortcuts(field)" in workflow_js
     assert "data-comfyui-template-embedding" in workflow_js
-    assert "insertComfyuiEmbeddingToken(button.getAttribute" in workflow_js
+    assert "data-comfyui-template-embedding-targets" in workflow_js
+    assert "insertComfyuiTemplateEmbeddingToken" in workflow_js
     assert "renderSelectedComfyuiTemplate({ preserveOpenPanels: true });" in workflow_js
     assert "data-comfyui-template-panel-id" in workflow_js
 
@@ -36,4 +37,4 @@ def test_import_preview_modal_renders_embedding_shortcuts_for_text_fields():
     assert 'field.input_type === "embedding_shortcuts"' in comfyui_js
     assert "data-comfyui-template-importer-embedding" in comfyui_js
     assert "function insertTemplateModalEmbeddingToken(name)" in comfyui_js
-    assert "dataset.classType === \"CLIPTextEncode\"" in comfyui_js
+    assert 'el.dataset.category === "TEXT"' in comfyui_js

@@ -24,6 +24,7 @@ error to the user.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
@@ -87,6 +88,29 @@ class RunGateResult:
 # ----------------------------------------------------------------------------
 
 
+_EMBEDDING_TOKEN_RE = re.compile(r"<\s*embeddings\s*:\s*([^<>]+?)\s*>", re.IGNORECASE)
+
+_TEMPLATE_LOCKED_MODEL_FIELDS = {
+    ("VAELoader", "vae_name"),
+    ("CLIPLoader", "clip_name"),
+    ("DualCLIPLoader", "clip_name1"),
+    ("DualCLIPLoader", "clip_name2"),
+    ("TripleCLIPLoader", "clip_name1"),
+    ("TripleCLIPLoader", "clip_name2"),
+    ("TripleCLIPLoader", "clip_name3"),
+    ("UNETLoader", "unet_name"),
+}
+
+
+def _normalize_embedding_shortcuts(value: Any) -> Any:
+    if not isinstance(value, str) or "<" not in value:
+        return value
+    return _EMBEDDING_TOKEN_RE.sub(
+        lambda match: f"embedding:{match.group(1).strip()}",
+        value,
+    )
+
+
 def _is_user_editable(field_obj: InputField) -> bool:
     """Mirror of services/comfyui/template/ui_schema.required_user_inputs filtering."""
     if (field_obj.class_type, field_obj.input_name) in {
@@ -96,6 +120,8 @@ def _is_user_editable(field_obj: InputField) -> bool:
         return False
     if (field_obj.class_type, field_obj.input_name) in PROTECTED_IMAGE_INPUTS:
         # protected image inputs go through remap, not user_inputs
+        return False
+    if (field_obj.class_type, field_obj.input_name) in _TEMPLATE_LOCKED_MODEL_FIELDS:
         return False
     if field_obj.category == FieldCategory.UNKNOWN:
         return False
@@ -216,6 +242,18 @@ def _apply_user_inputs(
                     f"node {node_id}.{input_name} 是受保護欄位 (LoadImage / LoadImageMask)，"
                     f"不允許透過 user_inputs 覆蓋；必須走 image_field_assignments"
                 )
+            if (class_type, input_name) in _TEMPLATE_LOCKED_MODEL_FIELDS:
+                continue
+            field_obj = next(
+                (
+                    f
+                    for f in analysis.user_inputs
+                    if f.node_id == str(node_id) and f.input_name == str(input_name)
+                ),
+                None,
+            )
+            if field_obj and field_obj.category == FieldCategory.TEXT:
+                value = _normalize_embedding_shortcuts(value)
             node_inputs[input_name] = value
     return workflow
 

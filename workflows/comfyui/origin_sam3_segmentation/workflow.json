@@ -1,0 +1,76 @@
+{
+  "106": {
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": [
+        "111",
+        0
+      ]
+    }
+  },
+  "111": {
+    "class_type": "JoinImageWithAlpha",
+    "inputs": {
+      "alpha": [
+        "115",
+        0
+      ],
+      "image": [
+        "79",
+        0
+      ]
+    }
+  },
+  "114": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "116",
+        1
+      ],
+      "text": "guitar"
+    }
+  },
+  "115": {
+    "class_type": "SAM3_Detect",
+    "inputs": {
+      "conditioning": [
+        "114",
+        0
+      ],
+      "image": [
+        "79",
+        0
+      ],
+      "individual_masks": false,
+      "model": [
+        "116",
+        0
+      ],
+      "refine_iterations": 2,
+      "threshold": 0.5
+    }
+  },
+  "116": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "sam3.1_multiplex_fp16.safetensors"
+    }
+  },
+  "79": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "neon_guitarist.png",
+      "upload": "image"
+    }
+  },
+  "95": {
+    "class_type": "MaskPreview",
+    "inputs": {
+      "mask": [
+        "115",
+        0
+      ]
+    }
+  }
+}

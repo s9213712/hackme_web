@@ -1,0 +1,366 @@
+{
+  "conversion": {
+    "allowlist_message": "",
+    "allowlist_status": "allowlisted",
+    "class_count": 15,
+    "denied_classes": [],
+    "node_count": 35,
+    "source_format": "ui_graph",
+    "source_path": "image/edit/image_qwen_image_edit_2509.json",
+    "structural_status": "pass",
+    "unknown_classes": []
+  },
+  "default_params": {
+    "batch_size": 1,
+    "cfg": 7,
+    "checkpoint": "",
+    "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "controlnet": null,
+    "denoise_strength": 1,
+    "diffusion_model": "qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+    "generation_mode": "img2img",
+    "height": 1024,
+    "loras": [
+      {
+        "name": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+        "strength_clip": 1,
+        "strength_model": 1
+      }
+    ],
+    "model": "qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+    "negative_prompt": "",
+    "prompt": "",
+    "sampler_name": "euler",
+    "scheduler": "simple",
+    "seed": 973414316252139,
+    "steps": 20,
+    "upscale_model": "",
+    "vae": "qwen_image_vae.safetensors",
+    "width": 1024
+  },
+  "description": "Qwen image-edit workflow converted from origin.",
+  "id": "origin_qwen_image_edit_2509",
+  "name": "Qwen Image Edit 2509",
+  "origin_source_path": "image/edit/image_qwen_image_edit_2509.json",
+  "output_kinds": [
+    "image"
+  ],
+  "required_controlnets": [],
+  "required_custom_nodes": [],
+  "required_loras": [
+    {
+      "name": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+      "strength_model": 1
+    }
+  ],
+  "required_models": [
+    {
+      "kind": "vae",
+      "name": "qwen_image_vae.safetensors"
+    },
+    {
+      "kind": "clip",
+      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    },
+    {
+      "kind": "diffusion_model",
+      "name": "qwen_image_edit_2509_fp8_e4m3fn.safetensors"
+    }
+  ],
+  "schema_version": 1,
+  "source": "official_origin",
+  "source_format": "ui_graph",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "IMAGE",
+            "class_type": "LoadImage",
+            "constraints": {
+              "accept_mime": [
+                "image/png",
+                "image/jpeg",
+                "image/webp"
+              ]
+            },
+            "current_value": "image_qwen_image_edit_2509_input_image.png",
+            "id": "node:78:image",
+            "input_name": "image",
+            "input_type": "file_picker",
+            "label": "上傳圖片",
+            "node_id": "78",
+            "required": true
+          }
+        ],
+        "id": "image",
+        "label": "圖片輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "LoraLoaderModelOnly",
+            "current_value": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+            "id": "node:476:lora_name",
+            "input_name": "lora_name",
+            "input_type": "select",
+            "label": "LoRA 模型（Model-only）（Node 476）",
+            "node_id": "476",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "LoraLoaderModelOnly",
+            "current_value": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+            "id": "node:497:lora_name",
+            "input_name": "lora_name",
+            "input_type": "select",
+            "label": "LoRA 模型（Model-only）（Node 497）",
+            "node_id": "497",
+            "required": true
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 973414316252139,
+            "id": "node:478:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "種子（Node 478）",
+            "node_id": "478",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "euler",
+            "id": "node:478:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器（Node 478）",
+            "node_id": "478",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "simple",
+            "id": "node:478:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器（Node 478）",
+            "node_id": "478",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:478:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise（Node 478）",
+            "node_id": "478",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 1001672099958606,
+            "id": "node:499:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "種子（Node 499）",
+            "node_id": "499",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "euler",
+            "id": "node:499:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器（Node 499）",
+            "node_id": "499",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "simple",
+            "id": "node:499:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器（Node 499）",
+            "node_id": "499",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:499:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise（Node 499）",
+            "node_id": "499",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ComfySwitchNode",
+            "current_value": true,
+            "id": "node:504:switch",
+            "input_name": "switch",
+            "input_type": "select",
+            "label": "ComfySwitchNode.switch（Node 504）",
+            "node_id": "504",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ComfySwitchNode",
+            "current_value": true,
+            "id": "node:505:switch",
+            "input_name": "switch",
+            "input_type": "select",
+            "label": "ComfySwitchNode.switch（Node 505）",
+            "node_id": "505",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ComfySwitchNode",
+            "current_value": true,
+            "id": "node:506:switch",
+            "input_name": "switch",
+            "input_type": "select",
+            "label": "ComfySwitchNode.switch（Node 506）",
+            "node_id": "506",
+            "required": true
+          }
+        ],
+        "id": "sampler",
+        "label": "採樣設定"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "ModelSamplingAuraFlow",
+            "constraints": {
+              "max": 20.0,
+              "min": 0.0,
+              "step": 0.1
+            },
+            "current_value": 3,
+            "id": "node:472:shift",
+            "input_name": "shift",
+            "input_type": "number",
+            "label": "Model Shift（Node 472）",
+            "node_id": "472",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "LoraLoaderModelOnly",
+            "constraints": {
+              "max": 2.0,
+              "min": -2.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:476:strength_model",
+            "input_name": "strength_model",
+            "input_type": "number",
+            "label": "LoRA 強度（Node 476）",
+            "node_id": "476",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ModelSamplingAuraFlow",
+            "constraints": {
+              "max": 20.0,
+              "min": 0.0,
+              "step": 0.1
+            },
+            "current_value": 3,
+            "id": "node:493:shift",
+            "input_name": "shift",
+            "input_type": "number",
+            "label": "Model Shift（Node 493）",
+            "node_id": "493",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "LoraLoaderModelOnly",
+            "constraints": {
+              "max": 2.0,
+              "min": -2.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:497:strength_model",
+            "input_name": "strength_model",
+            "input_type": "number",
+            "label": "LoRA 強度（Node 497）",
+            "node_id": "497",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "進階數值參數"
+      },
+      {
+        "collapsed_default": false,
+        "fields": [],
+        "id": "compatibility",
+        "label": "相容性報告",
+        "read_only": true
+      },
+      {
+        "collapsed_default": true,
+        "fields": [],
+        "id": "raw",
+        "label": "原始 workflow",
+        "read_only": true
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

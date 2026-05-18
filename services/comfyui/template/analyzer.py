@@ -11,6 +11,7 @@ Spec reference: docs/comfyui/COMFYUI_TEMPLATE_IMPORTER_PLAN.md §5.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -179,12 +180,14 @@ class InputField:
     raw_value: Any
     category: FieldCategory
     is_link: bool
+    node_title: str = ""
 
 
 @dataclass
 class NodeAnalysis:
     node_id: str
     class_type: str
+    title: str = ""
     inputs: list[InputField] = field(default_factory=list)
     is_allowed: bool = False
     is_explicitly_denied: bool = False
@@ -221,6 +224,22 @@ _MODEL_CATEGORY_BUCKETS = {
     "clip_name3": "clip",
     "model": "api_model",
 }
+
+_EMBEDDING_TAG_RE = re.compile(r"<\s*embeddings?\s*:\s*([^<>]+?)\s*>", re.IGNORECASE)
+_EMBEDDING_PREFIX_RE = re.compile(r"(?<![\w/])embedding:([^\s,;<>]+)", re.IGNORECASE)
+
+
+def _extract_embedding_names(text: str) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for pattern in (_EMBEDDING_TAG_RE, _EMBEDDING_PREFIX_RE):
+        for match in pattern.finditer(str(text or "")):
+            name = str(match.group(1) or "").strip().strip(".,;")
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+    return names
 
 
 def analyze_workflow_json(workflow: dict[str, Any]) -> WorkflowAnalysis:
@@ -261,7 +280,9 @@ def analyze_workflow_json(workflow: dict[str, Any]) -> WorkflowAnalysis:
             )
         inputs_raw = node.get("inputs") or {}
 
-        node_analysis = NodeAnalysis(node_id=node_id, class_type=class_type)
+        node_meta = node.get("_meta") if isinstance(node.get("_meta"), dict) else {}
+        node_title = str(node_meta.get("title") or node.get("title") or "").strip()
+        node_analysis = NodeAnalysis(node_id=node_id, class_type=class_type, title=node_title)
         node_analysis.is_allowed = is_allowed_class(class_type)
         node_analysis.is_explicitly_denied = is_explicitly_denied_class(class_type)
         node_analysis.is_unknown = not (
@@ -279,6 +300,7 @@ def analyze_workflow_json(workflow: dict[str, Any]) -> WorkflowAnalysis:
                 raw_value=raw_value,
                 category=classify_input_field(class_type, str(input_name)),
                 is_link=is_link,
+                node_title=node_title,
             )
             node_analysis.inputs.append(field_obj)
             if not is_link:
@@ -291,6 +313,10 @@ def analyze_workflow_json(workflow: dict[str, Any]) -> WorkflowAnalysis:
             ):
                 bucket = _MODEL_CATEGORY_BUCKETS.get(input_name, "model")
                 required_models.setdefault(bucket, []).append(raw_value)
+            if field_obj.category == FieldCategory.TEXT and not is_link and isinstance(raw_value, str):
+                embeddings = _extract_embedding_names(raw_value)
+                if embeddings:
+                    required_models.setdefault("embedding", []).extend(embeddings)
 
         analysis.nodes.append(node_analysis)
         analysis.class_types.add(class_type)

@@ -156,8 +156,14 @@ def _validate_tracker_url(tracker_url):
 def validate_magnet_trackers(url):
     parsed = urllib.parse.urlparse(url)
     params = urllib.parse.parse_qs(parsed.query)
-    for tracker in params.get("tr", []):
-        _validate_tracker_url(tracker)
+    trackers = [tracker for tracker in params.get("tr", []) if str(tracker or "").strip()]
+    blocked = []
+    for tracker in trackers:
+        try:
+            _validate_tracker_url(tracker)
+        except RemoteDownloadError as exc:
+            blocked.append({"url": tracker, "reason": str(exc)})
+    return {"trackers": trackers, "blocked": blocked}
 
 
 def _bdecode(data, index=0, depth=0):
@@ -235,9 +241,6 @@ def inspect_torrent_file_trackers(torrent_path):
 
 def validate_torrent_file_trackers(torrent_path):
     report = inspect_torrent_file_trackers(torrent_path)
-    if report["blocked"]:
-        first = report["blocked"][0]
-        raise RemoteDownloadError(f"BT 種子檔包含不安全 tracker，已阻擋（{first['url']}：{first['reason']}）")
     return report
 
 
@@ -675,6 +678,7 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
 
 
 def download_magnet_with_aria2(url, *, timeout_seconds=300, max_bytes=None, progress_callback=None, rate_limit_kb_per_sec=None, cancel_check=None):
+    tracker_report = validate_magnet_trackers(url)
     return _download_bt_with_aria2(
         url,
         source_label="BT/magnet",
@@ -682,6 +686,7 @@ def download_magnet_with_aria2(url, *, timeout_seconds=300, max_bytes=None, prog
         max_bytes=max_bytes,
         progress_callback=progress_callback,
         rate_limit_kb_per_sec=rate_limit_kb_per_sec,
+        exclude_trackers=[item["url"] for item in tracker_report.get("blocked", [])],
         cancel_check=cancel_check,
     )
 
@@ -690,7 +695,7 @@ def download_torrent_file_with_aria2(torrent_path, *, display_name="BT 檔案", 
     if not os.path.isfile(torrent_path):
         raise RemoteDownloadError("找不到 BT 種子檔")
     _check_remote_download_control(cancel_check)
-    validate_torrent_file_trackers(torrent_path)
+    tracker_report = validate_torrent_file_trackers(torrent_path)
     return _download_bt_with_aria2(
         torrent_path,
         source_label=display_name or "BT 檔案",
@@ -698,6 +703,7 @@ def download_torrent_file_with_aria2(torrent_path, *, display_name="BT 檔案", 
         max_bytes=max_bytes,
         progress_callback=progress_callback,
         rate_limit_kb_per_sec=rate_limit_kb_per_sec,
+        exclude_trackers=[item["url"] for item in tracker_report.get("blocked", [])],
         cancel_check=cancel_check,
     )
 

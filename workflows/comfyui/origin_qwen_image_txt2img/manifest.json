@@ -1,0 +1,349 @@
+{
+  "conversion": {
+    "allowlist_message": "",
+    "allowlist_status": "allowlisted",
+    "class_count": 11,
+    "denied_classes": [],
+    "node_count": 14,
+    "source_format": "ui_graph",
+    "source_path": "image/txt2img/image_qwen_image.json",
+    "structural_status": "pass",
+    "unknown_classes": []
+  },
+  "default_params": {
+    "batch_size": 1,
+    "cfg": 7,
+    "checkpoint": "",
+    "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "controlnet": null,
+    "denoise_strength": 1,
+    "diffusion_model": "qwen_image_fp8_e4m3fn.safetensors",
+    "generation_mode": "txt2img",
+    "height": 1328,
+    "loras": [
+      {
+        "name": "QWEN\\Qwen-Image-Lightning-8steps-V1.0.safetensors",
+        "strength_clip": 1,
+        "strength_model": 1
+      }
+    ],
+    "model": "qwen_image_fp8_e4m3fn.safetensors",
+    "negative_prompt": "",
+    "prompt": "\nanime style, by ogipote,This is a warm and bright digital illustration depicting a three-year-old girl with cute cat ears and tail standing in the middle of an orange grove, surrounded by lush green leaves and trees laden with bright, plump oranges. Her golden hair is casually tied into two braids, falling over her shoulders, and soft bangs accentuate her radiant smile. Her expression is full of joy and sunshine—her eyes are slightly narrowed, her lips are parted in a wide grin, revealing a carefree smile that radiates pure happiness. She wears a wet white coat, without a bra underneath, her slightly protruding breasts boldly exposed, her rosy nipples peeking out. The coat buttons are slightly undone, giving her a relaxed and casual look. She wears a skirt, but sits cross-legged on the ground, without underwear, her vaginal fluids spilling onto the floor. Sunlight filters through the leaves, casting dappled shadows on her hair and shoulders, creating a warm and inviting atmosphere. A few oranges hang near her head, and one or two are scattered at her feet. The background is soft woods, with sunlight filtering through the leaves and spilling into the distance. The art style is soft and delicate, highlighting the natural environment and the girl's sunny and innocent charm.",
+    "sampler_name": "euler",
+    "scheduler": "simple",
+    "seed": 252589807937016,
+    "steps": 20,
+    "upscale_model": "",
+    "vae": "qwen_image_vae.safetensors",
+    "width": 1328
+  },
+  "description": "Qwen image text-to-image workflow converted from origin.",
+  "id": "origin_qwen_image_txt2img",
+  "name": "Qwen Image Text-to-Image",
+  "origin_source_path": "image/txt2img/image_qwen_image.json",
+  "output_kinds": [
+    "image"
+  ],
+  "required_controlnets": [],
+  "required_custom_nodes": [],
+  "required_loras": [
+    {
+      "name": "QWEN\\Qwen-Image-Lightning-8steps-V1.0.safetensors",
+      "strength_model": 1
+    }
+  ],
+  "required_models": [
+    {
+      "kind": "vae",
+      "name": "qwen_image_vae.safetensors"
+    },
+    {
+      "kind": "clip",
+      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    },
+    {
+      "kind": "diffusion_model",
+      "name": "qwen_image_fp8_e4m3fn.safetensors"
+    }
+  ],
+  "schema_version": 1,
+  "source": "official_origin",
+  "source_format": "ui_graph",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "\nanime style, by ogipote,This is a warm and bright digital illustration depicting a three-year-old girl with cute cat ears and tail standing in the middle of an orange grove, surrounded by lush green leaves and trees laden with bright, plump oranges. Her golden hair is casually tied into two braids, falling over her shoulders, and soft bangs accentuate her radiant smile. Her expression is full of joy and sunshine—her eyes are slightly narrowed, her lips are parted in a wide grin, revealing a carefree smile that radiates pure happiness. She wears a wet white coat, without a bra underneath, her slightly protruding breasts boldly exposed, her rosy nipples peeking out. The coat buttons are slightly undone, giving her a relaxed and casual look. She wears a skirt, but sits cross-legged on the ground, without underwear, her vaginal fluids spilling onto the floor. Sunlight filters through the leaves, casting dappled shadows on her hair and shoulders, creating a warm and inviting atmosphere. A few oranges hang near her head, and one or two are scattered at her feet. The background is soft woods, with sunlight filtering through the leaves and spilling into the distance. The art style is soft and delicate, highlighting the natural environment and the girl's sunny and innocent charm.",
+            "id": "node:83:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "正向提示詞",
+            "node_id": "83",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "",
+            "id": "node:84:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "負面提示詞",
+            "node_id": "84",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "EmbeddingShortcuts",
+            "constraints": {
+              "target_field_ids": [
+                "node:83:text",
+                "node:84:text"
+              ],
+              "token_prefix": "<embeddings:"
+            },
+            "current_value": "",
+            "id": "text:embeddings",
+            "input_name": "embeddings",
+            "input_type": "embedding_shortcuts",
+            "label": "Embedding 快速插入",
+            "node_id": "",
+            "parent_category": "text",
+            "required": false,
+            "synthetic": true
+          }
+        ],
+        "id": "text",
+        "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "LoraLoaderModelOnly",
+            "current_value": "QWEN\\Qwen-Image-Lightning-8steps-V1.0.safetensors",
+            "id": "node:86:lora_name",
+            "input_name": "lora_name",
+            "input_type": "select",
+            "label": "LoRA 模型（Model-only）",
+            "node_id": "86",
+            "required": true
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 252589807937016,
+            "id": "node:87:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "種子",
+            "node_id": "87",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "euler",
+            "id": "node:87:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器",
+            "node_id": "87",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "simple",
+            "id": "node:87:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器",
+            "node_id": "87",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:87:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise",
+            "node_id": "87",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ComfySwitchNode",
+            "current_value": false,
+            "id": "node:88:switch",
+            "input_name": "switch",
+            "input_type": "select",
+            "label": "ComfySwitchNode.switch（Node 88）",
+            "node_id": "88",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ComfySwitchNode",
+            "current_value": false,
+            "id": "node:91:switch",
+            "input_name": "switch",
+            "input_type": "select",
+            "label": "ComfySwitchNode.switch（Node 91）",
+            "node_id": "91",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ComfySwitchNode",
+            "current_value": false,
+            "id": "node:92:switch",
+            "input_name": "switch",
+            "input_type": "select",
+            "label": "ComfySwitchNode.switch（Node 92）",
+            "node_id": "92",
+            "required": true
+          }
+        ],
+        "id": "sampler",
+        "label": "採樣設定"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptySD3LatentImage",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 1328,
+            "id": "node:80:width",
+            "input_name": "width",
+            "input_type": "number",
+            "label": "寬度",
+            "node_id": "80",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptySD3LatentImage",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 1328,
+            "id": "node:80:height",
+            "input_name": "height",
+            "input_type": "number",
+            "label": "高度",
+            "node_id": "80",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptySD3LatentImage",
+            "constraints": {
+              "max": 16,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 1,
+            "id": "node:80:batch_size",
+            "input_name": "batch_size",
+            "input_type": "number",
+            "label": "批次大小",
+            "node_id": "80",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ModelSamplingAuraFlow",
+            "constraints": {
+              "max": 20.0,
+              "min": 0.0,
+              "step": 0.1
+            },
+            "current_value": 3.1000000000000005,
+            "id": "node:81:shift",
+            "input_name": "shift",
+            "input_type": "number",
+            "label": "Model Shift",
+            "node_id": "81",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "LoraLoaderModelOnly",
+            "constraints": {
+              "max": 2.0,
+              "min": -2.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:86:strength_model",
+            "input_name": "strength_model",
+            "input_type": "number",
+            "label": "LoRA 強度",
+            "node_id": "86",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "進階數值參數"
+      },
+      {
+        "collapsed_default": false,
+        "fields": [],
+        "id": "compatibility",
+        "label": "相容性報告",
+        "read_only": true
+      },
+      {
+        "collapsed_default": true,
+        "fields": [],
+        "id": "raw",
+        "label": "原始 workflow",
+        "read_only": true
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

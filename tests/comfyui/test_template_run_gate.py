@@ -36,10 +36,16 @@ TXT2IMG = {
 }
 
 
-def _stub_client(*, classes, models=None):
+def _stub_client(*, classes, models=None, vaes=None, diffusion_models=None, clips=None, embeddings=None):
     info = {cls: {"input": {"required": {}}} for cls in classes}
     if "CheckpointLoaderSimple" in info and models is not None:
         info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [list(models)]
+    if "VAELoader" in info and vaes is not None:
+        info["VAELoader"]["input"]["required"]["vae_name"] = [list(vaes)]
+    if "UNETLoader" in info and diffusion_models is not None:
+        info["UNETLoader"]["input"]["required"]["unet_name"] = [list(diffusion_models)]
+    if "CLIPLoader" in info and clips is not None:
+        info["CLIPLoader"]["input"]["required"]["clip_name"] = [list(clips)]
     if "KSampler" in info:
         info["KSampler"]["input"]["required"]["sampler_name"] = [["euler"]]
         info["KSampler"]["input"]["required"]["scheduler"] = [["normal"]]
@@ -48,6 +54,8 @@ def _stub_client(*, classes, models=None):
         base_url = "http://stub"
         def get_object_info(self):
             return info
+        def get_embeddings(self):
+            return list(embeddings or [])
     return _Stub()
 
 
@@ -105,6 +113,87 @@ def test_happy_path_all_gates_pass():
     assert result.workflow["6"]["inputs"]["text"] == "cat"
     assert result.capability.overall == "SUPPORTED"
     assert result.audit_metadata["overall"] == "SUPPORTED"
+
+
+def test_locked_model_loader_fields_are_not_required_or_overridden():
+    workflow = {
+        "61": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_06b_base.safetensors"}},
+        "62": {"class_type": "VAELoader", "inputs": {"vae_name": "anime_vae.safetensors"}},
+        "64": {"class_type": "EmptyLatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+        "65": {"class_type": "CLIPTextEncode", "inputs": {"text": "low quality", "clip": ["61", 0]}},
+        "66": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": 42,
+                "steps": 30,
+                "cfg": 4,
+                "denoise": 1,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "model": ["68", 0],
+                "positive": ["67", 0],
+                "negative": ["65", 0],
+                "latent_image": ["64", 0],
+            },
+        },
+        "67": {"class_type": "CLIPTextEncode", "inputs": {"text": "anime", "clip": ["61", 0]}},
+        "68": {"class_type": "UNETLoader", "inputs": {"unet_name": "anima-preview3-base.safetensors"}},
+        "69": {"class_type": "VAEDecode", "inputs": {"samples": ["66", 0], "vae": ["62", 0]}},
+        "70": {"class_type": "SaveImage", "inputs": {"filename_prefix": "ComfyUI", "images": ["69", 0]}},
+    }
+    client = _stub_client(
+        classes={"CLIPLoader", "VAELoader", "EmptyLatentImage", "CLIPTextEncode", "KSampler", "UNETLoader", "VAEDecode", "SaveImage"},
+        vaes=["anime_vae.safetensors"],
+        diffusion_models=["anima-preview3-base.safetensors"],
+        clips=["qwen_3_06b_base.safetensors"],
+    )
+    result = run_workflow_through_gates(
+        raw_workflow=workflow,
+        user_inputs={
+            "61": {"clip_name": "wrong_clip.safetensors"},
+            "62": {"vae_name": "wrong_vae.safetensors"},
+            "64": {"width": 1024, "height": 1024, "batch_size": 1},
+            "65": {"text": "low quality"},
+            "66": {"seed": 42, "steps": 30, "cfg": 4, "denoise": 1, "sampler_name": "euler", "scheduler": "normal"},
+            "67": {"text": "anime"},
+            "68": {"unet_name": "wrong_unet.safetensors"},
+        },
+        image_field_assignments={},
+        actor={"id": 1, "username": "alice"},
+        user_id=1,
+        run_id="run123",
+        conn=None,
+        comfyui_client=client,
+        upload_callback=_stub_upload,
+    )
+
+    assert result.workflow["61"]["inputs"]["clip_name"] == "qwen_3_06b_base.safetensors"
+    assert result.workflow["62"]["inputs"]["vae_name"] == "anime_vae.safetensors"
+    assert result.workflow["68"]["inputs"]["unet_name"] == "anima-preview3-base.safetensors"
+
+
+def test_workflow_user_inputs_normalize_embedding_shortcut_syntax():
+    user_inputs = _full_user_inputs(prompt="portrait, <embeddings:badhandv4.pt>")
+    result = run_workflow_through_gates(
+        raw_workflow=TXT2IMG,
+        user_inputs=user_inputs,
+        image_field_assignments={},
+        actor={"id": 1, "username": "alice"},
+        user_id=1,
+        run_id="run123",
+        conn=None,
+        comfyui_client=_stub_client(
+            classes={
+                "CheckpointLoaderSimple", "EmptyLatentImage", "CLIPTextEncode",
+                "KSampler", "VAEDecode", "SaveImage",
+            },
+            models=["v1-5.safetensors"],
+            embeddings=["badhandv4.pt"],
+        ),
+        upload_callback=_stub_upload,
+    )
+
+    assert result.workflow["6"]["inputs"]["text"] == "portrait, embedding:badhandv4.pt"
 
 
 def test_gate1_rejects_ui_graph_format():

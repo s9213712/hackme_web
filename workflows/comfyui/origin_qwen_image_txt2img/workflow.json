@@ -1,0 +1,158 @@
+{
+  "60": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Qwen-Image",
+      "images": [
+        "85",
+        0
+      ]
+    }
+  },
+  "78": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "79": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "device": "default",
+      "type": "qwen_image"
+    }
+  },
+  "80": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "batch_size": 1,
+      "height": 1328,
+      "width": 1328
+    }
+  },
+  "81": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "model": [
+        "88",
+        0
+      ],
+      "shift": 3.1000000000000005
+    }
+  },
+  "82": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "qwen_image_fp8_e4m3fn.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "83": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "79",
+        0
+      ],
+      "text": "\nanime style, by ogipote,This is a warm and bright digital illustration depicting a three-year-old girl with cute cat ears and tail standing in the middle of an orange grove, surrounded by lush green leaves and trees laden with bright, plump oranges. Her golden hair is casually tied into two braids, falling over her shoulders, and soft bangs accentuate her radiant smile. Her expression is full of joy and sunshine—her eyes are slightly narrowed, her lips are parted in a wide grin, revealing a carefree smile that radiates pure happiness. She wears a wet white coat, without a bra underneath, her slightly protruding breasts boldly exposed, her rosy nipples peeking out. The coat buttons are slightly undone, giving her a relaxed and casual look. She wears a skirt, but sits cross-legged on the ground, without underwear, her vaginal fluids spilling onto the floor. Sunlight filters through the leaves, casting dappled shadows on her hair and shoulders, creating a warm and inviting atmosphere. A few oranges hang near her head, and one or two are scattered at her feet. The background is soft woods, with sunlight filtering through the leaves and spilling into the distance. The art style is soft and delicate, highlighting the natural environment and the girl's sunny and innocent charm."
+    }
+  },
+  "84": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "79",
+        0
+      ],
+      "text": ""
+    }
+  },
+  "85": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "87",
+        0
+      ],
+      "vae": [
+        "78",
+        0
+      ]
+    }
+  },
+  "86": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "QWEN\\Qwen-Image-Lightning-8steps-V1.0.safetensors",
+      "model": [
+        "82",
+        0
+      ],
+      "strength_model": 1
+    }
+  },
+  "87": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": [
+        "92",
+        0
+      ],
+      "denoise": 1,
+      "latent_image": [
+        "80",
+        0
+      ],
+      "model": [
+        "81",
+        0
+      ],
+      "negative": [
+        "84",
+        0
+      ],
+      "positive": [
+        "83",
+        0
+      ],
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "seed": 252589807937016,
+      "steps": [
+        "91",
+        0
+      ]
+    }
+  },
+  "88": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "82",
+        0
+      ],
+      "on_true": [
+        "86",
+        0
+      ],
+      "switch": false
+    }
+  },
+  "91": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": 20,
+      "on_true": 8,
+      "switch": false
+    }
+  },
+  "92": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": 4,
+      "on_true": 1,
+      "switch": false
+    }
+  }
+}

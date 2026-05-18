@@ -1008,11 +1008,11 @@ copy_repo() {
 ensure_official_workflows_source() {
   local root="$1"
   local workflow_dir="$root/workflows/comfyui"
-  if [[ ! -f "$workflow_dir/txt2img_basic/workflow.json" || ! -f "$workflow_dir/txt2img_basic/manifest.json" ]]; then
-    die "official ComfyUI workflow bundles are missing under $workflow_dir; dev runtime cannot seed default official workflows"
-  fi
   local count
   count="$(find "$workflow_dir" -mindepth 2 -maxdepth 2 -name workflow.json 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "$count" == "0" ]]; then
+    die "official ComfyUI workflow bundles are missing under $workflow_dir; dev runtime cannot seed default official workflows"
+  fi
   say "[dev-tmp] workflows: found $count official ComfyUI workflow bundle(s)"
 }
 

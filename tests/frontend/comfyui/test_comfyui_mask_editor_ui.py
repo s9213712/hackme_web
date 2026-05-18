@@ -51,9 +51,15 @@ def test_mask_editor_is_touch_friendly_and_responsive():
     assert "@media (max-width: 860px)" in css
 
 
-def test_txt2img_hides_source_image_card():
+def test_generation_mode_is_inferred_from_source_and_mask_assets():
     js = _read("public/js/36-comfyui.js")
+    html = _read("public/index.html")
     assert "const sourceCard = $(COMFYUI_INPUT_ASSET_META.source.cardId);" in js
-    assert 'if (sourceCard) sourceCard.style.display = comfyuiModeUsesSourceImage(mode) ? "" : "none";' in js
+    assert 'if (sourceCard) sourceCard.style.display = "";' in js
+    assert 'if (upscaleField) upscaleField.style.display = comfyuiHasInputAsset("source") || comfyuiModeUsesUpscale(mode) ? "" : "none";' in js
+    assert 'if (comfyuiHasInputAsset("mask")) return "inpaint";' in js
+    assert 'return "img2img";' in js
     assert 'return ["img2img", "inpaint", "outpaint", "upscale", "i2v"].includes' in js
     assert 'return "文字生圖：只需要提示詞，不需要來源圖片。";' in js
+    assert 'select id="comfyui-generation-mode" hidden aria-hidden="true" tabindex="-1"' in html
+    assert 'id="comfyui-generation-mode-auto"' in html

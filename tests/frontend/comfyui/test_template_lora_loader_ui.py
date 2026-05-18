@@ -11,19 +11,26 @@ def _read(path):
 def test_selected_template_lora_loader_renders_interactive_controls():
     workflow_js = _read("public/js/36-comfyui-workflows.js")
 
-    assert 'field?.class_type === "LoraLoader" && field?.input_name === "lora_name"' in workflow_js
+    assert 'field?.class_type === "LoraLoader" || field?.class_type === "LoraLoaderModelOnly"' in workflow_js
+    assert 'field?.input_name === "lora_name") return { kind: "lora", nodeId: field.node_id }' in workflow_js
     assert 'return { kind: "lora", nodeId: field.node_id }' in workflow_js
     assert 'data-comfyui-template-lora-node' in workflow_js
     assert "let comfyuiTemplateLoraOverrides = {};" in workflow_js
     assert "upsertComfyuiTemplateLora(nodeId, select.value)" in workflow_js
     assert "applyComfyuiPromptTerms(detail.trained_words || [])" in workflow_js
-    assert "已加入 LoRA，並自動補上 trigger words" in workflow_js
+    assert "comfyuiLoraCompatibilityHint(cleanName)" in workflow_js
+    assert "若模型不相容，ComfyUI 可能產圖失敗或效果異常" in workflow_js
+    assert "detail.supported !== true" not in workflow_js
+    assert "addOption(option.value || \"\", option.textContent || option.label || option.value || \"\", false);" in workflow_js
+    assert "const triggerText = insertedTerms.length" in workflow_js
+    assert "並自動補上 trigger words" in workflow_js
 
 
 def test_selected_template_lora_loader_exposes_weight_controls_and_run_inputs():
     workflow_js = _read("public/js/36-comfyui-workflows.js")
     route_py = _read("routes/comfyui_sections/workflow_routes.py")
 
+    assert 'field?.class_type === "LoraLoader" || field?.class_type === "LoraLoaderModelOnly"' in workflow_js
     assert 'field?.input_name === "strength_model" || field?.input_name === "strength_clip"' in workflow_js
     assert 'data-comfyui-template-lora-strength' in workflow_js
     assert "updateComfyuiTemplateLoraStrength(nodeId, field, input.value)" in workflow_js

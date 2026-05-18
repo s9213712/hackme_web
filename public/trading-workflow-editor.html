@@ -22,10 +22,15 @@
           <option value="en">English</option>
         </select>
       </div>
-      <button id="templateBtn" type="button">載入範例</button>
-      <button id="importBtn" type="button">套用 JSON</button>
       <button class="primary" id="saveBtn" type="button">儲存</button>
       <button class="good" id="copyBtn" type="button">複製 JSON</button>
+      <details class="top-action-menu">
+        <summary>更多操作</summary>
+        <div class="top-action-menu-body">
+          <button id="templateBtn" type="button">載入範例</button>
+          <button id="importBtn" type="button">套用 JSON</button>
+        </div>
+      </details>
     </div>
   </header>
 
@@ -36,16 +41,16 @@
           <div class="panel-title">節點工具箱</div>
         </div>
         <div class="panel-body">
-          <div class="tool-group">
-            <div class="tool-title">Graph 節點</div>
+          <details class="tool-group" open>
+            <summary class="tool-title">Graph 節點 <span class="tool-count">3</span></summary>
             <div class="tool-grid">
               <button data-add="logic" data-add-node="logic:AND" type="button"><b>AND 節點</b><span>多個 input 全部成立才走 TRUE</span></button>
               <button data-add="logic" data-add-node="logic:OR" type="button"><b>OR 節點</b><span>任一 input 成立就走 TRUE</span></button>
               <button data-add="logic" data-add-node="logic:NOT" type="button"><b>NOT 節點</b><span>反向條件，可做排除規則</span></button>
             </div>
-          </div>
-          <div class="tool-group">
-            <div class="tool-title">條件節點</div>
+          </details>
+          <details class="tool-group" open>
+            <summary class="tool-title">條件節點 <span class="tool-count">8</span></summary>
             <div class="tool-grid">
               <button data-add="condition" data-add-node="condition:price_below" type="button"><b>價格低於</b><span>price <= 指定價格</span></button>
               <button data-add="condition" data-add-node="condition:price_above" type="button"><b>價格高於</b><span>price >= 指定價格</span></button>
@@ -56,9 +61,9 @@
               <button data-add="condition" data-add-node="condition:bb_position" type="button"><b>布林位置</b><span>中線、上軌、下軌</span></button>
               <button data-add="condition" data-add-node="condition:has_position" type="button"><b>持倉狀態</b><span>有倉位或無倉位</span></button>
             </div>
-          </div>
-          <div class="tool-group">
-            <div class="tool-title">行為節點</div>
+          </details>
+          <details class="tool-group">
+            <summary class="tool-title">行為節點 <span class="tool-count">5</span></summary>
             <div class="tool-grid">
               <button data-add="action" data-add-node="action:buy_percent" type="button"><b>買入百分比</b><span>使用可用資金的一部分</span></button>
               <button data-add="action" data-add-node="action:buy_amount" type="button"><b>固定金額買入</b><span>使用指定點數</span></button>
@@ -66,13 +71,13 @@
               <button data-add="action" data-add-node="action:close_all" type="button"><b>全部平倉</b><span>風險優先的緊急動作</span></button>
               <button data-add="action" data-add-node="action:hold" type="button"><b>不動作</b><span>條件成立但只記錄掃描</span></button>
             </div>
-          </div>
-          <div class="tool-group">
-            <div class="tool-title">控制節點</div>
+          </details>
+          <details class="tool-group">
+            <summary class="tool-title">控制節點 <span class="tool-count">1</span></summary>
             <div class="tool-grid">
               <button data-add="control" data-add-node="control:cooldown" type="button"><b>冷卻 / 次數</b><span>設定每 X 秒、最大執行次數</span></button>
             </div>
-          </div>
+          </details>
         </div>
       </div>
     </aside>

@@ -84,6 +84,18 @@ def test_analyze_required_models_collected():
     assert analysis.required_models == {"ckpt": ["v1-5-pruned.safetensors"]}
 
 
+def test_analyze_required_embeddings_from_prompt_tokens():
+    workflow = {
+        **TXT2IMG_API,
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "portrait, <embeddings:badhandv4.pt>, embedding:easynegative.safetensors", "clip": ["4", 1]},
+        },
+    }
+    analysis = analyze_workflow_json(workflow)
+    assert analysis.required_models["embedding"] == ["badhandv4.pt", "easynegative.safetensors"]
+
+
 def test_analyze_user_inputs_separates_links_from_scalars():
     analysis = analyze_workflow_json(TXT2IMG_API)
     user_input_keys = {(f.node_id, f.input_name) for f in analysis.user_inputs}

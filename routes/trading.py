@@ -54,7 +54,7 @@ REFERENCE_PRICE_CACHE = {}
 REFERENCE_PRICE_CACHE_TTL_SECONDS = 1.0
 BACKTEST_PROVIDER_CANDLE_LIMIT = MAX_BACKTEST_CANDLES
 WORKFLOW_ROOT = Path(__file__).resolve().parents[1] / "workflows"
-WORKFLOW_SYSTEM_DIR = WORKFLOW_ROOT / "system"
+WORKFLOW_SYSTEM_DIR = WORKFLOW_ROOT / "trading_bot"
 WORKFLOW_TEMPLATE_BENCHMARK_PATH = WORKFLOW_ROOT / "trading_bot" / "benchmarks" / "workflow_template_benchmarks.json"
 WORKFLOW_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 

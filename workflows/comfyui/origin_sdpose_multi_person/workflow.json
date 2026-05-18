@@ -1,0 +1,144 @@
+{
+  "679": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "group_photo.png",
+      "upload": "image"
+    }
+  },
+  "680": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "694",
+        0
+      ]
+    }
+  },
+  "682": {
+    "class_type": "DrawBBoxes",
+    "inputs": {
+      "bboxes": [
+        "697",
+        0
+      ],
+      "image": [
+        "697",
+        0
+      ]
+    }
+  },
+  "685": {
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": [
+        "690",
+        0
+      ]
+    }
+  },
+  "687": {
+    "class_type": "ResizeImageMaskNode",
+    "inputs": {
+      "input": [
+        "693",
+        0
+      ],
+      "resize_type.longer_size": 1024
+    }
+  },
+  "690": {
+    "class_type": "ImageBlend",
+    "inputs": {
+      "image1": [
+        "682",
+        0
+      ],
+      "image2": [
+        "694",
+        0
+      ]
+    }
+  },
+  "692": {
+    "class_type": "SDPoseKeypointExtractor",
+    "inputs": {
+      "bboxes": [
+        "697",
+        0
+      ],
+      "image": [
+        "693",
+        0
+      ],
+      "model": [
+        "695",
+        0
+      ],
+      "vae": [
+        "694",
+        0
+      ]
+    }
+  },
+  "693": {
+    "class_type": "ResizeImageMaskNode",
+    "inputs": {
+      "input": [
+        "679",
+        0
+      ],
+      "resize_type.longer_size": [
+        "697",
+        0
+      ],
+      "scale_method": 1024
+    }
+  },
+  "694": {
+    "class_type": "SDPoseDrawKeypoints",
+    "inputs": {
+      "draw_body": true,
+      "draw_face": true,
+      "draw_feet": true,
+      "draw_hands": true,
+      "face_point_size": 2,
+      "keypoints": [
+        "692",
+        0
+      ],
+      "score_threshold": 0.5,
+      "stick_width": 4
+    }
+  },
+  "695": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "sdpose_wholebody_fp16.safetensors"
+    }
+  },
+  "696": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "rt_detr_v4-x-hgnet_fp16.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "697": {
+    "class_type": "RTDETR_detect",
+    "inputs": {
+      "class_name": "person",
+      "image": [
+        "693",
+        0
+      ],
+      "max_detections": 1,
+      "model": [
+        "696",
+        0
+      ],
+      "threshold": 0.5
+    }
+  }
+}

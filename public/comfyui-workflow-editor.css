@@ -142,7 +142,61 @@ h1 { margin: 0; font-size: 1.08rem; }
 }
 .field { display: grid; gap: .32rem; margin-bottom: .68rem; }
 .field label, label.field { color: var(--muted); font-size: .82rem; }
-.tool-group { margin-bottom: .95rem; }
+.tool-group {
+  margin-bottom: .62rem;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 8px;
+  background: rgba(11, 18, 32, .42);
+  overflow: hidden;
+}
+
+.tool-group > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.tool-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-group > .tool-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .45rem;
+  min-height: 2.2rem;
+  margin: 0;
+  padding: .5rem .62rem;
+  background: rgba(21, 31, 46, .72);
+}
+
+.tool-group > .tool-title::before {
+  content: "›";
+  display: inline-block;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  transition: transform .15s ease;
+}
+
+.tool-group[open] > .tool-title::before {
+  transform: rotate(90deg);
+}
+
+.tool-group > .tool-grid,
+.tool-group > .catalog-category-list,
+.tool-group > button,
+.tool-group > .palette-status {
+  margin: .55rem .62rem;
+}
+
+.tool-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: .76rem;
+  font-weight: 600;
+}
+
 .palette-search {
   position: sticky;
   top: 0;
@@ -159,10 +213,54 @@ h1 { margin: 0; font-size: 1.08rem; }
 .tool-grid b { font-size: .88rem; }
 .tool-grid span { color: var(--muted); font-size: .76rem; line-height: 1.35; }
 .palette-status {
-  margin-top: .45rem;
   color: var(--muted);
   font-size: .76rem;
   line-height: 1.35;
+}
+
+.catalog-category-list {
+  display: grid;
+  gap: .45rem;
+}
+
+.catalog-category {
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 7px;
+  background: rgba(17, 24, 39, .5);
+  overflow: hidden;
+}
+
+.catalog-category > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .45rem;
+  list-style: none;
+  cursor: pointer;
+  min-height: 2rem;
+  padding: .42rem .55rem;
+  color: var(--text);
+  font-size: .82rem;
+  font-weight: 700;
+}
+
+.catalog-category > summary::-webkit-details-marker {
+  display: none;
+}
+
+.catalog-category > summary::before {
+  content: "›";
+  color: var(--muted);
+  font-size: 1rem;
+  transition: transform .15s ease;
+}
+
+.catalog-category[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.catalog-category .tool-grid {
+  padding: .48rem;
 }
 .badges { display: flex; flex-wrap: wrap; gap: .38rem; align-items: center; }
 .badge {

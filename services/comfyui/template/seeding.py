@@ -1,9 +1,8 @@
 """§18.1 first-boot seeding for runtime/comfyui/.
 
-The repo ships a set of system workflows under workflows/comfyui/ (txt2img,
-img2img, inpaint, outpaint, upscale, controlnet). On first server start we
-copy those into the runtime tree (``$HACKME_RUNTIME_DIR/comfyui/`` or
-``runtime/comfyui/`` by default) so:
+The repo ships a set of system workflows under workflows/comfyui/. On first
+server start we copy those into the runtime tree
+(``$HACKME_RUNTIME_DIR/comfyui/`` or ``runtime/comfyui/`` by default) so:
 
 - Operators can edit / extend templates without git churn.
 - The runtime tree stays gitignored, so customizations don't pollute the
@@ -27,22 +26,30 @@ from typing import Iterable
 
 REPO_SOURCE_DIR = Path(__file__).resolve().parents[3] / "workflows" / "comfyui"
 SYSTEM_WORKFLOW_IDS = (
-    "txt2img_basic",
-    "img2img_basic",
-    "inpaint_basic",
-    "outpaint_basic",
-    "upscale_basic",
-    "controlnet_canny",
-    "family_zit_txt2img",
-    "family_anima_txt2img",
-    "family_netayume_txt2img",
-    "flux2_image_edit",
-    "sd35_simple_example",
-    "sdxl_simple_example",
-    "wan22_14b_i2v_subgraphed",
-    "ace_step_15_t2a_song",
-    "bytedance_seedream_5_lite_t2i",
-    "grok_image_edit",
+    "origin_audio_ace_step_15_xl_base",
+    "origin_qwen_image_controlnet_2512",
+    "origin_sd35_large_canny_controlnet",
+    "origin_sd35_large_depth_controlnet",
+    "origin_capybara_image_edit",
+    "origin_qwen_image_edit_2509",
+    "origin_one_click_anime_to_real",
+    "origin_one_click_replace_aio_2511",
+    "origin_flux_fill_outpaint",
+    "origin_anima_txt2img",
+    "origin_sd35_txt2img",
+    "origin_sdxl_txt2img",
+    "origin_zit_txt2img",
+    "origin_flux_dev_txt2img",
+    "origin_qwen_image_txt2img",
+    "origin_netayume_txt2img",
+    "origin_compare_2checkpoints",
+    "origin_sdpose_multi_person",
+    "origin_sam3_segmentation",
+    "origin_multi_method_upscale",
+    "origin_capybara_video_edit",
+    "origin_wan_vace_inpainting",
+    "origin_wan22_14b_i2v_subgraphed",
+    "origin_ltx23_t2v",
 )
 
 

@@ -1,5 +1,7 @@
 """Workflow summary and inference helpers for ComfyUI JSON graphs."""
 
+import re
+
 from services.comfyui.constants import CONTROLNET_TYPE_DEFINITIONS
 from services.comfyui.validation.rules import WORKFLOW_BLOCKED_CLASS_RE, WorkflowValidationError
 
@@ -15,6 +17,22 @@ CONTROLNET_TYPE_ALIASES = {
     "soft_edge": "softedge",
     "tile": "tile",
 }
+
+EMBEDDING_TAG_RE = re.compile(r"<\s*embeddings?\s*:\s*([^<>]+?)\s*>", re.IGNORECASE)
+EMBEDDING_PREFIX_RE = re.compile(r"(?<![\w/])embedding:([^\s,;<>]+)", re.IGNORECASE)
+
+
+def extract_embedding_names_from_text(text):
+    names = []
+    seen = set()
+    for pattern in (EMBEDDING_TAG_RE, EMBEDDING_PREFIX_RE):
+        for match in pattern.finditer(str(text or "")):
+            name = str(match.group(1) or "").strip().strip(".,;")
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+    return names
 
 
 def infer_controlnet_type_from_name(name):
@@ -44,6 +62,8 @@ def extract_workflow_summary(workflow_json):
     default_params = {
         "generation_mode": "txt2img",
         "model": "",
+        "diffusion_model": "",
+        "clip": "",
         "vae": "",
         "prompt": "",
         "negative_prompt": "",
@@ -137,6 +157,19 @@ def extract_workflow_summary(workflow_json):
             if not default_params["vae"]:
                 default_params["vae"] = vae_name.strip()
 
+        unet_name = inputs.get("unet_name")
+        if isinstance(unet_name, str) and unet_name.strip():
+            add_model("diffusion_model", unet_name)
+            if not default_params.get("diffusion_model"):
+                default_params["diffusion_model"] = unet_name.strip()
+
+        for clip_input_name in ("clip_name", "clip_name1", "clip_name2", "clip_name3"):
+            clip_name = inputs.get(clip_input_name)
+            if isinstance(clip_name, str) and clip_name.strip():
+                add_model("clip", clip_name)
+                if not default_params["clip"]:
+                    default_params["clip"] = clip_name.strip()
+
         if "loraloader" in lower_class:
             add_lora(
                 inputs.get("lora_name"),
@@ -169,8 +202,12 @@ def extract_workflow_summary(workflow_json):
             if isinstance(inputs.get("denoise"), (int, float)):
                 default_params["denoise_strength"] = float(inputs.get("denoise"))
 
-        if lower_class == "cliptextencode" and isinstance(inputs.get("text"), str):
-            text_nodes.append(inputs.get("text").strip())
+        if isinstance(inputs.get("text"), str):
+            text = inputs.get("text").strip()
+            if lower_class in {"cliptextencode", "cliptextencodeflux"}:
+                text_nodes.append(text)
+            for embedding_name in extract_embedding_names_from_text(text):
+                add_model("embedding", embedding_name)
 
         if lower_class == "emptylatentimage":
             if isinstance(inputs.get("width"), (int, float)):

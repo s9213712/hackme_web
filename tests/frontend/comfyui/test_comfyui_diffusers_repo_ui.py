@@ -32,8 +32,8 @@ def test_diffusers_js_preflights_huggingface_repo_before_generation():
 
 def test_diffusers_cache_busts_preflight_ui_assets():
     html = _read("public/index.html")
-    assert "/js/36-comfyui.js?v=20260518-comfyui-qos" in html
-    assert "/js/36-comfyui-workflows.js?v=20260518-comfyui-qos" in html
+    assert "/js/36-comfyui.js?v=20260518-lora-hints" in html
+    assert "/js/36-comfyui-workflows.js?v=20260518-lora-hints" in html
 
 
 def test_diffusers_generation_progress_surfaces_huggingface_download_bytes():

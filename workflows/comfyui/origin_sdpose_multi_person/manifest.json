@@ -1,0 +1,121 @@
+{
+  "conversion": {
+    "allowlist_message": "",
+    "allowlist_status": "allowlisted",
+    "class_count": 11,
+    "denied_classes": [],
+    "node_count": 12,
+    "source_format": "ui_graph",
+    "source_path": "utility/pose/utility_sdpose_multi_person.json",
+    "structural_status": "pass",
+    "unknown_classes": []
+  },
+  "default_params": {
+    "batch_size": 1,
+    "cfg": 7,
+    "checkpoint": "sdpose_wholebody_fp16.safetensors",
+    "clip": "",
+    "controlnet": null,
+    "denoise_strength": 0,
+    "diffusion_model": "rt_detr_v4-x-hgnet_fp16.safetensors",
+    "generation_mode": "img2img",
+    "height": 1024,
+    "loras": [],
+    "model": "sdpose_wholebody_fp16.safetensors",
+    "negative_prompt": "",
+    "prompt": "",
+    "sampler_name": "",
+    "scheduler": "",
+    "seed": 42,
+    "steps": 20,
+    "upscale_model": "",
+    "vae": "",
+    "width": 1024
+  },
+  "description": "Multi-person pose extraction utility workflow converted from origin.",
+  "id": "origin_sdpose_multi_person",
+  "name": "SDPose Multi-Person Utility",
+  "origin_source_path": "utility/pose/utility_sdpose_multi_person.json",
+  "output_kinds": [
+    "image"
+  ],
+  "required_controlnets": [],
+  "required_custom_nodes": [],
+  "required_loras": [],
+  "required_models": [
+    {
+      "kind": "checkpoint",
+      "name": "sdpose_wholebody_fp16.safetensors"
+    },
+    {
+      "kind": "diffusion_model",
+      "name": "rt_detr_v4-x-hgnet_fp16.safetensors"
+    }
+  ],
+  "schema_version": 1,
+  "source": "official_origin",
+  "source_format": "ui_graph",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "IMAGE",
+            "class_type": "LoadImage",
+            "constraints": {
+              "accept_mime": [
+                "image/png",
+                "image/jpeg",
+                "image/webp"
+              ]
+            },
+            "current_value": "group_photo.png",
+            "id": "node:679:image",
+            "input_name": "image",
+            "input_type": "file_picker",
+            "label": "上傳圖片",
+            "node_id": "679",
+            "required": true
+          }
+        ],
+        "id": "image",
+        "label": "圖片輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "CheckpointLoaderSimple",
+            "current_value": "sdpose_wholebody_fp16.safetensors",
+            "id": "node:695:ckpt_name",
+            "input_name": "ckpt_name",
+            "input_type": "select",
+            "label": "Checkpoint / 大模型",
+            "node_id": "695",
+            "required": true
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
+      },
+      {
+        "collapsed_default": false,
+        "fields": [],
+        "id": "compatibility",
+        "label": "相容性報告",
+        "read_only": true
+      },
+      {
+        "collapsed_default": true,
+        "fields": [],
+        "id": "raw",
+        "label": "原始 workflow",
+        "read_only": true
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

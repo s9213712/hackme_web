@@ -61,6 +61,7 @@ from services.comfyui.client import (
 )
 from services.comfyui.files import normalize_file_ref as normalize_comfyui_file_ref
 from services.comfyui.huggingface import normalize_diffusers_variant, normalize_huggingface_repo_file
+from services.comfyui.workflow.compat import apply_workflow_compatibility_fixes
 from services.comfyui.workflows import (
     WorkflowValidationError,
     extract_workflow_summary,
@@ -738,6 +739,24 @@ def register_comfyui_routes(app, deps):
     def _workflow_preset_summary(row, *, dependency_status=None, recent_runs=None, actor=None):
         default_params = _parse_json_field(row["default_params_json"], {}) or {}
         workflow_json = _parse_json_field(row["workflow_json"], {}) or {}
+        try:
+            inferred_summary = extract_workflow_summary(apply_workflow_compatibility_fixes(workflow_json))
+        except Exception:
+            inferred_summary = {}
+
+        def _merged_summary_items(stored, inferred_items, key_names):
+            merged = []
+            seen = set()
+            for item in list(stored or []) + list(inferred_items or []):
+                if not isinstance(item, dict):
+                    continue
+                key = tuple(str(item.get(name) or "").strip().lower() for name in key_names)
+                if not any(key) or key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+            return merged
+
         paid_api_nodes = detect_paid_api_nodes(workflow_json)
         result = {
             "id": int(row["id"]),
@@ -753,9 +772,21 @@ def register_comfyui_routes(app, deps):
             "workflow_schema_version": row["workflow_schema_version"] or COMFYUI_WORKFLOW_SCHEMA_VERSION,
             "workflow_hash": row["workflow_hash"] or "",
             "layout_json": _parse_json_field(row["layout_json"], {}) or {},
-            "required_models": _parse_json_field(row["required_models_json"], []) or [],
-            "required_loras": _parse_json_field(row["required_loras_json"], []) or [],
-            "required_controlnets": _parse_json_field(row["required_controlnets_json"], []) or [],
+            "required_models": _merged_summary_items(
+                _parse_json_field(row["required_models_json"], []) or [],
+                inferred_summary.get("required_models") or [],
+                ("kind", "name"),
+            ),
+            "required_loras": _merged_summary_items(
+                _parse_json_field(row["required_loras_json"], []) or [],
+                inferred_summary.get("required_loras") or [],
+                ("name",),
+            ),
+            "required_controlnets": _merged_summary_items(
+                _parse_json_field(row["required_controlnets_json"], []) or [],
+                inferred_summary.get("required_controlnets") or [],
+                ("name", "type"),
+            ),
             "required_custom_nodes": _parse_json_field(row["required_custom_nodes_json"], []) or [],
             "default_params": default_params,
             "is_default": bool(row["is_default"]),
@@ -1201,10 +1232,17 @@ def register_comfyui_routes(app, deps):
             loras = set(active_client.get_loras() if hasattr(active_client, "get_loras") else [])
         except Exception:
             loras = set()
+        try:
+            embeddings = set(active_client.get_embeddings() if hasattr(active_client, "get_embeddings") else [])
+        except Exception:
+            embeddings = set()
         return {
             "models": models,
             "vaes": vaes,
             "loras": loras,
+            "embeddings": embeddings,
+            "diffusion_models": set((capabilities or {}).get("diffusion_models") or []),
+            "clip_models": set((capabilities or {}).get("clip_models") or []),
             "controlnets": set((capabilities or {}).get("controlnet_models") or []),
             "upscale_models": set((capabilities or {}).get("upscale_models") or []),
             "available_nodes": set((capabilities or {}).get("available_nodes") or []),
@@ -1212,10 +1250,31 @@ def register_comfyui_routes(app, deps):
         }
 
     def _workflow_dependency_status(active_client, row):
-        payload = _parse_json_field(row["workflow_json"], {}) or {}
+        payload = apply_workflow_compatibility_fixes(_parse_json_field(row["workflow_json"], {}) or {})
         required_models = _parse_json_field(row["required_models_json"], []) or []
         required_loras = _parse_json_field(row["required_loras_json"], []) or []
         required_controlnets = _parse_json_field(row["required_controlnets_json"], []) or []
+        try:
+            inferred = extract_workflow_summary(payload)
+        except Exception:
+            inferred = {}
+
+        def _merge_required(existing, inferred_items, key_names):
+            merged = []
+            seen = set()
+            for item in list(existing or []) + list(inferred_items or []):
+                if not isinstance(item, dict):
+                    continue
+                key = tuple(str(item.get(name) or "").strip().lower() for name in key_names)
+                if not any(key) or key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+            return merged
+
+        required_models = _merge_required(required_models, inferred.get("required_models") or [], ("kind", "name"))
+        required_loras = _merge_required(required_loras, inferred.get("required_loras") or [], ("name",))
+        required_controlnets = _merge_required(required_controlnets, inferred.get("required_controlnets") or [], ("name", "type"))
         sets = _active_client_dependency_sets(active_client)
         missing_models = []
         missing_loras = []
@@ -1237,6 +1296,15 @@ def register_comfyui_routes(app, deps):
                     missing_models.append({"kind": kind, "name": name})
             elif kind == "upscale":
                 if name not in sets["upscale_models"]:
+                    missing_models.append({"kind": kind, "name": name})
+            elif kind in {"diffusion_model", "unet"}:
+                if name not in sets["diffusion_models"]:
+                    missing_models.append({"kind": kind, "name": name})
+            elif kind in {"clip", "text_encoder"}:
+                if name not in sets["clip_models"]:
+                    missing_models.append({"kind": kind, "name": name})
+            elif kind == "embedding":
+                if name not in sets["embeddings"]:
                     missing_models.append({"kind": kind, "name": name})
             elif name not in sets["models"]:
                 missing_models.append({"kind": kind, "name": name})
@@ -2569,11 +2637,6 @@ def register_comfyui_routes(app, deps):
             if name in seen:
                 continue
             seen.add(name)
-            detail = _build_lora_details([name]).get(name) or {}
-            if detail.get("supported") is not True:
-                return None, detail.get("support_message") or (
-                    "這個 LoRA 目前不支援；只允許 SDXL、Pony、Illustrious、Noob 系列 LoRA。"
-                )
             normalized.append({
                 "name": name[:180],
                 "strength_model": _float_range(item.get("strength_model"), 1.0, -2.0, 2.0),
@@ -2629,6 +2692,13 @@ def register_comfyui_routes(app, deps):
 
     def _normalized_generation_mode(value):
         mode = str(value or "txt2img").strip().lower()
+        mode = {
+            "t2a": "t2s",
+            "text2audio": "t2s",
+            "text-to-audio": "t2s",
+            "text2speech": "t2s",
+            "text-to-speech": "t2s",
+        }.get(mode, mode)
         return mode if mode in GENERATION_MODE_DEFINITIONS else None
 
     def _validate_image_upload(file_storage, *, label):
