@@ -3,8 +3,16 @@ const COMFYUI_TEMPLATE_MEDIA_BINDING_KINDS = new Set(["image", "video"]);
 const COMFYUI_TEMPLATE_VIDEO_ACCEPT = "video/mp4,video/webm,video/quicktime,video/x-matroska,video/x-msvideo,.mp4,.webm,.mov,.mkv,.avi";
 const COMFYUI_BUILTIN_VAE_LABEL = "使用各自大模型內建 VAE";
 const COMFYUI_COMPARE_TWO_CHECKPOINTS_ID = "origin_compare_2checkpoints";
+const COMFYUI_MULTI_COMPARE_CHECKPOINTS_TEST_ID = "origin_multi_compare_checkpoints_test";
+const COMFYUI_MULTI_METHOD_UPSCALE_ID = "origin_multi_method_upscale";
 const COMFYUI_COMPARE_SHARED_KSAMPLER_INPUTS = new Set(["seed", "steps", "cfg", "sampler_name", "scheduler", "denoise"]);
 const COMFYUI_OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX = "official-template-media:";
+const COMFYUI_MULTI_COMPARE_MAX_CHECKPOINTS = 8;
+const COMFYUI_UPSCALE_BREAKPOINT_DEFAULT = "first_upscale";
+
+function comfyuiMultiCompareMaxLoras() {
+  return typeof COMFYUI_MAX_LORAS === "number" ? COMFYUI_MAX_LORAS : 8;
+}
 
 function comfyuiWorkflowPresetById(presetId) {
   return comfyuiWorkflowPresets.find((item) => Number(item?.id) === Number(presetId)) || null;
@@ -455,6 +463,8 @@ let comfyuiTemplateRenderTimer = null;
 let comfyuiTemplateLoraOverrides = {};
 let comfyuiTemplateFieldOverrides = {};
 let comfyuiTemplateEditableModelFields = {};
+let comfyuiMultiCompareState = { bundleId: "", checkpoints: [], loras: [] };
+let comfyuiUpscaleBreakpointState = { bundleId: "", stage: COMFYUI_UPSCALE_BREAKPOINT_DEFAULT };
 
 function queueRenderSelectedComfyuiTemplate() {
   if (comfyuiTemplateRenderTimer) clearTimeout(comfyuiTemplateRenderTimer);
@@ -495,6 +505,8 @@ function renderComfyuiTemplateSelector(payload = {}, { silentReload = true } = {
         comfyuiTemplateLoraOverrides = {};
         comfyuiTemplateFieldOverrides = {};
         comfyuiTemplateEditableModelFields = {};
+        comfyuiMultiCompareState = { bundleId: "", checkpoints: [], loras: [] };
+        comfyuiUpscaleBreakpointState = { bundleId: "", stage: COMFYUI_UPSCALE_BREAKPOINT_DEFAULT };
         comfyuiTemplatePromptShareMode = "independent";
         renderSelectedComfyuiTemplate();
         return;
@@ -533,6 +545,8 @@ async function loadComfyuiSelectedTemplateDetail(presetId, { silent = false, app
   comfyuiTemplateFieldOverrides = {};
   comfyuiTemplateEditableModelFields = {};
   comfyuiSelectedTemplateDetail = json.preset || null;
+  resetComfyuiMultiCompareState(comfyuiSelectedTemplateDetail);
+  resetComfyuiUpscaleBreakpointState(comfyuiSelectedTemplateDetail);
   comfyuiTemplatePromptShareMode = comfyuiTemplateNeedsPromptSharingChoice(comfyuiSelectedTemplateDetail) ? "ask" : "independent";
   if (applyDefaults) {
     applyComfyuiWorkflowPresetDefaults(comfyuiSelectedTemplateDetail?.default_params || {});
@@ -738,8 +752,72 @@ function comfyuiTemplateIsCompareTwoCheckpoints(detail = comfyuiSelectedTemplate
     || String(detail?.title || detail?.name || "").trim() === "Compare Two Checkpoints";
 }
 
+function comfyuiTemplateIsMultiCompareCheckpoints(detail = comfyuiSelectedTemplateDetail) {
+  return comfyuiTemplateBundleId(detail) === COMFYUI_MULTI_COMPARE_CHECKPOINTS_TEST_ID
+    || String(detail?.title || detail?.name || "").trim() === "Multi-Compare Checkpoints Test";
+}
+
+function comfyuiTemplateIsMultiMethodUpscale(detail = comfyuiSelectedTemplateDetail) {
+  return comfyuiTemplateBundleId(detail) === COMFYUI_MULTI_METHOD_UPSCALE_ID
+    || String(detail?.title || detail?.name || "").trim() === "Multi-Method Upscale Utility";
+}
+
+function resetComfyuiUpscaleBreakpointState(detail = comfyuiSelectedTemplateDetail) {
+  const bundleId = comfyuiTemplateBundleId(detail);
+  if (!comfyuiTemplateIsMultiMethodUpscale(detail)) {
+    comfyuiUpscaleBreakpointState = { bundleId: "", stage: COMFYUI_UPSCALE_BREAKPOINT_DEFAULT };
+    return;
+  }
+  const existingStage = String(detail?.default_params?.upscale_breakpoint || COMFYUI_UPSCALE_BREAKPOINT_DEFAULT);
+  comfyuiUpscaleBreakpointState = {
+    bundleId,
+    stage: existingStage === "second_upscale" ? "second_upscale" : COMFYUI_UPSCALE_BREAKPOINT_DEFAULT,
+  };
+}
+
+function ensureComfyuiUpscaleBreakpointState(detail = comfyuiSelectedTemplateDetail) {
+  const bundleId = comfyuiTemplateBundleId(detail);
+  if (!comfyuiTemplateIsMultiMethodUpscale(detail)) return null;
+  if (comfyuiUpscaleBreakpointState.bundleId !== bundleId) resetComfyuiUpscaleBreakpointState(detail);
+  return comfyuiUpscaleBreakpointState;
+}
+
+function comfyuiUpscaleBreakpointStage(detail = comfyuiSelectedTemplateDetail) {
+  return ensureComfyuiUpscaleBreakpointState(detail)?.stage || COMFYUI_UPSCALE_BREAKPOINT_DEFAULT;
+}
+
+function comfyuiTemplateCheckpointFields(detail = comfyuiSelectedTemplateDetail) {
+  return comfyuiTemplateAllFields(detail).filter((field) => (
+    field?.class_type === "CheckpointLoaderSimple" && field?.input_name === "ckpt_name"
+  ));
+}
+
+function resetComfyuiMultiCompareState(detail = comfyuiSelectedTemplateDetail) {
+  const bundleId = comfyuiTemplateBundleId(detail);
+  if (!comfyuiTemplateIsMultiCompareCheckpoints(detail)) {
+    comfyuiMultiCompareState = { bundleId: "", checkpoints: [], loras: [] };
+    return;
+  }
+  const checkpointFields = comfyuiTemplateCheckpointFields(detail);
+  const checkpoints = checkpointFields
+    .map((field) => String(field?.current_value || "").trim())
+    .filter(Boolean)
+    .slice(0, COMFYUI_MULTI_COMPARE_MAX_CHECKPOINTS);
+  while (checkpoints.length < 2) checkpoints.push("");
+  comfyuiMultiCompareState = { bundleId, checkpoints, loras: [] };
+}
+
+function ensureComfyuiMultiCompareState(detail = comfyuiSelectedTemplateDetail) {
+  const bundleId = comfyuiTemplateBundleId(detail);
+  if (!comfyuiTemplateIsMultiCompareCheckpoints(detail)) return null;
+  if (comfyuiMultiCompareState.bundleId !== bundleId || comfyuiMultiCompareState.checkpoints.length < 2) {
+    resetComfyuiMultiCompareState(detail);
+  }
+  return comfyuiMultiCompareState;
+}
+
 function comfyuiTemplateCompareSharedParamKey(detail, field = {}) {
-  if (!comfyuiTemplateIsCompareTwoCheckpoints(detail)) return "";
+  if (!comfyuiTemplateIsCompareTwoCheckpoints(detail) && !comfyuiTemplateIsMultiCompareCheckpoints(detail)) return "";
   if (String(field?.class_type || "") !== "KSampler") return "";
   const inputName = String(field?.input_name || "").trim();
   return COMFYUI_COMPARE_SHARED_KSAMPLER_INPUTS.has(inputName) ? inputName : "";
@@ -766,6 +844,23 @@ function comfyuiTemplateCompareSharedSourceField(detail, field = {}) {
 function comfyuiTemplateIsHiddenCompareSharedField(detail, field = {}) {
   const source = comfyuiTemplateCompareSharedSourceField(detail, field);
   return !!source && String(source.id || "") !== String(field?.id || "");
+}
+
+function comfyuiTemplateIsMultiCompareCheckpointField(detail, field = {}) {
+  return comfyuiTemplateIsMultiCompareCheckpoints(detail)
+    && field?.class_type === "CheckpointLoaderSimple"
+    && field?.input_name === "ckpt_name";
+}
+
+function comfyuiTemplateIsHiddenUpscaleBreakpointField(detail, field = {}) {
+  if (!comfyuiTemplateIsMultiMethodUpscale(detail)) return false;
+  return comfyuiUpscaleBreakpointStage(detail) === "first_upscale" && String(field?.node_id || "") === "77";
+}
+
+function comfyuiTemplateIsHiddenField(detail, field = {}) {
+  return comfyuiTemplateIsHiddenCompareSharedField(detail, field)
+    || comfyuiTemplateIsMultiCompareCheckpointField(detail, field)
+    || comfyuiTemplateIsHiddenUpscaleBreakpointField(detail, field);
 }
 
 function comfyuiTemplateCompareSharedRuntimeValue(detail, field = {}) {
@@ -1293,6 +1388,8 @@ function collectComfyuiTemplateUserInputs(detail) {
   panels.forEach((panel) => {
     (panel?.fields || []).forEach((field) => {
       if (!field || field.synthetic || field.input_type === "embedding_shortcuts" || !field.node_id || !field.input_name) return;
+      if (comfyuiTemplateIsMultiCompareCheckpointField(detail, field)) return;
+      if (comfyuiTemplateIsHiddenUpscaleBreakpointField(detail, field)) return;
       const binding = comfyuiTemplateFieldBinding(field, detail, ctx);
       if (COMFYUI_TEMPLATE_MEDIA_BINDING_KINDS.has(binding.kind) || binding.kind === "readonly") return;
       const rawValue = comfyuiTemplateIsHiddenCompareSharedField(detail, field)
@@ -1302,7 +1399,48 @@ function collectComfyuiTemplateUserInputs(detail) {
       userInputs[field.node_id][field.input_name] = normalizeComfyuiTemplateRuntimeValue(field, rawValue);
     });
   });
+  if (comfyuiTemplateIsMultiCompareCheckpoints(detail)) {
+    const spec = comfyuiMultiCompareRunSpec(detail);
+    comfyuiTemplateCheckpointFields(detail).slice(0, 2).forEach((field, index) => {
+      const checkpoint = spec.checkpoints[index] || "";
+      if (!checkpoint || !field?.node_id || !field?.input_name) return;
+      if (!userInputs[field.node_id]) userInputs[field.node_id] = {};
+      userInputs[field.node_id][field.input_name] = checkpoint;
+    });
+  }
   return userInputs;
+}
+
+function comfyuiMultiCompareRunSpec(detail = comfyuiSelectedTemplateDetail) {
+  const state = ensureComfyuiMultiCompareState(detail);
+  if (!state) return null;
+  const checkpoints = state.checkpoints
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .slice(0, COMFYUI_MULTI_COMPARE_MAX_CHECKPOINTS);
+  const loras = state.loras
+    .map((item) => ({
+      name: typeof normalizeComfyuiLoraName === "function" ? normalizeComfyuiLoraName(item?.name) : String(item?.name || "").trim(),
+      strength_model: Number.isFinite(Number(item?.strength_model)) ? Number(item.strength_model) : 1,
+      strength_clip: Number.isFinite(Number(item?.strength_clip)) ? Number(item.strength_clip) : 1,
+    }))
+    .filter((item) => item.name)
+    .slice(0, comfyuiMultiCompareMaxLoras());
+  return {
+    enabled: true,
+    bundle_id: comfyuiTemplateBundleId(detail),
+    checkpoints,
+    loras,
+  };
+}
+
+function comfyuiUpscaleBreakpointRunSpec(detail = comfyuiSelectedTemplateDetail) {
+  if (!comfyuiTemplateIsMultiMethodUpscale(detail)) return null;
+  const stage = comfyuiUpscaleBreakpointStage(detail);
+  return {
+    enabled: true,
+    stage: stage === "second_upscale" ? "second_upscale" : "first_upscale",
+  };
 }
 
 function ensureComfyuiTemplatePromptSharingChoice(detail) {
@@ -1518,6 +1656,74 @@ function renderComfyuiTemplatePromptSharingControl(detail = comfyuiSelectedTempl
   `;
 }
 
+function renderComfyuiMultiCompareControl(detail = comfyuiSelectedTemplateDetail) {
+  const state = ensureComfyuiMultiCompareState(detail);
+  if (!state) return "";
+  const checkpointField = comfyuiTemplateCheckpointFields(detail)[0] || {};
+  const modelOptions = comfyuiTemplateSelectOptions("comfyui-model-select", checkpointField);
+  const loraOptions = comfyuiTemplateLoraSelectOptions({});
+  const maxLoras = comfyuiMultiCompareMaxLoras();
+  const checkpointRows = state.checkpoints.map((checkpoint, index) => `
+    <div class="comfyui-multi-compare-row">
+      <label>大模型 #${index + 1}</label>
+      <select data-comfyui-multi-compare-checkpoint="${index}">
+        ${modelOptions.map((option) => `<option value="${sanitize(option.value)}"${option.value === checkpoint ? " selected" : ""}${option.disabled ? ' disabled="disabled"' : ""}>${sanitize(option.label)}</option>`).join("")}
+      </select>
+      <button class="btn btn-sm" type="button" data-comfyui-multi-compare-remove-checkpoint="${index}"${state.checkpoints.length <= 2 ? ' disabled="disabled"' : ""}>移除</button>
+    </div>
+  `).join("");
+  const loraRows = state.loras.length
+    ? state.loras.map((lora, index) => `
+      <div class="comfyui-multi-compare-row is-lora">
+        <label>LoRA #${index + 1}</label>
+        <select data-comfyui-multi-compare-lora="${index}">
+          ${loraOptions.map((option) => `<option value="${sanitize(option.value)}"${option.value === lora.name ? " selected" : ""}${option.disabled ? ' disabled="disabled"' : ""}>${sanitize(option.label)}</option>`).join("")}
+        </select>
+        <input type="number" min="-2" max="2" step="0.05" value="${sanitize(String(lora.strength_model ?? 1))}" data-comfyui-multi-compare-lora-strength-model="${index}" aria-label="LoRA #${index + 1} Model 權重" />
+        <input type="number" min="-2" max="2" step="0.05" value="${sanitize(String(lora.strength_clip ?? 1))}" data-comfyui-multi-compare-lora-strength-clip="${index}" aria-label="LoRA #${index + 1} CLIP 權重" />
+        <button class="btn btn-sm" type="button" data-comfyui-multi-compare-remove-lora="${index}">移除</button>
+      </div>
+    `).join("")
+    : '<div class="drive-card-sub">尚未加入 LoRA；不加入時就是純 checkpoint 比較。</div>';
+  return `
+    <section class="comfyui-multi-compare-card">
+      <div class="comfyui-multi-compare-head">
+        <div>
+          <div class="drive-card-title">Multi-Compare 測試</div>
+          <div class="drive-card-sub">最低比較 2 個大模型；新增後會在執行前自動衍生 KSampler、VAEDecode、PreviewImage 節點與連線。</div>
+        </div>
+        <div class="drive-file-actions">
+          <button class="btn btn-sm" type="button" data-comfyui-multi-compare-add-checkpoint="1"${state.checkpoints.length >= COMFYUI_MULTI_COMPARE_MAX_CHECKPOINTS ? ' disabled="disabled"' : ""}>新增大模型</button>
+          <button class="btn btn-sm" type="button" data-comfyui-multi-compare-add-lora="1"${state.loras.length >= maxLoras ? ' disabled="disabled"' : ""}>新增 LoRA</button>
+        </div>
+      </div>
+      <div class="comfyui-multi-compare-rows">${checkpointRows}</div>
+      <div class="comfyui-multi-compare-loras">
+        <div class="drive-card-sub">共用 LoRA：會套到每個比較分支，方便固定 LoRA 條件下比較 checkpoint 差異。</div>
+        ${loraRows}
+      </div>
+    </section>
+  `;
+}
+
+function renderComfyuiUpscaleBreakpointControl(detail = comfyuiSelectedTemplateDetail) {
+  const state = ensureComfyuiUpscaleBreakpointState(detail);
+  if (!state) return "";
+  const stage = state.stage === "second_upscale" ? "second_upscale" : "first_upscale";
+  return `
+    <section class="comfyui-upscale-breakpoint-card">
+      <div>
+        <div class="drive-card-title">放大斷點</div>
+        <div class="drive-card-sub">選擇這次執行停在哪個階段；系統只保留對應輸出節點，不會同時跑 Origin、一次放大與二次放大。</div>
+      </div>
+      <select data-comfyui-upscale-breakpoint="1" aria-label="放大斷點">
+        <option value="first_upscale"${stage === "first_upscale" ? " selected" : ""}>一次放大：停在 latent 放大與重繪後</option>
+        <option value="second_upscale"${stage === "second_upscale" ? " selected" : ""}>二次放大：再套用 Upscale 模型</option>
+      </select>
+    </section>
+  `;
+}
+
 function renderComfyuiTemplateEmbeddingShortcuts(field) {
   const values = Array.isArray(comfyuiAvailableEmbeddings) ? comfyuiAvailableEmbeddings : [];
   const targetAttr = comfyuiTemplateEmbeddingTargetIds(field).join("|");
@@ -1540,7 +1746,7 @@ function renderComfyuiTemplateField(field, detail, ctx) {
     return renderComfyuiTemplateEmbeddingShortcuts(field);
   }
   const binding = comfyuiTemplateFieldBinding(field, detail, ctx);
-  if (comfyuiTemplateIsHiddenCompareSharedField(detail, field)) return "";
+  if (comfyuiTemplateIsHiddenField(detail, field)) return "";
   const fieldLabel = comfyuiTemplateFieldLabel(field, binding);
   const isMediaField = COMFYUI_TEMPLATE_MEDIA_BINDING_KINDS.has(binding.kind);
   const cardClass = field?.input_type === "textarea" || isMediaField ? "comfyui-template-field-card is-wide" : "comfyui-template-field-card";
@@ -1795,6 +2001,98 @@ function bindRenderedComfyuiTemplateFields(detail) {
       });
     });
   });
+  host.querySelectorAll("[data-comfyui-upscale-breakpoint]").forEach((select) => {
+    if (select.dataset.boundComfyuiTemplate === "1") return;
+    select.dataset.boundComfyuiTemplate = "1";
+    select.addEventListener("change", () => {
+      const state = ensureComfyuiUpscaleBreakpointState(detail);
+      if (!state) return;
+      state.stage = select.value === "second_upscale" ? "second_upscale" : "first_upscale";
+      writeComfyuiDraft();
+      renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+    });
+  });
+  host.querySelectorAll("[data-comfyui-multi-compare-add-checkpoint]").forEach((button) => {
+    if (button.dataset.boundComfyuiTemplate === "1") return;
+    button.dataset.boundComfyuiTemplate = "1";
+    button.addEventListener("click", () => {
+      const state = ensureComfyuiMultiCompareState(detail);
+      if (!state || state.checkpoints.length >= COMFYUI_MULTI_COMPARE_MAX_CHECKPOINTS) return;
+      const fallback = state.checkpoints[state.checkpoints.length - 1] || $("comfyui-model-select")?.value || "";
+      state.checkpoints.push(fallback);
+      renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+    });
+  });
+  host.querySelectorAll("[data-comfyui-multi-compare-remove-checkpoint]").forEach((button) => {
+    if (button.dataset.boundComfyuiTemplate === "1") return;
+    button.dataset.boundComfyuiTemplate = "1";
+    button.addEventListener("click", () => {
+      const state = ensureComfyuiMultiCompareState(detail);
+      const index = Number(button.getAttribute("data-comfyui-multi-compare-remove-checkpoint"));
+      if (!state || state.checkpoints.length <= 2 || !Number.isInteger(index)) return;
+      state.checkpoints.splice(index, 1);
+      renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+    });
+  });
+  host.querySelectorAll("[data-comfyui-multi-compare-checkpoint]").forEach((select) => {
+    if (select.dataset.boundComfyuiTemplate === "1") return;
+    select.dataset.boundComfyuiTemplate = "1";
+    select.addEventListener("change", () => {
+      const state = ensureComfyuiMultiCompareState(detail);
+      const index = Number(select.getAttribute("data-comfyui-multi-compare-checkpoint"));
+      if (!state || !Number.isInteger(index)) return;
+      state.checkpoints[index] = select.value || "";
+    });
+  });
+  host.querySelectorAll("[data-comfyui-multi-compare-add-lora]").forEach((button) => {
+    if (button.dataset.boundComfyuiTemplate === "1") return;
+    button.dataset.boundComfyuiTemplate = "1";
+    button.addEventListener("click", () => {
+      const state = ensureComfyuiMultiCompareState(detail);
+      if (!state || state.loras.length >= comfyuiMultiCompareMaxLoras()) return;
+      state.loras.push({ name: "", strength_model: 1, strength_clip: 1 });
+      renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+    });
+  });
+  host.querySelectorAll("[data-comfyui-multi-compare-remove-lora]").forEach((button) => {
+    if (button.dataset.boundComfyuiTemplate === "1") return;
+    button.dataset.boundComfyuiTemplate = "1";
+    button.addEventListener("click", () => {
+      const state = ensureComfyuiMultiCompareState(detail);
+      const index = Number(button.getAttribute("data-comfyui-multi-compare-remove-lora"));
+      if (!state || !Number.isInteger(index)) return;
+      state.loras.splice(index, 1);
+      renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+    });
+  });
+  host.querySelectorAll("[data-comfyui-multi-compare-lora]").forEach((select) => {
+    if (select.dataset.boundComfyuiTemplate === "1") return;
+    select.dataset.boundComfyuiTemplate = "1";
+    select.addEventListener("change", () => {
+      const state = ensureComfyuiMultiCompareState(detail);
+      const index = Number(select.getAttribute("data-comfyui-multi-compare-lora"));
+      if (!state || !Number.isInteger(index) || !state.loras[index]) return;
+      state.loras[index].name = typeof normalizeComfyuiLoraName === "function" ? normalizeComfyuiLoraName(select.value) : String(select.value || "").trim();
+    });
+  });
+  host.querySelectorAll("[data-comfyui-multi-compare-lora-strength-model],[data-comfyui-multi-compare-lora-strength-clip]").forEach((input) => {
+    if (input.dataset.boundComfyuiTemplate === "1") return;
+    input.dataset.boundComfyuiTemplate = "1";
+    const sync = () => {
+      const modelIndex = input.getAttribute("data-comfyui-multi-compare-lora-strength-model");
+      const clipIndex = input.getAttribute("data-comfyui-multi-compare-lora-strength-clip");
+      const index = Number(modelIndex !== null ? modelIndex : clipIndex);
+      const field = modelIndex !== null ? "strength_model" : "strength_clip";
+      const state = ensureComfyuiMultiCompareState(detail);
+      if (!state || !Number.isInteger(index) || !state.loras[index]) return;
+      const value = Number(input.value || 1);
+      const normalized = Math.round(Math.max(-2, Math.min(2, Number.isFinite(value) ? value : 1)) * 100) / 100;
+      state.loras[index][field] = normalized;
+      input.value = String(normalized);
+    };
+    input.addEventListener("input", sync);
+    input.addEventListener("change", sync);
+  });
   host.querySelectorAll("[data-comfyui-template-image]").forEach((input) => {
     if (input.dataset.boundComfyuiTemplate === "1") return;
     input.dataset.boundComfyuiTemplate = "1";
@@ -1920,13 +2218,15 @@ function renderSelectedComfyuiTemplate({ preserveOpenPanels = false } = {}) {
       .map((section) => section.getAttribute("data-comfyui-template-panel-id")))
     : new Set();
   const promptSharingHtml = renderComfyuiTemplatePromptSharingControl(detail);
-  host.innerHTML = promptSharingHtml + panels.map((panel) => {
+  const multiCompareHtml = renderComfyuiMultiCompareControl(detail);
+  const upscaleBreakpointHtml = renderComfyuiUpscaleBreakpointControl(detail);
+  host.innerHTML = promptSharingHtml + multiCompareHtml + upscaleBreakpointHtml + panels.map((panel) => {
     const panelId = String(panel?.id || "");
     const isOpen = preserveOpenPanels ? openPanelIds.has(panelId) : !panel?.collapsed_default;
     const visibleFieldCount = (panel?.fields || []).filter((field) => (
       !field?.synthetic
       && field?.input_type !== "embedding_shortcuts"
-      && !comfyuiTemplateIsHiddenCompareSharedField(detail, field)
+      && !comfyuiTemplateIsHiddenField(detail, field)
     )).length;
     return `
     <details class="drive-collapsible-panel settings-collapse comfyui-template-render-card" data-comfyui-template-panel-id="${sanitize(panelId)}"${isOpen ? " open" : ""}>
@@ -2300,6 +2600,16 @@ async function runComfyuiWorkflowPreset(presetId) {
     setComfyuiMessage(`這個 workflow 有圖片或影片欄位尚未指定可安全重映射的雲端檔案：${labels}。請先上傳或選擇必要媒體後再執行。`, false);
     return;
   }
+  const multiCompareSpec = templateDetail && comfyuiTemplateIsMultiCompareCheckpoints(templateDetail)
+    ? comfyuiMultiCompareRunSpec(templateDetail)
+    : null;
+  if (multiCompareSpec && multiCompareSpec.checkpoints.length < 2) {
+    setComfyuiMessage("Multi-Compare 至少需要選擇 2 個大模型。", false);
+    return;
+  }
+  const upscaleBreakpointSpec = templateDetail && comfyuiTemplateIsMultiMethodUpscale(templateDetail)
+    ? comfyuiUpscaleBreakpointRunSpec(templateDetail)
+    : null;
   const paidApiNodes = comfyuiWorkflowPaidApiNodes(preset);
   let confirmPaidApiNodes = false;
   if (paidApiNodes.length) {
@@ -2328,6 +2638,8 @@ async function runComfyuiWorkflowPreset(presetId) {
       confirm_paid_api_nodes: !!confirmed,
       user_inputs: userInputs,
       image_field_assignments: imageAssignmentState.assignments,
+      multi_compare: multiCompareSpec || undefined,
+      upscale_breakpoint: upscaleBreakpointSpec || undefined,
     }),
   });
   try {

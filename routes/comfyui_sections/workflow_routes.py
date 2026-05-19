@@ -6,6 +6,16 @@ from flask import send_file
 
 from services.comfyui.template import errors as template_errors
 from services.comfyui.template.capability import rewrite_workflow_model_inputs_to_local_options
+from services.comfyui.template.multi_compare import (
+    MultiCompareWorkflowError,
+    expand_multi_compare_workflow,
+    is_multi_compare_workflow_id,
+)
+from services.comfyui.template.upscale_breakpoint import (
+    UpscaleBreakpointError,
+    apply_upscale_breakpoint,
+    is_upscale_breakpoint_workflow_id,
+)
 from services.comfyui.template.run_gate import (
     RunGateFailure,
     run_workflow_through_gates,
@@ -744,6 +754,12 @@ def register_comfyui_workflow_routes(app, ctx):
             if isinstance(body.get("image_field_assignments"), dict)
             else {}
         )
+        multi_compare = body.get("multi_compare") if isinstance(body.get("multi_compare"), dict) else {}
+        upscale_breakpoint = (
+            body.get("upscale_breakpoint")
+            if isinstance(body.get("upscale_breakpoint"), dict)
+            else {}
+        )
         conn = get_db()
         try:
             row, err_resp = load_workflow_preset(conn, preset_id=preset_id, actor=actor)
@@ -751,12 +767,48 @@ def register_comfyui_workflow_routes(app, ctx):
                 return err_resp
             comfyui_url = (comfyui_binding(actor) or {}).get("url")
             active_client = client_for_url(comfyui_url) if comfyui_url else None
-            dependency_status, dependency_msg = assert_workflow_dependencies_or_error(active_client, row)
+            default_params = parse_json_field(row["default_params_json"], {}) or {}
+            workflow_json = apply_workflow_compatibility_fixes(parse_json_field(row["workflow_json"], {}) or {})
+            runtime_dependency_row = row
+            runtime_workflow_changed = False
+            if is_upscale_breakpoint_workflow_id(row["system_bundle_id"]):
+                try:
+                    selection = apply_upscale_breakpoint(
+                        workflow_json,
+                        user_inputs,
+                        upscale_breakpoint,
+                    )
+                except UpscaleBreakpointError as exc:
+                    return json_resp({"ok": False, "msg": str(exc), "stage": "upscale_breakpoint_validation"}), 400
+                workflow_json = selection.workflow
+                user_inputs = selection.user_inputs
+                default_params = dict(default_params)
+                default_params["upscale_breakpoint"] = selection.stage
+                runtime_workflow_changed = True
+            if is_multi_compare_workflow_id(row["system_bundle_id"]) and multi_compare:
+                try:
+                    expansion = expand_multi_compare_workflow(
+                        workflow_json,
+                        user_inputs,
+                        multi_compare,
+                    )
+                except MultiCompareWorkflowError as exc:
+                    return json_resp({"ok": False, "msg": str(exc), "stage": "multi_compare_validation"}), 400
+                workflow_json = expansion.workflow
+                user_inputs = expansion.user_inputs
+                runtime_workflow_changed = True
+
+            if runtime_workflow_changed:
+                runtime_dependency_row = dict(row)
+                runtime_dependency_row["workflow_json"] = json.dumps(workflow_json or {}, ensure_ascii=False, sort_keys=True)
+                runtime_dependency_row["required_models_json"] = "[]"
+                runtime_dependency_row["required_loras_json"] = "[]"
+                runtime_dependency_row["required_controlnets_json"] = "[]"
+                runtime_dependency_row["required_custom_nodes_json"] = "[]"
+            dependency_status, dependency_msg = assert_workflow_dependencies_or_error(active_client, runtime_dependency_row)
             if dependency_msg:
                 stage = "unknown_node" if dependency_status.get("missing_nodes") else "missing_model"
                 return json_resp({"ok": False, "msg": dependency_msg, "stage": stage, "dependency_status": dependency_status}), 409
-            default_params = parse_json_field(row["default_params_json"], {}) or {}
-            workflow_json = apply_workflow_compatibility_fixes(parse_json_field(row["workflow_json"], {}) or {})
 
             # 5-gate enforcement before any job is created — failed gates
             # never produce a job_id so the user gets immediate feedback

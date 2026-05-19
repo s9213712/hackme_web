@@ -2260,6 +2260,8 @@ def register_comfyui_routes(app, deps):
             mime_type = item.get("mime_type") or result.get("mime_type") or "image/png"
             image_ref_item = item.get("image_ref") if isinstance(item.get("image_ref"), dict) else result["image_ref"]
             size_bytes = int(item.get("size_bytes") or len(raw_data) or 0)
+            output_node_id = str(item.get("output_node_id") or image_ref_item.get("output_node_id") or "").strip()
+            output_label = _safe_text(item.get("output_label") or image_ref_item.get("output_label") or "", 260)
             images.append({
                 "prompt_id": result["prompt_id"],
                 "image_ref": image_ref_item,
@@ -2269,6 +2271,8 @@ def register_comfyui_routes(app, deps):
                 "model": params["model"],
                 "batch_size": params["batch_size"],
                 "batch_index": index,
+                "output_node_id": output_node_id,
+                "output_label": output_label,
             })
         conn = get_db()
         try:
@@ -2508,6 +2512,8 @@ def register_comfyui_routes(app, deps):
                         "image_ref": item.get("image_ref"),
                         "mime_type": item.get("mime_type"),
                         "size_bytes": item.get("size_bytes"),
+                        "output_node_id": item.get("output_node_id") or "",
+                        "output_label": item.get("output_label") or "",
                     }
                     for item in images
                 ],
@@ -3215,6 +3221,7 @@ def register_comfyui_routes(app, deps):
         sampler = _safe_text(params.get("sampler_name"), 80)
         scheduler = _safe_text(params.get("scheduler"), 80)
         vae = _safe_text(params.get("vae"), 180)
+        output_label = _safe_text(params.get("output_label") or params.get("compare_label"), 260)
         size = f"{params.get('width') or '-'} x {params.get('height') or '-'}"
         loras = params.get("loras") if isinstance(params.get("loras"), list) else []
         lora_text = ", ".join(
@@ -3236,6 +3243,7 @@ def register_comfyui_routes(app, deps):
             negative or "-",
             "",
             "產圖參數",
+            f"輸出標籤：{output_label or '-'}",
             f"模型：{model or '-'}",
             f"尺寸：{size}",
             f"步數：{params.get('steps') or '-'}",

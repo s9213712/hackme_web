@@ -1,0 +1,424 @@
+{
+  "conversion": {
+    "allowlist_message": "",
+    "allowlist_status": "allowlisted",
+    "class_count": 7,
+    "denied_classes": [],
+    "node_count": 12,
+    "source_format": "ui_graph",
+    "source_path": "utility/compare/compare_2checkpoints.json",
+    "structural_status": "pass",
+    "unknown_classes": []
+  },
+  "default_params": {
+    "batch_size": 1,
+    "cfg": 6,
+    "checkpoint": "SDXL\\illustrious(IL)\\janxd系列\\JANKUTrainedNoobaiRouwei_v60.safetensors",
+    "clip": "",
+    "controlnet": null,
+    "denoise_strength": 1,
+    "diffusion_model": "",
+    "generation_mode": "txt2img",
+    "height": 1080,
+    "loras": [],
+    "model": "SDXL\\illustrious(IL)\\janxd系列\\JANKUTrainedNoobaiRouwei_v60.safetensors",
+    "negative_prompt": "blurry, illustration",
+    "prompt": "anime style, silver hair with black rose hairpins, strawberry-patterned white blouse with black bows, smiling, lying on bed, soft lighting, cozy bedroom background, wooden nightstand, clock, plant, detailed eyes with rainbow irises, gentle blush, realistic skin texture, soft focus, high detail, clean lines, cute expression, intimate pose, warm atmosphere",
+    "sampler_name": "dpmpp_2m",
+    "scheduler": "karras",
+    "seed": 591643929566303,
+    "steps": 30,
+    "upscale_model": "",
+    "vae": "vae-ft-mse-840000-ema-pruned.safetensors",
+    "width": 1920
+  },
+  "description": "Test multi-checkpoint comparison workflow. Starts with the same two branches as Compare Two Checkpoints, then the project UI can add more checkpoint branches and optional shared LoRA layers at run time without modifying the original template.",
+  "id": "origin_multi_compare_checkpoints_test",
+  "name": "Multi-Compare Checkpoints Test",
+  "origin_source_path": "utility/compare/compare_2checkpoints.json",
+  "output_kinds": [
+    "image"
+  ],
+  "required_controlnets": [],
+  "required_custom_nodes": [],
+  "required_loras": [],
+  "required_models": [
+    {
+      "kind": "vae",
+      "name": "vae-ft-mse-840000-ema-pruned.safetensors"
+    },
+    {
+      "kind": "checkpoint",
+      "name": "SDXL\\illustrious(IL)\\janxd系列\\JANKUTrainedNoobaiRouwei_v60.safetensors"
+    },
+    {
+      "kind": "checkpoint",
+      "name": "SDXL\\illustrious(IL)\\janxd系列\\JANKUTrainedNoobaiRouwei_v69.safetensors"
+    }
+  ],
+  "schema_version": 1,
+  "source": "official_origin",
+  "source_format": "ui_graph",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "blurry, illustration",
+            "id": "node:7:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "負面提示詞",
+            "node_id": "7",
+            "node_title": "CLIP Text Encode (Negative)",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "anime style, silver hair with black rose hairpins, strawberry-patterned white blouse with black bows, smiling, lying on bed, soft lighting, cozy bedroom background, wooden nightstand, clock, plant, detailed eyes with rainbow irises, gentle blush, realistic skin texture, soft focus, high detail, clean lines, cute expression, intimate pose, warm atmosphere",
+            "id": "node:6:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "正向提示詞",
+            "node_id": "6",
+            "node_title": "CLIP Text Encode (Positive)",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "EmbeddingShortcuts",
+            "constraints": {
+              "target_field_ids": [
+                "node:7:text",
+                "node:6:text"
+              ],
+              "token_prefix": "<embeddings:"
+            },
+            "current_value": "",
+            "id": "text:embeddings",
+            "input_name": "embeddings",
+            "input_type": "embedding_shortcuts",
+            "label": "Embedding 快速插入",
+            "node_id": "",
+            "parent_category": "text",
+            "required": false,
+            "synthetic": true
+          }
+        ],
+        "id": "text",
+        "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "vae-ft-mse-840000-ema-pruned.safetensors",
+            "id": "node:11:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE（共用VAE(option)）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "11",
+            "node_title": "共用VAE(option)",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CheckpointLoaderSimple",
+            "current_value": "SDXL\\illustrious(IL)\\janxd系列\\JANKUTrainedNoobaiRouwei_v60.safetensors",
+            "id": "node:4:ckpt_name",
+            "input_name": "ckpt_name",
+            "input_type": "select",
+            "label": "Checkpoint / 大模型（比較標的）（#1）",
+            "node_id": "4",
+            "node_title": "比較標的",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CheckpointLoaderSimple",
+            "current_value": "SDXL\\illustrious(IL)\\janxd系列\\JANKUTrainedNoobaiRouwei_v69.safetensors",
+            "id": "node:48:ckpt_name",
+            "input_name": "ckpt_name",
+            "input_type": "select",
+            "label": "Checkpoint / 大模型（比較標的）（#2）",
+            "node_id": "48",
+            "node_title": "比較標的",
+            "required": true
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 591643929566303,
+            "id": "node:17:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "種子（Node 17）",
+            "node_id": "17",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 150,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 30,
+            "id": "node:17:steps",
+            "input_name": "steps",
+            "input_type": "number",
+            "label": "步數（Node 17）",
+            "node_id": "17",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 30.0,
+              "min": 0.5,
+              "step": 0.1
+            },
+            "current_value": 6,
+            "id": "node:17:cfg",
+            "input_name": "cfg",
+            "input_type": "number",
+            "label": "CFG（Node 17）",
+            "node_id": "17",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "dpmpp_2m",
+            "id": "node:17:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器（Node 17）",
+            "node_id": "17",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "karras",
+            "id": "node:17:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器（Node 17）",
+            "node_id": "17",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:17:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise（Node 17）",
+            "node_id": "17",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 591643929566303,
+            "id": "node:3:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "種子（Node 3）",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 150,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 30,
+            "id": "node:3:steps",
+            "input_name": "steps",
+            "input_type": "number",
+            "label": "步數（Node 3）",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 30.0,
+              "min": 0.5,
+              "step": 0.1
+            },
+            "current_value": 6,
+            "id": "node:3:cfg",
+            "input_name": "cfg",
+            "input_type": "number",
+            "label": "CFG（Node 3）",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "dpmpp_2m",
+            "id": "node:3:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器（Node 3）",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "karras",
+            "id": "node:3:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器（Node 3）",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:3:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise（Node 3）",
+            "node_id": "3",
+            "required": true
+          }
+        ],
+        "id": "sampler",
+        "label": "採樣設定"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptyLatentImage",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 1920,
+            "id": "node:5:width",
+            "input_name": "width",
+            "input_type": "number",
+            "label": "寬度",
+            "node_id": "5",
+            "node_title": "共同條件",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptyLatentImage",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 1080,
+            "id": "node:5:height",
+            "input_name": "height",
+            "input_type": "number",
+            "label": "高度",
+            "node_id": "5",
+            "node_title": "共同條件",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptyLatentImage",
+            "constraints": {
+              "max": 16,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 1,
+            "id": "node:5:batch_size",
+            "input_name": "batch_size",
+            "input_type": "number",
+            "label": "批次大小",
+            "node_id": "5",
+            "node_title": "共同條件",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "進階數值參數"
+      },
+      {
+        "collapsed_default": false,
+        "fields": [],
+        "id": "compatibility",
+        "label": "相容性報告",
+        "read_only": true
+      },
+      {
+        "collapsed_default": true,
+        "fields": [],
+        "id": "raw",
+        "label": "原始 workflow",
+        "read_only": true
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

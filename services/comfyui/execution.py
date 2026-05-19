@@ -282,6 +282,10 @@ def collect_output_refs(record, workflow=None):
     for _node_id, output in _sorted_output_items(outputs, workflow=workflow):
         if not isinstance(output, dict):
             continue
+        source_node_id = str(_node_id)
+        source_node = workflow.get(source_node_id) if isinstance(workflow, dict) else None
+        source_meta = source_node.get("_meta") if isinstance(source_node, dict) and isinstance(source_node.get("_meta"), dict) else {}
+        output_label = str(source_meta.get("title") or source_meta.get("label") or "").strip()
         for raw_key, normalized_key in OUTPUT_REF_KEYS.items():
             refs = output.get(raw_key)
             if not isinstance(refs, list):
@@ -296,11 +300,14 @@ def collect_output_refs(record, workflow=None):
                     "filename": filename,
                     "subfolder": str(item.get("subfolder") or "").strip(),
                     "type": str(item.get("type") or "output").strip() or "output",
+                    "output_node_id": source_node_id,
                 }
+                if output_label:
+                    payload["output_label"] = output_label
                 for extra_key in ("format", "frame_rate", "duration", "workflow"):
                     if extra_key in item:
                         payload[extra_key] = item.get(extra_key)
-                dedupe = (normalized_key, payload["filename"], payload["subfolder"], payload["type"])
+                dedupe = (normalized_key, source_node_id, payload["filename"], payload["subfolder"], payload["type"])
                 if dedupe in seen:
                     continue
                 seen.add(dedupe)
@@ -596,6 +603,8 @@ def generate_from_workflow(
                     "mime_type": "image/png",
                     "data": b"",
                     "size_bytes": 0,
+                    "output_node_id": image_ref.get("output_node_id") or "",
+                    "output_label": image_ref.get("output_label") or "",
                 }
                 for image_ref in image_refs
             ],
@@ -612,6 +621,7 @@ def generate_from_workflow(
                 for key, values in media_refs.items()
             },
         }
+    image_refs = list(output_refs.get("images") or [])
     images = [
         _fetch_output_with_retries(
             image_fetcher,
@@ -620,7 +630,7 @@ def generate_from_workflow(
             progress_callback=progress_callback,
             label="圖片",
         )
-        for image_ref in output_refs.get("images") or []
+        for image_ref in image_refs
     ]
     media_outputs = {}
     for media_key in ("videos", "audio", "other"):
@@ -638,15 +648,20 @@ def generate_from_workflow(
     if not images and not any(media_outputs.values()):
         raise error_cls("ComfyUI 沒有回傳可用輸出檔")
     primary = images[0] if images else next(item for values in media_outputs.values() for item in values)
-    serialized_images = [{
-        "image_ref": {
-            "filename": item.filename,
-            "subfolder": item.subfolder,
-            "type": item.type,
-        },
-        "mime_type": item.mime_type,
-        "data": item.data,
-    } for item in images]
+    serialized_images = []
+    for index, item in enumerate(images):
+        ref_meta = image_refs[index] if index < len(image_refs) and isinstance(image_refs[index], dict) else {}
+        serialized_images.append({
+            "image_ref": {
+                "filename": item.filename,
+                "subfolder": item.subfolder,
+                "type": item.type,
+            },
+            "mime_type": item.mime_type,
+            "data": item.data,
+            "output_node_id": ref_meta.get("output_node_id") or "",
+            "output_label": ref_meta.get("output_label") or "",
+        })
     serialized_media = {
         key: [{
             "file_ref": {

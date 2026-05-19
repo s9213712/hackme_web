@@ -176,6 +176,49 @@ def test_compare_two_checkpoints_shares_sampler_params_except_checkpoint_models(
     assert "? comfyuiTemplateCompareSharedRuntimeValue(detail, field)" in workflow_js
 
 
+def test_multi_compare_checkpoint_template_adds_models_and_loras_dynamically():
+    workflow_js = _read("public/js/36-comfyui-workflows.js")
+    css = _read("public/styles.css")
+
+    assert 'const COMFYUI_MULTI_COMPARE_CHECKPOINTS_TEST_ID = "origin_multi_compare_checkpoints_test";' in workflow_js
+    assert "function renderComfyuiMultiCompareControl" in workflow_js
+    assert "function comfyuiMultiCompareRunSpec" in workflow_js
+    assert "function comfyuiTemplateIsMultiCompareCheckpointField" in workflow_js
+    assert "function comfyuiTemplateIsHiddenField" in workflow_js
+    assert 'data-comfyui-multi-compare-add-checkpoint="1"' in workflow_js
+    assert 'data-comfyui-multi-compare-add-lora="1"' in workflow_js
+    assert "multi_compare: multiCompareSpec || undefined" in workflow_js
+    assert "comfyuiTemplateIsMultiCompareCheckpointField(detail, field)" in workflow_js
+    assert ".comfyui-multi-compare-card" in css
+    assert ".comfyui-multi-compare-row.is-lora" in css
+
+
+def test_multi_method_upscale_template_has_runtime_breakpoint_selector():
+    workflow_js = _read("public/js/36-comfyui-workflows.js")
+    css = _read("public/styles.css")
+
+    assert 'const COMFYUI_MULTI_METHOD_UPSCALE_ID = "origin_multi_method_upscale";' in workflow_js
+    assert "function renderComfyuiUpscaleBreakpointControl" in workflow_js
+    assert "function comfyuiUpscaleBreakpointRunSpec" in workflow_js
+    assert 'data-comfyui-upscale-breakpoint="1"' in workflow_js
+    assert "upscale_breakpoint: upscaleBreakpointSpec || undefined" in workflow_js
+    assert "comfyuiTemplateIsHiddenUpscaleBreakpointField(detail, field)" in workflow_js
+    assert ".comfyui-upscale-breakpoint-card" in css
+
+
+def test_generated_images_show_model_labels_and_share_them():
+    comfyui_js = _read("public/js/36-comfyui.js")
+    routes_py = _read("routes/comfyui.py")
+    css = _read("public/styles.css")
+
+    assert "function comfyuiGeneratedImageLabel" in comfyui_js
+    assert "return `${prefix}模型：${modelName}`;" in comfyui_js
+    assert "payload.output_label = outputLabel;" in comfyui_js
+    assert "comfyui-output-label" in comfyui_js
+    assert ".comfyui-output-label" in css
+    assert "輸出標籤：" in routes_py
+
+
 def test_template_local_images_are_imported_before_safe_remap_gate():
     comfyui_js = _read("public/js/36-comfyui.js")
     workflow_js = _read("public/js/36-comfyui-workflows.js")

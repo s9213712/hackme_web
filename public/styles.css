@@ -1632,6 +1632,75 @@
       width: 100%;
     }
 
+    .comfyui-multi-compare-card {
+      display: grid;
+      gap: .75rem;
+      padding: .8rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card);
+    }
+
+    .comfyui-multi-compare-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: .75rem;
+      flex-wrap: wrap;
+    }
+
+    .comfyui-multi-compare-rows,
+    .comfyui-multi-compare-loras {
+      display: grid;
+      gap: .55rem;
+    }
+
+    .comfyui-multi-compare-row {
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr) auto;
+      align-items: end;
+      gap: .5rem;
+    }
+
+    .comfyui-multi-compare-row.is-lora {
+      grid-template-columns: 80px minmax(160px, 1fr) minmax(80px, 110px) minmax(80px, 110px) auto;
+    }
+
+    .comfyui-multi-compare-row label {
+      margin-bottom: .35rem;
+      color: var(--muted);
+      font-size: .8rem;
+    }
+
+    .comfyui-multi-compare-row select,
+    .comfyui-multi-compare-row input {
+      width: 100%;
+    }
+
+    .comfyui-upscale-breakpoint-card {
+      display: grid;
+      gap: .65rem;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
+      align-items: end;
+      padding: .8rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card);
+    }
+
+    .comfyui-upscale-breakpoint-card select {
+      width: 100%;
+    }
+
+    @media (max-width: 720px) {
+      .comfyui-multi-compare-row,
+      .comfyui-multi-compare-row.is-lora,
+      .comfyui-upscale-breakpoint-card {
+        grid-template-columns: 1fr;
+        align-items: stretch;
+      }
+    }
+
     .comfyui-template-field-card {
       padding: .7rem;
       position: relative;
@@ -2131,8 +2200,21 @@
       min-height: 0;
       padding: .7rem;
       display: grid;
-      grid-template-rows: minmax(0, 1fr) auto;
+      grid-template-rows: auto minmax(0, 1fr) auto;
       gap: .65rem;
+    }
+
+    .comfyui-output-label {
+      align-self: start;
+      width: 100%;
+      border: 1px solid rgba(255,255,255,.10);
+      border-radius: 8px;
+      background: rgba(255,255,255,.05);
+      padding: .45rem .6rem;
+      color: var(--text);
+      font-size: .86rem;
+      line-height: 1.35;
+      word-break: break-word;
     }
 
     .comfyui-output-main {
@@ -2199,6 +2281,8 @@
     .comfyui-batch-item span {
       font-size: .76rem;
       color: var(--muted);
+      min-height: 2.4em;
+      overflow-wrap: anywhere;
     }
 
     .comfyui-template-checkbox {

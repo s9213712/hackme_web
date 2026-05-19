@@ -2896,7 +2896,8 @@ function setComfyuiSelectedImage(index) {
   if (meta && comfyuiCurrentImage) {
     const total = comfyuiGeneratedImages.length;
     const batchLabel = total > 1 ? ` · 第 ${nextIndex + 1}/${total} 張` : "";
-    meta.textContent = `model=${comfyuiCurrentImage.model || "-"} · seed=${comfyuiCurrentImage.seed ?? "-"}${batchLabel} · ${formatDriveBytes(comfyuiCurrentImage.size_bytes || 0)}`;
+    const outputLabel = comfyuiGeneratedImageLabel(comfyuiCurrentImage, nextIndex);
+    meta.textContent = `${outputLabel ? `${outputLabel} · ` : ""}model=${comfyuiCurrentImage.model || "-"} · seed=${comfyuiCurrentImage.seed ?? "-"}${batchLabel} · ${formatDriveBytes(comfyuiCurrentImage.size_bytes || 0)}`;
   }
   const savePath = $("comfyui-save-path");
   if (savePath && comfyuiCurrentImage?.image_ref?.filename && (!savePath.value.trim() || savePath.dataset.comfyuiAutoPath === "1")) {
@@ -2905,6 +2906,22 @@ function setComfyuiSelectedImage(index) {
     writeComfyuiDraft();
   }
   updateComfyuiResultButtons(!!comfyuiCurrentImage?.image_ref);
+}
+
+function comfyuiGeneratedImageLabel(image, index = 0) {
+  const label = String(image?.output_label || image?.compare_label || "").trim();
+  const model = String(image?.model || "").trim();
+  const modelName = model ? model.replace(/\\/g, "/").split("/").pop() : "";
+  if (label) {
+    const labelHasModel = modelName && label.includes(modelName);
+    const labelLooksSpecific = /比較|checkpoint|ckpt|模型|\.safetensors|\.ckpt/i.test(label);
+    return modelName && !labelHasModel && !labelLooksSpecific ? `${label} · 模型：${modelName}` : label;
+  }
+  if (model) {
+    const prefix = Array.isArray(comfyuiGeneratedImages) && comfyuiGeneratedImages.length > 1 ? `第 ${Number(index) + 1} 張 · ` : "";
+    return `${prefix}模型：${modelName}`;
+  }
+  return "";
 }
 
 function renderComfyuiGeneratedMedia(mediaItems = []) {
@@ -2965,7 +2982,9 @@ function renderComfyuiGeneratedImages(images) {
       preview.innerHTML = `<div class="drive-empty">圖片已完成，正在讀取預覽。</div>`;
       return;
     }
+    const singleLabel = comfyuiGeneratedImageLabel(images[0], 0);
     preview.innerHTML = `
+      ${singleLabel ? `<div class="comfyui-output-label">${sanitize(singleLabel)}</div>` : ""}
       <button class="comfyui-output-main" type="button" data-comfyui-open-image="0" title="開啟大圖">
         <img loading="lazy" src="${sanitize(images[0].data_url || "")}" alt="ComfyUI generated image" />
       </button>
@@ -2975,8 +2994,10 @@ function renderComfyuiGeneratedImages(images) {
   }
   const selectedIndex = Math.max(0, Math.min(comfyuiSelectedImageIndex || 0, images.length - 1));
   const selected = images[selectedIndex] || images[0];
+  const selectedLabel = comfyuiGeneratedImageLabel(selected, selectedIndex);
   preview.innerHTML = `
     <div class="comfyui-output-gallery">
+      ${selectedLabel ? `<div class="comfyui-output-label">${sanitize(selectedLabel)}</div>` : ""}
       <button class="comfyui-output-main" type="button" data-comfyui-open-image="${selectedIndex}" title="開啟第 ${selectedIndex + 1} 張大圖">
         ${selected?.data_url
           ? `<img loading="lazy" src="${sanitize(selected.data_url || "")}" alt="ComfyUI generated image ${selectedIndex + 1}" />`
@@ -2988,7 +3009,7 @@ function renderComfyuiGeneratedImages(images) {
             ${image.data_url
               ? `<img loading="lazy" src="${sanitize(image.data_url || "")}" alt="ComfyUI generated image ${index + 1}" />`
               : `<span class="drive-empty">讀取預覽中</span>`}
-            <span>第 ${index + 1} 張</span>
+            <span>${sanitize(comfyuiGeneratedImageLabel(image, index) || `第 ${index + 1} 張`)}</span>
           </button>
         `).join("")}
       </div>
@@ -3441,6 +3462,8 @@ function comfyuiShareGenerationPayload() {
   if (comfyuiCurrentImage?.model) {
     payload.model = comfyuiCurrentImage.model;
   }
+  const outputLabel = comfyuiGeneratedImageLabel(comfyuiCurrentImage, comfyuiSelectedImageIndex);
+  if (outputLabel) payload.output_label = outputLabel;
   return payload;
 }
 
@@ -3901,7 +3924,8 @@ async function shareComfyuiToCommunity() {
 }
 
 function promptComfyuiShareMetadata() {
-  const defaultTitle = "ComfyUI 產圖分享";
+  const outputLabel = comfyuiGeneratedImageLabel(comfyuiCurrentImage, comfyuiSelectedImageIndex);
+  const defaultTitle = outputLabel ? `ComfyUI 產圖分享 - ${outputLabel}`.slice(0, 120) : "ComfyUI 產圖分享";
   const title = window.prompt("分享標題", defaultTitle);
   if (title === null) return null;
   const cleanTitle = String(title || "").trim().slice(0, 120) || defaultTitle;

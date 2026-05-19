@@ -38,6 +38,7 @@ EXPECTED_ORIGIN_WORKFLOW_IDS = {
     "origin_qwen_image_txt2img",
     "origin_netayume_txt2img",
     "origin_compare_2checkpoints",
+    "origin_multi_compare_checkpoints_test",
     "origin_sdpose_multi_person",
     "origin_sam3_segmentation",
     "origin_multi_method_upscale",
