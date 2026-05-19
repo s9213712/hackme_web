@@ -137,14 +137,14 @@ def test_locked_model_loader_fields_are_not_required_or_overridden():
             },
         },
         "67": {"class_type": "CLIPTextEncode", "inputs": {"text": "anime", "clip": ["61", 0]}},
-        "68": {"class_type": "UNETLoader", "inputs": {"unet_name": "anima-preview3-base.safetensors"}},
+        "68": {"class_type": "UNETLoader", "inputs": {"unet_name": "anima-preview2.safetensors"}},
         "69": {"class_type": "VAEDecode", "inputs": {"samples": ["66", 0], "vae": ["62", 0]}},
         "70": {"class_type": "SaveImage", "inputs": {"filename_prefix": "ComfyUI", "images": ["69", 0]}},
     }
     client = _stub_client(
         classes={"CLIPLoader", "VAELoader", "EmptyLatentImage", "CLIPTextEncode", "KSampler", "UNETLoader", "VAEDecode", "SaveImage"},
         vaes=["anime_vae.safetensors"],
-        diffusion_models=["anima-preview3-base.safetensors"],
+        diffusion_models=["anima-preview2.safetensors"],
         clips=["qwen_3_06b_base.safetensors"],
     )
     result = run_workflow_through_gates(
@@ -169,7 +169,7 @@ def test_locked_model_loader_fields_are_not_required_or_overridden():
 
     assert result.workflow["61"]["inputs"]["clip_name"] == "qwen_3_06b_base.safetensors"
     assert result.workflow["62"]["inputs"]["vae_name"] == "anime_vae.safetensors"
-    assert result.workflow["68"]["inputs"]["unet_name"] == "anima-preview3-base.safetensors"
+    assert result.workflow["68"]["inputs"]["unet_name"] == "anima-preview2.safetensors"
 
 
 def test_workflow_user_inputs_normalize_embedding_shortcut_syntax():

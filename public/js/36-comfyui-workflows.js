@@ -550,6 +550,15 @@ function comfyuiWorkflowPresetOutputKinds(item = {}) {
     : [];
 }
 
+function comfyuiWorkflowPresetForegroundTimeoutSeconds(item = {}) {
+  const baseTimeout = typeof COMFYUI_GENERATION_TIMEOUT_SECONDS === "number" ? COMFYUI_GENERATION_TIMEOUT_SECONDS : 1800;
+  const videoTimeout = typeof COMFYUI_VIDEO_FOREGROUND_TIMEOUT_SECONDS === "number"
+    ? COMFYUI_VIDEO_FOREGROUND_TIMEOUT_SECONDS
+    : Math.min(baseTimeout, 900);
+  const outputs = comfyuiWorkflowPresetOutputKinds(item);
+  return outputs.includes("video") ? videoTimeout : baseTimeout;
+}
+
 function comfyuiWorkflowPresetSupportsMode(item = {}, mode = "") {
   const normalized = typeof normalizeComfyuiGenerationModeAlias === "function"
     ? normalizeComfyuiGenerationModeAlias(mode)
@@ -1742,7 +1751,8 @@ async function runComfyuiWorkflowPreset(presetId) {
   await fetchCsrfToken({ force: true });
   setComfyuiBusy(true);
   setComfyuiMessage("正在建立 workflow 執行工作...", true);
-  startComfyuiProgress(COMFYUI_GENERATION_TIMEOUT_SECONDS);
+  const workflowTimeoutSeconds = comfyuiWorkflowPresetForegroundTimeoutSeconds(preset);
+  startComfyuiProgress(workflowTimeoutSeconds);
   const controller = new AbortController();
   comfyuiGenerateAbortController = controller;
   const runRequest = (confirmed) => apiFetch(API + `/comfyui/workflows/${encodeURIComponent(presetId)}/run`, {
@@ -1772,7 +1782,7 @@ async function runComfyuiWorkflowPreset(presetId) {
       json = await res.json().catch(() => ({}));
     }
     if (!res.ok || !json.ok) throw new Error(json.msg || `workflow 執行失敗（HTTP ${res.status}）`);
-    const result = await pollComfyuiJobUntilDone(json.job?.job_id, controller, COMFYUI_GENERATION_TIMEOUT_SECONDS);
+    const result = await pollComfyuiJobUntilDone(json.job?.job_id, controller, workflowTimeoutSeconds);
     const rawImages = Array.isArray(result.images) && result.images.length ? result.images : [result.image].filter(Boolean);
     const images = await hydrateComfyuiGeneratedImages(rawImages);
     const media = Array.isArray(result.media) ? result.media : [];
@@ -1786,8 +1796,15 @@ async function runComfyuiWorkflowPreset(presetId) {
     if (typeof applyComfyuiSeedAfterGenerate === "function") applyComfyuiSeedAfterGenerate(images[images.length - 1]?.seed);
     setComfyuiMessage(`已執行 workflow preset #${presetId}，輸出 ${images.length} 張圖片、${media.length} 個媒體檔。`, true);
   } catch (err) {
-    stopComfyuiProgress({ error: err.message || "workflow 執行失敗" });
-    setComfyuiMessage(err.message || "workflow 執行失敗", false);
+    const timedOut = typeof isComfyuiForegroundTimeoutError === "function" && isComfyuiForegroundTimeoutError(err);
+    const message = timedOut && typeof comfyuiForegroundTimeoutMessage === "function"
+      ? comfyuiForegroundTimeoutMessage(err)
+      : (err.message || "workflow 執行失敗");
+    stopComfyuiProgress({
+      error: message,
+      label: timedOut ? "已停止前台等待" : "產圖失敗"
+    });
+    setComfyuiMessage(message, false);
   } finally {
     if (comfyuiGenerateAbortController === controller) comfyuiGenerateAbortController = null;
     setComfyuiBusy(false);

@@ -70,6 +70,7 @@ const GAME_RUNTIME_SCRIPT_SRCS = Object.freeze([
   "/js/games/bullet-hell.js?v=20260518-game-ux",
   "/js/games/stickman-shooter.js?v=20260517-level-layouts",
   "/js/games/open-world.js?v=20260518-game-ux",
+  "/js/games/racing.js?v=20260519-racing",
   "/js/games/board-game-shared.js?v=20260513-game-modules",
   "/js/games/reversi.js?v=20260513-game-modules",
   "/js/games/go.js?v=20260513-game-modules",
@@ -282,6 +283,7 @@ function gameIcon(key) {
   if (key === "space_shooter") return "▲";
   if (key === "fps_arena") return "◎";
   if (key === "open_world") return "市";
+  if (key === "racing") return "R";
   if (key === "bullet_hell") return "✦";
   if (key === "stickman_shooter") return "人";
   return "♟";
@@ -303,6 +305,7 @@ function gameSubtitle(game) {
   if (game.key === "space_shooter") return "高分射擊挑戰";
   if (game.key === "fps_arena") return "3D 射擊訓練 / 合作 / PvP";
   if (game.key === "open_world") return "3D 城市探索 / 駕車任務 / 警戒追逐";
+  if (game.key === "racing") return "道具干擾、甩尾與氮氣衝刺";
   if (game.key === "bullet_hell") return "閃避密集彈幕並反擊";
   if (game.key === "stickman_shooter") return "2D 側捲平台射擊 / 合作解謎";
   return game.supports_computer ? "玩家對戰 / 電腦練習" : "玩家對戰";
@@ -353,6 +356,7 @@ function gameExperienceHint(key) {
     space_shooter: "宇宙戰機：左右移動、空白鍵或發射鍵射擊；敵方閃避預設關閉，想提高難度再打開。",
     fps_arena: "3D 射擊場：WASD 移動、滑鼠/拖曳瞄準，按住右鍵進入狙擊模式；手機按住「前/左/右」會連續移動，不是一步一步點。",
     open_world: "都市開放世界：WASD 或手機搖桿移動，靠近車輛可上車；路面目標光柱是任務方向。",
+    racing: "街頭賽車：按住加速與左右換線，煞車+方向可甩尾，空白鍵氮氣、E 或道具鍵可加速自己或干擾對手。",
     bullet_hell: "彈幕遊戲：黃點是受擊核心，藍圈是擦彈範圍；按住「精密」會變慢並縮小受擊範圍。",
     stickman_shooter: "火柴人橫向射擊：按住移動鍵走位，射擊與跳躍要配合掩體；合作模式需要雙方配合機關。",
     real_tetris: "真實版俄羅斯方塊：方塊會旋轉、傾斜與倒塌，目標是讓行覆蓋率達 90% 才消線。",

@@ -10,6 +10,7 @@
     { key: "space_shooter", title: "宇宙戰機", subtitle: "高分射擊挑戰", legacy: true },
     { key: "fps_arena", title: "3D 射擊場", subtitle: "3D 射擊訓練 / 合作 / PvP", legacy: true },
     { key: "open_world", title: "都市開放世界", subtitle: "3D 城市探索 / 駕車任務 / 警戒追逐" },
+    { key: "racing", title: "街頭賽車", subtitle: "道具干擾、甩尾與氮氣衝刺" },
     { key: "bullet_hell", title: "彈幕遊戲", subtitle: "閃避密集彈幕並反擊" },
     { key: "stickman_shooter", title: "火柴人橫向射擊", subtitle: "2D 側捲平台射擊 / 合作解謎" },
     { key: "real_tetris", title: "真實版俄羅斯方塊", subtitle: "剛體物理與 99% 消線" },
@@ -64,6 +65,14 @@
       length: Number(state.maxLength || state.snake?.length || 0),
       powerup: Number(state.powerupsCollected || 0),
       multiball: Number(state.multiball || 0),
+      distance: Number(state.distance || 0),
+      overtake: Number(state.overtakes || 0),
+      nitro: Number(state.nitroBursts || 0),
+      checkpoint: Number(state.checkpoints || 0),
+      integrity: Number(state.integrity || 0),
+      drift: Number(state.driftScore || 0),
+      interference: Number(state.interference || 0),
+      item: Number(state.itemsUsed || 0),
     });
   }
 
@@ -194,6 +203,14 @@
       { id: "missions-2", label: "完成 2 個城市任務", target: 2, metric: "missions" },
       { id: "evade", label: "甩開一次追逐", target: 1, metric: "evasion" },
     ],
+    racing: [
+      { id: "score-2200", label: "賽車 2200 分", target: 2200, metric: "score" },
+      { id: "overtake-8", label: "超車 8 台", target: 8, metric: "overtake" },
+      { id: "nitro-3", label: "氮氣衝刺 3 次", target: 3, metric: "nitro" },
+      { id: "drift-180", label: "甩尾 180 分", target: 180, metric: "drift" },
+      { id: "interference-3", label: "道具干擾 3 次", target: 3, metric: "interference" },
+      { id: "item-3", label: "使用道具 3 次", target: 3, metric: "item" },
+    ],
     bullet_hell: [
       { id: "score-1800", label: "彈幕 1800 分", target: 1800, metric: "score" },
       { id: "graze-40", label: "擦彈 40 次", target: 40, metric: "graze" },
@@ -284,6 +301,14 @@
       ["first-drive", "城市駕駛", "第一次進入車輛。"],
       ["city-runner", "城市跑者", "同一局完成三個城市任務。"],
       ["clean-escape", "甩開追逐", "成功降低警戒並脫離追逐。"],
+    ],
+    racing: [
+      ["first-finish", "完賽衝線", "完成一場街頭賽車。"],
+      ["clean-racer", "乾淨跑法", "低損傷完賽。"],
+      ["overtake-chain", "連續超車", "單局完成 8 次以上超車。"],
+      ["nitro-master", "氮氣掌握", "單局使用 3 次以上氮氣。"],
+      ["drift-chain", "甩尾入彎", "單局累積 180 甩尾分。"],
+      ["interference-hit", "道具干擾", "用道具干擾 3 次以上對手。"],
     ],
     bullet_hell: [
       ["score-posted", "彈幕出擊", "完成一局彈幕挑戰。"],

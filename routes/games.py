@@ -83,6 +83,7 @@ SOLO_GAME_KEYS = {
     "space_shooter",
     "fps_arena",
     "open_world",
+    "racing",
     "bullet_hell",
     "stickman_shooter",
     "snake",
@@ -99,6 +100,7 @@ SCORE_RANKED_SOLO_GAMES = {
     "space_shooter",
     "fps_arena",
     "open_world",
+    "racing",
     "bullet_hell",
     "stickman_shooter",
     "snake",
@@ -114,7 +116,7 @@ MULTIPLAYER_MODES_BY_GAME = {
     "fps_arena": {"coop", "pvp"},
     "stickman_shooter": {"coop"},
 }
-SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'open_world', 'bullet_hell', 'stickman_shooter', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku', 'chinese_chess'"
+SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'open_world', 'racing', 'bullet_hell', 'stickman_shooter', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku', 'chinese_chess'"
 WEEKLY_REWARDS = (300, 200, 100)
 DAILY_CHALLENGE_REWARD_POINTS = 25
 # New chess difficulty naming. ``experiment 0:minimax2ply`` is the
@@ -1347,6 +1349,12 @@ def register_games_routes(app, deps):
             }, {
                 "key": "open_world",
                 "title": "都市開放世界",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "racing",
+                "title": "街頭賽車",
                 "status": "available",
                 "supports_invites": False,
                 "supports_computer": False,

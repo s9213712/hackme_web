@@ -59,6 +59,8 @@ let comfyuiImagePickerState = {
   cloudDrive: [],
 };
 const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;
+const COMFYUI_VIDEO_FOREGROUND_TIMEOUT_SECONDS = 900;
+const COMFYUI_INTERRUPT_TIMEOUT_SECONDS = 15;
 const COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800;
 const COMFYUI_QUEUE_MAX_TIMEOUT_SECONDS = 21600;
 const COMFYUI_MAX_LORAS = 8;
@@ -1546,7 +1548,7 @@ function setComfyuiProgress({ visible = true, running = false, percent = 0, labe
   if (detailEl) detailEl.textContent = detail || "";
 }
 
-function stopComfyuiProgress({ complete = false, error = "" } = {}) {
+function stopComfyuiProgress({ complete = false, error = "", label = "" } = {}) {
   if (comfyuiProgressTimer) {
     clearInterval(comfyuiProgressTimer);
     comfyuiProgressTimer = null;
@@ -1564,7 +1566,7 @@ function stopComfyuiProgress({ complete = false, error = "" } = {}) {
       visible: true,
       running: false,
       percent: 100,
-      label: "產圖失敗",
+      label: label || "產圖失敗",
       detail: error
     });
   } else {
@@ -1652,6 +1654,25 @@ function extendComfyuiDeadlineForQueue(deadline, startedAt) {
   return Math.max(deadline, extended);
 }
 
+function createComfyuiForegroundTimeoutError(jobId) {
+  const suffix = jobId ? `（job id：${jobId}）` : "";
+  const err = new Error(`ComfyUI 前台等待逾時；後端工作可能仍在執行${suffix}。稍後可從歷史紀錄查看結果。`);
+  err.comfyuiForegroundTimeout = true;
+  err.jobId = jobId || "";
+  return err;
+}
+
+function isComfyuiForegroundTimeoutError(err) {
+  if (err?.comfyuiForegroundTimeout) return true;
+  return /前台等待逾時|進度查詢逾時/.test(String(err?.message || ""));
+}
+
+function comfyuiForegroundTimeoutMessage(err) {
+  const jobId = err?.jobId || comfyuiActiveJobId || "";
+  const suffix = jobId ? `（job id：${jobId}）` : "";
+  return `已停止前台等待；後端工作可能仍在執行${suffix}。完成後請到歷史紀錄查看或稍後重新整理 Workflow。`;
+}
+
 async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds) {
   comfyuiActiveJobId = jobId;
   const startedAt = Date.now();
@@ -1683,7 +1704,7 @@ async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds) {
     if (job.status === "error") throw new Error(job.error || job.progress?.detail || "ComfyUI 產圖失敗");
     await new Promise((resolve) => setTimeout(resolve, comfyuiJobPollMs()));
   }
-  throw new Error("ComfyUI 進度查詢逾時");
+  throw createComfyuiForegroundTimeoutError(jobId);
 }
 
 function selectedComfyuiAlbumId() {
@@ -3388,6 +3409,7 @@ async function interruptComfyuiGeneration() {
     setComfyuiMessage("目前沒有進行中的產圖可中斷", false);
     return;
   }
+  const interruptedJobId = comfyuiActiveJobId || "";
   const interruptBtn = $("comfyui-interrupt-btn");
   if (interruptBtn) {
     interruptBtn.disabled = true;
@@ -3398,28 +3420,55 @@ async function interruptComfyuiGeneration() {
     running: false,
     percent: 100,
     label: "正在中斷產圖",
-    detail: "已停止前端等待，後端會在不影響其他使用者時才送出 ComfyUI 中斷"
+    detail: interruptedJobId
+      ? `已停止前端等待 job ${interruptedJobId}，後端會在不影響其他使用者時才送出 ComfyUI 中斷`
+      : "已停止前端等待，後端會在不影響其他使用者時才送出 ComfyUI 中斷"
   });
   comfyuiGenerateAbortController.abort();
-  try {
+  const interruptRequestController = new AbortController();
+  let interruptTimeoutId = null;
+  const interruptTimeout = new Promise((_, reject) => {
+    interruptTimeoutId = window.setTimeout(() => {
+      interruptRequestController.abort();
+      const err = new Error("ComfyUI 中斷請求逾時");
+      err.name = "AbortError";
+      reject(err);
+    }, COMFYUI_INTERRUPT_TIMEOUT_SECONDS * 1000);
+  });
+  const interruptRequest = (async () => {
     await fetchCsrfToken({ force: true });
     const res = await apiFetch(API + "/comfyui/interrupt", {
       method: "POST",
       credentials: "same-origin",
+      signal: interruptRequestController.signal,
       headers: {
         "Content-Type": "application/json",
         "X-CSRF-Token": getCsrfToken() || ""
       },
       body: JSON.stringify({
+        job_id: interruptedJobId,
         ...comfyuiRequestPayloadExtras()
       })
     });
     const json = await res.json().catch(() => ({}));
+    return { res, json };
+  })();
+  interruptRequest.catch(() => {});
+  try {
+    const { res, json } = await Promise.race([interruptRequest, interruptTimeout]);
     if (!res.ok || !json.ok) throw new Error(json.msg || `中斷產圖失敗（HTTP ${res.status}）`);
     setComfyuiMessage(json.msg || "已送出中斷產圖請求", true);
   } catch (err) {
-    setComfyuiMessage(err.message || "中斷產圖失敗", false);
+    const timedOut = err?.name === "AbortError";
+    const suffix = interruptedJobId ? `（job id：${interruptedJobId}）` : "";
+    setComfyuiMessage(
+      timedOut
+        ? `已停止等待中斷回應${suffix}；後端可能仍在收尾，稍後可從歷史紀錄查看結果。`
+        : (err.message || "中斷產圖失敗"),
+      timedOut
+    );
   } finally {
+    if (interruptTimeoutId) window.clearTimeout(interruptTimeoutId);
     if (interruptBtn) {
       interruptBtn.textContent = "中斷產圖";
     }

@@ -118,7 +118,7 @@ def test_capability_partially_supported_when_only_models_missing():
 def test_capability_checks_diffusion_model_and_clip_buckets():
     info = {
         "UNETLoader": {
-            "input": {"required": {"unet_name": [["anima-preview3-base.safetensors"]]}}
+            "input": {"required": {"unet_name": [["anima-preview2.safetensors"]]}}
         },
         "CLIPLoader": {
             "input": {"required": {"clip_name": [["qwen_3_06b_base.safetensors"]]}}
@@ -128,7 +128,7 @@ def test_capability_checks_diffusion_model_and_clip_buckets():
     analysis = _analysis(
         class_types={"UNETLoader", "CLIPLoader"},
         models={
-            "diffusion_model": ["anima-preview3-base.safetensors"],
+            "diffusion_model": ["anima-preview2.safetensors"],
             "clip": ["qwen_3_06b_base.safetensors"],
         },
     )

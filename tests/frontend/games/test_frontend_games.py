@@ -26,6 +26,7 @@ def test_game_zone_frontend_assets_are_wired():
     local_bullet_js = (ROOT / "public" / "js" / "games" / "bullet-hell.js").read_text(encoding="utf-8")
     local_stickman_js = (ROOT / "public" / "js" / "games" / "stickman-shooter.js").read_text(encoding="utf-8")
     local_open_world_js = (ROOT / "public" / "js" / "games" / "open-world.js").read_text(encoding="utf-8")
+    local_racing_js = (ROOT / "public" / "js" / "games" / "racing.js").read_text(encoding="utf-8")
     local_board_shared_js = (ROOT / "public" / "js" / "games" / "board-game-shared.js").read_text(encoding="utf-8")
     local_real_tetris_js = (ROOT / "public" / "js" / "games" / "real-tetris.js").read_text(encoding="utf-8")
     local_reversi_js = (ROOT / "public" / "js" / "games" / "reversi.js").read_text(encoding="utf-8")
@@ -180,6 +181,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "彈幕遊戲" in game_modules_js
     assert "火柴人橫向射擊" in game_modules_js
     assert "都市開放世界" in game_modules_js
+    assert "街頭賽車" in game_modules_js
     assert "真實版俄羅斯方塊" in game_modules_js
     assert "99% 消線" in game_modules_js
     assert "黑白棋" in game_modules_js
@@ -248,6 +250,19 @@ def test_game_zone_frontend_assets_are_wired():
     assert "state.bullets = state.bullets.filter((bullet) => bulletHellBulletVerticalInBounds(bullet));" in local_bullet_js
     assert 'registerHackmeLocalGameModule("stickman_shooter"' in local_stickman_js
     assert 'registerHackmeLocalGameModule("open_world"' in local_open_world_js
+    assert 'registerHackmeLocalGameModule("racing"' in local_racing_js
+    assert "drawRacingBackdrop" in local_racing_js
+    assert "drawRacingCar" in local_racing_js
+    assert "drawRacingMinimap" in local_racing_js
+    assert "drawRacingDashboard" in local_racing_js
+    assert "drawRacingSteeringWheel" in local_racing_js
+    assert "updateRacingDrift" in local_racing_js
+    assert "useRacingItem" in local_racing_js
+    assert "finishRacingGame" in local_racing_js
+    assert 'data-hold="throttle"' in local_racing_js
+    assert 'data-hold="nitro"' in local_racing_js
+    assert 'data-action="item"' in local_racing_js
+    assert "煞車+方向可甩尾" in games_js
     assert "OPEN_WORLD_PLAYER_START" in local_open_world_js
     assert "OPEN_WORLD_MISSIONS" in local_open_world_js
     assert "OPEN_WORLD_BLOCK_CENTERS" in local_open_world_js
@@ -823,6 +838,7 @@ def test_all_games_declare_mobile_controls_or_touch_targets():
     chinese_chess_js = (ROOT / "public" / "js" / "games" / "chinese-chess.js").read_text(encoding="utf-8")
     local_modules = {
         "open_world": (ROOT / "public" / "js" / "games" / "open-world.js").read_text(encoding="utf-8"),
+        "racing": (ROOT / "public" / "js" / "games" / "racing.js").read_text(encoding="utf-8"),
         "bullet_hell": (ROOT / "public" / "js" / "games" / "bullet-hell.js").read_text(encoding="utf-8"),
         "stickman_shooter": (ROOT / "public" / "js" / "games" / "stickman-shooter.js").read_text(encoding="utf-8"),
         "real_tetris": (ROOT / "public" / "js" / "games" / "real-tetris.js").read_text(encoding="utf-8"),
@@ -833,7 +849,7 @@ def test_all_games_declare_mobile_controls_or_touch_targets():
     expected_games = [
         "chess", "sudoku", "minesweeper", "1a2b", "tetris", "space_shooter",
         "fps_arena", "open_world", "bullet_hell", "stickman_shooter",
-        "real_tetris", "snake", "game_2048", "brick_breaker", "reversi",
+        "racing", "real_tetris", "snake", "game_2048", "brick_breaker", "reversi",
         "go", "gomoku", "chinese_chess",
     ]
 
@@ -885,10 +901,14 @@ def test_all_games_declare_mobile_controls_or_touch_targets():
         assert "api.onControl" in module_js
 
     assert 'api.setSwipeMode?.("hold");' in local_modules["open_world"]
+    assert 'api.setSwipeMode?.("hold");' in local_modules["racing"]
     assert 'api.setSwipeMode?.("hold");' in local_modules["bullet_hell"]
     assert 'api.setSwipeMode?.("hold");' in local_modules["stickman_shooter"]
     assert 'api.setSwipeMode?.("hold");' in local_modules["real_tetris"]
     assert 'data-hold="fire"' in local_modules["stickman_shooter"]
+    assert 'data-hold="throttle"' in local_modules["racing"]
+    assert 'data-hold="nitro"' in local_modules["racing"]
+    assert 'data-action="item"' in local_modules["racing"]
     assert 'data-bomb="1"' in local_modules["bullet_hell"]
     assert 'data-drop="1"' in local_modules["real_tetris"]
     assert 'data-dir="${t}"' in local_modules["snake"]

@@ -34,7 +34,7 @@
     "scheduler": "",
     "seed": 42,
     "steps": 20,
-    "upscale_model": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+    "upscale_model": "",
     "vae": "",
     "width": 512
   },
@@ -58,10 +58,6 @@
     {
       "kind": "checkpoint",
       "name": "ltx-2.3-22b-dev-fp8.safetensors"
-    },
-    {
-      "kind": "upscale",
-      "name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
     }
   ],
   "schema_version": 1,

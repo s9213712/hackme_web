@@ -22,7 +22,7 @@ ANIMA_LEGACY_WORKFLOW = {
         },
     },
     "67": {"class_type": "CLIPTextEncode", "inputs": {"text": "anime", "clip": ["61", 0]}},
-    "68": {"class_type": "UNETLoader", "inputs": {"unet_name": "anima-preview3-base.safetensors"}},
+    "68": {"class_type": "UNETLoader", "inputs": {"unet_name": "anima-preview2.safetensors"}},
     "69": {"class_type": "VAEDecode", "inputs": {"samples": ["66", 0], "vae": ["62", 0]}},
     "70": {"class_type": "SaveImage", "inputs": {"images": ["69", 0], "filename_prefix": "Anima"}},
 }

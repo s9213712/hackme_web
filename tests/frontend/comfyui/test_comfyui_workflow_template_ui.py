@@ -118,6 +118,26 @@ def test_seed_after_generation_mode_is_available_for_generate_and_templates():
     assert 'if (typeof applyComfyuiSeedAfterGenerate === "function") applyComfyuiSeedAfterGenerate(images[images.length - 1]?.seed);' in workflow_js
 
 
+def test_video_workflow_templates_use_short_foreground_wait_without_losing_job_id():
+    comfyui_js = _read("public/js/36-comfyui.js")
+    workflow_js = _read("public/js/36-comfyui-workflows.js")
+
+    assert "const COMFYUI_VIDEO_FOREGROUND_TIMEOUT_SECONDS = 900;" in comfyui_js
+    assert "const COMFYUI_INTERRUPT_TIMEOUT_SECONDS = 15;" in comfyui_js
+    assert "function createComfyuiForegroundTimeoutError(jobId)" in comfyui_js
+    assert "err.comfyuiForegroundTimeout = true;" in comfyui_js
+    assert "function comfyuiForegroundTimeoutMessage(err)" in comfyui_js
+    assert "job_id: interruptedJobId" in comfyui_js
+    assert "signal: interruptRequestController.signal" in comfyui_js
+    assert "Promise.race([interruptRequest, interruptTimeout])" in comfyui_js
+    assert "已停止等待中斷回應" in comfyui_js
+    assert "function comfyuiWorkflowPresetForegroundTimeoutSeconds(item = {})" in workflow_js
+    assert 'return outputs.includes("video") ? videoTimeout : baseTimeout;' in workflow_js
+    assert "const workflowTimeoutSeconds = comfyuiWorkflowPresetForegroundTimeoutSeconds(preset);" in workflow_js
+    assert "pollComfyuiJobUntilDone(json.job?.job_id, controller, workflowTimeoutSeconds)" in workflow_js
+    assert 'label: timedOut ? "已停止前台等待" : "產圖失敗"' in workflow_js
+
+
 def test_workflow_only_modes_delegate_generate_button_to_selected_template():
     comfyui_js = _read("public/js/36-comfyui.js")
     workflow_js = _read("public/js/36-comfyui-workflows.js")

@@ -232,6 +232,7 @@ def test_game_catalog_includes_solo_games(tmp_path):
         "space_shooter",
         "fps_arena",
         "open_world",
+        "racing",
         "bullet_hell",
         "stickman_shooter",
         "snake",
@@ -288,6 +289,9 @@ def test_game_catalog_adds_stockfish_only_when_local_binary_available(tmp_path):
     assert [item["key"] for item in by_key["fps_arena"]["multiplayer_modes"]] == ["coop", "pvp"]
     assert by_key["open_world"]["title"] == "都市開放世界"
     assert by_key["open_world"]["supports_computer"] is False
+    assert by_key["racing"]["title"] == "街頭賽車"
+    assert by_key["racing"]["supports_invites"] is False
+    assert by_key["racing"]["supports_computer"] is False
     assert by_key["bullet_hell"]["title"] == "彈幕遊戲"
     assert by_key["stickman_shooter"]["title"] == "火柴人橫向射擊"
     assert by_key["stickman_shooter"]["supports_invites"] is True

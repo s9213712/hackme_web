@@ -149,9 +149,9 @@ def test_anima_origin_workflow_defaults_keep_model_stack_aligned():
     manifest = _manifest("origin_anima_txt2img")
     defaults = manifest["default_params"]
 
-    assert workflow["68"]["inputs"]["unet_name"] == "anima-preview3-base.safetensors"
-    assert defaults["model"] == "anima-preview3-base.safetensors"
-    assert defaults["diffusion_model"] == "anima-preview3-base.safetensors"
+    assert workflow["68"]["inputs"]["unet_name"] == "anima-preview2.safetensors"
+    assert defaults["model"] == "anima-preview2.safetensors"
+    assert defaults["diffusion_model"] == "anima-preview2.safetensors"
     assert defaults["clip"] == "qwen_3_06b_base.safetensors"
     assert defaults["vae"] == "qwen_image_vae.safetensors"
     assert defaults["prompt"].startswith("masterpiece, best quality")
