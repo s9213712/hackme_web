@@ -24,6 +24,10 @@ OUTPUT_NODE_CLASS_PRIORITY = {
     "SaveAudio": 0,
     "MaskPreview": 90,
 }
+VIDEO_OUTPUT_CLASS_TYPES = {"SaveVideo", "VHS_VideoCombine"}
+AUDIO_OUTPUT_CLASS_TYPES = {"SaveAudio", "SaveAudioMP3"}
+VIDEO_OUTPUT_EXTENSIONS = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".gif"}
+AUDIO_OUTPUT_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac"}
 TRANSIENT_ERROR_MARKERS = (
     "timed out",
     "timeout",
@@ -275,6 +279,23 @@ def _sorted_output_items(outputs, workflow=None):
     return [item for _index, item in sorted(enumerate(items), key=sort_key)]
 
 
+def _output_ref_bucket(raw_key, normalized_key, *, filename="", class_type=""):
+    class_type = str(class_type or "").strip()
+    if class_type in VIDEO_OUTPUT_CLASS_TYPES:
+        return "videos"
+    if class_type in AUDIO_OUTPUT_CLASS_TYPES:
+        return "audio"
+    lower_name = str(filename or "").strip().lower()
+    extension = ""
+    if "." in lower_name.rsplit("/", 1)[-1]:
+        extension = "." + lower_name.rsplit(".", 1)[-1]
+    if extension in VIDEO_OUTPUT_EXTENSIONS:
+        return "videos"
+    if extension in AUDIO_OUTPUT_EXTENSIONS:
+        return "audio"
+    return normalized_key
+
+
 def collect_output_refs(record, workflow=None):
     outputs = (record or {}).get("outputs") or {}
     found = {"images": [], "videos": [], "audio": [], "other": []}
@@ -284,6 +305,7 @@ def collect_output_refs(record, workflow=None):
             continue
         source_node_id = str(_node_id)
         source_node = workflow.get(source_node_id) if isinstance(workflow, dict) else None
+        source_class_type = str((source_node or {}).get("class_type") or "").strip()
         source_meta = source_node.get("_meta") if isinstance(source_node, dict) and isinstance(source_node.get("_meta"), dict) else {}
         output_label = str(source_meta.get("title") or source_meta.get("label") or "").strip()
         for raw_key, normalized_key in OUTPUT_REF_KEYS.items():
@@ -296,22 +318,29 @@ def collect_output_refs(record, workflow=None):
                 filename = str(item.get("filename") or "").strip()
                 if not filename:
                     continue
+                bucket = _output_ref_bucket(
+                    raw_key,
+                    normalized_key,
+                    filename=filename,
+                    class_type=source_class_type,
+                )
                 payload = {
                     "filename": filename,
                     "subfolder": str(item.get("subfolder") or "").strip(),
                     "type": str(item.get("type") or "output").strip() or "output",
-                    "output_node_id": source_node_id,
                 }
+                if isinstance(workflow, dict):
+                    payload["output_node_id"] = source_node_id
                 if output_label:
                     payload["output_label"] = output_label
                 for extra_key in ("format", "frame_rate", "duration", "workflow"):
                     if extra_key in item:
                         payload[extra_key] = item.get(extra_key)
-                dedupe = (normalized_key, source_node_id, payload["filename"], payload["subfolder"], payload["type"])
+                dedupe = (bucket, source_node_id, payload["filename"], payload["subfolder"], payload["type"])
                 if dedupe in seen:
                     continue
                 seen.add(dedupe)
-                found[normalized_key].append(payload)
+                found[bucket].append(payload)
     return found
 
 

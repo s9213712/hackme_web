@@ -1158,8 +1158,13 @@ function syncComfyuiTemplateSharedPromptFields(role, value) {
 function comfyuiTemplateCanEditLockedModelField(field = {}) {
   const category = String(field?.category || "").toUpperCase();
   if (category !== "MODEL" || !field?.node_id || !field?.input_name) return false;
+  if ((field?.class_type === "LoraLoader" || field?.class_type === "LoraLoaderModelOnly") && field?.input_name === "lora_name") return false;
+  if ((field?.class_type === "LoraLoader" || field?.class_type === "LoraLoaderModelOnly") && String(field?.input_name || "").startsWith("strength_")) return false;
+  if (field?.class_type === "LoraLoaderModelOnly" && field?.input_name === "model") return false;
+  if (field?.class_type === "LoraLoader" && ["model", "clip"].includes(field?.input_name)) return false;
+  if (field?.class_type === "ControlNetApplyAdvanced" && field?.input_name === "control_net") return false;
   if (field?.locked || field?.read_only || field?.lock_reason === "template_default_model") return true;
-  return false;
+  return true;
 }
 
 function comfyuiTemplateLockedModelFieldIsEditing(field = {}) {
@@ -1181,6 +1186,9 @@ function comfyuiTemplateFieldBinding(field, detail, ctx) {
   }
   if (comfyuiTemplateCanEditLockedModelField(field) && comfyuiTemplateLockedModelFieldIsEditing(field)) {
     return { kind: "direct", fieldId: field.id, editableLockedModel: true };
+  }
+  if (comfyuiTemplateCanEditLockedModelField(field)) {
+    return { kind: "readonly", editableLockedModel: true };
   }
   if (
     (field?.class_type === "VAELoader" && field?.input_name === "vae_name") ||

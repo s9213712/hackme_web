@@ -13,7 +13,7 @@ Example:
 
     python3 scripts/testing/video_hls_quality_stress.py \
       --base-url http://127.0.0.1:5017 \
-      --video /mnt/d/test.mp4 \
+      --video /tmp/hackme_video_quality_sample.mp4 \
       --accounts test:test test2:test2 test3:test3 test4:test4 \
       --db /tmp/hackme_video_quality_direct_5017/runtime/database/database.db \
       --runtime-marker /tmp/hackme_video_quality_direct_5017 \
@@ -687,7 +687,7 @@ def write_result(path: Path, result: dict[str, Any]) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:5017")
-    parser.add_argument("--video", default="/mnt/d/test.mp4")
+    parser.add_argument("--video", default="/tmp/hackme_video_quality_sample.mp4")
     parser.add_argument("--db", default="/tmp/hackme_video_quality_direct_5017/runtime/database/database.db")
     parser.add_argument("--runtime-marker", default="/tmp/hackme_video_quality_direct_5017")
     parser.add_argument("--out", default="/tmp/hackme_video_hls_quality_stress_result.json")

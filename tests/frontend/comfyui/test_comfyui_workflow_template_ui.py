@@ -90,11 +90,22 @@ def test_direct_template_fields_are_editable_for_large_model_workflows():
 def test_template_loader_model_fields_do_not_reuse_global_vae_select():
     js = _read("public/js/36-comfyui-workflows.js")
     assert 'field?.class_type === "VAELoader" && field?.input_name === "vae_name") ||' in js
-    assert 'return { kind: "readonly" };' in js
+    assert 'return { kind: "readonly", editableLockedModel: true };' in js
     assert 'field?.class_type === "VAELoader" && field?.input_name === "vae_name") return { kind: "field", targetId: "comfyui-vae-select" };' not in js
     assert 'binding.targetId === "comfyui-vae-select"' not in js
     assert "comfyuiTemplateDisplayValue(field, field?.current_value)" in js
     assert "留白代表使用各自大模型內建 VAE" in js
+
+
+def test_template_checkpoint_model_fields_keep_template_defaults_until_user_edits():
+    js = _read("public/js/36-comfyui-workflows.js")
+
+    assert 'if ((field?.class_type === "LoraLoader" || field?.class_type === "LoraLoaderModelOnly") && field?.input_name === "lora_name") return false;' in js
+    assert 'if (field?.class_type === "CheckpointLoaderSimple" && field?.input_name === "ckpt_name") return { kind: "field", targetId: "comfyui-model-select" };' in js
+    assert 'if (comfyuiTemplateCanEditLockedModelField(field)) {\n    return { kind: "readonly", editableLockedModel: true };\n  }\n  if (' in js
+    assert 'if (comfyuiTemplateCanEditLockedModelField(field) && comfyuiTemplateLockedModelFieldIsEditing(field))' in js
+    assert 'data-comfyui-template-model-edit="${sanitize(field.id || "")}"' in js
+    assert 'data-comfyui-template-model-reset="${sanitize(field.id || "")}"' in js
 
 
 def test_template_cards_do_not_sync_through_legacy_manual_fields():

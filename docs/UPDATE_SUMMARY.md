@@ -1,6 +1,19 @@
 # Update Summary
 
-Release ID: `2026.05.18-159`
+Release ID: `2026.05.19-160`
+
+## 2026.05.19-160
+
+- Fixed ComfyUI workflow media classification so `SaveVideo` and video-file
+  outputs are returned as playable media even when a ComfyUI node reports them
+  under an `images` output key.
+- Kept ComfyUI workflow template model fields on their template defaults unless
+  the user explicitly opens the edit control, avoiding cross-template/global
+  model selection leakage while preserving LoRA selection controls.
+- Added a Playwright QA helper and report for default official ComfyUI template
+  frontend preview checks against a remote ComfyUI API.
+- Cleaned CI gate metadata by registering maintained QA/probe scripts and
+  removing a workstation-specific example video path from the HLS stress probe.
 
 ## 2026.05.18-159
 
