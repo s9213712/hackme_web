@@ -134,6 +134,19 @@ _MODEL_FIELD_OBJECT_INFO_PATHS: dict[tuple[str, str], tuple[str, str]] = {
     for paths in _MODEL_BUCKET_OBJECT_INFO_PATHS.values()
     for class_type, input_name in paths
 }
+_MODEL_FIELD_BUCKETS: dict[tuple[str, str], str] = {
+    (class_type, input_name): bucket
+    for bucket, paths in _MODEL_BUCKET_OBJECT_INFO_PATHS.items()
+    for class_type, input_name in paths
+}
+_MODEL_BUCKET_CLIENT_METHODS: dict[str, str] = {
+    "ckpt": "get_models",
+    "vae": "get_vaes",
+    "lora": "get_loras",
+    "controlnet": "get_controlnet_models",
+    "upscale_model": "get_upscale_models",
+    "latent_upscale_model": "get_latent_upscale_models",
+}
 
 
 def _node_input_options(info: dict[str, Any], class_type: str, input_name: str) -> list[str]:
@@ -187,6 +200,27 @@ def model_option_available(model_name: str, local_options: Iterable[str]) -> boo
     return bool(resolve_model_option(model_name, local_options))
 
 
+def _client_model_options(client: Any, bucket: str) -> list[str]:
+    method_name = _MODEL_BUCKET_CLIENT_METHODS.get(bucket)
+    method = getattr(client, method_name or "", None)
+    if not callable(method):
+        return []
+    try:
+        values = method()
+    except Exception:
+        return []
+    return [str(item or "").strip() for item in values or [] if str(item or "").strip()]
+
+
+def _model_options_for_bucket(info: dict[str, Any], client: Any, bucket: str) -> list[str]:
+    options: list[str] = []
+    for class_type, input_name in _MODEL_BUCKET_OBJECT_INFO_PATHS.get(bucket, ()):
+        options.extend(_node_input_options(info, class_type, input_name))
+    if not options:
+        options.extend(_client_model_options(client, bucket))
+    return options
+
+
 def _embedding_match_keys(value: Any) -> set[str]:
     text = str(value or "").strip().replace("\\", "/").rstrip("/")
     if not text:
@@ -236,7 +270,8 @@ def rewrite_workflow_model_inputs_to_local_options(
             option_ref = _MODEL_FIELD_OBJECT_INFO_PATHS.get((class_type, str(input_name)))
             if not option_ref:
                 continue
-            options = _node_input_options(info, option_ref[0], option_ref[1])
+            bucket = _MODEL_FIELD_BUCKETS.get((class_type, str(input_name)))
+            options = _model_options_for_bucket(info, client, bucket) if bucket else _node_input_options(info, option_ref[0], option_ref[1])
             resolved = resolve_model_option(raw_value, options)
             if not resolved or resolved == raw_value:
                 continue
@@ -317,9 +352,7 @@ def check_workflow_capability(
             # Unknown bucket — fall back to MODEL bucket name as-is.
             cap.missing_models[bucket] = sorted(set(names))
             continue
-        local_options = []
-        for class_type, input_name in paths:
-            local_options.extend(_node_input_options(info, class_type, input_name))
+        local_options = _model_options_for_bucket(info, client, bucket)
         missing = sorted({n for n in names if n and not model_option_available(n, local_options)})
         if missing:
             cap.missing_models[bucket] = missing

@@ -81,6 +81,25 @@ def _clean_option_list(values):
     return cleaned
 
 
+def _model_folder_api_options(values):
+    options = []
+    for item in values or []:
+        if isinstance(item, dict):
+            item = (
+                item.get("name")
+                or item.get("file_name")
+                or item.get("filename")
+                or item.get("value")
+                or item.get("path")
+                or item.get("file_path")
+                or ""
+            )
+        text = str(item or "").strip()
+        if text:
+            options.append(text)
+    return options
+
+
 @dataclass
 class ComfyUIImage:
     filename: str
@@ -193,6 +212,32 @@ class ComfyUIClient:
 
     def _list_node_input_options(self, node_class, input_name):
         return _node_input_options_from_info(self.get_object_info(node_class), node_class, input_name)
+
+    def get_model_folder_models(self, folder_name):
+        folder = str(folder_name or "").strip().strip("/")
+        if not folder:
+            return []
+        data = self._json_request(
+            f"/api/models/{urllib.parse.quote(folder, safe='')}",
+            timeout=_object_info_timeout_seconds(self.timeout),
+        )
+        if isinstance(data, list):
+            return _model_folder_api_options(data)
+        if isinstance(data, dict):
+            for key in ("models", "files", "items"):
+                values = data.get(key)
+                if isinstance(values, list):
+                    return _model_folder_api_options(values)
+        return []
+
+    def _list_model_loader_options(self, node_class, input_name, folder_name):
+        options = self._list_node_input_options(node_class, input_name)
+        if options:
+            return options
+        try:
+            return self.get_model_folder_models(folder_name)
+        except ComfyUIError:
+            return []
 
     def get_object_info(self, node_class=None):
         path = "/object_info"
@@ -320,10 +365,10 @@ class ComfyUIClient:
         return self._list_node_input_options("ControlNetLoader", "control_net_name")
 
     def get_upscale_models(self):
-        return self._list_node_input_options("UpscaleModelLoader", "model_name")
+        return self._list_model_loader_options("UpscaleModelLoader", "model_name", "upscale_models")
 
     def get_latent_upscale_models(self):
-        return self._list_node_input_options("LatentUpscaleModelLoader", "model_name")
+        return self._list_model_loader_options("LatentUpscaleModelLoader", "model_name", "latent_upscale_models")
 
     def get_capabilities(self):
         object_info = self.get_object_info()
@@ -346,6 +391,16 @@ class ComfyUIClient:
         controlnet_models = _node_input_options_from_info(object_info, "ControlNetLoader", "control_net_name") if "ControlNetLoader" in available_nodes else []
         upscale_models = _node_input_options_from_info(object_info, "UpscaleModelLoader", "model_name") if "UpscaleModelLoader" in available_nodes else []
         latent_upscale_models = _node_input_options_from_info(object_info, "LatentUpscaleModelLoader", "model_name") if "LatentUpscaleModelLoader" in available_nodes else []
+        if not upscale_models:
+            try:
+                upscale_models = self.get_model_folder_models("upscale_models")
+            except ComfyUIError:
+                upscale_models = []
+        if not latent_upscale_models:
+            try:
+                latent_upscale_models = self.get_model_folder_models("latent_upscale_models")
+            except ComfyUIError:
+                latent_upscale_models = []
         samplers = _node_input_options_from_info(object_info, "KSampler", "sampler_name")
         schedulers = _node_input_options_from_info(object_info, "KSampler", "scheduler")
         controlnet_types = {}
@@ -467,8 +522,8 @@ class ComfyUIClient:
     def _emit_progress(self, progress_callback, snapshot):
         return comfy_execution.emit_progress(progress_callback, snapshot)
 
-    def _apply_ws_message_to_progress(self, snapshot, message, prompt_id):
-        return comfy_execution.apply_ws_message_to_progress(snapshot, message, prompt_id)
+    def _apply_ws_message_to_progress(self, snapshot, message, prompt_id, *, workflow=None):
+        return comfy_execution.apply_ws_message_to_progress(snapshot, message, prompt_id, workflow=workflow)
 
     def wait_for_images(
         self,

@@ -1794,7 +1794,7 @@ function comfyuiForegroundTimeoutMessage(err) {
   return `已停止前台等待；後端工作可能仍在執行${suffix}。完成後請到歷史紀錄查看或稍後重新整理 Workflow。`;
 }
 
-async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds) {
+async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds, options = {}) {
   comfyuiActiveJobId = jobId;
   const startedAt = Date.now();
   const unlimited = Number(timeoutSeconds) <= 0;
@@ -1821,6 +1821,13 @@ async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds) {
       );
     }
     applyComfyuiJobProgress(job.progress || {}, displayTimeoutSeconds);
+    if (job.status !== "completed" && job.result && typeof options.onPartialResult === "function") {
+      try {
+        await options.onPartialResult(job.result, job);
+      } catch (err) {
+        if (typeof options.onPartialError === "function") options.onPartialError(err, job);
+      }
+    }
     if (job.status === "completed" && job.result) return job.result;
     if (job.status === "error") throw new Error(job.error || job.progress?.detail || "ComfyUI 產圖失敗");
     await new Promise((resolve) => setTimeout(resolve, comfyuiJobPollMs()));
@@ -2204,15 +2211,23 @@ function renderComfyuiEmbeddingShortcuts(values = []) {
 function loraTermsStillNeededAfterRemoving(nameToRemove) {
   const needed = new Set();
   const removedName = normalizeComfyuiLoraName(nameToRemove);
-  comfyuiSelectedLoras.forEach((item) => {
-    const name = normalizeComfyuiLoraName(item?.name);
-    if (!name || name === removedName) return;
-    const detail = comfyuiLoraDetails?.[name] || {};
+  const addNeededTerms = (name) => {
+    const cleanName = normalizeComfyuiLoraName(name);
+    if (!cleanName) return;
+    const detail = comfyuiLoraDetails?.[cleanName] || {};
     (detail.trained_words || []).forEach((term) => {
       const cleanTerm = String(term || "").trim();
       if (cleanTerm) needed.add(cleanTerm.toLowerCase());
     });
+  };
+  comfyuiSelectedLoras.forEach((item) => {
+    const name = normalizeComfyuiLoraName(item?.name);
+    if (!name || name === removedName) return;
+    addNeededTerms(name);
   });
+  if (typeof comfyuiWorkflowLoraNamesForPromptSync === "function") {
+    comfyuiWorkflowLoraNamesForPromptSync().forEach((name) => addNeededTerms(name));
+  }
   return needed;
 }
 
@@ -2955,16 +2970,91 @@ function renderComfyuiGeneratedMedia(mediaItems = []) {
 }
 
 function openComfyuiGeneratedImage(index = comfyuiSelectedImageIndex) {
-  const image = comfyuiGeneratedImages[index] || comfyuiCurrentImage;
+  const images = Array.isArray(comfyuiGeneratedImages) && comfyuiGeneratedImages.length
+    ? comfyuiGeneratedImages
+    : [comfyuiCurrentImage].filter(Boolean);
+  const safeIndex = Math.max(0, Math.min(Number(index) || 0, images.length - 1));
+  const image = images[safeIndex] || comfyuiCurrentImage;
   if (!image?.data_url) {
     setComfyuiMessage("圖片預覽尚未載入完成", false);
     return;
   }
-  const opened = window.open(image.data_url, "_blank", "noopener");
-  if (!opened) {
-    setComfyuiMessage("瀏覽器阻擋了大圖視窗，請允許彈出視窗後再試。", false);
+  let overlay = $("comfyui-image-lightbox");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "comfyui-image-lightbox";
+    overlay.className = "comfyui-image-lightbox";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-hidden", "true");
+    overlay.innerHTML = `
+      <div class="comfyui-image-lightbox-bar">
+        <div>
+          <strong id="comfyui-image-lightbox-title">ComfyUI 圖片</strong>
+          <div class="drive-card-sub" id="comfyui-image-lightbox-meta"></div>
+        </div>
+        <button class="btn btn-sm" type="button" data-comfyui-lightbox-close="1">關閉</button>
+      </div>
+      <button class="comfyui-lightbox-nav prev" type="button" data-comfyui-lightbox-prev="1" aria-label="上一張">‹</button>
+      <div class="comfyui-image-lightbox-body" data-comfyui-lightbox-close="1">
+        <img id="comfyui-image-lightbox-img" alt="ComfyUI generated image enlarged" />
+      </div>
+      <button class="comfyui-lightbox-nav next" type="button" data-comfyui-lightbox-next="1" aria-label="下一張">›</button>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelectorAll("[data-comfyui-lightbox-close]").forEach((el) => {
+      el.addEventListener("click", (event) => {
+        if (event.target === el) closeComfyuiGeneratedImageLightbox();
+      });
+    });
+    overlay.querySelector("[data-comfyui-lightbox-prev]")?.addEventListener("click", () => {
+      openComfyuiGeneratedImage((Number(overlay.dataset.index) || 0) - 1);
+    });
+    overlay.querySelector("[data-comfyui-lightbox-next]")?.addEventListener("click", () => {
+      openComfyuiGeneratedImage((Number(overlay.dataset.index) || 0) + 1);
+    });
   }
+  overlay.dataset.index = String(safeIndex);
+  const img = overlay.querySelector("#comfyui-image-lightbox-img");
+  const title = overlay.querySelector("#comfyui-image-lightbox-title");
+  const meta = overlay.querySelector("#comfyui-image-lightbox-meta");
+  const label = comfyuiGeneratedImageLabel(image, safeIndex) || `第 ${safeIndex + 1} 張`;
+  if (img) img.src = image.data_url;
+  if (title) title.textContent = label;
+  if (meta) meta.textContent = `${safeIndex + 1} / ${Math.max(images.length, 1)}${image.size_bytes ? ` · ${formatDriveBytes(image.size_bytes)}` : ""}`;
+  overlay.querySelectorAll(".comfyui-lightbox-nav").forEach((button) => {
+    button.hidden = images.length <= 1;
+  });
+  overlay.classList.add("show");
+  overlay.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  overlay.querySelector("[data-comfyui-lightbox-close]")?.focus();
 }
+
+function closeComfyuiGeneratedImageLightbox() {
+  const overlay = $("comfyui-image-lightbox");
+  if (!overlay) return;
+  overlay.classList.remove("show");
+  overlay.setAttribute("aria-hidden", "true");
+  const img = overlay.querySelector("#comfyui-image-lightbox-img");
+  if (img) img.removeAttribute("src");
+  document.body.classList.remove("modal-open");
+}
+
+document.addEventListener("keydown", (event) => {
+  const overlay = $("comfyui-image-lightbox");
+  if (!overlay?.classList.contains("show")) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeComfyuiGeneratedImageLightbox();
+  } else if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    openComfyuiGeneratedImage((Number(overlay.dataset.index) || 0) - 1);
+  } else if (event.key === "ArrowRight") {
+    event.preventDefault();
+    openComfyuiGeneratedImage((Number(overlay.dataset.index) || 0) + 1);
+  }
+});
 
 function renderComfyuiGeneratedImages(images) {
   const preview = $("comfyui-preview");

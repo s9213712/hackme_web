@@ -34,6 +34,7 @@ from flask import request, send_file
 
 from services.comfyui.settings import (
     DEFAULT_COMFYUI_PORT,
+    DEFAULT_COMFYUI_REMOTE_API_URL,
     normalize_comfyui_connection_mode,
     normalize_huggingface_repo_id,
     validate_comfyui_api_host,
@@ -72,6 +73,7 @@ from services.comfyui.template import (
     analyze_workflow_json,
     build_ui_schema,
     check_workflow_capability,
+    embedding_option_available,
     model_option_available,
     runtime_comfyui_dir,
 )
@@ -91,7 +93,7 @@ from services.storage.storage_albums import (
 )
 
 
-DEFAULT_COMFYUI_URL = os.environ.get("COMFYUI_API_URL", "http://localhost:8192")
+DEFAULT_COMFYUI_URL = DEFAULT_COMFYUI_REMOTE_API_URL
 COMFYUI_LOCAL_START_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "comfyui" / "comfyui_run_in_linux.template.sh"
 SAFE_SAMPLER_FALLBACK = "euler"
 SAFE_SCHEDULER_FALLBACK = "normal"
@@ -1309,6 +1311,19 @@ def register_comfyui_routes(app, deps):
                 merged.append(item)
             return merged
 
+        inferred_models = inferred.get("required_models") or []
+        inferred_embedding_items = [
+            item for item in inferred_models
+            if isinstance(item, dict) and str(item.get("kind") or "").strip().lower() == "embedding"
+        ]
+        if inferred_embedding_items:
+            required_models = [
+                item for item in required_models
+                if not (
+                    isinstance(item, dict)
+                    and str(item.get("kind") or "").strip().lower() == "embedding"
+                )
+            ]
         required_models = _merge_required(required_models, inferred.get("required_models") or [], ("kind", "name"))
         required_loras = _merge_required(required_loras, inferred.get("required_loras") or [], ("name",))
         required_controlnets = _merge_required(required_controlnets, inferred.get("required_controlnets") or [], ("name", "type"))
@@ -1346,7 +1361,7 @@ def register_comfyui_routes(app, deps):
                 if not model_option_available(name, sets["clip_models"]):
                     missing_models.append({"kind": kind, "name": name})
             elif kind == "embedding":
-                if not model_option_available(name, sets["embeddings"]):
+                if not embedding_option_available(name, sets["embeddings"]):
                     missing_models.append({"kind": kind, "name": name})
             elif not model_option_available(name, sets["models"]):
                 missing_models.append({"kind": kind, "name": name})
@@ -1369,6 +1384,14 @@ def register_comfyui_routes(app, deps):
             issues.append(f"缺少 workflow node：{', '.join(sorted(set(missing_nodes)))}")
         if missing_models:
             issues.append("缺少模型：" + ", ".join(sorted({item['name'] for item in missing_models})))
+            if (
+                any(str(item.get("kind") or "").strip().lower() in {"latent_upscale", "latent_upscale_model"} for item in missing_models)
+                and not sets["latent_upscale_models"]
+            ):
+                issues.append(
+                    "ComfyUI API 目前未列出任何 latent_upscale_models；"
+                    "若檔案剛放入遠端 models/latent_upscale_models，請重啟或刷新遠端 ComfyUI 的模型清單"
+                )
         if missing_loras:
             issues.append("缺少 LoRA：" + ", ".join(sorted({item['name'] for item in missing_loras})))
         if missing_controlnets:
@@ -2246,7 +2269,7 @@ def register_comfyui_routes(app, deps):
             "billing": billing,
         }
 
-    def _finalize_generation_records(actor, params, result, *, backend_url=""):
+    def _finalize_generation_records(actor, params, result, *, backend_url="", notify=True):
         result_images = result.get("images") if isinstance(result.get("images"), list) else []
         if not result_images:
             result_images = [{
@@ -2267,9 +2290,9 @@ def register_comfyui_routes(app, deps):
                 "image_ref": image_ref_item,
                 "mime_type": mime_type,
                 "size_bytes": size_bytes,
-                "seed": params["seed"],
-                "model": params["model"],
-                "batch_size": params["batch_size"],
+                "seed": params.get("seed"),
+                "model": params.get("model") or params.get("checkpoint") or params.get("diffusion_model") or "",
+                "batch_size": params.get("batch_size") or len(result_images) or 1,
                 "batch_index": index,
                 "output_node_id": output_node_id,
                 "output_label": output_label,
@@ -2277,14 +2300,15 @@ def register_comfyui_routes(app, deps):
         conn = get_db()
         try:
             _register_comfyui_image_refs(conn, actor=actor, images=images, backend_url=backend_url)
-            create_notification_if_enabled(
-                conn,
-                user_id=_actor_value(actor, "id"),
-                type="comfyui_generation_completed",
-                title="ComfyUI 產圖完成",
-                body=f"你的 ComfyUI 產圖已完成，共產生 {len(images)} 張圖片。",
-                link="/comfyui",
-            )
+            if notify:
+                create_notification_if_enabled(
+                    conn,
+                    user_id=_actor_value(actor, "id"),
+                    type="comfyui_generation_completed",
+                    title="ComfyUI 產圖完成",
+                    body=f"你的 ComfyUI 產圖已完成，共產生 {len(images)} 張圖片。",
+                    link="/comfyui",
+                )
             conn.commit()
         except Exception:
             try:
@@ -2488,11 +2512,85 @@ def register_comfyui_routes(app, deps):
         prompt = str(default_params.get("prompt") or "")
         negative_prompt = str(default_params.get("negative_prompt") or "")
         expected_count = _workflow_expected_image_count(workflow_json, default_params)
+        partial_state = {"signature": ""}
+
+        def _partial_output_signature(refs):
+            parts = []
+            for item in refs:
+                if not isinstance(item, dict):
+                    continue
+                parts.append("|".join([
+                    str(item.get("output_node_id") or ""),
+                    str(item.get("filename") or ""),
+                    str(item.get("subfolder") or ""),
+                    str(item.get("type") or ""),
+                ]))
+            return "\n".join(parts)
+
+        def _publish_partial_workflow_outputs(progress):
+            partial_outputs = progress.get("partial_outputs") if isinstance(progress, dict) else {}
+            if not isinstance(partial_outputs, dict):
+                return
+            image_refs = partial_outputs.get("images") if isinstance(partial_outputs.get("images"), list) else []
+            if not image_refs:
+                return
+            signature = _partial_output_signature(image_refs)
+            if not signature or signature == partial_state.get("signature"):
+                return
+            partial_state["signature"] = signature
+            prompt_id = str(partial_outputs.get("prompt_id") or progress.get("prompt_id") or "")
+            image_items = [
+                {
+                    "image_ref": ref,
+                    "mime_type": "image/png",
+                    "data": b"",
+                    "size_bytes": 0,
+                    "output_node_id": ref.get("output_node_id") or "",
+                    "output_label": ref.get("output_label") or "",
+                }
+                for ref in image_refs
+                if isinstance(ref, dict)
+            ]
+            if not image_items:
+                return
+            result_stub = {
+                "prompt_id": prompt_id,
+                "image_ref": image_items[0]["image_ref"],
+                "mime_type": "image/png",
+                "data": b"",
+                "images": image_items,
+                "media": {},
+            }
+            try:
+                images = _finalize_generation_records(
+                    actor,
+                    default_params,
+                    result_stub,
+                    backend_url=backend_binding.get("url"),
+                    notify=False,
+                )
+            except Exception:
+                return
+            payload = {
+                "image": images[0] if images else None,
+                "images": images,
+                "media": [],
+                "workflow_run_id": run_id,
+                "preset_id": int(row["id"]),
+                "partial": True,
+                "expected_image_count": expected_count,
+            }
+            _update_generation_job(job_id, result=payload)
+
+        def _workflow_progress_callback(progress):
+            _update_generation_job_progress(job_id, progress)
+            _publish_partial_workflow_outputs(progress or {})
+
         try:
             run_kwargs = {
                 "timeout_seconds": timeout_seconds,
                 "expected_count": expected_count,
-                "progress_callback": lambda progress: _update_generation_job_progress(job_id, progress),
+                "progress_callback": _workflow_progress_callback,
                 "wait_until_completed": True,
             }
             if prompt_extra_data:

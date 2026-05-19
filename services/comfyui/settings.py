@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
+DEFAULT_COMFYUI_REMOTE_API_URL = os.environ.get("COMFYUI_API_URL", "http://192.168.18.19:8188").rstrip("/")
 DEFAULT_COMFYUI_PORT = 8192
 DEFAULT_COMFYUI_MAX_BATCH_SIZE = 1
 DEFAULT_COMFYUI_WIDTH = 1024
@@ -23,7 +24,7 @@ DEFAULT_COMFYUI_HEIGHT = 1024
 
 COMFYUI_DEFAULT_SETTINGS = {
     "comfyui_connection_mode": os.environ.get("COMFYUI_CONNECTION_MODE", "remote"),
-    "comfyui_remote_api_url": os.environ.get("COMFYUI_API_URL", ""),
+    "comfyui_remote_api_url": DEFAULT_COMFYUI_REMOTE_API_URL,
     "comfyui_base_dir": os.environ.get("COMFYUI_BASE_DIR", ""),
     "comfyui_local_start_script": os.environ.get("COMFYUI_START_SCRIPT", ""),
     "comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost"),

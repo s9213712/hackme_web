@@ -485,6 +485,14 @@ class RecoveringComfyUIClient:
         return {"ok": True, "system": {"os": "test"}}
 
 
+class UrlEchoComfyUIClient:
+    def __init__(self, base_url):
+        self.base_url = base_url
+
+    def health_check(self, *, timeout=3):
+        return {"ok": True, "system": {"backend": self.base_url}}
+
+
 class TrackingBackendClient:
     def __init__(self, base_url, *, model_name, filename):
         self.base_url = base_url
@@ -2328,6 +2336,57 @@ def test_comfyui_object_info_combo_options_are_parsed_for_latent_upscale_models(
     assert client.get_latent_upscale_models() == ["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]
 
 
+def test_comfyui_latent_upscale_models_fall_back_to_model_folder_api(monkeypatch):
+    client = ComfyUIClient("http://fake-comfyui")
+    seen_paths = []
+
+    def fake_json_request(path, **_kwargs):
+        seen_paths.append(path)
+        if path == "/object_info/LatentUpscaleModelLoader":
+            return {
+                "LatentUpscaleModelLoader": {
+                    "input": {
+                        "required": {
+                            "model_name": ["COMBO", {"options": []}],
+                        }
+                    }
+                }
+            }
+        if path == "/api/models/latent_upscale_models":
+            return ["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]
+        raise AssertionError(f"unexpected path {path}")
+
+    monkeypatch.setattr(client, "_json_request", fake_json_request)
+    assert client.get_latent_upscale_models() == ["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]
+    assert seen_paths == ["/object_info/LatentUpscaleModelLoader", "/api/models/latent_upscale_models"]
+
+
+def test_comfyui_capabilities_fall_back_to_latent_upscale_model_folder_api(monkeypatch):
+    client = ComfyUIClient("http://fake-comfyui")
+
+    def fake_json_request(path, **_kwargs):
+        if path == "/object_info":
+            return {
+                "LatentUpscaleModelLoader": {
+                    "input": {
+                        "required": {
+                            "model_name": ["COMBO", {"options": []}],
+                        }
+                    }
+                }
+            }
+        if path == "/api/models/latent_upscale_models":
+            return ["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]
+        if path == "/api/models/upscale_models":
+            return []
+        raise AssertionError(f"unexpected path {path}")
+
+    monkeypatch.setattr(client, "_json_request", fake_json_request)
+    capabilities = client.get_capabilities()
+
+    assert capabilities["latent_upscale_models"] == ["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]
+
+
 def test_comfyui_workflow_chains_loras_between_checkpoint_and_sampler():
     workflow = ComfyUIClient("http://fake-comfyui").build_text_to_image_workflow({
         "model": "dream.safetensors",
@@ -2484,6 +2543,35 @@ def test_comfyui_status_reports_offline_backend(tmp_path):
     assert body["ok"] is True
     assert body["available"] is False
     assert body["comfyui_url"] == "http://fake-offline"
+
+
+def test_comfyui_status_uses_lan_default_for_legacy_blank_remote_url(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "remote",
+            "comfyui_remote_api_url": "",
+            "comfyui_api_host": "localhost",
+            "comfyui_api_port": 8192,
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: UrlEchoComfyUIClient(url),
+        },
+    ).test_client()
+
+    status = client.get("/api/comfyui/status")
+
+    assert status.status_code == 200
+    body = status.get_json()
+    assert body["available"] is True
+    assert body["connection_mode"] == "remote"
+    assert body["comfyui_url"] == "http://192.168.18.19:8188"
 
 
 def test_comfyui_status_warns_when_models_are_on_windows_mount(tmp_path):
@@ -4741,7 +4829,7 @@ def test_comfyui_frontend_is_wired():
     assert '目前是本地模式：可由 root 啟動 / 停止本地 ComfyUI' in comfyui_js
     assert '目前是雲端 / 遠端模式：此頁會直接呼叫遠端 ComfyUI API 生圖' in comfyui_js
     assert '目前是 Diffusers 模式：後端會直接載入 Hugging Face repo 生圖' in comfyui_js
-    assert "function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds)" in comfyui_js
+    assert "function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds, options = {})" in comfyui_js
     assert "function pollComfyuiModelDownloadJob(jobId)" in comfyui_js
     assert "function comfyuiStorageWarningText(payload = {})" in comfyui_js
     assert "const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;" in comfyui_js
@@ -4879,6 +4967,8 @@ def test_comfyui_frontend_is_wired():
     assert "/js/25-community.js?v=20260518-inline-media" in index_html
     assert 'isComfyuiAvailableForNavigation' in admin_js
     assert '"feature_comfyui_enabled": False' in platform_settings_py
+    assert 'DEFAULT_COMFYUI_REMOTE_API_URL = os.environ.get("COMFYUI_API_URL", "http://192.168.18.19:8188").rstrip("/")' in comfyui_settings_py
+    assert '"comfyui_remote_api_url": DEFAULT_COMFYUI_REMOTE_API_URL' in comfyui_settings_py
     assert '"comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost")' in comfyui_settings_py
     assert '"comfyui_api_port": DEFAULT_COMFYUI_PORT' in comfyui_settings_py
     assert '"comfyui_max_batch_size": DEFAULT_COMFYUI_MAX_BATCH_SIZE' in comfyui_settings_py

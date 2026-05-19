@@ -5,6 +5,7 @@ import pytest
 
 from services.comfyui.execution import collect_output_refs
 from services.comfyui.template.multi_compare import (
+    MAX_MULTI_COMPARE_CHECKPOINTS,
     MultiCompareWorkflowError,
     expand_multi_compare_workflow,
 )
@@ -80,6 +81,23 @@ def test_multi_compare_expands_extra_checkpoint_branches_without_mutating_base()
 def test_multi_compare_requires_at_least_two_checkpoints():
     with pytest.raises(MultiCompareWorkflowError, match="至少需要選擇 2 個"):
         expand_multi_compare_workflow(_workflow(), {}, {"checkpoints": ["only-one.safetensors"]})
+
+
+def test_multi_compare_allows_up_to_fourteen_checkpoints():
+    checkpoints = [f"SDXL/model-{index}.safetensors" for index in range(MAX_MULTI_COMPARE_CHECKPOINTS)]
+    expansion = expand_multi_compare_workflow(_workflow(), {}, {"checkpoints": checkpoints})
+
+    assert MAX_MULTI_COMPARE_CHECKPOINTS == 14
+    assert len(expansion.output_labels) == 14
+    assert expansion.workflow["10300"]["inputs"]["ckpt_name"] == "SDXL/model-13.safetensors"
+    assert expansion.workflow["10303"]["inputs"]["images"] == ["10302", 0]
+
+
+def test_multi_compare_rejects_more_than_fourteen_checkpoints():
+    checkpoints = [f"model-{index}.safetensors" for index in range(MAX_MULTI_COMPARE_CHECKPOINTS + 1)]
+
+    with pytest.raises(MultiCompareWorkflowError, match="最多一次比較 14 個"):
+        expand_multi_compare_workflow(_workflow(), {}, {"checkpoints": checkpoints})
 
 
 def test_output_refs_preserve_workflow_node_labels():

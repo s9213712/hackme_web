@@ -32,6 +32,8 @@ const DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS = {
   suspended: { upload_kb_per_sec: 0, download_kb_per_sec: 0, priority: 0 }
 };
 
+const DEFAULT_COMFYUI_REMOTE_API_URL = "http://192.168.18.19:8188";
+
 let suppressNextSettingsStatusClear = false;
 let currentServerMode = "dev_ready";
 let settingsStatusAutoClearTimer = null;
@@ -4402,7 +4404,7 @@ async function loadSettings() {
   if ($("s-drive-dashboard-lazy-refresh-seconds")) $("s-drive-dashboard-lazy-refresh-seconds").value = adminRefreshSeconds(s.drive_dashboard_lazy_refresh_seconds, 10, 1, 300);
   updateBackpressureModeFields();
   if ($("s-comfyui-connection-mode")) $("s-comfyui-connection-mode").value = s.comfyui_connection_mode || "remote";
-  if ($("s-comfyui-remote-api-url")) $("s-comfyui-remote-api-url").value = s.comfyui_remote_api_url || "";
+  if ($("s-comfyui-remote-api-url")) $("s-comfyui-remote-api-url").value = s.comfyui_remote_api_url || DEFAULT_COMFYUI_REMOTE_API_URL;
   if ($("s-comfyui-base-dir")) $("s-comfyui-base-dir").value = s.comfyui_base_dir || "";
   if ($("s-comfyui-local-start-script")) $("s-comfyui-local-start-script").value = s.comfyui_local_start_script || "";
   if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
@@ -6164,7 +6166,7 @@ async function saveSettings() {
     server_connection_monitor_seconds: parseInt($("s-server-connection-monitor-seconds")?.value || "15", 10) || 15,
     drive_dashboard_lazy_refresh_seconds: parseInt($("s-drive-dashboard-lazy-refresh-seconds")?.value || "10", 10) || 10,
     comfyui_connection_mode: comfyuiMode,
-    comfyui_remote_api_url: ($("s-comfyui-remote-api-url")?.value || "").trim(),
+    comfyui_remote_api_url: ($("s-comfyui-remote-api-url")?.value || DEFAULT_COMFYUI_REMOTE_API_URL).trim(),
     comfyui_base_dir: ($("s-comfyui-base-dir")?.value || "").trim(),
     comfyui_local_start_script: ($("s-comfyui-local-start-script")?.value || "").trim(),
     comfyui_api_host: ($("s-comfyui-api-host")?.value || "localhost").trim(),
@@ -6314,7 +6316,7 @@ async function testComfyuiConnection() {
   const mode = $("s-comfyui-connection-mode")?.value || "remote";
   const host = ($("s-comfyui-api-host")?.value || "localhost").trim();
   const port = parseInt($("s-comfyui-api-port")?.value || "8192", 10);
-  const apiUrl = ($("s-comfyui-remote-api-url")?.value || "").trim();
+  const apiUrl = ($("s-comfyui-remote-api-url")?.value || DEFAULT_COMFYUI_REMOTE_API_URL).trim();
   const baseDir = ($("s-comfyui-base-dir")?.value || "").trim();
   const startScript = ($("s-comfyui-local-start-script")?.value || "").trim();
   const diffusersRepo = ($("s-comfyui-diffusers-model-repo")?.value || "").trim();

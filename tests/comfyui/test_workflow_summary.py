@@ -27,3 +27,25 @@ def test_workflow_summary_detects_unet_clip_and_embedding_dependencies():
     assert summary["default_params"]["diffusion_model"] == "anima-preview2.safetensors"
     assert summary["default_params"]["clip"] == "qwen_3_06b_base.safetensors"
     assert summary["default_params"]["upscale_model"] == ""
+
+
+def test_workflow_summary_embedding_parser_stops_before_prompt_words():
+    workflow = {
+        "4": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "clip": ["2", 0],
+                "text": "embedding:lazyneg blurry, embedding:lazypos embedding:lazywet embedding:lazyloli",
+            },
+        },
+    }
+
+    summary = extract_workflow_summary(workflow)
+    required = {(item["kind"], item["name"]) for item in summary["required_models"]}
+
+    assert ("embedding", "lazyneg") in required
+    assert ("embedding", "lazypos") in required
+    assert ("embedding", "lazywet") in required
+    assert ("embedding", "lazyloli") in required
+    assert ("embedding", "lazyneg blurry") not in required
+    assert ("embedding", "lazypos embedding:lazywet embedding:lazyloli") not in required

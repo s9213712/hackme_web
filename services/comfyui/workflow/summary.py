@@ -19,19 +19,49 @@ CONTROLNET_TYPE_ALIASES = {
 }
 
 EMBEDDING_TAG_RE = re.compile(r"<\s*embeddings?\s*:\s*([^<>]+?)\s*>", re.IGNORECASE)
-EMBEDDING_PREFIX_RE = re.compile(r"(?<![\w/])embedding:([^,;<>\r\n]+)", re.IGNORECASE)
+EMBEDDING_PREFIX_RE = re.compile(r"(?<![\w/])embedding:", re.IGNORECASE)
+EMBEDDING_PREFIX_STOP_RE = re.compile(r"[,;<>\r\n]")
+EMBEDDING_FILE_EXT_RE = re.compile(r"\.(?:safetensors|pt|pth|bin)\b", re.IGNORECASE)
+
+
+def clean_embedding_name(name):
+    return str(name or "").strip().strip(".,;")
+
+
+def extract_prefixed_embedding_names(text):
+    source = str(text or "")
+    matches = list(EMBEDDING_PREFIX_RE.finditer(source))
+    names = []
+    for index, match in enumerate(matches):
+        start = match.end()
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(source)
+        stop = EMBEDDING_PREFIX_STOP_RE.search(source, start, next_start)
+        end = stop.start() if stop else next_start
+        chunk = source[start:end].strip()
+        if not chunk:
+            continue
+        ext_match = EMBEDDING_FILE_EXT_RE.search(chunk)
+        if ext_match:
+            name = chunk[:ext_match.end()]
+        elif "/" in chunk or "\\" in chunk:
+            name = chunk
+        else:
+            name = chunk.split(maxsplit=1)[0]
+        name = clean_embedding_name(name)
+        if name:
+            names.append(name)
+    return names
 
 
 def extract_embedding_names_from_text(text):
     names = []
     seen = set()
-    for pattern in (EMBEDDING_TAG_RE, EMBEDDING_PREFIX_RE):
-        for match in pattern.finditer(str(text or "")):
-            name = str(match.group(1) or "").strip().strip(".,;")
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            names.append(name)
+    tag_names = [clean_embedding_name(match.group(1)) for match in EMBEDDING_TAG_RE.finditer(str(text or ""))]
+    for name in tag_names + extract_prefixed_embedding_names(text):
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
     return names
 
 

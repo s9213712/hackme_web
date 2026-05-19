@@ -7,7 +7,7 @@ const COMFYUI_MULTI_COMPARE_CHECKPOINTS_TEST_ID = "origin_multi_compare_checkpoi
 const COMFYUI_MULTI_METHOD_UPSCALE_ID = "origin_multi_method_upscale";
 const COMFYUI_COMPARE_SHARED_KSAMPLER_INPUTS = new Set(["seed", "steps", "cfg", "sampler_name", "scheduler", "denoise"]);
 const COMFYUI_OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX = "official-template-media:";
-const COMFYUI_MULTI_COMPARE_MAX_CHECKPOINTS = 8;
+const COMFYUI_MULTI_COMPARE_MAX_CHECKPOINTS = 14;
 const COMFYUI_UPSCALE_BREAKPOINT_DEFAULT = "first_upscale";
 
 function comfyuiMultiCompareMaxLoras() {
@@ -816,6 +816,141 @@ function ensureComfyuiMultiCompareState(detail = comfyuiSelectedTemplateDetail) 
   return comfyuiMultiCompareState;
 }
 
+function comfyuiWorkflowLoraNamesForPromptSync() {
+  const names = [];
+  const addName = (name) => {
+    const cleanName = typeof normalizeComfyuiLoraName === "function"
+      ? normalizeComfyuiLoraName(name)
+      : String(name || "").trim();
+    if (cleanName) names.push(cleanName);
+  };
+  if (comfyuiTemplateIsMultiCompareCheckpoints(comfyuiSelectedTemplateDetail)) {
+    const state = ensureComfyuiMultiCompareState(comfyuiSelectedTemplateDetail);
+    (state?.loras || []).forEach((item) => addName(item?.name));
+  }
+  return names;
+}
+
+function comfyuiMultiCompareLoraTrainedWords(name) {
+  const cleanName = typeof normalizeComfyuiLoraName === "function"
+    ? normalizeComfyuiLoraName(name)
+    : String(name || "").trim();
+  const detail = cleanName ? (comfyuiLoraDetails?.[cleanName] || {}) : {};
+  return Array.isArray(detail.trained_words)
+    ? detail.trained_words.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+}
+
+function comfyuiActiveLoraTriggerWords() {
+  const needed = new Set();
+  const addName = (name) => {
+    comfyuiMultiCompareLoraTrainedWords(name).forEach((term) => {
+      needed.add(term.toLowerCase());
+    });
+  };
+  (Array.isArray(comfyuiSelectedLoras) ? comfyuiSelectedLoras : []).forEach((item) => addName(item?.name));
+  Object.values(comfyuiTemplateLoraOverrides || {}).forEach((name) => addName(name));
+  comfyuiWorkflowLoraNamesForPromptSync().forEach((name) => addName(name));
+  return needed;
+}
+
+function applyComfyuiMultiCompareLoraPromptTerms(name) {
+  if (typeof applyComfyuiPromptTerms !== "function") return [];
+  return applyComfyuiPromptTerms(comfyuiMultiCompareLoraTrainedWords(name));
+}
+
+function removeComfyuiMultiCompareLoraPromptTerms(name) {
+  if (typeof removeComfyuiPromptTerms !== "function") return [];
+  const trainedWords = comfyuiMultiCompareLoraTrainedWords(name);
+  if (!trainedWords.length) return [];
+  const stillNeeded = comfyuiActiveLoraTriggerWords();
+  const removableTerms = trainedWords.filter((term) => !stillNeeded.has(term.toLowerCase()));
+  return removableTerms.length ? removeComfyuiPromptTerms(removableTerms, { promptType: "prompt" }) : [];
+}
+
+function comfyuiDefaultMultiCompareLoraName(state) {
+  const selectedNames = new Set((state?.loras || []).map((item) => (
+    typeof normalizeComfyuiLoraName === "function"
+      ? normalizeComfyuiLoraName(item?.name)
+      : String(item?.name || "").trim()
+  )).filter(Boolean));
+  const currentSelectName = typeof normalizeComfyuiLoraName === "function"
+    ? normalizeComfyuiLoraName($("comfyui-lora-select")?.value || "")
+    : String($("comfyui-lora-select")?.value || "").trim();
+  if (currentSelectName && !selectedNames.has(currentSelectName)) return currentSelectName;
+  const options = comfyuiTemplateLoraSelectOptions({});
+  const available = options.filter((option) => option.value && !option.disabled);
+  return available.find((option) => !selectedNames.has(option.value))?.value
+    || available[0]?.value
+    || "";
+}
+
+function comfyuiMultiCompareLoraMessage(name, insertedTerms = [], removedTerms = [], action = "已更新") {
+  const cleanName = typeof normalizeComfyuiLoraName === "function"
+    ? normalizeComfyuiLoraName(name)
+    : String(name || "").trim();
+  const hint = cleanName && typeof comfyuiLoraCompatibilityHint === "function"
+    ? comfyuiLoraCompatibilityHint(cleanName)
+    : "";
+  const insertedText = insertedTerms.length ? `，並自動補上 trigger words：${insertedTerms.join(", ")}` : "";
+  const removedText = removedTerms.length ? `；已移除不再使用的 trigger words：${removedTerms.join(", ")}` : "";
+  const hintText = hint ? ` 提醒：${hint}；若模型不相容，ComfyUI 可能產圖失敗或效果異常。` : "";
+  if (!cleanName) {
+    setComfyuiMessage(`${action} Multi-Compare LoRA 欄位，請選擇要比較的 LoRA${removedText}。`, true);
+    return;
+  }
+  setComfyuiMessage(`${action} Multi-Compare LoRA：${cleanName}${insertedText}${removedText}。${hintText}`, !hint);
+}
+
+function setComfyuiMultiCompareLoraName(detail, index, name, { notify = true } = {}) {
+  const state = ensureComfyuiMultiCompareState(detail);
+  if (!state || !Number.isInteger(index) || !state.loras[index]) return false;
+  const nextName = typeof normalizeComfyuiLoraName === "function"
+    ? normalizeComfyuiLoraName(name)
+    : String(name || "").trim();
+  const previousName = typeof normalizeComfyuiLoraName === "function"
+    ? normalizeComfyuiLoraName(state.loras[index].name)
+    : String(state.loras[index].name || "").trim();
+  if (previousName === nextName) return true;
+  state.loras[index].name = nextName;
+  const removedTerms = previousName ? removeComfyuiMultiCompareLoraPromptTerms(previousName) : [];
+  const insertedTerms = nextName ? applyComfyuiMultiCompareLoraPromptTerms(nextName) : [];
+  writeComfyuiDraft();
+  if (notify) comfyuiMultiCompareLoraMessage(nextName, insertedTerms, removedTerms, "已更新");
+  return true;
+}
+
+function addComfyuiMultiCompareLora(detail) {
+  const state = ensureComfyuiMultiCompareState(detail);
+  if (!state || state.loras.length >= comfyuiMultiCompareMaxLoras()) return false;
+  const name = comfyuiDefaultMultiCompareLoraName(state);
+  state.loras.push({ name, strength_model: 1, strength_clip: 1 });
+  const insertedTerms = name ? applyComfyuiMultiCompareLoraPromptTerms(name) : [];
+  writeComfyuiDraft();
+  comfyuiMultiCompareLoraMessage(name, insertedTerms, [], "已加入");
+  renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+  return true;
+}
+
+function removeComfyuiMultiCompareLoraAt(detail, index) {
+  const state = ensureComfyuiMultiCompareState(detail);
+  if (!state || !Number.isInteger(index) || !state.loras[index]) return false;
+  const removed = state.loras.splice(index, 1)[0] || {};
+  const removedName = typeof normalizeComfyuiLoraName === "function"
+    ? normalizeComfyuiLoraName(removed.name)
+    : String(removed.name || "").trim();
+  const removedTerms = removedName ? removeComfyuiMultiCompareLoraPromptTerms(removedName) : [];
+  writeComfyuiDraft();
+  setComfyuiMessage(
+    removedTerms.length
+      ? `已移除 Multi-Compare LoRA，並移除不再使用的 trigger words：${removedTerms.join(", ")}。`
+      : "已移除 Multi-Compare LoRA。",
+    true
+  );
+  renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+  return true;
+}
+
 function comfyuiTemplateCompareSharedParamKey(detail, field = {}) {
   if (!comfyuiTemplateIsCompareTwoCheckpoints(detail) && !comfyuiTemplateIsMultiCompareCheckpoints(detail)) return "";
   if (String(field?.class_type || "") !== "KSampler") return "";
@@ -1000,12 +1135,11 @@ function comfyuiTemplateLoraSelectOptions(field = {}) {
     Array.from(source.options).forEach((option) => {
       addOption(option.value || "", option.textContent || option.label || option.value || "", false);
     });
-  } else {
-    (Array.isArray(comfyuiAvailableLoras) ? comfyuiAvailableLoras : []).forEach((name) => {
-      const hint = typeof comfyuiLoraCompatibilityHint === "function" ? comfyuiLoraCompatibilityHint(name) : "";
-      addOption(name, hint ? `${name}（提醒：${hint}）` : name, false);
-    });
   }
+  (Array.isArray(comfyuiAvailableLoras) ? comfyuiAvailableLoras : []).forEach((name) => {
+    const hint = typeof comfyuiLoraCompatibilityHint === "function" ? comfyuiLoraCompatibilityHint(name) : "";
+    addOption(name, hint ? `${name}（提醒：${hint}）` : name, false);
+  });
   return options;
 }
 
@@ -1163,8 +1297,7 @@ function comfyuiTemplateCanEditLockedModelField(field = {}) {
   if (field?.class_type === "LoraLoaderModelOnly" && field?.input_name === "model") return false;
   if (field?.class_type === "LoraLoader" && ["model", "clip"].includes(field?.input_name)) return false;
   if (field?.class_type === "ControlNetApplyAdvanced" && field?.input_name === "control_net") return false;
-  if (field?.locked || field?.read_only || field?.lock_reason === "template_default_model") return true;
-  return true;
+  return !!(field?.locked || field?.read_only || field?.lock_reason === "template_default_model");
 }
 
 function comfyuiTemplateLockedModelFieldIsEditing(field = {}) {
@@ -2056,31 +2189,25 @@ function bindRenderedComfyuiTemplateFields(detail) {
     if (button.dataset.boundComfyuiTemplate === "1") return;
     button.dataset.boundComfyuiTemplate = "1";
     button.addEventListener("click", () => {
-      const state = ensureComfyuiMultiCompareState(detail);
-      if (!state || state.loras.length >= comfyuiMultiCompareMaxLoras()) return;
-      state.loras.push({ name: "", strength_model: 1, strength_clip: 1 });
-      renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+      addComfyuiMultiCompareLora(detail);
     });
   });
   host.querySelectorAll("[data-comfyui-multi-compare-remove-lora]").forEach((button) => {
     if (button.dataset.boundComfyuiTemplate === "1") return;
     button.dataset.boundComfyuiTemplate = "1";
     button.addEventListener("click", () => {
-      const state = ensureComfyuiMultiCompareState(detail);
       const index = Number(button.getAttribute("data-comfyui-multi-compare-remove-lora"));
-      if (!state || !Number.isInteger(index)) return;
-      state.loras.splice(index, 1);
-      renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+      removeComfyuiMultiCompareLoraAt(detail, index);
     });
   });
   host.querySelectorAll("[data-comfyui-multi-compare-lora]").forEach((select) => {
     if (select.dataset.boundComfyuiTemplate === "1") return;
     select.dataset.boundComfyuiTemplate = "1";
     select.addEventListener("change", () => {
-      const state = ensureComfyuiMultiCompareState(detail);
       const index = Number(select.getAttribute("data-comfyui-multi-compare-lora"));
-      if (!state || !Number.isInteger(index) || !state.loras[index]) return;
-      state.loras[index].name = typeof normalizeComfyuiLoraName === "function" ? normalizeComfyuiLoraName(select.value) : String(select.value || "").trim();
+      if (setComfyuiMultiCompareLoraName(detail, index, select.value)) {
+        renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+      }
     });
   });
   host.querySelectorAll("[data-comfyui-multi-compare-lora-strength-model],[data-comfyui-multi-compare-lora-strength-clip]").forEach((input) => {
@@ -2650,6 +2777,38 @@ async function runComfyuiWorkflowPreset(presetId) {
       upscale_breakpoint: upscaleBreakpointSpec || undefined,
     }),
   });
+  const partialRenderState = { signature: "" };
+  const partialExpectedCount = Array.isArray(multiCompareSpec?.checkpoints) ? multiCompareSpec.checkpoints.length : 0;
+  const partialImageSignature = (images = []) => (Array.isArray(images) ? images : [])
+    .map((image) => {
+      const ref = image?.image_ref || image;
+      return [
+        image?.output_node_id || ref?.output_node_id || "",
+        ref?.filename || "",
+        ref?.subfolder || "",
+        ref?.type || "",
+      ].join("|");
+    })
+    .join("\n");
+  const renderPartialWorkflowResult = async (partialResult) => {
+    if (!multiCompareSpec) return;
+    const rawImages = Array.isArray(partialResult?.images) && partialResult.images.length
+      ? partialResult.images
+      : [partialResult?.image].filter(Boolean);
+    const signature = partialImageSignature(rawImages);
+    if (!signature || signature === partialRenderState.signature) return;
+    partialRenderState.signature = signature;
+    const images = await hydrateComfyuiGeneratedImages(rawImages);
+    if (!images.length) return;
+    const selectedIndex = Math.max(0, Math.min(comfyuiSelectedImageIndex || 0, images.length - 1));
+    comfyuiGeneratedImages = images;
+    comfyuiGeneratedMedia = [];
+    renderComfyuiGeneratedImages(comfyuiGeneratedImages);
+    setComfyuiSelectedImage(selectedIndex);
+    updateComfyuiResultButtons(true);
+    const suffix = partialExpectedCount ? ` / ${partialExpectedCount}` : "";
+    setComfyuiMessage(`Multi-Compare 已先顯示 ${images.length}${suffix} 張完成圖片，剩餘分支仍在生成。`, true);
+  };
   try {
     let res = await runRequest(confirmPaidApiNodes);
     let json = await res.json().catch(() => ({}));
@@ -2664,7 +2823,12 @@ async function runComfyuiWorkflowPreset(presetId) {
     }
     if (!res.ok || !json.ok) throw new Error(json.msg || `workflow 執行失敗（HTTP ${res.status}）`);
     const jobId = json.job?.job_id;
-    const result = await pollComfyuiJobUntilDone(jobId, controller, workflowTimeoutSeconds);
+    const result = await pollComfyuiJobUntilDone(jobId, controller, workflowTimeoutSeconds, {
+      onPartialResult: renderPartialWorkflowResult,
+      onPartialError: (err) => {
+        console.warn("Multi-Compare partial preview failed", err);
+      },
+    });
     const rawImages = Array.isArray(result.images) && result.images.length ? result.images : [result.image].filter(Boolean);
     const images = await hydrateComfyuiGeneratedImages(rawImages);
     const media = await hydrateComfyuiGeneratedMedia(Array.isArray(result.media) ? result.media : [], jobId);

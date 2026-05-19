@@ -132,6 +132,33 @@ def test_analyze_required_embeddings_from_prompt_tokens():
     ]
 
 
+def test_analyze_required_embeddings_does_not_swallow_prompt_words():
+    workflow = {
+        **TXT2IMG_API,
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": (
+                    "embedding:lazyneg blurry, "
+                    "embedding:lazypos embedding:lazywet embedding:lazyloli, "
+                    "embedding:bad hand v4.safetensors"
+                ),
+                "clip": ["4", 1],
+            },
+        },
+    }
+    analysis = analyze_workflow_json(workflow)
+    assert set(analysis.required_models["embedding"]) == {
+        "lazyneg",
+        "lazypos",
+        "lazywet",
+        "lazyloli",
+        "bad hand v4.safetensors",
+    }
+    assert "lazyneg blurry" not in analysis.required_models["embedding"]
+    assert "lazypos embedding:lazywet embedding:lazyloli" not in analysis.required_models["embedding"]
+
+
 def test_analyze_user_inputs_separates_links_from_scalars():
     analysis = analyze_workflow_json(TXT2IMG_API)
     user_input_keys = {(f.node_id, f.input_name) for f in analysis.user_inputs}

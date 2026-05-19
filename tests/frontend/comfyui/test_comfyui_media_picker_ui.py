@@ -44,6 +44,9 @@ def test_comfyui_generation_results_lazy_load_output_previews():
     assert 'throw new Error("ComfyUI 未回傳圖片");' in js
     assert 'if (!comfyuiCurrentImage?.data_url) throw new Error("ComfyUI 未回傳圖片");' not in js
     assert "function openComfyuiGeneratedImage" in js
+    assert "function closeComfyuiGeneratedImageLightbox" in js
+    assert 'overlay.id = "comfyui-image-lightbox";' in js
+    assert 'window.open(image.data_url' not in js
     assert 'class="comfyui-output-gallery"' in js
     assert 'data-comfyui-open-image' in js
 
@@ -78,6 +81,8 @@ def test_image_picker_styles_are_responsive():
     assert ".comfyui-generated-media" in css
     assert ".comfyui-output-gallery" in css
     assert ".comfyui-output-main" in css
+    assert ".comfyui-image-lightbox" in css
+    assert ".comfyui-lightbox-nav" in css
     assert ".comfyui-template-checkbox" in css
     assert ".comfyui-layout {\n      display: grid;" in css
     assert "isolation: isolate;" in css

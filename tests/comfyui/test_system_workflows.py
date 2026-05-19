@@ -304,6 +304,20 @@ def test_wrapped_qwen_prompt_text_fields_are_visible_and_labeled():
     assert labels["node:333:prompt"] == "負面提示詞"
 
 
+def test_one_click_anime_to_real_checkpoint_field_is_runtime_editable():
+    manifest = _manifest("origin_one_click_anime_to_real")
+    fields = _ui_fields(manifest)
+    field = fields["node:312:ckpt_name"]
+
+    assert field["class_type"] == "CheckpointLoaderSimple"
+    assert field["input_name"] == "ckpt_name"
+    assert field["current_value"] == "ZIT-AIO\\Full-Red-Z-image_15AIO_ bf16.safetensors"
+    assert field["required"] is True
+    assert field.get("locked") is not True
+    assert field.get("read_only") is not True
+    assert field.get("lock_reason") != "template_default_model"
+
+
 def test_multi_method_upscale_keeps_origin_first_and_second_upscale_stages():
     workflow = _workflow("origin_multi_method_upscale")
     manifest = _manifest("origin_multi_method_upscale")

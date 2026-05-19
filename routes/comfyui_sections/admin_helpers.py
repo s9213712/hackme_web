@@ -241,6 +241,13 @@ def _configured_comfyui_url():
             url, msg = _validate_comfyui_api_url(configured_url)
             if not msg:
                 return url
+        host_value = str(settings.get("comfyui_api_host") or "").strip().strip("[]").lower()
+        try:
+            port_value = int(settings.get("comfyui_api_port") or 0)
+        except Exception:
+            port_value = 0
+        if host_value in {"", "localhost", "127.0.0.1"} and port_value in {0, DEFAULT_COMFYUI_PORT}:
+            return DEFAULT_COMFYUI_URL
     default_url = urlparse(DEFAULT_COMFYUI_URL)
     host = str(settings.get("comfyui_api_host") or default_url.hostname or os.environ.get("COMFYUI_API_HOST") or "localhost").strip()
     host = host.strip("[]")

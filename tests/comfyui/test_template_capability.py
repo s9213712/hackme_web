@@ -18,10 +18,11 @@ from services.comfyui.template.capability import (
 class _StubClient:
     """Minimal /object_info double; counts call sites for cache assertions."""
 
-    def __init__(self, payload, *, base_url="http://stub", embeddings=None):
+    def __init__(self, payload, *, base_url="http://stub", embeddings=None, latent_upscale_models=None):
         self._payload = payload
         self.base_url = base_url
         self._embeddings = list(embeddings or [])
+        self._latent_upscale_models = list(latent_upscale_models or [])
         self.calls = 0
 
     def get_object_info(self):
@@ -30,6 +31,9 @@ class _StubClient:
 
     def get_embeddings(self):
         return list(self._embeddings)
+
+    def get_latent_upscale_models(self):
+        return list(self._latent_upscale_models)
 
 
 def _local_payload(*, classes, models=None, samplers=None, schedulers=None):
@@ -171,6 +175,31 @@ def test_capability_checks_latent_upscale_bucket_against_latent_loader_options()
         models={"latent_upscale_model": ["ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]},
     )
     cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "SUPPORTED"
+    assert cap.missing_models == {}
+
+
+def test_capability_falls_back_to_latent_upscale_model_folder_catalog():
+    info = {
+        "LatentUpscaleModelLoader": {
+            "input": {
+                "required": {
+                    "model_name": ["COMBO", {"options": []}]
+                }
+            }
+        },
+    }
+    client = _StubClient(
+        info,
+        latent_upscale_models=["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"],
+    )
+    analysis = _analysis(
+        class_types={"LatentUpscaleModelLoader"},
+        models={"latent_upscale_model": ["ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]},
+    )
+
+    cap = check_workflow_capability(analysis, client=client)
+
     assert cap.overall == "SUPPORTED"
     assert cap.missing_models == {}
 

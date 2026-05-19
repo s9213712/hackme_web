@@ -2236,6 +2236,81 @@
       object-fit: contain;
     }
 
+    .comfyui-image-lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 9300;
+      display: none;
+      grid-template-rows: auto 1fr;
+      background: rgba(4, 8, 16, .96);
+      color: var(--text);
+    }
+
+    .comfyui-image-lightbox.show {
+      display: grid;
+    }
+
+    .comfyui-image-lightbox-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      padding: .75rem 1rem;
+      border-bottom: 1px solid rgba(255,255,255,.12);
+      background: rgba(15, 20, 32, .92);
+    }
+
+    .comfyui-image-lightbox-body {
+      min-height: 0;
+      display: grid;
+      place-items: center;
+      padding: 1rem 4.25rem;
+      overflow: auto;
+      cursor: zoom-out;
+    }
+
+    .comfyui-image-lightbox-body img {
+      max-width: 100%;
+      max-height: calc(100vh - 96px);
+      object-fit: contain;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: rgba(0,0,0,.32);
+    }
+
+    .comfyui-lightbox-nav {
+      position: fixed;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 9301;
+      width: 3rem;
+      height: 4.75rem;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,.16);
+      border-radius: 8px;
+      background: rgba(15, 20, 32, .78);
+      color: var(--text);
+      font-size: 2.4rem;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .comfyui-lightbox-nav.prev {
+      left: .75rem;
+    }
+
+    .comfyui-lightbox-nav.next {
+      right: .75rem;
+    }
+
+    .comfyui-lightbox-nav:hover,
+    .comfyui-lightbox-nav:focus-visible {
+      border-color: var(--accent);
+      background: rgba(110,168,254,.20);
+      outline: none;
+    }
+
     .comfyui-batch-grid {
       width: 100%;
       height: 100%;
@@ -2826,6 +2901,18 @@
       .comfyui-image-picker-item .btn {
         width: 100%;
         min-height: 42px;
+      }
+
+      .comfyui-image-lightbox-body {
+        padding: .75rem;
+      }
+
+      .comfyui-lightbox-nav {
+        top: auto;
+        bottom: .8rem;
+        transform: none;
+        width: 3.25rem;
+        height: 3.25rem;
       }
     }
 

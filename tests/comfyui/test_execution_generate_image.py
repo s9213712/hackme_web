@@ -221,6 +221,46 @@ def test_ws_node_progress_is_scaled_to_total_workflow_progress():
     assert snapshot["percent"] < 30
 
 
+def test_ws_executed_message_exposes_partial_output_refs():
+    snapshot = {
+        "prompt_id": "prompt-compare",
+        "phase": "running",
+        "percent": 0,
+        "current": 0,
+        "max": 0,
+        "completed": False,
+    }
+    workflow = {
+        "51": {
+            "class_type": "PreviewImage",
+            "inputs": {"images": ["8", 0]},
+            "_meta": {"title": "比較 #1: base-a.safetensors"},
+        }
+    }
+
+    updated = comfy_execution.apply_ws_message_to_progress(
+        snapshot,
+        {
+            "type": "executed",
+            "data": {
+                "prompt_id": "prompt-compare",
+                "node": "51",
+                "output": {"images": [{"filename": "partial.png", "subfolder": "", "type": "temp"}]},
+            },
+        },
+        "prompt-compare",
+        total_node_count=4,
+        workflow=workflow,
+    )
+
+    assert updated is True
+    assert snapshot["partial_output_count"] == 1
+    assert snapshot["partial_outputs"]["prompt_id"] == "prompt-compare"
+    assert snapshot["partial_outputs"]["images"][0]["filename"] == "partial.png"
+    assert snapshot["partial_outputs"]["images"][0]["output_node_id"] == "51"
+    assert snapshot["partial_outputs"]["images"][0]["output_label"] == "比較 #1: base-a.safetensors"
+
+
 def test_generate_from_workflow_retries_transient_output_fetch(monkeypatch):
     progress_events = []
 

@@ -152,6 +152,64 @@ def _total_progress_percent(snapshot):
     return percent
 
 
+def _output_ref_key(bucket, item):
+    if not isinstance(item, dict):
+        return (bucket, "", "", "", "")
+    return (
+        bucket,
+        str(item.get("output_node_id") or ""),
+        str(item.get("filename") or ""),
+        str(item.get("subfolder") or ""),
+        str(item.get("type") or ""),
+    )
+
+
+def _merge_output_collections(existing, found):
+    merged = {}
+    for bucket in ("images", "videos", "audio", "other"):
+        merged[bucket] = []
+        seen = set()
+        for source in (existing, found):
+            values = source.get(bucket) if isinstance(source, dict) else []
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                key = _output_ref_key(bucket, item)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged[bucket].append(dict(item))
+    return merged
+
+
+def _output_collection_count(collection):
+    if not isinstance(collection, dict):
+        return 0
+    return sum(
+        len(collection.get(bucket) or [])
+        for bucket in ("images", "videos", "audio", "other")
+        if isinstance(collection.get(bucket) or [], list)
+    )
+
+
+def _update_partial_outputs(snapshot, found, prompt_id):
+    if not isinstance(found, dict) or not _output_collection_count(found):
+        return False
+    existing = snapshot.get("partial_outputs") if isinstance(snapshot.get("partial_outputs"), dict) else {}
+    previous_count = _output_collection_count(existing)
+    merged = _merge_output_collections(existing, found)
+    next_count = _output_collection_count(merged)
+    if next_count <= previous_count:
+        return False
+    merged["prompt_id"] = str(prompt_id)
+    snapshot["partial_outputs"] = merged
+    snapshot["partial_output_count"] = next_count
+    snapshot["updated_at"] = time.time()
+    return True
+
+
 def _is_transient_comfy_error(exc):
     message = str(exc or "").strip().lower()
     if not message:
@@ -174,7 +232,7 @@ def _queued_deadline(now, *, start_time, deadline, extension_seconds=None, max_s
     return new_deadline, new_deadline > deadline
 
 
-def apply_ws_message_to_progress(snapshot, message, prompt_id, *, total_node_count=None):
+def apply_ws_message_to_progress(snapshot, message, prompt_id, *, total_node_count=None, workflow=None):
     if not isinstance(message, dict):
         return False
     _ensure_total_progress_state(snapshot, total_node_count=total_node_count)
@@ -262,6 +320,20 @@ def apply_ws_message_to_progress(snapshot, message, prompt_id, *, total_node_cou
                 snapshot["current_node"] = node_label
                 snapshot["detail"] = f"節點 {node_label}：{int(active_node.get('value') or 0)}/{int(active_node.get('max') or 0)}"
             updated = True
+    elif msg_type == "executed":
+        snapshot["phase"] = "running"
+        node_id = _progress_node_id(data.get("node") or data.get("display_node_id"))
+        if node_id:
+            _mark_progress_node(snapshot, node_id, 1.0)
+            snapshot["current_node"] = node_id
+        output = data.get("output") if isinstance(data.get("output"), dict) else {}
+        if node_id and output:
+            found = collect_output_refs({"outputs": {node_id: output}}, workflow=workflow)
+            if _update_partial_outputs(snapshot, found, prompt_id):
+                count = int(snapshot.get("partial_output_count") or 0)
+                snapshot["detail"] = f"已產生 {count} 個輸出，仍在繼續執行"
+        snapshot["percent"] = _total_progress_percent(snapshot)
+        updated = True
     return updated
 
 
@@ -329,7 +401,7 @@ def collect_output_refs(record, workflow=None):
                     "subfolder": str(item.get("subfolder") or "").strip(),
                     "type": str(item.get("type") or "output").strip() or "output",
                 }
-                if isinstance(workflow, dict):
+                if isinstance(source_node, dict):
                     payload["output_node_id"] = source_node_id
                 if output_label:
                     payload["output_label"] = output_label
@@ -450,7 +522,13 @@ def wait_for_outputs(
                     message = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if apply_ws_message_to_progress(snapshot, message, prompt_id, total_node_count=total_node_count):
+                if apply_ws_message_to_progress(
+                    snapshot,
+                    message,
+                    prompt_id,
+                    total_node_count=total_node_count,
+                    workflow=workflow,
+                ):
                     emit_progress(progress_callback, snapshot)
         now = time.time()
         if now >= next_history_poll:
@@ -488,6 +566,12 @@ def wait_for_outputs(
                 found = collect_output_refs(record, workflow=workflow)
                 image_count = len(found["images"])
                 media_count = len(found["videos"]) + len(found["audio"]) + len(found["other"])
+                if (image_count or media_count) and status.get("completed") is not True:
+                    if _update_partial_outputs(snapshot, found, prompt_id):
+                        count = int(snapshot.get("partial_output_count") or 0)
+                        snapshot["phase"] = "running"
+                        snapshot["detail"] = f"已產生 {count} 個輸出，仍在繼續執行"
+                        emit_progress(progress_callback, snapshot)
                 if (image_count or media_count) and status.get("completed") is True:
                     snapshot["phase"] = "completed"
                     snapshot["percent"] = 100
@@ -628,12 +712,16 @@ def generate_from_workflow(
             "data": b"",
             "images": [
                 {
-                    "image_ref": image_ref,
-                    "mime_type": "image/png",
-                    "data": b"",
-                    "size_bytes": 0,
-                    "output_node_id": image_ref.get("output_node_id") or "",
-                    "output_label": image_ref.get("output_label") or "",
+                    key: value
+                    for key, value in {
+                        "image_ref": image_ref,
+                        "mime_type": "image/png",
+                        "data": b"",
+                        "size_bytes": 0,
+                        "output_node_id": image_ref.get("output_node_id") or "",
+                        "output_label": image_ref.get("output_label") or "",
+                    }.items()
+                    if value or key in {"image_ref", "mime_type", "data", "size_bytes"}
                 }
                 for image_ref in image_refs
             ],

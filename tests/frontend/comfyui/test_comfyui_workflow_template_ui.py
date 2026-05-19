@@ -101,6 +101,7 @@ def test_template_checkpoint_model_fields_keep_template_defaults_until_user_edit
     js = _read("public/js/36-comfyui-workflows.js")
 
     assert 'if ((field?.class_type === "LoraLoader" || field?.class_type === "LoraLoaderModelOnly") && field?.input_name === "lora_name") return false;' in js
+    assert 'return !!(field?.locked || field?.read_only || field?.lock_reason === "template_default_model");' in js
     assert 'if (field?.class_type === "CheckpointLoaderSimple" && field?.input_name === "ckpt_name") return { kind: "field", targetId: "comfyui-model-select" };' in js
     assert 'if (comfyuiTemplateCanEditLockedModelField(field)) {\n    return { kind: "readonly", editableLockedModel: true };\n  }\n  if (' in js
     assert 'if (comfyuiTemplateCanEditLockedModelField(field) && comfyuiTemplateLockedModelFieldIsEditing(field))' in js
@@ -188,17 +189,29 @@ def test_compare_two_checkpoints_shares_sampler_params_except_checkpoint_models(
 
 
 def test_multi_compare_checkpoint_template_adds_models_and_loras_dynamically():
+    comfyui_js = _read("public/js/36-comfyui.js")
     workflow_js = _read("public/js/36-comfyui-workflows.js")
     css = _read("public/styles.css")
 
     assert 'const COMFYUI_MULTI_COMPARE_CHECKPOINTS_TEST_ID = "origin_multi_compare_checkpoints_test";' in workflow_js
+    assert "const COMFYUI_MULTI_COMPARE_MAX_CHECKPOINTS = 14;" in workflow_js
     assert "function renderComfyuiMultiCompareControl" in workflow_js
     assert "function comfyuiMultiCompareRunSpec" in workflow_js
     assert "function comfyuiTemplateIsMultiCompareCheckpointField" in workflow_js
     assert "function comfyuiTemplateIsHiddenField" in workflow_js
+    assert "function comfyuiWorkflowLoraNamesForPromptSync()" in workflow_js
+    assert "function addComfyuiMultiCompareLora(detail)" in workflow_js
+    assert "function removeComfyuiMultiCompareLoraAt(detail, index)" in workflow_js
+    assert "function setComfyuiMultiCompareLoraName(detail, index, name" in workflow_js
+    assert "applyComfyuiMultiCompareLoraPromptTerms(nextName)" in workflow_js
+    assert "removeComfyuiMultiCompareLoraPromptTerms(previousName)" in workflow_js
     assert 'data-comfyui-multi-compare-add-checkpoint="1"' in workflow_js
     assert 'data-comfyui-multi-compare-add-lora="1"' in workflow_js
     assert "multi_compare: multiCompareSpec || undefined" in workflow_js
+    assert "const renderPartialWorkflowResult = async (partialResult)" in workflow_js
+    assert "onPartialResult: renderPartialWorkflowResult" in workflow_js
+    assert "Multi-Compare 已先顯示" in workflow_js
+    assert "options.onPartialResult(job.result, job)" in comfyui_js
     assert "comfyuiTemplateIsMultiCompareCheckpointField(detail, field)" in workflow_js
     assert ".comfyui-multi-compare-card" in css
     assert ".comfyui-multi-compare-row.is-lora" in css
@@ -278,7 +291,7 @@ def test_video_workflow_templates_use_short_foreground_wait_without_losing_job_i
     assert 'return outputs.includes("video") ? videoTimeout : baseTimeout;' in workflow_js
     assert "const workflowTimeoutSeconds = comfyuiWorkflowPresetForegroundTimeoutSeconds(preset);" in workflow_js
     assert "const jobId = json.job?.job_id;" in workflow_js
-    assert "pollComfyuiJobUntilDone(jobId, controller, workflowTimeoutSeconds)" in workflow_js
+    assert "pollComfyuiJobUntilDone(jobId, controller, workflowTimeoutSeconds, {" in workflow_js
     assert 'label: timedOut ? "已停止前台等待" : "產圖失敗"' in workflow_js
 
 
