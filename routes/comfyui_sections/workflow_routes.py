@@ -886,6 +886,7 @@ def register_comfyui_workflow_routes(app, ctx):
                 )
             elif user_inputs:
                 workflow_json = _apply_legacy_workflow_user_inputs(workflow_json, user_inputs)
+                workflow_json = apply_workflow_compatibility_fixes(workflow_json)
             if not strict_mode:
                 workflow_json = rewrite_workflow_model_inputs_to_local_options(
                     workflow_json,
@@ -930,7 +931,13 @@ def register_comfyui_workflow_routes(app, ctx):
             "job": {
                 "job_id": job_id,
                 "status": "queued",
-                "progress": {"phase": "queued", "percent": 0, "detail": "已建立 workflow 執行工作"},
+                "progress": {
+                    "phase": "queued",
+                    "percent": 0,
+                    "detail": "已建立 workflow 執行工作",
+                    "timeout_seconds": int(DEFAULT_GENERATION_TIMEOUT_SECONDS or 0),
+                    "timeout_unlimited": int(DEFAULT_GENERATION_TIMEOUT_SECONDS or 0) <= 0,
+                },
             },
         })
 

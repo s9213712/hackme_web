@@ -28,6 +28,7 @@ from services.comfyui.template.capability import (
     iter_required_models,
     model_option_available,
     reset_object_info_cache,
+    resolve_model_option,
     rewrite_workflow_model_inputs_to_local_options,
 )
 from services.comfyui.template.safety import (
@@ -153,6 +154,7 @@ __all__ = [
     "next_safe_node_id",
     "required_user_inputs",
     "reset_object_info_cache",
+    "resolve_model_option",
     "rewrite_workflow_model_inputs_to_local_options",
     "rewrite_save_image_prefix",
 ]

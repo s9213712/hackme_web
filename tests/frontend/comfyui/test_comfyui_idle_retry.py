@@ -13,7 +13,7 @@ def test_comfyui_idle_ui_reset_is_bound_on_bootstrap():
     bootstrap_js = _read("public/js/90-bootstrap.js")
     assert "function resetComfyuiIdleUi()" in comfyui_js
     assert "stopComfyuiProgress();" in comfyui_js
-    assert 'preview.innerHTML = `<div class="drive-empty">尚未產生圖片</div>`;' in comfyui_js
+    assert 'preview.innerHTML = `<div class="drive-empty">${sanitize(comfyuiPreviewEmptyText())}</div>`;' in comfyui_js
     assert 'if (typeof resetComfyuiIdleUi === "function") resetComfyuiIdleUi();' in bootstrap_js
 
 
@@ -39,4 +39,4 @@ def test_comfyui_stop_button_stays_visible_while_local_runtime_is_starting():
 
 def test_comfyui_static_asset_cache_busted_for_idle_retry_fix():
     index_html = _read("public/index.html")
-    assert "/js/36-comfyui.js?v=20260519-multi-compare-labels" in index_html
+    assert "/js/36-comfyui.js?v=20260520-no-comfyui-wait-limit" in index_html

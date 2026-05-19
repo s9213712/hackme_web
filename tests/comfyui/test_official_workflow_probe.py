@@ -125,6 +125,30 @@ def test_preflight_reports_model_input_when_comfyui_option_list_is_empty():
     ]
 
 
+def test_preflight_accepts_equivalent_subfolder_model_paths():
+    probe = _load_probe_module()
+    object_info = {
+        "ControlNetLoader": {
+            "input": {
+                "required": {
+                    "control_net_name": [["QWEN/Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"], {}],
+                },
+            },
+        },
+    }
+    workflow = {
+        "135": {
+            "class_type": "ControlNetLoader",
+            "inputs": {"control_net_name": "QWEN\\Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"},
+        },
+    }
+
+    result = probe._preflight("qwen_controlnet", workflow, object_info)
+
+    assert result["runnable"] is True
+    assert result["missing_models"] == []
+
+
 def test_formal_params_preserve_generation_inputs_but_remap_probe_files():
     probe = _load_probe_module()
     workflow = {

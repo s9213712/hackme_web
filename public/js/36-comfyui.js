@@ -58,8 +58,8 @@ let comfyuiImagePickerState = {
   history: [],
   cloudDrive: [],
 };
-const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;
-const COMFYUI_VIDEO_FOREGROUND_TIMEOUT_SECONDS = 900;
+const COMFYUI_GENERATION_TIMEOUT_SECONDS = 0;
+const COMFYUI_VIDEO_FOREGROUND_TIMEOUT_SECONDS = 0;
 const COMFYUI_INTERRUPT_TIMEOUT_SECONDS = 15;
 const COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800;
 const COMFYUI_QUEUE_MAX_TIMEOUT_SECONDS = 21600;
@@ -1853,7 +1853,7 @@ function startComfyuiProgress(timeoutSeconds = COMFYUI_GENERATION_TIMEOUT_SECOND
     running: true,
     percent: 0,
     label: "已送出產圖請求",
-    detail: hasLimit ? `已等待 00:00 / 上限 ${formatComfyuiDuration(timeoutSeconds)}` : "已等待 00:00 / 上限由後端工作控制"
+    detail: hasLimit ? `已等待 00:00 / 上限 ${formatComfyuiDuration(timeoutSeconds)}` : "已等待 00:00 / 不設最長等待上限"
   });
 }
 
@@ -1888,7 +1888,7 @@ function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERAT
   const hasLimit = Number(timeoutSeconds) > 0;
   const waitText = hasLimit
     ? `；已等待 ${formatComfyuiDuration(elapsed)} / 上限 ${formatComfyuiDuration(timeoutSeconds)}`
-    : `；已等待 ${formatComfyuiDuration(elapsed)} / 上限由後端工作控制`;
+    : `；已等待 ${formatComfyuiDuration(elapsed)} / 不設最長等待上限`;
   const detail = `${baseDetail}${queueText}${nodeText}${stepText}${fileText}${byteText}${speedText}${waitText}`;
   setComfyuiProgress({
     visible: true,
@@ -3015,8 +3015,15 @@ async function rerunComfyuiHistory(historyId) {
     const images = await hydrateComfyuiGeneratedImages(rawImages);
     comfyuiGeneratedImages = images;
     comfyuiGeneratedMedia = await hydrateComfyuiGeneratedMedia(Array.isArray(result.media) ? result.media : [], jobId);
-    renderComfyuiGeneratedImages(comfyuiGeneratedImages);
-    setComfyuiSelectedImage(0);
+    comfyuiCurrentImage = images[0] || null;
+    if (images.length) {
+      renderComfyuiGeneratedImages(comfyuiGeneratedImages);
+      setComfyuiSelectedImage(0);
+    } else if (comfyuiGeneratedMedia.length) {
+      renderComfyuiGeneratedMedia(comfyuiGeneratedMedia);
+    } else {
+      renderComfyuiGeneratedImages([]);
+    }
     stopComfyuiProgress({ complete: true });
     updateComfyuiResultButtons(!!images.length);
     loadComfyuiHistory().catch(() => {});
@@ -3089,8 +3096,8 @@ function comfyuiGeneratedMediaMarkup(mediaItems = []) {
         const player = !src
           ? `<div class="drive-empty">${sanitize(item.preview_error || "媒體檔已完成，正在讀取預覽。")}</div>`
           : (kind === "audio"
-            ? `<audio controls src="${sanitize(src)}"></audio>`
-            : (kind === "video" ? `<video controls preload="metadata" playsinline src="${sanitize(src)}"></video>` : (kind === "image" ? `<img src="${sanitize(src)}" alt="${sanitize(filename)}" />` : `<a class="btn btn-sm" href="${sanitize(src)}" download="${sanitize(filename)}">開啟輸出檔</a>`)));
+            ? `<audio controls preload="metadata"><source src="${sanitize(src)}" type="${sanitize(item.mime_type || "audio/mpeg")}"></audio>`
+            : (kind === "video" ? `<video controls preload="metadata" playsinline><source src="${sanitize(src)}" type="${sanitize(item.mime_type || "video/mp4")}"></video>` : (kind === "image" ? `<img src="${sanitize(src)}" alt="${sanitize(filename)}" />` : `<a class="btn btn-sm" href="${sanitize(src)}" download="${sanitize(filename)}">開啟輸出檔</a>`)));
         return `
           <div class="comfyui-generated-media-card">
             ${player}
@@ -3844,6 +3851,7 @@ async function generateComfyuiImage() {
     startComfyuiProgress(COMFYUI_GENERATION_TIMEOUT_SECONDS * runCount);
     let totalCharged = 0;
     const generated = [];
+    const generatedMedia = [];
     const requestedBatchSize = Math.max(1, Math.min(comfyuiMaxBatchSize, Number(payload.batch_size || 1)));
     const totalRequests = runCount * requestedBatchSize;
     for (let requestIndex = 0; requestIndex < totalRequests; requestIndex += 1) {
@@ -3890,25 +3898,28 @@ async function generateComfyuiImage() {
       const rawRunImages = Array.isArray(json.images) && json.images.length ? json.images : [json.image].filter(Boolean);
       const runImages = await hydrateComfyuiGeneratedImages(rawRunImages);
       const runMedia = await hydrateComfyuiGeneratedMedia(Array.isArray(json.media) ? json.media : [], jobId);
-      comfyuiGeneratedMedia = runMedia;
+      runMedia.forEach((item) => {
+        generatedMedia.push({ ...item, run_index: runIndex, batch_index: batchIndex, run_count: runCount });
+      });
       runImages.forEach((image) => {
         generated.push({ ...image, run_index: runIndex, batch_index: batchIndex, run_count: runCount });
       });
       comfyuiGeneratedImages = generated.slice();
+      comfyuiGeneratedMedia = generatedMedia.slice();
       if (comfyuiGeneratedImages.length) {
         comfyuiSelectedImageIndex = Math.max(0, comfyuiGeneratedImages.length - 1);
         comfyuiCurrentImage = comfyuiGeneratedImages[comfyuiSelectedImageIndex];
         renderComfyuiGeneratedImages(comfyuiGeneratedImages);
         setComfyuiSelectedImage(comfyuiSelectedImageIndex);
         updateComfyuiResultButtons(true);
-      } else if (runMedia.length) {
-        renderComfyuiGeneratedMedia(runMedia);
+      } else if (comfyuiGeneratedMedia.length) {
+        renderComfyuiGeneratedMedia(comfyuiGeneratedMedia);
         updateComfyuiResultButtons(false);
       }
       if (json.billing?.charged) totalCharged += Number(json.billing.total_price || 0);
     }
     comfyuiGeneratedImages = generated;
-    if (comfyuiGeneratedImages.length) comfyuiGeneratedMedia = [];
+    comfyuiGeneratedMedia = generatedMedia;
     comfyuiCurrentImage = comfyuiGeneratedImages[0] || null;
     if (!comfyuiCurrentImage?.image_ref) {
       if (Array.isArray(comfyuiGeneratedMedia) && comfyuiGeneratedMedia.length) {

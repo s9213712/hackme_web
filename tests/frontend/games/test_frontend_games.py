@@ -41,7 +41,7 @@ def test_game_zone_frontend_assets_are_wired():
 
     assert 'id="tab-module-games"' in index_html
     assert 'id="module-games"' in index_html
-    assert "/js/38-games.js?v=20260518-game-ux" in index_html
+    assert "/js/38-games.js?v=20260520-racing-physics" in index_html
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
     assert 'id="game-practice-stockfish-depth"' in index_html
@@ -257,11 +257,18 @@ def test_game_zone_frontend_assets_are_wired():
     assert "drawRacingDashboard" in local_racing_js
     assert "drawRacingSteeringWheel" in local_racing_js
     assert "updateRacingDrift" in local_racing_js
+    assert "START_COUNTDOWN_TICKS" in local_racing_js
+    assert "MAX_TRAFFIC_CARS" in local_racing_js
+    assert "trafficLaneIsClear" in local_racing_js
+    assert "applyRacingRoadBoundary" in local_racing_js
+    assert "resolveRacingTrafficCollision" in local_racing_js
+    assert "updateRacingTrafficSeparation" in local_racing_js
     assert "useRacingItem" in local_racing_js
     assert "finishRacingGame" in local_racing_js
     assert 'data-hold="throttle"' in local_racing_js
     assert 'data-hold="nitro"' in local_racing_js
     assert 'data-action="item"' in local_racing_js
+    assert "20260520-racing-physics" in games_js
     assert "煞車+方向可甩尾" in games_js
     assert "OPEN_WORLD_PLAYER_START" in local_open_world_js
     assert "OPEN_WORLD_MISSIONS" in local_open_world_js

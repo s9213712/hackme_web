@@ -2,6 +2,7 @@
 
 import json
 import inspect
+import mimetypes
 import time
 import urllib.parse
 import uuid
@@ -11,10 +12,13 @@ QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800
 QUEUE_MAX_TIMEOUT_SECONDS = 21600
 OUTPUT_REF_KEYS = {
     "images": "images",
+    "video": "videos",
     "videos": "videos",
     "gifs": "videos",
     "audio": "audio",
     "audios": "audio",
+    "file": "other",
+    "files": "other",
 }
 OUTPUT_NODE_CLASS_PRIORITY = {
     "SaveImage": 0,
@@ -22,10 +26,12 @@ OUTPUT_NODE_CLASS_PRIORITY = {
     "SaveVideo": 0,
     "VHS_VideoCombine": 0,
     "SaveAudio": 0,
+    "SaveAudioMP3": 0,
+    "PreviewAudio": 10,
     "MaskPreview": 90,
 }
 VIDEO_OUTPUT_CLASS_TYPES = {"SaveVideo", "VHS_VideoCombine"}
-AUDIO_OUTPUT_CLASS_TYPES = {"SaveAudio", "SaveAudioMP3"}
+AUDIO_OUTPUT_CLASS_TYPES = {"SaveAudio", "SaveAudioMP3", "PreviewAudio"}
 PREVIEW_IMAGE_OUTPUT_CLASS_TYPES = {"PreviewImage", "MaskPreview"}
 VIDEO_OUTPUT_EXTENSIONS = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".gif"}
 AUDIO_OUTPUT_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac"}
@@ -367,6 +373,20 @@ def _output_ref_bucket(raw_key, normalized_key, *, filename="", class_type=""):
     if extension in AUDIO_OUTPUT_EXTENSIONS:
         return "audio"
     return normalized_key
+
+
+def _output_ref_mime_type(file_ref, *, bucket="other", fallback="application/octet-stream"):
+    filename = ""
+    if isinstance(file_ref, dict):
+        filename = str(file_ref.get("filename") or "").strip()
+    guessed = mimetypes.guess_type(filename)[0]
+    if guessed:
+        return guessed
+    if bucket == "videos":
+        return "video/mp4"
+    if bucket == "audio":
+        return "audio/mpeg"
+    return fallback or "application/octet-stream"
 
 
 def _workflow_suppresses_preview_image_outputs(workflow):
@@ -748,7 +768,7 @@ def generate_from_workflow(
                 key: [
                     {
                         "file_ref": file_ref,
-                        "mime_type": "application/octet-stream",
+                        "mime_type": _output_ref_mime_type(file_ref, bucket=key),
                         "data": b"",
                         "size_bytes": 0,
                     }
@@ -805,7 +825,7 @@ def generate_from_workflow(
                 "subfolder": item.subfolder,
                 "type": item.type,
             },
-            "mime_type": item.mime_type,
+            "mime_type": item.mime_type or _output_ref_mime_type({"filename": item.filename}, bucket=key),
             "data": item.data,
         } for item in values]
         for key, values in media_outputs.items()

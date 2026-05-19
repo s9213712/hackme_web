@@ -57,6 +57,87 @@ def _node_class(workflow: Mapping[str, Any], node_id: Any) -> str:
     return str((node or {}).get("class_type") or "").strip() if isinstance(node, Mapping) else ""
 
 
+def _linked_ref(workflow: Mapping[str, Any], value: Any) -> tuple[Mapping[str, Any], int] | None:
+    if not (isinstance(value, list) and len(value) == 2):
+        return None
+    node = workflow.get(str(value[0]))
+    if not isinstance(node, Mapping):
+        return None
+    try:
+        output_slot = int(value[1])
+    except (TypeError, ValueError):
+        output_slot = 0
+    return node, output_slot
+
+
+def _linked_model_name(workflow: Mapping[str, Any], value: Any, *, depth: int = 0) -> str:
+    if depth > 6:
+        return ""
+    linked = _linked_ref(workflow, value)
+    if not linked:
+        return ""
+    node, _output_slot = linked
+    if not isinstance(node, Mapping):
+        return ""
+    class_type = str(node.get("class_type") or "").strip()
+    inputs = _node_inputs(node)
+    if class_type == "UNETLoader":
+        return _clean_text(inputs.get("unet_name"))
+    if class_type == "LoraLoaderModelOnly":
+        lora_name = _clean_text(inputs.get("lora_name"))
+        upstream = _linked_model_name(workflow, inputs.get("model"), depth=depth + 1)
+        return f"{upstream} {lora_name}".strip()
+    if class_type == "ModelSamplingAuraFlow":
+        return _linked_model_name(workflow, inputs.get("model"), depth=depth + 1)
+    if class_type == "ComfySwitchNode":
+        selected = "on_true" if bool(inputs.get("switch")) else "on_false"
+        return _linked_model_name(workflow, inputs.get(selected), depth=depth + 1)
+    return ""
+
+
+def _sync_qwen_2512_lightning_switches(workflow: Mapping[str, Any]) -> Any:
+    """Keep the official Qwen 2512 Lightning switches in a consistent preset.
+
+    The source template splits one logical choice across three ComfySwitchNode
+    instances: steps 50/4, cfg 4/1, and base/Lightning-LoRA model. If a user
+    flips only part of that trio, Qwen can sample with an unstable half-preset
+    and produce NaN/Inf pixels at SaveImage time.
+    """
+    step_switch_id = ""
+    cfg_switch_id = ""
+    model_switch_id = ""
+    for node_id, node in workflow.items():
+        if not isinstance(node, Mapping):
+            continue
+        if str(node.get("class_type") or "").strip() != "ComfySwitchNode":
+            continue
+        inputs = _node_inputs(node)
+        on_false = inputs.get("on_false")
+        on_true = inputs.get("on_true")
+        if on_false == 50 and on_true == 4:
+            step_switch_id = str(node_id)
+        elif on_false == 4 and on_true == 1:
+            cfg_switch_id = str(node_id)
+        else:
+            false_model = _linked_model_name(workflow, on_false)
+            true_model = _linked_model_name(workflow, on_true)
+            if (
+                "qwen_image_2512" in false_model
+                and "qwen-image-lightning-4steps" in true_model
+            ):
+                model_switch_id = str(node_id)
+    switch_ids = [step_switch_id, cfg_switch_id, model_switch_id]
+    if not all(switch_ids):
+        return workflow
+    enabled = any(bool(_node_inputs(workflow[switch_id]).get("switch")) for switch_id in switch_ids)
+    if all(bool(_node_inputs(workflow[switch_id]).get("switch")) == enabled for switch_id in switch_ids):
+        return workflow
+    patched = deepcopy(dict(workflow))
+    for switch_id in switch_ids:
+        patched[switch_id].setdefault("inputs", {})["switch"] = enabled
+    return patched
+
+
 def apply_workflow_compatibility_fixes(workflow: Any) -> Any:
     """Return a workflow with narrow fixes for known broken legacy templates.
 
@@ -82,6 +163,8 @@ def apply_workflow_compatibility_fixes(workflow: Any) -> Any:
         patched_defaults[str(node_id)].setdefault("inputs", {})["delimiter"] = ""
     if patched_defaults is not None:
         workflow = patched_defaults
+
+    workflow = _sync_qwen_2512_lightning_switches(workflow)
 
     if not _workflow_uses_qwen_image_vae(workflow):
         return workflow

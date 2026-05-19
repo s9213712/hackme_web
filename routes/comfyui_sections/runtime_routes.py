@@ -436,6 +436,7 @@ def register_comfyui_runtime_routes(app, ctx):
                     "percent": 0,
                     "detail": "已建立產圖工作",
                     "timeout_seconds": timeout_seconds,
+                    "timeout_unlimited": int(timeout_seconds or 0) <= 0,
                 },
             },
         })
@@ -492,7 +493,14 @@ def register_comfyui_runtime_routes(app, ctx):
                 detail=f"job_id={job_id},file={file_ref.get('filename', '-')}",
             )
             return json_resp({"ok": False, "msg": "無權讀取這個 ComfyUI 媒體輸出"}), 403
-        active_client = _client_for_url(_comfyui_binding(actor).get("url"))
+        job_result = job.get("result") if isinstance(job.get("result"), dict) else {}
+        media_backend_url = (
+            media_item.get("backend_url")
+            or job_result.get("backend_url")
+            or job_result.get("comfyui_url")
+            or ""
+        )
+        active_client = _client_for_url(_comfyui_binding(actor, backend_url=media_backend_url).get("url"))
         fetch_file = getattr(active_client, "fetch_file", None)
         if not callable(fetch_file):
             return json_resp({"ok": False, "msg": "目前 ComfyUI 後端不支援媒體檔預覽"}), 503

@@ -7,6 +7,13 @@
   const HORIZON_Y = 76;
   const PLAYER_Y = 388;
   const LANES = [-1, 0, 1];
+  const START_COUNTDOWN_TICKS = 92;
+  const MAX_TRAFFIC_CARS = 8;
+  const TRAFFIC_MIN_SCREEN_GAP = 66;
+  const PLAYER_CAR_WIDTH = 46;
+  const PLAYER_CAR_HEIGHT = 76;
+  const ROAD_EDGE_MARGIN = 26;
+  const EDGE_IMPACT_COOLDOWN = 24;
   const CAR_COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#38bdf8", "#a78bfa"];
   const PICKUP_DETAILS = {
     nitro: { label: "N", color: "#22d3ee", name: "氮氣補給" },
@@ -38,9 +45,101 @@
     return roadCenterAt(y, state) + lane * roadWidthAt(y) * 0.245;
   }
 
-  function drawRacingCar(ctx, x, y, w, h, color, accent = "#e5e7eb") {
+  function roadBoundsAt(y, state) {
+    const center = roadCenterAt(y, state);
+    const width = roadWidthAt(y);
+    return {
+      left: center - width / 2 + ROAD_EDGE_MARGIN,
+      right: center + width / 2 - ROAD_EDGE_MARGIN,
+      center,
+      width,
+    };
+  }
+
+  function racingRect(x, y, w, h) {
+    return { left: x - w / 2, right: x + w / 2, top: y - h / 2, bottom: y + h / 2, width: w, height: h };
+  }
+
+  function racingRectsOverlap(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
+
+  function trafficCarSize(y) {
+    const t = roadT(y);
+    return { width: 22 + t * 23, height: 34 + t * 38 };
+  }
+
+  function trafficLane(car) {
+    return Number(car.lane || 0) + Number(car.laneOffset || 0);
+  }
+
+  function trafficScreenX(car, state) {
+    return laneX(trafficLane(car), car.y, state);
+  }
+
+  function trafficCollisionBox(car, state) {
+    const size = trafficCarSize(car.y);
+    return racingRect(trafficScreenX(car, state), car.y, size.width * 0.82, size.height * 0.82);
+  }
+
+  function playerCollisionBox(state) {
+    return racingRect(state.playerX, PLAYER_Y, PLAYER_CAR_WIDTH * 0.72, PLAYER_CAR_HEIGHT * 0.78);
+  }
+
+  function trafficLaneIsClear(state, lane, y, minGap = TRAFFIC_MIN_SCREEN_GAP) {
+    return !(state.traffic || []).some((car) => Math.abs(Number(car.lane || 0) - lane) < 0.45 && Math.abs(Number(car.y || 0) - y) < minGap);
+  }
+
+  function chooseTrafficLane(state, y = HORIZON_Y + 12) {
+    const lanes = LANES.map((lane) => ({
+      lane,
+      nearest: Math.min(...(state.traffic || [])
+        .filter((car) => Math.abs(Number(car.lane || 0) - lane) < 0.45)
+        .map((car) => Math.abs(Number(car.y || 0) - y))
+        .concat([999])),
+    })).sort((a, b) => b.nearest - a.nearest);
+    const open = lanes.filter((row) => row.nearest >= TRAFFIC_MIN_SCREEN_GAP + 14);
+    if (!open.length) return null;
+    return open[Math.floor(racingRandom(state) * open.length)]?.lane ?? open[0].lane;
+  }
+
+  function choosePickupLane(state, y = HORIZON_Y + 10) {
+    const open = LANES.filter((lane) => trafficLaneIsClear(state, lane, y, 96));
+    const lanes = open.length ? open : LANES;
+    return lanes[Math.floor(racingRandom(state) * lanes.length)] || 0;
+  }
+
+  function addRacingImpactParticles(state, x, y, color = "#facc15", count = 10) {
+    for (let i = 0; i < count; i += 1) {
+      const angle = racingRandom(state) * Math.PI * 2;
+      const speed = 1.2 + racingRandom(state) * 3.2;
+      state.impactParticles.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 0.8,
+        life: 24 + Math.floor(racingRandom(state) * 16),
+        color,
+      });
+    }
+  }
+
+  function drawRacingImpactParticles(ctx, state) {
+    (state.impactParticles || []).forEach((particle) => {
+      ctx.save();
+      ctx.globalAlpha = clamp(particle.life / 34, 0, 1);
+      ctx.fillStyle = particle.color || "#facc15";
+      ctx.beginPath();
+      ctx.arc(particle.x, particle.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+
+  function drawRacingCar(ctx, x, y, w, h, color, accent = "#e5e7eb", rotation = 0) {
     ctx.save();
     ctx.translate(x, y);
+    ctx.rotate(rotation);
     ctx.fillStyle = "rgba(0,0,0,.26)";
     ctx.beginPath();
     ctx.ellipse(0, h * 0.32, w * 0.52, h * 0.2, 0, 0, Math.PI * 2);
@@ -155,6 +254,23 @@
     ctx.lineTo(bottomCenter - roadWidthAt(HEIGHT) / 2, HEIGHT);
     ctx.closePath();
     ctx.fill();
+
+    ctx.strokeStyle = "#dc2626";
+    ctx.lineWidth = 9;
+    ctx.beginPath();
+    ctx.moveTo(topCenter - roadWidthAt(HORIZON_Y) / 2 + 7, HORIZON_Y);
+    ctx.lineTo(bottomCenter - roadWidthAt(HEIGHT) / 2 + 21, HEIGHT);
+    ctx.moveTo(topCenter + roadWidthAt(HORIZON_Y) / 2 - 7, HORIZON_Y);
+    ctx.lineTo(bottomCenter + roadWidthAt(HEIGHT) / 2 - 21, HEIGHT);
+    ctx.stroke();
+    ctx.strokeStyle = "#f8fafc";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(topCenter - roadWidthAt(HORIZON_Y) / 2 + 12, HORIZON_Y);
+    ctx.lineTo(bottomCenter - roadWidthAt(HEIGHT) / 2 + ROAD_EDGE_MARGIN, HEIGHT);
+    ctx.moveTo(topCenter + roadWidthAt(HORIZON_Y) / 2 - 12, HORIZON_Y);
+    ctx.lineTo(bottomCenter + roadWidthAt(HEIGHT) / 2 - ROAD_EDGE_MARGIN, HEIGHT);
+    ctx.stroke();
 
     ctx.strokeStyle = "#f8fafc";
     ctx.lineWidth = 4;
@@ -322,16 +438,23 @@
   }
 
   function drawRacingScene(ctx, state) {
+    ctx.save();
+    if (state.impactShake > 0) {
+      const shake = Math.min(7, state.impactShake * 0.28);
+      ctx.translate((racingRandom(state) - 0.5) * shake, (racingRandom(state) - 0.5) * shake);
+    }
     drawRacingBackdrop(ctx, state);
-    (state.pickups || []).forEach((pickup) => drawRacingPickup(ctx, state, pickup));
+    (state.pickups || []).slice().sort((a, b) => a.y - b.y).forEach((pickup) => drawRacingPickup(ctx, state, pickup));
     drawRacingOilSlicks(ctx, state);
     drawRacingSkidMarks(ctx, state);
-    (state.traffic || []).forEach((car) => {
+    (state.traffic || []).slice().sort((a, b) => a.y - b.y).forEach((car) => {
       const t = roadT(car.y);
-      const lane = car.lane + (car.disrupted ? Math.sin((state.tick + car.y) * 0.13) * 0.16 : 0);
-      drawRacingCar(ctx, laneX(lane, car.y, state), car.y, 22 + t * 23, 34 + t * 38, car.disrupted ? "#c084fc" : car.color, "#dbeafe");
+      const wiggle = car.disrupted ? Math.sin((state.tick + car.y) * 0.13) * 0.14 : 0;
+      const rotation = clamp(Number(car.laneVelocity || 0) * 0.22 + wiggle * 0.15, -0.26, 0.26);
+      drawRacingCar(ctx, trafficScreenX(car, state) + wiggle * 11 * t, car.y, 22 + t * 23, 34 + t * 38, car.disrupted ? "#c084fc" : car.color, "#dbeafe", rotation);
     });
-    drawRacingCar(ctx, state.playerX + Number(state.drift || 0) * Number(state.lastSteer || 0) * 5, PLAYER_Y, 46, 76, state.shieldTicks > 0 ? "#22c55e" : "#ef4444", "#fef2f2");
+    drawRacingImpactParticles(ctx, state);
+    drawRacingCar(ctx, state.playerX + Number(state.drift || 0) * Number(state.lastSteer || 0) * 5, PLAYER_Y, PLAYER_CAR_WIDTH, PLAYER_CAR_HEIGHT, state.shieldTicks > 0 ? "#22c55e" : "#ef4444", "#fef2f2", Number(state.steeringAngle || 0) * 0.18);
     if (state.nitroActive) {
       ctx.fillStyle = "rgba(56,189,248,.42)";
       ctx.beginPath();
@@ -348,27 +471,47 @@
       ctx.arc(state.playerX, PLAYER_Y + 2, 33 + state.drift * 8, 0.3, Math.PI - 0.3);
       ctx.stroke();
     }
+    ctx.restore();
     drawRacingHud(ctx, state);
     drawRacingMinimap(ctx, state);
     drawRacingDashboard(ctx, state);
+    if (state.countdownTicks > 0 && state.status === "active") {
+      const label = state.countdownTicks > 62 ? "3" : state.countdownTicks > 32 ? "2" : state.countdownTicks > 6 ? "1" : "GO";
+      ctx.fillStyle = "rgba(15,23,42,.54)";
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+      ctx.fillStyle = label === "GO" ? "#22c55e" : "#facc15";
+      ctx.font = `800 ${label === "GO" ? 52 : 68}px system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, WIDTH / 2, HEIGHT / 2 - 12);
+      ctx.textAlign = "start";
+      ctx.textBaseline = "alphabetic";
+    }
   }
 
   function makeTraffic(state) {
-    const lane = LANES[Math.floor(racingRandom(state) * LANES.length)];
+    if ((state.traffic || []).length >= MAX_TRAFFIC_CARS) return;
+    const spawnY = HORIZON_Y + 8;
+    const lane = chooseTrafficLane(state, spawnY);
+    if (lane === null) return;
     const color = CAR_COLORS[Math.floor(racingRandom(state) * CAR_COLORS.length)] || "#38bdf8";
     state.traffic.push({
       lane,
-      y: HORIZON_Y + 6,
+      laneOffset: 0,
+      laneVelocity: 0,
+      y: spawnY,
       color,
-      speed: 0.6 + racingRandom(state) * 1.8,
+      roadSpeed: 54 + racingRandom(state) * 48,
+      mass: 0.8 + racingRandom(state) * 0.55,
       passed: false,
       hit: false,
+      collisionCooldown: 0,
       disrupted: state.jammerTicks > 0 ? 90 : 0,
     });
   }
 
   function makePickup(state) {
-    const lane = LANES[Math.floor(racingRandom(state) * LANES.length)];
+    const lane = choosePickupLane(state);
     const roll = racingRandom(state);
     const type = roll < 0.38 ? "nitro" : roll < 0.58 ? "boost" : roll < 0.78 ? "jammer" : roll < 0.91 ? "oil" : "shield";
     state.pickups.push({ lane, y: HORIZON_Y + 8, collected: false, type });
@@ -455,26 +598,125 @@
     }
   }
 
+  function applyRacingRoadBoundary(api, state) {
+    const bounds = roadBoundsAt(PLAYER_Y, state);
+    const leftLimit = bounds.left + PLAYER_CAR_WIDTH * 0.28;
+    const rightLimit = bounds.right - PLAYER_CAR_WIDTH * 0.28;
+    let impacted = false;
+    if (state.playerX < leftLimit) {
+      state.playerX = leftLimit;
+      state.lateralVelocity = Math.max(2.6, Math.abs(Number(state.lateralVelocity || 0)) * 0.55);
+      impacted = true;
+    } else if (state.playerX > rightLimit) {
+      state.playerX = rightLimit;
+      state.lateralVelocity = -Math.max(2.6, Math.abs(Number(state.lateralVelocity || 0)) * 0.55);
+      impacted = true;
+    }
+    if (!impacted) return;
+    state.speed *= 0.86;
+    if (state.edgeImpactCooldown <= 0) {
+      state.integrity = Math.max(0, state.integrity - (state.speed > 120 ? 5.5 : 2.2));
+      state.edgeImpactCooldown = EDGE_IMPACT_COOLDOWN;
+      state.impactShake = Math.max(state.impactShake || 0, 13);
+      addRacingImpactParticles(state, state.playerX, PLAYER_Y + 22, "#f97316", 9);
+      api.sound?.("metalHit", { volume: 0.14, throttleMs: 240 });
+    }
+  }
+
+  function trafficLaneOpenNear(state, lane, y, self) {
+    return !(state.traffic || []).some((car) => car !== self && Math.abs(Number(car.lane || 0) - lane) < 0.45 && Math.abs(Number(car.y || 0) - y) < TRAFFIC_MIN_SCREEN_GAP);
+  }
+
+  function updateRacingTrafficSeparation(state) {
+    const cars = (state.traffic || []).slice().sort((a, b) => a.y - b.y);
+    for (let i = 0; i < cars.length; i += 1) {
+      const car = cars[i];
+      car.laneOffset = clamp(Number(car.laneOffset || 0) + Number(car.laneVelocity || 0), -0.36, 0.36);
+      car.laneVelocity = Number(car.laneVelocity || 0) * 0.82 - Number(car.laneOffset || 0) * 0.08;
+      for (let j = i + 1; j < cars.length; j += 1) {
+        const other = cars[j];
+        if (Math.abs(Number(car.lane || 0) - Number(other.lane || 0)) > 0.45) continue;
+        const gap = Math.abs(Number(other.y || 0) - Number(car.y || 0));
+        if (gap >= TRAFFIC_MIN_SCREEN_GAP) continue;
+        const alternatives = LANES.filter((lane) => lane !== other.lane && trafficLaneOpenNear(state, lane, other.y, other));
+        if (alternatives.length && racingRandom(state) > 0.32) {
+          other.lane = alternatives[Math.floor(racingRandom(state) * alternatives.length)];
+          other.laneVelocity += (other.lane > car.lane ? 0.035 : -0.035);
+        } else {
+          other.y = car.y + TRAFFIC_MIN_SCREEN_GAP;
+          other.roadSpeed = Math.max(34, Number(other.roadSpeed || 64) - 4);
+        }
+      }
+    }
+  }
+
+  function resolveRacingTrafficCollision(api, state, car) {
+    if (car.collisionCooldown > 0) return;
+    const playerBox = playerCollisionBox(state);
+    const carBox = trafficCollisionBox(car, state);
+    if (!racingRectsOverlap(playerBox, carBox)) return;
+
+    const carX = trafficScreenX(car, state);
+    const side = state.playerX <= carX ? -1 : 1;
+    const overlapX = Math.min(playerBox.right - carBox.left, carBox.right - playerBox.left);
+    const relativeSpeed = Math.max(18, Math.abs(Number(state.speed || 0) - Number(car.roadSpeed || 70)));
+    car.collisionCooldown = 42;
+    car.hit = true;
+    car.disrupted = Math.max(car.disrupted || 0, state.shieldTicks > 0 ? 140 : 90);
+    car.laneOffset = clamp(Number(car.laneOffset || 0) - side * 0.18, -0.34, 0.34);
+    car.laneVelocity = clamp(Number(car.laneVelocity || 0) - side * 0.055, -0.12, 0.12);
+    state.playerX += side * Math.min(20, Math.max(7, overlapX * 0.58));
+    state.lateralVelocity = side * Math.max(3.4, relativeSpeed / 42);
+    state.impactShake = Math.max(state.impactShake || 0, state.shieldTicks > 0 ? 12 : 22);
+    addRacingImpactParticles(state, (state.playerX + carX) / 2, PLAYER_Y - 8, state.shieldTicks > 0 ? "#22c55e" : "#facc15", state.shieldTicks > 0 ? 12 : 18);
+
+    if (state.shieldTicks > 0) {
+      state.shieldTicks = Math.max(0, state.shieldTicks - 90);
+      state.interference += 1;
+      state.speed *= 0.82;
+      api.sound?.("uiSuccess", { volume: 0.13, throttleMs: 220 });
+      api.mission?.("interference-3", state.interference, 3, "道具干擾 3 次");
+      return;
+    }
+
+    const damage = clamp(8 + relativeSpeed * 0.16 + Math.max(0, state.speed - 120) * 0.08, 10, 30);
+    state.integrity = Math.max(0, state.integrity - damage);
+    state.speed = Math.max(0, state.speed * 0.52 - 8);
+    api.sound?.("metalHit", { volume: 0.18, throttleMs: 200 });
+  }
+
   function updateRacingGame(api, state, ctx) {
     if (state.status !== "active") return;
     state.tick += 1;
-    state.curve += (state.targetCurve - state.curve) * 0.012;
-    if (state.tick % 260 === 0) state.targetCurve = (racingRandom(state) - 0.5) * 1.7;
+    if (state.edgeImpactCooldown > 0) state.edgeImpactCooldown -= 1;
+    if (state.impactShake > 0) state.impactShake -= 1;
+    state.curve += (state.targetCurve - state.curve) * 0.014;
+    if (state.tick % 260 === 0) state.targetCurve = (racingRandom(state) - 0.5) * 1.55;
+
+    if (state.countdownTicks > 0) {
+      state.countdownTicks -= 1;
+      state.speed = 0;
+      state.nitroActive = false;
+      drawRacingScene(ctx, state);
+      api.status("起跑倒數 · 距離尚未開始計算");
+      return;
+    }
+
     if (state.itemBoostTicks > 0) {
       state.itemBoostTicks -= 1;
-      state.speed += 1.35;
+      state.speed += 1.1;
     }
     if (state.shieldTicks > 0) state.shieldTicks -= 1;
     if (state.jammerTicks > 0) state.jammerTicks -= 1;
 
     const throttle = state.controls.throttle || state.controls.nitro;
-    if (throttle) state.speed += 2.1;
-    else state.speed -= 0.82;
-    if (state.controls.brake) state.speed -= 3.8;
-    state.nitroActive = Boolean(state.controls.nitro && state.nitro > 0 && state.speed > 58);
+    if (throttle) state.speed += 1.85 + Math.max(0, 80 - state.speed) * 0.014;
+    else state.speed -= 1.18;
+    if (state.controls.brake) state.speed -= 4.2 + Math.min(1.4, state.speed / 170);
+    state.nitroActive = Boolean(state.controls.nitro && state.nitro > 0 && state.speed > 38);
     if (state.nitroActive) {
-      state.speed += 3.2;
-      state.nitro = Math.max(0, state.nitro - 1.55);
+      state.speed += 3.05;
+      state.nitro = Math.max(0, state.nitro - 1.48);
       if (!state.nitroHeldLastFrame) {
         state.nitroBursts += 1;
         api.sound?.("uiSwitch", { volume: 0.11, throttleMs: 240 });
@@ -492,31 +734,27 @@
     state.lastSteer = steer;
     state.steeringAngle += (steer * 0.72 - state.steeringAngle) * 0.18;
     updateRacingDrift(api, state, steer);
-    state.playerX += steer * (4.2 + state.speed / 75 + Number(state.drift || 0) * 1.7);
-    state.playerX += Number(state.curve || 0) * -0.45 * Math.max(0.6, state.speed / 140);
-    state.playerX = clamp(state.playerX, 20, 340);
+    const steerGrip = state.controls.brake ? 0.54 : 1;
+    state.lateralVelocity += steer * (0.72 + state.speed / 210) * steerGrip;
+    state.lateralVelocity += Number(state.curve || 0) * -0.055 * Math.max(0.7, state.speed / 150);
+    state.lateralVelocity *= state.controls.brake ? 0.93 : 0.88;
+    state.playerX += state.lateralVelocity + steer * Number(state.drift || 0) * 0.9;
+    applyRacingRoadBoundary(api, state);
 
-    const playerRoadCenter = roadCenterAt(PLAYER_Y, state);
-    const playerRoadWidth = roadWidthAt(PLAYER_Y);
-    if (Math.abs(state.playerX - playerRoadCenter) > playerRoadWidth * 0.47) {
-      state.integrity = Math.max(0, state.integrity - 0.18);
-      state.speed *= 0.975;
-    }
-
-    state.distance += state.speed * 0.024;
+    if (state.speed > 0.1) state.distance += state.speed * 0.0235;
     state.score = Math.max(0, Math.round(state.distance * 0.26 + state.overtakes * 180 + state.pickupsCollected * 105 + state.checkpoints * 260 + state.maxSpeed * 3 + state.driftScore * 2.1 + state.interference * 145 - (100 - state.integrity) * 12));
     state.maxSpeed = Math.max(state.maxSpeed, state.speed);
 
-    if (state.tick >= state.nextTrafficTick) {
+    if (state.speed > 32 && state.tick >= state.nextTrafficTick) {
       makeTraffic(state);
-      state.nextTrafficTick = state.tick + Math.max(24, 58 - Math.floor(state.speed / 8)) + Math.floor(racingRandom(state) * 32);
+      state.nextTrafficTick = state.tick + Math.max(34, 78 - Math.floor(state.speed / 7)) + Math.floor(racingRandom(state) * 34);
     }
-    if (state.tick >= state.nextPickupTick) {
+    if (state.speed > 22 && state.tick >= state.nextPickupTick) {
       makePickup(state);
       state.nextPickupTick = state.tick + 170 + Math.floor(racingRandom(state) * 110);
     }
 
-    const travel = Math.max(2.2, state.speed * 0.052);
+    const travel = Math.max(0, state.speed * 0.052);
     state.skidMarks.forEach((mark) => {
       mark.y += travel * 0.96;
       mark.alpha -= 0.005;
@@ -527,26 +765,21 @@
       slick.life -= 1;
     });
     state.oilSlicks = state.oilSlicks.filter((slick) => slick.life > 0 && slick.y < HEIGHT + 40);
+    state.impactParticles.forEach((particle) => {
+      particle.x += particle.vx;
+      particle.y += particle.vy + travel * 0.28;
+      particle.vy += 0.18;
+      particle.life -= 1;
+    });
+    state.impactParticles = state.impactParticles.filter((particle) => particle.life > 0);
+
     state.traffic.forEach((car) => {
       if (car.disrupted > 0) car.disrupted -= 1;
-      car.y += travel - car.speed - (car.disrupted ? 2.2 : 0);
-      const lane = car.lane + (car.disrupted ? Math.sin((state.tick + car.y) * 0.13) * 0.16 : 0);
-      const x = laneX(lane, car.y, state);
-      if (!car.hit && car.y > PLAYER_Y - 48 && car.y < PLAYER_Y + 42 && Math.abs(x - state.playerX) < 34) {
-        car.hit = true;
-        if (state.shieldTicks > 0) {
-          state.shieldTicks = 0;
-          state.interference += 1;
-          car.disrupted = 120;
-          state.speed *= 0.82;
-          api.sound?.("uiSuccess", { volume: 0.13, throttleMs: 220 });
-          api.mission?.("interference-3", state.interference, 3, "道具干擾 3 次");
-        } else {
-          state.integrity = Math.max(0, state.integrity - 22);
-          state.speed *= 0.45;
-          api.sound?.("metalHit", { volume: 0.18, throttleMs: 200 });
-        }
-      }
+      if (car.collisionCooldown > 0) car.collisionCooldown -= 1;
+      const carTravel = Number(car.roadSpeed || 64) * 0.031;
+      const disruptionDrag = car.disrupted ? 2.1 : 0;
+      car.y += travel - carTravel - disruptionDrag;
+      resolveRacingTrafficCollision(api, state, car);
       if (!car.passed && car.y > PLAYER_Y + 54) {
         car.passed = true;
         state.overtakes += 1;
@@ -555,7 +788,8 @@
         api.mission?.("overtake-8", state.overtakes, 8, "超車 8 台");
       }
     });
-    state.traffic = state.traffic.filter((car) => car.y < HEIGHT + 90);
+    updateRacingTrafficSeparation(state);
+    state.traffic = state.traffic.filter((car) => car.y < HEIGHT + 90 && car.y > HORIZON_Y - 70);
 
     state.pickups.forEach((pickup) => {
       pickup.y += travel + 0.4;
@@ -618,6 +852,7 @@
         rng: null,
         controls: { left: false, right: false, throttle: false, brake: false, nitro: false },
         tick: 0,
+        countdownTicks: 0,
         speed: 0,
         maxSpeed: 0,
         distance: 0,
@@ -644,8 +879,12 @@
         driftAchievementSent: false,
         steeringAngle: 0,
         lastSteer: 0,
+        lateralVelocity: 0,
+        edgeImpactCooldown: 0,
+        impactShake: 0,
         skidMarks: [],
         oilSlicks: [],
+        impactParticles: [],
         playerX: WIDTH / 2,
         curve: 0,
         targetCurve: 0,
@@ -653,8 +892,8 @@
         pickups: [],
         pickupsCollected: 0,
         overtakes: 0,
-        nextTrafficTick: 30,
-        nextPickupTick: 120,
+        nextTrafficTick: START_COUNTDOWN_TICKS + 88,
+        nextPickupTick: START_COUNTDOWN_TICKS + 130,
       };
       api.root.innerHTML = `<canvas class="arcade-canvas tall racing-canvas" width="${WIDTH}" height="${HEIGHT}" aria-label="街頭賽車"></canvas>`;
       api.setControls(`
@@ -680,8 +919,9 @@
           dailyChallenge,
           rng: dailyChallenge?.seed ? window.createHackmeGameSeededRandom?.(dailyChallenge.seed) : null,
           tick: 0,
-          speed: 70,
-          maxSpeed: 70,
+          countdownTicks: START_COUNTDOWN_TICKS,
+          speed: 0,
+          maxSpeed: 0,
           distance: 0,
           trackLength: dailyChallenge?.modifier === "rush" ? 5600 : 6500,
           nextCheckpoint: 1500,
@@ -706,8 +946,12 @@
           driftAchievementSent: false,
           steeringAngle: 0,
           lastSteer: 0,
+          lateralVelocity: 0,
+          edgeImpactCooldown: 0,
+          impactShake: 0,
           skidMarks: [],
           oilSlicks: [],
+          impactParticles: [],
           playerX: WIDTH / 2,
           curve: 0,
           targetCurve: 0,
@@ -715,8 +959,8 @@
           pickups: [],
           pickupsCollected: 0,
           overtakes: 0,
-          nextTrafficTick: 30,
-          nextPickupTick: 120,
+          nextTrafficTick: START_COUNTDOWN_TICKS + 88,
+          nextPickupTick: START_COUNTDOWN_TICKS + 130,
         });
         state.controls = { left: false, right: false, throttle: false, brake: false, nitro: false };
         state.timer = setInterval(() => updateRacingGame(api, state, ctx), 16);

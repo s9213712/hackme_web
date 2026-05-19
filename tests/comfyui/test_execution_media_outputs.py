@@ -61,12 +61,32 @@ def test_collect_output_refs_treats_savevideo_images_as_video_media():
             "output_label": "WAN output",
         }
     ]
-    assert refs["images"] == [
+    assert refs["images"] == []
+
+
+def test_collect_output_refs_accepts_singular_video_output_key():
+    record = {
+        "outputs": {
+            "75": {
+                "video": [
+                    {"filename": "ltx_output_00001.mp4", "subfolder": "t2v", "type": "output"},
+                ],
+            },
+        },
+    }
+    workflow = {
+        "75": {"class_type": "SaveVideo", "inputs": {}, "_meta": {"title": "LTX video"}},
+    }
+
+    refs = collect_output_refs(record, workflow=workflow)
+
+    assert refs["videos"] == [
         {
-            "filename": "ComfyUI_00001.png",
-            "subfolder": "wan",
+            "filename": "ltx_output_00001.mp4",
+            "subfolder": "t2v",
             "type": "output",
-            "output_node_id": "214",
-            "output_label": "Mask preview",
+            "output_node_id": "75",
+            "output_label": "LTX video",
         }
     ]
+    assert refs["images"] == []

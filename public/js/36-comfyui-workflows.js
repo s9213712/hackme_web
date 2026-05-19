@@ -584,10 +584,10 @@ function comfyuiWorkflowPresetOutputKinds(item = {}) {
 }
 
 function comfyuiWorkflowPresetForegroundTimeoutSeconds(item = {}) {
-  const baseTimeout = typeof COMFYUI_GENERATION_TIMEOUT_SECONDS === "number" ? COMFYUI_GENERATION_TIMEOUT_SECONDS : 1800;
+  const baseTimeout = typeof COMFYUI_GENERATION_TIMEOUT_SECONDS === "number" ? COMFYUI_GENERATION_TIMEOUT_SECONDS : 0;
   const videoTimeout = typeof COMFYUI_VIDEO_FOREGROUND_TIMEOUT_SECONDS === "number"
     ? COMFYUI_VIDEO_FOREGROUND_TIMEOUT_SECONDS
-    : Math.min(baseTimeout, 900);
+    : baseTimeout;
   const outputs = comfyuiWorkflowPresetOutputKinds(item);
   return outputs.includes("video") ? videoTimeout : baseTimeout;
 }
@@ -2900,8 +2900,14 @@ async function runComfyuiWorkflowPreset(presetId) {
     const media = await hydrateComfyuiGeneratedMedia(Array.isArray(result.media) ? result.media : [], jobId);
     comfyuiGeneratedImages = images;
     comfyuiGeneratedMedia = media;
-    renderComfyuiGeneratedImages(comfyuiGeneratedImages);
-    setComfyuiSelectedImage(0);
+    if (images.length) {
+      renderComfyuiGeneratedImages(comfyuiGeneratedImages);
+      setComfyuiSelectedImage(0);
+    } else if (media.length) {
+      renderComfyuiGeneratedMedia(comfyuiGeneratedMedia);
+    } else {
+      renderComfyuiGeneratedImages([]);
+    }
     stopComfyuiProgress({ complete: true });
     updateComfyuiResultButtons(!!images.length);
     await loadComfyuiWorkflowPresets();

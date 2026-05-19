@@ -32,8 +32,8 @@ def test_diffusers_js_preflights_huggingface_repo_before_generation():
 
 def test_diffusers_cache_busts_preflight_ui_assets():
     html = _read("public/index.html")
-    assert "/js/36-comfyui.js?v=20260519-multi-compare-labels" in html
-    assert "/js/36-comfyui-workflows.js?v=20260519-upscale-breakpoint" in html
+    assert "/js/36-comfyui.js?v=20260520-no-comfyui-wait-limit" in html
+    assert "/js/36-comfyui-workflows.js?v=20260520-no-comfyui-wait-limit" in html
 
 
 def test_diffusers_generation_progress_surfaces_huggingface_download_bytes():
@@ -46,4 +46,4 @@ def test_diffusers_generation_progress_surfaces_huggingface_download_bytes():
     assert "progress.speed_bytes_per_sec" in js
     assert "progress.step" in js
     assert "formatDriveBytes(writtenBytes)" in js
-    assert "上限由後端工作控制" in js
+    assert "不設最長等待上限" in js

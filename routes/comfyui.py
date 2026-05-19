@@ -75,6 +75,7 @@ from services.comfyui.template import (
     check_workflow_capability,
     embedding_option_available,
     model_option_available,
+    resolve_model_option,
     runtime_comfyui_dir,
 )
 from services.comfyui.template.seeding import SYSTEM_WORKFLOW_IDS
@@ -107,6 +108,16 @@ def _env_int(name, default, minimum, maximum):
     return max(minimum, min(maximum, value))
 
 
+def _env_timeout_seconds(name, default, minimum, maximum):
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except Exception:
+        value = default
+    if value <= 0:
+        return 0
+    return max(minimum, min(maximum, value))
+
+
 def _env_float(name, default, minimum, maximum):
     try:
         value = float(os.environ.get(name, str(default)))
@@ -115,7 +126,7 @@ def _env_float(name, default, minimum, maximum):
     return max(minimum, min(maximum, value))
 
 
-DEFAULT_GENERATION_TIMEOUT_SECONDS = _env_int("COMFYUI_GENERATION_TIMEOUT_SECONDS", 1800, 30, 6 * 3600)
+DEFAULT_GENERATION_TIMEOUT_SECONDS = _env_timeout_seconds("COMFYUI_GENERATION_TIMEOUT_SECONDS", 0, 30, 6 * 3600)
 MAX_GENERATION_TIMEOUT_SECONDS = _env_int("COMFYUI_GENERATION_MAX_TIMEOUT_SECONDS", 6 * 3600, 60, 24 * 3600)
 COMFYUI_BACKEND_REQUEST_TIMEOUT_SECONDS = _env_int("COMFYUI_BACKEND_REQUEST_TIMEOUT_SECONDS", 8, 2, 30)
 COMFYUI_STATUS_TIMEOUT_SECONDS = _env_float("COMFYUI_STATUS_TIMEOUT_SECONDS", 2.0, 0.5, 10.0)
@@ -1382,7 +1393,7 @@ def register_comfyui_routes(app, deps):
                 continue
             name = str(item.get("name") or "").strip()
             control_type = str(item.get("type") or "").strip().lower()
-            if name and name not in sets["controlnets"]:
+            if name and not model_option_available(name, sets["controlnets"]):
                 missing_controlnets.append({"name": name, "type": control_type})
             elif control_type and not ((sets["controlnet_types"].get(control_type) or {}).get("available")):
                 missing_controlnets.append({"name": name, "type": control_type})
@@ -1571,9 +1582,14 @@ def register_comfyui_routes(app, deps):
             required_nodes.update({"LoadImage", "ImagePadForOutpaint", "VAEEncodeForInpaint"})
         elif mode == "upscale":
             required_nodes = {"LoadImage", "UpscaleModelLoader", "ImageUpscaleWithModel", "SaveImage"}
-            upscale_models = set((capabilities or {}).get("upscale_models") or [])
-            if str((params or {}).get("upscale_model") or "").strip() not in upscale_models:
+            upscale_models = list((capabilities or {}).get("upscale_models") or [])
+            resolved_upscale_model = resolve_model_option(
+                str((params or {}).get("upscale_model") or "").strip(),
+                upscale_models,
+            )
+            if not resolved_upscale_model:
                 return None, "缺少對應的放大模型，請先安裝 scale model"
+            params["upscale_model"] = resolved_upscale_model
         missing_nodes = sorted(node for node in required_nodes if node not in available_nodes)
         if missing_nodes:
             return None, f"ComfyUI 缺少必要 workflow node：{', '.join(missing_nodes)}"
@@ -1594,10 +1610,44 @@ def register_comfyui_routes(app, deps):
                 if not matching_models:
                     return None, "缺少對應的 ControlNet 模型"
                 control["model_name"] = matching_models[0]
-            elif chosen_model not in set(type_info.get("matching_models") or []):
-                return None, f"ControlNet 模型不可用：{chosen_model}"
+            else:
+                resolved_controlnet_model = resolve_model_option(
+                    chosen_model,
+                    type_info.get("matching_models") or [],
+                )
+                if not resolved_controlnet_model:
+                    return None, f"ControlNet 模型不可用：{chosen_model}"
+                control["model_name"] = resolved_controlnet_model
             control["preprocessor"] = chosen_preprocessor
             params["controlnet"] = control
+        lora_options = list((capabilities or {}).get("loras") or [])
+        if not lora_options and hasattr(active_client, "get_loras"):
+            try:
+                lora_options = list(active_client.get_loras() or [])
+            except Exception:
+                lora_options = []
+        for lora in list((params or {}).get("loras") or []):
+            if not isinstance(lora, dict):
+                continue
+            lora_name = str(lora.get("name") or "").strip()
+            if not lora_name:
+                continue
+            resolved_lora = resolve_model_option(lora_name, lora_options) if lora_options else lora_name
+            if lora_options and not resolved_lora:
+                return None, f"LoRA 模型不可用：{lora_name}"
+            lora["name"] = resolved_lora
+        vae_name = str((params or {}).get("vae") or "").strip()
+        if vae_name:
+            vae_options = list((capabilities or {}).get("vaes") or [])
+            if not vae_options and hasattr(active_client, "get_vaes"):
+                try:
+                    vae_options = list(active_client.get_vaes() or [])
+                except Exception:
+                    vae_options = []
+            resolved_vae = resolve_model_option(vae_name, vae_options) if vae_options else vae_name
+            if vae_options and not resolved_vae:
+                return None, f"VAE 模型不可用：{vae_name}"
+            params["vae"] = resolved_vae
         return capabilities, None
 
     def _assert_reasonable_image_size(image):
@@ -2068,6 +2118,7 @@ def register_comfyui_routes(app, deps):
                 progress["backend_unresponsive"] = True
                 progress["stale_seconds"] = int(time.time() - updated_at)
                 progress["timeout_seconds"] = int(progress.get("timeout_seconds") or DEFAULT_GENERATION_TIMEOUT_SECONDS)
+                progress["timeout_unlimited"] = int(progress.get("timeout_seconds") or 0) <= 0
         return payload
 
     def _active_generation_snapshot():
@@ -2328,6 +2379,8 @@ def register_comfyui_routes(app, deps):
         return images
 
     def _serialize_comfyui_media_records(result):
+        import mimetypes
+
         media = result.get("media") if isinstance(result.get("media"), dict) else {}
         items = []
         for media_kind, records in media.items():
@@ -2338,7 +2391,12 @@ def register_comfyui_routes(app, deps):
                 file_ref = item.get("file_ref") if isinstance(item.get("file_ref"), dict) else item.get("image_ref")
                 if not file_ref:
                     continue
-                mime_type = item.get("mime_type") or "application/octet-stream"
+                filename = str(file_ref.get("filename") or "")
+                guessed_mime = mimetypes.guess_type(filename)[0]
+                fallback_mime = "video/mp4" if media_kind == "videos" else ("audio/mpeg" if media_kind == "audio" else "application/octet-stream")
+                mime_type = item.get("mime_type") or guessed_mime or fallback_mime
+                if str(mime_type).split(";", 1)[0].strip().lower() == "application/octet-stream":
+                    mime_type = guessed_mime or fallback_mime
                 size_bytes = int(item.get("size_bytes") or len(raw_data) or 0)
                 items.append({
                     "prompt_id": result.get("prompt_id") or "",
@@ -2362,11 +2420,13 @@ def register_comfyui_routes(app, deps):
         audit_ip = request_meta.get("client_ip") or "-"
         audit_ua = request_meta.get("user_agent") or "-"
         _update_generation_job(job_id, status="running")
+        timeout_value = int(timeout_seconds or 0)
         _update_generation_job_progress(job_id, {
             "phase": "queued",
             "percent": 0,
             "detail": "已送出至 ComfyUI 背景工作",
-            "timeout_seconds": int(timeout_seconds or DEFAULT_GENERATION_TIMEOUT_SECONDS),
+            "timeout_seconds": timeout_value,
+            "timeout_unlimited": timeout_value <= 0,
         })
         try:
             result = active_client.generate_image(
@@ -2515,6 +2575,14 @@ def register_comfyui_routes(app, deps):
         audit_ip = request_meta.get("client_ip") or "-"
         audit_ua = request_meta.get("user_agent") or "-"
         _update_generation_job(job_id, status="running")
+        timeout_value = int(timeout_seconds or 0)
+        _update_generation_job_progress(job_id, {
+            "phase": "queued",
+            "percent": 0,
+            "detail": "已送出 workflow 至 ComfyUI 背景工作",
+            "timeout_seconds": timeout_value,
+            "timeout_unlimited": timeout_value <= 0,
+        })
         workflow_json = workflow_override if isinstance(workflow_override, dict) else (_parse_json_field(row["workflow_json"], {}) or {})
         default_params = _parse_json_field(row["default_params_json"], {}) or {}
         prompt = str(default_params.get("prompt") or "")
@@ -2643,6 +2711,7 @@ def register_comfyui_routes(app, deps):
                 "image": images[0] if images else None,
                 "images": images,
                 "media": media,
+                "backend_url": backend_binding.get("url"),
                 "workflow_run_id": run_id,
                 "preset_id": int(row["id"]),
             }
@@ -2756,12 +2825,14 @@ def register_comfyui_routes(app, deps):
         return number
 
     def _normalize_generation_timeout(value):
+        if value in (None, ""):
+            return DEFAULT_GENERATION_TIMEOUT_SECONDS
         try:
             number = int(value)
         except Exception:
             number = DEFAULT_GENERATION_TIMEOUT_SECONDS
         if number <= 0:
-            return DEFAULT_GENERATION_TIMEOUT_SECONDS
+            return 0
         return _int_range(number, DEFAULT_GENERATION_TIMEOUT_SECONDS, 30, MAX_GENERATION_TIMEOUT_SECONDS)
 
     def _float_range(value, default, minimum, maximum):
@@ -2770,6 +2841,18 @@ def register_comfyui_routes(app, deps):
         except Exception:
             number = default
         return max(minimum, min(maximum, number))
+
+    def _normalize_comfyui_model_option_name(value, *, limit=180):
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        normalized_path = text.replace("\\", "/")
+        if "\x00" in text or normalized_path.startswith("/") or re.match(r"^[A-Za-z]:", normalized_path):
+            return None
+        parts = normalized_path.split("/")
+        if any(not part.strip() or part.strip() in {".", ".."} for part in parts):
+            return None
+        return text[:limit]
 
     def _normalize_loras(data):
         raw_loras = data.get("loras") if isinstance(data, dict) else []
@@ -2787,11 +2870,13 @@ def register_comfyui_routes(app, deps):
             name = str(item.get("name") or item.get("lora_name") or "").strip()
             if not name:
                 continue
-            if "/" in name or "\\" in name or ".." in name:
+            name = _normalize_comfyui_model_option_name(name)
+            if name is None:
                 return None, "LoRA 名稱不合法"
-            if name in seen:
+            dedupe_key = name.replace("\\", "/").lower()
+            if dedupe_key in seen:
                 continue
-            seen.add(name)
+            seen.add(dedupe_key)
             normalized.append({
                 "name": name[:180],
                 "strength_model": _float_range(item.get("strength_model"), 1.0, -2.0, 2.0),
@@ -2813,9 +2898,7 @@ def register_comfyui_routes(app, deps):
         text = str(value or "").strip()
         if not text or text == COMFYUI_VAE_BUILTIN:
             return ""
-        if "/" in text or "\\" in text or ".." in text:
-            return None
-        return text[:180]
+        return _normalize_comfyui_model_option_name(text)
 
     def _clean_filename(name, fallback="comfyui.png"):
         text = str(name or "").strip()

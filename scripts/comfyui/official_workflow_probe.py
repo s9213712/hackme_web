@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from services.comfyui.client import ComfyUIClient, ComfyUIError  # noqa: E402
+from services.comfyui.template.capability import resolve_model_option  # noqa: E402
 from services.comfyui.template.seeding import SYSTEM_WORKFLOW_IDS  # noqa: E402
 
 
@@ -141,7 +142,7 @@ def _preflight(bundle_id, workflow, object_info):
             if not value:
                 continue
             options = _node_options(object_info, *option_ref)
-            if options is not None and value not in options:
+            if options is not None and not resolve_model_option(value, options):
                 missing_models.append({
                     "node_id": node_id,
                     "class_type": class_type,

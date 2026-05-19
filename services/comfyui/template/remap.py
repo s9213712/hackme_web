@@ -55,6 +55,8 @@ ALLOWED_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
     {".png", ".jpg", ".jpeg", ".webp"}
 )
 DEFAULT_MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MiB
+OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX = "official-template-media:"
+DEFAULT_MAX_OFFICIAL_TEMPLATE_IMAGE_BYTES = 64 * 1024 * 1024  # 64 MiB
 ALLOWED_VIDEO_MIMES: frozenset[str] = frozenset(
     {
         "video/mp4",
@@ -162,13 +164,18 @@ def _validate_uploaded_file_row(
             f"{label} {cloud_file_id} 的副檔名 ({ext!r}) 不在允許清單中"
         )
 
-    # Size
+    # Size. Official template media is shipped with the project and already
+    # selected by exact basename lookup, so it gets a separate fixture-sized
+    # cap while user cloud-drive images keep the stricter upload cap.
     size = int(file_row.get("size_bytes") or 0)
     if size <= 0:
         raise SafetyError(f"{label} {cloud_file_id} 大小未知或為 0")
-    if size > int(max_bytes):
+    effective_max_bytes = int(max_bytes)
+    if media_kind == "image" and cloud_file_id.startswith(OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX):
+        effective_max_bytes = max(effective_max_bytes, DEFAULT_MAX_OFFICIAL_TEMPLATE_IMAGE_BYTES)
+    if size > effective_max_bytes:
         raise SafetyError(
-            f"{label} {cloud_file_id} 大小 {size} 超過上限 {max_bytes}"
+            f"{label} {cloud_file_id} 大小 {size} 超過上限 {effective_max_bytes}"
         )
 
     # Scan status: not_required is the scanner-disabled / not-applicable
@@ -360,7 +367,9 @@ __all__ = [
     "ALLOWED_VIDEO_EXTENSIONS",
     "ALLOWED_VIDEO_MIMES",
     "DEFAULT_MAX_IMAGE_BYTES",
+    "DEFAULT_MAX_OFFICIAL_TEMPLATE_IMAGE_BYTES",
     "DEFAULT_MAX_VIDEO_BYTES",
+    "OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX",
     "PROTECTED_IMAGE_INPUTS",
     "PROTECTED_MEDIA_INPUTS",
     "PROTECTED_VIDEO_INPUTS",

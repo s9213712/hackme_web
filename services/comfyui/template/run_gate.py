@@ -51,6 +51,7 @@ from services.comfyui.template.safety import (
     enforce_allowlist,
     rewrite_save_image_prefix,
 )
+from services.comfyui.workflow.compat import apply_workflow_compatibility_fixes
 from services.comfyui.validation.rules import WorkflowValidationError
 from services.comfyui.validation.sanitize import sanitize_workflow_json
 
@@ -367,6 +368,7 @@ def run_workflow_through_gates(
             analysis=analysis,
             user_inputs=user_inputs or {},
         )
+        workflow = apply_workflow_compatibility_fixes(workflow)
         workflow = rewrite_workflow_model_inputs_to_local_options(
             workflow,
             client=comfyui_client,

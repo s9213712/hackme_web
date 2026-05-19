@@ -583,6 +583,26 @@ class MissingControlnetModelClient(FakeComfyUIClient):
         return payload
 
 
+class SubfolderModelOptionClient(FakeComfyUIClient):
+    def get_loras(self):
+        return ["QWEN/Qwen-Image-Lightning-4steps-V1.0.safetensors"]
+
+    def get_vaes(self):
+        return ["SDXL/sdxl_vae.safetensors"]
+
+    def get_capabilities(self):
+        payload = super().get_capabilities()
+        payload["loras"] = self.get_loras()
+        payload["vaes"] = self.get_vaes()
+        payload["upscale_models"] = ["ESRGAN/OmniSR_X4_DIV2K.safetensors"]
+        payload["controlnet_models"] = ["SD35/sd3.5_large_controlnet_canny.safetensors"]
+        payload["controlnet_types"]["canny"]["available"] = True
+        payload["controlnet_types"]["canny"]["matching_models"] = [
+            "SD35/sd3.5_large_controlnet_canny.safetensors"
+        ]
+        return payload
+
+
 class MissingWorkflowNodeClient(FakeComfyUIClient):
     def get_capabilities(self):
         payload = super().get_capabilities()
@@ -845,7 +865,7 @@ def test_comfyui_models_and_generate_routes(tmp_path):
         conn.close()
     assert '"data_url"' not in stored_result
     assert len(stored_result) < 5000
-    assert FakeComfyUIClient.last_timeout_seconds == 1800
+    assert FakeComfyUIClient.last_timeout_seconds == 0
     assert FakeComfyUIClient.last_params["loras"] == [{"name": "detail.safetensors", "strength_model": 0.8, "strength_clip": 0.7}]
     assert FakeComfyUIClient.last_params["vae"] == "sdxl_vae.safetensors"
 
@@ -947,6 +967,84 @@ def test_comfyui_generate_rejects_when_controlnet_model_missing(tmp_path):
     )
     assert generated.status_code == 409
     assert "缺少對應" in generated.get_json()["msg"]
+
+
+def test_comfyui_generate_accepts_subfolder_lora_and_vae_options(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root, comfyui_client=SubfolderModelOptionClient()).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "model": "dream.safetensors",
+            "prompt": "subfolder model option test",
+            "confirm_billing": True,
+            "vae": "SDXL\\sdxl_vae.safetensors",
+            "loras": [
+                {"name": "QWEN\\Qwen-Image-Lightning-4steps-V1.0.safetensors", "strength_model": 1}
+            ],
+        },
+    )
+
+    assert generated.status_code == 200
+    _await_comfyui_result(client, generated)
+    assert FakeComfyUIClient.last_params["vae"] == "SDXL/sdxl_vae.safetensors"
+    assert FakeComfyUIClient.last_params["loras"][0]["name"] == "QWEN/Qwen-Image-Lightning-4steps-V1.0.safetensors"
+
+
+def test_comfyui_generate_accepts_subfolder_controlnet_model_option(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root, comfyui_client=SubfolderModelOptionClient()).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        data={
+            "generation_mode": "img2img",
+            "model": "dream.safetensors",
+            "prompt": "controlnet subfolder path",
+            "confirm_billing": "true",
+            "source_image": (io.BytesIO(b"source-bytes"), "source.png", "image/png"),
+            "control_image": (io.BytesIO(b"control-bytes"), "control.png", "image/png"),
+            "controlnet_enabled": "true",
+            "controlnet_type": "canny",
+            "controlnet_model": "SD35\\sd3.5_large_controlnet_canny.safetensors",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert generated.status_code == 200
+    _await_comfyui_result(client, generated)
+    assert FakeComfyUIClient.last_params["controlnet"]["model_name"] == "SD35/sd3.5_large_controlnet_canny.safetensors"
+
+
+def test_comfyui_generate_accepts_subfolder_upscale_model_option(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root, comfyui_client=SubfolderModelOptionClient()).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        data={
+            "generation_mode": "upscale",
+            "confirm_billing": "true",
+            "source_image": (io.BytesIO(b"source-bytes"), "source.png", "image/png"),
+            "upscale_model": "ESRGAN\\OmniSR_X4_DIV2K.safetensors",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert generated.status_code == 200
+    _await_comfyui_result(client, generated)
+    assert FakeComfyUIClient.last_params["upscale_model"] == "ESRGAN/OmniSR_X4_DIV2K.safetensors"
 
 
 def test_comfyui_generate_rejects_when_workflow_node_missing(tmp_path):
@@ -1427,6 +1525,201 @@ def test_comfyui_workflow_audio_media_preview_can_play_generated_output(tmp_path
     assert preview_json["media"]["mime_type"] == "audio/mpeg"
     assert preview_json["media"]["data_url"].startswith("data:audio/mpeg;base64,")
     assert preview_json["media"]["size_bytes"] == len(b"ID3fake-mp3-bytes")
+
+
+def test_comfyui_workflow_video_media_preview_can_play_generated_output(tmp_path):
+    class VideoWorkflowClient(FakeComfyUIClient):
+        def generate_from_workflow(
+            self,
+            workflow,
+            *,
+            timeout_seconds=180,
+            expected_count=1,
+            progress_callback=None,
+            fetch_outputs=False,
+            extra_data=None,
+        ):
+            FakeComfyUIClient.generated_count += 1
+            FakeComfyUIClient.last_workflow = json.loads(json.dumps(workflow))
+            file_ref = {"filename": "ltx_preview.mp4", "subfolder": "video", "type": "output"}
+            return {
+                "prompt_id": "video-prompt-1",
+                "image_ref": file_ref,
+                "mime_type": "application/octet-stream",
+                "data": b"",
+                "images": [],
+                "media": {
+                    "videos": [{
+                        "file_ref": file_ref,
+                        "mime_type": "application/octet-stream",
+                        "data": b"",
+                        "size_bytes": 0,
+                    }],
+                },
+            }
+
+        def fetch_file(self, file_ref):
+            assert file_ref == {"filename": "ltx_preview.mp4", "subfolder": "video", "type": "output"}
+            return ComfyUIImage(
+                filename=file_ref["filename"],
+                subfolder=file_ref["subfolder"],
+                type=file_ref["type"],
+                mime_type="application/octet-stream",
+                data=b"\x00\x00\x00\x18ftypmp42fake-mp4",
+            )
+
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root, comfyui_client=VideoWorkflowClient()).test_client()
+    exported = client.post(
+        "/api/comfyui/workflows/export-current",
+        json={
+            "generation_mode": "txt2img",
+            "model": "dream.safetensors",
+            "prompt": "video media smoke",
+            "negative_prompt": "",
+            "width": 512,
+            "height": 512,
+            "steps": 8,
+            "cfg": 4,
+            "seed": 123,
+            "batch_size": 1,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+        },
+    )
+    assert exported.status_code == 200, exported.get_json()
+    preset = _import_workflow_preset(
+        client,
+        exported.get_json()["workflow_json"],
+        title="Video Output Flow",
+        default_params=exported.get_json()["default_params"],
+    )
+
+    run = client.post(f"/api/comfyui/workflows/{preset['id']}/run", json={})
+    body = _await_comfyui_job(client, run)
+    media = body["result"]["media"]
+    assert body["result"]["images"] == []
+    assert media[0]["media_kind"] == "video"
+
+    preview = client.post(
+        "/api/comfyui/media-preview",
+        json={"job_id": body["job_id"], "file_ref": media[0]["file_ref"]},
+    )
+    assert preview.status_code == 200, preview.get_json()
+    preview_json = preview.get_json()
+    assert preview_json["media"]["mime_type"] == "video/mp4"
+    assert preview_json["media"]["data_url"].startswith("data:video/mp4;base64,")
+    assert preview_json["media"]["size_bytes"] == len(b"\x00\x00\x00\x18ftypmp42fake-mp4")
+
+
+def test_comfyui_media_preview_uses_original_workflow_backend_url(tmp_path):
+    class BackendAwareAudioClient(FakeComfyUIClient):
+        def __init__(self, base_url):
+            self.base_url = base_url
+            self.fetch_calls = []
+
+        def generate_from_workflow(
+            self,
+            workflow,
+            *,
+            timeout_seconds=180,
+            expected_count=1,
+            progress_callback=None,
+            fetch_outputs=False,
+            extra_data=None,
+        ):
+            file_ref = {"filename": "ace_backend_preview.mp3", "subfolder": "audio", "type": "output"}
+            return {
+                "prompt_id": f"audio:{self.base_url}",
+                "image_ref": file_ref,
+                "mime_type": "application/octet-stream",
+                "data": b"",
+                "images": [],
+                "media": {
+                    "audio": [{
+                        "file_ref": file_ref,
+                        "mime_type": "application/octet-stream",
+                        "data": b"",
+                        "size_bytes": 0,
+                    }],
+                },
+            }
+
+        def fetch_file(self, file_ref):
+            self.fetch_calls.append(dict(file_ref))
+            return ComfyUIImage(
+                filename=file_ref["filename"],
+                subfolder=file_ref.get("subfolder") or "",
+                type=file_ref.get("type") or "output",
+                mime_type="application/octet-stream",
+                data=f"mp3:{self.base_url}".encode("utf-8"),
+            )
+
+    settings = {
+        "comfyui_connection_mode": "remote",
+        "comfyui_remote_api_url": "http://run-backend:8188",
+    }
+    clients = {}
+
+    def factory(url):
+        clients.setdefault(url, BackendAwareAudioClient(url))
+        return clients[url]
+
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings=settings,
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": factory,
+        },
+    ).test_client()
+    exported = client.post(
+        "/api/comfyui/workflows/export-current",
+        json={
+            "generation_mode": "txt2img",
+            "model": "dream.safetensors",
+            "prompt": "backend media smoke",
+            "negative_prompt": "",
+            "width": 512,
+            "height": 512,
+            "steps": 8,
+            "cfg": 4,
+            "seed": 123,
+            "batch_size": 1,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+        },
+    )
+    assert exported.status_code == 200, exported.get_json()
+    preset = _import_workflow_preset(
+        client,
+        exported.get_json()["workflow_json"],
+        title="Backend Audio Output Flow",
+        default_params=exported.get_json()["default_params"],
+    )
+
+    run = client.post(f"/api/comfyui/workflows/{preset['id']}/run", json={})
+    body = _await_comfyui_job(client, run)
+    media = body["result"]["media"]
+    assert body["result"]["backend_url"] == "http://run-backend:8188"
+
+    settings["comfyui_remote_api_url"] = "http://other-backend:8188"
+    preview = client.post(
+        "/api/comfyui/media-preview",
+        json={"job_id": body["job_id"], "file_ref": media[0]["file_ref"]},
+    )
+
+    assert preview.status_code == 200, preview.get_json()
+    assert clients["http://run-backend:8188"].fetch_calls == [media[0]["file_ref"]]
+    assert clients.get("http://other-backend:8188") is None or clients["http://other-backend:8188"].fetch_calls == []
 
 
 def test_comfyui_workflow_run_expects_multiple_preview_outputs(tmp_path):
@@ -2341,6 +2634,32 @@ def test_comfyui_object_info_combo_options_are_parsed_for_latent_upscale_models(
     assert client.get_latent_upscale_models() == ["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]
 
 
+def test_comfyui_controlnet_models_fall_back_to_model_folder_api(monkeypatch):
+    client = ComfyUIClient("http://fake-comfyui")
+    seen_paths = []
+
+    def fake_json_request(path, **_kwargs):
+        seen_paths.append(path)
+        if path == "/object_info/ControlNetLoader":
+            return {
+                "ControlNetLoader": {
+                    "input": {
+                        "required": {
+                            "control_net_name": ["COMBO", {"options": []}],
+                        }
+                    }
+                }
+            }
+        if path == "/api/models/controlnet":
+            return ["QWEN/Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"]
+        raise AssertionError(f"unexpected path {path}")
+
+    monkeypatch.setattr(client, "_json_request", fake_json_request)
+
+    assert client.get_controlnet_models() == ["QWEN/Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"]
+    assert seen_paths == ["/object_info/ControlNetLoader", "/api/models/controlnet"]
+
+
 def test_comfyui_latent_upscale_models_fall_back_to_model_folder_api(monkeypatch):
     client = ComfyUIClient("http://fake-comfyui")
     seen_paths = []
@@ -2414,6 +2733,35 @@ def test_comfyui_capabilities_fall_back_to_latent_upscale_model_folder_api(monke
     assert capabilities["latent_upscale_models"] == ["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]
 
 
+def test_comfyui_capabilities_fall_back_to_controlnet_model_folder_api(monkeypatch):
+    client = ComfyUIClient("http://fake-comfyui")
+
+    def fake_json_request(path, **_kwargs):
+        if path == "/object_info":
+            return {
+                "ControlNetLoader": {
+                    "input": {
+                        "required": {
+                            "control_net_name": ["COMBO", {"options": []}],
+                        }
+                    }
+                },
+                "ControlNetApplyAdvanced": {"input": {"required": {}}},
+                "LoadImage": {"input": {"required": {}}},
+                "CannyEdgePreprocessor": {"input": {"required": {}}},
+            }
+        if path == "/api/models/controlnet":
+            return ["QWEN/Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"]
+        if path in {"/api/models/upscale_models", "/api/models/latent_upscale_models", "/api/models/clip_vision"}:
+            return []
+        raise AssertionError(f"unexpected path {path}")
+
+    monkeypatch.setattr(client, "_json_request", fake_json_request)
+    capabilities = client.get_capabilities()
+
+    assert capabilities["controlnet_models"] == ["QWEN/Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"]
+
+
 def test_comfyui_capabilities_fall_back_to_clip_vision_model_folder_api(monkeypatch):
     client = ComfyUIClient("http://fake-comfyui")
 
@@ -2460,6 +2808,42 @@ def test_comfyui_workflow_dependency_status_accepts_clip_vision_models(tmp_path)
 
     assert dependency["available"] is True
     assert dependency["missing_models"] == []
+
+
+def test_comfyui_workflow_dependency_status_accepts_controlnet_subfolder_paths(tmp_path):
+    class SubfolderControlNetClient(FakeComfyUIClient):
+        def get_capabilities(self):
+            capabilities = json.loads(json.dumps(super().get_capabilities()))
+            capabilities["controlnet_models"] = ["SD35/sd3.5_large_controlnet_depth.safetensors"]
+            capabilities["controlnet_types"]["depth"]["available"] = True
+            capabilities["controlnet_types"]["depth"]["matching_models"] = [
+                "SD35/sd3.5_large_controlnet_depth.safetensors"
+            ]
+            return capabilities
+
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root, comfyui_client=SubfolderControlNetClient()).test_client()
+    workflow = {
+        "10": {
+            "class_type": "ControlNetLoader",
+            "inputs": {"control_net_name": "SD35\\sd3.5_large_controlnet_depth.safetensors"},
+        },
+        "20": {
+            "class_type": "PreviewImage",
+            "inputs": {"images": ["30", 0]},
+        },
+    }
+    preset = _import_workflow_preset(client, workflow, title="SD3.5 Depth ControlNet Workflow")
+
+    detail = client.get(f"/api/comfyui/workflows/{preset['id']}")
+    assert detail.status_code == 200
+    dependency = detail.get_json()["preset"]["dependency_status"]
+
+    assert dependency["available"] is True
+    assert dependency["missing_controlnets"] == []
 
 
 def test_comfyui_workflow_chains_loras_between_checkpoint_and_sampler():
@@ -4907,8 +5291,8 @@ def test_comfyui_frontend_is_wired():
     assert "function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds, options = {})" in comfyui_js
     assert "function pollComfyuiModelDownloadJob(jobId)" in comfyui_js
     assert "function comfyuiStorageWarningText(payload = {})" in comfyui_js
-    assert "const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;" in comfyui_js
-    assert "上限由後端工作控制" in comfyui_js
+    assert "const COMFYUI_GENERATION_TIMEOUT_SECONDS = 0;" in comfyui_js
+    assert "不設最長等待上限" in comfyui_js
     assert "const COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800;" in comfyui_js
     assert "function extendComfyuiDeadlineForQueue(deadline, startedAt)" in comfyui_js
     assert "function setComfyuiModelDownloadProgress" in comfyui_js

@@ -236,6 +236,28 @@ def test_remap_rejects_oversize_file():
         )
 
 
+def test_official_template_media_image_uses_fixture_sized_limit():
+    asset_id = f"{_OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX}2.png"
+    rows = {
+        asset_id: _row(
+            id=asset_id,
+            size_bytes=15_096_725,
+            original_filename_plain_for_public="2.png",
+        )
+    }
+    out = remap_load_image_to_cloud_file(
+        WORKFLOW_WITH_LOAD_IMAGE,
+        image_field_assignments={"1": asset_id},
+        actor={"id": 7},
+        conn=None,
+        run_id="anime",
+        upload_callback=_stub_upload,
+        fetch_file_row=_stub_fetch(rows),
+    )
+
+    assert out["1"]["inputs"]["image"] == "anime/7_anime_1.png"
+
+
 def test_remap_rejects_unscanned_when_skip_not_allowed():
     rows = {"f-1": _row(scan_status="skipped")}
     with pytest.raises(SafetyError, match="未通過安全掃描"):

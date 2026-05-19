@@ -249,6 +249,20 @@ def test_generated_images_show_model_labels_and_share_them():
     assert "輸出標籤：" in routes_py
 
 
+def test_non_image_comfyui_outputs_render_as_playable_media():
+    comfyui_js = _read("public/js/36-comfyui.js")
+    workflow_js = _read("public/js/36-comfyui-workflows.js")
+
+    assert 'kind === "audio"' in comfyui_js
+    assert '<audio controls preload="metadata"><source src="${sanitize(src)}" type="${sanitize(item.mime_type || "audio/mpeg")}"></audio>' in comfyui_js
+    assert '<video controls preload="metadata" playsinline><source src="${sanitize(src)}" type="${sanitize(item.mime_type || "video/mp4")}"></video>' in comfyui_js
+    assert "const generatedMedia = [];" in comfyui_js
+    assert "generatedMedia.push({ ...item, run_index: runIndex, batch_index: batchIndex, run_count: runCount });" in comfyui_js
+    assert "comfyuiGeneratedMedia = generatedMedia;" in comfyui_js
+    assert "if (comfyuiGeneratedImages.length) comfyuiGeneratedMedia = [];" not in comfyui_js
+    assert "} else if (media.length) {\n      renderComfyuiGeneratedMedia(comfyuiGeneratedMedia);\n    }" in workflow_js
+
+
 def test_template_local_images_are_imported_before_safe_remap_gate():
     comfyui_js = _read("public/js/36-comfyui.js")
     workflow_js = _read("public/js/36-comfyui-workflows.js")
@@ -280,15 +294,17 @@ def test_official_workflow_template_media_defaults_are_auto_assigned():
     assert '<img src="${sanitize(officialMediaPreviewUrl)}" alt="${sanitize(fieldLabel || "模板範例圖片")}" />' in workflow_js
 
 
-def test_video_workflow_templates_use_short_foreground_wait_without_losing_job_id():
+def test_workflow_templates_use_unlimited_foreground_wait_without_losing_job_id():
     comfyui_js = _read("public/js/36-comfyui.js")
     workflow_js = _read("public/js/36-comfyui-workflows.js")
 
-    assert "const COMFYUI_VIDEO_FOREGROUND_TIMEOUT_SECONDS = 900;" in comfyui_js
+    assert "const COMFYUI_GENERATION_TIMEOUT_SECONDS = 0;" in comfyui_js
+    assert "const COMFYUI_VIDEO_FOREGROUND_TIMEOUT_SECONDS = 0;" in comfyui_js
     assert "const COMFYUI_INTERRUPT_TIMEOUT_SECONDS = 15;" in comfyui_js
     assert "function createComfyuiForegroundTimeoutError(jobId)" in comfyui_js
     assert "err.comfyuiForegroundTimeout = true;" in comfyui_js
     assert "function comfyuiForegroundTimeoutMessage(err)" in comfyui_js
+    assert "不設最長等待上限" in comfyui_js
     assert "job_id: interruptedJobId" in comfyui_js
     assert "signal: interruptRequestController.signal" in comfyui_js
     assert "Promise.race([interruptRequest, interruptTimeout])" in comfyui_js

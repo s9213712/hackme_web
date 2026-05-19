@@ -69,3 +69,32 @@ def test_string_concatenate_gets_empty_delimiter_for_newer_comfyui():
 
     assert patched["1"]["inputs"]["delimiter"] == ""
     assert "delimiter" not in workflow["1"]["inputs"]
+
+
+def test_qwen_2512_lightning_switches_are_synced_when_partially_enabled():
+    workflow = {
+        "132": {"class_type": "ComfySwitchNode", "inputs": {"on_false": 50, "on_true": 4, "switch": True}},
+        "133": {"class_type": "ComfySwitchNode", "inputs": {"on_false": 4, "on_true": 1, "switch": False}},
+        "134": {
+            "class_type": "ComfySwitchNode",
+            "inputs": {"on_false": ["141", 0], "on_true": ["140", 0], "switch": False},
+        },
+        "140": {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "lora_name": "QWEN\\Qwen-Image-Lightning-4steps-V1.0.safetensors",
+                "model": ["141", 0],
+                "strength_model": 1,
+            },
+        },
+        "141": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_2512_fp8_e4m3fn.safetensors"}},
+        "143": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+        "137": {"class_type": "KSampler", "inputs": {"model": ["134", 0]}},
+    }
+
+    patched = apply_workflow_compatibility_fixes(workflow)
+
+    assert patched["132"]["inputs"]["switch"] is True
+    assert patched["133"]["inputs"]["switch"] is True
+    assert patched["134"]["inputs"]["switch"] is True
+    assert workflow["133"]["inputs"]["switch"] is False
