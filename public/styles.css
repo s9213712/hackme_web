@@ -1586,6 +1586,14 @@
       margin-top: .45rem;
     }
 
+    .comfyui-workflow-default-model-notice {
+      margin-top: .35rem;
+      color: #dbeafe;
+      font-size: .78rem;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
     .comfyui-template-panel-grid {
       display: grid;
       gap: .65rem;
@@ -2505,6 +2513,7 @@
       display: grid;
       gap: .18rem;
       min-width: 0;
+      flex: 1 1 260px;
     }
 
     .comfyui-workflow-item-title strong {

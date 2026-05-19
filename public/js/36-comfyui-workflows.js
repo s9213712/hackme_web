@@ -652,6 +652,57 @@ function comfyuiTemplateInputKinds(detail) {
   ].filter(Boolean);
 }
 
+function comfyuiWorkflowModelKindLabel(kind = "") {
+  const normalized = String(kind || "").trim().toLowerCase();
+  if (["ckpt", "checkpoint", "model"].includes(normalized)) return "Checkpoint";
+  if (["diffusion_model", "unet"].includes(normalized)) return "Diffusion / UNet";
+  if (["clip", "text_encoder"].includes(normalized)) return "Text Encoder / CLIP";
+  if (normalized === "vae") return "VAE";
+  if (normalized === "lora") return "LoRA";
+  if (normalized === "controlnet") return "ControlNet";
+  if (normalized === "embedding") return "Embedding";
+  if (["upscale", "upscale_model", "upscale_models"].includes(normalized)) return "Upscale";
+  return kind ? String(kind) : "模型";
+}
+
+function comfyuiWorkflowDefaultModelEntries(item = {}) {
+  const defaults = item?.default_params || {};
+  const entries = [];
+  const seen = new Set();
+  const add = (kind, value) => {
+    const text = String(value || "").trim();
+    if (!text || text === COMFYUI_VAE_BUILTIN) return;
+    const key = `${String(kind || "").toLowerCase()}:${text.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push({ kind: comfyuiWorkflowModelKindLabel(kind), name: text });
+  };
+  add("checkpoint", defaults.model);
+  add("diffusion_model", defaults.diffusion_model);
+  add("clip", defaults.clip);
+  add("vae", defaults.vae);
+  add("upscale", defaults.upscale_model);
+  if (defaults.controlnet?.model_name) add("controlnet", defaults.controlnet.model_name);
+  (Array.isArray(defaults.loras) ? defaults.loras : []).forEach((entry) => add("lora", entry?.name || entry));
+  (Array.isArray(item?.required_models) ? item.required_models : []).forEach((entry) => add(entry?.kind || "model", entry?.name || entry));
+  (Array.isArray(item?.required_loras) ? item.required_loras : []).forEach((entry) => add("lora", entry?.name || entry));
+  (Array.isArray(item?.required_controlnets) ? item.required_controlnets : []).forEach((entry) => add("controlnet", entry?.name || entry));
+  return entries;
+}
+
+function comfyuiWorkflowDefaultModelSummaryText(item = {}, limit = 4) {
+  const entries = comfyuiWorkflowDefaultModelEntries(item);
+  if (!entries.length) return "預設模型：未在模板中標示";
+  const visible = entries.slice(0, Math.max(1, Number(limit) || 4));
+  const text = visible.map((entry) => `${entry.kind}: ${entry.name}`).join("、");
+  const hiddenCount = entries.length - visible.length;
+  return `預設模型：${text}${hiddenCount > 0 ? `，另 ${hiddenCount} 個` : ""}`;
+}
+
+function comfyuiWorkflowDefaultModelNoticeHtml(item = {}, limit = 4) {
+  return `<div class="comfyui-workflow-default-model-notice">${sanitize(comfyuiWorkflowDefaultModelSummaryText(item, limit))}</div>`;
+}
+
 function comfyuiTemplateSummaryMarkup(detail) {
   if (!detail) {
     return "";
@@ -682,6 +733,7 @@ function comfyuiTemplateSummaryMarkup(detail) {
     </div>
       </summary>
     <div class="drive-card-sub">${sanitize(detail?.description || "未填寫模板說明")}</div>
+    ${comfyuiWorkflowDefaultModelNoticeHtml(detail, 8)}
     <div class="drive-card-sub">這個模板會根據 workflow manifest 只顯示需要的欄位；執行時只使用下方模板卡片的值。</div>
     ${requirementBits.length ? `<div class="drive-card-sub" style="margin-top:.35rem;">依賴：${sanitize(requirementBits.join("、"))}</div>` : ""}
     ${comfyuiWorkflowPaidApiWarningHtml(detail)}
@@ -1613,6 +1665,7 @@ function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {
   list.innerHTML = items.map((item) => {
     const dependency = item?.dependency_status || null;
     const dependencyHtml = comfyuiWorkflowDependencyHtml(dependency);
+    const defaultModelNotice = comfyuiWorkflowDefaultModelNoticeHtml(item, 4);
     const models = Array.isArray(item?.required_models) ? item.required_models.map((entry) => `${entry.kind || "model"}:${entry.name || ""}`) : [];
     const loras = Array.isArray(item?.required_loras) ? item.required_loras.map((entry) => entry.name || entry) : [];
     const controlnets = Array.isArray(item?.required_controlnets) ? item.required_controlnets.map((entry) => entry.name || entry) : [];
@@ -1629,6 +1682,7 @@ function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {
           <div class="comfyui-workflow-item-title">
             <strong>${sanitize(item?.title || `Workflow #${item?.id || ""}`)}</strong>
             <span>${sanitize(mode)} · ${sanitize(purpose)} · ${sanitize(String(item?.updated_at || "").replace("T", " ").slice(0, 16))}</span>
+            ${defaultModelNotice}
           </div>
           <div class="comfyui-workflow-flags">
             ${item?.is_official ? '<span class="comfyui-workflow-chip">官方</span>' : ""}
@@ -1644,6 +1698,7 @@ function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {
         </summary>
         <div class="comfyui-workflow-item-body">
         <div class="drive-card-sub">${sanitize(item?.description || "未填寫說明")}</div>
+        ${comfyuiWorkflowDefaultModelNoticeHtml(item, 12)}
         <div class="comfyui-workflow-meta">
           <span class="comfyui-workflow-chip">Project ${sanitize(item?.project_version || "-")}</span>
           <span class="comfyui-workflow-chip">ComfyUI ${sanitize(item?.comfyui_version || "-")}</span>

@@ -36,6 +36,23 @@ def test_workflow_template_library_cards_are_collapsed_until_opened():
     assert ".comfyui-workflow-expand-indicator::before" in css
 
 
+def test_workflow_template_cards_show_default_model_notice():
+    js = _read("public/js/36-comfyui-workflows.js")
+    css = _read("public/styles.css")
+
+    assert "function comfyuiWorkflowDefaultModelEntries" in js
+    assert "function comfyuiWorkflowDefaultModelSummaryText" in js
+    assert "function comfyuiWorkflowDefaultModelNoticeHtml" in js
+    assert "預設模型：" in js
+    assert "default_params" in js
+    assert "required_models" in js
+    assert "required_loras" in js
+    assert "required_controlnets" in js
+    assert "comfyuiWorkflowDefaultModelNoticeHtml(item, 4)" in js
+    assert "comfyuiWorkflowDefaultModelNoticeHtml(detail, 8)" in js
+    assert ".comfyui-workflow-default-model-notice" in css
+
+
 def test_workflow_layout_builder_secondary_actions_are_collapsed():
     html = _read("public/index.html")
     css = _read("public/styles.css")
