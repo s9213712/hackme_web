@@ -1,5 +1,8 @@
 {
   "11": {
+    "_meta": {
+      "title": "共用VAE(option)"
+    },
     "class_type": "VAELoader",
     "inputs": {
       "vae_name": "vae-ft-mse-840000-ema-pruned.safetensors"
@@ -73,18 +76,30 @@
     }
   },
   "4": {
+    "_meta": {
+      "group_title": "比較標的",
+      "title": "比較標的"
+    },
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
       "ckpt_name": "SDXL\\illustrious(IL)\\janxd系列\\JANKUTrainedNoobaiRouwei_v60.safetensors"
     }
   },
   "48": {
+    "_meta": {
+      "group_title": "比較標的",
+      "title": "比較標的"
+    },
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
       "ckpt_name": "SDXL\\illustrious(IL)\\janxd系列\\JANKUTrainedNoobaiRouwei_v69.safetensors"
     }
   },
   "5": {
+    "_meta": {
+      "group_title": "共同條件",
+      "title": "共同條件"
+    },
     "class_type": "EmptyLatentImage",
     "inputs": {
       "batch_size": 1,
@@ -111,6 +126,10 @@
     }
   },
   "6": {
+    "_meta": {
+      "group_title": "共同條件",
+      "title": "CLIP Text Encode (Positive)"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [
@@ -121,6 +140,10 @@
     }
   },
   "7": {
+    "_meta": {
+      "group_title": "共同條件",
+      "title": "CLIP Text Encode (Negative)"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [

@@ -50,6 +50,9 @@
     }
   },
   "136": {
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [
@@ -60,6 +63,9 @@
     }
   },
   "137": {
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [
@@ -210,6 +216,9 @@
     }
   },
   "97": {
+    "_meta": {
+      "title": "Start Frame Image"
+    },
     "class_type": "LoadImage",
     "inputs": {
       "image": "03_video_wan2_2_14B_i2v_subgraphed_input_image.png",

@@ -96,6 +96,20 @@
             "label": "Checkpoint / 大模型",
             "node_id": "695",
             "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "rt_detr_v4-x-hgnet_fp16.safetensors",
+            "id": "node:696:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "696",
+            "read_only": true,
+            "required": false
           }
         ],
         "id": "model",

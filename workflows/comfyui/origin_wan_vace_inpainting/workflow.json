@@ -1,5 +1,9 @@
 {
   "111": {
+    "_meta": {
+      "group_title": "Repeat Mask Batch",
+      "title": "Repeat Mask Batch"
+    },
     "class_type": "MaskToImage",
     "inputs": {
       "mask": [
@@ -9,6 +13,10 @@
     }
   },
   "129": {
+    "_meta": {
+      "group_title": "Repeat Mask Batch",
+      "title": "Repeat Mask Batch"
+    },
     "class_type": "RepeatImageBatch",
     "inputs": {
       "amount": [
@@ -22,6 +30,10 @@
     }
   },
   "130": {
+    "_meta": {
+      "group_title": "Repeat Mask Batch",
+      "title": "Repeat Mask Batch"
+    },
     "class_type": "ImageToMask",
     "inputs": {
       "channel": "red",
@@ -32,6 +44,10 @@
     }
   },
   "140": {
+    "_meta": {
+      "group_title": "14B",
+      "title": "14B"
+    },
     "class_type": "UNETLoader",
     "inputs": {
       "unet_name": "wan2.1_vace_14B_fp16.safetensors",
@@ -39,6 +55,10 @@
     }
   },
   "154": {
+    "_meta": {
+      "group_title": "14B",
+      "title": "14B"
+    },
     "class_type": "LoraLoaderModelOnly",
     "inputs": {
       "lora_name": "WAN\\Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
@@ -50,6 +70,10 @@
     }
   },
   "162": {
+    "_meta": {
+      "group_title": "(Optional)reference image",
+      "title": "(Optional)reference image"
+    },
     "class_type": "LoadImage",
     "inputs": {
       "image": "api_bfl_flux_1_kontext_multiple_images_input_dog.jpg",
@@ -57,6 +81,10 @@
     }
   },
   "208": {
+    "_meta": {
+      "group_title": "Composite video & masks",
+      "title": "Composite video & masks"
+    },
     "class_type": "ImageCompositeMasked",
     "inputs": {
       "destination": [
@@ -77,6 +105,10 @@
     }
   },
   "209": {
+    "_meta": {
+      "group_title": "Step2 - Load video for editing",
+      "title": "Step2 - Load video for editing"
+    },
     "class_type": "LoadVideo",
     "inputs": {
       "file": "video_wan_vace_inpainting_input_video.mp4",
@@ -84,6 +116,10 @@
     }
   },
   "210": {
+    "_meta": {
+      "group_title": "Get video info",
+      "title": "Get video info"
+    },
     "class_type": "GetVideoComponents",
     "inputs": {
       "video": [
@@ -93,6 +129,10 @@
     }
   },
   "211": {
+    "_meta": {
+      "group_title": "Get video info",
+      "title": "Get video info"
+    },
     "class_type": "GetImageSize",
     "inputs": {
       "image": [
@@ -102,6 +142,10 @@
     }
   },
   "213": {
+    "_meta": {
+      "group_title": "Composite video & masks",
+      "title": "Composite video & masks"
+    },
     "class_type": "RebatchImages",
     "inputs": {
       "batch_size": [
@@ -115,6 +159,10 @@
     }
   },
   "214": {
+    "_meta": {
+      "group_title": "Composite video & masks",
+      "title": "Composite video & masks"
+    },
     "class_type": "PreviewImage",
     "inputs": {
       "images": [
@@ -124,6 +172,10 @@
     }
   },
   "215": {
+    "_meta": {
+      "group_title": "Step 3 - Load 1st frame & create mask",
+      "title": "Step 3 - Load 1st frame & create mask"
+    },
     "class_type": "LoadImage",
     "inputs": {
       "image": "video_wan_vace_inpainting_1st_frame_and_mask.png",
@@ -131,6 +183,10 @@
     }
   },
   "216": {
+    "_meta": {
+      "group_title": "Composite video & masks",
+      "title": "Composite video & masks"
+    },
     "class_type": "MaskToImage",
     "inputs": {
       "mask": [
@@ -140,6 +196,10 @@
     }
   },
   "219": {
+    "_meta": {
+      "group_title": "Composite video & masks",
+      "title": "Composite video & masks"
+    },
     "class_type": "InvertMask",
     "inputs": {
       "mask": [
@@ -157,6 +217,10 @@
     }
   },
   "227": {
+    "_meta": {
+      "group_title": "1.3B",
+      "title": "1.3B"
+    },
     "class_type": "LoraLoader",
     "inputs": {
       "lora_name": "WAN\\Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
@@ -169,6 +233,10 @@
     }
   },
   "228": {
+    "_meta": {
+      "group_title": "1.3B",
+      "title": "1.3B"
+    },
     "class_type": "UNETLoader",
     "inputs": {
       "unet_name": "wan2.1_vace_1.3B_fp16.safetensors",
@@ -176,6 +244,10 @@
     }
   },
   "3": {
+    "_meta": {
+      "group_title": "Sampling & Decoding",
+      "title": "Sampling & Decoding"
+    },
     "class_type": "KSampler",
     "inputs": {
       "cfg": 1,
@@ -203,6 +275,10 @@
     }
   },
   "38": {
+    "_meta": {
+      "group_title": "Step1 - Load models here",
+      "title": "Step1 - Load models here"
+    },
     "class_type": "CLIPLoader",
     "inputs": {
       "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -211,12 +287,20 @@
     }
   },
   "39": {
+    "_meta": {
+      "group_title": "Step1 - Load models here",
+      "title": "Step1 - Load models here"
+    },
     "class_type": "VAELoader",
     "inputs": {
       "vae_name": "wan_2.1_vae.safetensors"
     }
   },
   "48": {
+    "_meta": {
+      "group_title": "Sampling & Decoding",
+      "title": "Sampling & Decoding"
+    },
     "class_type": "ModelSamplingSD3",
     "inputs": {
       "model": [
@@ -227,6 +311,10 @@
     }
   },
   "49": {
+    "_meta": {
+      "group_title": "Step4 - Set video size & length",
+      "title": "Step4 - Set video size & length"
+    },
     "class_type": "WanVaceToVideo",
     "inputs": {
       "batch_size": 1,
@@ -261,6 +349,10 @@
     }
   },
   "58": {
+    "_meta": {
+      "group_title": "Sampling & Decoding",
+      "title": "Sampling & Decoding"
+    },
     "class_type": "TrimVideoLatent",
     "inputs": {
       "samples": [
@@ -274,6 +366,10 @@
     }
   },
   "6": {
+    "_meta": {
+      "group_title": "Prompt",
+      "title": "CLIP Text Encode (Positive Prompt)"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [
@@ -284,6 +380,10 @@
     }
   },
   "68": {
+    "_meta": {
+      "group_title": "Save Video(Mp4)",
+      "title": "Save Video(Mp4)"
+    },
     "class_type": "CreateVideo",
     "inputs": {
       "fps": [
@@ -297,6 +397,10 @@
     }
   },
   "69": {
+    "_meta": {
+      "group_title": "Save Video(Mp4)",
+      "title": "Save Video(Mp4)"
+    },
     "class_type": "SaveVideo",
     "inputs": {
       "codec": "auto",
@@ -309,6 +413,10 @@
     }
   },
   "7": {
+    "_meta": {
+      "group_title": "Prompt",
+      "title": "CLIP Text Encode (Negative Prompt)"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [
@@ -319,6 +427,10 @@
     }
   },
   "8": {
+    "_meta": {
+      "group_title": "Sampling & Decoding",
+      "title": "Sampling & Decoding"
+    },
     "class_type": "VAEDecode",
     "inputs": {
       "samples": [

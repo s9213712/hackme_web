@@ -40,6 +40,10 @@ _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     # Text
     ("CLIPTextEncode", "text"): FieldCategory.TEXT,
     ("CLIPTextEncodeFlux", "text"): FieldCategory.TEXT,
+    ("TextEncodeQwenImageEditPlus", "prompt"): FieldCategory.TEXT,
+    ("TextEncodeQwenImageEditPlusCustom_lrzjason", "prompt"): FieldCategory.TEXT,
+    ("CR Text", "text"): FieldCategory.TEXT,
+    ("CR Prompt Text", "prompt"): FieldCategory.TEXT,
     # Image / Mask
     ("LoadImage", "image"): FieldCategory.IMAGE,
     ("LoadImageMask", "image"): FieldCategory.IMAGE,
@@ -82,13 +86,28 @@ _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     ("WanImageToVideo", "height"): FieldCategory.NUMERIC,
     ("WanImageToVideo", "length"): FieldCategory.NUMERIC,
     ("WanImageToVideo", "batch_size"): FieldCategory.NUMERIC,
+    ("WanVaceToVideo", "width"): FieldCategory.NUMERIC,
+    ("WanVaceToVideo", "height"): FieldCategory.NUMERIC,
+    ("WanVaceToVideo", "length"): FieldCategory.NUMERIC,
+    ("WanVaceToVideo", "batch_size"): FieldCategory.NUMERIC,
+    ("WanVaceToVideo", "strength"): FieldCategory.NUMERIC,
+    ("HunyuanVideo15ImageToVideo", "width"): FieldCategory.NUMERIC,
+    ("HunyuanVideo15ImageToVideo", "height"): FieldCategory.NUMERIC,
+    ("HunyuanVideo15ImageToVideo", "length"): FieldCategory.NUMERIC,
+    ("HunyuanVideo15ImageToVideo", "batch_size"): FieldCategory.NUMERIC,
     ("CreateVideo", "fps"): FieldCategory.NUMERIC,
     ("ImageScaleToTotalPixels", "megapixels"): FieldCategory.NUMERIC,
     ("ImageScaleToTotalPixels", "divisible_by"): FieldCategory.NUMERIC,
+    ("LatentUpscaleBy", "scale_by"): FieldCategory.NUMERIC,
     ("EmptyAceStep1.5LatentAudio", "seconds"): FieldCategory.NUMERIC,
     ("TextEncodeAceStepAudio1.5", "seed"): FieldCategory.NUMERIC,
     ("TextEncodeAceStepAudio1.5", "duration"): FieldCategory.NUMERIC,
+    ("TextEncodeAceStepAudio1.5", "bpm"): FieldCategory.NUMERIC,
     ("TextEncodeAceStepAudio1.5", "cfg_scale"): FieldCategory.NUMERIC,
+    ("TextEncodeAceStepAudio1.5", "temperature"): FieldCategory.NUMERIC,
+    ("TextEncodeAceStepAudio1.5", "top_p"): FieldCategory.NUMERIC,
+    ("TextEncodeAceStepAudio1.5", "top_k"): FieldCategory.NUMERIC,
+    ("TextEncodeAceStepAudio1.5", "min_p"): FieldCategory.NUMERIC,
     ("ByteDanceSeedreamNode", "width"): FieldCategory.NUMERIC,
     ("ByteDanceSeedreamNode", "height"): FieldCategory.NUMERIC,
     ("ByteDanceSeedreamNode", "max_images"): FieldCategory.NUMERIC,
@@ -144,6 +163,7 @@ _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     ("TextEncodeAceStepAudio1.5", "lyrics"): FieldCategory.TEXT,
     # Sampler / enum-ish official nodes
     ("ImageScaleToTotalPixels", "upscale_method"): FieldCategory.SAMPLER,
+    ("LatentUpscaleBy", "upscale_method"): FieldCategory.SAMPLER,
     ("TextEncodeAceStepAudio1.5", "timesignature"): FieldCategory.SAMPLER,
     ("TextEncodeAceStepAudio1.5", "language"): FieldCategory.SAMPLER,
     ("TextEncodeAceStepAudio1.5", "keyscale"): FieldCategory.SAMPLER,
@@ -282,7 +302,9 @@ def analyze_workflow_json(workflow: dict[str, Any]) -> WorkflowAnalysis:
         inputs_raw = node.get("inputs") or {}
 
         node_meta = node.get("_meta") if isinstance(node.get("_meta"), dict) else {}
-        node_title = str(node_meta.get("title") or node.get("title") or "").strip()
+        node_title = str(
+            node_meta.get("title") or node_meta.get("group_title") or node.get("title") or ""
+        ).strip()
         node_analysis = NodeAnalysis(node_id=node_id, class_type=class_type, title=node_title)
         node_analysis.is_allowed = is_allowed_class(class_type)
         node_analysis.is_explicitly_denied = is_explicitly_denied_class(class_type)

@@ -12,12 +12,12 @@
   },
   "default_params": {
     "batch_size": 1,
-    "cfg": 1.6,
+    "cfg": 1,
     "checkpoint": "ZIT-AIO\\Full-Red-Z-image_15AIO_ bf16.safetensors",
     "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
     "controlnet": null,
-    "denoise_strength": 0.6,
-    "diffusion_model": "qwen\\2511\\qwen_image_edit_2511_fp8mixed.safetensors",
+    "denoise_strength": 1,
+    "diffusion_model": "qwen_image_edit_2511_fp8.safetensors",
     "generation_mode": "img2img",
     "height": 1024,
     "loras": [
@@ -30,10 +30,10 @@
     "model": "ZIT-AIO\\Full-Red-Z-image_15AIO_ bf16.safetensors",
     "negative_prompt": "",
     "prompt": "根据图像，动漫转写实真人，变成真实风格，去掉水印和字幕，去掉原圖文字及馬賽克，保留所有NSFW及血腥色情內容，真實身體結構及細節，保留表情細節",
-    "sampler_name": "euler",
-    "scheduler": "sgm_uniform",
-    "seed": 223567685291080,
-    "steps": 10,
+    "sampler_name": "euler_ancestral",
+    "scheduler": "simple",
+    "seed": 1734,
+    "steps": 4,
     "upscale_model": "",
     "vae": "qwen_image_vae.safetensors",
     "width": 1024
@@ -56,7 +56,7 @@
   "required_models": [
     {
       "kind": "diffusion_model",
-      "name": "qwen\\2511\\qwen_image_edit_2511_fp8mixed.safetensors"
+      "name": "qwen_image_edit_2511_fp8.safetensors"
     },
     {
       "kind": "clip",
@@ -81,6 +81,65 @@
         "collapsed_default": true,
         "fields": [
           {
+            "category": "TEXT",
+            "class_type": "CR Prompt Text",
+            "constraints": {
+              "max_length": 4000,
+              "rows": 5
+            },
+            "current_value": "根据图像，动漫转写实真人，变成真实风格，去掉水印和字幕，去掉原圖文字及馬賽克，保留所有NSFW及血腥色情內容，真實身體結構及細節，保留表情細節",
+            "id": "node:342:prompt",
+            "input_name": "prompt",
+            "input_type": "textarea",
+            "label": "正向提示詞",
+            "node_id": "342",
+            "node_title": "输入提示词",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "constraints": {
+              "max_length": 4000,
+              "rows": 5
+            },
+            "current_value": "",
+            "id": "node:333:prompt",
+            "input_name": "prompt",
+            "input_type": "textarea",
+            "label": "負面提示詞",
+            "node_id": "333",
+            "node_title": "QWEN一次重绘",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "EmbeddingShortcuts",
+            "constraints": {
+              "target_field_ids": [
+                "node:342:prompt",
+                "node:333:prompt"
+              ],
+              "token_prefix": "<embeddings:"
+            },
+            "current_value": "",
+            "id": "text:embeddings",
+            "input_name": "embeddings",
+            "input_type": "embedding_shortcuts",
+            "label": "Embedding 快速插入",
+            "node_id": "",
+            "parent_category": "text",
+            "required": false,
+            "synthetic": true
+          }
+        ],
+        "id": "text",
+        "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
             "category": "IMAGE",
             "class_type": "LoadImage",
             "constraints": {
@@ -90,12 +149,13 @@
                 "image/webp"
               ]
             },
-            "current_value": "9d525be0a6fe72d19868b21aa72bfb9244d0e71575fdc983b1a4642ec171342b.webp",
+            "current_value": "2.png",
             "id": "node:331:image",
             "input_name": "image",
             "input_type": "file_picker",
             "label": "上傳圖片",
             "node_id": "331",
+            "node_title": "QWEN一次重绘",
             "required": true
           }
         ],
@@ -107,14 +167,60 @@
         "fields": [
           {
             "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "qwen_image_edit_2511_fp8.safetensors",
+            "id": "node:349:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型（加载模型）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "349",
+            "node_title": "加载模型",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CLIPLoader",
+            "current_value": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+            "id": "node:340:clip_name",
+            "input_name": "clip_name",
+            "input_type": "select",
+            "label": "CLIP / 文字編碼器（加载模型）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "340",
+            "node_title": "加载模型",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
             "class_type": "LoraLoaderModelOnly",
             "current_value": "QWEN\\Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
             "id": "node:319:lora_name",
             "input_name": "lora_name",
             "input_type": "select",
-            "label": "LoRA 模型（Model-only）",
+            "label": "LoRA 模型（Model-only）（加载模型）",
             "node_id": "319",
+            "node_title": "加载模型",
             "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "qwen_image_vae.safetensors",
+            "id": "node:332:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE（加载模型）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "332",
+            "node_title": "加载模型",
+            "read_only": true,
+            "required": false
           },
           {
             "category": "MODEL",
@@ -123,8 +229,9 @@
             "id": "node:312:ckpt_name",
             "input_name": "ckpt_name",
             "input_type": "select",
-            "label": "Checkpoint / 大模型",
+            "label": "Checkpoint / 大模型（模型加载）",
             "node_id": "312",
+            "node_title": "模型加载",
             "required": true
           }
         ],
@@ -142,98 +249,13 @@
               "min": 0,
               "step": 1
             },
-            "current_value": 223567685291080,
-            "id": "node:308:seed",
-            "input_name": "seed",
-            "input_type": "number",
-            "label": "種子（Node 308）",
-            "node_id": "308",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
-            "class_type": "KSampler",
-            "constraints": {
-              "max": 150,
-              "min": 1,
-              "step": 1
-            },
-            "current_value": 10,
-            "id": "node:308:steps",
-            "input_name": "steps",
-            "input_type": "number",
-            "label": "步數（Node 308）",
-            "node_id": "308",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
-            "class_type": "KSampler",
-            "constraints": {
-              "max": 30.0,
-              "min": 0.5,
-              "step": 0.1
-            },
-            "current_value": 1.6,
-            "id": "node:308:cfg",
-            "input_name": "cfg",
-            "input_type": "number",
-            "label": "CFG（Node 308）",
-            "node_id": "308",
-            "required": true
-          },
-          {
-            "category": "SAMPLER",
-            "class_type": "KSampler",
-            "current_value": "euler",
-            "id": "node:308:sampler_name",
-            "input_name": "sampler_name",
-            "input_type": "select",
-            "label": "取樣器（Node 308）",
-            "node_id": "308",
-            "required": true
-          },
-          {
-            "category": "SAMPLER",
-            "class_type": "KSampler",
-            "current_value": "sgm_uniform",
-            "id": "node:308:scheduler",
-            "input_name": "scheduler",
-            "input_type": "select",
-            "label": "排程器（Node 308）",
-            "node_id": "308",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
-            "class_type": "KSampler",
-            "constraints": {
-              "max": 1.0,
-              "min": 0.0,
-              "step": 0.05
-            },
-            "current_value": 0.6,
-            "id": "node:308:denoise",
-            "input_name": "denoise",
-            "input_type": "number",
-            "label": "Denoise（Node 308）",
-            "node_id": "308",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
-            "class_type": "KSampler",
-            "constraints": {
-              "max": 9007199254740992,
-              "min": 0,
-              "step": 1
-            },
-            "current_value": 582570367011562,
+            "current_value": 984854957240835,
             "id": "node:348:seed",
             "input_name": "seed",
             "input_type": "number",
-            "label": "種子（Node 348）",
+            "label": "種子（QWEN一次重绘）",
             "node_id": "348",
+            "node_title": "QWEN一次重绘",
             "required": true
           },
           {
@@ -248,8 +270,9 @@
             "id": "node:348:steps",
             "input_name": "steps",
             "input_type": "number",
-            "label": "步數（Node 348）",
+            "label": "步數（QWEN一次重绘）",
             "node_id": "348",
+            "node_title": "QWEN一次重绘",
             "required": true
           },
           {
@@ -264,8 +287,9 @@
             "id": "node:348:cfg",
             "input_name": "cfg",
             "input_type": "number",
-            "label": "CFG（Node 348）",
+            "label": "CFG（QWEN一次重绘）",
             "node_id": "348",
+            "node_title": "QWEN一次重绘",
             "required": true
           },
           {
@@ -275,19 +299,21 @@
             "id": "node:348:sampler_name",
             "input_name": "sampler_name",
             "input_type": "select",
-            "label": "取樣器（Node 348）",
+            "label": "取樣器（QWEN一次重绘）",
             "node_id": "348",
+            "node_title": "QWEN一次重绘",
             "required": true
           },
           {
             "category": "SAMPLER",
             "class_type": "KSampler",
-            "current_value": "FlowMatchEulerDiscreteScheduler",
+            "current_value": "simple",
             "id": "node:348:scheduler",
             "input_name": "scheduler",
             "input_type": "select",
-            "label": "排程器（Node 348）",
+            "label": "排程器（QWEN一次重绘）",
             "node_id": "348",
+            "node_title": "QWEN一次重绘",
             "required": true
           },
           {
@@ -302,8 +328,101 @@
             "id": "node:348:denoise",
             "input_name": "denoise",
             "input_type": "number",
-            "label": "Denoise（Node 348）",
+            "label": "Denoise（QWEN一次重绘）",
             "node_id": "348",
+            "node_title": "QWEN一次重绘",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 198271606286347,
+            "id": "node:308:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "種子（采样过程）",
+            "node_id": "308",
+            "node_title": "采样过程",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 150,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 10,
+            "id": "node:308:steps",
+            "input_name": "steps",
+            "input_type": "number",
+            "label": "步數（采样过程）",
+            "node_id": "308",
+            "node_title": "采样过程",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 30.0,
+              "min": 0.5,
+              "step": 0.1
+            },
+            "current_value": 1.6,
+            "id": "node:308:cfg",
+            "input_name": "cfg",
+            "input_type": "number",
+            "label": "CFG（采样过程）",
+            "node_id": "308",
+            "node_title": "采样过程",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "euler",
+            "id": "node:308:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器（采样过程）",
+            "node_id": "308",
+            "node_title": "采样过程",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "sgm_uniform",
+            "id": "node:308:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器（采样过程）",
+            "node_id": "308",
+            "node_title": "采样过程",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 0.6,
+            "id": "node:308:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise（采样过程）",
+            "node_id": "308",
+            "node_title": "采样过程",
             "required": true
           }
         ],
@@ -327,6 +446,7 @@
             "input_type": "number",
             "label": "LoRA 強度",
             "node_id": "319",
+            "node_title": "加载模型",
             "required": true
           }
         ],

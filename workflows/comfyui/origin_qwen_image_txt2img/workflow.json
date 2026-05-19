@@ -49,6 +49,9 @@
     }
   },
   "83": {
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [
@@ -59,6 +62,9 @@
     }
   },
   "84": {
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [
@@ -126,6 +132,9 @@
     }
   },
   "88": {
+    "_meta": {
+      "title": "Switch (Model)"
+    },
     "class_type": "ComfySwitchNode",
     "inputs": {
       "on_false": [
@@ -140,6 +149,9 @@
     }
   },
   "91": {
+    "_meta": {
+      "title": "Switch (Steps)"
+    },
     "class_type": "ComfySwitchNode",
     "inputs": {
       "on_false": 20,
@@ -148,6 +160,9 @@
     }
   },
   "92": {
+    "_meta": {
+      "title": "Switch (CFG)"
+    },
     "class_type": "ComfySwitchNode",
     "inputs": {
       "on_false": 4,

@@ -80,8 +80,9 @@
             "id": "node:53:text",
             "input_name": "text",
             "input_type": "textarea",
-            "label": "提示詞",
+            "label": "正向提示詞",
             "node_id": "53",
+            "node_title": "CLIP Text Encode (Positive Prompt)",
             "required": true
           },
           {
@@ -131,6 +132,69 @@
         ],
         "id": "image",
         "label": "圖片輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "DualCLIPLoader",
+            "current_value": "clip_l.safetensors",
+            "id": "node:48:clip_name1",
+            "input_name": "clip_name1",
+            "input_type": "select",
+            "label": "CLIP-L 文字編碼器",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "48",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "DualCLIPLoader",
+            "current_value": "t5xxl_fp16.safetensors",
+            "id": "node:48:clip_name2",
+            "input_name": "clip_name2",
+            "input_type": "select",
+            "label": "T5 / 第二文字編碼器",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "48",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "ae.safetensors",
+            "id": "node:50:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "50",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "flux1-fill-dev.safetensors",
+            "id": "node:51:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "51",
+            "read_only": true,
+            "required": false
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
       },
       {
         "collapsed_default": true,

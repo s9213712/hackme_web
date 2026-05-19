@@ -47,6 +47,10 @@ def _input_type_for_category(category: FieldCategory) -> str:
 # check results (e.g., narrow `options` on `ckpt_name` to local files only).
 _FIELD_CONSTRAINT_HINTS: dict[tuple[str, str], dict[str, Any]] = {
     ("CLIPTextEncode", "text"): {"max_length": 2000, "rows": 4},
+    ("TextEncodeQwenImageEditPlus", "prompt"): {"max_length": 4000, "rows": 5},
+    ("TextEncodeQwenImageEditPlusCustom_lrzjason", "prompt"): {"max_length": 4000, "rows": 5},
+    ("CR Text", "text"): {"max_length": 4000, "rows": 5},
+    ("CR Prompt Text", "prompt"): {"max_length": 4000, "rows": 5},
     ("ByteDanceSeedreamNode", "prompt"): {"max_length": 4000, "rows": 5},
     ("GrokImageEditNode", "prompt"): {"max_length": 4000, "rows": 5},
     ("StringConcatenate", "string_a"): {"max_length": 3000, "rows": 3},
@@ -83,10 +87,25 @@ _FIELD_CONSTRAINT_HINTS: dict[tuple[str, str], dict[str, Any]] = {
     ("Flux2Scheduler", "width"): {"min": 64, "max": 4096, "step": 8},
     ("Flux2Scheduler", "height"): {"min": 64, "max": 4096, "step": 8},
     ("CreateVideo", "fps"): {"min": 1, "max": 120, "step": 1},
+    ("WanVaceToVideo", "width"): {"min": 64, "max": 4096, "step": 8},
+    ("WanVaceToVideo", "height"): {"min": 64, "max": 4096, "step": 8},
+    ("WanVaceToVideo", "length"): {"min": 1, "max": 512, "step": 1},
+    ("WanVaceToVideo", "batch_size"): {"min": 1, "max": 16, "step": 1},
+    ("WanVaceToVideo", "strength"): {"min": 0.0, "max": 2.0, "step": 0.05},
+    ("HunyuanVideo15ImageToVideo", "width"): {"min": 64, "max": 4096, "step": 8},
+    ("HunyuanVideo15ImageToVideo", "height"): {"min": 64, "max": 4096, "step": 8},
+    ("HunyuanVideo15ImageToVideo", "length"): {"min": 1, "max": 512, "step": 1},
+    ("HunyuanVideo15ImageToVideo", "batch_size"): {"min": 1, "max": 16, "step": 1},
     ("ImageScaleToTotalPixels", "megapixels"): {"min": 0.1, "max": 64.0, "step": 0.1},
     ("ImageScaleToTotalPixels", "divisible_by"): {"min": 1, "max": 256, "step": 1},
+    ("LatentUpscaleBy", "scale_by"): {"min": 1.0, "max": 8.0, "step": 0.1},
     ("TextEncodeAceStepAudio1.5", "duration"): {"min": 1, "max": 600, "step": 1},
+    ("TextEncodeAceStepAudio1.5", "bpm"): {"min": 1, "max": 300, "step": 1},
     ("TextEncodeAceStepAudio1.5", "cfg_scale"): {"min": 0.0, "max": 20.0, "step": 0.1},
+    ("TextEncodeAceStepAudio1.5", "temperature"): {"min": 0.0, "max": 2.0, "step": 0.01},
+    ("TextEncodeAceStepAudio1.5", "top_p"): {"min": 0.0, "max": 1.0, "step": 0.01},
+    ("TextEncodeAceStepAudio1.5", "top_k"): {"min": 0, "max": 1000, "step": 1},
+    ("TextEncodeAceStepAudio1.5", "min_p"): {"min": 0.0, "max": 1.0, "step": 0.01},
     ("EmptyAceStep1.5LatentAudio", "seconds"): {"min": 1, "max": 600, "step": 1},
     ("ByteDanceSeedreamNode", "width"): {"min": 256, "max": 4096, "step": 64},
     ("ByteDanceSeedreamNode", "height"): {"min": 256, "max": 4096, "step": 64},
@@ -125,6 +144,8 @@ def _clean_title(title: str) -> str:
 def _prompt_role_label(field_obj: InputField, label_context: dict[str, Any] | None) -> str | None:
     roles = set((label_context or {}).get("prompt_roles", {}).get(field_obj.node_id, []))
     title = f"{field_obj.node_title} {field_obj.raw_value}".lower()
+    if "positive" in roles and "negative" in roles:
+        return "正負共用提示詞"
     if "negative" in roles or "負" in title or "negative" in title or "neg" in title:
         return "負面提示詞"
     if "positive" in roles or "正" in title or "positive" in title or "pos" in title:
@@ -153,14 +174,48 @@ def _model_label_with_role(field_obj: InputField, base_label: str) -> str:
     return base_label
 
 
+_STAGE_AWARE_LABEL_CLASSES = {
+    "ImageScaleToTotalPixels",
+    "LatentUpscaleBy",
+}
+
+
+def _label_with_stage(field_obj: InputField, base_label: str) -> str:
+    title = _clean_title(field_obj.node_title)
+    if title and title not in base_label:
+        return f"{base_label}（{title}）"
+    return base_label
+
+
 def _label_zh(field_obj: InputField, label_context: dict[str, Any] | None = None) -> str:
     """Best-effort 繁中 label; falls back to the raw input name."""
     prompt_role = _prompt_role_label(field_obj, label_context)
-    if prompt_role and field_obj.class_type in {"CLIPTextEncode", "CLIPTextEncodeFlux"} and field_obj.input_name == "text":
+    if prompt_role and (
+        (
+            field_obj.class_type in {"CLIPTextEncode", "CLIPTextEncodeFlux", "CR Text"}
+            and field_obj.input_name == "text"
+        )
+        or (
+            field_obj.class_type in {
+                "TextEncodeQwenImageEditPlus",
+                "TextEncodeQwenImageEditPlusCustom_lrzjason",
+                "CR Prompt Text",
+            }
+            and field_obj.input_name == "prompt"
+        )
+        or (
+            field_obj.class_type == "TextEncodeAceStepAudio1.5"
+            and field_obj.input_name == "tags"
+        )
+    ):
         return prompt_role
     table: dict[tuple[str, str], str] = {
         ("CLIPTextEncode", "text"): "提示詞",
         ("CLIPTextEncodeFlux", "text"): "提示詞",
+        ("TextEncodeQwenImageEditPlus", "prompt"): "Qwen 編輯提示詞",
+        ("TextEncodeQwenImageEditPlusCustom_lrzjason", "prompt"): "Qwen 編輯提示詞",
+        ("CR Text", "text"): "提示詞",
+        ("CR Prompt Text", "prompt"): "提示詞",
         ("LoadImage", "image"): "上傳圖片",
         ("LoadImageMask", "image"): "上傳遮罩",
         ("LoadImageMask", "channel"): "遮罩通道",
@@ -227,6 +282,15 @@ def _label_zh(field_obj: InputField, label_context: dict[str, Any] | None = None
         ("WanImageToVideo", "height"): "影片高度",
         ("WanImageToVideo", "length"): "影片幀數",
         ("WanImageToVideo", "batch_size"): "影片批次大小",
+        ("WanVaceToVideo", "width"): "影片寬度",
+        ("WanVaceToVideo", "height"): "影片高度",
+        ("WanVaceToVideo", "length"): "影片幀數",
+        ("WanVaceToVideo", "batch_size"): "影片批次大小",
+        ("WanVaceToVideo", "strength"): "VACE 強度",
+        ("HunyuanVideo15ImageToVideo", "width"): "影片寬度",
+        ("HunyuanVideo15ImageToVideo", "height"): "影片高度",
+        ("HunyuanVideo15ImageToVideo", "length"): "影片幀數",
+        ("HunyuanVideo15ImageToVideo", "batch_size"): "影片批次大小",
         ("VAEEncodeForInpaint", "grow_mask_by"): "遮罩外擴",
         ("SaveImage", "filename_prefix"): "輸出檔名前綴（系統會改寫）",
         ("SaveVideo", "filename_prefix"): "影片輸出檔名前綴（系統會改寫）",
@@ -252,15 +316,22 @@ def _label_zh(field_obj: InputField, label_context: dict[str, Any] | None = None
         ("TextEncodeAceStepAudio1.5", "tags"): "音樂標籤",
         ("TextEncodeAceStepAudio1.5", "lyrics"): "歌詞",
         ("TextEncodeAceStepAudio1.5", "duration"): "秒數",
+        ("TextEncodeAceStepAudio1.5", "bpm"): "BPM",
         ("TextEncodeAceStepAudio1.5", "timesignature"): "拍號",
         ("TextEncodeAceStepAudio1.5", "language"): "語言",
         ("TextEncodeAceStepAudio1.5", "keyscale"): "調式",
         ("TextEncodeAceStepAudio1.5", "generate_audio_codes"): "生成 audio codes",
         ("TextEncodeAceStepAudio1.5", "cfg_scale"): "CFG",
+        ("TextEncodeAceStepAudio1.5", "temperature"): "Temperature",
+        ("TextEncodeAceStepAudio1.5", "top_p"): "Top P",
+        ("TextEncodeAceStepAudio1.5", "top_k"): "Top K",
+        ("TextEncodeAceStepAudio1.5", "min_p"): "Min P",
         ("EmptyAceStep1.5LatentAudio", "seconds"): "音訊秒數",
         ("ImageScaleToTotalPixels", "upscale_method"): "縮放方式",
         ("ImageScaleToTotalPixels", "megapixels"): "目標百萬像素",
         ("ImageScaleToTotalPixels", "divisible_by"): "尺寸整除",
+        ("LatentUpscaleBy", "upscale_method"): "Latent 放大方式",
+        ("LatentUpscaleBy", "scale_by"): "Latent 放大倍率",
         ("CreateVideo", "fps"): "FPS",
     }
     label = table.get(
@@ -269,6 +340,8 @@ def _label_zh(field_obj: InputField, label_context: dict[str, Any] | None = None
     )
     if field_obj.category == FieldCategory.MODEL:
         return _model_label_with_role(field_obj, label)
+    if field_obj.class_type in _STAGE_AWARE_LABEL_CLASSES:
+        return _label_with_stage(field_obj, label)
     return label
 
 
@@ -285,7 +358,12 @@ def _serialize_field(field_obj: InputField, label_context: dict[str, Any] | None
     label = _label_zh(field_obj, label_context)
     label_counts = (label_context or {}).get("label_counts", {})
     if label_counts.get(label, 0) > 1:
-        label = f"{label}（{_field_disambiguation(field_obj)}）"
+        disambiguation = _field_disambiguation(field_obj)
+        if disambiguation and f"（{disambiguation}）" not in label:
+            label = f"{label}（{disambiguation}）"
+        else:
+            ordinal = (label_context or {}).get("label_ordinals", {}).get(_field_id(field_obj))
+            label = f"{label}（#{ordinal}）" if ordinal else f"{label}（{field_obj.node_id}）"
     payload = {
         "id": _field_id(field_obj),
         "node_id": field_obj.node_id,
@@ -297,6 +375,11 @@ def _serialize_field(field_obj: InputField, label_context: dict[str, Any] | None
         "required": True,
         "current_value": _safe_current_value(field_obj.raw_value),
     }
+    if _is_template_locked_model_field(field_obj):
+        payload["required"] = False
+        payload["read_only"] = True
+        payload["locked"] = True
+        payload["lock_reason"] = "template_default_model"
     if field_obj.node_title:
         payload["node_title"] = field_obj.node_title
     if constraints:
@@ -361,12 +444,79 @@ def _is_template_locked_model_field(field_obj: InputField) -> bool:
 def _is_user_visible_field(field_obj: InputField) -> bool:
     if (field_obj.class_type, field_obj.input_name) in _SYSTEM_REWRITTEN_FIELDS:
         return False
-    if _is_template_locked_model_field(field_obj):
-        return False
     return field_obj.category != FieldCategory.UNKNOWN
 
 
-def _build_label_context(analysis: WorkflowAnalysis) -> dict[str, Any]:
+def _is_required_user_input_field(field_obj: InputField) -> bool:
+    if not _is_user_visible_field(field_obj):
+        return False
+    if _is_template_locked_model_field(field_obj):
+        return False
+    return True
+
+
+def _linked_node_ref(raw_workflow: dict[str, Any] | None, value: Any) -> tuple[str, dict[str, Any], int] | None:
+    if not isinstance(raw_workflow, dict):
+        return None
+    if not (isinstance(value, list) and len(value) == 2):
+        return None
+    node_id = str(value[0])
+    node = raw_workflow.get(node_id)
+    if not isinstance(node, dict):
+        return None
+    try:
+        output_slot = int(value[1])
+    except (TypeError, ValueError):
+        output_slot = 0
+    return node_id, node, output_slot
+
+
+def _text_role_source_nodes(
+    raw_workflow: dict[str, Any] | None,
+    value: Any,
+    *,
+    depth: int = 0,
+) -> set[str]:
+    if depth > 8:
+        return set()
+    linked = _linked_node_ref(raw_workflow, value)
+    if not linked:
+        return set()
+    node_id, node, output_slot = linked
+    class_type = str(node.get("class_type") or "")
+    inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+    if class_type in {"CLIPTextEncode", "CLIPTextEncodeFlux", "TextEncodeAceStepAudio1.5"}:
+        return {node_id}
+    if class_type in {"TextEncodeQwenImageEditPlus", "TextEncodeQwenImageEditPlusCustom_lrzjason"}:
+        sources = {node_id}
+        sources.update(_text_role_source_nodes(raw_workflow, inputs.get("prompt"), depth=depth + 1))
+        return sources
+    if class_type in {"CR Text", "CR Prompt Text"}:
+        return {node_id}
+    if class_type == "ConditioningZeroOut":
+        return set()
+    if class_type in {
+        "ControlNetApplyAdvanced",
+        "ControlNetApplySD3",
+        "CFGGuider",
+        "HunyuanVideo15ImageToVideo",
+        "LTXVConditioning",
+        "LTXVCropGuides",
+        "WanImageToVideo",
+        "WanImageToVideoApi",
+        "WanVaceToVideo",
+    }:
+        input_name = "negative" if output_slot == 1 else "positive"
+        return _text_role_source_nodes(raw_workflow, inputs.get(input_name), depth=depth + 1)
+    if class_type == "ReferenceLatent":
+        return _text_role_source_nodes(raw_workflow, inputs.get("conditioning"), depth=depth + 1)
+    return set()
+
+
+def _build_label_context(
+    analysis: WorkflowAnalysis,
+    raw_workflow: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     prompt_roles: dict[str, set[str]] = {}
     for node in analysis.nodes:
         for input_field in node.inputs:
@@ -375,18 +525,24 @@ def _build_label_context(analysis: WorkflowAnalysis) -> dict[str, Any]:
             source_node = str(input_field.raw_value[0]) if isinstance(input_field.raw_value, list) and input_field.raw_value else ""
             if source_node:
                 prompt_roles.setdefault(source_node, set()).add(input_field.input_name)
+            for text_node_id in _text_role_source_nodes(raw_workflow, input_field.raw_value):
+                prompt_roles.setdefault(text_node_id, set()).add(input_field.input_name)
 
     context: dict[str, Any] = {
         "prompt_roles": {key: sorted(value) for key, value in prompt_roles.items()},
         "label_counts": {},
+        "label_ordinals": {},
     }
     label_counts: dict[str, int] = {}
+    label_ordinals: dict[str, int] = {}
     for field_obj in analysis.user_inputs:
         if not _is_user_visible_field(field_obj) or _panel_key_for_field(field_obj) is None:
             continue
         label = _label_zh(field_obj, context)
         label_counts[label] = label_counts.get(label, 0) + 1
+        label_ordinals[_field_id(field_obj)] = label_counts[label]
     context["label_counts"] = label_counts
+    context["label_ordinals"] = label_ordinals
     return context
 
 
@@ -434,7 +590,7 @@ def build_ui_schema(
     """
     schema = UISchema()
     by_panel: dict[str, list[dict[str, Any]]] = {key: [] for key, _, _ in _PANEL_ORDER}
-    label_context = _build_label_context(analysis)
+    label_context = _build_label_context(analysis, raw_workflow=raw_workflow)
 
     for field_obj in analysis.user_inputs:
         # Output filename prefixes are overwritten by §7.2; not user-editable.
@@ -516,7 +672,7 @@ def required_user_inputs(analysis: WorkflowAnalysis) -> list[str]:
     """Field IDs that must be filled in before /run; consumed by §10 Gate 4."""
     ids: list[str] = []
     for field_obj in analysis.user_inputs:
-        if not _is_user_visible_field(field_obj):
+        if not _is_required_user_input_field(field_obj):
             continue
         ids.append(_field_id(field_obj))
     return ids

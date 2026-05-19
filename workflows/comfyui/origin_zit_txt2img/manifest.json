@@ -107,6 +107,55 @@
         "collapsed_default": true,
         "fields": [
           {
+            "category": "MODEL",
+            "class_type": "CLIPLoader",
+            "current_value": "qwen_3_4b.safetensors",
+            "id": "node:105:clip_name",
+            "input_name": "clip_name",
+            "input_type": "select",
+            "label": "CLIP / 文字編碼器",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "105",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "ae.safetensors",
+            "id": "node:106:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "106",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "z_image_turbo_bf16.safetensors",
+            "id": "node:109:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "109",
+            "read_only": true,
+            "required": false
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
             "category": "NUMERIC",
             "class_type": "KSampler",
             "constraints": {

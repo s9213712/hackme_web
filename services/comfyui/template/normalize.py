@@ -199,10 +199,14 @@ def convert_ui_graph_to_api_workflow(payload: dict[str, Any]) -> dict[str, Any]:
             if widget_name and not widget_name.startswith("_skip_") and widget_name not in api_inputs:
                 api_inputs[widget_name] = widget_value
 
-        workflow[node_id] = {
+        api_node = {
             "class_type": class_type,
             "inputs": api_inputs,
         }
+        meta = _node_metadata(node, payload)
+        if meta:
+            api_node["_meta"] = meta
+        workflow[node_id] = api_node
 
     if not workflow:
         raise WorkflowValidationError("workflow UI graph 沒有可轉換的可執行節點")
@@ -598,6 +602,52 @@ def _primitive_node_value(node: dict[str, Any]) -> Any:
     if isinstance(widgets, dict) and widgets:
         return next(iter(widgets.values()))
     return _MISSING
+
+
+def _node_metadata(node: dict[str, Any], payload: dict[str, Any]) -> dict[str, str]:
+    meta: dict[str, str] = {}
+    title = str(node.get("title") or "").strip()
+    group_title = _node_group_title(node, payload)
+    if title:
+        meta["title"] = title
+    if group_title:
+        meta["group_title"] = group_title
+        if not title:
+            meta["title"] = group_title
+    return meta
+
+
+def _node_group_title(node: dict[str, Any], payload: dict[str, Any]) -> str:
+    pos = node.get("pos")
+    if not (isinstance(pos, list) and len(pos) >= 2):
+        return ""
+    try:
+        x = float(pos[0])
+        y = float(pos[1])
+    except (TypeError, ValueError):
+        return ""
+    matches: list[tuple[float, str]] = []
+    for group in payload.get("groups") or []:
+        if not isinstance(group, dict):
+            continue
+        title = str(group.get("title") or "").strip()
+        bounding = group.get("bounding")
+        if not title or not (isinstance(bounding, list) and len(bounding) >= 4):
+            continue
+        try:
+            gx = float(bounding[0])
+            gy = float(bounding[1])
+            width = float(bounding[2])
+            height = float(bounding[3])
+        except (TypeError, ValueError):
+            continue
+        if width <= 0 or height <= 0:
+            continue
+        if gx <= x <= gx + width and gy <= y <= gy + height:
+            matches.append((width * height, title))
+    if not matches:
+        return ""
+    return min(matches, key=lambda item: item[0])[1]
 
 
 def _widget_names_for_node(node: dict[str, Any]) -> list[str]:

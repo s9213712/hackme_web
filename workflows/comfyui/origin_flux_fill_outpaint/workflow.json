@@ -1,5 +1,9 @@
 {
   "17": {
+    "_meta": {
+      "group_title": "Step 2 - Load image",
+      "title": "Step 2 - Load image"
+    },
     "class_type": "LoadImage",
     "inputs": {
       "image": "螢幕快照 2026-04-09 17-16-46.png",
@@ -7,6 +11,10 @@
     }
   },
   "23": {
+    "_meta": {
+      "group_title": "Prompt",
+      "title": "CLIP Text Encode (Positive Prompt)"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [
@@ -17,6 +25,10 @@
     }
   },
   "26": {
+    "_meta": {
+      "group_title": "Prompt",
+      "title": "Prompt"
+    },
     "class_type": "FluxGuidance",
     "inputs": {
       "conditioning": [
@@ -54,6 +66,10 @@
     }
   },
   "31": {
+    "_meta": {
+      "group_title": "Step 1 - Load models",
+      "title": "Step 1 - Load models"
+    },
     "class_type": "UNETLoader",
     "inputs": {
       "unet_name": "flux1-fill-dev.safetensors",
@@ -61,12 +77,20 @@
     }
   },
   "32": {
+    "_meta": {
+      "group_title": "Step 1 - Load models",
+      "title": "Step 1 - Load models"
+    },
     "class_type": "VAELoader",
     "inputs": {
       "vae_name": "ae.safetensors"
     }
   },
   "34": {
+    "_meta": {
+      "group_title": "Step 1 - Load models",
+      "title": "Step 1 - Load models"
+    },
     "class_type": "DualCLIPLoader",
     "inputs": {
       "clip_name1": "clip_l.safetensors",
@@ -125,6 +149,10 @@
     }
   },
   "46": {
+    "_meta": {
+      "group_title": "Prompt",
+      "title": "Prompt"
+    },
     "class_type": "ConditioningZeroOut",
     "inputs": {
       "conditioning": [

@@ -111,6 +111,69 @@
         "collapsed_default": true,
         "fields": [
           {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "ae.safetensors",
+            "id": "node:195:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "195",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "flux1-dev.safetensors",
+            "id": "node:196:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "196",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "DualCLIPLoader",
+            "current_value": "clip_l.safetensors",
+            "id": "node:197:clip_name1",
+            "input_name": "clip_name1",
+            "input_type": "select",
+            "label": "CLIP-L 文字編碼器",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "197",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "DualCLIPLoader",
+            "current_value": "t5xxl_fp16.safetensors",
+            "id": "node:197:clip_name2",
+            "input_name": "clip_name2",
+            "input_type": "select",
+            "label": "T5 / 第二文字編碼器",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "197",
+            "read_only": true,
+            "required": false
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
             "category": "NUMERIC",
             "class_type": "KSampler",
             "constraints": {

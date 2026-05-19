@@ -100,6 +100,7 @@
             "input_type": "textarea",
             "label": "負面提示詞",
             "node_id": "40",
+            "node_title": "Negative Prompt",
             "required": true
           },
           {
@@ -115,6 +116,7 @@
             "input_type": "textarea",
             "label": "正向提示詞",
             "node_id": "16",
+            "node_title": "Positive Prompt",
             "required": true
           },
           {
@@ -151,8 +153,9 @@
             "id": "node:77:model_name",
             "input_name": "model_name",
             "input_type": "select",
-            "label": "放大 / Upscale 模型",
+            "label": "放大 / Upscale 模型（二次放大）",
             "node_id": "77",
+            "node_title": "二次放大",
             "required": true
           },
           {
@@ -162,8 +165,9 @@
             "id": "node:87:lora_name",
             "input_name": "lora_name",
             "input_type": "select",
-            "label": "LoRA 模型（Node 87）",
+            "label": "LoRA 模型（Lora）（#1）",
             "node_id": "87",
+            "node_title": "Lora",
             "required": true
           },
           {
@@ -173,8 +177,9 @@
             "id": "node:4:ckpt_name",
             "input_name": "ckpt_name",
             "input_type": "select",
-            "label": "Checkpoint / 大模型",
+            "label": "Checkpoint / 大模型（Origin）",
             "node_id": "4",
+            "node_title": "Origin",
             "required": true
           },
           {
@@ -184,8 +189,9 @@
             "id": "node:86:lora_name",
             "input_name": "lora_name",
             "input_type": "select",
-            "label": "LoRA 模型（Node 86）",
+            "label": "LoRA 模型（Lora）（#2）",
             "node_id": "86",
+            "node_title": "Lora",
             "required": true
           }
         ],
@@ -195,6 +201,18 @@
       {
         "collapsed_default": true,
         "fields": [
+          {
+            "category": "SAMPLER",
+            "class_type": "LatentUpscaleBy",
+            "current_value": "nearest-exact",
+            "id": "node:63:upscale_method",
+            "input_name": "upscale_method",
+            "input_type": "select",
+            "label": "Latent 放大方式（一次放大）",
+            "node_id": "63",
+            "node_title": "一次放大",
+            "required": true
+          },
           {
             "category": "NUMERIC",
             "class_type": "KSampler",
@@ -207,8 +225,9 @@
             "id": "node:61:seed",
             "input_name": "seed",
             "input_type": "number",
-            "label": "種子（Node 61）",
+            "label": "種子（一次放大）",
             "node_id": "61",
+            "node_title": "一次放大",
             "required": true
           },
           {
@@ -223,8 +242,9 @@
             "id": "node:61:steps",
             "input_name": "steps",
             "input_type": "number",
-            "label": "步數（Node 61）",
+            "label": "步數（一次放大）",
             "node_id": "61",
+            "node_title": "一次放大",
             "required": true
           },
           {
@@ -239,8 +259,9 @@
             "id": "node:61:cfg",
             "input_name": "cfg",
             "input_type": "number",
-            "label": "CFG（Node 61）",
+            "label": "CFG（一次放大）",
             "node_id": "61",
+            "node_title": "一次放大",
             "required": true
           },
           {
@@ -250,8 +271,9 @@
             "id": "node:61:sampler_name",
             "input_name": "sampler_name",
             "input_type": "select",
-            "label": "取樣器（Node 61）",
+            "label": "取樣器（一次放大）",
             "node_id": "61",
+            "node_title": "一次放大",
             "required": true
           },
           {
@@ -261,8 +283,9 @@
             "id": "node:61:scheduler",
             "input_name": "scheduler",
             "input_type": "select",
-            "label": "排程器（Node 61）",
+            "label": "排程器（一次放大）",
             "node_id": "61",
+            "node_title": "一次放大",
             "required": true
           },
           {
@@ -277,8 +300,9 @@
             "id": "node:61:denoise",
             "input_name": "denoise",
             "input_type": "number",
-            "label": "Denoise（Node 61）",
+            "label": "Denoise（一次放大）",
             "node_id": "61",
+            "node_title": "一次放大",
             "required": true
           },
           {
@@ -293,8 +317,9 @@
             "id": "node:3:seed",
             "input_name": "seed",
             "input_type": "number",
-            "label": "種子（Node 3）",
+            "label": "種子（Origin）",
             "node_id": "3",
+            "node_title": "Origin",
             "required": true
           },
           {
@@ -309,8 +334,9 @@
             "id": "node:3:steps",
             "input_name": "steps",
             "input_type": "number",
-            "label": "步數（Node 3）",
+            "label": "步數（Origin）",
             "node_id": "3",
+            "node_title": "Origin",
             "required": true
           },
           {
@@ -325,8 +351,9 @@
             "id": "node:3:cfg",
             "input_name": "cfg",
             "input_type": "number",
-            "label": "CFG（Node 3）",
+            "label": "CFG（Origin）",
             "node_id": "3",
+            "node_title": "Origin",
             "required": true
           },
           {
@@ -336,8 +363,9 @@
             "id": "node:3:sampler_name",
             "input_name": "sampler_name",
             "input_type": "select",
-            "label": "取樣器（Node 3）",
+            "label": "取樣器（Origin）",
             "node_id": "3",
+            "node_title": "Origin",
             "required": true
           },
           {
@@ -347,8 +375,9 @@
             "id": "node:3:scheduler",
             "input_name": "scheduler",
             "input_type": "select",
-            "label": "排程器（Node 3）",
+            "label": "排程器（Origin）",
             "node_id": "3",
+            "node_title": "Origin",
             "required": true
           },
           {
@@ -363,8 +392,9 @@
             "id": "node:3:denoise",
             "input_name": "denoise",
             "input_type": "number",
-            "label": "Denoise（Node 3）",
+            "label": "Denoise（Origin）",
             "node_id": "3",
+            "node_title": "Origin",
             "required": true
           }
         ],
@@ -374,6 +404,23 @@
       {
         "collapsed_default": true,
         "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "LatentUpscaleBy",
+            "constraints": {
+              "max": 8.0,
+              "min": 1.0,
+              "step": 0.1
+            },
+            "current_value": 2,
+            "id": "node:63:scale_by",
+            "input_name": "scale_by",
+            "input_type": "number",
+            "label": "Latent 放大倍率（一次放大）",
+            "node_id": "63",
+            "node_title": "一次放大",
+            "required": true
+          },
           {
             "category": "NUMERIC",
             "class_type": "EmptyLatentImage",
@@ -388,6 +435,7 @@
             "input_type": "number",
             "label": "寬度",
             "node_id": "56",
+            "node_title": "Origin",
             "required": true
           },
           {
@@ -404,6 +452,7 @@
             "input_type": "number",
             "label": "高度",
             "node_id": "56",
+            "node_title": "Origin",
             "required": true
           },
           {
@@ -420,6 +469,7 @@
             "input_type": "number",
             "label": "批次大小",
             "node_id": "56",
+            "node_title": "Origin",
             "required": true
           },
           {
@@ -434,8 +484,9 @@
             "id": "node:87:strength_model",
             "input_name": "strength_model",
             "input_type": "number",
-            "label": "LoRA 強度（model）（Node 87）",
+            "label": "LoRA 強度（model）（Lora）",
             "node_id": "87",
+            "node_title": "Lora",
             "required": true
           },
           {
@@ -450,8 +501,9 @@
             "id": "node:87:strength_clip",
             "input_name": "strength_clip",
             "input_type": "number",
-            "label": "LoRA 強度（clip）（Node 87）",
+            "label": "LoRA 強度（clip）（Lora）",
             "node_id": "87",
+            "node_title": "Lora",
             "required": true
           },
           {
@@ -466,8 +518,9 @@
             "id": "node:86:strength_model",
             "input_name": "strength_model",
             "input_type": "number",
-            "label": "LoRA 強度（model）（Node 86）",
+            "label": "LoRA 強度（model）（Lora）",
             "node_id": "86",
+            "node_title": "Lora",
             "required": true
           },
           {
@@ -482,8 +535,9 @@
             "id": "node:86:strength_clip",
             "input_name": "strength_clip",
             "input_type": "number",
-            "label": "LoRA 強度（clip）（Node 86）",
+            "label": "LoRA 強度（clip）（Lora）",
             "node_id": "86",
+            "node_title": "Lora",
             "required": true
           }
         ],

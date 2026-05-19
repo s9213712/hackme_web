@@ -34,7 +34,6 @@ SYSTEM_WORKFLOW_IDS = (
     "origin_qwen_image_edit_2509",
     "origin_flux_fill_inpaint",
     "origin_one_click_anime_to_real",
-    "origin_one_click_replace_aio_2511",
     "origin_flux_fill_outpaint",
     "origin_anima_txt2img",
     "origin_sd35_txt2img",

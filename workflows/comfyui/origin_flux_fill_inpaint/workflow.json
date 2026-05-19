@@ -48,6 +48,9 @@
     }
   },
   "53": {
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [

@@ -108,13 +108,6 @@ ORIGIN_BUNDLES: tuple[OriginBundle, ...] = (
         "img2img",
     ),
     OriginBundle(
-        "image/edit/【70】一键换万物超级精准-AIO-2511版本.json",
-        "origin_one_click_replace_aio_2511",
-        "One-Click Replace AIO 2511",
-        "One-click object/person replacement workflow converted from origin.",
-        "img2img",
-    ),
-    OriginBundle(
         "image/outpaint/flux_fill_outpaint_example.json",
         "origin_flux_fill_outpaint",
         "Flux Fill Outpaint",
@@ -296,6 +289,56 @@ def _first_input(analysis, *names: str) -> Any:
     return None
 
 
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _first_non_empty_input(analysis, *names: str) -> Any:
+    for name in names:
+        for field_obj in analysis.user_inputs:
+            if field_obj.input_name != name or field_obj.is_link:
+                continue
+            if field_obj.raw_value not in (None, ""):
+                return field_obj.raw_value
+    return None
+
+
+def _negative_prompt_hint(analysis) -> str | None:
+    for field_obj in analysis.user_inputs:
+        if field_obj.is_link or not isinstance(field_obj.raw_value, str):
+            continue
+        text = field_obj.raw_value.strip()
+        if not text:
+            continue
+        haystack = f"{field_obj.node_title} {field_obj.input_name} {text}".lower()
+        if any(
+            token in haystack
+            for token in (
+                "negative",
+                "負",
+                "worst quality",
+                "low quality",
+                "bad anatomy",
+                "blurry",
+                "deformed",
+                "watermark",
+            )
+        ):
+            return field_obj.raw_value
+    return None
+
+
+def _positive_number_or_none(value: Any) -> Any:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and value > 0:
+        return value
+    return None
+
+
 def _first_sampler(workflow: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
     for node_id, node in (workflow or {}).items():
         if not isinstance(node, dict):
@@ -305,11 +348,43 @@ def _first_sampler(workflow: dict[str, Any]) -> tuple[str | None, dict[str, Any]
     return None, None
 
 
-def _linked_node(workflow: dict[str, Any], value: Any) -> dict[str, Any] | None:
+def _linked_ref(workflow: dict[str, Any], value: Any) -> tuple[dict[str, Any], int] | None:
     if not (isinstance(value, list) and len(value) == 2):
         return None
     node = (workflow or {}).get(str(value[0]))
-    return node if isinstance(node, dict) else None
+    if not isinstance(node, dict):
+        return None
+    try:
+        output_slot = int(value[1])
+    except (TypeError, ValueError):
+        output_slot = 0
+    return node, output_slot
+
+
+def _linked_node(workflow: dict[str, Any], value: Any) -> dict[str, Any] | None:
+    linked = _linked_ref(workflow, value)
+    return linked[0] if linked else None
+
+
+def _scalar_from_node_output(workflow: dict[str, Any], value: Any, *, depth: int = 0) -> Any:
+    if not (isinstance(value, list) and len(value) == 2):
+        return value
+    if depth > 8:
+        return None
+    linked = _linked_ref(workflow, value)
+    if not linked:
+        return None
+    node, _output_slot = linked
+    class_type = str(node.get("class_type") or "")
+    inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+    if class_type == "ComfySwitchNode":
+        selected = "on_true" if bool(inputs.get("switch")) else "on_false"
+        return _scalar_from_node_output(workflow, inputs.get(selected), depth=depth + 1)
+    if class_type == "RandomNoise":
+        return _scalar_from_node_output(workflow, inputs.get("noise_seed"), depth=depth + 1)
+    if class_type == "KSamplerSelect":
+        return _scalar_from_node_output(workflow, inputs.get("sampler_name"), depth=depth + 1)
+    return None
 
 
 def _string_from_node_input(workflow: dict[str, Any], value: Any, *, depth: int = 0) -> str | None:
@@ -332,18 +407,55 @@ def _string_from_node_input(workflow: dict[str, Any], value: Any, *, depth: int 
         if not isinstance(delimiter, str):
             delimiter = ""
         return delimiter.join(parts)
+    if class_type in {"CR Text", "CR Prompt Text"}:
+        for key in ("text", "prompt"):
+            text = _string_from_node_input(workflow, inputs.get(key), depth=depth + 1)
+            if isinstance(text, str):
+                return text
+    if class_type == "ProcessString":
+        text = _string_from_node_input(workflow, inputs.get("input_string"), depth=depth + 1)
+        return text if isinstance(text, str) else None
     return None
 
 
-def _text_for_conditioning_link(workflow: dict[str, Any], value: Any) -> str | None:
-    node = _linked_node(workflow, value)
-    if not isinstance(node, dict):
+def _text_for_conditioning_link(workflow: dict[str, Any], value: Any, *, depth: int = 0) -> str | None:
+    if depth > 8:
         return None
-    if str(node.get("class_type") or "") != "CLIPTextEncode":
+    linked = _linked_ref(workflow, value)
+    if not linked:
         return None
+    node, output_slot = linked
+    class_type = str(node.get("class_type") or "")
     inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
-    text = _string_from_node_input(workflow, inputs.get("text"))
-    return text if isinstance(text, str) else None
+    if class_type in {"CLIPTextEncode", "CLIPTextEncodeFlux"}:
+        text = _string_from_node_input(workflow, inputs.get("text"))
+        return text if isinstance(text, str) else None
+    if class_type in {"TextEncodeQwenImageEditPlus", "TextEncodeQwenImageEditPlusCustom_lrzjason"}:
+        text = _string_from_node_input(workflow, inputs.get("prompt"))
+        return text if isinstance(text, str) else None
+    if class_type == "TextEncodeAceStepAudio1.5":
+        text = _string_from_node_input(workflow, inputs.get("tags"))
+        return text if isinstance(text, str) else None
+    if class_type == "ConditioningZeroOut":
+        return ""
+    if class_type in {
+        "ControlNetApplyAdvanced",
+        "ControlNetApplySD3",
+        "HunyuanVideo15ImageToVideo",
+        "LTXVConditioning",
+        "LTXVCropGuides",
+        "WanImageToVideo",
+        "WanImageToVideoApi",
+        "WanVaceToVideo",
+    }:
+        input_name = "negative" if output_slot == 1 else "positive"
+        return _text_for_conditioning_link(workflow, inputs.get(input_name), depth=depth + 1)
+    if class_type == "ReferenceLatent":
+        return _text_for_conditioning_link(workflow, inputs.get("conditioning"), depth=depth + 1)
+    if class_type == "CFGGuider":
+        input_name = "negative" if output_slot == 1 else "positive"
+        return _text_for_conditioning_link(workflow, inputs.get(input_name), depth=depth + 1)
+    return None
 
 
 def _prompt_pair(workflow: dict[str, Any], analysis) -> tuple[str, str]:
@@ -352,41 +464,89 @@ def _prompt_pair(workflow: dict[str, Any], analysis) -> tuple[str, str]:
         inputs = sampler.get("inputs") if isinstance(sampler.get("inputs"), dict) else {}
         prompt = _text_for_conditioning_link(workflow, inputs.get("positive"))
         negative_prompt = _text_for_conditioning_link(workflow, inputs.get("negative"))
-        if prompt is not None or negative_prompt is not None:
+        if prompt is not None or negative_prompt not in (None, ""):
             return prompt or "", negative_prompt or ""
-    prompt = _first_input(analysis, "prompt", "text", "string_b", "tags")
-    negative_prompt = _first_input(analysis, "negative", "negative_prompt", "string_a")
+    for node in (workflow or {}).values():
+        if not isinstance(node, dict) or str(node.get("class_type") or "") != "CFGGuider":
+            continue
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        prompt = _text_for_conditioning_link(workflow, inputs.get("positive"))
+        negative_prompt = _text_for_conditioning_link(workflow, inputs.get("negative"))
+        if prompt is not None or negative_prompt not in (None, ""):
+            return prompt or "", negative_prompt or ""
+    prompt = _first_non_empty_input(analysis, "prompt", "text", "string_b", "tags")
+    negative_prompt = _first_non_empty_input(analysis, "negative", "negative_prompt", "string_a")
     return prompt or "", negative_prompt or ""
 
 
 def _default_params(wrapper: dict[str, Any], analysis, generation_mode: str, workflow: dict[str, Any]) -> dict[str, Any]:
     base = dict(wrapper.get("default_params") or {})
     prompt, negative_prompt = _prompt_pair(workflow, analysis)
+    prompt = prompt or _first_non_empty_input(analysis, "prompt", "text", "string_b", "tags") or ""
+    negative_prompt = negative_prompt or _negative_prompt_hint(analysis) or ""
+    _, sampler = _first_sampler(workflow)
+    sampler_inputs = sampler.get("inputs") if isinstance(sampler, dict) and isinstance(sampler.get("inputs"), dict) else {}
+    sampler_seed = _scalar_from_node_output(
+        workflow,
+        sampler_inputs.get("seed") if "seed" in sampler_inputs else sampler_inputs.get("noise_seed"),
+    )
+    sampler_steps = _scalar_from_node_output(workflow, sampler_inputs.get("steps"))
+    sampler_cfg = _scalar_from_node_output(workflow, sampler_inputs.get("cfg"))
+    sampler_name = _scalar_from_node_output(workflow, sampler_inputs.get("sampler_name"))
+    sampler_scheduler = _scalar_from_node_output(workflow, sampler_inputs.get("scheduler"))
+    sampler_denoise = _scalar_from_node_output(workflow, sampler_inputs.get("denoise"))
     checkpoint = _first_input(analysis, "ckpt_name")
     diffusion_model = _first_input(analysis, "unet_name")
     api_model = _first_input(analysis, "model")
     clip = _first_input(analysis, "clip_name", "clip_name1")
     vae = _first_input(analysis, "vae_name")
-    model = checkpoint or diffusion_model or api_model or base.get("model")
+    model = _first_present(checkpoint, diffusion_model, api_model, base.get("model"))
     params = {
         "generation_mode": generation_mode,
         "model": model or "",
-        "checkpoint": checkpoint or base.get("checkpoint") or "",
-        "diffusion_model": diffusion_model or base.get("diffusion_model") or "",
-        "clip": clip or base.get("clip") or "",
-        "vae": vae or base.get("vae") or "",
-        "prompt": prompt or base.get("prompt") or "",
-        "negative_prompt": negative_prompt or base.get("negative_prompt") or "",
-        "width": _first_input(analysis, "width") or base.get("width") or 1024,
-        "height": _first_input(analysis, "height") or base.get("height") or 1024,
-        "batch_size": _first_input(analysis, "batch_size") or base.get("batch_size") or 1,
-        "steps": _first_input(analysis, "steps") or base.get("steps") or 20,
-        "cfg": _first_input(analysis, "cfg", "cfg_scale", "guidance") or base.get("cfg") or 7,
-        "seed": _first_input(analysis, "seed", "noise_seed") or base.get("seed") or 42,
-        "sampler_name": _first_input(analysis, "sampler_name") or base.get("sampler_name") or "",
-        "scheduler": _first_input(analysis, "scheduler") or base.get("scheduler") or "",
-        "denoise_strength": _first_input(analysis, "denoise") or base.get("denoise_strength") or 0,
-        "upscale_model": _first_input(analysis, "model_name") or base.get("upscale_model") or "",
+        "checkpoint": _first_present(checkpoint, base.get("checkpoint")) or "",
+        "diffusion_model": _first_present(diffusion_model, base.get("diffusion_model")) or "",
+        "clip": _first_present(clip, base.get("clip")) or "",
+        "vae": _first_present(vae, base.get("vae")) or "",
+        "prompt": _first_present(prompt, base.get("prompt")) or "",
+        "negative_prompt": _first_present(negative_prompt, base.get("negative_prompt")) or "",
+        "width": _first_present(
+            _positive_number_or_none(_first_input(analysis, "width")),
+            _positive_number_or_none(base.get("width")),
+            1024,
+        ),
+        "height": _first_present(
+            _positive_number_or_none(_first_input(analysis, "height")),
+            _positive_number_or_none(base.get("height")),
+            1024,
+        ),
+        "batch_size": _first_present(
+            _positive_number_or_none(_first_input(analysis, "batch_size")),
+            _positive_number_or_none(base.get("batch_size")),
+            1,
+        ),
+        "steps": _first_present(
+            _positive_number_or_none(_first_input(analysis, "steps")),
+            _positive_number_or_none(sampler_steps),
+            _positive_number_or_none(base.get("steps")),
+            20,
+        ),
+        "cfg": _first_present(
+            _first_input(analysis, "cfg", "cfg_scale", "guidance"),
+            sampler_cfg,
+            _positive_number_or_none(base.get("cfg")),
+            7,
+        ),
+        "seed": _first_present(
+            _first_input(analysis, "seed", "noise_seed"),
+            sampler_seed,
+            _positive_number_or_none(base.get("seed")),
+            42,
+        ),
+        "sampler_name": _first_present(_first_input(analysis, "sampler_name"), sampler_name, base.get("sampler_name")) or "",
+        "scheduler": _first_present(_first_input(analysis, "scheduler"), sampler_scheduler, base.get("scheduler")) or "",
+        "denoise_strength": _first_present(_first_input(analysis, "denoise"), sampler_denoise, base.get("denoise_strength"), 0),
+        "upscale_model": _first_present(_first_input(analysis, "model_name"), base.get("upscale_model")) or "",
         "loras": base.get("loras") if isinstance(base.get("loras"), list) else [],
         "controlnet": base.get("controlnet") if isinstance(base.get("controlnet"), dict) else None,
     }

@@ -108,6 +108,7 @@
             "input_type": "textarea",
             "label": "正向提示詞",
             "node_id": "6",
+            "node_title": "CLIP Text Encode (Positive Prompt)",
             "required": true
           },
           {
@@ -123,6 +124,7 @@
             "input_type": "textarea",
             "label": "負面提示詞",
             "node_id": "7",
+            "node_title": "CLIP Text Encode (Negative Prompt)",
             "required": true
           },
           {
@@ -166,8 +168,9 @@
             "id": "node:215:image",
             "input_name": "image",
             "input_type": "file_picker",
-            "label": "上傳圖片（Node 215）",
+            "label": "上傳圖片（Step 3 - Load 1st frame & create mask）",
             "node_id": "215",
+            "node_title": "Step 3 - Load 1st frame & create mask",
             "required": true
           },
           {
@@ -184,8 +187,9 @@
             "id": "node:162:image",
             "input_name": "image",
             "input_type": "file_picker",
-            "label": "上傳圖片（Node 162）",
+            "label": "上傳圖片（(Optional)reference image）",
             "node_id": "162",
+            "node_title": "(Optional)reference image",
             "required": true
           }
         ],
@@ -202,9 +206,54 @@
             "id": "node:227:lora_name",
             "input_name": "lora_name",
             "input_type": "select",
-            "label": "LoRA 模型",
+            "label": "LoRA 模型（1.3B）",
             "node_id": "227",
+            "node_title": "1.3B",
             "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "wan2.1_vace_1.3B_fp16.safetensors",
+            "id": "node:228:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型（1.3B）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "228",
+            "node_title": "1.3B",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CLIPLoader",
+            "current_value": "umt5_xxl_fp16.safetensors",
+            "id": "node:226:clip_name",
+            "input_name": "clip_name",
+            "input_type": "select",
+            "label": "CLIP / 文字編碼器",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "226",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "wan2.1_vace_14B_fp16.safetensors",
+            "id": "node:140:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型（14B）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "140",
+            "node_title": "14B",
+            "read_only": true,
+            "required": false
           },
           {
             "category": "MODEL",
@@ -213,9 +262,40 @@
             "id": "node:154:lora_name",
             "input_name": "lora_name",
             "input_type": "select",
-            "label": "LoRA 模型（Model-only）",
+            "label": "LoRA 模型（Model-only）（14B）",
             "node_id": "154",
+            "node_title": "14B",
             "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CLIPLoader",
+            "current_value": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+            "id": "node:38:clip_name",
+            "input_name": "clip_name",
+            "input_type": "select",
+            "label": "CLIP / 文字編碼器（Step1 - Load models here）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "38",
+            "node_title": "Step1 - Load models here",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "wan_2.1_vae.safetensors",
+            "id": "node:39:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE（Step1 - Load models here）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "39",
+            "node_title": "Step1 - Load models here",
+            "read_only": true,
+            "required": false
           }
         ],
         "id": "model",
@@ -238,6 +318,7 @@
             "input_type": "number",
             "label": "種子",
             "node_id": "3",
+            "node_title": "Sampling & Decoding",
             "required": true
           },
           {
@@ -254,6 +335,7 @@
             "input_type": "number",
             "label": "步數",
             "node_id": "3",
+            "node_title": "Sampling & Decoding",
             "required": true
           },
           {
@@ -270,6 +352,7 @@
             "input_type": "number",
             "label": "CFG",
             "node_id": "3",
+            "node_title": "Sampling & Decoding",
             "required": true
           },
           {
@@ -281,6 +364,7 @@
             "input_type": "select",
             "label": "取樣器",
             "node_id": "3",
+            "node_title": "Sampling & Decoding",
             "required": true
           },
           {
@@ -292,6 +376,7 @@
             "input_type": "select",
             "label": "排程器",
             "node_id": "3",
+            "node_title": "Sampling & Decoding",
             "required": true
           },
           {
@@ -308,6 +393,7 @@
             "input_type": "number",
             "label": "Denoise",
             "node_id": "3",
+            "node_title": "Sampling & Decoding",
             "required": true
           }
         ],
@@ -331,6 +417,92 @@
             "input_type": "number",
             "label": "Model Shift",
             "node_id": "48",
+            "node_title": "Sampling & Decoding",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "WanVaceToVideo",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 720,
+            "id": "node:49:width",
+            "input_name": "width",
+            "input_type": "number",
+            "label": "影片寬度",
+            "node_id": "49",
+            "node_title": "Step4 - Set video size & length",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "WanVaceToVideo",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 720,
+            "id": "node:49:height",
+            "input_name": "height",
+            "input_type": "number",
+            "label": "影片高度",
+            "node_id": "49",
+            "node_title": "Step4 - Set video size & length",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "WanVaceToVideo",
+            "constraints": {
+              "max": 512,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 81,
+            "id": "node:49:length",
+            "input_name": "length",
+            "input_type": "number",
+            "label": "影片幀數",
+            "node_id": "49",
+            "node_title": "Step4 - Set video size & length",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "WanVaceToVideo",
+            "constraints": {
+              "max": 16,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 1,
+            "id": "node:49:batch_size",
+            "input_name": "batch_size",
+            "input_type": "number",
+            "label": "影片批次大小",
+            "node_id": "49",
+            "node_title": "Step4 - Set video size & length",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "WanVaceToVideo",
+            "constraints": {
+              "max": 2.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:49:strength",
+            "input_name": "strength",
+            "input_type": "number",
+            "label": "VACE 強度",
+            "node_id": "49",
+            "node_title": "Step4 - Set video size & length",
             "required": true
           },
           {
@@ -347,6 +519,7 @@
             "input_type": "number",
             "label": "LoRA 強度（model）",
             "node_id": "227",
+            "node_title": "1.3B",
             "required": true
           },
           {
@@ -363,6 +536,7 @@
             "input_type": "number",
             "label": "LoRA 強度（clip）",
             "node_id": "227",
+            "node_title": "1.3B",
             "required": true
           },
           {
@@ -379,6 +553,7 @@
             "input_type": "number",
             "label": "LoRA 強度",
             "node_id": "154",
+            "node_title": "14B",
             "required": true
           }
         ],

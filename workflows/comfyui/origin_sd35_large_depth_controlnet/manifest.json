@@ -90,6 +90,7 @@
             "input_type": "textarea",
             "label": "正向提示詞",
             "node_id": "57",
+            "node_title": "Step 3 - Prompt",
             "required": true
           },
           {
@@ -134,6 +135,7 @@
             "input_type": "file_picker",
             "label": "上傳圖片",
             "node_id": "45",
+            "node_title": "Step 2 - Upload image",
             "required": true
           }
         ],
@@ -150,8 +152,9 @@
             "id": "node:46:control_net_name",
             "input_name": "control_net_name",
             "input_type": "select",
-            "label": "ControlNet 模型",
+            "label": "ControlNet 模型（Step 1 - Load models）",
             "node_id": "46",
+            "node_title": "Step 1 - Load models",
             "required": true
           },
           {
@@ -161,9 +164,38 @@
             "id": "node:4:ckpt_name",
             "input_name": "ckpt_name",
             "input_type": "select",
-            "label": "Checkpoint / 大模型",
+            "label": "Checkpoint / 大模型（Step 1 - Load models）",
             "node_id": "4",
+            "node_title": "Step 1 - Load models",
             "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "vae-ft-mse-840000-ema-pruned.safetensors",
+            "id": "node:91:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "91",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "lotus-depth-d-v1-1.safetensors",
+            "id": "node:92:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "92",
+            "read_only": true,
+            "required": false
           }
         ],
         "id": "model",
@@ -179,8 +211,9 @@
             "id": "node:70:upscale_method",
             "input_name": "upscale_method",
             "input_type": "select",
-            "label": "縮放方式",
+            "label": "縮放方式（Image depth preprocessing）",
             "node_id": "70",
+            "node_title": "Image depth preprocessing",
             "required": true
           },
           {
@@ -310,8 +343,9 @@
             "id": "node:70:megapixels",
             "input_name": "megapixels",
             "input_type": "number",
-            "label": "目標百萬像素",
+            "label": "目標百萬像素（Image depth preprocessing）",
             "node_id": "70",
+            "node_title": "Image depth preprocessing",
             "required": true
           },
           {
@@ -376,6 +410,7 @@
             "input_type": "number",
             "label": "寬度",
             "node_id": "33",
+            "node_title": "Custom output image size",
             "required": true
           },
           {
@@ -392,6 +427,7 @@
             "input_type": "number",
             "label": "高度",
             "node_id": "33",
+            "node_title": "Custom output image size",
             "required": true
           },
           {
@@ -408,6 +444,7 @@
             "input_type": "number",
             "label": "批次大小",
             "node_id": "33",
+            "node_title": "Custom output image size",
             "required": true
           },
           {

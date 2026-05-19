@@ -37,7 +37,7 @@
     "prompt": "A felt-style little eagle cashier greeting, waving, and smiling at the camera.",
     "sampler_name": "euler",
     "scheduler": "simple",
-    "seed": 42,
+    "seed": 0,
     "steps": 4,
     "upscale_model": "",
     "vae": "wan_2.1_vae.safetensors",
@@ -103,6 +103,7 @@
             "input_type": "textarea",
             "label": "正向提示詞",
             "node_id": "136",
+            "node_title": "CLIP Text Encode (Positive Prompt)",
             "required": true
           },
           {
@@ -118,6 +119,7 @@
             "input_type": "textarea",
             "label": "負面提示詞",
             "node_id": "137",
+            "node_title": "CLIP Text Encode (Negative Prompt)",
             "required": true
           },
           {
@@ -163,6 +165,7 @@
             "input_type": "file_picker",
             "label": "上傳圖片",
             "node_id": "97",
+            "node_title": "Start Frame Image",
             "required": true
           }
         ],
@@ -172,6 +175,62 @@
       {
         "collapsed_default": true,
         "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "CLIPLoader",
+            "current_value": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+            "id": "node:131:clip_name",
+            "input_name": "clip_name",
+            "input_type": "select",
+            "label": "CLIP / 文字編碼器",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "131",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "wan_2.1_vae.safetensors",
+            "id": "node:132:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "132",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+            "id": "node:133:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型（High Noise）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "133",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+            "id": "node:134:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型（Low Noise）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "134",
+            "read_only": true,
+            "required": false
+          },
           {
             "category": "MODEL",
             "class_type": "LoraLoaderModelOnly",

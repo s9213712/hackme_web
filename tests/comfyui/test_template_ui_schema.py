@@ -60,6 +60,85 @@ def test_ui_schema_labels_positive_and_negative_prompt_fields_by_sampler_links()
     assert labels["node:7:text"] == "負面提示詞"
 
 
+def test_ui_schema_labels_prompt_used_by_both_roles_as_shared():
+    workflow = {
+        "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1-5.safetensors"}},
+        "5": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "shared scene prompt", "clip": ["4", 1]}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "low quality", "clip": ["4", 1]}},
+        "8": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": 1,
+                "steps": 4,
+                "cfg": 1,
+                "denoise": 1,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "model": ["4", 0],
+                "positive": ["6", 0],
+                "negative": ["6", 0],
+                "latent_image": ["5", 0],
+            },
+        },
+        "9": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": 2,
+                "steps": 4,
+                "cfg": 1,
+                "denoise": 1,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "model": ["4", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["5", 0],
+            },
+        },
+    }
+    schema = build_ui_schema(analysis=analyze_workflow_json(workflow), raw_workflow=workflow)
+    text_panel = next(p for p in schema.panels if p["id"] == "text")
+    labels = {f["id"]: f["label"] for f in text_panel["fields"]}
+
+    assert labels["node:6:text"] == "正負共用提示詞"
+    assert labels["node:7:text"] == "負面提示詞"
+
+
+def test_ui_schema_labels_wrapped_qwen_reference_latent_prompt_fields():
+    workflow = {
+        "1": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"prompt": "replace cat"}},
+        "2": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"prompt": ""}},
+        "3": {"class_type": "ReferenceLatent", "inputs": {"conditioning": ["1", 0], "latent": ["5", 0]}},
+        "4": {"class_type": "ReferenceLatent", "inputs": {"conditioning": ["2", 0], "latent": ["5", 0]}},
+        "5": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}},
+        "6": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": 1,
+                "steps": 4,
+                "cfg": 1,
+                "denoise": 1,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "model": ["7", 0],
+                "positive": ["3", 0],
+                "negative": ["4", 0],
+                "latent_image": ["5", 0],
+            },
+        },
+    }
+    schema = build_ui_schema(
+        analysis=analyze_workflow_json(workflow),
+        raw_workflow=workflow,
+    )
+    text_panel = next(p for p in schema.panels if p["id"] == "text")
+    labels = {f["id"]: f["label"] for f in text_panel["fields"]}
+
+    assert labels["node:1:prompt"] == "正向提示詞"
+    assert labels["node:2:prompt"] == "負面提示詞"
+
+
 def test_ui_schema_adds_embeddings_as_text_child_when_prompt_fields_exist():
     schema = build_ui_schema(analysis=analyze_workflow_json(TXT2IMG))
     text_panel = next(p for p in schema.panels if p["id"] == "text")
@@ -194,7 +273,7 @@ def test_ui_schema_image_panel_has_accept_mime():
     assert "image/png" in img_field["constraints"]["accept_mime"]
 
 
-def test_ui_schema_hides_template_locked_model_loader_fields_from_manual_panel():
+def test_ui_schema_shows_template_locked_model_loader_fields_as_readonly():
     workflow = {
         **TXT2IMG,
         "20": {
@@ -212,12 +291,14 @@ def test_ui_schema_hides_template_locked_model_loader_fields_from_manual_panel()
         },
     }
     schema = build_ui_schema(analysis=analyze_workflow_json(workflow))
-    all_field_ids = {f["id"] for p in schema.panels for f in p.get("fields", [])}
+    all_fields = {f["id"]: f for p in schema.panels for f in p.get("fields", [])}
     ids = required_user_inputs(analyze_workflow_json(workflow))
 
-    assert "node:20:unet_name" not in all_field_ids
-    assert "node:21:clip_name" not in all_field_ids
-    assert "node:22:vae_name" not in all_field_ids
+    assert all_fields["node:20:unet_name"]["read_only"] is True
+    assert all_fields["node:20:unet_name"]["locked"] is True
+    assert all_fields["node:20:unet_name"]["required"] is False
+    assert all_fields["node:21:clip_name"]["read_only"] is True
+    assert all_fields["node:22:vae_name"]["read_only"] is True
     assert "node:20:unet_name" not in ids
     assert "node:21:clip_name" not in ids
     assert "node:22:vae_name" not in ids
@@ -242,6 +323,28 @@ def test_ui_schema_model_labels_distinguish_large_lora_and_upscale_models():
     assert labels["node:4:ckpt_name"] == "Checkpoint / 大模型"
     assert labels["node:22:lora_name"] == "LoRA 模型（Model-only）（High Noise）"
     assert labels["node:23:model_name"] == "放大 / Upscale 模型"
+
+
+def test_ui_schema_uses_ordinals_when_duplicate_labels_share_same_stage_title():
+    workflow = {
+        **TXT2IMG,
+        "22": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "first.safetensors", "strength_model": 1, "strength_clip": 1},
+            "_meta": {"title": "Lora"},
+        },
+        "23": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "second.safetensors", "strength_model": 1, "strength_clip": 1},
+            "_meta": {"title": "Lora"},
+        },
+    }
+    schema = build_ui_schema(analysis=analyze_workflow_json(workflow))
+    model_panel = next(p for p in schema.panels if p["id"] == "model")
+    labels = {f["id"]: f["label"] for f in model_panel["fields"]}
+
+    assert labels["node:22:lora_name"] == "LoRA 模型（Lora）（#1）"
+    assert labels["node:23:lora_name"] == "LoRA 模型（Lora）（#2）"
 
 
 def test_required_user_inputs_excludes_save_image_prefix():

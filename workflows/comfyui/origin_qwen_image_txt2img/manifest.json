@@ -12,7 +12,7 @@
   },
   "default_params": {
     "batch_size": 1,
-    "cfg": 7,
+    "cfg": 4,
     "checkpoint": "",
     "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
     "controlnet": null,
@@ -89,6 +89,7 @@
             "input_type": "textarea",
             "label": "正向提示詞",
             "node_id": "83",
+            "node_title": "CLIP Text Encode (Positive Prompt)",
             "required": true
           },
           {
@@ -104,6 +105,7 @@
             "input_type": "textarea",
             "label": "負面提示詞",
             "node_id": "84",
+            "node_title": "CLIP Text Encode (Negative Prompt)",
             "required": true
           },
           {
@@ -133,6 +135,48 @@
       {
         "collapsed_default": true,
         "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "qwen_image_vae.safetensors",
+            "id": "node:78:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "78",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CLIPLoader",
+            "current_value": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+            "id": "node:79:clip_name",
+            "input_name": "clip_name",
+            "input_type": "select",
+            "label": "CLIP / 文字編碼器",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "79",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "qwen_image_fp8_e4m3fn.safetensors",
+            "id": "node:82:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "82",
+            "read_only": true,
+            "required": false
+          },
           {
             "category": "MODEL",
             "class_type": "LoraLoaderModelOnly",
@@ -212,8 +256,9 @@
             "id": "node:88:switch",
             "input_name": "switch",
             "input_type": "select",
-            "label": "ComfySwitchNode.switch（Node 88）",
+            "label": "ComfySwitchNode.switch（Switch (Model)）",
             "node_id": "88",
+            "node_title": "Switch (Model)",
             "required": true
           },
           {
@@ -223,8 +268,9 @@
             "id": "node:91:switch",
             "input_name": "switch",
             "input_type": "select",
-            "label": "ComfySwitchNode.switch（Node 91）",
+            "label": "ComfySwitchNode.switch（Switch (Steps)）",
             "node_id": "91",
+            "node_title": "Switch (Steps)",
             "required": true
           },
           {
@@ -234,8 +280,9 @@
             "id": "node:92:switch",
             "input_name": "switch",
             "input_type": "select",
-            "label": "ComfySwitchNode.switch（Node 92）",
+            "label": "ComfySwitchNode.switch（Switch (CFG)）",
             "node_id": "92",
+            "node_title": "Switch (CFG)",
             "required": true
           }
         ],

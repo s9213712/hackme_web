@@ -254,6 +254,9 @@
     }
   },
   "290": {
+    "_meta": {
+      "title": "Math Expression (fps)"
+    },
     "class_type": "ComfyMathExpression",
     "inputs": {
       "expression": "a",
@@ -444,6 +447,9 @@
     }
   },
   "311": {
+    "_meta": {
+      "title": "Math Expression (length)"
+    },
     "class_type": "ComfyMathExpression",
     "inputs": {
       "expression": "a * b + 1",

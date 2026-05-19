@@ -1,5 +1,9 @@
 {
   "33": {
+    "_meta": {
+      "group_title": "Custom output image size",
+      "title": "Custom output image size"
+    },
     "class_type": "EmptySD3LatentImage",
     "inputs": {
       "batch_size": 1,
@@ -8,12 +12,20 @@
     }
   },
   "4": {
+    "_meta": {
+      "group_title": "Step 1 - Load models",
+      "title": "Step 1 - Load models"
+    },
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
       "ckpt_name": "sd3.5_large_fp8_scaled.safetensors"
     }
   },
   "45": {
+    "_meta": {
+      "group_title": "Step 2 - Upload image",
+      "title": "Step 2 - Upload image"
+    },
     "class_type": "LoadImage",
     "inputs": {
       "image": "sd3.5_large_depth_input_image.png",
@@ -21,6 +33,10 @@
     }
   },
   "46": {
+    "_meta": {
+      "group_title": "Step 1 - Load models",
+      "title": "Step 1 - Load models"
+    },
     "class_type": "ControlNetLoader",
     "inputs": {
       "control_net_name": "SD35\\sd3.5_large_controlnet_depth.safetensors"
@@ -54,6 +70,10 @@
     }
   },
   "57": {
+    "_meta": {
+      "group_title": "Step 3 - Prompt",
+      "title": "Step 3 - Prompt"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [
@@ -64,6 +84,10 @@
     }
   },
   "58": {
+    "_meta": {
+      "group_title": "Step 3 - Prompt",
+      "title": "Step 3 - Prompt"
+    },
     "class_type": "ConditioningZeroOut",
     "inputs": {
       "conditioning": [
@@ -101,6 +125,10 @@
     }
   },
   "70": {
+    "_meta": {
+      "group_title": "Image depth preprocessing",
+      "title": "Image depth preprocessing"
+    },
     "class_type": "ImageScaleToTotalPixels",
     "inputs": {
       "image": [

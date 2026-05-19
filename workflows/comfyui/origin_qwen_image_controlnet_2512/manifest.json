@@ -12,7 +12,7 @@
   },
   "default_params": {
     "batch_size": 1,
-    "cfg": 7,
+    "cfg": 4,
     "checkpoint": "",
     "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
     "controlnet": {
@@ -35,12 +35,12 @@
       }
     ],
     "model": "qwen_image_2512_fp8_e4m3fn.safetensors",
-    "negative_prompt": "A woman with curly hair, wearing orange sunglasses, a white knit sweater with orange accents, and high-waisted orange trousers, stands confidently against a vibrant, clear blue sky. The photo has a warm, sunlit filter that amplifies the rich terracotta and burnt orange tones of her outfit, while the cool, deep blue background is intensified, creating a bold, saturated contrast that feels vivid and cinematic.",
-    "prompt": "低分辨率，低画质，肢体畸形，手指畸形，画面过饱和，蜡像感，人脸无细节，过度光滑，画面具有AI感。构图混乱。文字模糊，扭曲",
+    "negative_prompt": "低分辨率，低画质，肢体畸形，手指畸形，画面过饱和，蜡像感，人脸无细节，过度光滑，画面具有AI感。构图混乱。文字模糊，扭曲",
+    "prompt": "A woman with curly hair, wearing orange sunglasses, a white knit sweater with orange accents, and high-waisted orange trousers, stands confidently against a vibrant, clear blue sky. The photo has a warm, sunlit filter that amplifies the rich terracotta and burnt orange tones of her outfit, while the cool, deep blue background is intensified, creating a bold, saturated contrast that feels vivid and cinematic.",
     "sampler_name": "euler",
     "scheduler": "simple",
     "seed": 985578626029454,
-    "steps": 20,
+    "steps": 50,
     "upscale_model": "",
     "vae": "qwen_image_vae.safetensors",
     "width": 1024
@@ -100,6 +100,7 @@
             "input_type": "textarea",
             "label": "負面提示詞",
             "node_id": "145",
+            "node_title": "CLIP Text Encode (Negative Prompt)",
             "required": true
           },
           {
@@ -115,6 +116,7 @@
             "input_type": "textarea",
             "label": "正向提示詞",
             "node_id": "146",
+            "node_title": "CLIP Text Encode (Positive Prompt)",
             "required": true
           },
           {
@@ -190,6 +192,48 @@
             "label": "LoRA 模型（Model-only）",
             "node_id": "140",
             "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "qwen_image_2512_fp8_e4m3fn.safetensors",
+            "id": "node:141:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "141",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CLIPLoader",
+            "current_value": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+            "id": "node:142:clip_name",
+            "input_name": "clip_name",
+            "input_type": "select",
+            "label": "CLIP / 文字編碼器",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "142",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "qwen_image_vae.safetensors",
+            "id": "node:143:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "143",
+            "read_only": true,
+            "required": false
           }
         ],
         "id": "model",
@@ -245,6 +289,7 @@
             "input_type": "number",
             "label": "種子",
             "node_id": "137",
+            "node_title": "Image Preprocess",
             "required": true
           },
           {
@@ -256,6 +301,7 @@
             "input_type": "select",
             "label": "取樣器",
             "node_id": "137",
+            "node_title": "Image Preprocess",
             "required": true
           },
           {
@@ -267,6 +313,7 @@
             "input_type": "select",
             "label": "排程器",
             "node_id": "137",
+            "node_title": "Image Preprocess",
             "required": true
           },
           {
@@ -283,6 +330,7 @@
             "input_type": "number",
             "label": "Denoise",
             "node_id": "137",
+            "node_title": "Image Preprocess",
             "required": true
           }
         ],
@@ -306,6 +354,7 @@
             "input_type": "number",
             "label": "Model Shift",
             "node_id": "129",
+            "node_title": "Image Preprocess",
             "required": true
           },
           {

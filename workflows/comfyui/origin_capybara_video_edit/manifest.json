@@ -87,6 +87,7 @@
             "input_type": "textarea",
             "label": "正向提示詞",
             "node_id": "131",
+            "node_title": "CLIP Text Encode (Positive Prompt)",
             "required": true
           },
           {
@@ -102,6 +103,7 @@
             "input_type": "textarea",
             "label": "負面提示詞",
             "node_id": "136",
+            "node_title": "CLIP Text Encode (Negative Prompt)",
             "required": true
           },
           {
@@ -127,6 +129,69 @@
         ],
         "id": "text",
         "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "capybara_v0.1.safetensors",
+            "id": "node:133:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "133",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "DualCLIPLoader",
+            "current_value": "qwen_2.5_vl_7b.safetensors",
+            "id": "node:134:clip_name1",
+            "input_name": "clip_name1",
+            "input_type": "select",
+            "label": "CLIP-L 文字編碼器",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "134",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "DualCLIPLoader",
+            "current_value": "byt5_small_glyphxl_fp16.safetensors",
+            "id": "node:134:clip_name2",
+            "input_name": "clip_name2",
+            "input_type": "select",
+            "label": "T5 / 第二文字編碼器",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "134",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "hunyuanvideo15_vae_fp16.safetensors",
+            "id": "node:135:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "135",
+            "read_only": true,
+            "required": false
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
       },
       {
         "collapsed_default": true,
@@ -223,6 +288,70 @@
             "input_type": "number",
             "label": "FPS",
             "node_id": "140",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "HunyuanVideo15ImageToVideo",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 960,
+            "id": "node:142:width",
+            "input_name": "width",
+            "input_type": "number",
+            "label": "影片寬度",
+            "node_id": "142",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "HunyuanVideo15ImageToVideo",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 960,
+            "id": "node:142:height",
+            "input_name": "height",
+            "input_type": "number",
+            "label": "影片高度",
+            "node_id": "142",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "HunyuanVideo15ImageToVideo",
+            "constraints": {
+              "max": 512,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 121,
+            "id": "node:142:length",
+            "input_name": "length",
+            "input_type": "number",
+            "label": "影片幀數",
+            "node_id": "142",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "HunyuanVideo15ImageToVideo",
+            "constraints": {
+              "max": 16,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 1,
+            "id": "node:142:batch_size",
+            "input_name": "batch_size",
+            "input_type": "number",
+            "label": "影片批次大小",
+            "node_id": "142",
             "required": true
           }
         ],

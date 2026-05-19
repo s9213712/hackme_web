@@ -166,6 +166,9 @@
     }
   },
   "483": {
+    "_meta": {
+      "title": "Switch (Model)"
+    },
     "class_type": "ComfySwitchNode",
     "inputs": {
       "on_false": [
@@ -180,6 +183,9 @@
     }
   },
   "484": {
+    "_meta": {
+      "title": "Switch (Steps)"
+    },
     "class_type": "ComfySwitchNode",
     "inputs": {
       "on_false": 20,
@@ -188,6 +194,9 @@
     }
   },
   "485": {
+    "_meta": {
+      "title": "Switch (CFG)"
+    },
     "class_type": "ComfySwitchNode",
     "inputs": {
       "on_false": 4,
@@ -352,6 +361,9 @@
     }
   },
   "504": {
+    "_meta": {
+      "title": "Switch (Model)"
+    },
     "class_type": "ComfySwitchNode",
     "inputs": {
       "on_false": [
@@ -366,6 +378,9 @@
     }
   },
   "505": {
+    "_meta": {
+      "title": "Switch (Steps)"
+    },
     "class_type": "ComfySwitchNode",
     "inputs": {
       "on_false": 20,
@@ -374,6 +389,9 @@
     }
   },
   "506": {
+    "_meta": {
+      "title": "Switch (CFG)"
+    },
     "class_type": "ComfySwitchNode",
     "inputs": {
       "on_false": 4,

@@ -27,6 +27,10 @@
     }
   },
   "33": {
+    "_meta": {
+      "group_title": "Image size",
+      "title": "Image size"
+    },
     "class_type": "EmptySD3LatentImage",
     "inputs": {
       "batch_size": 1,
@@ -35,12 +39,20 @@
     }
   },
   "4": {
+    "_meta": {
+      "group_title": "Step 1 - Load models",
+      "title": "Step 1 - Load models"
+    },
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
       "ckpt_name": "sd3.5_large_fp8_scaled.safetensors"
     }
   },
   "45": {
+    "_meta": {
+      "group_title": "Step 2 - Load image",
+      "title": "Step 2 - Load image"
+    },
     "class_type": "LoadImage",
     "inputs": {
       "image": "sd3.5_large_canny_controlnet_example_input_image.png",
@@ -48,12 +60,20 @@
     }
   },
   "46": {
+    "_meta": {
+      "group_title": "Step 1 - Load models",
+      "title": "Step 1 - Load models"
+    },
     "class_type": "ControlNetLoader",
     "inputs": {
       "control_net_name": "SD35\\sd3.5_large_controlnet_canny.safetensors"
     }
   },
   "47": {
+    "_meta": {
+      "group_title": "Canny preprocessing",
+      "title": "Canny preprocessing"
+    },
     "class_type": "Canny",
     "inputs": {
       "high_threshold": 0.6,
@@ -65,6 +85,10 @@
     }
   },
   "48": {
+    "_meta": {
+      "group_title": "Canny preprocessing",
+      "title": "Canny preprocessing"
+    },
     "class_type": "ImageScale",
     "inputs": {
       "crop": "center",
@@ -87,6 +111,10 @@
     }
   },
   "50": {
+    "_meta": {
+      "group_title": "Step 3 - Prompt",
+      "title": "Step 3 - Prompt"
+    },
     "class_type": "ConditioningZeroOut",
     "inputs": {
       "conditioning": [
@@ -124,6 +152,10 @@
     }
   },
   "6": {
+    "_meta": {
+      "group_title": "Step 3 - Prompt",
+      "title": "Step 3 - Prompt"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [

@@ -26,7 +26,7 @@
     "prompt": "A quiet, meditative ambient electronic track at 72 BPM in 4/4 time. The piece opens with slowly evolving pad textures layered with gentle granular synthesis and the faint crackle of vinyl, creating a warm, intimate atmosphere. A breathy female vocal enters softly, singing sparse, whispered phrases with long reverb tails that dissolve into the surrounding soundscape. A delicate fingerpicked acoustic guitar weaves between the pads, its notes ringing out with natural decay. A subtle sub-bass pulse anchors the track without intruding, and a sparse, brushed drum pattern rests far back in the mix. The arrangement barely moves — it breathes and shifts slowly like clouds, building to a gentle swell of layered vocals and pads in the final section before fading to near-silence. The production is hushed and intimate, leaving generous space between every element.\n",
     "sampler_name": "euler",
     "scheduler": "simple",
-    "seed": 42,
+    "seed": 0,
     "steps": 50,
     "upscale_model": "",
     "vae": "ace_1.5_vae.safetensors",
@@ -80,8 +80,9 @@
             "id": "node:94:tags",
             "input_name": "tags",
             "input_type": "textarea",
-            "label": "音樂標籤",
+            "label": "正向提示詞",
             "node_id": "94",
+            "node_title": "Prompt",
             "required": true
           },
           {
@@ -97,6 +98,7 @@
             "input_type": "textarea",
             "label": "歌詞",
             "node_id": "94",
+            "node_title": "Prompt",
             "required": true
           },
           {
@@ -122,6 +124,73 @@
         ],
         "id": "text",
         "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "acestep_v1.5_xl_base_bf16.safetensors",
+            "id": "node:104:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型（Model）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "104",
+            "node_title": "Model",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "ace_1.5_vae.safetensors",
+            "id": "node:106:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE（Model）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "106",
+            "node_title": "Model",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "DualCLIPLoader",
+            "current_value": "qwen_0.6b_ace15.safetensors",
+            "id": "node:105:clip_name1",
+            "input_name": "clip_name1",
+            "input_type": "select",
+            "label": "CLIP-L 文字編碼器（Model）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "105",
+            "node_title": "Model",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "DualCLIPLoader",
+            "current_value": "qwen_4b_ace15.safetensors",
+            "id": "node:105:clip_name2",
+            "input_name": "clip_name2",
+            "input_type": "select",
+            "label": "T5 / 第二文字編碼器（Model）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "105",
+            "node_title": "Model",
+            "read_only": true,
+            "required": false
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
       },
       {
         "collapsed_default": true,
@@ -221,6 +290,7 @@
             "input_type": "select",
             "label": "拍號",
             "node_id": "94",
+            "node_title": "Prompt",
             "required": true
           },
           {
@@ -232,6 +302,7 @@
             "input_type": "select",
             "label": "語言",
             "node_id": "94",
+            "node_title": "Prompt",
             "required": true
           },
           {
@@ -243,6 +314,7 @@
             "input_type": "select",
             "label": "調式",
             "node_id": "94",
+            "node_title": "Prompt",
             "required": true
           },
           {
@@ -254,6 +326,7 @@
             "input_type": "select",
             "label": "生成 audio codes",
             "node_id": "94",
+            "node_title": "Prompt",
             "required": true
           }
         ],
@@ -277,6 +350,7 @@
             "input_type": "number",
             "label": "音訊秒數",
             "node_id": "98",
+            "node_title": "Prompt",
             "required": true
           },
           {
@@ -288,6 +362,7 @@
             "input_type": "number",
             "label": "TextEncodeAceStepAudio1.5.seed",
             "node_id": "94",
+            "node_title": "Prompt",
             "required": true
           },
           {
@@ -304,6 +379,24 @@
             "input_type": "number",
             "label": "秒數",
             "node_id": "94",
+            "node_title": "Prompt",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "TextEncodeAceStepAudio1.5",
+            "constraints": {
+              "max": 300,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 72,
+            "id": "node:94:bpm",
+            "input_name": "bpm",
+            "input_type": "number",
+            "label": "BPM",
+            "node_id": "94",
+            "node_title": "Prompt",
             "required": true
           },
           {
@@ -320,6 +413,75 @@
             "input_type": "number",
             "label": "CFG（Node 94）",
             "node_id": "94",
+            "node_title": "Prompt",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "TextEncodeAceStepAudio1.5",
+            "constraints": {
+              "max": 2.0,
+              "min": 0.0,
+              "step": 0.01
+            },
+            "current_value": 0.85,
+            "id": "node:94:temperature",
+            "input_name": "temperature",
+            "input_type": "number",
+            "label": "Temperature",
+            "node_id": "94",
+            "node_title": "Prompt",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "TextEncodeAceStepAudio1.5",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.01
+            },
+            "current_value": 0.9,
+            "id": "node:94:top_p",
+            "input_name": "top_p",
+            "input_type": "number",
+            "label": "Top P",
+            "node_id": "94",
+            "node_title": "Prompt",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "TextEncodeAceStepAudio1.5",
+            "constraints": {
+              "max": 1000,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 0,
+            "id": "node:94:top_k",
+            "input_name": "top_k",
+            "input_type": "number",
+            "label": "Top K",
+            "node_id": "94",
+            "node_title": "Prompt",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "TextEncodeAceStepAudio1.5",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.01
+            },
+            "current_value": 0,
+            "id": "node:94:min_p",
+            "input_name": "min_p",
+            "input_type": "number",
+            "label": "Min P",
+            "node_id": "94",
+            "node_title": "Prompt",
             "required": true
           },
           {

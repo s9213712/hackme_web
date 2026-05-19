@@ -187,6 +187,40 @@ def test_ui_graph_video_widget_values_map_to_current_api_inputs():
     assert converted["2"]["inputs"]["codec"] == "auto"
 
 
+def test_ui_graph_group_titles_are_preserved_as_node_metadata():
+    workflow = {
+        "groups": [
+            {"title": "Outer", "bounding": [0, 0, 1000, 1000]},
+            {"title": "一次放大", "bounding": [100, 100, 250, 250]},
+        ],
+        "nodes": [
+            {
+                "id": 1,
+                "type": "LatentUpscaleBy",
+                "pos": [150, 150],
+                "inputs": [],
+                "outputs": [],
+                "widgets_values": ["nearest-exact", 2],
+            },
+            {
+                "id": 2,
+                "type": "UpscaleModelLoader",
+                "title": "二次放大",
+                "pos": [700, 700],
+                "inputs": [],
+                "outputs": [],
+                "widgets_values": ["ESRGAN/model.safetensors"],
+            },
+        ],
+        "links": [],
+    }
+
+    converted = convert_ui_graph_to_api_workflow(workflow)
+
+    assert converted["1"]["_meta"] == {"group_title": "一次放大", "title": "一次放大"}
+    assert converted["2"]["_meta"] == {"group_title": "Outer", "title": "二次放大"}
+
+
 def test_subgraph_inputs_match_by_name_not_position():
     workflow = {
         "nodes": [

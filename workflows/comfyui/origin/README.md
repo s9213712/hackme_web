@@ -33,7 +33,6 @@ Keep raw files under `category/mode/`. Do not place JSON files directly in this 
 | `image/edit/image_qwen_image_edit_2509.json` | Qwen image edit workflow. |
 | `image/edit/flux_fill_inpaint_example.json` | Flux fill/inpaint workflow. |
 | `image/edit/【50】一键动漫转真人.json` | One-click anime-to-real image edit workflow. |
-| `image/edit/【70】一键换万物超级精准-AIO-2511版本.json` | One-click replacement AIO image edit workflow. |
 | `image/outpaint/flux_fill_outpaint_example.json` | Flux fill/outpaint workflow. |
 | `image/txt2img/ANIMA.json` | ANIMA text-to-image workflow. |
 | `image/txt2img/SD3.5.json` | SD3.5 simple text-to-image workflow. |

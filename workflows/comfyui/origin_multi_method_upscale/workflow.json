@@ -1,5 +1,9 @@
 {
   "16": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Positive Prompt"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [
@@ -10,6 +14,10 @@
     }
   },
   "3": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Origin"
+    },
     "class_type": "KSampler",
     "inputs": {
       "cfg": 6,
@@ -37,12 +45,20 @@
     }
   },
   "4": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Origin"
+    },
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
       "ckpt_name": "SDXL\\illustrious(IL)\\WAI系列\\waiIllustriousSDXL_v160.safetensors"
     }
   },
   "40": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Negative Prompt"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [
@@ -53,6 +69,10 @@
     }
   },
   "56": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Origin"
+    },
     "class_type": "EmptyLatentImage",
     "inputs": {
       "batch_size": 1,
@@ -61,6 +81,10 @@
     }
   },
   "61": {
+    "_meta": {
+      "group_title": "一次放大",
+      "title": "一次放大"
+    },
     "class_type": "KSampler",
     "inputs": {
       "cfg": 6.5,
@@ -88,6 +112,10 @@
     }
   },
   "63": {
+    "_meta": {
+      "group_title": "一次放大",
+      "title": "一次放大"
+    },
     "class_type": "LatentUpscaleBy",
     "inputs": {
       "samples": [
@@ -99,6 +127,10 @@
     }
   },
   "64": {
+    "_meta": {
+      "group_title": "一次放大",
+      "title": "一次放大"
+    },
     "class_type": "VAEDecode",
     "inputs": {
       "samples": [
@@ -121,6 +153,10 @@
     }
   },
   "71": {
+    "_meta": {
+      "group_title": "二次放大",
+      "title": "二次放大"
+    },
     "class_type": "ImageUpscaleWithModel",
     "inputs": {
       "image": [
@@ -153,12 +189,20 @@
     }
   },
   "77": {
+    "_meta": {
+      "group_title": "二次放大",
+      "title": "二次放大"
+    },
     "class_type": "UpscaleModelLoader",
     "inputs": {
       "model_name": "ESRGAN\\OmniSR_X4_DIV2K.safetensors"
     }
   },
   "8": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Origin"
+    },
     "class_type": "VAEDecode",
     "inputs": {
       "samples": [
@@ -172,6 +216,10 @@
     }
   },
   "86": {
+    "_meta": {
+      "group_title": "Lora",
+      "title": "Lora"
+    },
     "class_type": "LoraLoader",
     "inputs": {
       "clip": [
@@ -188,6 +236,10 @@
     }
   },
   "87": {
+    "_meta": {
+      "group_title": "Lora",
+      "title": "Lora"
+    },
     "class_type": "LoraLoader",
     "inputs": {
       "clip": [
@@ -204,6 +256,10 @@
     }
   },
   "93": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Origin"
+    },
     "class_type": "SaveImage",
     "inputs": {
       "filename_prefix": "test",
@@ -214,6 +270,10 @@
     }
   },
   "94": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Origin"
+    },
     "class_type": "PreviewImage",
     "inputs": {
       "images": [

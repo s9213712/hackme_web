@@ -80,8 +80,9 @@
             "id": "node:23:text",
             "input_name": "text",
             "input_type": "textarea",
-            "label": "提示詞",
+            "label": "正向提示詞",
             "node_id": "23",
+            "node_title": "CLIP Text Encode (Positive Prompt)",
             "required": true
           },
           {
@@ -126,11 +127,79 @@
             "input_type": "file_picker",
             "label": "上傳圖片",
             "node_id": "17",
+            "node_title": "Step 2 - Load image",
             "required": true
           }
         ],
         "id": "image",
         "label": "圖片輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "DualCLIPLoader",
+            "current_value": "clip_l.safetensors",
+            "id": "node:34:clip_name1",
+            "input_name": "clip_name1",
+            "input_type": "select",
+            "label": "CLIP-L 文字編碼器（Step 1 - Load models）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "34",
+            "node_title": "Step 1 - Load models",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "DualCLIPLoader",
+            "current_value": "t5xxl_fp16.safetensors",
+            "id": "node:34:clip_name2",
+            "input_name": "clip_name2",
+            "input_type": "select",
+            "label": "T5 / 第二文字編碼器（Step 1 - Load models）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "34",
+            "node_title": "Step 1 - Load models",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "flux1-fill-dev.safetensors",
+            "id": "node:31:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 大模型（Step 1 - Load models）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "31",
+            "node_title": "Step 1 - Load models",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "ae.safetensors",
+            "id": "node:32:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE（Step 1 - Load models）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "32",
+            "node_title": "Step 1 - Load models",
+            "read_only": true,
+            "required": false
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
       },
       {
         "collapsed_default": true,
@@ -237,6 +306,7 @@
             "input_type": "number",
             "label": "Flux Guidance",
             "node_id": "26",
+            "node_title": "Prompt",
             "required": true
           },
           {

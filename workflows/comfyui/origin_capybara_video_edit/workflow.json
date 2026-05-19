@@ -74,6 +74,9 @@
     }
   },
   "131": {
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [
@@ -116,6 +119,9 @@
     }
   },
   "136": {
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    },
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": [

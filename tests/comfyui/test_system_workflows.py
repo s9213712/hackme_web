@@ -28,7 +28,6 @@ EXPECTED_ORIGIN_WORKFLOW_IDS = {
     "origin_qwen_image_edit_2509",
     "origin_flux_fill_inpaint",
     "origin_one_click_anime_to_real",
-    "origin_one_click_replace_aio_2511",
     "origin_flux_fill_outpaint",
     "origin_anima_txt2img",
     "origin_sd35_txt2img",
@@ -67,6 +66,14 @@ def _manifest(workflow_id):
 
 def _workflow(workflow_id):
     return json.loads((SYSTEM_DIR / workflow_id / "workflow.json").read_text(encoding="utf-8"))
+
+
+def _ui_fields(manifest):
+    return {
+        field["id"]: field
+        for panel in (manifest.get("ui") or {}).get("panels", [])
+        for field in panel.get("fields", [])
+    }
 
 
 def test_system_registry_matches_origin_workflow_ids():
@@ -167,3 +174,71 @@ def test_text_to_audio_origin_workflow_uses_text_to_speech_mode():
     assert manifest["default_params"]["generation_mode"] == "t2s"
     assert manifest["output_kinds"] == ["music"]
     assert "TextEncodeAceStepAudio1.5" in classes
+
+
+@pytest.mark.parametrize("workflow_id", sorted(EXPECTED_ORIGIN_WORKFLOW_IDS))
+def test_origin_manifest_core_numeric_defaults_are_usable(workflow_id):
+    defaults = _manifest(workflow_id)["default_params"]
+
+    for key in ("width", "height", "batch_size", "steps", "cfg"):
+        assert isinstance(defaults.get(key), (int, float)), f"{workflow_id}.{key} is not numeric"
+        assert defaults[key] > 0, f"{workflow_id}.{key} should not use an internal zero fallback"
+    assert isinstance(defaults.get("seed"), (int, float)), f"{workflow_id}.seed is not numeric"
+    assert defaults["seed"] >= 0
+
+
+def test_origin_defaults_preserve_zero_seed_when_origin_uses_zero():
+    assert _manifest("origin_audio_ace_step_15_xl_base")["default_params"]["seed"] == 0
+    assert _manifest("origin_netayume_txt2img")["default_params"]["seed"] == 0
+    assert _manifest("origin_wan22_14b_i2v_subgraphed")["default_params"]["seed"] == 0
+
+
+def test_qwen_controlnet_defaults_follow_graph_roles_and_switches():
+    defaults = _manifest("origin_qwen_image_controlnet_2512")["default_params"]
+
+    assert defaults["prompt"].startswith("A woman with curly hair")
+    assert defaults["negative_prompt"].startswith("低分辨率")
+    assert defaults["steps"] == 50
+    assert defaults["cfg"] == 4
+
+
+def test_qwen_edit_defaults_follow_reference_latent_prompt_links():
+    manifest = _manifest("origin_qwen_image_edit_2509")
+    defaults = manifest["default_params"]
+    text_panel = next(panel for panel in manifest["ui"]["panels"] if panel["id"] == "text")
+    labels = {field["id"]: field["label"] for field in text_panel["fields"]}
+
+    assert defaults["prompt"] == "Replace the cat with a dalmatian, keeping the environment and scene consistent"
+    assert defaults["steps"] == 4
+    assert defaults["cfg"] == 1
+    assert labels["node:471:prompt"].startswith("負面提示詞")
+    assert labels["node:473:prompt"].startswith("正向提示詞")
+
+
+def test_wrapped_qwen_prompt_text_fields_are_visible_and_labeled():
+    manifest = _manifest("origin_one_click_anime_to_real")
+    text_panel = next(panel for panel in manifest["ui"]["panels"] if panel["id"] == "text")
+    labels = {field["id"]: field["label"] for field in text_panel["fields"]}
+
+    assert manifest["default_params"]["prompt"].startswith("根据图像，动漫转写实真人")
+    assert labels["node:342:prompt"] == "正向提示詞"
+    assert labels["node:333:prompt"] == "負面提示詞"
+
+
+def test_multi_method_upscale_keeps_origin_first_and_second_upscale_stages():
+    workflow = _workflow("origin_multi_method_upscale")
+    manifest = _manifest("origin_multi_method_upscale")
+    fields = _ui_fields(manifest)
+
+    assert workflow["3"]["_meta"]["title"] == "Origin"
+    assert workflow["61"]["_meta"]["title"] == "一次放大"
+    assert workflow["63"]["_meta"]["title"] == "一次放大"
+    assert workflow["77"]["_meta"]["title"] == "二次放大"
+    assert workflow["63"]["inputs"]["upscale_method"] == "nearest-exact"
+    assert workflow["63"]["inputs"]["scale_by"] == 2
+    assert workflow["77"]["inputs"]["model_name"] == "ESRGAN\\OmniSR_X4_DIV2K.safetensors"
+
+    assert fields["node:61:denoise"]["label"] == "Denoise（一次放大）"
+    assert fields["node:63:upscale_method"]["label"] == "Latent 放大方式（一次放大）"
+    assert fields["node:63:scale_by"]["label"] == "Latent 放大倍率（一次放大）"
+    assert fields["node:77:model_name"]["label"] == "放大 / Upscale 模型（二次放大）"

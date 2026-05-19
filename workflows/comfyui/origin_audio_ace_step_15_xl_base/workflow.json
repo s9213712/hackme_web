@@ -1,5 +1,9 @@
 {
   "104": {
+    "_meta": {
+      "group_title": "Model",
+      "title": "Model"
+    },
     "class_type": "UNETLoader",
     "inputs": {
       "unet_name": "acestep_v1.5_xl_base_bf16.safetensors",
@@ -7,6 +11,10 @@
     }
   },
   "105": {
+    "_meta": {
+      "group_title": "Model",
+      "title": "Model"
+    },
     "class_type": "DualCLIPLoader",
     "inputs": {
       "clip_name1": "qwen_0.6b_ace15.safetensors",
@@ -16,6 +24,10 @@
     }
   },
   "106": {
+    "_meta": {
+      "group_title": "Model",
+      "title": "Model"
+    },
     "class_type": "VAELoader",
     "inputs": {
       "vae_name": "ace_1.5_vae.safetensors"
@@ -73,6 +85,10 @@
     }
   },
   "47": {
+    "_meta": {
+      "group_title": "Prompt",
+      "title": "Prompt"
+    },
     "class_type": "ConditioningZeroOut",
     "inputs": {
       "conditioning": [
@@ -92,6 +108,10 @@
     }
   },
   "94": {
+    "_meta": {
+      "group_title": "Prompt",
+      "title": "Prompt"
+    },
     "class_type": "TextEncodeAceStepAudio1.5",
     "inputs": {
       "bpm": 72,
@@ -115,6 +135,10 @@
     }
   },
   "98": {
+    "_meta": {
+      "group_title": "Prompt",
+      "title": "Prompt"
+    },
     "class_type": "EmptyAceStep1.5LatentAudio",
     "inputs": {
       "batch_size": 1,

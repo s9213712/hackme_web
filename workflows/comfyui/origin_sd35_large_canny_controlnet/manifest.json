@@ -82,6 +82,7 @@
             "input_type": "textarea",
             "label": "正向提示詞",
             "node_id": "6",
+            "node_title": "Step 3 - Prompt",
             "required": true
           },
           {
@@ -126,6 +127,7 @@
             "input_type": "file_picker",
             "label": "上傳圖片",
             "node_id": "45",
+            "node_title": "Step 2 - Load image",
             "required": true
           }
         ],
@@ -142,8 +144,9 @@
             "id": "node:4:ckpt_name",
             "input_name": "ckpt_name",
             "input_type": "select",
-            "label": "Checkpoint / 大模型",
+            "label": "Checkpoint / 大模型（Step 1 - Load models）",
             "node_id": "4",
+            "node_title": "Step 1 - Load models",
             "required": true
           },
           {
@@ -153,8 +156,9 @@
             "id": "node:46:control_net_name",
             "input_name": "control_net_name",
             "input_type": "select",
-            "label": "ControlNet 模型",
+            "label": "ControlNet 模型（Step 1 - Load models）",
             "node_id": "46",
+            "node_title": "Step 1 - Load models",
             "required": true
           }
         ],
@@ -271,6 +275,7 @@
             "input_type": "number",
             "label": "寬度",
             "node_id": "33",
+            "node_title": "Image size",
             "required": true
           },
           {
@@ -287,6 +292,7 @@
             "input_type": "number",
             "label": "高度",
             "node_id": "33",
+            "node_title": "Image size",
             "required": true
           },
           {
@@ -303,6 +309,7 @@
             "input_type": "number",
             "label": "批次大小",
             "node_id": "33",
+            "node_title": "Image size",
             "required": true
           },
           {

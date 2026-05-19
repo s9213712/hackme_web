@@ -78,6 +78,7 @@
             "input_type": "textarea",
             "label": "負面提示詞",
             "node_id": "7",
+            "node_title": "CLIP Text Encode (Negative)",
             "required": true
           },
           {
@@ -93,6 +94,7 @@
             "input_type": "textarea",
             "label": "正向提示詞",
             "node_id": "6",
+            "node_title": "CLIP Text Encode (Positive)",
             "required": true
           },
           {
@@ -124,13 +126,29 @@
         "fields": [
           {
             "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "vae-ft-mse-840000-ema-pruned.safetensors",
+            "id": "node:11:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE（共用VAE(option)）",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "11",
+            "node_title": "共用VAE(option)",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
             "class_type": "CheckpointLoaderSimple",
             "current_value": "SDXL\\illustrious(IL)\\janxd系列\\JANKUTrainedNoobaiRouwei_v60.safetensors",
             "id": "node:4:ckpt_name",
             "input_name": "ckpt_name",
             "input_type": "select",
-            "label": "Checkpoint / 大模型（Node 4）",
+            "label": "Checkpoint / 大模型（比較標的）（#1）",
             "node_id": "4",
+            "node_title": "比較標的",
             "required": true
           },
           {
@@ -140,8 +158,9 @@
             "id": "node:48:ckpt_name",
             "input_name": "ckpt_name",
             "input_type": "select",
-            "label": "Checkpoint / 大模型（Node 48）",
+            "label": "Checkpoint / 大模型（比較標的）（#2）",
             "node_id": "48",
+            "node_title": "比較標的",
             "required": true
           }
         ],
@@ -344,6 +363,7 @@
             "input_type": "number",
             "label": "寬度",
             "node_id": "5",
+            "node_title": "共同條件",
             "required": true
           },
           {
@@ -360,6 +380,7 @@
             "input_type": "number",
             "label": "高度",
             "node_id": "5",
+            "node_title": "共同條件",
             "required": true
           },
           {
@@ -376,6 +397,7 @@
             "input_type": "number",
             "label": "批次大小",
             "node_id": "5",
+            "node_title": "共同條件",
             "required": true
           }
         ],
