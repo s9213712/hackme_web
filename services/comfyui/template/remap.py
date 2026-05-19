@@ -141,9 +141,11 @@ def _validate_uploaded_file_row(
             f"image 檔 {cloud_file_id} 大小 {size} 超過上限 {max_bytes}"
         )
 
-    # Scan status (clean by default; skipped only when root has opted in).
+    # Scan status: not_required is the scanner-disabled / not-applicable
+    # success state used by the cloud-drive upload policy. skipped remains
+    # root opt-in only.
     scan_status = str(file_row.get("scan_status") or "").strip().lower()
-    allowed_scan = {"clean"}
+    allowed_scan = {"clean", "not_required"}
     if upload_scan_skip_allowed:
         allowed_scan.add("skipped")
     if scan_status not in allowed_scan:

@@ -2716,6 +2716,8 @@ def register_comfyui_routes(app, deps):
             pass
         if not data:
             return None, f"{label} 內容不可為空"
+        if len(data) > MAX_COMFYUI_FETCH_IMAGE_BYTES:
+            return None, f"{label} 超過大小上限"
         return {
             "filename": _clean_filename(filename, fallback="image.png"),
             "mime_type": mime_type,
@@ -3379,6 +3381,7 @@ def register_comfyui_routes(app, deps):
         "resolve_file_storage_path": resolve_file_storage_path,
         "safe_text": _safe_text,
         "save_fetched_image": _save_fetched_image,
+        "validate_image_upload": _validate_image_upload,
         "storage_root": storage_root,
         "COMFYUI_ALLOWED_IMAGE_EXTENSIONS": COMFYUI_ALLOWED_IMAGE_EXTENSIONS,
         "COMFYUI_ALLOWED_IMAGE_MIME_TYPES": COMFYUI_ALLOWED_IMAGE_MIME_TYPES,

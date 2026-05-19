@@ -1592,6 +1592,22 @@
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     }
 
+    .comfyui-template-prompt-sharing {
+      display: grid;
+      gap: .65rem;
+      grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+      align-items: end;
+      padding: .7rem;
+      margin-bottom: .65rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card);
+    }
+
+    .comfyui-template-prompt-sharing select {
+      width: 100%;
+    }
+
     .comfyui-template-field-card {
       padding: .7rem;
     }
@@ -1616,6 +1632,14 @@
 
     .comfyui-template-field-card.is-wide {
       grid-column: 1 / -1;
+    }
+
+    .comfyui-template-seed-after-control {
+      margin-top: .55rem;
+    }
+
+    .comfyui-template-seed-after-control label {
+      margin-bottom: .25rem;
     }
 
     .comfyui-template-readonly {

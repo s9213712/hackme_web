@@ -212,6 +212,21 @@ def test_remap_rejects_unscanned_when_skip_not_allowed():
         )
 
 
+def test_remap_accepts_not_required_scan_status():
+    rows = {"f-1": _row(scan_status="not_required")}
+    out = remap_load_image_to_cloud_file(
+        WORKFLOW_WITH_LOAD_IMAGE,
+        image_field_assignments={"1": "f-1"},
+        actor={"id": 7},
+        conn=None,
+        run_id="r",
+        upload_callback=_stub_upload,
+        fetch_file_row=_stub_fetch(rows),
+        upload_scan_skip_allowed=False,
+    )
+    assert out["1"]["inputs"]["image"].startswith("r/7_r_1.")
+
+
 def test_remap_accepts_skipped_scan_when_root_opted_in():
     rows = {"f-1": _row(scan_status="skipped")}
     out = remap_load_image_to_cloud_file(

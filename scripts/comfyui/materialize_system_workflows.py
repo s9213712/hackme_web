@@ -94,6 +94,13 @@ ORIGIN_BUNDLES: tuple[OriginBundle, ...] = (
         "img2img",
     ),
     OriginBundle(
+        "image/edit/flux_fill_inpaint_example.json",
+        "origin_flux_fill_inpaint",
+        "Flux Fill Inpaint",
+        "Flux fill/inpaint workflow converted from origin.",
+        "inpaint",
+    ),
+    OriginBundle(
         "image/edit/【50】一键动漫转真人.json",
         "origin_one_click_anime_to_real",
         "One-Click Anime to Real",

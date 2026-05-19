@@ -1500,6 +1500,43 @@ def test_comfyui_input_image_candidates_import_history_and_drive_images(tmp_path
     assert len(FakeComfyUIClient.uploaded_images) >= 2
 
 
+def test_comfyui_import_uploaded_image_saves_cloud_file_and_input_ref(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    FakeComfyUIClient.uploaded_images = []
+    client = _build_app(db_path, storage_root).test_client()
+
+    imported = client.post(
+        "/api/comfyui/import-uploaded-image",
+        data={
+            "image": (io.BytesIO(b"uploaded-template-png"), "local template.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert imported.status_code == 200, imported.get_json()
+    body = imported.get_json()["image"]
+    assert body["cloud_file_id"]
+    assert body["storage_file_id"]
+    assert body["filename"] == "local_template.png"
+    assert body["image_ref"]["filename"] == "local_template.png"
+    assert body["image_ref"]["type"] == "input"
+    assert body["data_url"].startswith("data:image/png;base64,")
+    assert FakeComfyUIClient.uploaded_images[-1]["size"] == len(b"uploaded-template-png")
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (body["cloud_file_id"],)).fetchone()
+        storage_row = conn.execute("SELECT * FROM storage_files WHERE id=?", (body["storage_file_id"],)).fetchone()
+    finally:
+        conn.close()
+    assert file_row["privacy_mode"] == "standard_plain"
+    assert file_row["original_filename_plain_for_public"] == "local_template.png"
+    assert storage_row["virtual_path"].startswith("/input/comfyui/")
+
+
 def test_comfyui_generate_allows_unsupported_lora_base_model_with_warning_only(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -4333,7 +4370,7 @@ def test_comfyui_frontend_is_wired():
     assert "if (modelsTab) modelsTab.hidden = !showLocalModels;" in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
     assert "/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" in index_html
-    assert "/styles.css?v=20260518-lora-hints" in index_html
+    assert "/styles.css?v=20260519-template-prompt-sharing" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert ".comfyui-root-details" in css

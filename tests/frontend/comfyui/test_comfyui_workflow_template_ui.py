@@ -113,9 +113,45 @@ def test_seed_after_generation_mode_is_available_for_generate_and_templates():
     assert '<option value="decrement">-1</option>' in html
     assert '"comfyui-seed-after-generate"' in comfyui_js
     assert "function applyComfyuiSeedAfterGenerate" in comfyui_js
+    assert "function comfyuiSeedAfterGenerateMode" in comfyui_js
+    assert "function setComfyuiSeedAfterGenerateMode" in comfyui_js
     assert "randomComfyuiSeedForUi" in comfyui_js
+    assert "currentSelectedComfyuiTemplateSeedValue" in comfyui_js
     assert "applyComfyuiSeedAfterGenerate(generated[generated.length - 1]?.seed);" in comfyui_js
     assert 'if (typeof applyComfyuiSeedAfterGenerate === "function") applyComfyuiSeedAfterGenerate(images[images.length - 1]?.seed);' in workflow_js
+    assert "function comfyuiTemplateFieldIsSeed" in workflow_js
+    assert "function currentSelectedComfyuiTemplateSeedValue" in workflow_js
+    assert "function renderComfyuiTemplateSeedAfterGenerateControl" in workflow_js
+    assert 'data-comfyui-template-seed-after-generate="1"' in workflow_js
+    assert "setComfyuiSeedAfterGenerateMode(select.value)" in workflow_js
+
+
+def test_template_prompts_ask_before_global_sharing_multiple_fields():
+    workflow_js = _read("public/js/36-comfyui-workflows.js")
+    css = _read("public/styles.css")
+
+    assert 'let comfyuiTemplatePromptShareMode = "independent";' in workflow_js
+    assert "function comfyuiTemplateNeedsPromptSharingChoice" in workflow_js
+    assert "function renderComfyuiTemplatePromptSharingControl" in workflow_js
+    assert 'data-comfyui-template-prompt-sharing="1"' in workflow_js
+    assert "請先選擇是否全域共用提示詞" in workflow_js
+    assert "syncComfyuiTemplateSharedPromptFields" in workflow_js
+    assert 'data-comfyui-template-prompt-role="${sanitize(binding.promptRole)}"' in workflow_js
+    assert ".comfyui-template-prompt-sharing" in css
+
+
+def test_template_local_images_are_imported_before_safe_remap_gate():
+    comfyui_js = _read("public/js/36-comfyui.js")
+    workflow_js = _read("public/js/36-comfyui-workflows.js")
+
+    assert 'apiFetch(API + "/comfyui/import-uploaded-image"' in comfyui_js
+    assert "function importComfyuiUploadedImage" in comfyui_js
+    assert "setComfyuiInputAssetFromRef(assetKey" in comfyui_js
+    assert "cloudFileId: image.cloud_file_id" in comfyui_js
+    assert "async function ensureComfyuiTemplateImageAssignments" in workflow_js
+    assert ".filter((item) => item.hasLocalFile && item.assetKey)" in workflow_js
+    assert "await importComfyuiUploadedImage(assetKey);" in workflow_js
+    assert "await ensureComfyuiTemplateImageAssignments(templateDetail)" in workflow_js
 
 
 def test_video_workflow_templates_use_short_foreground_wait_without_losing_job_id():

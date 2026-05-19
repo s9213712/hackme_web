@@ -17,11 +17,11 @@
     "clip": "qwen_3_06b_base.safetensors",
     "controlnet": null,
     "denoise_strength": 1,
-    "diffusion_model": "anima-preview2.safetensors",
+    "diffusion_model": "anima-preview3-base.safetensors",
     "generation_mode": "txt2img",
     "height": 1024,
     "loras": [],
-    "model": "anima-preview2.safetensors",
+    "model": "anima-preview3-base.safetensors",
     "negative_prompt": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia",
     "prompt": "masterpiece, best quality, score_7, safe, anime, a close-up of a futuristic cyberpunk robotic eye, original close-up eye composition strictly preserved, encased in weathered metallic blue and chrome plating with exposed wiring, glowing orange indicator lights, hydraulic pistons, and panel seams wrapping around the eyelid, a chrome mechanical tear duct with fine circuit details, long dark anime-style eyelashes framing the eye, soft pink sclera. The dark pupil holds a complete, glowing Earth with blue atmosphere and white clouds as a reflection, while the surrounding iris reflects a vivid cosmic scene: a fiery red shooting star, wispy cyan nebula clouds, and tiny glowing star specks. No change to the original close-up eye framing, no additional elements outside the eye structure, neon accent lighting, high contrast cyberpunk color palette, intricate mechanical engineering, sharp line art, gritty futuristic sci-fi atmosphere.",
     "sampler_name": "er_sde",
@@ -53,7 +53,7 @@
     },
     {
       "kind": "diffusion_model",
-      "name": "anima-preview2.safetensors"
+      "name": "anima-preview3-base.safetensors"
     }
   ],
   "schema_version": 1,

@@ -1,5 +1,6 @@
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def register_comfyui_image_routes(app, ctx):
@@ -39,6 +40,7 @@ def register_comfyui_image_routes(app, ctx):
     resolve_file_storage_path = ctx["resolve_file_storage_path"]
     _safe_text = ctx["safe_text"]
     _save_fetched_image = ctx["save_fetched_image"]
+    _validate_image_upload = ctx["validate_image_upload"]
     storage_root = ctx["storage_root"]
     COMFYUI_ALLOWED_IMAGE_EXTENSIONS = ctx["COMFYUI_ALLOWED_IMAGE_EXTENSIONS"]
     COMFYUI_ALLOWED_IMAGE_MIME_TYPES = ctx["COMFYUI_ALLOWED_IMAGE_MIME_TYPES"]
@@ -186,6 +188,79 @@ def register_comfyui_image_routes(app, ctx):
             "image": {
                 "image_ref": image_ref,
                 "cloud_file_id": file_id,
+                "filename": filename,
+                "mime_type": mime_type,
+                "size_bytes": len(raw),
+                "data_url": f"data:{mime_type};base64,{base64.b64encode(raw).decode('ascii')}",
+            },
+        })
+
+    @app.route("/api/comfyui/import-uploaded-image", methods=["POST"])
+    @require_csrf
+    def comfyui_import_uploaded_image():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        payload, msg = _validate_image_upload(request.files.get("image"), label="模板圖片")
+        if msg:
+            return json_resp({"ok": False, "msg": msg}), 400
+        if not payload:
+            return json_resp({"ok": False, "msg": "缺少要匯入的模板圖片"}), 400
+
+        filename = payload["filename"]
+        mime_type = payload["mime_type"]
+        raw = payload["data"]
+        binding = _comfyui_binding(actor)
+        active_client = _client_for_url(binding["url"])
+        conn = get_db()
+        try:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            image = SimpleNamespace(data=raw, filename=filename, mime_type=mime_type)
+            upload_result, storage_file, _album, msg = _save_fetched_image(
+                conn,
+                actor=actor,
+                data={
+                    "display_name": filename,
+                    "virtual_path": f"/input/comfyui/{stamp}_{filename}",
+                },
+                image=image,
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            try:
+                imported_ref = active_client.upload_image_bytes(
+                    raw,
+                    filename,
+                    image_type="input",
+                    overwrite=False,
+                )
+            except ComfyUIError as exc:
+                conn.rollback()
+                return _json_error_from_comfy(exc, active_client)
+            _register_comfyui_image_refs(
+                conn,
+                actor=actor,
+                images=[{"image_ref": imported_ref, "prompt_id": ""}],
+                backend_url=binding.get("url"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        audit(
+            "COMFYUI_IMPORT_UPLOADED_IMAGE",
+            get_client_ip(),
+            user=actor["username"],
+            success=True,
+            ua=get_ua(),
+            detail=f"file_id={upload_result['file_id']}, image={imported_ref.get('filename')}",
+        )
+        return json_resp({
+            "ok": True,
+            "image": {
+                "image_ref": imported_ref,
+                "cloud_file_id": upload_result["file_id"],
+                "storage_file_id": (storage_file or {}).get("id"),
                 "filename": filename,
                 "mime_type": mime_type,
                 "size_bytes": len(raw),

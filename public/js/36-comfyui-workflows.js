@@ -1,3 +1,5 @@
+let comfyuiTemplatePromptShareMode = "independent";
+
 function comfyuiWorkflowPresetById(presetId) {
   return comfyuiWorkflowPresets.find((item) => Number(item?.id) === Number(presetId)) || null;
 }
@@ -485,6 +487,7 @@ function renderComfyuiTemplateSelector(payload = {}, { silentReload = true } = {
         comfyuiSelectedTemplateDetail = null;
         comfyuiTemplateLoraOverrides = {};
         comfyuiTemplateFieldOverrides = {};
+        comfyuiTemplatePromptShareMode = "independent";
         renderSelectedComfyuiTemplate();
         return;
       }
@@ -521,6 +524,7 @@ async function loadComfyuiSelectedTemplateDetail(presetId, { silent = false, app
   comfyuiTemplateLoraOverrides = {};
   comfyuiTemplateFieldOverrides = {};
   comfyuiSelectedTemplateDetail = json.preset || null;
+  comfyuiTemplatePromptShareMode = comfyuiTemplateNeedsPromptSharingChoice(comfyuiSelectedTemplateDetail) ? "ask" : "independent";
   if (applyDefaults) {
     applyComfyuiWorkflowPresetDefaults(comfyuiSelectedTemplateDetail?.default_params || {});
   }
@@ -822,10 +826,74 @@ function updateComfyuiTemplateLoraStrength(nodeId, fieldName, rawValue) {
   return comfyuiSelectedLoras[index][field];
 }
 
+function comfyuiTemplateIsPromptTextField(field = {}) {
+  return ["CLIPTextEncode", "CLIPTextEncodeFlux"].includes(String(field?.class_type || ""))
+    && String(field?.input_name || "") === "text";
+}
+
+function comfyuiTemplatePromptRole(field = {}, fallbackIndex = 0) {
+  if (!comfyuiTemplateIsPromptTextField(field)) return "";
+  const text = `${field?.label || ""} ${field?.node_title || ""} ${field?.current_value || ""}`.toLowerCase();
+  if (text.includes("negative") || text.includes("負") || text.includes("low quality") || text.includes("worst quality") || text.includes("bad anatomy") || text.includes("blurry")) return "negative";
+  if (text.includes("positive") || text.includes("正")) return "positive";
+  return fallbackIndex === 0 ? "positive" : "negative";
+}
+
+function comfyuiTemplatePromptFieldsByRole(detail = comfyuiSelectedTemplateDetail) {
+  const roles = { positive: [], negative: [] };
+  const ctx = { textFieldIndex: 0 };
+  (Array.isArray(detail?.ui_schema?.panels) ? detail.ui_schema.panels : []).forEach((panel) => {
+    (panel?.fields || []).forEach((field) => {
+      if (!field || field.synthetic || !comfyuiTemplateIsPromptTextField(field)) return;
+      const role = comfyuiTemplatePromptRole(field, ctx.textFieldIndex);
+      ctx.textFieldIndex += 1;
+      if (role === "negative") roles.negative.push(field);
+      else roles.positive.push(field);
+    });
+  });
+  return roles;
+}
+
+function comfyuiTemplateNeedsPromptSharingChoice(detail = comfyuiSelectedTemplateDetail) {
+  const roles = comfyuiTemplatePromptFieldsByRole(detail);
+  return roles.positive.length > 1 || roles.negative.length > 1;
+}
+
+function comfyuiTemplatePromptSharingMode(detail = comfyuiSelectedTemplateDetail) {
+  if (!comfyuiTemplateNeedsPromptSharingChoice(detail)) return "independent";
+  return ["ask", "shared", "independent"].includes(comfyuiTemplatePromptShareMode)
+    ? comfyuiTemplatePromptShareMode
+    : "ask";
+}
+
+function comfyuiTemplatePromptFieldDirectValue(field = {}) {
+  if (comfyuiTemplateHasFieldOverride(field)) return comfyuiTemplateFieldOverrideValue(field);
+  const el = $(`tmpl-${field.id || ""}`);
+  return el ? el.value : field?.current_value;
+}
+
+function comfyuiTemplateSharedPromptValue(role, detail = comfyuiSelectedTemplateDetail) {
+  const fields = comfyuiTemplatePromptFieldsByRole(detail)[role] || [];
+  const field = fields[0] || null;
+  return field ? comfyuiTemplatePromptFieldDirectValue(field) : "";
+}
+
+function syncComfyuiTemplateSharedPromptFields(role, value) {
+  if (!role) return;
+  const fields = comfyuiTemplatePromptFieldsByRole(comfyuiSelectedTemplateDetail)[role] || [];
+  fields.forEach((field) => {
+    if (!field?.id) return;
+    comfyuiTemplateFieldOverrides[String(field.id)] = value;
+    const input = $(`tmpl-${field.id}`);
+    if (input && input.value !== String(value ?? "")) input.value = String(value ?? "");
+  });
+}
+
 function comfyuiTemplateFieldBinding(field, detail, ctx) {
   const mode = String(detail?.default_params?.generation_mode || "txt2img").trim().toLowerCase();
-  if (field?.class_type === "CLIPTextEncode" && field?.input_name === "text") {
-    const binding = { kind: "field", targetId: ctx.textFieldIndex === 0 ? "comfyui-prompt" : "comfyui-negative-prompt" };
+  if (comfyuiTemplateIsPromptTextField(field)) {
+    const role = comfyuiTemplatePromptRole(field, ctx.textFieldIndex);
+    const binding = { kind: "field", targetId: role === "negative" ? "comfyui-negative-prompt" : "comfyui-prompt", promptRole: role };
     ctx.textFieldIndex += 1;
     return binding;
   }
@@ -893,11 +961,10 @@ function comfyuiTemplateFieldLabel(field = {}, binding = null) {
   const classType = String(field?.class_type || "");
   const inputName = String(field?.input_name || "");
   if ((classType === "CLIPTextEncode" || classType === "CLIPTextEncodeFlux") && inputName === "text") {
-    const text = `${rawLabel} ${field?.node_title || ""} ${field?.current_value || ""}`.toLowerCase();
-    if (text.includes("negative") || text.includes("負") || text.includes("low quality") || text.includes("worst quality")) return "負面提示詞";
-    if (text.includes("positive") || text.includes("正")) return "正向提示詞";
-    if (binding?.targetId === "comfyui-prompt") return "正向提示詞";
-    if (binding?.targetId === "comfyui-negative-prompt") return "負面提示詞";
+    if (rawLabel.includes("正向提示詞") || rawLabel.includes("負面提示詞")) return rawLabel;
+    const role = binding?.promptRole || comfyuiTemplatePromptRole(field, binding?.targetId === "comfyui-negative-prompt" ? 1 : 0);
+    if (role === "negative") return "負面提示詞";
+    if (role === "positive") return "正向提示詞";
     return rawLabel && !["文字輸入", "提示詞"].includes(rawLabel) ? rawLabel : "提示詞";
   }
   if (classType === "CheckpointLoaderSimple" && inputName === "ckpt_name") return "Checkpoint / 大模型";
@@ -936,6 +1003,9 @@ function setComfyuiTemplateFieldOverride(field = {}, value) {
 }
 
 function comfyuiTemplateFieldValue(binding, field = {}) {
+  if (binding?.promptRole && comfyuiTemplatePromptSharingMode() === "shared") {
+    return comfyuiTemplateSharedPromptValue(binding.promptRole);
+  }
   if (comfyuiTemplateHasFieldOverride(field)) return comfyuiTemplateFieldOverrideValue(field);
   if (binding.kind === "field") {
     const el = $(`tmpl-${field.id || ""}`);
@@ -952,6 +1022,9 @@ function comfyuiTemplateFieldValue(binding, field = {}) {
 }
 
 function comfyuiTemplateRuntimeValue(binding, field = {}) {
+  if (binding?.promptRole && comfyuiTemplatePromptSharingMode() === "shared") {
+    return comfyuiTemplateSharedPromptValue(binding.promptRole);
+  }
   if (comfyuiTemplateHasFieldOverride(field)) return comfyuiTemplateFieldOverrideValue(field);
   if (binding.kind === "field") {
     const el = $(`tmpl-${field.id || ""}`);
@@ -1015,6 +1088,15 @@ function collectComfyuiTemplateUserInputs(detail) {
   return userInputs;
 }
 
+function ensureComfyuiTemplatePromptSharingChoice(detail) {
+  if (!comfyuiTemplateNeedsPromptSharingChoice(detail)) return true;
+  if (comfyuiTemplatePromptSharingMode(detail) !== "ask") return true;
+  setComfyuiMessage("這個 workflow 有多個正向或負面提示詞欄位，請先選擇是否全域共用提示詞。", false);
+  const select = document.querySelector("[data-comfyui-template-prompt-sharing]");
+  if (select) select.focus();
+  return false;
+}
+
 function collectComfyuiTemplateImageAssignments(detail) {
   const assignments = {};
   const missing = [];
@@ -1040,6 +1122,25 @@ function collectComfyuiTemplateImageAssignments(detail) {
     });
   });
   return { assignments, missing };
+}
+
+async function ensureComfyuiTemplateImageAssignments(detail) {
+  let imageAssignmentState = collectComfyuiTemplateImageAssignments(detail);
+  const localAssetKeys = Array.from(new Set(
+    imageAssignmentState.missing
+      .filter((item) => item.hasLocalFile && item.assetKey)
+      .map((item) => item.assetKey)
+  ));
+  if (!localAssetKeys.length) return imageAssignmentState;
+  if (typeof importComfyuiUploadedImage !== "function") return imageAssignmentState;
+  const assetMeta = typeof COMFYUI_INPUT_ASSET_META === "object" ? COMFYUI_INPUT_ASSET_META : {};
+  const titleByKey = (key) => assetMeta[key]?.title || key;
+  setComfyuiMessage(`正在將本機圖片匯入雲端硬碟供 workflow 安全重映射：${localAssetKeys.map(titleByKey).join("、")}`, true);
+  for (const assetKey of localAssetKeys) {
+    await importComfyuiUploadedImage(assetKey);
+  }
+  renderSelectedComfyuiTemplate();
+  return collectComfyuiTemplateImageAssignments(detail);
 }
 
 function comfyuiTemplateUpdateField(binding, field, rawValue) {
@@ -1114,6 +1215,69 @@ function updateSelectedComfyuiTemplateSeedFields(seedValue) {
   return updated;
 }
 
+function comfyuiTemplateFieldIsSeed(field = {}) {
+  const inputName = String(field?.input_name || "").trim();
+  if (!["seed", "noise_seed"].includes(inputName)) return false;
+  return String(field?.category || "").toUpperCase() === "NUMERIC" || field?.input_type === "number";
+}
+
+function currentSelectedComfyuiTemplateSeedValue() {
+  if (!comfyuiSelectedTemplateDetail?.ui_schema?.panels) return null;
+  const panels = comfyuiSelectedTemplateDetail.ui_schema.panels || [];
+  for (const panel of panels) {
+    for (const field of (panel?.fields || [])) {
+      if (!field || field.synthetic || !comfyuiTemplateFieldIsSeed(field)) continue;
+      const input = $(`tmpl-${field.id || ""}`);
+      const value = input ? input.value : (comfyuiTemplateHasFieldOverride(field) ? comfyuiTemplateFieldOverrideValue(field) : field.current_value);
+      const seed = normalizeComfyuiSeedForUi(value);
+      if (seed !== null) return seed;
+    }
+  }
+  return null;
+}
+
+function renderComfyuiTemplateSeedAfterGenerateControl() {
+  const mode = typeof comfyuiSeedAfterGenerateMode === "function"
+    ? comfyuiSeedAfterGenerateMode()
+    : ($("comfyui-seed-after-generate")?.value || "fixed");
+  const options = [
+    ["random", "隨機"],
+    ["fixed", "固定"],
+    ["increment", "+1"],
+    ["decrement", "-1"],
+  ];
+  return `
+    <div class="comfyui-template-seed-after-control">
+      <label>任務後 Seed</label>
+      <select data-comfyui-template-seed-after-generate="1">
+        ${options.map(([value, label]) => `<option value="${sanitize(value)}"${value === mode ? " selected" : ""}>${sanitize(label)}</option>`).join("")}
+      </select>
+    </div>
+  `;
+}
+
+function renderComfyuiTemplatePromptSharingControl(detail = comfyuiSelectedTemplateDetail) {
+  if (!comfyuiTemplateNeedsPromptSharingChoice(detail)) return "";
+  const roles = comfyuiTemplatePromptFieldsByRole(detail);
+  const mode = comfyuiTemplatePromptSharingMode(detail);
+  const parts = [];
+  if (roles.positive.length > 1) parts.push(`正向 ${roles.positive.length} 個`);
+  if (roles.negative.length > 1) parts.push(`負面 ${roles.negative.length} 個`);
+  return `
+    <div class="comfyui-template-prompt-sharing">
+      <div>
+        <div class="drive-card-title">提示詞共用</div>
+        <div class="drive-card-sub">偵測到多個提示詞欄位：${sanitize(parts.join("、"))}。</div>
+      </div>
+      <select data-comfyui-template-prompt-sharing="1">
+        <option value="ask"${mode === "ask" ? " selected" : ""}>請選擇是否全域共用</option>
+        <option value="shared"${mode === "shared" ? " selected" : ""}>全域共用正負向提示詞</option>
+        <option value="independent"${mode === "independent" ? " selected" : ""}>各欄位獨立設定</option>
+      </select>
+    </div>
+  `;
+}
+
 function renderComfyuiTemplateEmbeddingShortcuts(field) {
   const values = Array.isArray(comfyuiAvailableEmbeddings) ? comfyuiAvailableEmbeddings : [];
   const targetAttr = comfyuiTemplateEmbeddingTargetIds(field).join("|");
@@ -1138,6 +1302,7 @@ function renderComfyuiTemplateField(field, detail, ctx) {
   const binding = comfyuiTemplateFieldBinding(field, detail, ctx);
   const fieldLabel = comfyuiTemplateFieldLabel(field, binding);
   const cardClass = field?.input_type === "textarea" || binding.kind === "image" ? "comfyui-template-field-card is-wide" : "comfyui-template-field-card";
+  const promptRoleAttr = binding.promptRole ? ` data-comfyui-template-prompt-role="${sanitize(binding.promptRole)}"` : "";
   if (binding.kind === "image") {
     const asset = comfyuiTemplateFieldValue(binding, field) || {};
     const previewHtml = asset.previewUrl
@@ -1177,10 +1342,12 @@ function renderComfyuiTemplateField(field, detail, ctx) {
     const maxAttr = field?.constraints?.max !== undefined ? ` max="${sanitize(String(field.constraints.max))}"` : "";
     const stepAttr = field?.constraints?.step !== undefined ? ` step="${sanitize(String(field.constraints.step))}"` : "";
     const hint = comfyuiTemplateDirectHint(field);
+    const seedAfterControl = comfyuiTemplateFieldIsSeed(field) ? renderComfyuiTemplateSeedAfterGenerateControl() : "";
     return `
       <div class="${cardClass}">
         <label for="tmpl-${sanitize(field.id || "")}">${sanitize(fieldLabel)}</label>
         <input id="tmpl-${sanitize(field.id || "")}" type="${sanitize(inputType)}" value="${sanitize(String(value ?? ""))}"${minAttr}${maxAttr}${stepAttr} data-comfyui-template-direct-field="${sanitize(field.id || "")}" data-comfyui-template-label="${sanitize(fieldLabel)}" />
+        ${seedAfterControl}
         ${hint ? `<div class="comfyui-template-direct-hint">${sanitize(hint)}</div>` : ""}
       </div>
     `;
@@ -1220,7 +1387,7 @@ function renderComfyuiTemplateField(field, detail, ctx) {
     return `
       <div class="${cardClass}">
         <label for="tmpl-${sanitize(field.id || "")}">${sanitize(fieldLabel)}</label>
-        <textarea id="tmpl-${sanitize(field.id || "")}" rows="${sanitize(String(field?.constraints?.rows || 4))}" data-comfyui-template-target="${sanitize(binding.targetId)}" data-comfyui-template-label="${sanitize(fieldLabel)}">${sanitize(value)}</textarea>
+        <textarea id="tmpl-${sanitize(field.id || "")}" rows="${sanitize(String(field?.constraints?.rows || 4))}" data-comfyui-template-target="${sanitize(binding.targetId)}" data-comfyui-template-label="${sanitize(fieldLabel)}"${promptRoleAttr}>${sanitize(value)}</textarea>
       </div>
     `;
   }
@@ -1230,7 +1397,7 @@ function renderComfyuiTemplateField(field, detail, ctx) {
     return `
       <div class="${cardClass}">
         <label for="tmpl-${sanitize(field.id || "")}">${sanitize(fieldLabel)}</label>
-        <select id="tmpl-${sanitize(field.id || "")}" data-comfyui-template-target="${sanitize(binding.targetId)}">
+        <select id="tmpl-${sanitize(field.id || "")}" data-comfyui-template-target="${sanitize(binding.targetId)}"${promptRoleAttr}>
           ${options.map((option) => `<option value="${sanitize(option.value)}"${option.value === current ? " selected" : ""}${option.disabled ? ' disabled="disabled"' : ""}>${sanitize(option.label)}</option>`).join("")}
         </select>
       </div>
@@ -1240,10 +1407,12 @@ function renderComfyuiTemplateField(field, detail, ctx) {
   const minAttr = field?.constraints?.min !== undefined ? ` min="${sanitize(String(field.constraints.min))}"` : "";
   const maxAttr = field?.constraints?.max !== undefined ? ` max="${sanitize(String(field.constraints.max))}"` : "";
   const stepAttr = field?.constraints?.step !== undefined ? ` step="${sanitize(String(field.constraints.step))}"` : "";
+  const seedAfterControl = comfyuiTemplateFieldIsSeed(field) ? renderComfyuiTemplateSeedAfterGenerateControl() : "";
   return `
     <div class="${cardClass}">
       <label for="tmpl-${sanitize(field.id || "")}">${sanitize(fieldLabel)}</label>
-      <input id="tmpl-${sanitize(field.id || "")}" type="${sanitize(inputType)}" value="${sanitize(String(value ?? ""))}"${minAttr}${maxAttr}${stepAttr} data-comfyui-template-target="${sanitize(binding.targetId)}" data-comfyui-template-label="${sanitize(fieldLabel)}" />
+      <input id="tmpl-${sanitize(field.id || "")}" type="${sanitize(inputType)}" value="${sanitize(String(value ?? ""))}"${minAttr}${maxAttr}${stepAttr} data-comfyui-template-target="${sanitize(binding.targetId)}" data-comfyui-template-label="${sanitize(fieldLabel)}"${promptRoleAttr} />
+      ${seedAfterControl}
     </div>
   `;
 }
@@ -1251,12 +1420,32 @@ function renderComfyuiTemplateField(field, detail, ctx) {
 function bindRenderedComfyuiTemplateFields(detail) {
   const host = $("comfyui-template-panels");
   if (!host) return;
+  host.querySelectorAll("[data-comfyui-template-prompt-sharing]").forEach((select) => {
+    if (select.dataset.boundComfyuiTemplate === "1") return;
+    select.dataset.boundComfyuiTemplate = "1";
+    select.addEventListener("change", () => {
+      comfyuiTemplatePromptShareMode = ["shared", "independent"].includes(select.value) ? select.value : "ask";
+      if (comfyuiTemplatePromptShareMode === "shared") {
+        ["positive", "negative"].forEach((role) => {
+          syncComfyuiTemplateSharedPromptFields(role, comfyuiTemplateSharedPromptValue(role, detail));
+        });
+      }
+      writeComfyuiDraft();
+      renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+    });
+  });
   host.querySelectorAll("[data-comfyui-template-target]").forEach((el) => {
     const fieldId = el.id && el.id.startsWith("tmpl-") ? el.id.slice("tmpl-".length) : "";
     if (el.dataset.boundComfyuiTemplate === "1") return;
     el.dataset.boundComfyuiTemplate = "1";
     const sync = () => {
       if (fieldId) comfyuiTemplateFieldOverrides[fieldId] = el.value;
+      const field = (detail?.ui_schema?.panels || [])
+        .flatMap((panel) => panel?.fields || [])
+        .find((item) => String(item?.id || "") === fieldId);
+      if (comfyuiTemplatePromptSharingMode(detail) === "shared" && comfyuiTemplateIsPromptTextField(field)) {
+        syncComfyuiTemplateSharedPromptFields(el.getAttribute("data-comfyui-template-prompt-role") || comfyuiTemplatePromptRole(field), el.value);
+      }
       writeComfyuiDraft();
     };
     el.addEventListener("input", sync);
@@ -1272,6 +1461,21 @@ function bindRenderedComfyuiTemplateFields(detail) {
     };
     el.addEventListener("input", sync);
     el.addEventListener("change", sync);
+  });
+  host.querySelectorAll("[data-comfyui-template-seed-after-generate]").forEach((select) => {
+    if (select.dataset.boundComfyuiTemplate === "1") return;
+    select.dataset.boundComfyuiTemplate = "1";
+    select.addEventListener("change", () => {
+      if (typeof setComfyuiSeedAfterGenerateMode === "function") {
+        setComfyuiSeedAfterGenerateMode(select.value);
+      } else if ($("comfyui-seed-after-generate")) {
+        $("comfyui-seed-after-generate").value = select.value;
+        writeComfyuiDraft();
+      }
+      host.querySelectorAll("[data-comfyui-template-seed-after-generate]").forEach((other) => {
+        other.value = select.value;
+      });
+    });
   });
   host.querySelectorAll("[data-comfyui-template-image]").forEach((input) => {
     if (input.dataset.boundComfyuiTemplate === "1") return;
@@ -1374,7 +1578,8 @@ function renderSelectedComfyuiTemplate({ preserveOpenPanels = false } = {}) {
       .filter((section) => section.open)
       .map((section) => section.getAttribute("data-comfyui-template-panel-id")))
     : new Set();
-  host.innerHTML = panels.map((panel) => {
+  const promptSharingHtml = renderComfyuiTemplatePromptSharingControl(detail);
+  host.innerHTML = promptSharingHtml + panels.map((panel) => {
     const panelId = String(panel?.id || "");
     const isOpen = preserveOpenPanels ? openPanelIds.has(panelId) : !panel?.collapsed_default;
     return `
@@ -1732,8 +1937,15 @@ async function runComfyuiWorkflowPreset(presetId) {
   if (!presetId) return;
   const preset = comfyuiWorkflowPresetById(presetId);
   const templateDetail = Number(comfyuiSelectedTemplateDetail?.id || 0) === Number(presetId) ? comfyuiSelectedTemplateDetail : null;
+  if (templateDetail && !ensureComfyuiTemplatePromptSharingChoice(templateDetail)) return;
   const userInputs = templateDetail ? collectComfyuiTemplateUserInputs(templateDetail) : {};
-  const imageAssignmentState = templateDetail ? collectComfyuiTemplateImageAssignments(templateDetail) : { assignments: {}, missing: [] };
+  let imageAssignmentState = { assignments: {}, missing: [] };
+  try {
+    imageAssignmentState = templateDetail ? await ensureComfyuiTemplateImageAssignments(templateDetail) : imageAssignmentState;
+  } catch (err) {
+    setComfyuiMessage(err.message || "模板圖片匯入失敗，請改用「選擇既有圖片」。", false);
+    return;
+  }
   if (imageAssignmentState.missing.length) {
     const labels = imageAssignmentState.missing.map((item) => item.label || `Node ${item.nodeId}`).slice(0, 4).join("、");
     setComfyuiMessage(`這個 workflow 有圖片欄位尚未指定可安全重映射的雲端圖片：${labels}。請用「選擇既有圖片」選雲端硬碟圖片，或選歷史產圖讓系統先匯入雲端硬碟。`, false);

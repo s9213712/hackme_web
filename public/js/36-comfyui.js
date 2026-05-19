@@ -1441,6 +1441,30 @@ async function importComfyuiDriveImage(fileId) {
   return json.image || {};
 }
 
+async function importComfyuiUploadedImage(assetKey = "source") {
+  const asset = comfyuiAssetState(assetKey);
+  if (!asset?.file) throw new Error("尚未選擇要匯入的本機圖片。");
+  await fetchCsrfToken({ force: true });
+  const form = new FormData();
+  form.append("image", asset.file, asset.filename || asset.file.name || "image.png");
+  form.append("asset_key", assetKey);
+  const res = await apiFetch(API + "/comfyui/import-uploaded-image", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "X-CSRF-Token": getCsrfToken() || ""
+    },
+    body: form
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.msg || `本機圖片匯入失敗（HTTP ${res.status}）`);
+  const image = json.image || {};
+  setComfyuiInputAssetFromRef(assetKey, image.image_ref, image.data_url || asset.previewUrl || "", image.filename || asset.filename || "", {
+    cloudFileId: image.cloud_file_id || "",
+  });
+  return image;
+}
+
 async function importComfyuiHistoryImage(imageRef) {
   await fetchCsrfToken({ force: true });
   const res = await apiFetch(API + "/comfyui/import-history-image", {
@@ -2982,18 +3006,39 @@ function randomComfyuiSeedForUi() {
   return Math.floor(Math.random() * (COMFYUI_RANDOM_SEED_MAX + 1));
 }
 
+function normalizeComfyuiSeedAfterGenerateMode(value) {
+  const mode = String(value || "").trim().toLowerCase();
+  return ["random", "fixed", "increment", "decrement"].includes(mode) ? mode : "fixed";
+}
+
+function comfyuiSeedAfterGenerateMode() {
+  const templateSelect = document.querySelector("[data-comfyui-template-seed-after-generate]");
+  return normalizeComfyuiSeedAfterGenerateMode(templateSelect?.value || $("comfyui-seed-after-generate")?.value || "fixed");
+}
+
+function setComfyuiSeedAfterGenerateMode(value) {
+  const mode = normalizeComfyuiSeedAfterGenerateMode(value);
+  const globalSelect = $("comfyui-seed-after-generate");
+  if (globalSelect) globalSelect.value = mode;
+  document.querySelectorAll("[data-comfyui-template-seed-after-generate]").forEach((select) => {
+    select.value = mode;
+  });
+  writeComfyuiDraft();
+}
+
 function applyComfyuiSeedAfterGenerate(completedSeed = null) {
   const seedInput = $("comfyui-seed");
   if (!seedInput) return;
-  const mode = $("comfyui-seed-after-generate")?.value || "fixed";
+  const mode = comfyuiSeedAfterGenerateMode();
   if (mode === "fixed") return;
   let nextSeed = null;
   if (mode === "random") {
     nextSeed = randomComfyuiSeedForUi();
   } else {
     const baseSeed = normalizeComfyuiSeedForUi(completedSeed)
-      ?? normalizeComfyuiSeedForUi(comfyuiCurrentImage?.seed)
+      ?? normalizeComfyuiSeedForUi(typeof currentSelectedComfyuiTemplateSeedValue === "function" ? currentSelectedComfyuiTemplateSeedValue() : null)
       ?? normalizeComfyuiSeedForUi(seedInput.value)
+      ?? normalizeComfyuiSeedForUi(comfyuiCurrentImage?.seed)
       ?? randomComfyuiSeedForUi();
     if (mode === "increment") nextSeed = Math.min(COMFYUI_UI_SEED_MAX, baseSeed + 1);
     else if (mode === "decrement") nextSeed = Math.max(0, baseSeed - 1);
