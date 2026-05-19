@@ -41,10 +41,14 @@ def register_comfyui_image_routes(app, ctx):
     _safe_text = ctx["safe_text"]
     _save_fetched_image = ctx["save_fetched_image"]
     _validate_image_upload = ctx["validate_image_upload"]
+    _validate_video_upload = ctx["validate_video_upload"]
     storage_root = ctx["storage_root"]
     COMFYUI_ALLOWED_IMAGE_EXTENSIONS = ctx["COMFYUI_ALLOWED_IMAGE_EXTENSIONS"]
     COMFYUI_ALLOWED_IMAGE_MIME_TYPES = ctx["COMFYUI_ALLOWED_IMAGE_MIME_TYPES"]
+    COMFYUI_ALLOWED_VIDEO_EXTENSIONS = ctx["COMFYUI_ALLOWED_VIDEO_EXTENSIONS"]
+    COMFYUI_ALLOWED_VIDEO_MIME_TYPES = ctx["COMFYUI_ALLOWED_VIDEO_MIME_TYPES"]
     MAX_COMFYUI_FETCH_IMAGE_BYTES = ctx["MAX_COMFYUI_FETCH_IMAGE_BYTES"]
+    MAX_COMFYUI_FETCH_VIDEO_BYTES = ctx["MAX_COMFYUI_FETCH_VIDEO_BYTES"]
     COMFYUI_INTERRUPT_TIMEOUT_SECONDS = ctx.get("COMFYUI_INTERRUPT_TIMEOUT_SECONDS", 2.0)
 
     def _cloud_image_row_payload(row, *, storage_row=None):
@@ -79,6 +83,12 @@ def register_comfyui_image_routes(app, ctx):
         for row in rows:
             filename = row["original_filename_plain_for_public"] or ""
             if Path(filename).suffix.lower() not in COMFYUI_ALLOWED_IMAGE_EXTENSIONS:
+                continue
+            try:
+                path = resolve_file_storage_path(storage_root, row)
+            except Exception:
+                continue
+            if not path.exists() or not path.is_file():
                 continue
             allowed, _reason, _download_row = can_download_file(conn, actor=actor, file_id=row["id"], action="preview")
             if not allowed:
@@ -265,6 +275,60 @@ def register_comfyui_image_routes(app, ctx):
                 "mime_type": mime_type,
                 "size_bytes": len(raw),
                 "data_url": f"data:{mime_type};base64,{base64.b64encode(raw).decode('ascii')}",
+            },
+        })
+
+    @app.route("/api/comfyui/import-uploaded-video", methods=["POST"])
+    @require_csrf
+    def comfyui_import_uploaded_video():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        payload, msg = _validate_video_upload(request.files.get("video"), label="模板影片")
+        if msg:
+            return json_resp({"ok": False, "msg": msg}), 400
+        if not payload:
+            return json_resp({"ok": False, "msg": "缺少要匯入的模板影片"}), 400
+
+        filename = payload["filename"]
+        mime_type = payload["mime_type"]
+        raw = payload["data"]
+        conn = get_db()
+        try:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            media = SimpleNamespace(data=raw, filename=filename, mime_type=mime_type)
+            upload_result, storage_file, _album, msg = _save_fetched_image(
+                conn,
+                actor=actor,
+                data={
+                    "display_name": filename,
+                    "virtual_path": f"/input/comfyui/{stamp}_{filename}",
+                },
+                image=media,
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+        finally:
+            conn.close()
+        audit(
+            "COMFYUI_IMPORT_UPLOADED_VIDEO",
+            get_client_ip(),
+            user=actor["username"],
+            success=True,
+            ua=get_ua(),
+            detail=f"file_id={upload_result['file_id']}, filename={filename}",
+        )
+        return json_resp({
+            "ok": True,
+            "media": {
+                "media_ref": {"filename": filename, "type": "input"},
+                "cloud_file_id": upload_result["file_id"],
+                "storage_file_id": (storage_file or {}).get("id"),
+                "filename": filename,
+                "mime_type": mime_type,
+                "size_bytes": len(raw),
             },
         })
 

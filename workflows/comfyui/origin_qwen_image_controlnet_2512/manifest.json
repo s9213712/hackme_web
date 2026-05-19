@@ -244,6 +244,49 @@
         "fields": [
           {
             "category": "SAMPLER",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "options": [
+                "scale dimensions",
+                "scale total pixels",
+                "scale longer dimension",
+                "scale shorter dimension",
+                "scale by multiplier",
+                "scale width",
+                "scale height",
+                "scale to multiple"
+              ]
+            },
+            "current_value": "scale total pixels",
+            "id": "node:123:resize_type",
+            "input_name": "resize_type",
+            "input_type": "select",
+            "label": "縮放模式",
+            "node_id": "123",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "options": [
+                "nearest-exact",
+                "bilinear",
+                "area",
+                "bicubic",
+                "lanczos"
+              ]
+            },
+            "current_value": "area",
+            "id": "node:123:scale_method",
+            "input_name": "scale_method",
+            "input_type": "select",
+            "label": "縮放演算法",
+            "node_id": "123",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
             "class_type": "ComfySwitchNode",
             "current_value": false,
             "id": "node:132:switch",
@@ -340,6 +383,22 @@
       {
         "collapsed_default": true,
         "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "max": 64.0,
+              "min": 0.1,
+              "step": 0.1
+            },
+            "current_value": 1.6,
+            "id": "node:123:resize_type.megapixels",
+            "input_name": "resize_type.megapixels",
+            "input_type": "number",
+            "label": "目標百萬像素",
+            "node_id": "123",
+            "required": true
+          },
           {
             "category": "NUMERIC",
             "class_type": "ModelSamplingAuraFlow",

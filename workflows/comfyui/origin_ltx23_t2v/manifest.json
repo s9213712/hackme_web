@@ -34,7 +34,7 @@
     "scheduler": "",
     "seed": 42,
     "steps": 20,
-    "upscale_model": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+    "upscale_model": "",
     "vae": "",
     "width": 512
   },
@@ -60,7 +60,7 @@
       "name": "ltx-2.3-22b-dev-fp8.safetensors"
     },
     {
-      "kind": "upscale",
+      "kind": "latent_upscale",
       "name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
     }
   ],
@@ -143,6 +143,20 @@
           },
           {
             "category": "MODEL",
+            "class_type": "LatentUpscaleModelLoader",
+            "current_value": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+            "id": "node:303:model_name",
+            "input_name": "model_name",
+            "input_type": "select",
+            "label": "Latent 放大模型",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "303",
+            "read_only": true,
+            "required": false
+          },
+          {
+            "category": "MODEL",
             "class_type": "CheckpointLoaderSimple",
             "current_value": "ltx-2.3-22b-dev-fp8.safetensors",
             "id": "node:313:ckpt_name",
@@ -168,6 +182,49 @@
             "input_type": "select",
             "label": "取樣器（Node 272）",
             "node_id": "272",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "options": [
+                "scale dimensions",
+                "scale total pixels",
+                "scale longer dimension",
+                "scale shorter dimension",
+                "scale by multiplier",
+                "scale width",
+                "scale height",
+                "scale to multiple"
+              ]
+            },
+            "current_value": "scale dimensions",
+            "id": "node:282:resize_type",
+            "input_name": "resize_type",
+            "input_type": "select",
+            "label": "縮放模式",
+            "node_id": "282",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "options": [
+                "nearest-exact",
+                "bilinear",
+                "area",
+                "bicubic",
+                "lanczos"
+              ]
+            },
+            "current_value": "lanczos",
+            "id": "node:282:scale_method",
+            "input_name": "scale_method",
+            "input_type": "select",
+            "label": "縮放演算法",
+            "node_id": "282",
             "required": true
           },
           {
@@ -224,6 +281,38 @@
             "input_type": "number",
             "label": "LoRA 強度",
             "node_id": "277",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "max": 8192,
+              "min": 16,
+              "step": 8
+            },
+            "current_value": 1280,
+            "id": "node:282:resize_type.width",
+            "input_name": "resize_type.width",
+            "input_type": "number",
+            "label": "縮放寬度",
+            "node_id": "282",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "max": 8192,
+              "min": 16,
+              "step": 8
+            },
+            "current_value": 720,
+            "id": "node:282:resize_type.height",
+            "input_name": "resize_type.height",
+            "input_type": "number",
+            "label": "縮放高度",
+            "node_id": "282",
             "required": true
           }
         ],

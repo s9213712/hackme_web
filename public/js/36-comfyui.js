@@ -151,6 +151,7 @@ const COMFYUI_INPUT_ASSET_META = {
     cardId: "comfyui-source-image-card",
     emptyText: "尚未選擇來源圖片",
     title: "來源圖片",
+    mediaType: "image",
   },
   mask: {
     fileInputId: "comfyui-mask-image-file",
@@ -162,6 +163,7 @@ const COMFYUI_INPUT_ASSET_META = {
     cardId: "comfyui-mask-image-card",
     emptyText: "尚未選擇遮罩圖片",
     title: "遮罩圖片",
+    mediaType: "image",
   },
   control: {
     fileInputId: "comfyui-control-image-file",
@@ -172,6 +174,17 @@ const COMFYUI_INPUT_ASSET_META = {
     cardId: "comfyui-control-image-card",
     emptyText: "尚未選擇控制圖",
     title: "控制圖",
+    mediaType: "image",
+  },
+  video: {
+    fileInputId: "comfyui-template-video-file",
+    previewId: "comfyui-template-video-preview",
+    metaId: "comfyui-template-video-meta",
+    clearBtnId: "comfyui-template-video-clear-btn",
+    cardId: "comfyui-template-video-card",
+    emptyText: "尚未選擇來源影片",
+    title: "來源影片",
+    mediaType: "video",
   },
 };
 
@@ -896,19 +909,23 @@ function renderComfyuiInputAsset(key) {
   const asset = comfyuiAssetState(key);
   if (preview) {
     if (asset.previewUrl) {
-      preview.innerHTML = `<img src="${sanitize(asset.previewUrl)}" alt="${sanitize(meta.title)}預覽" />`;
+      preview.innerHTML = meta.mediaType === "video"
+        ? `<video src="${sanitize(asset.previewUrl)}" controls muted preload="metadata"></video>`
+        : `<img src="${sanitize(asset.previewUrl)}" alt="${sanitize(meta.title)}預覽" />`;
     } else {
       preview.innerHTML = `<span class="drive-card-sub">${sanitize(meta.emptyText)}</span>`;
     }
   }
   if (status) {
     if (asset.file) {
-      status.textContent = `已選擇本地檔：${asset.filename || asset.file.name || "未命名圖片"} · ${formatDriveBytes(asset.file.size || 0)}`;
+      status.textContent = `已選擇本地檔：${asset.filename || asset.file.name || "未命名檔案"} · ${formatDriveBytes(asset.file.size || 0)}`;
     } else if (asset.imageRef?.filename) {
       const sourceText = asset.cloudFileId ? "雲端硬碟 / 歷史匯入" : "已保存";
       status.textContent = `使用${sourceText}的 ${meta.title}：${asset.filename || asset.imageRef.filename}`;
     } else {
-      status.textContent = key === "mask" ? "建議與來源圖片尺寸一致。" : (key === "control" ? "控制圖只在啟用 ControlNet 時送出。" : "可上傳 PNG、JPG、WEBP。");
+      status.textContent = meta.mediaType === "video"
+        ? "可上傳 MP4、WEBM、MOV、MKV、AVI。"
+        : (key === "mask" ? "建議與來源圖片尺寸一致。" : (key === "control" ? "控制圖只在啟用 ControlNet 時送出。" : "可上傳 PNG、JPG、WEBP。"));
     }
   }
   if (clearBtn) clearBtn.disabled = !asset.file && !asset.imageRef;
@@ -940,7 +957,7 @@ function setComfyuiInputAssetFromFile(key, file) {
 
 function setComfyuiInputAssetFromRef(key, imageRef, previewUrl = "", filename = "", options = {}) {
   const asset = comfyuiAssetState(key);
-  revokeComfyuiAssetPreview(asset);
+  if (!asset?.previewUrl || asset.previewUrl !== previewUrl) revokeComfyuiAssetPreview(asset);
   comfyuiInputAssets[key] = {
     file: null,
     imageRef: imageRef || null,
@@ -1312,6 +1329,7 @@ function comfyuiImageRefCacheKey(imageRef) {
 }
 
 const comfyuiOutputPreviewCache = new Map();
+const comfyuiMediaPreviewCache = new Map();
 
 async function hydrateComfyuiOutputImage(image) {
   if (!image || image.data_url || !image.image_ref?.filename) return image;
@@ -1335,6 +1353,52 @@ async function hydrateComfyuiGeneratedImages(images = []) {
   const hydrated = [];
   for (const image of items) {
     hydrated.push(await hydrateComfyuiOutputImage(image));
+  }
+  return hydrated;
+}
+
+async function loadComfyuiMediaPreview(fileRef, jobId) {
+  const res = await apiFetch(API + "/comfyui/media-preview", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": getCsrfToken() || ""
+    },
+    body: JSON.stringify({ file_ref: fileRef, job_id: jobId })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 媒體預覽讀取失敗（HTTP ${res.status}）`);
+  return json.media || {};
+}
+
+async function hydrateComfyuiOutputMedia(item, jobId) {
+  if (!item || item.data_url || !item.file_ref?.filename || !jobId) return item;
+  const cacheKey = `${jobId}:${comfyuiImageRefCacheKey(item.file_ref)}`;
+  if (cacheKey && comfyuiMediaPreviewCache.has(cacheKey)) {
+    return { ...item, ...comfyuiMediaPreviewCache.get(cacheKey) };
+  }
+  try {
+    await fetchCsrfToken({ force: true });
+    const preview = await loadComfyuiMediaPreview(item.file_ref, jobId);
+    const hydrated = {
+      data_url: preview.data_url || "",
+      mime_type: preview.mime_type || item.mime_type || "application/octet-stream",
+      size_bytes: Number(preview.size_bytes || item.size_bytes || 0),
+      file_ref: preview.file_ref || item.file_ref,
+    };
+    if (cacheKey) comfyuiMediaPreviewCache.set(cacheKey, hydrated);
+    return { ...item, ...hydrated };
+  } catch (err) {
+    return { ...item, preview_error: err.message || "媒體預覽讀取失敗" };
+  }
+}
+
+async function hydrateComfyuiGeneratedMedia(mediaItems = [], jobId = "") {
+  const items = Array.isArray(mediaItems) ? mediaItems.filter(Boolean) : [];
+  const hydrated = [];
+  for (const item of items) {
+    hydrated.push(await hydrateComfyuiOutputMedia(item, jobId));
   }
   return hydrated;
 }
@@ -1465,6 +1529,39 @@ async function importComfyuiUploadedImage(assetKey = "source") {
   return image;
 }
 
+async function importComfyuiUploadedVideo(assetKey = "video") {
+  const asset = comfyuiAssetState(assetKey);
+  if (!asset?.file) throw new Error("尚未選擇要匯入的本機影片。");
+  await fetchCsrfToken({ force: true });
+  const form = new FormData();
+  form.append("video", asset.file, asset.filename || asset.file.name || "video.mp4");
+  form.append("asset_key", assetKey);
+  const res = await apiFetch(API + "/comfyui/import-uploaded-video", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "X-CSRF-Token": getCsrfToken() || ""
+    },
+    body: form
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.msg || `本機影片匯入失敗（HTTP ${res.status}）`);
+  const media = json.media || {};
+  setComfyuiInputAssetFromRef(assetKey, media.media_ref || { filename: media.filename || asset.filename || "" }, asset.previewUrl || "", media.filename || asset.filename || "", {
+    cloudFileId: media.cloud_file_id || "",
+  });
+  return media;
+}
+
+async function importComfyuiUploadedMedia(assetKey = "source") {
+  const asset = comfyuiAssetState(assetKey);
+  const meta = COMFYUI_INPUT_ASSET_META[assetKey] || {};
+  if (meta.mediaType === "video" || /^video\//i.test(asset?.file?.type || "")) {
+    return importComfyuiUploadedVideo(assetKey);
+  }
+  return importComfyuiUploadedImage(assetKey);
+}
+
 async function importComfyuiHistoryImage(imageRef) {
   await fetchCsrfToken({ force: true });
   const res = await apiFetch(API + "/comfyui/import-history-image", {
@@ -1535,7 +1632,7 @@ function fillComfyuiVaeSelect(values = []) {
   comfyuiAvailableVaes = Array.isArray(values) ? values.filter(Boolean).map(String) : [];
   const select = $("comfyui-vae-select");
   if (!select) return;
-  const options = [`<option value="${COMFYUI_VAE_BUILTIN}">使用 checkpoint 內建 VAE</option>`]
+  const options = [`<option value="${COMFYUI_VAE_BUILTIN}">使用各自大模型內建 VAE</option>`]
     .concat(comfyuiAvailableVaes.map((value) => `<option value="${sanitize(value)}">${sanitize(value)}</option>`));
   select.innerHTML = options.join("");
 }
@@ -1773,14 +1870,18 @@ function setComfyuiFieldValue(id, value) {
   el.value = String(value);
 }
 
+function normalizeComfyuiLoraName(name) {
+  return String(name || "").trim().replace(/（提醒：[^）]*）$/u, "").trim();
+}
+
 function restoreComfyuiDraft({ includeDynamicSelects = true } = {}) {
   const draft = readComfyuiDraft();
   if (Array.isArray(draft.selected_loras)) {
     comfyuiSelectedLoras = draft.selected_loras
-      .filter((item) => item && typeof item === "object" && item.name)
+      .filter((item) => item && typeof item === "object" && normalizeComfyuiLoraName(item.name))
       .slice(0, COMFYUI_MAX_LORAS)
       .map((item) => ({
-        name: String(item.name),
+        name: normalizeComfyuiLoraName(item.name),
         strength_model: Number.isFinite(Number(item.strength_model)) ? Number(item.strength_model) : 1,
         strength_clip: Number.isFinite(Number(item.strength_clip)) ? Number(item.strength_clip) : 1,
         template_node_id: item.template_node_id ? String(item.template_node_id) : "",
@@ -1830,7 +1931,11 @@ function renderComfyuiSelectedLoras() {
   const box = $("comfyui-selected-loras");
   const count = $("comfyui-lora-count");
   if (!box) return;
-  comfyuiSelectedLoras = comfyuiSelectedLoras.slice(0, COMFYUI_MAX_LORAS);
+  comfyuiSelectedLoras = comfyuiSelectedLoras
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({ ...item, name: normalizeComfyuiLoraName(item.name) }))
+    .filter((item) => item.name)
+    .slice(0, COMFYUI_MAX_LORAS);
   if (count) count.textContent = `${comfyuiSelectedLoras.length} / ${COMFYUI_MAX_LORAS}`;
   if (!comfyuiSelectedLoras.length) {
     box.innerHTML = '<span class="drive-card-sub">尚未選擇 LoRA</span>';
@@ -1886,7 +1991,14 @@ function updateComfyuiSelectedLoraStrength(input, field) {
 }
 
 function fillComfyuiLoraSelect(values = []) {
-  comfyuiAvailableLoras = Array.isArray(values) ? values.filter(Boolean).map(String) : [];
+  const seen = new Set();
+  comfyuiAvailableLoras = (Array.isArray(values) ? values : [])
+    .map(normalizeComfyuiLoraName)
+    .filter((value) => {
+      if (!value || seen.has(value)) return false;
+      seen.add(value);
+      return true;
+    });
   const select = $("comfyui-lora-select");
   if (!select) return;
   const options = ['<option value="">不使用 LoRA（可略過）</option>']
@@ -1900,17 +2012,29 @@ function fillComfyuiLoraSelect(values = []) {
 
 function pruneUnsupportedComfyuiSelectedLoras({ notify = false } = {}) {
   if (notify) {
-    const warnings = comfyuiSelectedLoras
-      .map((item) => item?.name ? comfyuiLoraCompatibilityHint(item.name) : "")
-      .filter(Boolean);
+    const warnings = uniqueComfyuiLoraCompatibilityHints(comfyuiSelectedLoras);
     if (warnings.length) setComfyuiMessage(`已保留已選 LoRA；提醒：${warnings.slice(0, 3).join("；")}`, false);
   }
   return [];
 }
 
+function uniqueComfyuiLoraCompatibilityHints(loras = []) {
+  const seen = new Set();
+  const warnings = [];
+  (Array.isArray(loras) ? loras : []).forEach((item) => {
+    const name = normalizeComfyuiLoraName(item?.name);
+    const hint = name ? comfyuiLoraCompatibilityHint(name) : "";
+    if (!hint || seen.has(hint)) return;
+    seen.add(hint);
+    warnings.push(hint);
+  });
+  return warnings;
+}
+
 function comfyuiLoraCompatibilityHint(name) {
-  const detail = comfyuiLoraDetails?.[String(name || "").trim()] || {};
-  if (!name || detail.supported === true) return "";
+  const cleanName = normalizeComfyuiLoraName(name);
+  const detail = comfyuiLoraDetails?.[cleanName] || {};
+  if (!cleanName || detail.supported === true) return "";
   if (detail.base_model) return `${detail.base_model} LoRA 可能需要搭配同系列模型`;
   return "base model metadata 未知，請確認和目前模型相容";
 }
@@ -1948,23 +2072,78 @@ function joinComfyuiPromptTerms(terms = []) {
     : "";
 }
 
-function removeComfyuiPromptTerms(terms = [], { promptType = "prompt" } = {}) {
-  const prompt = comfyuiPromptField(promptType);
-  if (!prompt) return [];
+function removeComfyuiPromptTermsFromInput(input, terms = []) {
+  if (!input) return [];
   const normalizedTerms = Array.isArray(terms)
     ? terms.map((item) => String(item || "").trim()).filter(Boolean)
     : [];
   if (!normalizedTerms.length) return [];
   const removalSet = new Set(normalizedTerms.map((item) => item.toLowerCase()));
   const removed = [];
-  const keptTerms = splitComfyuiPromptTerms(prompt.value).filter((term) => {
+  const keptTerms = splitComfyuiPromptTerms(input.value).filter((term) => {
     const shouldRemove = removalSet.has(term.toLowerCase());
     if (shouldRemove) removed.push(term);
     return !shouldRemove;
   });
   if (!removed.length) return [];
-  prompt.value = joinComfyuiPromptTerms(keptTerms);
+  input.value = joinComfyuiPromptTerms(keptTerms);
+  return removed;
+}
+
+function removeComfyuiPromptTerms(terms = [], { promptType = "prompt" } = {}) {
+  const prompt = comfyuiPromptField(promptType);
+  if (!prompt) return [];
+  const removed = removeComfyuiPromptTermsFromInput(prompt, terms);
+  if (!removed.length) return [];
   writeComfyuiDraft();
+  return removed;
+}
+
+function comfyuiEmbeddingTokenVariants(name) {
+  const cleanName = String(name || "").trim();
+  if (!cleanName) return [];
+  return [
+    `<embeddings:${cleanName}>`,
+    `<embedding:${cleanName}>`,
+    `embedding:${cleanName}`,
+  ];
+}
+
+function comfyuiEscapeRegExp(text) {
+  return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function cleanupComfyuiPromptTextAfterRemoval(text) {
+  return String(text || "")
+    .replace(/(?:[ \t]*,[ \t]*){2,}/g, ", ")
+    .replace(/^[\s,]+|[\s,]+$/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s*,\s*/g, ", ");
+}
+
+function removeComfyuiEmbeddingTokenFromInput(input, name) {
+  if (!input) return [];
+  const variants = comfyuiEmbeddingTokenVariants(name).sort((a, b) => b.length - a.length);
+  if (!variants.length) return [];
+  let next = String(input.value || "");
+  const removed = [];
+  variants.forEach((variant) => {
+    const tokenPattern = comfyuiEscapeRegExp(variant);
+    const re = new RegExp(`(^|[\\s,])(${tokenPattern})(?=$|[\\s,])`, "gi");
+    next = next.replace(re, (_match, leading, token) => {
+      removed.push(token);
+      return leading || "";
+    });
+  });
+  if (!removed.length) return [];
+  input.value = cleanupComfyuiPromptTextAfterRemoval(next);
+  return removed;
+}
+
+function removeComfyuiEmbeddingTokenFromPrompt(name, { promptType = "prompt" } = {}) {
+  const prompt = comfyuiPromptField(promptType);
+  const removed = removeComfyuiEmbeddingTokenFromInput(prompt, name);
+  if (removed.length) writeComfyuiDraft();
   return removed;
 }
 
@@ -1981,16 +2160,16 @@ function insertComfyuiEmbeddingToken(name) {
   const otherPrompt = comfyuiPromptField(otherPromptType);
   if (!prompt || !cleanName) return;
   const embeddingTag = `<embeddings:${cleanName}>`;
-  if ((prompt.value || "").includes(embeddingTag)) {
-    removeComfyuiPromptTerms([embeddingTag], { promptType });
+  const removed = removeComfyuiEmbeddingTokenFromPrompt(cleanName, { promptType });
+  if (removed.length) {
     setComfyuiMessage(`已從${promptType === "negative" ? "負面" : "正向"}提示詞移除 ${cleanName}。`, true);
     prompt.focus();
     return;
   }
-  if (otherPrompt && (otherPrompt.value || "").includes(embeddingTag)) {
-    removeComfyuiPromptTerms([embeddingTag], { promptType: otherPromptType });
+  const removedOther = otherPrompt ? removeComfyuiEmbeddingTokenFromPrompt(cleanName, { promptType: otherPromptType }) : [];
+  if (removedOther.length) {
     setComfyuiMessage(`已從${otherPromptType === "negative" ? "負面" : "正向"}提示詞移除 ${cleanName}。`, true);
-    prompt.focus();
+    otherPrompt.focus();
     return;
   }
   const raw = prompt.value || "";
@@ -2015,7 +2194,7 @@ function renderComfyuiEmbeddingShortcuts(values = []) {
     return;
   }
   box.innerHTML = comfyuiAvailableEmbeddings.map((value) => (
-    `<button class="comfyui-embedding-chip" type="button" data-comfyui-embedding="${sanitize(value)}" title="插入 ${sanitize(value)}">${sanitize(value)}</button>`
+    `<button class="comfyui-embedding-chip" type="button" data-comfyui-embedding="${sanitize(value)}" title="插入 / 移除 ${sanitize(value)}">${sanitize(value)}</button>`
   )).join("");
   box.querySelectorAll("[data-comfyui-embedding]").forEach((button) => {
     button.addEventListener("click", () => insertComfyuiEmbeddingToken(button.getAttribute("data-comfyui-embedding")));
@@ -2024,9 +2203,11 @@ function renderComfyuiEmbeddingShortcuts(values = []) {
 
 function loraTermsStillNeededAfterRemoving(nameToRemove) {
   const needed = new Set();
+  const removedName = normalizeComfyuiLoraName(nameToRemove);
   comfyuiSelectedLoras.forEach((item) => {
-    if (!item?.name || item.name === nameToRemove) return;
-    const detail = comfyuiLoraDetails?.[item.name] || {};
+    const name = normalizeComfyuiLoraName(item?.name);
+    if (!name || name === removedName) return;
+    const detail = comfyuiLoraDetails?.[name] || {};
     (detail.trained_words || []).forEach((term) => {
       const cleanTerm = String(term || "").trim();
       if (cleanTerm) needed.add(cleanTerm.toLowerCase());
@@ -2038,11 +2219,12 @@ function loraTermsStillNeededAfterRemoving(nameToRemove) {
 function removeComfyuiSelectedLoraByIndex(index) {
   const current = comfyuiSelectedLoras[index];
   if (!current) return;
-  const detail = comfyuiLoraDetails?.[current.name] || {};
+  const currentName = normalizeComfyuiLoraName(current.name);
+  const detail = comfyuiLoraDetails?.[currentName] || {};
   const trainedWords = Array.isArray(detail.trained_words)
     ? detail.trained_words.map((item) => String(item || "").trim()).filter(Boolean)
     : [];
-  const stillNeeded = loraTermsStillNeededAfterRemoving(current.name);
+  const stillNeeded = loraTermsStillNeededAfterRemoving(currentName);
   const removableTerms = trainedWords.filter((term) => !stillNeeded.has(term.toLowerCase()));
   comfyuiSelectedLoras.splice(index, 1);
   if (removableTerms.length) removeComfyuiPromptTerms(removableTerms, { promptType: "prompt" });
@@ -2057,7 +2239,7 @@ function clearSelectedComfyuiLoras() {
   }
   const removableTerms = [];
   comfyuiSelectedLoras.forEach((item) => {
-    const detail = comfyuiLoraDetails?.[item?.name] || {};
+    const detail = comfyuiLoraDetails?.[normalizeComfyuiLoraName(item?.name)] || {};
     (detail.trained_words || []).forEach((term) => {
       const cleanTerm = String(term || "").trim();
       if (cleanTerm) removableTerms.push(cleanTerm);
@@ -2071,7 +2253,7 @@ function clearSelectedComfyuiLoras() {
 }
 
 function addSelectedComfyuiLora() {
-  const name = $("comfyui-lora-select")?.value || "";
+  const name = normalizeComfyuiLoraName($("comfyui-lora-select")?.value || "");
   if (!name) {
     clearSelectedComfyuiLoras();
     return;
@@ -2080,7 +2262,7 @@ function addSelectedComfyuiLora() {
     setComfyuiMessage(`已達 LoRA 數量上限 ${COMFYUI_MAX_LORAS} 個。`, false);
     return;
   }
-  if (comfyuiSelectedLoras.some((item) => item.name === name)) {
+  if (comfyuiSelectedLoras.some((item) => normalizeComfyuiLoraName(item?.name) === name)) {
     setComfyuiMessage("這個 LoRA 已經加入。", false);
     return;
   }
@@ -2600,10 +2782,10 @@ async function applyComfyuiHistoryToForm(historyId) {
   const controlnet = item.controlnet || {};
   const loras = Array.isArray(payload.loras) ? payload.loras : [];
   comfyuiSelectedLoras = loras
-    .filter((entry) => entry && typeof entry === "object" && entry.name)
+    .filter((entry) => entry && typeof entry === "object" && normalizeComfyuiLoraName(entry.name))
     .slice(0, COMFYUI_MAX_LORAS)
     .map((entry) => ({
-      name: String(entry.name),
+      name: normalizeComfyuiLoraName(entry.name),
       strength_model: Number.isFinite(Number(entry.strength_model)) ? Number(entry.strength_model) : 1,
       strength_clip: Number.isFinite(Number(entry.strength_clip)) ? Number(entry.strength_clip) : 1,
       template_node_id: entry.template_node_id ? String(entry.template_node_id) : "",
@@ -2674,15 +2856,16 @@ async function rerunComfyuiHistory(historyId) {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 歷史重跑失敗（HTTP ${res.status}）`);
-    const result = await pollComfyuiJobUntilDone(json.job?.job_id, controller, COMFYUI_GENERATION_TIMEOUT_SECONDS);
+    const jobId = json.job?.job_id;
+    const result = await pollComfyuiJobUntilDone(jobId, controller, COMFYUI_GENERATION_TIMEOUT_SECONDS);
     const rawImages = Array.isArray(result.images) && result.images.length ? result.images : [result.image].filter(Boolean);
     const images = await hydrateComfyuiGeneratedImages(rawImages);
     comfyuiGeneratedImages = images;
-    comfyuiGeneratedMedia = Array.isArray(result.media) ? result.media : [];
+    comfyuiGeneratedMedia = await hydrateComfyuiGeneratedMedia(Array.isArray(result.media) ? result.media : [], jobId);
     renderComfyuiGeneratedImages(comfyuiGeneratedImages);
     setComfyuiSelectedImage(0);
     stopComfyuiProgress({ complete: true });
-    updateComfyuiResultButtons(true);
+    updateComfyuiResultButtons(!!images.length);
     loadComfyuiHistory().catch(() => {});
     setComfyuiMessage(`已重跑第 ${targetId} 筆 ComfyUI 歷史。`, true);
   } catch (err) {
@@ -2738,9 +2921,11 @@ function renderComfyuiGeneratedMedia(mediaItems = []) {
         const kind = item.media_kind || (String(item.mime_type || "").startsWith("audio/") ? "audio" : "video");
         const src = item.data_url || "";
         const filename = item.file_ref?.filename || "output";
-        const player = kind === "audio"
-          ? `<audio controls src="${sanitize(src)}"></audio>`
-          : (kind === "video" ? `<video controls src="${sanitize(src)}"></video>` : `<a class="btn btn-sm" href="${sanitize(src)}" download="${sanitize(filename)}">開啟輸出檔</a>`);
+        const player = !src
+          ? `<div class="drive-empty">${sanitize(item.preview_error || "媒體檔已完成，正在讀取預覽。")}</div>`
+          : (kind === "audio"
+            ? `<audio controls src="${sanitize(src)}"></audio>`
+            : (kind === "video" ? `<video controls src="${sanitize(src)}"></video>` : `<a class="btn btn-sm" href="${sanitize(src)}" download="${sanitize(filename)}">開啟輸出檔</a>`));
         return `
           <div class="comfyui-generated-media-card">
             ${player}
@@ -2750,6 +2935,18 @@ function renderComfyuiGeneratedMedia(mediaItems = []) {
       }).join("")}
     </div>
   `;
+}
+
+function openComfyuiGeneratedImage(index = comfyuiSelectedImageIndex) {
+  const image = comfyuiGeneratedImages[index] || comfyuiCurrentImage;
+  if (!image?.data_url) {
+    setComfyuiMessage("圖片預覽尚未載入完成", false);
+    return;
+  }
+  const opened = window.open(image.data_url, "_blank", "noopener");
+  if (!opened) {
+    setComfyuiMessage("瀏覽器阻擋了大圖視窗，請允許彈出視窗後再試。", false);
+  }
 }
 
 function renderComfyuiGeneratedImages(images) {
@@ -2768,24 +2965,42 @@ function renderComfyuiGeneratedImages(images) {
       preview.innerHTML = `<div class="drive-empty">圖片已完成，正在讀取預覽。</div>`;
       return;
     }
-    preview.innerHTML = `<img loading="lazy" src="${sanitize(images[0].data_url || "")}" alt="ComfyUI generated image" />`;
+    preview.innerHTML = `
+      <button class="comfyui-output-main" type="button" data-comfyui-open-image="0" title="開啟大圖">
+        <img loading="lazy" src="${sanitize(images[0].data_url || "")}" alt="ComfyUI generated image" />
+      </button>
+    `;
+    preview.querySelector("[data-comfyui-open-image]")?.addEventListener("click", () => openComfyuiGeneratedImage(0));
     return;
   }
+  const selectedIndex = Math.max(0, Math.min(comfyuiSelectedImageIndex || 0, images.length - 1));
+  const selected = images[selectedIndex] || images[0];
   preview.innerHTML = `
-    <div class="comfyui-batch-grid">
-      ${images.map((image, index) => `
-        <button class="comfyui-batch-item${index === comfyuiSelectedImageIndex ? " active" : ""}" type="button" data-comfyui-image-index="${index}" title="選擇第 ${index + 1} 張">
-          ${image.data_url
-            ? `<img loading="lazy" src="${sanitize(image.data_url || "")}" alt="ComfyUI generated image ${index + 1}" />`
-            : `<span class="drive-empty">讀取預覽中</span>`}
-          <span>第 ${index + 1} 張</span>
-        </button>
-      `).join("")}
+    <div class="comfyui-output-gallery">
+      <button class="comfyui-output-main" type="button" data-comfyui-open-image="${selectedIndex}" title="開啟第 ${selectedIndex + 1} 張大圖">
+        ${selected?.data_url
+          ? `<img loading="lazy" src="${sanitize(selected.data_url || "")}" alt="ComfyUI generated image ${selectedIndex + 1}" />`
+          : `<span class="drive-empty">圖片已完成，正在讀取預覽。</span>`}
+      </button>
+      <div class="comfyui-batch-grid is-strip">
+        ${images.map((image, index) => `
+          <button class="comfyui-batch-item${index === selectedIndex ? " active" : ""}" type="button" data-comfyui-image-index="${index}" title="選擇第 ${index + 1} 張">
+            ${image.data_url
+              ? `<img loading="lazy" src="${sanitize(image.data_url || "")}" alt="ComfyUI generated image ${index + 1}" />`
+              : `<span class="drive-empty">讀取預覽中</span>`}
+            <span>第 ${index + 1} 張</span>
+          </button>
+        `).join("")}
+      </div>
     </div>
   `;
+  preview.querySelector("[data-comfyui-open-image]")?.addEventListener("click", () => {
+    openComfyuiGeneratedImage(selectedIndex);
+  });
   preview.querySelectorAll("[data-comfyui-image-index]").forEach((button) => {
     button.addEventListener("click", () => {
-      setComfyuiSelectedImage(parseInt(button.getAttribute("data-comfyui-image-index"), 10));
+      const nextIndex = parseInt(button.getAttribute("data-comfyui-image-index"), 10);
+      setComfyuiSelectedImage(nextIndex);
       renderComfyuiGeneratedImages(comfyuiGeneratedImages);
     });
   });
@@ -3408,7 +3623,8 @@ async function generateComfyuiImage() {
       const json = await pollComfyuiJobUntilDone(jobId, controller, COMFYUI_GENERATION_TIMEOUT_SECONDS);
       const rawRunImages = Array.isArray(json.images) && json.images.length ? json.images : [json.image].filter(Boolean);
       const runImages = await hydrateComfyuiGeneratedImages(rawRunImages);
-      comfyuiGeneratedMedia = Array.isArray(json.media) ? json.media : [];
+      const runMedia = await hydrateComfyuiGeneratedMedia(Array.isArray(json.media) ? json.media : [], jobId);
+      comfyuiGeneratedMedia = runMedia;
       runImages.forEach((image) => {
         generated.push({ ...image, run_index: runIndex, batch_index: batchIndex, run_count: runCount });
       });
@@ -3419,13 +3635,25 @@ async function generateComfyuiImage() {
         renderComfyuiGeneratedImages(comfyuiGeneratedImages);
         setComfyuiSelectedImage(comfyuiSelectedImageIndex);
         updateComfyuiResultButtons(true);
+      } else if (runMedia.length) {
+        renderComfyuiGeneratedMedia(runMedia);
+        updateComfyuiResultButtons(false);
       }
       if (json.billing?.charged) totalCharged += Number(json.billing.total_price || 0);
     }
     comfyuiGeneratedImages = generated;
-    comfyuiGeneratedMedia = [];
+    if (comfyuiGeneratedImages.length) comfyuiGeneratedMedia = [];
     comfyuiCurrentImage = comfyuiGeneratedImages[0] || null;
-    if (!comfyuiCurrentImage?.image_ref) throw new Error("ComfyUI 未回傳圖片");
+    if (!comfyuiCurrentImage?.image_ref) {
+      if (Array.isArray(comfyuiGeneratedMedia) && comfyuiGeneratedMedia.length) {
+        renderComfyuiGeneratedMedia(comfyuiGeneratedMedia);
+        stopComfyuiProgress({ complete: true });
+        updateComfyuiResultButtons(false);
+        setComfyuiMessage(`已執行 ${runCount} 次，共產生 ${comfyuiGeneratedMedia.length} 個媒體檔。`, true);
+        return;
+      }
+      throw new Error("ComfyUI 未回傳圖片");
+    }
     renderComfyuiGeneratedImages(comfyuiGeneratedImages);
     setComfyuiSelectedImage(0);
     stopComfyuiProgress({ complete: true });
@@ -3932,6 +4160,7 @@ function comfyuiDefaultModelRelativeDir(type = comfyuiSelectedModelDownloadType(
   if (normalized === "video") return "video";
   if (normalized === "controlnet") return "controlnet";
   if (normalized === "upscale") return "upscale_models";
+  if (normalized === "latent_upscale") return "latent_upscale_models";
   return "checkpoints";
 }
 
@@ -4389,6 +4618,15 @@ const ComfyUITemplateImporter = (() => {
       ? (textInputs.find((el) => looksNegative(el)) || textInputs[1] || textInputs[0])
       : (textInputs.find((el) => !looksNegative(el)) || textInputs[0]);
     const embeddingTag = `<embeddings:${cleanName}>`;
+    const existingTarget = textInputs.find((el) => (
+      typeof removeComfyuiEmbeddingTokenFromInput === "function"
+        ? removeComfyuiEmbeddingTokenFromInput(el, cleanName).length
+        : false
+    ));
+    if (existingTarget) {
+      existingTarget.focus();
+      return;
+    }
     const raw = target.value || "";
     const start = Number.isInteger(target.selectionStart) ? target.selectionStart : raw.length;
     const end = Number.isInteger(target.selectionEnd) ? target.selectionEnd : raw.length;

@@ -12,6 +12,7 @@ from flask import Flask, jsonify, make_response, request
 
 from routes import comfyui as comfyui_routes
 from routes.comfyui import register_comfyui_routes
+from routes.comfyui_sections import workflow_routes as comfyui_workflow_routes
 from services.comfyui import execution as comfy_execution
 from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
 from services.comfyui.client import ComfyUIClient, ComfyUIError, ComfyUIImage
@@ -34,8 +35,10 @@ ROOT = Path(__file__).resolve().parents[2]
 class FakeComfyUIClient:
     base_url = "http://fake-comfyui"
     last_timeout_seconds = None
+    last_expected_count = None
     last_params = {}
     last_workflow = {}
+    last_wait_until_completed = None
     discarded = []
     interrupted = 0
     generated_count = 0
@@ -69,6 +72,7 @@ class FakeComfyUIClient:
                 "KSampler",
                 "VAEDecode",
                 "SaveImage",
+                "PreviewImage",
                 "EmptyLatentImage",
                 "LoadImage",
                 "LoadImageMask",
@@ -210,10 +214,12 @@ class FakeComfyUIClient:
             "images": images,
         }
 
-    def generate_from_workflow(self, workflow, *, timeout_seconds=180, expected_count=1, progress_callback=None):
+    def generate_from_workflow(self, workflow, *, timeout_seconds=180, expected_count=1, progress_callback=None, wait_until_completed=False):
         FakeComfyUIClient.generated_count += 1
         FakeComfyUIClient.last_timeout_seconds = timeout_seconds
+        FakeComfyUIClient.last_expected_count = expected_count
         FakeComfyUIClient.last_workflow = json.loads(json.dumps(workflow))
+        FakeComfyUIClient.last_wait_until_completed = bool(wait_until_completed)
         FakeComfyUIClient.generated_workflows.append(FakeComfyUIClient.last_workflow)
         if progress_callback:
             progress_callback({
@@ -1301,6 +1307,195 @@ def test_comfyui_export_current_and_run_workflow_preset_preserve_parameters(tmp_
     assert FakeComfyUIClient.last_workflow["3"]["inputs"]["seed"] == 424242
     assert FakeComfyUIClient.last_workflow["3"]["inputs"]["steps"] == 16
     assert FakeComfyUIClient.last_workflow["3"]["inputs"]["cfg"] == 5.5
+    assert FakeComfyUIClient.last_wait_until_completed is True
+
+
+def test_comfyui_workflow_audio_media_preview_can_play_generated_output(tmp_path):
+    class AudioWorkflowClient(FakeComfyUIClient):
+        def generate_from_workflow(
+            self,
+            workflow,
+            *,
+            timeout_seconds=180,
+            expected_count=1,
+            progress_callback=None,
+            fetch_outputs=False,
+            extra_data=None,
+        ):
+            FakeComfyUIClient.generated_count += 1
+            FakeComfyUIClient.last_workflow = json.loads(json.dumps(workflow))
+            if progress_callback:
+                progress_callback({
+                    "phase": "running",
+                    "percent": 50,
+                    "current": 1,
+                    "max": 1,
+                    "current_node": "audio",
+                    "detail": "audio workflow 執行中",
+                    "queue_remaining": 0,
+                })
+            file_ref = {"filename": "ace_step_preview.mp3", "subfolder": "audio", "type": "output"}
+            return {
+                "prompt_id": "audio-prompt-1",
+                "image_ref": file_ref,
+                "mime_type": "application/octet-stream",
+                "data": b"",
+                "images": [],
+                "media": {
+                    "audio": [{
+                        "file_ref": file_ref,
+                        "mime_type": "application/octet-stream",
+                        "data": b"",
+                        "size_bytes": 0,
+                    }],
+                },
+            }
+
+        def fetch_file(self, file_ref):
+            assert file_ref == {"filename": "ace_step_preview.mp3", "subfolder": "audio", "type": "output"}
+            return ComfyUIImage(
+                filename=file_ref["filename"],
+                subfolder=file_ref["subfolder"],
+                type=file_ref["type"],
+                mime_type="application/octet-stream",
+                data=b"ID3fake-mp3-bytes",
+            )
+
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root, comfyui_client=AudioWorkflowClient()).test_client()
+    exported = client.post(
+        "/api/comfyui/workflows/export-current",
+        json={
+            "generation_mode": "txt2img",
+            "model": "dream.safetensors",
+            "prompt": "ace audio smoke",
+            "negative_prompt": "",
+            "width": 512,
+            "height": 512,
+            "steps": 8,
+            "cfg": 4,
+            "seed": 123,
+            "batch_size": 1,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+        },
+    )
+    assert exported.status_code == 200, exported.get_json()
+    preset = _import_workflow_preset(
+        client,
+        exported.get_json()["workflow_json"],
+        title="Audio Output Flow",
+        default_params=exported.get_json()["default_params"],
+    )
+
+    run = client.post(f"/api/comfyui/workflows/{preset['id']}/run", json={})
+    assert run.status_code == 200, run.get_json()
+    job_id = run.get_json()["job"]["job_id"]
+    body = client.get(f"/api/comfyui/jobs/{job_id}").get_json()
+    for _ in range(100):
+        if body["job"]["status"] == "completed":
+            break
+        time.sleep(0.1)
+        body = client.get(f"/api/comfyui/jobs/{job_id}").get_json()
+    assert body["job"]["status"] == "completed"
+    media = body["job"]["result"]["media"]
+    assert media[0]["media_kind"] == "audio"
+    assert "data_url" not in media[0]
+
+    preview = client.post(
+        "/api/comfyui/media-preview",
+        json={"job_id": job_id, "file_ref": media[0]["file_ref"]},
+    )
+    assert preview.status_code == 200, preview.get_json()
+    preview_json = preview.get_json()
+    assert preview_json["media"]["mime_type"] == "audio/mpeg"
+    assert preview_json["media"]["data_url"].startswith("data:audio/mpeg;base64,")
+    assert preview_json["media"]["size_bytes"] == len(b"ID3fake-mp3-bytes")
+
+
+def test_comfyui_workflow_run_expects_multiple_preview_outputs(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+    workflow = {
+        "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "dream.safetensors"}},
+        "48": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "photo.ckpt"}},
+        "5": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "same prompt", "clip": ["4", 1]}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "same negative", "clip": ["4", 1]}},
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["4", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["5", 0],
+                "seed": 42,
+                "steps": 12,
+                "cfg": 6,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "denoise": 1,
+            },
+        },
+        "17": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["48", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["5", 0],
+                "seed": 42,
+                "steps": 12,
+                "cfg": 6,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "denoise": 1,
+            },
+        },
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+        "18": {"class_type": "VAEDecode", "inputs": {"samples": ["17", 0], "vae": ["48", 2]}},
+        "50": {"class_type": "PreviewImage", "inputs": {"images": ["8", 0]}},
+        "51": {"class_type": "PreviewImage", "inputs": {"images": ["18", 0]}},
+    }
+    preset = _import_workflow_preset(
+        client,
+        workflow,
+        title="Compare Preview Outputs",
+        default_params={
+            "generation_mode": "txt2img",
+            "model": "dream.safetensors",
+            "prompt": "same prompt",
+            "negative_prompt": "same negative",
+            "width": 512,
+            "height": 512,
+            "steps": 12,
+            "cfg": 6,
+            "seed": 42,
+            "batch_size": 1,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+        },
+    )
+
+    run = client.post(f"/api/comfyui/workflows/{preset['id']}/run", json={})
+    assert run.status_code == 200, run.get_json()
+    job_id = run.get_json()["job"]["job_id"]
+    body = client.get(f"/api/comfyui/jobs/{job_id}").get_json()
+    for _ in range(100):
+        if body["job"]["status"] == "completed":
+            break
+        time.sleep(0.1)
+        body = client.get(f"/api/comfyui/jobs/{job_id}").get_json()
+
+    assert body["job"]["status"] == "completed"
+    assert FakeComfyUIClient.last_expected_count == 2
+    assert len(body["job"]["result"]["images"]) == 2
 
 
 def test_comfyui_workflow_run_rejects_missing_dependencies(tmp_path):
@@ -1403,6 +1598,25 @@ def test_root_can_publish_official_workflow_preset_with_audit(tmp_path):
     assert body["preset"]["is_official"] is True
     assert body["preset"]["visibility"] == "public"
     assert any(args and args[0] == "COMFYUI_WORKFLOW_PUBLISH_OFFICIAL" for args, _kwargs in audit_events)
+
+
+def test_comfyui_official_workflow_media_preview_serves_asset(tmp_path, monkeypatch):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    media_dir = tmp_path / "official-media"
+    media_dir.mkdir()
+    (media_dir / "sample.png").write_bytes(b"official-sample-png")
+    monkeypatch.setattr(comfyui_workflow_routes, "_OFFICIAL_TEMPLATE_MEDIA_DIR", media_dir)
+
+    client = _build_app(db_path, storage_root).test_client()
+    response = client.get("/api/comfyui/workflows/official-media/sample.png")
+
+    assert response.status_code == 200
+    assert response.data == b"official-sample-png"
+    assert response.content_type.startswith("image/png")
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
 
 
 def test_comfyui_image_preview_returns_uploaded_asset_preview(tmp_path):
@@ -2088,6 +2302,30 @@ def test_comfyui_object_info_combo_options_are_parsed_for_upscale_models(monkeyp
 
     monkeypatch.setattr(client, "_json_request", fake_json_request)
     assert client.get_upscale_models() == ["4x_NMKD-Superscale-SP_178000_G.pth"]
+
+
+def test_comfyui_object_info_combo_options_are_parsed_for_latent_upscale_models(monkeypatch):
+    client = ComfyUIClient("http://fake-comfyui")
+
+    def fake_json_request(path, **_kwargs):
+        assert path == "/object_info/LatentUpscaleModelLoader"
+        return {
+            "LatentUpscaleModelLoader": {
+                "input": {
+                    "required": {
+                        "model_name": [
+                            "COMBO",
+                            {
+                                "options": ["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"],
+                            },
+                        ]
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(client, "_json_request", fake_json_request)
+    assert client.get_latent_upscale_models() == ["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]
 
 
 def test_comfyui_workflow_chains_loras_between_checkpoint_and_sampler():
@@ -4370,7 +4608,7 @@ def test_comfyui_frontend_is_wired():
     assert "if (modelsTab) modelsTab.hidden = !showLocalModels;" in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
     assert "/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" in index_html
-    assert "/styles.css?v=20260519-template-model-notice" in index_html
+    assert "/styles.css?v=20260519-sdpose-gallery" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert ".comfyui-root-details" in css
@@ -4520,6 +4758,9 @@ def test_comfyui_frontend_is_wired():
     assert "function fillComfyuiVaeSelect(values = [])" in comfyui_js
     assert "function renderComfyuiEmbeddingShortcuts(values = [])" in comfyui_js
     assert "function insertComfyuiEmbeddingToken(name)" in comfyui_js
+    assert "function removeComfyuiEmbeddingTokenFromInput(input, name)" in comfyui_js
+    assert "function comfyuiEmbeddingTokenVariants(name)" in comfyui_js
+    assert "插入 / 移除" in comfyui_js
     assert "function removeComfyuiPromptTerms(terms = [], { promptType = \"prompt\" } = {})" in comfyui_js
     assert "function clearSelectedComfyuiLoras()" in comfyui_js
     assert "function removeComfyuiSelectedLoraByIndex(index)" in comfyui_js

@@ -19,6 +19,7 @@ Spec reference: docs/comfyui/COMFYUI_TEMPLATE_IMPORTER_PLAN.md §6.
 
 from __future__ import annotations
 
+import copy
 import threading
 import time
 from dataclasses import dataclass, field
@@ -109,9 +110,10 @@ class CapabilityCheck:
 _MODEL_BUCKET_OBJECT_INFO_PATHS: dict[str, tuple[tuple[str, str], ...]] = {
     "ckpt": (("CheckpointLoaderSimple", "ckpt_name"),),
     "vae": (("VAELoader", "vae_name"),),
-    "lora": (("LoraLoader", "lora_name"),),
+    "lora": (("LoraLoader", "lora_name"), ("LoraLoaderModelOnly", "lora_name")),
     "controlnet": (("ControlNetLoader", "control_net_name"),),
     "upscale_model": (("UpscaleModelLoader", "model_name"),),
+    "latent_upscale_model": (("LatentUpscaleModelLoader", "model_name"),),
     "diffusion_model": (("UNETLoader", "unet_name"),),
     "clip": (
         ("CLIPLoader", "clip_name"),
@@ -121,9 +123,17 @@ _MODEL_BUCKET_OBJECT_INFO_PATHS: dict[str, tuple[tuple[str, str], ...]] = {
         ("TripleCLIPLoader", "clip_name2"),
         ("TripleCLIPLoader", "clip_name3"),
     ),
+    "clip_vision": (("CLIPVisionLoader", "clip_name"),),
 }
 
 _MODEL_BUCKETS_NOT_LOCAL_FILES = frozenset({"api_model"})
+_VAE_BUILTIN_SENTINEL = "__checkpoint_builtin__"
+
+_MODEL_FIELD_OBJECT_INFO_PATHS: dict[tuple[str, str], tuple[str, str]] = {
+    (class_type, input_name): (class_type, input_name)
+    for paths in _MODEL_BUCKET_OBJECT_INFO_PATHS.values()
+    for class_type, input_name in paths
+}
 
 
 def _node_input_options(info: dict[str, Any], class_type: str, input_name: str) -> list[str]:
@@ -142,6 +152,98 @@ def _node_input_options(info: dict[str, Any], class_type: str, input_name: str) 
             if isinstance(options, list):
                 return [str(x) for x in options if str(x).strip()]
     return []
+
+
+def _model_basename(value: Any) -> str:
+    text = str(value or "").strip().replace("\\", "/").rstrip("/")
+    return text.rsplit("/", 1)[-1].lower()
+
+
+def resolve_model_option(model_name: str, local_options: Iterable[str]) -> str:
+    """Return the ComfyUI combo value matching a model literal.
+
+    ComfyUI reports files inside model subfolders as `subdir/file.safetensors`.
+    Many upstream workflows only store the basename. Treat a unique basename
+    match as the local option so dependency checks and run-gate rewrites agree.
+    """
+    required = str(model_name or "").strip()
+    if not required:
+        return ""
+    options = [str(option or "").strip() for option in local_options if str(option or "").strip()]
+    for option in options:
+        if option == required:
+            return option
+    required_path = required.replace("\\", "/")
+    for option in options:
+        if option.replace("\\", "/") == required_path:
+            return option
+    required_base = _model_basename(required)
+    matches = [option for option in options if _model_basename(option) == required_base]
+    unique_matches = sorted(set(matches))
+    return unique_matches[0] if len(unique_matches) == 1 else ""
+
+
+def model_option_available(model_name: str, local_options: Iterable[str]) -> bool:
+    return bool(resolve_model_option(model_name, local_options))
+
+
+def _embedding_match_keys(value: Any) -> set[str]:
+    text = str(value or "").strip().replace("\\", "/").rstrip("/")
+    if not text:
+        return set()
+    base = text.rsplit("/", 1)[-1]
+    path_no_ext = text
+    base_no_ext = base
+    for ext in (".safetensors", ".pt", ".pth", ".bin"):
+        if path_no_ext.lower().endswith(ext):
+            path_no_ext = path_no_ext[: -len(ext)]
+        if base_no_ext.lower().endswith(ext):
+            base_no_ext = base_no_ext[: -len(ext)]
+    return {item.lower() for item in {text, base, path_no_ext, base_no_ext} if item}
+
+
+def embedding_option_available(embedding_name: str, local_options: Iterable[str]) -> bool:
+    required_keys = _embedding_match_keys(embedding_name)
+    if not required_keys:
+        return False
+    for option in local_options:
+        if required_keys & _embedding_match_keys(option):
+            return True
+    return False
+
+
+def rewrite_workflow_model_inputs_to_local_options(
+    workflow: dict[str, Any],
+    *,
+    client: _ObjectInfoClient | None,
+) -> dict[str, Any]:
+    """Patch model literals to exact local ComfyUI combo values when possible."""
+    if client is None or not isinstance(workflow, dict):
+        return workflow
+    try:
+        info = _get_object_info_cached(client)
+    except Exception:
+        return workflow
+    patched = None
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "")
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        for input_name, raw_value in inputs.items():
+            if not isinstance(raw_value, str) or not raw_value.strip():
+                continue
+            option_ref = _MODEL_FIELD_OBJECT_INFO_PATHS.get((class_type, str(input_name)))
+            if not option_ref:
+                continue
+            options = _node_input_options(info, option_ref[0], option_ref[1])
+            resolved = resolve_model_option(raw_value, options)
+            if not resolved or resolved == raw_value:
+                continue
+            if patched is None:
+                patched = copy.deepcopy(workflow)
+            patched[str(node_id)]["inputs"][str(input_name)] = resolved
+    return patched if patched is not None else workflow
 
 
 class _ObjectInfoClient(Protocol):
@@ -196,13 +298,14 @@ def check_workflow_capability(
     # For each required model bucket the analyzer recorded, ask the local
     # ComfyUI which files it actually has and compute the diff.
     for bucket, names in (analysis.required_models or {}).items():
+        if bucket == "vae":
+            names = [n for n in names if str(n or "").strip() != _VAE_BUILTIN_SENTINEL]
         if bucket == "embedding":
             try:
                 local_options = client.get_embeddings() if hasattr(client, "get_embeddings") else []
             except Exception:
                 local_options = []
-            local_set = set(str(item) for item in local_options)
-            missing = sorted({n for n in names if n and n not in local_set})
+            missing = sorted({n for n in names if n and not embedding_option_available(n, local_options)})
             if missing:
                 cap.missing_models[bucket] = missing
                 cap.blockers.append(f"本地 ComfyUI 缺少 embedding：{missing}")
@@ -217,8 +320,7 @@ def check_workflow_capability(
         local_options = []
         for class_type, input_name in paths:
             local_options.extend(_node_input_options(info, class_type, input_name))
-        local_set = set(local_options)
-        missing = sorted({n for n in names if n and n not in local_set})
+        missing = sorted({n for n in names if n and not model_option_available(n, local_options)})
         if missing:
             cap.missing_models[bucket] = missing
             cap.blockers.append(
@@ -257,6 +359,10 @@ __all__ = [
     "CapabilityCheck",
     "CapabilityOverall",
     "check_workflow_capability",
+    "embedding_option_available",
     "iter_required_models",
+    "model_option_available",
     "reset_object_info_cache",
+    "resolve_model_option",
+    "rewrite_workflow_model_inputs_to_local_options",
 ]

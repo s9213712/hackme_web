@@ -293,6 +293,7 @@ class DiffusersClient:
             "schedulers": ["default"],
             "controlnet_models": [],
             "upscale_models": [],
+            "latent_upscale_models": [],
             "controlnet_types": {},
             "generation_modes": generation_modes,
             "model_families": model_families,

@@ -91,6 +91,136 @@ def test_wait_for_images_treats_transient_history_timeout_as_recoverable(monkeyp
     assert any(event.get("phase") == "completed" for event in progress_events)
 
 
+def test_wait_for_outputs_keeps_all_completed_workflow_images():
+    class CompletedCompareClient:
+        timeout = 1
+
+        def _json_request(self, path, *, timeout=None):
+            assert path == "/history/prompt-compare"
+            return {
+                "prompt-compare": {
+                    "status": {"completed": True, "status_str": "success"},
+                    "outputs": {
+                        "50": {"images": [{"filename": "checkpoint_a.png", "subfolder": "", "type": "output"}]},
+                        "51": {"images": [{"filename": "checkpoint_b.png", "subfolder": "", "type": "output"}]},
+                    },
+                }
+            }
+
+    outputs = comfy_execution.wait_for_outputs(
+        CompletedCompareClient(),
+        "prompt-compare",
+        timeout_seconds=10,
+        poll_interval=0.5,
+        expected_count=1,
+        error_cls=RuntimeError,
+    )
+
+    assert [item["filename"] for item in outputs["images"]] == ["checkpoint_a.png", "checkpoint_b.png"]
+
+
+def test_wait_for_outputs_can_wait_for_completed_prompt_before_returning_first_preview(monkeypatch):
+    clock = {"now": 0.0}
+
+    class EarlyMaskClient:
+        timeout = 1
+
+        def __init__(self):
+            self.calls = 0
+
+        def _json_request(self, path, *, timeout=None):
+            assert path == "/history/prompt-sam3"
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "prompt-sam3": {
+                        "status": {"completed": False, "status_str": "running"},
+                        "outputs": {
+                            "95": {"images": [{"filename": "mask_preview.png", "subfolder": "", "type": "temp"}]},
+                        },
+                    }
+                }
+            return {
+                "prompt-sam3": {
+                    "status": {"completed": True, "status_str": "success"},
+                    "outputs": {
+                        "95": {"images": [{"filename": "mask_preview.png", "subfolder": "", "type": "temp"}]},
+                        "106": {"images": [{"filename": "segmented_image.png", "subfolder": "", "type": "temp"}]},
+                    },
+                }
+            }
+
+    def fake_time():
+        return clock["now"]
+
+    def fake_sleep(seconds):
+        clock["now"] += max(float(seconds), 0.15)
+
+    monkeypatch.setattr(comfy_execution.time, "time", fake_time)
+    monkeypatch.setattr(comfy_execution.time, "sleep", fake_sleep)
+
+    client = EarlyMaskClient()
+    outputs = comfy_execution.wait_for_outputs(
+        client,
+        "prompt-sam3",
+        timeout_seconds=10,
+        poll_interval=0.5,
+        expected_count=1,
+        wait_until_completed=True,
+        workflow={
+            "95": {"class_type": "MaskPreview", "inputs": {}},
+            "106": {"class_type": "PreviewImage", "inputs": {}},
+        },
+        error_cls=RuntimeError,
+    )
+
+    assert client.calls == 2
+    assert [item["filename"] for item in outputs["images"]] == ["segmented_image.png", "mask_preview.png"]
+
+
+def test_ws_node_progress_is_scaled_to_total_workflow_progress():
+    snapshot = {
+        "prompt_id": "prompt-1",
+        "phase": "queued",
+        "percent": 0,
+        "current": 0,
+        "max": 0,
+        "completed": False,
+    }
+
+    comfy_execution.apply_ws_message_to_progress(
+        snapshot,
+        {"type": "executing", "data": {"prompt_id": "prompt-1", "node": "10"}},
+        "prompt-1",
+        total_node_count=4,
+    )
+    comfy_execution.apply_ws_message_to_progress(
+        snapshot,
+        {"type": "progress", "data": {"prompt_id": "prompt-1", "node": "10", "value": 100, "max": 100}},
+        "prompt-1",
+        total_node_count=4,
+    )
+    first_node_done = snapshot["percent"]
+
+    comfy_execution.apply_ws_message_to_progress(
+        snapshot,
+        {"type": "executing", "data": {"prompt_id": "prompt-1", "node": "11"}},
+        "prompt-1",
+        total_node_count=4,
+    )
+    comfy_execution.apply_ws_message_to_progress(
+        snapshot,
+        {"type": "progress", "data": {"prompt_id": "prompt-1", "node": "11", "value": 5, "max": 100}},
+        "prompt-1",
+        total_node_count=4,
+    )
+
+    assert first_node_done == 25
+    assert snapshot["node_percent"] == 5
+    assert snapshot["percent"] >= first_node_done
+    assert snapshot["percent"] < 30
+
+
 def test_generate_from_workflow_retries_transient_output_fetch(monkeypatch):
     progress_events = []
 

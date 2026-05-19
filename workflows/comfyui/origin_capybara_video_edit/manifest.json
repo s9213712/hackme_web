@@ -61,7 +61,7 @@
       "name": "hunyuanvideo15_vae_fp16.safetensors"
     },
     {
-      "kind": "clip",
+      "kind": "clip_vision",
       "name": "sigclip_vision_patch14_384.safetensors"
     }
   ],
@@ -134,6 +134,32 @@
         "collapsed_default": true,
         "fields": [
           {
+            "category": "VIDEO",
+            "class_type": "LoadVideo",
+            "constraints": {
+              "accept_mime": [
+                "video/mp4",
+                "video/webm",
+                "video/quicktime",
+                "video/x-matroska"
+              ]
+            },
+            "current_value": "horse_running.mp4",
+            "id": "node:127:file",
+            "input_name": "file",
+            "input_type": "video_file_picker",
+            "label": "載入影片",
+            "node_id": "127",
+            "required": true
+          }
+        ],
+        "id": "video",
+        "label": "影片輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
             "category": "MODEL",
             "class_type": "UNETLoader",
             "current_value": "capybara_v0.1.safetensors",
@@ -188,6 +214,20 @@
             "node_id": "135",
             "read_only": true,
             "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CLIPVisionLoader",
+            "current_value": "sigclip_vision_patch14_384.safetensors",
+            "id": "node:141:clip_name",
+            "input_name": "clip_name",
+            "input_type": "select",
+            "label": "CLIP Vision 模型",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "141",
+            "read_only": true,
+            "required": false
           }
         ],
         "id": "model",
@@ -216,6 +256,49 @@
             "input_type": "select",
             "label": "取樣器",
             "node_id": "137",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "options": [
+                "scale dimensions",
+                "scale total pixels",
+                "scale longer dimension",
+                "scale shorter dimension",
+                "scale by multiplier",
+                "scale width",
+                "scale height",
+                "scale to multiple"
+              ]
+            },
+            "current_value": "scale dimensions",
+            "id": "node:148:resize_type",
+            "input_name": "resize_type",
+            "input_type": "select",
+            "label": "縮放模式",
+            "node_id": "148",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "options": [
+                "nearest-exact",
+                "bilinear",
+                "area",
+                "bicubic",
+                "lanczos"
+              ]
+            },
+            "current_value": "lanczos",
+            "id": "node:148:scale_method",
+            "input_name": "scale_method",
+            "input_type": "select",
+            "label": "縮放演算法",
+            "node_id": "148",
             "required": true
           }
         ],
@@ -352,6 +435,38 @@
             "input_type": "number",
             "label": "影片批次大小",
             "node_id": "142",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "max": 8192,
+              "min": 16,
+              "step": 8
+            },
+            "current_value": 960,
+            "id": "node:148:resize_type.width",
+            "input_name": "resize_type.width",
+            "input_type": "number",
+            "label": "縮放寬度",
+            "node_id": "148",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "max": 8192,
+              "min": 16,
+              "step": 8
+            },
+            "current_value": 960,
+            "id": "node:148:resize_type.height",
+            "input_name": "resize_type.height",
+            "input_type": "number",
+            "label": "縮放高度",
+            "node_id": "148",
             "required": true
           }
         ],

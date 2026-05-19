@@ -116,28 +116,6 @@
             "label": "提示詞（Node 60）",
             "node_id": "60",
             "required": true
-          },
-          {
-            "category": "TEXT",
-            "class_type": "EmbeddingShortcuts",
-            "constraints": {
-              "target_field_ids": [
-                "node:56:string_a",
-                "node:56:string_b",
-                "node:60:string_a",
-                "node:60:string_b"
-              ],
-              "token_prefix": "<embeddings:"
-            },
-            "current_value": "",
-            "id": "text:embeddings",
-            "input_name": "embeddings",
-            "input_type": "embedding_shortcuts",
-            "label": "Embedding 快速插入",
-            "node_id": "",
-            "parent_category": "text",
-            "required": false,
-            "synthetic": true
           }
         ],
         "id": "text",

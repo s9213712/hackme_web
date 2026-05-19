@@ -1,4 +1,10 @@
 let comfyuiTemplatePromptShareMode = "independent";
+const COMFYUI_TEMPLATE_MEDIA_BINDING_KINDS = new Set(["image", "video"]);
+const COMFYUI_TEMPLATE_VIDEO_ACCEPT = "video/mp4,video/webm,video/quicktime,video/x-matroska,video/x-msvideo,.mp4,.webm,.mov,.mkv,.avi";
+const COMFYUI_BUILTIN_VAE_LABEL = "使用各自大模型內建 VAE";
+const COMFYUI_COMPARE_TWO_CHECKPOINTS_ID = "origin_compare_2checkpoints";
+const COMFYUI_COMPARE_SHARED_KSAMPLER_INPUTS = new Set(["seed", "steps", "cfg", "sampler_name", "scheduler", "denoise"]);
+const COMFYUI_OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX = "official-template-media:";
 
 function comfyuiWorkflowPresetById(presetId) {
   return comfyuiWorkflowPresets.find((item) => Number(item?.id) === Number(presetId)) || null;
@@ -448,6 +454,7 @@ function comfyuiTemplateSelectGroups(payload = {}) {
 let comfyuiTemplateRenderTimer = null;
 let comfyuiTemplateLoraOverrides = {};
 let comfyuiTemplateFieldOverrides = {};
+let comfyuiTemplateEditableModelFields = {};
 
 function queueRenderSelectedComfyuiTemplate() {
   if (comfyuiTemplateRenderTimer) clearTimeout(comfyuiTemplateRenderTimer);
@@ -487,6 +494,7 @@ function renderComfyuiTemplateSelector(payload = {}, { silentReload = true } = {
         comfyuiSelectedTemplateDetail = null;
         comfyuiTemplateLoraOverrides = {};
         comfyuiTemplateFieldOverrides = {};
+        comfyuiTemplateEditableModelFields = {};
         comfyuiTemplatePromptShareMode = "independent";
         renderSelectedComfyuiTemplate();
         return;
@@ -523,6 +531,7 @@ async function loadComfyuiSelectedTemplateDetail(presetId, { silent = false, app
   comfyuiSelectedTemplatePresetId = Number(presetId);
   comfyuiTemplateLoraOverrides = {};
   comfyuiTemplateFieldOverrides = {};
+  comfyuiTemplateEditableModelFields = {};
   comfyuiSelectedTemplateDetail = json.preset || null;
   comfyuiTemplatePromptShareMode = comfyuiTemplateNeedsPromptSharingChoice(comfyuiSelectedTemplateDetail) ? "ask" : "independent";
   if (applyDefaults) {
@@ -634,7 +643,7 @@ async function runSelectedComfyuiWorkflowTemplateFromGenerate(mode) {
 }
 
 function comfyuiTemplateInputKinds(detail) {
-  const counts = { text: 0, image: 0, parameter: 0 };
+  const counts = { text: 0, image: 0, video: 0, parameter: 0 };
   const panels = Array.isArray(detail?.ui_schema?.panels) ? detail.ui_schema.panels : [];
   panels.forEach((panel) => {
     (panel?.fields || []).forEach((field) => {
@@ -642,12 +651,14 @@ function comfyuiTemplateInputKinds(detail) {
       const category = String(field?.category || "").trim().toUpperCase();
       if (category === "TEXT") counts.text += 1;
       else if (category === "IMAGE" || field?.input_type === "file_picker") counts.image += 1;
+      else if (category === "VIDEO" || field?.input_type === "video_file_picker") counts.video += 1;
       else counts.parameter += 1;
     });
   });
   return [
     counts.text ? `文字 ${counts.text}` : "",
     counts.image ? `圖片 ${counts.image}` : "",
+    counts.video ? `影片 ${counts.video}` : "",
     counts.parameter ? `參數 ${counts.parameter}` : "",
   ].filter(Boolean);
 }
@@ -657,11 +668,13 @@ function comfyuiWorkflowModelKindLabel(kind = "") {
   if (["ckpt", "checkpoint", "model"].includes(normalized)) return "Checkpoint";
   if (["diffusion_model", "unet"].includes(normalized)) return "Diffusion / UNet";
   if (["clip", "text_encoder"].includes(normalized)) return "Text Encoder / CLIP";
+  if (["clip_vision", "clipvision"].includes(normalized)) return "CLIP Vision";
   if (normalized === "vae") return "VAE";
   if (normalized === "lora") return "LoRA";
   if (normalized === "controlnet") return "ControlNet";
   if (normalized === "embedding") return "Embedding";
   if (["upscale", "upscale_model", "upscale_models"].includes(normalized)) return "Upscale";
+  if (["latent_upscale", "latent_upscale_model", "latent_upscale_models"].includes(normalized)) return "Latent Upscale";
   return kind ? String(kind) : "模型";
 }
 
@@ -669,18 +682,24 @@ function comfyuiWorkflowDefaultModelEntries(item = {}) {
   const defaults = item?.default_params || {};
   const entries = [];
   const seen = new Set();
-  const add = (kind, value) => {
+  const addEntry = (kind, value) => {
     const text = String(value || "").trim();
-    if (!text || text === COMFYUI_VAE_BUILTIN) return;
+    if (!text) return;
     const key = `${String(kind || "").toLowerCase()}:${text.toLowerCase()}`;
     if (seen.has(key)) return;
     seen.add(key);
     entries.push({ kind: comfyuiWorkflowModelKindLabel(kind), name: text });
   };
+  const add = (kind, value) => {
+    const text = String(value || "").trim();
+    if (!text || text === COMFYUI_VAE_BUILTIN) return;
+    addEntry(kind, text);
+  };
   add("checkpoint", defaults.model);
   add("diffusion_model", defaults.diffusion_model);
   add("clip", defaults.clip);
-  add("vae", defaults.vae);
+  if (comfyuiWorkflowUsesBuiltinVae(defaults)) addEntry("vae", COMFYUI_BUILTIN_VAE_LABEL);
+  else add("vae", defaults.vae);
   add("upscale", defaults.upscale_model);
   if (defaults.controlnet?.model_name) add("controlnet", defaults.controlnet.model_name);
   (Array.isArray(defaults.loras) ? defaults.loras : []).forEach((entry) => add("lora", entry?.name || entry));
@@ -688,6 +707,13 @@ function comfyuiWorkflowDefaultModelEntries(item = {}) {
   (Array.isArray(item?.required_loras) ? item.required_loras : []).forEach((entry) => add("lora", entry?.name || entry));
   (Array.isArray(item?.required_controlnets) ? item.required_controlnets : []).forEach((entry) => add("controlnet", entry?.name || entry));
   return entries;
+}
+
+function comfyuiWorkflowUsesBuiltinVae(defaults = {}) {
+  if (!defaults || typeof defaults !== "object") return false;
+  const rawVae = String(defaults.vae ?? "").trim();
+  if (rawVae && rawVae !== COMFYUI_VAE_BUILTIN) return false;
+  return !!String(defaults.model || defaults.checkpoint || defaults.diffusion_model || "").trim();
 }
 
 function comfyuiWorkflowDefaultModelSummaryText(item = {}, limit = 4) {
@@ -701,6 +727,81 @@ function comfyuiWorkflowDefaultModelSummaryText(item = {}, limit = 4) {
 
 function comfyuiWorkflowDefaultModelNoticeHtml(item = {}, limit = 4) {
   return `<div class="comfyui-workflow-default-model-notice">${sanitize(comfyuiWorkflowDefaultModelSummaryText(item, limit))}</div>`;
+}
+
+function comfyuiTemplateBundleId(detail = comfyuiSelectedTemplateDetail) {
+  return String(detail?.system_bundle_id || detail?.manifest_json?.id || "").trim();
+}
+
+function comfyuiTemplateIsCompareTwoCheckpoints(detail = comfyuiSelectedTemplateDetail) {
+  return comfyuiTemplateBundleId(detail) === COMFYUI_COMPARE_TWO_CHECKPOINTS_ID
+    || String(detail?.title || detail?.name || "").trim() === "Compare Two Checkpoints";
+}
+
+function comfyuiTemplateCompareSharedParamKey(detail, field = {}) {
+  if (!comfyuiTemplateIsCompareTwoCheckpoints(detail)) return "";
+  if (String(field?.class_type || "") !== "KSampler") return "";
+  const inputName = String(field?.input_name || "").trim();
+  return COMFYUI_COMPARE_SHARED_KSAMPLER_INPUTS.has(inputName) ? inputName : "";
+}
+
+function comfyuiTemplateAllFields(detail = comfyuiSelectedTemplateDetail) {
+  const fields = [];
+  (Array.isArray(detail?.ui_schema?.panels) ? detail.ui_schema.panels : []).forEach((panel) => {
+    (panel?.fields || []).forEach((field) => {
+      if (field && !field.synthetic && field.input_type !== "embedding_shortcuts") fields.push(field);
+    });
+  });
+  return fields;
+}
+
+function comfyuiTemplateCompareSharedSourceField(detail, field = {}) {
+  const key = comfyuiTemplateCompareSharedParamKey(detail, field);
+  if (!key) return null;
+  return comfyuiTemplateAllFields(detail).find((candidate) => (
+    comfyuiTemplateCompareSharedParamKey(detail, candidate) === key
+  )) || null;
+}
+
+function comfyuiTemplateIsHiddenCompareSharedField(detail, field = {}) {
+  const source = comfyuiTemplateCompareSharedSourceField(detail, field);
+  return !!source && String(source.id || "") !== String(field?.id || "");
+}
+
+function comfyuiTemplateCompareSharedRuntimeValue(detail, field = {}) {
+  const source = comfyuiTemplateCompareSharedSourceField(detail, field) || field;
+  const binding = comfyuiTemplateFieldBinding(source, detail, { textFieldIndex: 0, loadImageIndex: 0 });
+  return comfyuiTemplateRuntimeValue(binding, source);
+}
+
+function comfyuiTemplateCompareSharedLabel(inputName = "") {
+  return {
+    seed: "共同種子",
+    steps: "共同步數",
+    cfg: "共同 CFG",
+    sampler_name: "共同取樣器",
+    scheduler: "共同排程器",
+    denoise: "共同 Denoise",
+  }[String(inputName || "")] || "";
+}
+
+function comfyuiTemplateOfficialMediaFilename(field = {}, detail = comfyuiSelectedTemplateDetail) {
+  if (!detail?.is_official && !detail?.system_bundle_id) return "";
+  if (!COMFYUI_TEMPLATE_MEDIA_BINDING_KINDS.has(comfyuiTemplateFieldBinding(field, detail, { textFieldIndex: 0, loadImageIndex: 0 }).kind)) return "";
+  const raw = String(field?.current_value || "").trim();
+  if (!raw || raw.includes("://")) return "";
+  const filename = raw.split(/[\\/]/).pop().trim();
+  return /\.(png|jpe?g|webp|mp4|mov|webm|mkv|avi)$/i.test(filename) ? filename : "";
+}
+
+function comfyuiTemplateOfficialMediaAssignment(field = {}, detail = comfyuiSelectedTemplateDetail) {
+  const filename = comfyuiTemplateOfficialMediaFilename(field, detail);
+  return filename ? `${COMFYUI_OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX}${filename}` : "";
+}
+
+function comfyuiTemplateOfficialMediaPreviewUrl(filename = "") {
+  const cleanName = String(filename || "").trim().split(/[\\/]/).pop();
+  return cleanName ? `${API}/comfyui/workflows/official-media/${encodeURIComponent(cleanName)}` : "";
 }
 
 function comfyuiTemplateSummaryMarkup(detail) {
@@ -786,13 +887,18 @@ function comfyuiTemplateLoraSelectOptions(field = {}) {
   const seen = new Set();
   const options = [];
   const addOption = (value, label = value, disabled = false) => {
-    const cleanValue = String(value || "");
+    const cleanValue = typeof normalizeComfyuiLoraName === "function"
+      ? normalizeComfyuiLoraName(value)
+      : String(value || "").trim();
     if (seen.has(cleanValue)) return;
     seen.add(cleanValue);
-    options.push({ value: cleanValue, label: String(label || cleanValue), disabled: !!disabled });
+    const cleanLabel = String(label || cleanValue).trim();
+    options.push({ value: cleanValue, label: cleanLabel || cleanValue, disabled: !!disabled });
   };
   addOption("", "不使用 LoRA（可略過）");
-  const current = String(field?.current_value || "").trim();
+  const current = typeof normalizeComfyuiLoraName === "function"
+    ? normalizeComfyuiLoraName(field?.current_value)
+    : String(field?.current_value || "").trim();
   if (current) addOption(current, current, false);
   const source = $("comfyui-lora-select");
   if (source && source.options && source.options.length) {
@@ -821,7 +927,9 @@ function comfyuiSelectedLoraForTemplateNode(nodeId) {
 
 function upsertComfyuiTemplateLora(nodeId, name, { notify = true } = {}) {
   const cleanNodeId = String(nodeId || "");
-  const cleanName = String(name || "").trim();
+  const cleanName = typeof normalizeComfyuiLoraName === "function"
+    ? normalizeComfyuiLoraName(name)
+    : String(name || "").trim();
   if (cleanNodeId) comfyuiTemplateLoraOverrides[cleanNodeId] = cleanName;
   const existingIndex = comfyuiSelectedLoraIndexForTemplateNode(cleanNodeId);
   if (!cleanName) {
@@ -830,7 +938,12 @@ function upsertComfyuiTemplateLora(nodeId, name, { notify = true } = {}) {
     writeComfyuiDraft();
     return true;
   }
-  if (comfyuiSelectedLoras.some((item, index) => index !== existingIndex && item?.name === cleanName)) {
+  if (comfyuiSelectedLoras.some((item, index) => {
+    const itemName = typeof normalizeComfyuiLoraName === "function"
+      ? normalizeComfyuiLoraName(item?.name)
+      : String(item?.name || "").trim();
+    return index !== existingIndex && itemName === cleanName;
+  })) {
     setComfyuiMessage("這個 LoRA 已經加入。", false);
     return false;
   }
@@ -921,7 +1034,13 @@ function comfyuiTemplatePromptSharingMode(detail = comfyuiSelectedTemplateDetail
 function comfyuiTemplatePromptFieldDirectValue(field = {}) {
   if (comfyuiTemplateHasFieldOverride(field)) return comfyuiTemplateFieldOverrideValue(field);
   const el = $(`tmpl-${field.id || ""}`);
-  return el ? el.value : field?.current_value;
+  return el ? comfyuiTemplateElementValue(el) : field?.current_value;
+}
+
+function comfyuiTemplateElementValue(el) {
+  if (!el) return "";
+  if (el.type === "checkbox") return !!el.checked;
+  return el.value;
 }
 
 function comfyuiTemplateSharedPromptValue(role, detail = comfyuiSelectedTemplateDetail) {
@@ -941,21 +1060,41 @@ function syncComfyuiTemplateSharedPromptFields(role, value) {
   });
 }
 
+function comfyuiTemplateCanEditLockedModelField(field = {}) {
+  const category = String(field?.category || "").toUpperCase();
+  if (category !== "MODEL" || !field?.node_id || !field?.input_name) return false;
+  if (field?.locked || field?.read_only || field?.lock_reason === "template_default_model") return true;
+  return false;
+}
+
+function comfyuiTemplateLockedModelFieldIsEditing(field = {}) {
+  const key = comfyuiTemplateOverrideKey(field);
+  return !!key && comfyuiTemplateEditableModelFields[key] === true;
+}
+
 function comfyuiTemplateFieldBinding(field, detail, ctx) {
   const mode = String(detail?.default_params?.generation_mode || "txt2img").trim().toLowerCase();
+  const sharedCompareParam = comfyuiTemplateCompareSharedParamKey(detail, field);
+  const withCompareSharing = (binding) => (
+    sharedCompareParam ? { ...binding, sharedCompareParam } : binding
+  );
   if (comfyuiTemplateIsPromptTextField(field)) {
     const role = comfyuiTemplatePromptRole(field, ctx.textFieldIndex);
     const binding = { kind: "field", targetId: role === "negative" ? "comfyui-negative-prompt" : "comfyui-prompt", promptRole: role };
     ctx.textFieldIndex += 1;
     return binding;
   }
+  if (comfyuiTemplateCanEditLockedModelField(field) && comfyuiTemplateLockedModelFieldIsEditing(field)) {
+    return { kind: "direct", fieldId: field.id, editableLockedModel: true };
+  }
   if (
     (field?.class_type === "VAELoader" && field?.input_name === "vae_name") ||
     (field?.class_type === "CLIPLoader" && field?.input_name === "clip_name") ||
     (field?.class_type === "DualCLIPLoader" && ["clip_name1", "clip_name2"].includes(field?.input_name)) ||
     (field?.class_type === "TripleCLIPLoader" && ["clip_name1", "clip_name2", "clip_name3"].includes(field?.input_name)) ||
+    (field?.class_type === "CLIPVisionLoader" && field?.input_name === "clip_name") ||
     (field?.class_type === "UNETLoader" && field?.input_name === "unet_name")
-  ) return { kind: "readonly" };
+  ) return { kind: "readonly", editableLockedModel: comfyuiTemplateCanEditLockedModelField(field) };
   if (field?.class_type === "CheckpointLoaderSimple" && field?.input_name === "ckpt_name") return { kind: "field", targetId: "comfyui-model-select" };
   if ((field?.class_type === "LoraLoader" || field?.class_type === "LoraLoaderModelOnly") && field?.input_name === "lora_name") return { kind: "lora", nodeId: field.node_id };
   if ((field?.class_type === "LoraLoader" || field?.class_type === "LoraLoaderModelOnly") && (field?.input_name === "strength_model" || field?.input_name === "strength_clip")) {
@@ -963,12 +1102,12 @@ function comfyuiTemplateFieldBinding(field, detail, ctx) {
   }
   if (field?.class_type === "UpscaleModelLoader" && field?.input_name === "model_name") return { kind: "field", targetId: "comfyui-upscale-model" };
   if (field?.class_type === "ControlNetLoader" && field?.input_name === "control_net_name") return { kind: "field", targetId: "comfyui-controlnet-model", enableControlnet: true };
-  if (field?.class_type === "KSampler" && field?.input_name === "seed") return { kind: "field", targetId: "comfyui-seed" };
-  if (field?.class_type === "KSampler" && field?.input_name === "steps") return { kind: "field", targetId: "comfyui-steps" };
-  if (field?.class_type === "KSampler" && field?.input_name === "cfg") return { kind: "field", targetId: "comfyui-cfg" };
-  if (field?.class_type === "KSampler" && field?.input_name === "sampler_name") return { kind: "field", targetId: "comfyui-sampler" };
-  if (field?.class_type === "KSampler" && field?.input_name === "scheduler") return { kind: "field", targetId: "comfyui-scheduler" };
-  if (field?.class_type === "KSampler" && field?.input_name === "denoise") return { kind: "field", targetId: "comfyui-denoise-strength" };
+  if (field?.class_type === "KSampler" && field?.input_name === "seed") return withCompareSharing({ kind: "field", targetId: "comfyui-seed" });
+  if (field?.class_type === "KSampler" && field?.input_name === "steps") return withCompareSharing({ kind: "field", targetId: "comfyui-steps" });
+  if (field?.class_type === "KSampler" && field?.input_name === "cfg") return withCompareSharing({ kind: "field", targetId: "comfyui-cfg" });
+  if (field?.class_type === "KSampler" && field?.input_name === "sampler_name") return withCompareSharing({ kind: "field", targetId: "comfyui-sampler" });
+  if (field?.class_type === "KSampler" && field?.input_name === "scheduler") return withCompareSharing({ kind: "field", targetId: "comfyui-scheduler" });
+  if (field?.class_type === "KSampler" && field?.input_name === "denoise") return withCompareSharing({ kind: "field", targetId: "comfyui-denoise-strength" });
   if (field?.class_type === "EmptyLatentImage" && field?.input_name === "width") return { kind: "field", targetId: "comfyui-width" };
   if (field?.class_type === "EmptyLatentImage" && field?.input_name === "height") return { kind: "field", targetId: "comfyui-height" };
   if (field?.class_type === "EmptyLatentImage" && field?.input_name === "batch_size") return { kind: "field", targetId: "comfyui-batch-size" };
@@ -982,6 +1121,7 @@ function comfyuiTemplateFieldBinding(field, detail, ctx) {
   if (field?.class_type === "ImagePadForOutpaint" && field?.input_name === "feathering") return { kind: "field", targetId: "comfyui-outpaint-feathering" };
   if (field?.class_type === "LoadImageMask" && field?.input_name === "image") return { kind: "image", assetKey: "mask", nodeId: field.node_id };
   if (field?.class_type === "LoadImageMask" && field?.input_name === "channel") return { kind: "readonly" };
+  if (field?.class_type === "LoadVideo" && field?.input_name === "file") return { kind: "video", assetKey: "video", nodeId: field.node_id };
   if (field?.class_type === "LoadImage" && field?.input_name === "image") {
     const hasControlnet = !!detail?.default_params?.controlnet?.type;
     const usesSource = ["img2img", "inpaint", "outpaint", "upscale"].includes(mode);
@@ -1012,6 +1152,9 @@ function comfyuiTemplateFieldLabel(field = {}, binding = null) {
   const rawLabel = String(field?.label || "").trim();
   const classType = String(field?.class_type || "");
   const inputName = String(field?.input_name || "");
+  if (binding?.sharedCompareParam) {
+    return comfyuiTemplateCompareSharedLabel(binding.sharedCompareParam) || rawLabel || inputName || "共同參數";
+  }
   if ((classType === "CLIPTextEncode" || classType === "CLIPTextEncodeFlux") && inputName === "text") {
     if (rawLabel.includes("正向提示詞") || rawLabel.includes("負面提示詞")) return rawLabel;
     const role = binding?.promptRole || comfyuiTemplatePromptRole(field, binding?.targetId === "comfyui-negative-prompt" ? 1 : 0);
@@ -1028,11 +1171,23 @@ function comfyuiTemplateFieldLabel(field = {}, binding = null) {
   if (classType === "TripleCLIPLoader" && inputName === "clip_name1") return "CLIP-L 文字編碼器";
   if (classType === "TripleCLIPLoader" && inputName === "clip_name2") return "CLIP-G 文字編碼器";
   if (classType === "TripleCLIPLoader" && inputName === "clip_name3") return "T5 / 第三文字編碼器";
+  if (classType === "CLIPVisionLoader" && inputName === "clip_name") return "CLIP Vision 模型";
   if (classType === "LoraLoader" && inputName === "lora_name") return comfyuiTemplateLabelWithNoise(field, "LoRA 模型");
   if (classType === "LoraLoaderModelOnly" && inputName === "lora_name") return comfyuiTemplateLabelWithNoise(field, "LoRA 模型（Model-only）");
   if (classType === "UpscaleModelLoader" && inputName === "model_name") return "放大 / Upscale 模型";
   if (classType === "ControlNetLoader" && inputName === "control_net_name") return "ControlNet 模型";
+  if (classType === "LoadVideo" && inputName === "file") return "載入影片";
   return rawLabel || inputName || "欄位";
+}
+
+function comfyuiTemplateDisplayValue(field = {}, value = "") {
+  const classType = String(field?.class_type || "");
+  const inputName = String(field?.input_name || "");
+  const text = String(value ?? "").trim();
+  if (classType === "VAELoader" && inputName === "vae_name" && (!text || text === COMFYUI_VAE_BUILTIN)) {
+    return COMFYUI_BUILTIN_VAE_LABEL;
+  }
+  return String(value ?? "");
 }
 
 function comfyuiTemplateOverrideKey(field = {}) {
@@ -1061,14 +1216,16 @@ function comfyuiTemplateFieldValue(binding, field = {}) {
   if (comfyuiTemplateHasFieldOverride(field)) return comfyuiTemplateFieldOverrideValue(field);
   if (binding.kind === "field") {
     const el = $(`tmpl-${field.id || ""}`);
-    return el ? String(el.value || "") : String(field?.current_value ?? "");
+    const value = el ? comfyuiTemplateElementValue(el) : field?.current_value;
+    return field?.input_type === "checkbox" ? !!value : String(value ?? "");
   }
-  if (binding.kind === "image") {
+  if (COMFYUI_TEMPLATE_MEDIA_BINDING_KINDS.has(binding.kind)) {
     return comfyuiAssetState(binding.assetKey);
   }
   if (binding.kind === "direct") {
     const el = $(`tmpl-${field.id || ""}`);
-    return el ? String(el.value || "") : String(field?.current_value ?? "");
+    const value = el ? comfyuiTemplateElementValue(el) : field?.current_value;
+    return field?.input_type === "checkbox" ? !!value : String(value ?? "");
   }
   return field?.current_value;
 }
@@ -1080,7 +1237,7 @@ function comfyuiTemplateRuntimeValue(binding, field = {}) {
   if (comfyuiTemplateHasFieldOverride(field)) return comfyuiTemplateFieldOverrideValue(field);
   if (binding.kind === "field") {
     const el = $(`tmpl-${field.id || ""}`);
-    return el ? el.value : field?.current_value;
+    return el ? comfyuiTemplateElementValue(el) : field?.current_value;
   }
   if (binding.kind === "lora") {
     const selected = comfyuiSelectedLoraForTemplateNode(binding.nodeId);
@@ -1095,7 +1252,7 @@ function comfyuiTemplateRuntimeValue(binding, field = {}) {
   }
   if (binding.kind === "direct") {
     const el = $(`tmpl-${field.id || ""}`);
-    return el ? el.value : field?.current_value;
+    return el ? comfyuiTemplateElementValue(el) : field?.current_value;
   }
   return field?.current_value;
 }
@@ -1105,6 +1262,9 @@ function comfyuiTemplateDirectHint(field = {}) {
   const classType = String(field?.class_type || "");
   const inputName = String(field?.input_name || "");
   if (category === "MODEL") {
+    if (classType === "VAELoader" && inputName === "vae_name") return "留白代表使用各自大模型內建 VAE；若要覆蓋，請填 ComfyUI models/vae 內實際檔名。";
+    if (classType === "CLIPVisionLoader") return "填 ComfyUI models/clip_vision 內實際檔名；例如 Capybara 使用的 sigclip_vision_patch14_384.safetensors。";
+    if (classType === "LatentUpscaleModelLoader") return "填 ComfyUI models/latent_upscale_models 內實際檔名；若檔案在子資料夾，系統會嘗試用檔名自動對應。";
     if (/clip/i.test(inputName)) return "填 ComfyUI models/clip 或 text_encoders 內實際檔名；缺檔時相容性檢查會提示。";
     if (/unet/i.test(inputName)) return "填 ComfyUI models/diffusion_models 或 unet 內實際檔名；請對應 Flux、SD3.5、Wan 等模型。";
     return "填已安裝模型檔名；若本地或遠端 ComfyUI 找不到，送出前會提示缺少依賴。";
@@ -1116,6 +1276,9 @@ function comfyuiTemplateDirectHint(field = {}) {
 }
 
 function normalizeComfyuiTemplateRuntimeValue(field, value) {
+  if (field?.category === "BOOLEAN" || field?.input_type === "checkbox") {
+    return value === true || value === "true" || value === "1" || value === 1;
+  }
   if (field?.category === "NUMERIC" || field?.input_type === "number") {
     const number = Number(value);
     return Number.isFinite(number) ? number : Number(field?.current_value || 0);
@@ -1131,8 +1294,10 @@ function collectComfyuiTemplateUserInputs(detail) {
     (panel?.fields || []).forEach((field) => {
       if (!field || field.synthetic || field.input_type === "embedding_shortcuts" || !field.node_id || !field.input_name) return;
       const binding = comfyuiTemplateFieldBinding(field, detail, ctx);
-      if (binding.kind === "image" || binding.kind === "readonly") return;
-      const rawValue = comfyuiTemplateRuntimeValue(binding, field);
+      if (COMFYUI_TEMPLATE_MEDIA_BINDING_KINDS.has(binding.kind) || binding.kind === "readonly") return;
+      const rawValue = comfyuiTemplateIsHiddenCompareSharedField(detail, field)
+        ? comfyuiTemplateCompareSharedRuntimeValue(detail, field)
+        : comfyuiTemplateRuntimeValue(binding, field);
       if (!userInputs[field.node_id]) userInputs[field.node_id] = {};
       userInputs[field.node_id][field.input_name] = normalizeComfyuiTemplateRuntimeValue(field, rawValue);
     });
@@ -1158,15 +1323,21 @@ function collectComfyuiTemplateImageAssignments(detail) {
     (panel?.fields || []).forEach((field) => {
       if (!field || field.synthetic || field.input_type === "embedding_shortcuts" || !field.node_id || !field.input_name) return;
       const binding = comfyuiTemplateFieldBinding(field, detail, ctx);
-      if (binding.kind !== "image") return;
+      if (!COMFYUI_TEMPLATE_MEDIA_BINDING_KINDS.has(binding.kind)) return;
       const asset = comfyuiAssetState(binding.assetKey);
       if (asset?.cloudFileId) {
         assignments[String(field.node_id)] = String(asset.cloudFileId);
       } else {
+        const officialAssignment = comfyuiTemplateOfficialMediaAssignment(field, detail);
+        if (officialAssignment) {
+          assignments[String(field.node_id)] = officialAssignment;
+          return;
+        }
         missing.push({
           nodeId: String(field.node_id),
           label: comfyuiTemplateFieldLabel(field, binding) || field.input_name || `Node ${field.node_id}`,
           assetKey: binding.assetKey,
+          mediaKind: binding.kind,
           hasLocalFile: !!asset?.file,
           hasImageRef: !!asset?.imageRef,
         });
@@ -1184,12 +1355,15 @@ async function ensureComfyuiTemplateImageAssignments(detail) {
       .map((item) => item.assetKey)
   ));
   if (!localAssetKeys.length) return imageAssignmentState;
-  if (typeof importComfyuiUploadedImage !== "function") return imageAssignmentState;
+  const importer = typeof importComfyuiUploadedMedia === "function"
+    ? importComfyuiUploadedMedia
+    : (typeof importComfyuiUploadedImage === "function" ? importComfyuiUploadedImage : null);
+  if (!importer) return imageAssignmentState;
   const assetMeta = typeof COMFYUI_INPUT_ASSET_META === "object" ? COMFYUI_INPUT_ASSET_META : {};
   const titleByKey = (key) => assetMeta[key]?.title || key;
-  setComfyuiMessage(`正在將本機圖片匯入雲端硬碟供 workflow 安全重映射：${localAssetKeys.map(titleByKey).join("、")}`, true);
+  setComfyuiMessage(`正在將本機媒體匯入雲端硬碟供 workflow 安全重映射：${localAssetKeys.map(titleByKey).join("、")}`, true);
   for (const assetKey of localAssetKeys) {
-    await importComfyuiUploadedImage(assetKey);
+    await importer(assetKey);
   }
   renderSelectedComfyuiTemplate();
   return collectComfyuiTemplateImageAssignments(detail);
@@ -1234,6 +1408,19 @@ function insertComfyuiTemplateEmbeddingToken(name, targetFieldIds = []) {
     ? (localTargets.find((el) => comfyuiTemplateLooksNegativeTextTarget(el)) || localTargets[1] || localTargets[0])
     : (localTargets.find((el) => !comfyuiTemplateLooksNegativeTextTarget(el)) || localTargets[0]);
   const embeddingTag = `<embeddings:${cleanName}>`;
+  const existingTarget = localTargets.find((el) => (
+    typeof removeComfyuiEmbeddingTokenFromInput === "function"
+      ? removeComfyuiEmbeddingTokenFromInput(el, cleanName).length
+      : false
+  ));
+  if (existingTarget) {
+    existingTarget.focus();
+    existingTarget.dispatchEvent(new Event("input", { bubbles: true }));
+    existingTarget.dispatchEvent(new Event("change", { bubbles: true }));
+    writeComfyuiDraft();
+    if (typeof setComfyuiMessage === "function") setComfyuiMessage(`已從提示詞移除 ${cleanName}。`, true);
+    return;
+  }
   const raw = target.value || "";
   const start = Number.isInteger(target.selectionStart) ? target.selectionStart : raw.length;
   const end = Number.isInteger(target.selectionEnd) ? target.selectionEnd : raw.length;
@@ -1246,6 +1433,7 @@ function insertComfyuiTemplateEmbeddingToken(name, targetFieldIds = []) {
   target.dispatchEvent(new Event("input", { bubbles: true }));
   target.dispatchEvent(new Event("change", { bubbles: true }));
   writeComfyuiDraft();
+  if (typeof setComfyuiMessage === "function") setComfyuiMessage(`已把 ${cleanName} 插入提示詞。`, true);
 }
 
 function updateSelectedComfyuiTemplateSeedFields(seedValue) {
@@ -1335,14 +1523,14 @@ function renderComfyuiTemplateEmbeddingShortcuts(field) {
   const targetAttr = comfyuiTemplateEmbeddingTargetIds(field).join("|");
   const content = values.length
     ? values.map((value) => (
-      `<button class="comfyui-embedding-chip" type="button" data-comfyui-template-embedding="${sanitize(value)}" data-comfyui-template-embedding-targets="${sanitize(targetAttr)}" title="插入 ${sanitize(value)}">${sanitize(value)}</button>`
+      `<button class="comfyui-embedding-chip" type="button" data-comfyui-template-embedding="${sanitize(value)}" data-comfyui-template-embedding-targets="${sanitize(targetAttr)}" title="插入 / 移除 ${sanitize(value)}">${sanitize(value)}</button>`
     )).join("")
     : '<span class="drive-card-sub">目前沒有可用的 Embedding。</span>';
   return `
     <div class="comfyui-template-field-card is-wide">
       <label>${sanitize(field?.label || "Embedding 快速插入")}</label>
       <div class="comfyui-embedding-shortcuts">${content}</div>
-      <div class="drive-card-sub">點一下會把 <code>&lt;embeddings:名稱&gt;</code> 插入正向或負面提示詞。</div>
+      <div class="drive-card-sub">點一下插入，再點一次會從提示詞移除。</div>
     </div>
   `;
 }
@@ -1352,64 +1540,120 @@ function renderComfyuiTemplateField(field, detail, ctx) {
     return renderComfyuiTemplateEmbeddingShortcuts(field);
   }
   const binding = comfyuiTemplateFieldBinding(field, detail, ctx);
+  if (comfyuiTemplateIsHiddenCompareSharedField(detail, field)) return "";
   const fieldLabel = comfyuiTemplateFieldLabel(field, binding);
-  const cardClass = field?.input_type === "textarea" || binding.kind === "image" ? "comfyui-template-field-card is-wide" : "comfyui-template-field-card";
+  const isMediaField = COMFYUI_TEMPLATE_MEDIA_BINDING_KINDS.has(binding.kind);
+  const cardClass = field?.input_type === "textarea" || isMediaField ? "comfyui-template-field-card is-wide" : "comfyui-template-field-card";
   const promptRoleAttr = binding.promptRole ? ` data-comfyui-template-prompt-role="${sanitize(binding.promptRole)}"` : "";
-  if (binding.kind === "image") {
+  if (isMediaField) {
     const asset = comfyuiTemplateFieldValue(binding, field) || {};
+    const isVideo = binding.kind === "video";
+    const meta = COMFYUI_INPUT_ASSET_META[binding.assetKey] || {};
+    const officialMediaFilename = comfyuiTemplateOfficialMediaFilename(field, detail);
+    const officialMediaPreviewUrl = comfyuiTemplateOfficialMediaPreviewUrl(officialMediaFilename);
+    const accept = isVideo
+      ? (Array.isArray(field?.constraints?.accept_mime) ? field.constraints.accept_mime.join(",") : COMFYUI_TEMPLATE_VIDEO_ACCEPT)
+      : "image/png,image/jpeg,image/webp";
     const previewHtml = asset.previewUrl
-      ? `<img src="${sanitize(asset.previewUrl)}" alt="${sanitize(fieldLabel || "圖片預覽")}" />`
-      : `<span class="drive-card-sub">${sanitize(COMFYUI_INPUT_ASSET_META[binding.assetKey]?.emptyText || "尚未選擇圖片")}</span>`;
+      ? (isVideo
+        ? `<video src="${sanitize(asset.previewUrl)}" controls muted preload="metadata"></video>`
+        : `<img src="${sanitize(asset.previewUrl)}" alt="${sanitize(fieldLabel || "圖片預覽")}" />`)
+      : officialMediaPreviewUrl
+        ? (isVideo
+          ? `<video src="${sanitize(officialMediaPreviewUrl)}" controls muted preload="metadata"></video>`
+          : `<img src="${sanitize(officialMediaPreviewUrl)}" alt="${sanitize(fieldLabel || "模板範例圖片")}" />`)
+      : `<span class="drive-card-sub">${sanitize(meta.emptyText || (isVideo ? "尚未選擇影片" : "尚未選擇圖片"))}</span>`;
     const metaText = asset.file
-      ? `已選擇本地檔：${asset.filename || asset.file.name || "未命名圖片"}`
+      ? `已選擇本地檔：${asset.filename || asset.file.name || (isVideo ? "未命名影片" : "未命名圖片")}`
       : asset.imageRef?.filename
-        ? `使用已保存圖片：${asset.filename || asset.imageRef.filename}`
-        : (COMFYUI_INPUT_ASSET_META[binding.assetKey]?.emptyText || "尚未選擇圖片");
+        ? `使用已保存${isVideo ? "影片" : "圖片"}：${asset.filename || asset.imageRef.filename}`
+        : officialMediaFilename
+          ? `使用模板範例${isVideo ? "影片" : "圖片"}：${officialMediaFilename}`
+        : (meta.emptyText || (isVideo ? "尚未選擇影片" : "尚未選擇圖片"));
+    const pickerButtons = isVideo
+      ? `<button class="btn btn-sm" type="button" data-comfyui-template-media-clear="${sanitize(binding.assetKey)}">清除影片</button>`
+      : `
+          <button class="btn btn-sm" type="button" data-comfyui-template-image-picker="${sanitize(binding.assetKey)}">選擇既有圖片</button>
+          <button class="btn btn-sm" type="button" data-comfyui-template-mask-editor="1">編輯遮罩</button>
+          <button class="btn btn-sm" type="button" data-comfyui-template-media-clear="${sanitize(binding.assetKey)}">清除圖片</button>
+        `;
     return `
       <div class="${cardClass}">
-        <label>${sanitize(fieldLabel || "圖片")}</label>
-        <input type="file" data-comfyui-template-image="${sanitize(binding.assetKey)}" accept="image/png,image/jpeg,image/webp" />
+        <label>${sanitize(fieldLabel || (isVideo ? "影片" : "圖片"))}</label>
+        <input type="file" ${isVideo ? "data-comfyui-template-video" : "data-comfyui-template-image"}="${sanitize(binding.assetKey)}" accept="${sanitize(accept)}" />
         <div class="comfyui-input-preview" style="margin-top:.55rem;">${previewHtml}</div>
         <div class="drive-card-sub" style="margin-top:.45rem;">${sanitize(metaText)}</div>
         <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.45rem;">
-          <button class="btn btn-sm" type="button" data-comfyui-template-image-picker="${sanitize(binding.assetKey)}">選擇既有圖片</button>
-          ${binding.assetKey === "mask" ? `<button class="btn btn-sm" type="button" data-comfyui-template-mask-editor="1">編輯遮罩</button>` : ""}
-          <button class="btn btn-sm" type="button" data-comfyui-template-image-clear="${sanitize(binding.assetKey)}">清除圖片</button>
+          ${pickerButtons}
         </div>
       </div>
     `;
   }
   if (binding.kind === "readonly") {
+    const editAction = binding.editableLockedModel
+      ? `
+        <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.45rem;">
+          <button class="btn btn-sm" type="button" data-comfyui-template-model-edit="${sanitize(field.id || "")}">編輯</button>
+        </div>
+        <div class="comfyui-template-direct-hint">保留模板預設可維持官方建議；需要客製化時可改成你 ComfyUI 內實際安裝的模型檔名。</div>
+      `
+      : "";
     return `
       <div class="${cardClass}">
         <label>${sanitize(fieldLabel)}</label>
-        <div class="comfyui-template-readonly">這個欄位目前沿用模板預設值：${sanitize(String(field?.current_value ?? ""))}</div>
+        <div class="comfyui-template-readonly">這個欄位目前沿用模板預設值：${sanitize(comfyuiTemplateDisplayValue(field, field?.current_value))}</div>
+        ${editAction}
       </div>
     `;
   }
   if (binding.kind === "direct") {
     const value = comfyuiTemplateFieldValue(binding, field);
+    if (field?.input_type === "checkbox") {
+      const checked = value === true || value === "true" || value === "1" || value === 1;
+      const hint = comfyuiTemplateDirectHint(field);
+      return `
+        <div class="${cardClass}">
+          <label for="tmpl-${sanitize(field.id || "")}">${sanitize(fieldLabel)}</label>
+          <label class="comfyui-template-checkbox">
+            <input id="tmpl-${sanitize(field.id || "")}" type="checkbox"${checked ? " checked" : ""} data-comfyui-template-direct-field="${sanitize(field.id || "")}" data-comfyui-template-label="${sanitize(fieldLabel)}" />
+            <span>啟用</span>
+          </label>
+          ${hint ? `<div class="comfyui-template-direct-hint">${sanitize(hint)}</div>` : ""}
+        </div>
+      `;
+    }
     const inputType = field?.input_type === "number" ? "number" : "text";
     const minAttr = field?.constraints?.min !== undefined ? ` min="${sanitize(String(field.constraints.min))}"` : "";
     const maxAttr = field?.constraints?.max !== undefined ? ` max="${sanitize(String(field.constraints.max))}"` : "";
     const stepAttr = field?.constraints?.step !== undefined ? ` step="${sanitize(String(field.constraints.step))}"` : "";
     const hint = comfyuiTemplateDirectHint(field);
     const seedAfterControl = comfyuiTemplateFieldIsSeed(field) ? renderComfyuiTemplateSeedAfterGenerateControl() : "";
+    const modelEditActions = binding.editableLockedModel
+      ? `
+        <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.45rem;">
+          <button class="btn btn-sm" type="button" data-comfyui-template-model-reset="${sanitize(field.id || "")}">恢復模板預設</button>
+        </div>
+      `
+      : "";
     return `
       <div class="${cardClass}">
         <label for="tmpl-${sanitize(field.id || "")}">${sanitize(fieldLabel)}</label>
         <input id="tmpl-${sanitize(field.id || "")}" type="${sanitize(inputType)}" value="${sanitize(String(value ?? ""))}"${minAttr}${maxAttr}${stepAttr} data-comfyui-template-direct-field="${sanitize(field.id || "")}" data-comfyui-template-label="${sanitize(fieldLabel)}" />
         ${seedAfterControl}
         ${hint ? `<div class="comfyui-template-direct-hint">${sanitize(hint)}</div>` : ""}
+        ${modelEditActions}
       </div>
     `;
   }
   if (binding.kind === "lora") {
     const selected = comfyuiSelectedLoraForTemplateNode(binding.nodeId);
     const overrideKey = String(binding.nodeId || "");
-    const current = Object.prototype.hasOwnProperty.call(comfyuiTemplateLoraOverrides, overrideKey)
+    const rawCurrent = Object.prototype.hasOwnProperty.call(comfyuiTemplateLoraOverrides, overrideKey)
       ? comfyuiTemplateLoraOverrides[overrideKey]
       : (selected?.name || String(field?.current_value || ""));
+    const current = typeof normalizeComfyuiLoraName === "function"
+      ? normalizeComfyuiLoraName(rawCurrent)
+      : String(rawCurrent || "").trim();
     const options = comfyuiTemplateLoraSelectOptions(field);
     return `
       <div class="${cardClass}">
@@ -1491,7 +1735,7 @@ function bindRenderedComfyuiTemplateFields(detail) {
     if (el.dataset.boundComfyuiTemplate === "1") return;
     el.dataset.boundComfyuiTemplate = "1";
     const sync = () => {
-      if (fieldId) comfyuiTemplateFieldOverrides[fieldId] = el.value;
+      if (fieldId) comfyuiTemplateFieldOverrides[fieldId] = comfyuiTemplateElementValue(el);
       const field = (detail?.ui_schema?.panels || [])
         .flatMap((panel) => panel?.fields || [])
         .find((item) => String(item?.id || "") === fieldId);
@@ -1508,11 +1752,33 @@ function bindRenderedComfyuiTemplateFields(detail) {
     el.dataset.boundComfyuiTemplate = "1";
     const fieldId = el.getAttribute("data-comfyui-template-direct-field") || "";
     const sync = () => {
-      if (fieldId) comfyuiTemplateFieldOverrides[fieldId] = el.value;
+      if (fieldId) comfyuiTemplateFieldOverrides[fieldId] = comfyuiTemplateElementValue(el);
       writeComfyuiDraft();
     };
     el.addEventListener("input", sync);
     el.addEventListener("change", sync);
+  });
+  host.querySelectorAll("[data-comfyui-template-model-edit]").forEach((button) => {
+    if (button.dataset.boundComfyuiTemplate === "1") return;
+    button.dataset.boundComfyuiTemplate = "1";
+    button.addEventListener("click", () => {
+      const fieldId = button.getAttribute("data-comfyui-template-model-edit") || "";
+      if (!fieldId) return;
+      comfyuiTemplateEditableModelFields[fieldId] = true;
+      renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+    });
+  });
+  host.querySelectorAll("[data-comfyui-template-model-reset]").forEach((button) => {
+    if (button.dataset.boundComfyuiTemplate === "1") return;
+    button.dataset.boundComfyuiTemplate = "1";
+    button.addEventListener("click", () => {
+      const fieldId = button.getAttribute("data-comfyui-template-model-reset") || "";
+      if (!fieldId) return;
+      delete comfyuiTemplateEditableModelFields[fieldId];
+      delete comfyuiTemplateFieldOverrides[fieldId];
+      writeComfyuiDraft();
+      renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+    });
   });
   host.querySelectorAll("[data-comfyui-template-seed-after-generate]").forEach((select) => {
     if (select.dataset.boundComfyuiTemplate === "1") return;
@@ -1549,11 +1815,34 @@ function bindRenderedComfyuiTemplateFields(detail) {
       renderSelectedComfyuiTemplate();
     });
   });
-  host.querySelectorAll("[data-comfyui-template-image-clear]").forEach((button) => {
+  host.querySelectorAll("[data-comfyui-template-video]").forEach((input) => {
+    if (input.dataset.boundComfyuiTemplate === "1") return;
+    input.dataset.boundComfyuiTemplate = "1";
+    input.addEventListener("change", () => {
+      const assetKey = input.getAttribute("data-comfyui-template-video");
+      const file = input.files && input.files[0] ? input.files[0] : null;
+      if (!file) {
+        clearComfyuiInputAsset(assetKey);
+        renderSelectedComfyuiTemplate();
+        return;
+      }
+      const name = String(file.name || "").toLowerCase();
+      const validExt = /\.(mp4|webm|mov|mkv|avi)$/.test(name);
+      const validMime = !file.type || /^video\/(mp4|webm|quicktime|x-matroska|x-msvideo)$/i.test(file.type || "") || file.type === "application/octet-stream";
+      if (!validExt || !validMime) {
+        setComfyuiMessage("模板影片欄位只支援 MP4、WEBM、MOV、MKV、AVI。", false);
+        input.value = "";
+        return;
+      }
+      setComfyuiInputAssetFromFile(assetKey, file);
+      renderSelectedComfyuiTemplate();
+    });
+  });
+  host.querySelectorAll("[data-comfyui-template-media-clear],[data-comfyui-template-image-clear]").forEach((button) => {
     if (button.dataset.boundComfyuiTemplate === "1") return;
     button.dataset.boundComfyuiTemplate = "1";
     button.addEventListener("click", () => {
-      clearComfyuiInputAsset(button.getAttribute("data-comfyui-template-image-clear"));
+      clearComfyuiInputAsset(button.getAttribute("data-comfyui-template-media-clear") || button.getAttribute("data-comfyui-template-image-clear"));
       renderSelectedComfyuiTemplate();
     });
   });
@@ -1634,12 +1923,17 @@ function renderSelectedComfyuiTemplate({ preserveOpenPanels = false } = {}) {
   host.innerHTML = promptSharingHtml + panels.map((panel) => {
     const panelId = String(panel?.id || "");
     const isOpen = preserveOpenPanels ? openPanelIds.has(panelId) : !panel?.collapsed_default;
+    const visibleFieldCount = (panel?.fields || []).filter((field) => (
+      !field?.synthetic
+      && field?.input_type !== "embedding_shortcuts"
+      && !comfyuiTemplateIsHiddenCompareSharedField(detail, field)
+    )).length;
     return `
     <details class="drive-collapsible-panel settings-collapse comfyui-template-render-card" data-comfyui-template-panel-id="${sanitize(panelId)}"${isOpen ? " open" : ""}>
       <summary>
         <div>
           <div class="drive-card-title">${sanitize(panel?.label || panel?.id || "模板區塊")}</div>
-          <div class="drive-card-sub">${sanitize(String((panel?.fields || []).filter((field) => !field?.synthetic && field?.input_type !== "embedding_shortcuts").length || 0))} 個欄位</div>
+          <div class="drive-card-sub">${sanitize(String(visibleFieldCount || 0))} 個欄位</div>
         </div>
       </summary>
       <div class="drive-collapsible-body">
@@ -1998,12 +2292,12 @@ async function runComfyuiWorkflowPreset(presetId) {
   try {
     imageAssignmentState = templateDetail ? await ensureComfyuiTemplateImageAssignments(templateDetail) : imageAssignmentState;
   } catch (err) {
-    setComfyuiMessage(err.message || "模板圖片匯入失敗，請改用「選擇既有圖片」。", false);
+    setComfyuiMessage(err.message || "模板媒體匯入失敗，請重新選擇本機檔案。", false);
     return;
   }
   if (imageAssignmentState.missing.length) {
     const labels = imageAssignmentState.missing.map((item) => item.label || `Node ${item.nodeId}`).slice(0, 4).join("、");
-    setComfyuiMessage(`這個 workflow 有圖片欄位尚未指定可安全重映射的雲端圖片：${labels}。請用「選擇既有圖片」選雲端硬碟圖片，或選歷史產圖讓系統先匯入雲端硬碟。`, false);
+    setComfyuiMessage(`這個 workflow 有圖片或影片欄位尚未指定可安全重映射的雲端檔案：${labels}。請先上傳或選擇必要媒體後再執行。`, false);
     return;
   }
   const paidApiNodes = comfyuiWorkflowPaidApiNodes(preset);
@@ -2049,10 +2343,11 @@ async function runComfyuiWorkflowPreset(presetId) {
       json = await res.json().catch(() => ({}));
     }
     if (!res.ok || !json.ok) throw new Error(json.msg || `workflow 執行失敗（HTTP ${res.status}）`);
-    const result = await pollComfyuiJobUntilDone(json.job?.job_id, controller, workflowTimeoutSeconds);
+    const jobId = json.job?.job_id;
+    const result = await pollComfyuiJobUntilDone(jobId, controller, workflowTimeoutSeconds);
     const rawImages = Array.isArray(result.images) && result.images.length ? result.images : [result.image].filter(Boolean);
     const images = await hydrateComfyuiGeneratedImages(rawImages);
-    const media = Array.isArray(result.media) ? result.media : [];
+    const media = await hydrateComfyuiGeneratedMedia(Array.isArray(result.media) ? result.media : [], jobId);
     comfyuiGeneratedImages = images;
     comfyuiGeneratedMedia = media;
     renderComfyuiGeneratedImages(comfyuiGeneratedImages);

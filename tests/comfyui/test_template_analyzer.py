@@ -58,6 +58,7 @@ TXT2IMG_API = {
 def test_classify_input_field_known_buckets():
     assert classify_input_field("CLIPTextEncode", "text") == FieldCategory.TEXT
     assert classify_input_field("LoadImage", "image") == FieldCategory.IMAGE
+    assert classify_input_field("LoadVideo", "file") == FieldCategory.VIDEO
     assert classify_input_field("CheckpointLoaderSimple", "ckpt_name") == FieldCategory.MODEL
     assert classify_input_field("KSampler", "seed") == FieldCategory.NUMERIC
     assert classify_input_field("KSampler", "sampler_name") == FieldCategory.SAMPLER
@@ -84,16 +85,51 @@ def test_analyze_required_models_collected():
     assert analysis.required_models == {"ckpt": ["v1-5-pruned.safetensors"]}
 
 
+def test_analyze_clip_vision_loader_uses_clip_vision_bucket():
+    workflow = {
+        **TXT2IMG_API,
+        "20": {
+            "class_type": "CLIPVisionLoader",
+            "inputs": {"clip_name": "sigclip_vision_patch14_384.safetensors"},
+        },
+    }
+    analysis = analyze_workflow_json(workflow)
+    assert analysis.required_models["clip_vision"] == ["sigclip_vision_patch14_384.safetensors"]
+    assert "sigclip_vision_patch14_384.safetensors" not in analysis.required_models.get("clip", [])
+
+
+def test_analyze_latent_upscale_loader_uses_latent_upscale_bucket():
+    workflow = {
+        **TXT2IMG_API,
+        "20": {
+            "class_type": "LatentUpscaleModelLoader",
+            "inputs": {"model_name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"},
+        },
+    }
+    analysis = analyze_workflow_json(workflow)
+    assert analysis.required_models["latent_upscale_model"] == [
+        "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+    ]
+    assert "ltx-2.3-spatial-upscaler-x2-1.1.safetensors" not in analysis.required_models.get("upscale_model", [])
+
+
 def test_analyze_required_embeddings_from_prompt_tokens():
     workflow = {
         **TXT2IMG_API,
         "6": {
             "class_type": "CLIPTextEncode",
-            "inputs": {"text": "portrait, <embeddings:badhandv4.pt>, embedding:easynegative.safetensors", "clip": ["4", 1]},
+            "inputs": {
+                "text": "portrait, <embeddings:badhandv4.pt>, embedding:easynegative.safetensors, embedding:lazy series\\IL\\lazyneg",
+                "clip": ["4", 1],
+            },
         },
     }
     analysis = analyze_workflow_json(workflow)
-    assert analysis.required_models["embedding"] == ["badhandv4.pt", "easynegative.safetensors"]
+    assert analysis.required_models["embedding"] == [
+        "badhandv4.pt",
+        "easynegative.safetensors",
+        "lazy series\\IL\\lazyneg",
+    ]
 
 
 def test_analyze_user_inputs_separates_links_from_scalars():

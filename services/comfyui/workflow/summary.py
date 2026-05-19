@@ -19,7 +19,7 @@ CONTROLNET_TYPE_ALIASES = {
 }
 
 EMBEDDING_TAG_RE = re.compile(r"<\s*embeddings?\s*:\s*([^<>]+?)\s*>", re.IGNORECASE)
-EMBEDDING_PREFIX_RE = re.compile(r"(?<![\w/])embedding:([^\s,;<>]+)", re.IGNORECASE)
+EMBEDDING_PREFIX_RE = re.compile(r"(?<![\w/])embedding:([^,;<>\r\n]+)", re.IGNORECASE)
 
 
 def extract_embedding_names_from_text(text):
@@ -163,7 +163,13 @@ def extract_workflow_summary(workflow_json):
             if not default_params.get("diffusion_model"):
                 default_params["diffusion_model"] = unet_name.strip()
 
+        if lower_class == "clipvisionloader":
+            clip_vision_name = inputs.get("clip_name")
+            if isinstance(clip_vision_name, str) and clip_vision_name.strip():
+                add_model("clip_vision", clip_vision_name)
         for clip_input_name in ("clip_name", "clip_name1", "clip_name2", "clip_name3"):
+            if lower_class == "clipvisionloader" and clip_input_name == "clip_name":
+                continue
             clip_name = inputs.get(clip_input_name)
             if isinstance(clip_name, str) and clip_name.strip():
                 add_model("clip", clip_name)
@@ -183,7 +189,9 @@ def extract_workflow_summary(workflow_json):
                 control_type=infer_controlnet_type_from_name(inputs.get("control_net_name") or inputs.get("model_name")),
             )
 
-        if "upscalemodelloader" in lower_class:
+        if lower_class == "latentupscalemodelloader":
+            add_model("latent_upscale", inputs.get("model_name"))
+        elif lower_class == "upscalemodelloader":
             add_model("upscale", inputs.get("model_name"))
             if not default_params["upscale_model"] and isinstance(inputs.get("model_name"), str):
                 default_params["upscale_model"] = inputs.get("model_name").strip()

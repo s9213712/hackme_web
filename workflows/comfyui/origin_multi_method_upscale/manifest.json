@@ -71,7 +71,7 @@
     },
     {
       "kind": "embedding",
-      "name": "lazy"
+      "name": "lazy series\\IL\\lazyneg"
     },
     {
       "kind": "checkpoint",

@@ -41,6 +41,7 @@ def test_template_mask_image_card_can_open_same_editor():
     assert 'data-comfyui-template-mask-editor="1"' in workflow_js
     assert 'data-comfyui-template-mask-editor="1" disabled' not in workflow_js
     assert "openComfyuiMaskEditor()" in workflow_js
+    assert 'binding.assetKey === "mask" ?' not in workflow_js
 
 
 def test_mask_editor_is_touch_friendly_and_responsive():

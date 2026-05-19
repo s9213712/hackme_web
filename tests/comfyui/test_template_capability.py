@@ -8,8 +8,10 @@ from services.comfyui.template.analyzer import (
 )
 from services.comfyui.template.capability import (
     check_workflow_capability,
+    embedding_option_available,
     iter_required_models,
     reset_object_info_cache,
+    rewrite_workflow_model_inputs_to_local_options,
 )
 
 
@@ -137,6 +139,63 @@ def test_capability_checks_diffusion_model_and_clip_buckets():
     assert cap.missing_models == {}
 
 
+def test_capability_checks_clip_vision_bucket_against_clip_vision_loader_options():
+    info = {
+        "CLIPVisionLoader": {
+            "input": {"required": {"clip_name": [["sigclip_vision_patch14_384.safetensors"]]}}
+        },
+    }
+    client = _StubClient(info)
+    analysis = _analysis(
+        class_types={"CLIPVisionLoader"},
+        models={"clip_vision": ["sigclip_vision_patch14_384.safetensors"]},
+    )
+    cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "SUPPORTED"
+    assert cap.missing_models == {}
+
+
+def test_capability_checks_latent_upscale_bucket_against_latent_loader_options():
+    info = {
+        "LatentUpscaleModelLoader": {
+            "input": {
+                "required": {
+                    "model_name": [["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]]
+                }
+            }
+        },
+    }
+    client = _StubClient(info)
+    analysis = _analysis(
+        class_types={"LatentUpscaleModelLoader"},
+        models={"latent_upscale_model": ["ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]},
+    )
+    cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "SUPPORTED"
+    assert cap.missing_models == {}
+
+
+def test_rewrite_workflow_model_inputs_uses_unique_subfolder_basename_match():
+    info = {
+        "LatentUpscaleModelLoader": {
+            "input": {
+                "required": {
+                    "model_name": [["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]]
+                }
+            }
+        },
+    }
+    workflow = {
+        "303": {
+            "class_type": "LatentUpscaleModelLoader",
+            "inputs": {"model_name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"},
+        },
+    }
+    patched = rewrite_workflow_model_inputs_to_local_options(workflow, client=_StubClient(info))
+    assert patched["303"]["inputs"]["model_name"] == "3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+    assert workflow["303"]["inputs"]["model_name"] == "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+
+
 def test_capability_ignores_paid_api_model_bucket_as_non_local_file():
     info = {"ByteDanceSeedreamNode": {"input": {"required": {}}}}
     client = _StubClient(info)
@@ -159,6 +218,39 @@ def test_capability_checks_embedding_bucket_with_embedding_catalog():
     cap = check_workflow_capability(analysis, client=client)
     assert cap.overall == "PARTIALLY_SUPPORTED"
     assert cap.missing_models == {"embedding": ["badhandv4.pt"]}
+
+
+def test_capability_treats_builtin_vae_sentinel_as_checkpoint_embedded():
+    info = _local_payload(classes={"CheckpointLoaderSimple", "VAELoader"}, models=["base.safetensors"])
+    client = _StubClient(info)
+    analysis = _analysis(
+        class_types={"CheckpointLoaderSimple", "VAELoader"},
+        models={"ckpt": ["base.safetensors"], "vae": ["__checkpoint_builtin__"]},
+    )
+    cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "SUPPORTED"
+    assert cap.missing_models == {}
+
+
+def test_capability_matches_embedding_subfolders_spaces_and_optional_extensions():
+    assert embedding_option_available(
+        "lazy series\\IL\\lazyneg",
+        ["lazy series/IL/lazyneg.safetensors"],
+    )
+    assert embedding_option_available(
+        "lazy series\\IL\\lazyneg",
+        ["lazyneg.pt"],
+    )
+
+    info = _local_payload(classes={"CLIPTextEncode"})
+    client = _StubClient(info, embeddings=["lazy series/IL/lazyneg.safetensors"])
+    analysis = _analysis(
+        class_types={"CLIPTextEncode"},
+        models={"embedding": ["lazy series\\IL\\lazyneg"]},
+    )
+    cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "SUPPORTED"
+    assert cap.missing_models == {}
 
 
 def test_capability_explicit_denied_class_treated_as_unsupported():

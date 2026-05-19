@@ -26,6 +26,20 @@ def test_selected_template_lora_loader_renders_interactive_controls():
     assert "並自動補上 trigger words" in workflow_js
 
 
+def test_lora_warning_messages_are_deduplicated_and_names_stay_clean():
+    comfyui_js = _read("public/js/36-comfyui.js")
+    workflow_js = _read("public/js/36-comfyui-workflows.js")
+
+    assert "function normalizeComfyuiLoraName(name)" in comfyui_js
+    assert "replace(/（提醒：[^）]*）$/u" in comfyui_js
+    assert "function uniqueComfyuiLoraCompatibilityHints(loras = [])" in comfyui_js
+    assert "uniqueComfyuiLoraCompatibilityHints(comfyuiSelectedLoras)" in comfyui_js
+    assert "seen.has(hint)" in comfyui_js
+    assert "normalizeComfyuiLoraName(item?.name)" in comfyui_js
+    assert "normalizeComfyuiLoraName(value)" in workflow_js
+    assert "normalizeComfyuiLoraName(rawCurrent)" in workflow_js
+
+
 def test_selected_template_lora_loader_exposes_weight_controls_and_run_inputs():
     workflow_js = _read("public/js/36-comfyui-workflows.js")
     route_py = _read("routes/comfyui_sections/workflow_routes.py")

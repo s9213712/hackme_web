@@ -29,7 +29,7 @@
     ],
     "model": "qwen_image_fp8_e4m3fn.safetensors",
     "negative_prompt": "",
-    "prompt": "\nanime style, by ogipote, a cheerful adult woman cosplayer with cat ears and a tail standing in a bright orange grove, wearing a modest white summer dress, golden hair in braids, warm sunlight through green leaves, oranges on the trees, soft delicate digital illustration, joyful expression, detailed eyes, clean lines",
+    "prompt": "\nanime style, a cheerful adult woman cosplayer with cat ears and a tail standing in a bright orange grove, wearing a modest white summer dress, golden hair in braids, warm sunlight through green leaves, oranges on the trees, soft delicate digital illustration, joyful expression, detailed eyes, clean lines",
     "sampler_name": "euler",
     "scheduler": "simple",
     "seed": 252589807937016,
@@ -83,7 +83,7 @@
               "max_length": 2000,
               "rows": 4
             },
-            "current_value": "\nanime style, by ogipote, a cheerful adult woman cosplayer with cat ears and a tail standing in a bright orange grove, wearing a modest white summer dress, golden hair in braids, warm sunlight through green leaves, oranges on the trees, soft delicate digital illustration, joyful expression, detailed eyes, clean lines",
+            "current_value": "\nanime style, a cheerful adult woman cosplayer with cat ears and a tail standing in a bright orange grove, wearing a modest white summer dress, golden hair in braids, warm sunlight through green leaves, oranges on the trees, soft delicate digital illustration, joyful expression, detailed eyes, clean lines",
             "id": "node:83:text",
             "input_name": "text",
             "input_type": "textarea",

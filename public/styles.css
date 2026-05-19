@@ -1485,6 +1485,22 @@
       grid-template-columns: minmax(320px, 0.95fr) minmax(320px, 1.05fr);
       gap: 1rem;
       align-items: start;
+      isolation: isolate;
+    }
+
+    .comfyui-panel,
+    .comfyui-preview-card {
+      position: relative;
+      min-width: 0;
+    }
+
+    .comfyui-panel {
+      z-index: 2;
+    }
+
+    .comfyui-preview-card {
+      z-index: 1;
+      overflow: hidden;
     }
 
     .comfyui-subnav {
@@ -1618,6 +1634,7 @@
 
     .comfyui-template-field-card {
       padding: .7rem;
+      position: relative;
     }
 
     .comfyui-template-field-card label {
@@ -1726,6 +1743,7 @@
       border-radius: 10px;
       background: rgba(255,255,255,.035);
       padding: .7rem;
+      position: relative;
     }
 
     .comfyui-controlnet-panel,
@@ -1742,9 +1760,18 @@
       border-radius: 8px;
       background: rgba(0,0,0,.2);
       overflow: hidden;
+      position: relative;
+      z-index: 1;
     }
 
-    .comfyui-input-preview img {
+    .comfyui-input-asset-card > .drive-file-actions,
+    .comfyui-template-field-card > .drive-file-actions {
+      position: relative;
+      z-index: 3;
+    }
+
+    .comfyui-input-preview img,
+    .comfyui-input-preview video {
       width: 100%;
       max-height: 220px;
       object-fit: contain;
@@ -2098,6 +2125,35 @@
       display: block;
     }
 
+    .comfyui-output-gallery {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      padding: .7rem;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      gap: .65rem;
+    }
+
+    .comfyui-output-main {
+      width: 100%;
+      min-height: 0;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,.10);
+      border-radius: 8px;
+      background: rgba(0,0,0,.18);
+      padding: 0;
+      overflow: hidden;
+      cursor: zoom-in;
+    }
+
+    .comfyui-output-main img {
+      width: 100%;
+      max-height: 68vh;
+      object-fit: contain;
+    }
+
     .comfyui-batch-grid {
       width: 100%;
       height: 100%;
@@ -2106,6 +2162,12 @@
       grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
       gap: .65rem;
       align-items: start;
+    }
+
+    .comfyui-batch-grid.is-strip {
+      height: auto;
+      padding: 0;
+      grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
     }
 
     .comfyui-batch-item {
@@ -2137,6 +2199,21 @@
     .comfyui-batch-item span {
       font-size: .76rem;
       color: var(--muted);
+    }
+
+    .comfyui-template-checkbox {
+      display: inline-flex;
+      align-items: center;
+      gap: .45rem;
+      min-height: 2.15rem;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .comfyui-template-checkbox input {
+      width: 1rem;
+      height: 1rem;
+      accent-color: var(--accent);
     }
 
     .comfyui-progress-panel {

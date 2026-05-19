@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260519-template-model-notice" />
+  <link rel="stylesheet" href="/styles.css?v=20260519-sdpose-gallery" />
   <link rel="stylesheet" href="/experiments.css?v=20260517-plane-view-angle" />
 </head>
 <body>
@@ -1918,9 +1918,9 @@
           <div class="field">
             <label>VAE</label>
             <select id="comfyui-vae-select">
-              <option value="__checkpoint_builtin__">使用 checkpoint 內建 VAE</option>
+              <option value="__checkpoint_builtin__">使用各自大模型內建 VAE</option>
             </select>
-            <div class="drive-card-sub">可保留模型內建 VAE，或改用已安裝的獨立 VAE 檔。</div>
+            <div class="drive-card-sub">留白代表使用各自大模型內建 VAE；也可改用已安裝的獨立 VAE 檔。</div>
           </div>
           <div class="settings-option-grid">
             <div class="field comfyui-auto-generation-mode-field">
@@ -2364,6 +2364,7 @@
                   <option value="audio">Audio / TTS</option>
                   <option value="video">Video / Motion</option>
                   <option value="upscale">放大模型 / Upscaler</option>
+                  <option value="latent_upscale">Latent 放大模型 / Latent Upscaler</option>
                 </select>
               </div>
               <div class="field">
@@ -6521,7 +6522,7 @@
 </div>
 
 <script src="/js/00-core.js?v=20260517-trading-snapshot-warmup" defer></script>
-<script src="/js/05-i18n.js?v=20260517-share-expiry-picker" defer></script>
+<script src="/js/05-i18n.js?v=20260519-vae-builtin" defer></script>
 <script src="/js/01-root-quick-settings.js?v=20260514-root-quick-settings" defer></script>
 <script src="/js/10-users.js?v=20260503-account-delete-feedback" defer></script>
 <script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
@@ -6532,8 +6533,8 @@
 <script src="/js/35-drive.js?v=20260517-share-expiry-picker" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
 <!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
-<script src="/js/36-comfyui.js?v=20260519-template-model-notice" defer></script>
-<script src="/js/36-comfyui-workflows.js?v=20260519-template-model-notice" defer></script>
+<script src="/js/36-comfyui.js?v=20260519-lora-warning-dedupe" defer></script>
+<script src="/js/36-comfyui-workflows.js?v=20260519-template-media-preview" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/41-game-modules.js?v=20260518-game-ux" defer></script>
 <script src="/js/games/game-view-registry.js?v=20260513-legacy-modules" defer></script>

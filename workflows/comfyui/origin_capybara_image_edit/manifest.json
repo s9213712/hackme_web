@@ -61,7 +61,7 @@
       "name": "hunyuanvideo15_vae_fp16.safetensors"
     },
     {
-      "kind": "clip",
+      "kind": "clip_vision",
       "name": "sigclip_vision_patch14_384.safetensors"
     }
   ],
@@ -213,6 +213,20 @@
             "node_id": "120",
             "read_only": true,
             "required": false
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CLIPVisionLoader",
+            "current_value": "sigclip_vision_patch14_384.safetensors",
+            "id": "node:121:clip_name",
+            "input_name": "clip_name",
+            "input_type": "select",
+            "label": "CLIP Vision 模型",
+            "lock_reason": "template_default_model",
+            "locked": true,
+            "node_id": "121",
+            "read_only": true,
+            "required": false
           }
         ],
         "id": "model",
@@ -230,6 +244,49 @@
             "input_type": "select",
             "label": "排程器",
             "node_id": "111",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "options": [
+                "scale dimensions",
+                "scale total pixels",
+                "scale longer dimension",
+                "scale shorter dimension",
+                "scale by multiplier",
+                "scale width",
+                "scale height",
+                "scale to multiple"
+              ]
+            },
+            "current_value": "scale dimensions",
+            "id": "node:124:resize_type",
+            "input_name": "resize_type",
+            "input_type": "select",
+            "label": "縮放模式",
+            "node_id": "124",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "options": [
+                "nearest-exact",
+                "bilinear",
+                "area",
+                "bicubic",
+                "lanczos"
+              ]
+            },
+            "current_value": "lanczos",
+            "id": "node:124:scale_method",
+            "input_name": "scale_method",
+            "input_type": "select",
+            "label": "縮放演算法",
+            "node_id": "124",
             "required": true
           },
           {
@@ -302,6 +359,38 @@
             "input_type": "number",
             "label": "Model Shift",
             "node_id": "116",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "max": 8192,
+              "min": 16,
+              "step": 8
+            },
+            "current_value": 1024,
+            "id": "node:124:resize_type.width",
+            "input_name": "resize_type.width",
+            "input_type": "number",
+            "label": "縮放寬度",
+            "node_id": "124",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "max": 8192,
+              "min": 16,
+              "step": 8
+            },
+            "current_value": 1024,
+            "id": "node:124:resize_type.height",
+            "input_name": "resize_type.height",
+            "input_type": "number",
+            "label": "縮放高度",
+            "node_id": "124",
             "required": true
           },
           {

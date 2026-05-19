@@ -18,7 +18,14 @@ from typing import Any
 from services.comfyui.validation.rules import WorkflowValidationError
 
 
-_UI_ONLY_NODE_TYPES = frozenset({"Note", "MarkdownNote"})
+_UI_ONLY_NODE_TYPES = frozenset({
+    "Note",
+    "MarkdownNote",
+    # rgthree UI control node. It toggles ComfyUI editor groups and has no
+    # runtime API inputs; keeping it in API prompts makes ComfyUI object_info
+    # checks fail on machines without rgthree installed.
+    "Fast Groups Bypasser (rgthree)",
+})
 _PASSTHROUGH_NODE_TYPES = frozenset({"Reroute"})
 _VALUE_FOLD_NODE_TYPES = frozenset(
     {

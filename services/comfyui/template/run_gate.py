@@ -13,13 +13,13 @@ error to the user.
 §10.3 implementation notes covered here:
 1. Each gate failure produces a structured failure record; the route is
    expected to audit each one before returning.
-2. Image upload to ComfyUI input/<run_id>/ is delegated to the caller-
+2. Media upload to ComfyUI input/<run_id>/ is delegated to the caller-
    supplied ``upload_callback`` — when Gate 5 raises after some images
    were uploaded, the caller is expected to call ``cleanup_callback`` to
    reap that run_id's subfolder (the caller knows the filesystem layout).
 3. ``apply_user_inputs`` patches user_input scalars *only on inputs that
    are in the analysis's user_inputs list and not in PROTECTED_INPUTS*,
-   guaranteeing no overwrite of the LoadImage/LoadImageMask remap.
+   guaranteeing no overwrite of the LoadImage/LoadImageMask/LoadVideo remap.
 """
 
 from __future__ import annotations
@@ -37,11 +37,12 @@ from services.comfyui.template.analyzer import (
 from services.comfyui.template.capability import (
     CapabilityCheck,
     check_workflow_capability,
+    rewrite_workflow_model_inputs_to_local_options,
 )
 from services.comfyui.template.cleanup import register_run_dir
 from services.comfyui.template import errors as template_errors
 from services.comfyui.template.remap import (
-    PROTECTED_IMAGE_INPUTS,
+    PROTECTED_MEDIA_INPUTS,
     UploadCallback,
     remap_load_image_to_cloud_file,
 )
@@ -98,7 +99,9 @@ _TEMPLATE_LOCKED_MODEL_FIELDS = {
     ("TripleCLIPLoader", "clip_name1"),
     ("TripleCLIPLoader", "clip_name2"),
     ("TripleCLIPLoader", "clip_name3"),
+    ("CLIPVisionLoader", "clip_name"),
     ("UNETLoader", "unet_name"),
+    ("LatentUpscaleModelLoader", "model_name"),
 }
 
 
@@ -120,8 +123,8 @@ def _is_user_editable(field_obj: InputField) -> bool:
         ("SaveAudioMP3", "filename_prefix"),
     }:
         return False
-    if (field_obj.class_type, field_obj.input_name) in PROTECTED_IMAGE_INPUTS:
-        # protected image inputs go through remap, not user_inputs
+    if (field_obj.class_type, field_obj.input_name) in PROTECTED_MEDIA_INPUTS:
+        # protected media inputs go through remap, not user_inputs
         return False
     if (field_obj.class_type, field_obj.input_name) in _TEMPLATE_LOCKED_MODEL_FIELDS:
         return False
@@ -188,6 +191,13 @@ def _check_user_input_constraints(
                         f"目前型別為 {type(value).__name__}",
                         node_id=str(node_id), input_name=str(input_name),
                     )
+            elif field_obj.category == FieldCategory.BOOLEAN:
+                if not isinstance(value, bool):
+                    raise _constraint_fail(
+                        f"user_inputs[{node_id}].{input_name} 必須是布林值，"
+                        f"目前型別為 {type(value).__name__}",
+                        node_id=str(node_id), input_name=str(input_name),
+                    )
             elif field_obj.category == FieldCategory.TEXT:
                 if not isinstance(value, str):
                     raise _constraint_fail(
@@ -207,7 +217,7 @@ def _check_user_input_constraints(
                         node_id=str(node_id), input_name=str(input_name),
                     )
             # MODEL fields are validated by capability check (Gate 2).
-            # IMAGE fields are protected; enforced in remap (Gate 5).
+            # IMAGE/VIDEO fields are protected; enforced in remap (Gate 5).
 
     missing = required - seen
     if missing:
@@ -227,7 +237,7 @@ def _apply_user_inputs(
 ) -> dict[str, Any]:
     """§10.3.3-compliant input patcher.
 
-    Hard-fails any patch that targets a PROTECTED_IMAGE_INPUTS slot (those
+    Hard-fails any patch that targets a protected media slot (those
     must come through the remap step, never through user_inputs).
     """
     for node_id, patch in (user_inputs or {}).items():
@@ -239,9 +249,9 @@ def _apply_user_inputs(
         if not isinstance(node_inputs, dict):
             continue
         for input_name, value in patch.items():
-            if (class_type, input_name) in PROTECTED_IMAGE_INPUTS:
+            if (class_type, input_name) in PROTECTED_MEDIA_INPUTS:
                 raise SafetyError(
-                    f"node {node_id}.{input_name} 是受保護欄位 (LoadImage / LoadImageMask)，"
+                    f"node {node_id}.{input_name} 是受保護欄位 (LoadImage / LoadImageMask / LoadVideo)，"
                     f"不允許透過 user_inputs 覆蓋；必須走 image_field_assignments"
                 )
             if (class_type, input_name) in _TEMPLATE_LOCKED_MODEL_FIELDS:
@@ -307,6 +317,11 @@ def run_workflow_through_gates(
     except WorkflowValidationError as exc:
         stage, msg = template_errors.gate1_analyze_msg(str(exc))
         raise RunGateFailure(gate=1, stage=stage, msg=msg, audit_detail={}) from exc
+    workflow = rewrite_workflow_model_inputs_to_local_options(
+        workflow,
+        client=comfyui_client,
+    )
+    analysis = analyze_workflow_json(workflow)
 
     # ----- Gate 2: capability ---------------------------------------------
     capability = check_workflow_capability(analysis, client=comfyui_client)
@@ -351,6 +366,10 @@ def run_workflow_through_gates(
             workflow,
             analysis=analysis,
             user_inputs=user_inputs or {},
+        )
+        workflow = rewrite_workflow_model_inputs_to_local_options(
+            workflow,
+            client=comfyui_client,
         )
         # Model fields are user-editable, so the raw-workflow capability check
         # above is not enough. Re-check after applying user_inputs to catch stale

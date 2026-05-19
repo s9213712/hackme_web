@@ -72,6 +72,7 @@ from services.comfyui.template import (
     analyze_workflow_json,
     build_ui_schema,
     check_workflow_capability,
+    model_option_available,
     runtime_comfyui_dir,
 )
 from services.comfyui.template.seeding import SYSTEM_WORKFLOW_IDS
@@ -121,6 +122,7 @@ COMFYUI_JOB_STALE_SECONDS = _env_float("COMFYUI_JOB_STALE_SECONDS", 90.0, 10.0, 
 COMFYUI_JOB_PROGRESS_DB_THROTTLE_SECONDS = _env_float("COMFYUI_JOB_PROGRESS_DB_THROTTLE_SECONDS", 2.0, 0.0, 30.0)
 COMFYUI_BASIC_PRICE_ITEM_KEY = "comfyui_txt2img_basic"
 MAX_COMFYUI_FETCH_IMAGE_BYTES = 50 * 1024 * 1024
+MAX_COMFYUI_FETCH_VIDEO_BYTES = 512 * 1024 * 1024
 MAX_COMFYUI_LORAS_PER_PROMPT = 8
 COMFYUI_LORA_EXTRA_PRICE_POINTS = 1
 COMFYUI_VAE_BUILTIN = "__checkpoint_builtin__"
@@ -139,6 +141,7 @@ COMFYUI_MODEL_DOWNLOAD_TYPES = {
     "video": ("video", "Video / Motion"),
     "controlnet": ("controlnet", "ControlNet"),
     "upscale": ("upscale_models", "放大模型"),
+    "latent_upscale": ("latent_upscale_models", "Latent 放大模型"),
 }
 COMFYUI_SUPPORTED_LORA_BASE_MODEL_FAMILIES = {"sdxl", "pony", "illustrious", "noob"}
 MAX_COMFYUI_MODEL_DOWNLOAD_BYTES = int(os.environ.get("COMFYUI_MODEL_DOWNLOAD_MAX_BYTES", str(20 * 1024 * 1024 * 1024)))
@@ -191,6 +194,10 @@ CIVITAI_MODEL_TYPE_TO_DOWNLOAD_TYPE = {
     "controlnet": "controlnet",
     "upscaler": "upscale",
     "upscale": "upscale",
+    "latentupscale": "latent_upscale",
+    "latentupscaler": "latent_upscale",
+    "latentupscalemodel": "latent_upscale",
+    "latent_upscale": "latent_upscale",
 }
 CIVITAI_SEARCH_TYPE_TO_API = {
     "checkpoint": "Checkpoint",
@@ -206,6 +213,15 @@ COMFYUI_ALLOWED_IMAGE_MIME_TYPES = {
     "image/webp",
 }
 COMFYUI_ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+COMFYUI_ALLOWED_VIDEO_MIME_TYPES = {
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
+    "video/x-matroska",
+    "video/x-msvideo",
+    "application/octet-stream",
+}
+COMFYUI_ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".mkv", ".avi"}
 COMFYUI_HISTORY_LIMIT = 20
 COMFYUI_WORKFLOW_PRESET_LIMIT = 50
 COMFYUI_WORKFLOW_RUN_LIMIT = 8
@@ -1218,6 +1234,22 @@ def register_comfyui_routes(app, deps):
             ),
         )
 
+    def _workflow_expected_image_count(workflow_json, default_params):
+        try:
+            batch_size = max(1, int((default_params or {}).get("batch_size") or 1))
+        except Exception:
+            batch_size = 1
+        image_output_nodes = 0
+        if isinstance(workflow_json, dict):
+            for node in workflow_json.values():
+                if not isinstance(node, dict):
+                    continue
+                class_type = str(node.get("class_type") or "").strip()
+                inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+                if class_type in {"SaveImage", "PreviewImage"} and "images" in inputs:
+                    image_output_nodes += 1
+        return max(batch_size, image_output_nodes, 1)
+
     def _active_client_dependency_sets(active_client):
         capabilities = active_client.get_capabilities() if hasattr(active_client, "get_capabilities") else {}
         try:
@@ -1236,6 +1268,10 @@ def register_comfyui_routes(app, deps):
             embeddings = set(active_client.get_embeddings() if hasattr(active_client, "get_embeddings") else [])
         except Exception:
             embeddings = set()
+        try:
+            latent_upscale_models = set(active_client.get_latent_upscale_models() if hasattr(active_client, "get_latent_upscale_models") else [])
+        except Exception:
+            latent_upscale_models = set()
         return {
             "models": models,
             "vaes": vaes,
@@ -1245,6 +1281,7 @@ def register_comfyui_routes(app, deps):
             "clip_models": set((capabilities or {}).get("clip_models") or []),
             "controlnets": set((capabilities or {}).get("controlnet_models") or []),
             "upscale_models": set((capabilities or {}).get("upscale_models") or []),
+            "latent_upscale_models": set((capabilities or {}).get("latent_upscale_models") or []) or latent_upscale_models,
             "available_nodes": set((capabilities or {}).get("available_nodes") or []),
             "controlnet_types": (capabilities or {}).get("controlnet_types") or {},
         }
@@ -1291,26 +1328,31 @@ def register_comfyui_routes(app, deps):
             kind = str(item.get("kind") or "checkpoint").strip().lower()
             if not name:
                 continue
+            if kind == "vae" and name == COMFYUI_VAE_BUILTIN:
+                continue
             if kind == "vae":
-                if name not in sets["vaes"]:
+                if not model_option_available(name, sets["vaes"]):
                     missing_models.append({"kind": kind, "name": name})
             elif kind == "upscale":
-                if name not in sets["upscale_models"]:
+                if not model_option_available(name, sets["upscale_models"]):
+                    missing_models.append({"kind": kind, "name": name})
+            elif kind in {"latent_upscale", "latent_upscale_model"}:
+                if not model_option_available(name, sets["latent_upscale_models"]):
                     missing_models.append({"kind": kind, "name": name})
             elif kind in {"diffusion_model", "unet"}:
-                if name not in sets["diffusion_models"]:
+                if not model_option_available(name, sets["diffusion_models"]):
                     missing_models.append({"kind": kind, "name": name})
             elif kind in {"clip", "text_encoder"}:
-                if name not in sets["clip_models"]:
+                if not model_option_available(name, sets["clip_models"]):
                     missing_models.append({"kind": kind, "name": name})
             elif kind == "embedding":
-                if name not in sets["embeddings"]:
+                if not model_option_available(name, sets["embeddings"]):
                     missing_models.append({"kind": kind, "name": name})
-            elif name not in sets["models"]:
+            elif not model_option_available(name, sets["models"]):
                 missing_models.append({"kind": kind, "name": name})
         for item in required_loras:
             name = str((item or {}).get("name") or "").strip() if isinstance(item, dict) else str(item or "").strip()
-            if name and name not in sets["loras"]:
+            if name and not model_option_available(name, sets["loras"]):
                 missing_loras.append({"name": name})
         for item in required_controlnets:
             if not isinstance(item, dict):
@@ -1564,14 +1606,14 @@ def register_comfyui_routes(app, deps):
     def _maybe_fetch_outputs_kwarg(func, **kwargs):
         try:
             signature = inspect.signature(func)
-            accepts_fetch_outputs = (
-                "fetch_outputs" in signature.parameters
-                or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
-            )
+            accepts_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
         except (TypeError, ValueError):
-            accepts_fetch_outputs = True
-        if not accepts_fetch_outputs:
-            kwargs.pop("fetch_outputs", None)
+            accepts_kwargs = True
+            signature = None
+        if signature is not None and not accepts_kwargs:
+            for key in list(kwargs.keys()):
+                if key not in signature.parameters:
+                    kwargs.pop(key, None)
         return kwargs
 
     def _strip_comfyui_inline_data_urls(value):
@@ -2441,12 +2483,13 @@ def register_comfyui_routes(app, deps):
         default_params = _parse_json_field(row["default_params_json"], {}) or {}
         prompt = str(default_params.get("prompt") or "")
         negative_prompt = str(default_params.get("negative_prompt") or "")
-        expected_count = max(1, int(default_params.get("batch_size") or 1))
+        expected_count = _workflow_expected_image_count(workflow_json, default_params)
         try:
             run_kwargs = {
                 "timeout_seconds": timeout_seconds,
                 "expected_count": expected_count,
                 "progress_callback": lambda progress: _update_generation_job_progress(job_id, progress),
+                "wait_until_completed": True,
             }
             if prompt_extra_data:
                 run_kwargs["extra_data"] = prompt_extra_data
@@ -2721,6 +2764,32 @@ def register_comfyui_routes(app, deps):
         return {
             "filename": _clean_filename(filename, fallback="image.png"),
             "mime_type": mime_type,
+            "data": data,
+        }, None
+
+    def _validate_video_upload(file_storage, *, label):
+        if not file_storage:
+            return None, None
+        filename = str(getattr(file_storage, "filename", "") or "").strip()
+        mime_type = str(getattr(file_storage, "mimetype", "") or "").strip().lower()
+        ext = Path(filename).suffix.lower()
+        if ext not in COMFYUI_ALLOWED_VIDEO_EXTENSIONS:
+            return None, f"{label} 只支援 MP4 / WEBM / MOV / MKV / AVI"
+        if mime_type and mime_type not in COMFYUI_ALLOWED_VIDEO_MIME_TYPES:
+            return None, f"{label} MIME 不支援：{mime_type}"
+        data = file_storage.read()
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        if not data:
+            return None, f"{label} 內容不可為空"
+        if len(data) > MAX_COMFYUI_FETCH_VIDEO_BYTES:
+            return None, f"{label} 超過大小上限"
+        guessed_mime = mime_type or mimetypes.guess_type(filename)[0] or "video/mp4"
+        return {
+            "filename": _clean_filename(filename, fallback="video.mp4"),
+            "mime_type": guessed_mime,
             "data": data,
         }, None
 
@@ -3175,7 +3244,7 @@ def register_comfyui_routes(app, deps):
             f"Seed：{params.get('seed') if params.get('seed') is not None else '-'}",
             f"Sampler：{sampler or '-'}",
             f"Scheduler：{scheduler or '-'}",
-            f"VAE：{vae or '使用 checkpoint 內建 VAE'}",
+            f"VAE：{vae or '使用各自大模型內建 VAE'}",
             f"LoRA：{lora_text or '-'}",
         ])
         return "\n".join(lines)[:3900]
@@ -3237,6 +3306,7 @@ def register_comfyui_routes(app, deps):
         "record_generation_history": _record_generation_history,
         "register_active_generation": _register_active_generation,
         "generation_job_payload": _generation_job_payload,
+        "image_ref_payload": _image_ref_payload,
         "run_comfyui_generation_job": _run_comfyui_generation_job,
         "start_local_comfyui": _start_local_comfyui,
         "stop_local_comfyui": _stop_local_comfyui,
@@ -3323,6 +3393,8 @@ def register_comfyui_routes(app, deps):
         "list_workflow_presets": _list_workflow_presets,
         "workflow_dependency_status": _workflow_dependency_status,
         "list_workflow_runs": _list_workflow_runs,
+        "resolve_file_storage_path": resolve_file_storage_path,
+        "storage_root": storage_root,
         "normalize_generation_payload": _normalize_generation_payload,
         "validate_generation_capabilities": _validate_generation_capabilities,
         "sanitize_workflow_json": sanitize_workflow_json,
@@ -3382,9 +3454,13 @@ def register_comfyui_routes(app, deps):
         "safe_text": _safe_text,
         "save_fetched_image": _save_fetched_image,
         "validate_image_upload": _validate_image_upload,
+        "validate_video_upload": _validate_video_upload,
         "storage_root": storage_root,
         "COMFYUI_ALLOWED_IMAGE_EXTENSIONS": COMFYUI_ALLOWED_IMAGE_EXTENSIONS,
         "COMFYUI_ALLOWED_IMAGE_MIME_TYPES": COMFYUI_ALLOWED_IMAGE_MIME_TYPES,
+        "COMFYUI_ALLOWED_VIDEO_EXTENSIONS": COMFYUI_ALLOWED_VIDEO_EXTENSIONS,
+        "COMFYUI_ALLOWED_VIDEO_MIME_TYPES": COMFYUI_ALLOWED_VIDEO_MIME_TYPES,
         "MAX_COMFYUI_FETCH_IMAGE_BYTES": MAX_COMFYUI_FETCH_IMAGE_BYTES,
+        "MAX_COMFYUI_FETCH_VIDEO_BYTES": MAX_COMFYUI_FETCH_VIDEO_BYTES,
         "COMFYUI_INTERRUPT_TIMEOUT_SECONDS": COMFYUI_INTERRUPT_TIMEOUT_SECONDS,
     })

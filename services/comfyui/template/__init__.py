@@ -25,7 +25,9 @@ from services.comfyui.template.capability import (
     CapabilityOverall,
     check_workflow_capability,
     iter_required_models,
+    model_option_available,
     reset_object_info_cache,
+    rewrite_workflow_model_inputs_to_local_options,
 )
 from services.comfyui.template.safety import (
     SafetyError,
@@ -41,8 +43,13 @@ from services.comfyui.template.ui_schema import (
 from services.comfyui.template.remap import (
     ALLOWED_IMAGE_EXTENSIONS,
     ALLOWED_IMAGE_MIMES,
+    ALLOWED_VIDEO_EXTENSIONS,
+    ALLOWED_VIDEO_MIMES,
     DEFAULT_MAX_IMAGE_BYTES,
+    DEFAULT_MAX_VIDEO_BYTES,
     PROTECTED_IMAGE_INPUTS,
+    PROTECTED_MEDIA_INPUTS,
+    PROTECTED_VIDEO_INPUTS,
     UploadCallback,
     remap_load_image_to_cloud_file,
 )
@@ -86,11 +93,16 @@ from services.comfyui.template import errors
 __all__ = [
     "ALLOWED_IMAGE_EXTENSIONS",
     "ALLOWED_IMAGE_MIMES",
+    "ALLOWED_VIDEO_EXTENSIONS",
+    "ALLOWED_VIDEO_MIMES",
     "DEFAULT_MAX_IMAGE_BYTES",
+    "DEFAULT_MAX_VIDEO_BYTES",
     "DatabasePreviewStore",
     "InMemoryPreviewStore",
     "PREVIEW_TOKEN_TTL_SECONDS",
     "PROTECTED_IMAGE_INPUTS",
+    "PROTECTED_MEDIA_INPUTS",
+    "PROTECTED_VIDEO_INPUTS",
     "PreviewEntry",
     "PreviewStore",
     "RunGateFailure",
@@ -135,8 +147,10 @@ __all__ = [
     "is_allowed_class",
     "is_explicitly_denied_class",
     "iter_required_models",
+    "model_option_available",
     "next_safe_node_id",
     "required_user_inputs",
     "reset_object_info_cache",
+    "rewrite_workflow_model_inputs_to_local_options",
     "rewrite_save_image_prefix",
 ]

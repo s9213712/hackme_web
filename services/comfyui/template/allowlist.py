@@ -186,7 +186,6 @@ ORIGIN_WORKFLOW_ALLOWLIST = frozenset(
         "ControlNetApplySD3",
         "CR Prompt Text",
         "CR Text",
-        "Fast Groups Bypasser (rgthree)",
         "INTConstant",
         "ImpactInt",
         "ProcessString",

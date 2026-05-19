@@ -2,9 +2,9 @@
   "conversion": {
     "allowlist_message": "",
     "allowlist_status": "allowlisted",
-    "class_count": 29,
+    "class_count": 28,
     "denied_classes": [],
-    "node_count": 40,
+    "node_count": 39,
     "source_format": "ui_graph",
     "source_path": "image/edit/【50】一键动漫转真人.json",
     "structural_status": "pass",

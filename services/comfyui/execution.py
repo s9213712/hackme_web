@@ -16,6 +16,14 @@ OUTPUT_REF_KEYS = {
     "audio": "audio",
     "audios": "audio",
 }
+OUTPUT_NODE_CLASS_PRIORITY = {
+    "SaveImage": 0,
+    "PreviewImage": 10,
+    "SaveVideo": 0,
+    "VHS_VideoCombine": 0,
+    "SaveAudio": 0,
+    "MaskPreview": 90,
+}
 TRANSIENT_ERROR_MARKERS = (
     "timed out",
     "timeout",
@@ -75,7 +83,69 @@ def delete_queue_items(client, prompt_ids, *, timeout_seconds=None):
 def emit_progress(progress_callback, snapshot):
     if not progress_callback:
         return
-    progress_callback(dict(snapshot))
+    progress_callback({key: value for key, value in dict(snapshot).items() if not str(key).startswith("_")})
+
+
+def _workflow_node_count(workflow):
+    if not isinstance(workflow, dict):
+        return 0
+    return sum(
+        1
+        for node in workflow.values()
+        if isinstance(node, dict) and str(node.get("class_type") or "").strip()
+    )
+
+
+def _progress_node_id(value):
+    text = str(value or "").strip()
+    return text or None
+
+
+def _ensure_total_progress_state(snapshot, *, total_node_count=None):
+    nodes = snapshot.setdefault("_node_progress", {})
+    if not isinstance(nodes, dict):
+        nodes = {}
+        snapshot["_node_progress"] = nodes
+    if total_node_count is not None:
+        try:
+            count = int(total_node_count or 0)
+        except Exception:
+            count = 0
+        if count > 0:
+            snapshot["_total_node_count"] = max(int(snapshot.get("_total_node_count") or 0), count)
+    return nodes
+
+
+def _mark_progress_node(snapshot, node_id, ratio):
+    node_id = _progress_node_id(node_id)
+    if not node_id:
+        return
+    nodes = _ensure_total_progress_state(snapshot)
+    try:
+        value = float(ratio or 0)
+    except Exception:
+        value = 0.0
+    value = max(0.0, min(1.0, value))
+    nodes[node_id] = max(float(nodes.get(node_id) or 0.0), value)
+
+
+def _total_progress_percent(snapshot):
+    nodes = _ensure_total_progress_state(snapshot)
+    configured_total = int(snapshot.get("_total_node_count") or 0)
+    known_nodes = len(nodes)
+    # Without a workflow node count, keep room for at least one later node so a
+    # single node's 100% step progress does not masquerade as whole-prompt 100%.
+    estimated_total = known_nodes + (0 if snapshot.get("completed") else 1)
+    total_nodes = max(configured_total, known_nodes, estimated_total, 1)
+    total_ratio = sum(max(0.0, min(1.0, float(value or 0.0))) for value in nodes.values())
+    percent = max(0, min(99, round((total_ratio / total_nodes) * 99)))
+    previous = int(float(snapshot.get("_last_total_percent") or snapshot.get("percent") or 0))
+    if str(snapshot.get("phase") or "").lower() not in {"completed", "error"}:
+        percent = max(previous, percent)
+    snapshot["_last_total_percent"] = percent
+    snapshot["current"] = total_ratio
+    snapshot["max"] = total_nodes
+    return percent
 
 
 def _is_transient_comfy_error(exc):
@@ -100,9 +170,10 @@ def _queued_deadline(now, *, start_time, deadline, extension_seconds=None, max_s
     return new_deadline, new_deadline > deadline
 
 
-def apply_ws_message_to_progress(snapshot, message, prompt_id):
+def apply_ws_message_to_progress(snapshot, message, prompt_id, *, total_node_count=None):
     if not isinstance(message, dict):
         return False
+    _ensure_total_progress_state(snapshot, total_node_count=total_node_count)
     msg_type = str(message.get("type") or "")
     data = message.get("data") if isinstance(message.get("data"), dict) else {}
     if data.get("prompt_id") and str(data.get("prompt_id")) != str(prompt_id):
@@ -119,11 +190,31 @@ def apply_ws_message_to_progress(snapshot, message, prompt_id):
                 updated = True
     elif msg_type == "executing":
         snapshot["phase"] = "running"
-        snapshot["current_node"] = data.get("node")
+        node_id = _progress_node_id(data.get("node") or data.get("display_node_id"))
+        previous_node = _progress_node_id(snapshot.get("_active_node"))
+        if previous_node and previous_node != node_id:
+            _mark_progress_node(snapshot, previous_node, 1.0)
+        if node_id:
+            snapshot["_active_node"] = node_id
+            _mark_progress_node(snapshot, node_id, 0.0)
+            snapshot["current_node"] = node_id
+            snapshot["node_current"] = 0
+            snapshot["node_max"] = 0
+            snapshot["node_percent"] = 0
+            snapshot["detail"] = f"正在執行節點 {node_id}"
+        else:
+            snapshot["current_node"] = None
+            snapshot["node_current"] = 0
+            snapshot["node_max"] = 0
+            snapshot["node_percent"] = 0
+        snapshot["percent"] = _total_progress_percent(snapshot)
         updated = True
     elif msg_type == "execution_cached":
         snapshot["phase"] = "running"
         nodes = data.get("nodes") if isinstance(data.get("nodes"), list) else []
+        for node_id in nodes:
+            _mark_progress_node(snapshot, node_id, 1.0)
+        snapshot["percent"] = _total_progress_percent(snapshot)
         snapshot["detail"] = f"使用快取節點 {len(nodes)} 個"
         updated = True
     elif msg_type == "progress":
@@ -131,17 +222,20 @@ def apply_ws_message_to_progress(snapshot, message, prompt_id):
         maximum = data.get("max")
         if isinstance(value, (int, float)) and isinstance(maximum, (int, float)) and maximum:
             snapshot["phase"] = "running"
-            snapshot["current"] = float(value)
-            snapshot["max"] = float(maximum)
-            snapshot["percent"] = max(0, min(99, round((float(value) / float(maximum)) * 100)))
-            node_id = data.get("node") or data.get("display_node_id")
+            node_ratio = float(value) / float(maximum)
+            node_id = _progress_node_id(data.get("node") or data.get("display_node_id") or snapshot.get("_active_node"))
+            if node_id:
+                snapshot["_active_node"] = node_id
+                _mark_progress_node(snapshot, node_id, node_ratio)
+            snapshot["node_current"] = float(value)
+            snapshot["node_max"] = float(maximum)
+            snapshot["node_percent"] = max(0, min(100, round(node_ratio * 100)))
+            snapshot["percent"] = _total_progress_percent(snapshot)
             snapshot["current_node"] = node_id
             snapshot["detail"] = f"節點 {node_id or '-'}：{int(value)}/{int(maximum)}"
             updated = True
     elif msg_type == "progress_state":
         nodes = data.get("nodes") if isinstance(data.get("nodes"), dict) else {}
-        total_value = 0.0
-        total_max = 0.0
         active_node = None
         for node_id, node in nodes.items():
             if not isinstance(node, dict):
@@ -151,16 +245,14 @@ def apply_ws_message_to_progress(snapshot, message, prompt_id):
             node_max = node.get("max")
             node_value = node.get("value")
             if isinstance(node_max, (int, float)) and float(node_max) > 0:
-                total_max += float(node_max)
-                total_value += min(float(node_value or 0), float(node_max))
+                node_key = node.get("display_node_id") or node.get("node_id") or node_id
+                _mark_progress_node(snapshot, node_key, min(float(node_value or 0), float(node_max)) / float(node_max))
                 if active_node is None and float(node_value or 0) < float(node_max):
                     active_node = node
-                    active_node["node_id"] = node.get("display_node_id") or node.get("node_id") or node_id
-        if total_max > 0:
+                    active_node["node_id"] = node_key
+        if nodes:
             snapshot["phase"] = "running"
-            snapshot["current"] = total_value
-            snapshot["max"] = total_max
-            snapshot["percent"] = max(0, min(99, round((total_value / total_max) * 100)))
+            snapshot["percent"] = _total_progress_percent(snapshot)
             if active_node:
                 node_label = active_node.get("node_id") or "-"
                 snapshot["current_node"] = node_label
@@ -169,11 +261,25 @@ def apply_ws_message_to_progress(snapshot, message, prompt_id):
     return updated
 
 
-def collect_output_refs(record):
+def _sorted_output_items(outputs, workflow=None):
+    items = list(outputs.items())
+    if not isinstance(workflow, dict):
+        return items
+
+    def sort_key(indexed_item):
+        index, (node_id, _output) = indexed_item
+        node = workflow.get(str(node_id)) if isinstance(workflow, dict) else None
+        class_type = str((node or {}).get("class_type") or "").strip()
+        return (OUTPUT_NODE_CLASS_PRIORITY.get(class_type, 50), index)
+
+    return [item for _index, item in sorted(enumerate(items), key=sort_key)]
+
+
+def collect_output_refs(record, workflow=None):
     outputs = (record or {}).get("outputs") or {}
     found = {"images": [], "videos": [], "audio": [], "other": []}
     seen = set()
-    for output in outputs.values():
+    for _node_id, output in _sorted_output_items(outputs, workflow=workflow):
         if not isinstance(output, dict):
             continue
         for raw_key, normalized_key in OUTPUT_REF_KEYS.items():
@@ -209,6 +315,7 @@ def wait_for_images(
     timeout_seconds=1800,
     poll_interval=1.0,
     expected_count=1,
+    total_node_count=None,
     websocket_conn=None,
     progress_callback=None,
     error_cls,
@@ -220,6 +327,7 @@ def wait_for_images(
         timeout_seconds=timeout_seconds,
         poll_interval=poll_interval,
         expected_count=expected_count,
+        total_node_count=total_node_count,
         websocket_conn=websocket_conn,
         progress_callback=progress_callback,
         error_cls=error_cls,
@@ -237,6 +345,9 @@ def wait_for_outputs(
     timeout_seconds=1800,
     poll_interval=1.0,
     expected_count=1,
+    wait_until_completed=False,
+    workflow=None,
+    total_node_count=None,
     websocket_conn=None,
     progress_callback=None,
     error_cls,
@@ -259,6 +370,7 @@ def wait_for_outputs(
         "queue_remaining": None,
         "detail": "已送出至 ComfyUI 佇列",
         "completed": False,
+        "_total_node_count": int(total_node_count or 0) if total_node_count else 0,
         "timeout_seconds": 0 if unlimited_timeout else timeout_value,
         "timeout_unlimited": unlimited_timeout,
         "timeout_extended": False,
@@ -302,7 +414,7 @@ def wait_for_outputs(
                     message = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if apply_ws_message_to_progress(snapshot, message, prompt_id):
+                if apply_ws_message_to_progress(snapshot, message, prompt_id, total_node_count=total_node_count):
                     emit_progress(progress_callback, snapshot)
         now = time.time()
         if now >= next_history_poll:
@@ -337,10 +449,17 @@ def wait_for_outputs(
                 last_status = status
                 if status.get("status_str") == "error" or status.get("completed") is False and status.get("status_str") == "error":
                     raise error_cls("ComfyUI 產圖失敗")
-                found = collect_output_refs(record)
+                found = collect_output_refs(record, workflow=workflow)
                 image_count = len(found["images"])
                 media_count = len(found["videos"]) + len(found["audio"]) + len(found["other"])
-                if image_count >= expected:
+                if (image_count or media_count) and status.get("completed") is True:
+                    snapshot["phase"] = "completed"
+                    snapshot["percent"] = 100
+                    snapshot["completed"] = True
+                    snapshot["detail"] = f"已完成，輸出 {image_count + media_count} 個檔案"
+                    emit_progress(progress_callback, snapshot)
+                    return {**found, "prompt_id": str(prompt_id)}
+                if not wait_until_completed and image_count >= expected:
                     snapshot["phase"] = "completed"
                     snapshot["percent"] = 100
                     snapshot["completed"] = True
@@ -351,13 +470,6 @@ def wait_for_outputs(
                         "images": found["images"][:expected],
                         "prompt_id": str(prompt_id),
                     }
-                if (image_count or media_count) and status.get("completed") is True:
-                    snapshot["phase"] = "completed"
-                    snapshot["percent"] = 100
-                    snapshot["completed"] = True
-                    snapshot["detail"] = f"已完成，輸出 {image_count + media_count} 個檔案"
-                    emit_progress(progress_callback, snapshot)
-                    return {**found, "prompt_id": str(prompt_id)}
             next_history_poll = now + float(poll_interval)
         time.sleep(0.15)
     detail_parts = []
@@ -413,6 +525,7 @@ def generate_from_workflow(
     progress_callback=None,
     extra_data=None,
     fetch_outputs=True,
+    wait_until_completed=False,
     error_cls,
     websocket_module=None,
     image_fetcher,
@@ -433,12 +546,14 @@ def generate_from_workflow(
             error_cls=error_cls,
         )
         prompt_id = queued["prompt_id"]
+        total_node_count = _workflow_node_count(workflow)
         emit_progress(progress_callback, {
             "prompt_id": prompt_id,
             "phase": "queued",
             "percent": 0,
             "current": 0,
             "max": 0,
+            "total_node_count": total_node_count,
             "current_node": None,
             "queue_remaining": None,
             "detail": "已送出至 ComfyUI 佇列",
@@ -450,6 +565,9 @@ def generate_from_workflow(
             prompt_id,
             timeout_seconds=timeout_seconds,
             expected_count=expected_count,
+            wait_until_completed=wait_until_completed,
+            workflow=workflow,
+            total_node_count=total_node_count,
             websocket_conn=websocket_conn,
             progress_callback=progress_callback,
             error_cls=error_cls,

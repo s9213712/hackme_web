@@ -1,7 +1,11 @@
 import json
 from datetime import datetime
+from pathlib import Path
+
+from flask import send_file
 
 from services.comfyui.template import errors as template_errors
+from services.comfyui.template.capability import rewrite_workflow_model_inputs_to_local_options
 from services.comfyui.template.run_gate import (
     RunGateFailure,
     run_workflow_through_gates,
@@ -10,23 +14,203 @@ from services.comfyui.workflow.compat import apply_workflow_compatibility_fixes
 from services.platform.settings import is_feature_enabled
 
 
-def _default_upload_callback(active_client):
+_OFFICIAL_TEMPLATE_MEDIA_DIR = Path(__file__).resolve().parents[2] / "workflows" / "comfyui" / "assets"
+_OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX = "official-template-media:"
+_OFFICIAL_TEMPLATE_MEDIA_ALIASES = {
+    # Keep a small alias table for historical renamed assets. The normal path
+    # is exact basename lookup under workflows/comfyui/assets.
+    "image_qwen_image_edit_2509_input_image.png": "image_qwen_image_edit_2509_input_image.png",
+}
+_OFFICIAL_TEMPLATE_MEDIA_MIME_BY_EXT = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".mkv": "video/x-matroska",
+    ".avi": "video/x-msvideo",
+}
+
+
+def _official_template_media_path(name):
+    clean_name = Path(str(name or "").strip()).name
+    if not clean_name:
+        return None
+    lookup_names = []
+    alias = _OFFICIAL_TEMPLATE_MEDIA_ALIASES.get(clean_name)
+    if alias:
+        lookup_names.append(Path(alias).name)
+    lookup_names.append(clean_name)
+    seen_names = set()
+    for lookup_name in lookup_names:
+        if lookup_name in seen_names:
+            continue
+        seen_names.add(lookup_name)
+        direct_path = _OFFICIAL_TEMPLATE_MEDIA_DIR / lookup_name
+        if direct_path.is_file():
+            return direct_path
+        if not _OFFICIAL_TEMPLATE_MEDIA_DIR.is_dir():
+            continue
+        matches = sorted(
+            path
+            for path in _OFFICIAL_TEMPLATE_MEDIA_DIR.rglob("*")
+            if path.is_file() and path.name == lookup_name
+        )
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+
+def _official_template_media_row(actor, media_name):
+    media_path = _official_template_media_path(media_name)
+    if media_path is None:
+        return None
+    ext = media_path.suffix.lower()
+    mime_type = _OFFICIAL_TEMPLATE_MEDIA_MIME_BY_EXT.get(ext)
+    if not mime_type:
+        return None
+    try:
+        actor_id = int(actor.get("id") if hasattr(actor, "get") else actor["id"])
+    except Exception:
+        actor_id = 0
+    if actor_id <= 0:
+        return None
+    try:
+        size_bytes = int(media_path.stat().st_size)
+    except OSError:
+        return None
+    if size_bytes <= 0:
+        return None
+    clean_name = media_path.name
+    return {
+        "id": f"{_OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX}{clean_name}",
+        "owner_user_id": actor_id,
+        "storage_path": str(media_path),
+        "privacy_mode": "standard_plain",
+        "risk_level": "low",
+        "scan_status": "clean",
+        "original_filename_plain_for_public": clean_name,
+        "mime_type_plain_for_public": mime_type,
+        "size_bytes": size_bytes,
+        "deleted_at": None,
+    }
+
+
+def _workflow_template_fetch_file_row(conn, cloud_file_id, *, actor):
+    cloud_file_id = str(cloud_file_id or "").strip()
+    if cloud_file_id.startswith(_OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX):
+        return _official_template_media_row(
+            actor,
+            cloud_file_id[len(_OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX) :],
+        )
+    row = conn.execute(
+        """
+        SELECT id, owner_user_id, storage_path, privacy_mode, risk_level,
+               scan_status, original_filename_plain_for_public,
+               mime_type_plain_for_public, size_bytes, deleted_at
+        FROM uploaded_files
+        WHERE id = ? AND deleted_at IS NULL
+        """,
+        (cloud_file_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _official_template_media_mime_type(path):
+    return _OFFICIAL_TEMPLATE_MEDIA_MIME_BY_EXT.get(Path(path).suffix.lower()) or "application/octet-stream"
+
+
+def _official_template_media_fallback(file_row, *, raw_path):
+    if not raw_path or Path(raw_path).is_absolute():
+        return None
+    if hasattr(file_row, "get"):
+        owner_user_id = file_row.get("owner_user_id")
+        original_name = str(file_row.get("original_filename_plain_for_public") or "").strip()
+    else:
+        try:
+            owner_user_id = file_row["owner_user_id"]
+        except Exception:
+            owner_user_id = None
+        try:
+            original_name = str(file_row["original_filename_plain_for_public"] or "").strip()
+        except Exception:
+            original_name = ""
+    try:
+        owner_id = int(owner_user_id or 0)
+    except (TypeError, ValueError):
+        owner_id = 0
+    if owner_id != 1 or not raw_path.startswith("users/1/"):
+        return None
+
+    names = [Path(raw_path).name]
+    if original_name:
+        names.append(Path(original_name).name)
+    for name in names:
+        fallback_path = _official_template_media_path(name)
+        if fallback_path is not None:
+            return fallback_path
+    return None
+
+
+def _resolve_upload_source_path(file_row, *, storage_root=None, resolve_file_storage_path=None):
+    storage_path = file_row.get("storage_path") if hasattr(file_row, "get") else file_row["storage_path"]
+    raw_path = str(storage_path or "").strip()
+    source_path = Path(raw_path)
+    candidates = []
+    if source_path.is_absolute():
+        candidates.append(source_path)
+    else:
+        if storage_root and resolve_file_storage_path:
+            try:
+                candidates.append(resolve_file_storage_path(storage_root, file_row))
+            except Exception:
+                pass
+        elif storage_root:
+            candidates.append(Path(storage_root) / raw_path)
+        candidates.append(Path.cwd() / "runtime" / "storage" / raw_path)
+        candidates.append(Path.cwd() / raw_path)
+
+    seen = set()
+    for candidate in candidates:
+        candidate = Path(candidate)
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    fallback = _official_template_media_fallback(file_row, raw_path=raw_path)
+    if fallback is not None:
+        return fallback
+
+    attempted = ", ".join(str(path) for path in candidates) or raw_path or "<empty>"
+    raise FileNotFoundError(f"雲端檔案實體不存在：{raw_path}；已嘗試 {attempted}")
+
+
+def _default_upload_callback(active_client, *, storage_root=None, resolve_file_storage_path=None):
     """Return an UploadCallback that pushes bytes into ComfyUI input/<run_id>/.
 
     Upload errors are intentionally surfaced to Gate 5. Pretending an upload
-    succeeded leaves LoadImage pointing at a file ComfyUI never received.
+    succeeded leaves media loader nodes pointing at files ComfyUI never received.
     """
     def _cb(*, file_row, target_filename, run_id):
         if active_client is None:
             raise RuntimeError("尚未連線到 ComfyUI，無法上傳 workflow 圖片")
-        storage_path = file_row.get("storage_path") if hasattr(file_row, "get") else file_row["storage_path"]
         try:
-            with open(storage_path, "rb") as fh:
+            source_path = _resolve_upload_source_path(
+                file_row,
+                storage_root=storage_root,
+                resolve_file_storage_path=resolve_file_storage_path,
+            )
+            with open(source_path, "rb") as fh:
                 data = fh.read()
         except Exception as exc:
-            raise RuntimeError(f"讀取雲端圖片失敗：{exc}") from exc
+            raise RuntimeError(f"讀取雲端媒體失敗：{exc}") from exc
         if not data:
-            raise RuntimeError("雲端圖片內容為空，無法上傳到 ComfyUI")
+            raise RuntimeError("雲端媒體內容為空，無法上傳到 ComfyUI")
         if hasattr(active_client, "upload_image_bytes"):
             return active_client.upload_image_bytes(
                 data,
@@ -93,6 +277,8 @@ def register_comfyui_workflow_routes(app, ctx):
     DEFAULT_GENERATION_TIMEOUT_SECONDS = ctx["DEFAULT_GENERATION_TIMEOUT_SECONDS"]
     safe_text = ctx["safe_text"]
     threading = ctx["threading"]
+    resolve_file_storage_path = ctx.get("resolve_file_storage_path")
+    storage_root = ctx.get("storage_root")
 
     def _apply_legacy_workflow_user_inputs(workflow_json, user_inputs):
         if not isinstance(workflow_json, dict) or not isinstance(user_inputs, dict):
@@ -228,6 +414,26 @@ def register_comfyui_workflow_routes(app, ctx):
             "required_controlnets": required_controlnets,
             "required_custom_nodes": required_custom_nodes,
         }
+
+    @app.route("/api/comfyui/workflows/official-media/<path:filename>", methods=["GET"])
+    @require_csrf_safe
+    def comfyui_official_workflow_media(filename):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        media_path = _official_template_media_path(filename)
+        if media_path is None:
+            return json_resp({"ok": False, "msg": "找不到官方模板範例媒體"}), 404
+        response = send_file(
+            media_path,
+            mimetype=_official_template_media_mime_type(media_path),
+            as_attachment=False,
+            download_name=media_path.name,
+            conditional=True,
+            max_age=3600,
+        )
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @app.route("/api/comfyui/workflow-layouts", methods=["GET"])
     @app.route("/api/comfyui/workflows", methods=["GET"])
@@ -568,7 +774,16 @@ def register_comfyui_workflow_routes(app, ctx):
                         run_id=gate_run_id,
                         conn=conn,
                         comfyui_client=active_client,
-                        upload_callback=_default_upload_callback(active_client),
+                        upload_callback=_default_upload_callback(
+                            active_client,
+                            storage_root=storage_root,
+                            resolve_file_storage_path=resolve_file_storage_path,
+                        ),
+                        fetch_file_row=lambda gate_conn, cloud_file_id: _workflow_template_fetch_file_row(
+                            gate_conn,
+                            cloud_file_id,
+                            actor=actor,
+                        ),
                     )
                 except RunGateFailure as exc:
                     audit(
@@ -604,6 +819,11 @@ def register_comfyui_workflow_routes(app, ctx):
                 )
             elif user_inputs:
                 workflow_json = _apply_legacy_workflow_user_inputs(workflow_json, user_inputs)
+            if not strict_mode:
+                workflow_json = rewrite_workflow_model_inputs_to_local_options(
+                    workflow_json,
+                    client=active_client,
+                )
 
             prompt_extra_data = {}
             if comfyui_paid_api_policy:

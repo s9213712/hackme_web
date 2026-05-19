@@ -289,6 +289,17 @@ def _first_input(analysis, *names: str) -> Any:
     return None
 
 
+def _first_input_for_class(analysis, class_type: str, *names: str) -> Any:
+    for field_obj in analysis.user_inputs:
+        if (
+            field_obj.class_type == class_type
+            and field_obj.input_name in names
+            and not field_obj.is_link
+        ):
+            return field_obj.raw_value
+    return None
+
+
 def _first_present(*values: Any) -> Any:
     for value in values:
         if value is not None:
@@ -546,7 +557,10 @@ def _default_params(wrapper: dict[str, Any], analysis, generation_mode: str, wor
         "sampler_name": _first_present(_first_input(analysis, "sampler_name"), sampler_name, base.get("sampler_name")) or "",
         "scheduler": _first_present(_first_input(analysis, "scheduler"), sampler_scheduler, base.get("scheduler")) or "",
         "denoise_strength": _first_present(_first_input(analysis, "denoise"), sampler_denoise, base.get("denoise_strength"), 0),
-        "upscale_model": _first_present(_first_input(analysis, "model_name"), base.get("upscale_model")) or "",
+        "upscale_model": _first_present(
+            _first_input_for_class(analysis, "UpscaleModelLoader", "model_name"),
+            base.get("upscale_model"),
+        ) or "",
         "loras": base.get("loras") if isinstance(base.get("loras"), list) else [],
         "controlnet": base.get("controlnet") if isinstance(base.get("controlnet"), dict) else None,
     }

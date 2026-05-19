@@ -35,8 +35,10 @@ def _input_type_for_category(category: FieldCategory) -> str:
     return {
         FieldCategory.TEXT: "textarea",
         FieldCategory.IMAGE: "file_picker",
+        FieldCategory.VIDEO: "video_file_picker",
         FieldCategory.MODEL: "select",
         FieldCategory.NUMERIC: "number",
+        FieldCategory.BOOLEAN: "checkbox",
         FieldCategory.SAMPLER: "select",
         FieldCategory.UNKNOWN: "textarea",
     }[category]
@@ -98,7 +100,35 @@ _FIELD_CONSTRAINT_HINTS: dict[tuple[str, str], dict[str, Any]] = {
     ("HunyuanVideo15ImageToVideo", "batch_size"): {"min": 1, "max": 16, "step": 1},
     ("ImageScaleToTotalPixels", "megapixels"): {"min": 0.1, "max": 64.0, "step": 0.1},
     ("ImageScaleToTotalPixels", "divisible_by"): {"min": 1, "max": 256, "step": 1},
+    ("ResizeImageMaskNode", "resize_type"): {
+        "options": [
+            "scale dimensions",
+            "scale total pixels",
+            "scale longer dimension",
+            "scale shorter dimension",
+            "scale by multiplier",
+            "scale width",
+            "scale height",
+            "scale to multiple",
+        ]
+    },
+    ("ResizeImageMaskNode", "scale_method"): {"options": ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]},
+    ("ResizeImageMaskNode", "resize_type.longer_size"): {"min": 16, "max": 8192, "step": 8},
+    ("ResizeImageMaskNode", "resize_type.shorter_size"): {"min": 16, "max": 8192, "step": 8},
+    ("ResizeImageMaskNode", "resize_type.width"): {"min": 16, "max": 8192, "step": 8},
+    ("ResizeImageMaskNode", "resize_type.height"): {"min": 16, "max": 8192, "step": 8},
+    ("ResizeImageMaskNode", "resize_type.megapixels"): {"min": 0.1, "max": 64.0, "step": 0.1},
+    ("ResizeImageMaskNode", "resize_type.multiplier"): {"min": 0.05, "max": 16.0, "step": 0.05},
+    ("ResizeImageMaskNode", "resize_type.multiple"): {"min": 1, "max": 512, "step": 1},
+    ("ImageBlend", "blend_factor"): {"min": 0.0, "max": 1.0, "step": 0.05},
+    ("ImageBlend", "blend_mode"): {"options": ["normal", "multiply", "screen", "overlay", "soft_light", "difference"]},
     ("LatentUpscaleBy", "scale_by"): {"min": 1.0, "max": 8.0, "step": 0.1},
+    ("SDPoseKeypointExtractor", "batch_size"): {"min": 1, "max": 64, "step": 1},
+    ("SDPoseDrawKeypoints", "stick_width"): {"min": 1, "max": 64, "step": 1},
+    ("SDPoseDrawKeypoints", "face_point_size"): {"min": 1, "max": 32, "step": 1},
+    ("SDPoseDrawKeypoints", "score_threshold"): {"min": 0.0, "max": 1.0, "step": 0.05},
+    ("RTDETR_detect", "threshold"): {"min": 0.0, "max": 1.0, "step": 0.05},
+    ("RTDETR_detect", "max_detections"): {"min": 1, "max": 100, "step": 1},
     ("TextEncodeAceStepAudio1.5", "duration"): {"min": 1, "max": 600, "step": 1},
     ("TextEncodeAceStepAudio1.5", "bpm"): {"min": 1, "max": 300, "step": 1},
     ("TextEncodeAceStepAudio1.5", "cfg_scale"): {"min": 0.0, "max": 20.0, "step": 0.1},
@@ -120,6 +150,7 @@ _FIELD_CONSTRAINT_HINTS: dict[tuple[str, str], dict[str, Any]] = {
     ("LoadImage", "image"): {"accept_mime": ["image/png", "image/jpeg", "image/webp"]},
     ("LoadImageMask", "image"): {"accept_mime": ["image/png", "image/jpeg", "image/webp"]},
     ("LoadImageMask", "channel"): {"options": ["alpha", "red", "green", "blue"]},
+    ("LoadVideo", "file"): {"accept_mime": ["video/mp4", "video/webm", "video/quicktime", "video/x-matroska"]},
 }
 
 
@@ -219,6 +250,7 @@ def _label_zh(field_obj: InputField, label_context: dict[str, Any] | None = None
         ("LoadImage", "image"): "上傳圖片",
         ("LoadImageMask", "image"): "上傳遮罩",
         ("LoadImageMask", "channel"): "遮罩通道",
+        ("LoadVideo", "file"): "載入影片",
         ("CheckpointLoaderSimple", "ckpt_name"): "Checkpoint / 大模型",
         ("VAELoader", "vae_name"): "VAE",
         ("CLIPLoader", "clip_name"): "CLIP / 文字編碼器",
@@ -227,6 +259,7 @@ def _label_zh(field_obj: InputField, label_context: dict[str, Any] | None = None
         ("TripleCLIPLoader", "clip_name1"): "CLIP-L 文字編碼器",
         ("TripleCLIPLoader", "clip_name2"): "CLIP-G 文字編碼器",
         ("TripleCLIPLoader", "clip_name3"): "T5 / 第三文字編碼器",
+        ("CLIPVisionLoader", "clip_name"): "CLIP Vision 模型",
         ("UNETLoader", "unet_name"): "Diffusion / UNet 大模型",
         ("LoraLoader", "lora_name"): "LoRA 模型",
         ("LoraLoaderModelOnly", "lora_name"): "LoRA 模型（Model-only）",
@@ -235,6 +268,7 @@ def _label_zh(field_obj: InputField, label_context: dict[str, Any] | None = None
         ("LoraLoaderModelOnly", "strength_model"): "LoRA 強度",
         ("ControlNetLoader", "control_net_name"): "ControlNet 模型",
         ("UpscaleModelLoader", "model_name"): "放大 / Upscale 模型",
+        ("LatentUpscaleModelLoader", "model_name"): "Latent 放大模型",
         ("KSampler", "seed"): "種子",
         ("KSampler", "steps"): "步數",
         ("KSampler", "cfg"): "CFG",
@@ -332,6 +366,28 @@ def _label_zh(field_obj: InputField, label_context: dict[str, Any] | None = None
         ("ImageScaleToTotalPixels", "divisible_by"): "尺寸整除",
         ("LatentUpscaleBy", "upscale_method"): "Latent 放大方式",
         ("LatentUpscaleBy", "scale_by"): "Latent 放大倍率",
+        ("ResizeImageMaskNode", "resize_type"): "縮放模式",
+        ("ResizeImageMaskNode", "scale_method"): "縮放演算法",
+        ("ResizeImageMaskNode", "resize_type.longer_size"): "長邊尺寸",
+        ("ResizeImageMaskNode", "resize_type.shorter_size"): "短邊尺寸",
+        ("ResizeImageMaskNode", "resize_type.width"): "縮放寬度",
+        ("ResizeImageMaskNode", "resize_type.height"): "縮放高度",
+        ("ResizeImageMaskNode", "resize_type.megapixels"): "目標百萬像素",
+        ("ResizeImageMaskNode", "resize_type.multiplier"): "縮放倍率",
+        ("ResizeImageMaskNode", "resize_type.multiple"): "尺寸倍數",
+        ("ImageBlend", "blend_factor"): "預覽混合比例",
+        ("ImageBlend", "blend_mode"): "預覽混合模式",
+        ("SDPoseKeypointExtractor", "batch_size"): "姿態批次大小",
+        ("SDPoseDrawKeypoints", "draw_body"): "繪製身體",
+        ("SDPoseDrawKeypoints", "draw_hands"): "繪製手部",
+        ("SDPoseDrawKeypoints", "draw_face"): "繪製臉部",
+        ("SDPoseDrawKeypoints", "draw_feet"): "繪製腳部",
+        ("SDPoseDrawKeypoints", "stick_width"): "骨架線寬",
+        ("SDPoseDrawKeypoints", "face_point_size"): "臉部點大小",
+        ("SDPoseDrawKeypoints", "score_threshold"): "姿態分數門檻",
+        ("RTDETR_detect", "threshold"): "人物偵測門檻",
+        ("RTDETR_detect", "class_name"): "偵測類別",
+        ("RTDETR_detect", "max_detections"): "最大偵測數",
         ("CreateVideo", "fps"): "FPS",
     }
     label = table.get(
@@ -382,9 +438,29 @@ def _serialize_field(field_obj: InputField, label_context: dict[str, Any] | None
         payload["lock_reason"] = "template_default_model"
     if field_obj.node_title:
         payload["node_title"] = field_obj.node_title
+    if field_obj.class_type == "RTDETR_detect" and field_obj.input_name == "class_name":
+        payload["input_type"] = "text"
     if constraints:
         payload["constraints"] = constraints
     return payload
+
+
+def _supports_embedding_shortcuts(field: dict[str, Any]) -> bool:
+    class_type = str(field.get("class_type") or "")
+    input_name = str(field.get("input_name") or "")
+    return (
+        (class_type in {"CLIPTextEncode", "CLIPTextEncodeFlux", "CR Text"} and input_name == "text")
+        or (
+            class_type
+            in {
+                "TextEncodeQwenImageEditPlus",
+                "TextEncodeQwenImageEditPlusCustom_lrzjason",
+                "CR Prompt Text",
+            }
+            and input_name == "prompt"
+        )
+        or (class_type == "TextEncodeAceStepAudio1.5" and input_name == "tags")
+    )
 
 
 def _embedding_shortcuts_field(text_fields: Iterable[dict[str, Any]]) -> dict[str, Any]:
@@ -433,7 +509,9 @@ _TEMPLATE_LOCKED_MODEL_FIELDS = {
     ("TripleCLIPLoader", "clip_name1"),
     ("TripleCLIPLoader", "clip_name2"),
     ("TripleCLIPLoader", "clip_name3"),
+    ("CLIPVisionLoader", "clip_name"),
     ("UNETLoader", "unet_name"),
+    ("LatentUpscaleModelLoader", "model_name"),
 }
 
 
@@ -568,6 +646,7 @@ class UISchema:
 _PANEL_ORDER: list[tuple[str, FieldCategory, str]] = [
     ("text", FieldCategory.TEXT, "文字輸入"),
     ("image", FieldCategory.IMAGE, "圖片輸入"),
+    ("video", FieldCategory.VIDEO, "影片輸入"),
     ("model", FieldCategory.MODEL, "模型需求"),
     ("sampler", FieldCategory.SAMPLER, "採樣設定"),
     ("numeric", FieldCategory.NUMERIC, "進階數值參數"),
@@ -602,8 +681,9 @@ def build_ui_schema(
         by_panel[panel_key].append(_serialize_field(field_obj, label_context))
 
     text_fields = by_panel.get("text", [])
-    if text_fields:
-        text_fields.append(_embedding_shortcuts_field(text_fields))
+    embedding_targets = [field for field in text_fields if _supports_embedding_shortcuts(field)]
+    if embedding_targets:
+        text_fields.append(_embedding_shortcuts_field(embedding_targets))
 
     for key, _category, label in _PANEL_ORDER:
         fields = by_panel.get(key, [])
@@ -652,6 +732,8 @@ def _panel_key_for_field(field_obj: InputField) -> str | None:
         return "text"
     if cat == FieldCategory.IMAGE:
         return "image"
+    if cat == FieldCategory.VIDEO:
+        return "video"
     if cat == FieldCategory.MODEL:
         return "model"
     if cat == FieldCategory.SAMPLER:
@@ -662,6 +744,8 @@ def _panel_key_for_field(field_obj: InputField) -> str | None:
         # strength) goes onto the advanced numeric panel.
         if field_obj.class_type in {"KSampler", "KSamplerAdvanced"}:
             return "sampler"
+        return "numeric"
+    if cat == FieldCategory.BOOLEAN:
         return "numeric"
     # FieldCategory.UNKNOWN — keep them out of UI so the user can't break the
     # workflow by editing fields whose semantics we don't model.

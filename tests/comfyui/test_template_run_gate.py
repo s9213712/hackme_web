@@ -36,7 +36,7 @@ TXT2IMG = {
 }
 
 
-def _stub_client(*, classes, models=None, vaes=None, diffusion_models=None, clips=None, embeddings=None):
+def _stub_client(*, classes, models=None, vaes=None, diffusion_models=None, clips=None, latent_upscale_models=None, embeddings=None):
     info = {cls: {"input": {"required": {}}} for cls in classes}
     if "CheckpointLoaderSimple" in info and models is not None:
         info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [list(models)]
@@ -46,6 +46,8 @@ def _stub_client(*, classes, models=None, vaes=None, diffusion_models=None, clip
         info["UNETLoader"]["input"]["required"]["unet_name"] = [list(diffusion_models)]
     if "CLIPLoader" in info and clips is not None:
         info["CLIPLoader"]["input"]["required"]["clip_name"] = [list(clips)]
+    if "LatentUpscaleModelLoader" in info and latent_upscale_models is not None:
+        info["LatentUpscaleModelLoader"]["input"]["required"]["model_name"] = [list(latent_upscale_models)]
     if "KSampler" in info:
         info["KSampler"]["input"]["required"]["sampler_name"] = [["euler"]]
         info["KSampler"]["input"]["required"]["scheduler"] = [["normal"]]
@@ -64,6 +66,7 @@ def _ok_client():
         classes={
             "CheckpointLoaderSimple", "EmptyLatentImage", "CLIPTextEncode",
             "KSampler", "VAEDecode", "SaveImage", "LoadImage", "LoadImageMask",
+            "LoadVideo",
         },
         models=["v1-5.safetensors"],
     )
@@ -113,6 +116,51 @@ def test_happy_path_all_gates_pass():
     assert result.workflow["6"]["inputs"]["text"] == "cat"
     assert result.capability.overall == "SUPPORTED"
     assert result.audit_metadata["overall"] == "SUPPORTED"
+
+
+def test_boolean_template_inputs_are_validated_and_applied():
+    workflow = {
+        "1": {
+            "class_type": "SDPoseDrawKeypoints",
+            "inputs": {
+                "keypoints": ["0", 0],
+                "draw_body": True,
+                "draw_hands": True,
+                "draw_face": True,
+                "draw_feet": True,
+                "stick_width": 4,
+                "face_point_size": 2,
+                "score_threshold": 0.5,
+            },
+        },
+        "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "ComfyUI", "images": ["1", 0]}},
+    }
+
+    result = run_workflow_through_gates(
+        raw_workflow=workflow,
+        user_inputs={
+            "1": {
+                "draw_body": False,
+                "draw_hands": True,
+                "draw_face": False,
+                "draw_feet": True,
+                "stick_width": 5,
+                "face_point_size": 3,
+                "score_threshold": 0.7,
+            }
+        },
+        image_field_assignments={},
+        actor={"id": 1, "username": "alice"},
+        user_id=1,
+        run_id="pose123",
+        conn=None,
+        comfyui_client=_stub_client(classes={"SDPoseDrawKeypoints", "SaveImage"}),
+        upload_callback=_stub_upload,
+    )
+
+    assert result.workflow["1"]["inputs"]["draw_body"] is False
+    assert result.workflow["1"]["inputs"]["draw_face"] is False
+    assert result.workflow["1"]["inputs"]["stick_width"] == 5
 
 
 def test_save_audio_filename_prefix_is_system_rewritten_not_required():
@@ -313,6 +361,33 @@ def test_gate2_rechecks_model_fields_after_user_inputs():
     }
 
 
+def test_run_gate_rewrites_latent_upscale_model_to_local_subfolder_option():
+    workflow = {
+        "303": {
+            "class_type": "LatentUpscaleModelLoader",
+            "inputs": {"model_name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"},
+        },
+    }
+    client = _stub_client(
+        classes={"LatentUpscaleModelLoader"},
+        latent_upscale_models=["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"],
+    )
+
+    result = run_workflow_through_gates(
+        raw_workflow=workflow,
+        user_inputs={},
+        image_field_assignments={},
+        actor={"id": 1},
+        user_id=1,
+        run_id="r",
+        conn=None,
+        comfyui_client=client,
+        upload_callback=_stub_upload,
+    )
+
+    assert result.workflow["303"]["inputs"]["model_name"] == "3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+
+
 def test_gate3_allowlist_blocks_unknown_class():
     """Unknown class type passes capability if local ComfyUI has it, but Gate 3 still rejects."""
     bad = {**TXT2IMG, "10": {"class_type": "FancyCommunityNode", "inputs": {}}}
@@ -509,6 +584,47 @@ def test_gate5_image_remap_invokes_upload_callback():
     assert upload_calls[0] == ("1_run9_1.png", "run9")
     # Workflow's LoadImage.image was rewritten to ComfyUI subfolder/filename
     assert result.workflow["1"]["inputs"]["image"] == "run9/1_run9_1.png"
+    assert result.audit_metadata["image_remapped"] == 1
+
+
+def test_gate5_video_remap_invokes_upload_callback():
+    """LoadVideo.file uses the same protected media remap path as LoadImage."""
+    workflow_with_video = {
+        **TXT2IMG,
+        "1": {"class_type": "LoadVideo", "inputs": {"file": "clip.webm"}},
+    }
+    file_row = {
+        "id": "v-1",
+        "owner_user_id": 1,
+        "storage_path": "/tmp/clip.webm",
+        "privacy_mode": "standard_plain",
+        "scan_status": "clean",
+        "original_filename_plain_for_public": "clip.webm",
+        "mime_type_plain_for_public": "video/webm",
+        "size_bytes": 2048,
+        "deleted_at": None,
+    }
+    upload_calls = []
+
+    def _capture_upload(*, file_row, target_filename, run_id):
+        upload_calls.append((target_filename, run_id))
+        return {"filename": target_filename, "subfolder": run_id}
+
+    result = run_workflow_through_gates(
+        raw_workflow=workflow_with_video,
+        user_inputs=_full_user_inputs(),
+        image_field_assignments={"1": "v-1"},
+        actor={"id": 1, "username": "alice"},
+        user_id=1,
+        run_id="runv",
+        conn=None,
+        comfyui_client=_ok_client(),
+        upload_callback=_capture_upload,
+        fetch_file_row=lambda _conn, _id: file_row,
+    )
+
+    assert upload_calls == [("1_runv_1.webm", "runv")]
+    assert result.workflow["1"]["inputs"]["file"] == "runv/1_runv_1.webm"
     assert result.audit_metadata["image_remapped"] == 1
 
 

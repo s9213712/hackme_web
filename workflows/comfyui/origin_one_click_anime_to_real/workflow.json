@@ -33,14 +33,6 @@
       ]
     }
   },
-  "306": {
-    "_meta": {
-      "group_title": "图片反推开关",
-      "title": "图片反推开关"
-    },
-    "class_type": "Fast Groups Bypasser (rgthree)",
-    "inputs": {}
-  },
   "307": {
     "_meta": {
       "group_title": "RED-Z-二次重绘",

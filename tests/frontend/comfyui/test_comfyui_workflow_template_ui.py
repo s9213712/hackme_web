@@ -40,10 +40,13 @@ def test_workflow_template_cards_show_default_model_notice():
     js = _read("public/js/36-comfyui-workflows.js")
     css = _read("public/styles.css")
 
+    assert 'const COMFYUI_BUILTIN_VAE_LABEL = "使用各自大模型內建 VAE";' in js
     assert "function comfyuiWorkflowDefaultModelEntries" in js
+    assert "function comfyuiWorkflowUsesBuiltinVae" in js
     assert "function comfyuiWorkflowDefaultModelSummaryText" in js
     assert "function comfyuiWorkflowDefaultModelNoticeHtml" in js
     assert "預設模型：" in js
+    assert 'addEntry("vae", COMFYUI_BUILTIN_VAE_LABEL);' in js
     assert "default_params" in js
     assert "required_models" in js
     assert "required_loras" in js
@@ -90,6 +93,8 @@ def test_template_loader_model_fields_do_not_reuse_global_vae_select():
     assert 'return { kind: "readonly" };' in js
     assert 'field?.class_type === "VAELoader" && field?.input_name === "vae_name") return { kind: "field", targetId: "comfyui-vae-select" };' not in js
     assert 'binding.targetId === "comfyui-vae-select"' not in js
+    assert "comfyuiTemplateDisplayValue(field, field?.current_value)" in js
+    assert "留白代表使用各自大模型內建 VAE" in js
 
 
 def test_template_cards_do_not_sync_through_legacy_manual_fields():
@@ -157,18 +162,49 @@ def test_template_prompts_ask_before_global_sharing_multiple_fields():
     assert ".comfyui-template-prompt-sharing" in css
 
 
+def test_compare_two_checkpoints_shares_sampler_params_except_checkpoint_models():
+    workflow_js = _read("public/js/36-comfyui-workflows.js")
+
+    assert 'const COMFYUI_COMPARE_TWO_CHECKPOINTS_ID = "origin_compare_2checkpoints";' in workflow_js
+    assert "COMFYUI_COMPARE_SHARED_KSAMPLER_INPUTS" in workflow_js
+    assert "function comfyuiTemplateIsCompareTwoCheckpoints" in workflow_js
+    assert "function comfyuiTemplateIsHiddenCompareSharedField" in workflow_js
+    assert "function comfyuiTemplateCompareSharedRuntimeValue" in workflow_js
+    assert "共同種子" in workflow_js
+    assert "共同取樣器" in workflow_js
+    assert "comfyuiTemplateIsHiddenCompareSharedField(detail, field)" in workflow_js
+    assert "? comfyuiTemplateCompareSharedRuntimeValue(detail, field)" in workflow_js
+
+
 def test_template_local_images_are_imported_before_safe_remap_gate():
     comfyui_js = _read("public/js/36-comfyui.js")
     workflow_js = _read("public/js/36-comfyui-workflows.js")
 
     assert 'apiFetch(API + "/comfyui/import-uploaded-image"' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/import-uploaded-video"' in comfyui_js
     assert "function importComfyuiUploadedImage" in comfyui_js
+    assert "async function importComfyuiUploadedMedia" in comfyui_js
     assert "setComfyuiInputAssetFromRef(assetKey" in comfyui_js
     assert "cloudFileId: image.cloud_file_id" in comfyui_js
     assert "async function ensureComfyuiTemplateImageAssignments" in workflow_js
     assert ".filter((item) => item.hasLocalFile && item.assetKey)" in workflow_js
-    assert "await importComfyuiUploadedImage(assetKey);" in workflow_js
+    assert "await importer(assetKey);" in workflow_js
     assert "await ensureComfyuiTemplateImageAssignments(templateDetail)" in workflow_js
+
+
+def test_official_workflow_template_media_defaults_are_auto_assigned():
+    workflow_js = _read("public/js/36-comfyui-workflows.js")
+
+    assert 'const COMFYUI_OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX = "official-template-media:";' in workflow_js
+    assert "function comfyuiTemplateOfficialMediaFilename" in workflow_js
+    assert "function comfyuiTemplateOfficialMediaAssignment" in workflow_js
+    assert "function comfyuiTemplateOfficialMediaPreviewUrl" in workflow_js
+    assert '`${API}/comfyui/workflows/official-media/${encodeURIComponent(cleanName)}`' in workflow_js
+    assert "assignments[String(field.node_id)] = officialAssignment;" in workflow_js
+    assert "officialMediaFilename" in workflow_js
+    assert "officialMediaPreviewUrl" in workflow_js
+    assert '<video src="${sanitize(officialMediaPreviewUrl)}" controls muted preload="metadata"></video>' in workflow_js
+    assert '<img src="${sanitize(officialMediaPreviewUrl)}" alt="${sanitize(fieldLabel || "模板範例圖片")}" />' in workflow_js
 
 
 def test_video_workflow_templates_use_short_foreground_wait_without_losing_job_id():
@@ -187,7 +223,8 @@ def test_video_workflow_templates_use_short_foreground_wait_without_losing_job_i
     assert "function comfyuiWorkflowPresetForegroundTimeoutSeconds(item = {})" in workflow_js
     assert 'return outputs.includes("video") ? videoTimeout : baseTimeout;' in workflow_js
     assert "const workflowTimeoutSeconds = comfyuiWorkflowPresetForegroundTimeoutSeconds(preset);" in workflow_js
-    assert "pollComfyuiJobUntilDone(json.job?.job_id, controller, workflowTimeoutSeconds)" in workflow_js
+    assert "const jobId = json.job?.job_id;" in workflow_js
+    assert "pollComfyuiJobUntilDone(jobId, controller, workflowTimeoutSeconds)" in workflow_js
     assert 'label: timedOut ? "已停止前台等待" : "產圖失敗"' in workflow_js
 
 

@@ -273,6 +273,21 @@ def test_ui_schema_image_panel_has_accept_mime():
     assert "image/png" in img_field["constraints"]["accept_mime"]
 
 
+def test_ui_schema_video_panel_has_load_video_file_picker():
+    workflow = {
+        **TXT2IMG,
+        "10": {"class_type": "LoadVideo", "inputs": {"file": "input.mp4"}},
+    }
+    schema = build_ui_schema(analysis=analyze_workflow_json(workflow))
+    video_panel = next(p for p in schema.panels if p["id"] == "video")
+    video_field = next(f for f in video_panel["fields"] if f["id"] == "node:10:file")
+
+    assert video_panel["label"] == "影片輸入"
+    assert video_field["label"] == "載入影片"
+    assert video_field["input_type"] == "video_file_picker"
+    assert "video/mp4" in video_field["constraints"]["accept_mime"]
+
+
 def test_ui_schema_shows_template_locked_model_loader_fields_as_readonly():
     workflow = {
         **TXT2IMG,
@@ -289,6 +304,10 @@ def test_ui_schema_shows_template_locked_model_loader_fields_as_readonly():
             "class_type": "VAELoader",
             "inputs": {"vae_name": "qwen_image_vae.safetensors"},
         },
+        "23": {
+            "class_type": "CLIPVisionLoader",
+            "inputs": {"clip_name": "sigclip_vision_patch14_384.safetensors"},
+        },
     }
     schema = build_ui_schema(analysis=analyze_workflow_json(workflow))
     all_fields = {f["id"]: f for p in schema.panels for f in p.get("fields", [])}
@@ -299,9 +318,12 @@ def test_ui_schema_shows_template_locked_model_loader_fields_as_readonly():
     assert all_fields["node:20:unet_name"]["required"] is False
     assert all_fields["node:21:clip_name"]["read_only"] is True
     assert all_fields["node:22:vae_name"]["read_only"] is True
+    assert all_fields["node:23:clip_name"]["label"] == "CLIP Vision 模型"
+    assert all_fields["node:23:clip_name"]["read_only"] is True
     assert "node:20:unet_name" not in ids
     assert "node:21:clip_name" not in ids
     assert "node:22:vae_name" not in ids
+    assert "node:23:clip_name" not in ids
 
 
 def test_ui_schema_model_labels_distinguish_large_lora_and_upscale_models():
@@ -315,14 +337,21 @@ def test_ui_schema_model_labels_distinguish_large_lora_and_upscale_models():
             "class_type": "UpscaleModelLoader",
             "inputs": {"model_name": "4x-UltraSharp.pth"},
         },
+        "24": {
+            "class_type": "LatentUpscaleModelLoader",
+            "inputs": {"model_name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"},
+        },
     }
     schema = build_ui_schema(analysis=analyze_workflow_json(workflow))
     model_panel = next(p for p in schema.panels if p["id"] == "model")
     labels = {f["id"]: f["label"] for f in model_panel["fields"]}
+    fields = {f["id"]: f for f in model_panel["fields"]}
 
     assert labels["node:4:ckpt_name"] == "Checkpoint / 大模型"
     assert labels["node:22:lora_name"] == "LoRA 模型（Model-only）（High Noise）"
     assert labels["node:23:model_name"] == "放大 / Upscale 模型"
+    assert labels["node:24:model_name"] == "Latent 放大模型"
+    assert fields["node:24:model_name"]["locked"] is True
 
 
 def test_ui_schema_uses_ordinals_when_duplicate_labels_share_same_stage_title():

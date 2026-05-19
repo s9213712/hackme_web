@@ -29,8 +29,10 @@ from services.comfyui.validation.rules import WorkflowValidationError
 class FieldCategory(str, Enum):
     TEXT = "TEXT"  # CLIPTextEncode.text, etc.
     IMAGE = "IMAGE"  # LoadImage.image, LoadImageMask.image
+    VIDEO = "VIDEO"  # LoadVideo.file
     MODEL = "MODEL"  # ckpt_name / vae_name / lora_name / control_net_name / model_name
     NUMERIC = "NUMERIC"  # KSampler seed / steps / cfg / denoise / etc.
+    BOOLEAN = "BOOLEAN"  # on/off node options
     SAMPLER = "SAMPLER"  # KSampler.sampler_name / scheduler (enum)
     UNKNOWN = "UNKNOWN"  # not classifiable, leave for caller
 
@@ -48,6 +50,8 @@ _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     ("LoadImage", "image"): FieldCategory.IMAGE,
     ("LoadImageMask", "image"): FieldCategory.IMAGE,
     ("LoadImageMask", "channel"): FieldCategory.TEXT,  # alpha/red/green/blue enum
+    # Video
+    ("LoadVideo", "file"): FieldCategory.VIDEO,
     # Models
     ("CheckpointLoaderSimple", "ckpt_name"): FieldCategory.MODEL,
     ("VAELoader", "vae_name"): FieldCategory.MODEL,
@@ -57,11 +61,13 @@ _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     ("TripleCLIPLoader", "clip_name1"): FieldCategory.MODEL,
     ("TripleCLIPLoader", "clip_name2"): FieldCategory.MODEL,
     ("TripleCLIPLoader", "clip_name3"): FieldCategory.MODEL,
+    ("CLIPVisionLoader", "clip_name"): FieldCategory.MODEL,
     ("UNETLoader", "unet_name"): FieldCategory.MODEL,
     ("LoraLoader", "lora_name"): FieldCategory.MODEL,
     ("LoraLoaderModelOnly", "lora_name"): FieldCategory.MODEL,
     ("ControlNetLoader", "control_net_name"): FieldCategory.MODEL,
     ("UpscaleModelLoader", "model_name"): FieldCategory.MODEL,
+    ("LatentUpscaleModelLoader", "model_name"): FieldCategory.MODEL,
     ("ByteDanceSeedreamNode", "model"): FieldCategory.MODEL,
     ("GrokImageEditNode", "model"): FieldCategory.MODEL,
     # Numeric — KSampler
@@ -98,8 +104,22 @@ _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     ("CreateVideo", "fps"): FieldCategory.NUMERIC,
     ("ImageScaleToTotalPixels", "megapixels"): FieldCategory.NUMERIC,
     ("ImageScaleToTotalPixels", "divisible_by"): FieldCategory.NUMERIC,
+    ("ResizeImageMaskNode", "resize_type.longer_size"): FieldCategory.NUMERIC,
+    ("ResizeImageMaskNode", "resize_type.shorter_size"): FieldCategory.NUMERIC,
+    ("ResizeImageMaskNode", "resize_type.width"): FieldCategory.NUMERIC,
+    ("ResizeImageMaskNode", "resize_type.height"): FieldCategory.NUMERIC,
+    ("ResizeImageMaskNode", "resize_type.megapixels"): FieldCategory.NUMERIC,
+    ("ResizeImageMaskNode", "resize_type.multiplier"): FieldCategory.NUMERIC,
+    ("ResizeImageMaskNode", "resize_type.multiple"): FieldCategory.NUMERIC,
+    ("ImageBlend", "blend_factor"): FieldCategory.NUMERIC,
     ("LatentUpscaleBy", "scale_by"): FieldCategory.NUMERIC,
     ("EmptyAceStep1.5LatentAudio", "seconds"): FieldCategory.NUMERIC,
+    ("SDPoseKeypointExtractor", "batch_size"): FieldCategory.NUMERIC,
+    ("SDPoseDrawKeypoints", "stick_width"): FieldCategory.NUMERIC,
+    ("SDPoseDrawKeypoints", "face_point_size"): FieldCategory.NUMERIC,
+    ("SDPoseDrawKeypoints", "score_threshold"): FieldCategory.NUMERIC,
+    ("RTDETR_detect", "threshold"): FieldCategory.NUMERIC,
+    ("RTDETR_detect", "max_detections"): FieldCategory.NUMERIC,
     ("TextEncodeAceStepAudio1.5", "seed"): FieldCategory.NUMERIC,
     ("TextEncodeAceStepAudio1.5", "duration"): FieldCategory.NUMERIC,
     ("TextEncodeAceStepAudio1.5", "bpm"): FieldCategory.NUMERIC,
@@ -175,6 +195,14 @@ _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     ("GrokImageEditNode", "resolution"): FieldCategory.SAMPLER,
     ("GrokImageEditNode", "aspect_ratio"): FieldCategory.SAMPLER,
     ("ComfySwitchNode", "switch"): FieldCategory.SAMPLER,
+    ("ResizeImageMaskNode", "resize_type"): FieldCategory.SAMPLER,
+    ("ResizeImageMaskNode", "scale_method"): FieldCategory.SAMPLER,
+    ("ImageBlend", "blend_mode"): FieldCategory.SAMPLER,
+    ("RTDETR_detect", "class_name"): FieldCategory.TEXT,
+    ("SDPoseDrawKeypoints", "draw_body"): FieldCategory.BOOLEAN,
+    ("SDPoseDrawKeypoints", "draw_hands"): FieldCategory.BOOLEAN,
+    ("SDPoseDrawKeypoints", "draw_face"): FieldCategory.BOOLEAN,
+    ("SDPoseDrawKeypoints", "draw_feet"): FieldCategory.BOOLEAN,
     # VAEEncodeForInpaint mask grow (numeric)
     ("VAEEncodeForInpaint", "grow_mask_by"): FieldCategory.NUMERIC,
 }
@@ -246,8 +274,13 @@ _MODEL_CATEGORY_BUCKETS = {
     "model": "api_model",
 }
 
+_MODEL_CLASS_INPUT_BUCKETS = {
+    ("CLIPVisionLoader", "clip_name"): "clip_vision",
+    ("LatentUpscaleModelLoader", "model_name"): "latent_upscale_model",
+}
+
 _EMBEDDING_TAG_RE = re.compile(r"<\s*embeddings?\s*:\s*([^<>]+?)\s*>", re.IGNORECASE)
-_EMBEDDING_PREFIX_RE = re.compile(r"(?<![\w/])embedding:([^\s,;<>]+)", re.IGNORECASE)
+_EMBEDDING_PREFIX_RE = re.compile(r"(?<![\w/])embedding:([^,;<>\r\n]+)", re.IGNORECASE)
 
 
 def _extract_embedding_names(text: str) -> list[str]:
@@ -334,7 +367,10 @@ def analyze_workflow_json(workflow: dict[str, Any]) -> WorkflowAnalysis:
                 and isinstance(raw_value, str)
                 and raw_value
             ):
-                bucket = _MODEL_CATEGORY_BUCKETS.get(input_name, "model")
+                bucket = _MODEL_CLASS_INPUT_BUCKETS.get(
+                    (field_obj.class_type, field_obj.input_name),
+                    _MODEL_CATEGORY_BUCKETS.get(input_name, "model"),
+                )
                 required_models.setdefault(bucket, []).append(raw_value)
             if field_obj.category == FieldCategory.TEXT and not is_link and isinstance(raw_value, str):
                 embeddings = _extract_embedding_names(raw_value)

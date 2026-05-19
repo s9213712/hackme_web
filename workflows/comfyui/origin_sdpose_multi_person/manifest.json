@@ -62,6 +62,24 @@
         "collapsed_default": true,
         "fields": [
           {
+            "category": "TEXT",
+            "class_type": "RTDETR_detect",
+            "current_value": "person",
+            "id": "node:697:class_name",
+            "input_name": "class_name",
+            "input_type": "text",
+            "label": "偵測類別",
+            "node_id": "697",
+            "required": true
+          }
+        ],
+        "id": "text",
+        "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
             "category": "IMAGE",
             "class_type": "LoadImage",
             "constraints": {
@@ -114,6 +132,320 @@
         ],
         "id": "model",
         "label": "模型需求"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "SAMPLER",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "options": [
+                "scale dimensions",
+                "scale total pixels",
+                "scale longer dimension",
+                "scale shorter dimension",
+                "scale by multiplier",
+                "scale width",
+                "scale height",
+                "scale to multiple"
+              ]
+            },
+            "current_value": "scale longer dimension",
+            "id": "node:687:resize_type",
+            "input_name": "resize_type",
+            "input_type": "select",
+            "label": "縮放模式（Preview）",
+            "node_id": "687",
+            "node_title": "Preview",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "options": [
+                "nearest-exact",
+                "bilinear",
+                "area",
+                "bicubic",
+                "lanczos"
+              ]
+            },
+            "current_value": "lanczos",
+            "id": "node:687:scale_method",
+            "input_name": "scale_method",
+            "input_type": "select",
+            "label": "縮放演算法（Preview）",
+            "node_id": "687",
+            "node_title": "Preview",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ImageBlend",
+            "constraints": {
+              "options": [
+                "normal",
+                "multiply",
+                "screen",
+                "overlay",
+                "soft_light",
+                "difference"
+              ]
+            },
+            "current_value": "normal",
+            "id": "node:690:blend_mode",
+            "input_name": "blend_mode",
+            "input_type": "select",
+            "label": "預覽混合模式",
+            "node_id": "690",
+            "node_title": "Preview",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "options": [
+                "nearest-exact",
+                "bilinear",
+                "area",
+                "bicubic",
+                "lanczos"
+              ]
+            },
+            "current_value": "lanczos",
+            "id": "node:693:scale_method",
+            "input_name": "scale_method",
+            "input_type": "select",
+            "label": "縮放演算法（Node 693）",
+            "node_id": "693",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "options": [
+                "scale dimensions",
+                "scale total pixels",
+                "scale longer dimension",
+                "scale shorter dimension",
+                "scale by multiplier",
+                "scale width",
+                "scale height",
+                "scale to multiple"
+              ]
+            },
+            "current_value": "scale longer dimension",
+            "id": "node:693:resize_type",
+            "input_name": "resize_type",
+            "input_type": "select",
+            "label": "縮放模式（Node 693）",
+            "node_id": "693",
+            "required": true
+          }
+        ],
+        "id": "sampler",
+        "label": "採樣設定"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "max": 8192,
+              "min": 16,
+              "step": 8
+            },
+            "current_value": 1024,
+            "id": "node:687:resize_type.longer_size",
+            "input_name": "resize_type.longer_size",
+            "input_type": "number",
+            "label": "長邊尺寸（Preview）",
+            "node_id": "687",
+            "node_title": "Preview",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ImageBlend",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 0.5,
+            "id": "node:690:blend_factor",
+            "input_name": "blend_factor",
+            "input_type": "number",
+            "label": "預覽混合比例",
+            "node_id": "690",
+            "node_title": "Preview",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "SDPoseKeypointExtractor",
+            "constraints": {
+              "max": 64,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 16,
+            "id": "node:692:batch_size",
+            "input_name": "batch_size",
+            "input_type": "number",
+            "label": "姿態批次大小",
+            "node_id": "692",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ResizeImageMaskNode",
+            "constraints": {
+              "max": 8192,
+              "min": 16,
+              "step": 8
+            },
+            "current_value": 1024,
+            "id": "node:693:resize_type.longer_size",
+            "input_name": "resize_type.longer_size",
+            "input_type": "number",
+            "label": "長邊尺寸（Node 693）",
+            "node_id": "693",
+            "required": true
+          },
+          {
+            "category": "BOOLEAN",
+            "class_type": "SDPoseDrawKeypoints",
+            "current_value": true,
+            "id": "node:694:draw_body",
+            "input_name": "draw_body",
+            "input_type": "checkbox",
+            "label": "繪製身體",
+            "node_id": "694",
+            "required": true
+          },
+          {
+            "category": "BOOLEAN",
+            "class_type": "SDPoseDrawKeypoints",
+            "current_value": true,
+            "id": "node:694:draw_hands",
+            "input_name": "draw_hands",
+            "input_type": "checkbox",
+            "label": "繪製手部",
+            "node_id": "694",
+            "required": true
+          },
+          {
+            "category": "BOOLEAN",
+            "class_type": "SDPoseDrawKeypoints",
+            "current_value": true,
+            "id": "node:694:draw_face",
+            "input_name": "draw_face",
+            "input_type": "checkbox",
+            "label": "繪製臉部",
+            "node_id": "694",
+            "required": true
+          },
+          {
+            "category": "BOOLEAN",
+            "class_type": "SDPoseDrawKeypoints",
+            "current_value": true,
+            "id": "node:694:draw_feet",
+            "input_name": "draw_feet",
+            "input_type": "checkbox",
+            "label": "繪製腳部",
+            "node_id": "694",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "SDPoseDrawKeypoints",
+            "constraints": {
+              "max": 64,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 4,
+            "id": "node:694:stick_width",
+            "input_name": "stick_width",
+            "input_type": "number",
+            "label": "骨架線寬",
+            "node_id": "694",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "SDPoseDrawKeypoints",
+            "constraints": {
+              "max": 32,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 2,
+            "id": "node:694:face_point_size",
+            "input_name": "face_point_size",
+            "input_type": "number",
+            "label": "臉部點大小",
+            "node_id": "694",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "SDPoseDrawKeypoints",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 0.5,
+            "id": "node:694:score_threshold",
+            "input_name": "score_threshold",
+            "input_type": "number",
+            "label": "姿態分數門檻",
+            "node_id": "694",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "RTDETR_detect",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 0.5,
+            "id": "node:697:threshold",
+            "input_name": "threshold",
+            "input_type": "number",
+            "label": "人物偵測門檻",
+            "node_id": "697",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "RTDETR_detect",
+            "constraints": {
+              "max": 100,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 1,
+            "id": "node:697:max_detections",
+            "input_name": "max_detections",
+            "input_type": "number",
+            "label": "最大偵測數",
+            "node_id": "697",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "進階數值參數"
       },
       {
         "collapsed_default": false,

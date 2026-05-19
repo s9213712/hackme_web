@@ -322,6 +322,9 @@ class ComfyUIClient:
     def get_upscale_models(self):
         return self._list_node_input_options("UpscaleModelLoader", "model_name")
 
+    def get_latent_upscale_models(self):
+        return self._list_node_input_options("LatentUpscaleModelLoader", "model_name")
+
     def get_capabilities(self):
         object_info = self.get_object_info()
         available_nodes = set(object_info.keys())
@@ -342,6 +345,7 @@ class ComfyUIClient:
                 clip_models.extend(_node_input_options_from_info(object_info, class_type, input_name))
         controlnet_models = _node_input_options_from_info(object_info, "ControlNetLoader", "control_net_name") if "ControlNetLoader" in available_nodes else []
         upscale_models = _node_input_options_from_info(object_info, "UpscaleModelLoader", "model_name") if "UpscaleModelLoader" in available_nodes else []
+        latent_upscale_models = _node_input_options_from_info(object_info, "LatentUpscaleModelLoader", "model_name") if "LatentUpscaleModelLoader" in available_nodes else []
         samplers = _node_input_options_from_info(object_info, "KSampler", "sampler_name")
         schedulers = _node_input_options_from_info(object_info, "KSampler", "scheduler")
         controlnet_types = {}
@@ -383,6 +387,7 @@ class ComfyUIClient:
             "schedulers": schedulers,
             "controlnet_models": controlnet_models,
             "upscale_models": upscale_models,
+            "latent_upscale_models": latent_upscale_models,
             "controlnet_types": controlnet_types,
             "generation_modes": [
                 {
@@ -396,7 +401,7 @@ class ComfyUIClient:
                 }
                 for key, value in GENERATION_MODE_DEFINITIONS.items()
             ],
-            "model_families": detect_model_families([*models, *loras, *vaes, *diffusion_models, *clip_models, *controlnet_models, *upscale_models]),
+            "model_families": detect_model_families([*models, *loras, *vaes, *diffusion_models, *clip_models, *controlnet_models, *upscale_models, *latent_upscale_models]),
         }
 
     def upload_image_bytes(self, data, filename, *, image_type="input", overwrite=False, subfolder=""):
@@ -536,6 +541,7 @@ class ComfyUIClient:
         progress_callback=None,
         extra_data=None,
         fetch_outputs=True,
+        wait_until_completed=False,
     ):
         return comfy_execution.generate_from_workflow(
             self,
@@ -545,6 +551,7 @@ class ComfyUIClient:
             progress_callback=progress_callback,
             extra_data=extra_data,
             fetch_outputs=fetch_outputs,
+            wait_until_completed=wait_until_completed,
             error_cls=ComfyUIError,
             websocket_module=websocket,
             image_fetcher=self.fetch_image,

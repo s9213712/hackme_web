@@ -56,10 +56,45 @@ def register_comfyui_runtime_routes(app, ctx):
     _register_active_generation = ctx["register_active_generation"]
     _run_comfyui_generation_job = ctx["run_comfyui_generation_job"]
     _generation_job_payload = ctx.get("generation_job_payload")
+    _media_ref_payload = ctx.get("image_ref_payload")
     _start_local_comfyui = ctx["start_local_comfyui"]
     _stop_local_comfyui = ctx["stop_local_comfyui"]
     _unregister_active_generation = ctx["unregister_active_generation"]
     _validate_generation_capabilities = ctx["validate_generation_capabilities"]
+
+    def _job_media_output_item(job_result, file_ref):
+        if not callable(_media_ref_payload) or not isinstance(job_result, dict) or not file_ref:
+            return None
+        media = job_result.get("media")
+        records = []
+        if isinstance(media, list):
+            records.extend(media)
+        elif isinstance(media, dict):
+            for items in media.values():
+                if isinstance(items, list):
+                    records.extend(items)
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            candidate = item.get("file_ref") if isinstance(item.get("file_ref"), dict) else item.get("image_ref")
+            if not candidate:
+                continue
+            try:
+                if _media_ref_payload(candidate) == file_ref:
+                    return item
+            except Exception:
+                continue
+        return None
+
+    def _media_mime_type(mime_type, filename):
+        import mimetypes
+
+        raw = str(mime_type or "").strip()
+        normalized = raw.split(";", 1)[0].strip().lower()
+        guessed = mimetypes.guess_type(str(filename or ""))[0]
+        if not normalized or normalized == "application/octet-stream":
+            return guessed or raw or "application/octet-stream"
+        return raw
 
     @app.route("/api/comfyui/status", methods=["GET"])
     @require_csrf_safe
@@ -189,6 +224,7 @@ def register_comfyui_runtime_routes(app, ctx):
                 "default_height": _configured_default_dimensions()["height"],
                 "controlnet_models": [],
                 "upscale_models": [],
+                "latent_upscale_models": [],
                 "diffusion_models": [],
                 "clip_models": [],
                 "controlnet_types": {},
@@ -210,6 +246,12 @@ def register_comfyui_runtime_routes(app, ctx):
             embeddings = active_client.get_embeddings() if hasattr(active_client, "get_embeddings") else []
         except ComfyUIError:
             embeddings = []
+        try:
+            latent_upscale_models = list((capabilities or {}).get("latent_upscale_models") or [])
+            if not latent_upscale_models and hasattr(active_client, "get_latent_upscale_models"):
+                latent_upscale_models = active_client.get_latent_upscale_models()
+        except ComfyUIError:
+            latent_upscale_models = []
         lora_details = _build_lora_details(loras)
         model_families = (capabilities or {}).get("model_families") or []
         return json_resp({
@@ -229,6 +271,7 @@ def register_comfyui_runtime_routes(app, ctx):
             "default_height": _configured_default_dimensions()["height"],
             "controlnet_models": (capabilities or {}).get("controlnet_models") or [],
             "upscale_models": (capabilities or {}).get("upscale_models") or [],
+            "latent_upscale_models": latent_upscale_models,
             "diffusion_models": (capabilities or {}).get("diffusion_models") or [],
             "clip_models": (capabilities or {}).get("clip_models") or [],
             "controlnet_types": (capabilities or {}).get("controlnet_types") or {},
@@ -406,6 +449,70 @@ def register_comfyui_runtime_routes(app, ctx):
             "result": job.get("result"),
         }
         return json_resp({"ok": True, "job": public_job})
+
+    @app.route("/api/comfyui/media-preview", methods=["POST"])
+    @require_csrf
+    def comfyui_media_preview():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
+        data = data if isinstance(data, dict) else {}
+        job_id = str(data.get("job_id") or "").strip()
+        if not job_id:
+            return json_resp({"ok": False, "msg": "缺少 ComfyUI 工作編號"}), 400
+        if not callable(_media_ref_payload):
+            return json_resp({"ok": False, "msg": "ComfyUI 媒體預覽功能未載入"}), 503
+        try:
+            file_ref = _media_ref_payload(data.get("file_ref"))
+        except Exception:
+            return json_resp({"ok": False, "msg": "媒體檔案引用不合法"}), 400
+        job, err = _assert_generation_job_owner(job_id, actor)
+        if err:
+            return err
+        media_item = _job_media_output_item(job.get("result"), file_ref)
+        if not media_item:
+            audit(
+                "COMFYUI_MEDIA_REF_DENIED",
+                get_client_ip(),
+                user=actor["username"],
+                success=False,
+                ua=get_ua(),
+                detail=f"job_id={job_id},file={file_ref.get('filename', '-')}",
+            )
+            return json_resp({"ok": False, "msg": "無權讀取這個 ComfyUI 媒體輸出"}), 403
+        active_client = _client_for_url(_comfyui_binding(actor).get("url"))
+        fetch_file = getattr(active_client, "fetch_file", None)
+        if not callable(fetch_file):
+            return json_resp({"ok": False, "msg": "目前 ComfyUI 後端不支援媒體檔預覽"}), 503
+        try:
+            media_file = fetch_file(file_ref)
+        except ComfyUIError as exc:
+            return _json_error_from_comfy(exc, active_client)
+        import base64
+
+        mime_type = _media_mime_type(
+            getattr(media_file, "mime_type", "") or media_item.get("mime_type"),
+            getattr(media_file, "filename", "") or file_ref.get("filename"),
+        )
+        media_ref = {
+            "filename": getattr(media_file, "filename", "") or file_ref.get("filename"),
+            "subfolder": getattr(media_file, "subfolder", "") or file_ref.get("subfolder") or "",
+            "type": getattr(media_file, "type", "") or file_ref.get("type") or "output",
+        }
+        data_bytes = getattr(media_file, "data", b"") or b""
+        return json_resp({
+            "ok": True,
+            "media": {
+                "file_ref": media_ref,
+                "mime_type": mime_type,
+                "size_bytes": len(data_bytes),
+                "data_url": f"data:{mime_type};base64,{base64.b64encode(data_bytes).decode('ascii')}",
+            },
+        })
 
     @app.route("/api/comfyui/history", methods=["GET"])
     @require_csrf_safe

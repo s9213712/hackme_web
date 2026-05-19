@@ -18,6 +18,7 @@ from services.comfyui.validation.sanitize import sanitize_workflow_json
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SYSTEM_DIR = REPO_ROOT / "workflows" / "comfyui"
 ORIGIN_DIR = SYSTEM_DIR / "origin"
+ASSETS_DIR = SYSTEM_DIR / "assets"
 
 EXPECTED_ORIGIN_WORKFLOW_IDS = {
     "origin_audio_ace_step_15_xl_base",
@@ -68,6 +69,35 @@ def _workflow(workflow_id):
     return json.loads((SYSTEM_DIR / workflow_id / "workflow.json").read_text(encoding="utf-8"))
 
 
+def _workflow_media_refs(workflow_id):
+    media_inputs = {
+        "LoadImage": ("image", "image"),
+        "LoadImageMask": ("image", "image"),
+        "LoadVideo": ("file", "video"),
+        "VHS_LoadVideo": ("file", "video"),
+    }
+    media_exts = (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm", ".mkv", ".avi")
+    for node_id, node in _workflow(workflow_id).items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "")
+        media_input = media_inputs.get(class_type)
+        if not media_input:
+            continue
+        input_name, media_kind = media_input
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        value = inputs.get(input_name)
+        if isinstance(value, str) and value.lower().endswith(media_exts):
+            yield {
+                "workflow_id": workflow_id,
+                "node_id": str(node_id),
+                "class_type": class_type,
+                "input_name": input_name,
+                "media_kind": media_kind,
+                "filename": Path(value).name,
+            }
+
+
 def _ui_fields(manifest):
     return {
         field["id"]: field
@@ -96,6 +126,34 @@ def test_every_origin_workflow_has_converted_bundle():
         for workflow_id in EXPECTED_ORIGIN_WORKFLOW_IDS
     }
     assert converted_paths == origin_paths
+
+
+def test_system_workflow_default_media_assets_are_present():
+    missing = []
+    duplicate = []
+    checked = []
+    for workflow_id in sorted(EXPECTED_ORIGIN_WORKFLOW_IDS):
+        for ref in _workflow_media_refs(workflow_id):
+            checked.append(ref)
+            matches = sorted(
+                path
+                for path in ASSETS_DIR.rglob("*")
+                if path.is_file() and path.name == ref["filename"]
+            )
+            label = (
+                f"{ref['workflow_id']} node {ref['node_id']} "
+                f"{ref['class_type']}.{ref['input_name']} -> {ref['filename']}"
+            )
+            if not matches:
+                missing.append(label)
+            elif len(matches) > 1:
+                duplicate.append(label)
+            elif matches[0].stat().st_size <= 0:
+                missing.append(f"{label} (empty file)")
+
+    assert checked, "no system workflow media inputs were discovered"
+    assert not missing, "missing default media assets:\n" + "\n".join(missing)
+    assert not duplicate, "duplicate default media asset basenames:\n" + "\n".join(duplicate)
 
 
 @pytest.mark.parametrize("workflow_id", sorted(EXPECTED_ORIGIN_WORKFLOW_IDS))
@@ -202,6 +260,26 @@ def test_qwen_controlnet_defaults_follow_graph_roles_and_switches():
     assert defaults["cfg"] == 4
 
 
+def test_non_sdxl_full_text_defaults_do_not_trigger_plain_embedding_names():
+    for workflow_id in (
+        "origin_flux_dev_txt2img",
+        "origin_zit_txt2img",
+        "origin_qwen_image_txt2img",
+    ):
+        manifest = _manifest(workflow_id)
+        workflow = _workflow(workflow_id)
+        prompt = manifest["default_params"]["prompt"]
+        text_values = [
+            str((node.get("inputs") or {}).get("text") or "")
+            for node in workflow.values()
+            if isinstance(node, dict)
+        ]
+
+        assert "by ogipote" not in prompt
+        assert all("by ogipote" not in text for text in text_values)
+        assert "embedding:" not in prompt.lower()
+
+
 def test_qwen_edit_defaults_follow_reference_latent_prompt_links():
     manifest = _manifest("origin_qwen_image_edit_2509")
     defaults = manifest["default_params"]
@@ -229,6 +307,7 @@ def test_multi_method_upscale_keeps_origin_first_and_second_upscale_stages():
     workflow = _workflow("origin_multi_method_upscale")
     manifest = _manifest("origin_multi_method_upscale")
     fields = _ui_fields(manifest)
+    required = {(item["kind"], item["name"]) for item in manifest["required_models"]}
 
     assert workflow["3"]["_meta"]["title"] == "Origin"
     assert workflow["61"]["_meta"]["title"] == "一次放大"
@@ -242,3 +321,53 @@ def test_multi_method_upscale_keeps_origin_first_and_second_upscale_stages():
     assert fields["node:63:upscale_method"]["label"] == "Latent 放大方式（一次放大）"
     assert fields["node:63:scale_by"]["label"] == "Latent 放大倍率（一次放大）"
     assert fields["node:77:model_name"]["label"] == "放大 / Upscale 模型（二次放大）"
+    assert ("embedding", "lazy") not in required
+    assert ("embedding", "lazy series\\IL\\lazyneg") in required
+
+
+def test_ltx23_latent_upscale_model_is_not_treated_as_regular_upscaler():
+    manifest = _manifest("origin_ltx23_t2v")
+    fields = _ui_fields(manifest)
+    required = {(item["kind"], item["name"]) for item in manifest["required_models"]}
+
+    assert manifest["default_params"]["upscale_model"] == ""
+    assert ("latent_upscale", "ltx-2.3-spatial-upscaler-x2-1.1.safetensors") in required
+    assert ("upscale", "ltx-2.3-spatial-upscaler-x2-1.1.safetensors") not in required
+    assert fields["node:303:model_name"]["label"] == "Latent 放大模型"
+    assert fields["node:303:model_name"]["locked"] is True
+
+
+def test_wan_vace_inpainting_exposes_load_video_input():
+    manifest = _manifest("origin_wan_vace_inpainting")
+    fields = _ui_fields(manifest)
+    video_panel = next(panel for panel in manifest["ui"]["panels"] if panel["id"] == "video")
+
+    assert video_panel["label"] == "影片輸入"
+    assert fields["node:209:file"]["class_type"] == "LoadVideo"
+    assert fields["node:209:file"]["label"] == "載入影片"
+    assert fields["node:209:file"]["input_type"] == "video_file_picker"
+
+
+def test_sdpose_multi_person_exposes_required_group_photo_input():
+    manifest = _manifest("origin_sdpose_multi_person")
+    workflow = _workflow("origin_sdpose_multi_person")
+    fields = _ui_fields(manifest)
+    image_panel = next(panel for panel in manifest["ui"]["panels"] if panel["id"] == "image")
+    numeric_panel = next(panel for panel in manifest["ui"]["panels"] if panel["id"] == "numeric")
+
+    assert image_panel["label"] == "圖片輸入"
+    assert numeric_panel["label"] == "進階數值參數"
+    assert workflow["679"]["class_type"] == "LoadImage"
+    assert workflow["679"]["inputs"]["image"] == "group_photo.png"
+    assert workflow["697"]["inputs"]["max_detections"] == 1
+    assert fields["node:679:image"]["class_type"] == "LoadImage"
+    assert fields["node:679:image"]["label"] == "上傳圖片"
+    assert fields["node:679:image"]["required"] is True
+    assert fields["node:697:max_detections"]["label"] == "最大偵測數"
+    assert fields["node:697:max_detections"]["input_type"] == "number"
+    assert fields["node:697:threshold"]["label"] == "人物偵測門檻"
+    assert fields["node:697:class_name"]["label"] == "偵測類別"
+    assert fields["node:694:draw_body"]["input_type"] == "checkbox"
+    assert fields["node:694:draw_hands"]["input_type"] == "checkbox"
+    assert fields["node:694:score_threshold"]["label"] == "姿態分數門檻"
+    assert fields["node:692:batch_size"]["label"] == "姿態批次大小"

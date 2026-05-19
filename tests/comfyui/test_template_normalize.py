@@ -1,6 +1,40 @@
 from services.comfyui.template.normalize import convert_ui_graph_to_api_workflow
 
 
+def test_ui_graph_skips_rgthree_group_bypasser_node():
+    workflow = {
+        "nodes": [
+            {
+                "id": 1,
+                "type": "Fast Groups Bypasser (rgthree)",
+                "inputs": [],
+                "outputs": [{"name": "OPT_CONNECTION", "type": "*", "links": []}],
+                "widgets_values": [],
+            },
+            {
+                "id": 2,
+                "type": "LoadImage",
+                "inputs": [],
+                "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": [10]}],
+                "widgets_values": ["source.png", "image"],
+            },
+            {
+                "id": 3,
+                "type": "PreviewImage",
+                "inputs": [{"name": "images", "type": "IMAGE", "link": 10}],
+                "outputs": [],
+                "widgets_values": [],
+            },
+        ],
+        "links": [[10, 2, 0, 3, 0, "IMAGE"]],
+    }
+
+    converted = convert_ui_graph_to_api_workflow(workflow)
+
+    assert "1" not in converted
+    assert {node["class_type"] for node in converted.values()} == {"LoadImage", "PreviewImage"}
+
+
 def test_ui_graph_subgraph_expansion_allocates_links_after_root_links():
     workflow = {
         "nodes": [

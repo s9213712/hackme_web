@@ -200,6 +200,33 @@
         "collapsed_default": true,
         "fields": [
           {
+            "category": "VIDEO",
+            "class_type": "LoadVideo",
+            "constraints": {
+              "accept_mime": [
+                "video/mp4",
+                "video/webm",
+                "video/quicktime",
+                "video/x-matroska"
+              ]
+            },
+            "current_value": "video_wan_vace_inpainting_input_video.mp4",
+            "id": "node:209:file",
+            "input_name": "file",
+            "input_type": "video_file_picker",
+            "label": "載入影片",
+            "node_id": "209",
+            "node_title": "Step2 - Load video for editing",
+            "required": true
+          }
+        ],
+        "id": "video",
+        "label": "影片輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
             "category": "MODEL",
             "class_type": "LoraLoader",
             "current_value": "WAN\\Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",

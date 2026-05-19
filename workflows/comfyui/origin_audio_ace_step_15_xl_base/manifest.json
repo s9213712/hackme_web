@@ -106,8 +106,7 @@
             "class_type": "EmbeddingShortcuts",
             "constraints": {
               "target_field_ids": [
-                "node:94:tags",
-                "node:94:lyrics"
+                "node:94:tags"
               ],
               "token_prefix": "<embeddings:"
             },

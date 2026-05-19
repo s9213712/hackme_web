@@ -103,3 +103,8 @@ def test_unknown_class_neither_allowed_nor_denied():
     name = "SomeNewCommunityNode"
     assert is_allowed_class(name) is False
     assert is_explicitly_denied_class(name) is False
+
+
+def test_rgthree_group_bypasser_is_not_runtime_allowlisted():
+    assert is_allowed_class("Fast Groups Bypasser (rgthree)") is False
+    assert is_explicitly_denied_class("Fast Groups Bypasser (rgthree)") is False
