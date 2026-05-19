@@ -88,6 +88,19 @@ def test_diffusers_client_requires_effective_model_repo_before_dependency_check(
     assert "尚未設定 Hugging Face model repo" in str(exc.value)
 
 
+def test_diffusers_client_allows_in_process_when_root_setting_confirms_risk(tmp_path, monkeypatch):
+    monkeypatch.delenv("HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS", raising=False)
+    client = DiffusersClient.from_settings(
+        {"comfyui_allow_in_process_diffusers": True},
+        storage_root=tmp_path,
+    )
+
+    with pytest.raises(ComfyUIError) as exc:
+        client.generate_image({"generation_mode": "txt2img", "prompt": "test"})
+
+    assert "尚未設定 Hugging Face model repo" in str(exc.value)
+
+
 def test_diffusers_client_upload_fetch_and_discard_round_trip(tmp_path):
     client = DiffusersClient(model_repo="dhead/waiIllustriousSDXL_v150", storage_root=tmp_path)
 

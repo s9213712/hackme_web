@@ -340,6 +340,11 @@ def register_system_admin_settings_routes(app, ctx):
             if dtype is None:
                 return json_resp({"ok":False,"msg":"comfyui_diffusers_dtype 必須是 auto、float16、bfloat16 或 float32"}), 400
             data["comfyui_diffusers_dtype"] = dtype
+        if "comfyui_allow_in_process_diffusers" in data:
+            allow_diffusers = parse_strict_bool(data.get("comfyui_allow_in_process_diffusers"))
+            if allow_diffusers is None:
+                return json_resp({"ok":False,"msg":"comfyui_allow_in_process_diffusers 必須是布林值 true/false"}), 400
+            data["comfyui_allow_in_process_diffusers"] = allow_diffusers
         if "comfyui_max_batch_size" in data:
             try:
                 batch_size = int(data.get("comfyui_max_batch_size"))

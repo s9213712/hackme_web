@@ -2065,7 +2065,7 @@
             <label>提示詞</label>
             <textarea id="comfyui-prompt" rows="5" maxlength="3000" placeholder="描述你要產生的圖片"></textarea>
           </div>
-          <div class="field">
+          <div class="field" id="comfyui-embedding-shortcuts-field" style="display:none;">
             <label>Embedding 快速插入</label>
             <div id="comfyui-embedding-shortcuts" class="comfyui-embedding-shortcuts">
               <span class="drive-card-sub">讀取 Embedding 中...</span>
@@ -4764,6 +4764,10 @@
                   <option value="float32">float32</option>
                 </select>
               </div>
+              <div class="field">
+                <label><input type="checkbox" id="s-comfyui-allow-in-process-diffusers" /> 我接受在 Flask 主程序內載入 Diffusers 模型的 RAM / VRAM / CPU 風險</label>
+                <div class="drive-card-sub">未勾選時，Diffusers 模式只會檢查 repo；真正推論會被阻擋，建議改用外部 ComfyUI local / remote backend。</div>
+              </div>
               <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">目前支援文字生圖、圖生圖與局部重繪；影片、語音、放大、ControlNet 與 ComfyUI workflow 仍走 ComfyUI 後端。</div>
             </div>
             <div id="comfyui-local-settings" style="display:none;">
@@ -6524,7 +6528,7 @@
 
 <script src="/js/00-core.js?v=20260517-trading-snapshot-warmup" defer></script>
 <script src="/js/05-i18n.js?v=20260519-vae-builtin" defer></script>
-<script src="/js/01-root-quick-settings.js?v=20260514-root-quick-settings" defer></script>
+<script src="/js/01-root-quick-settings.js?v=20260520-diffusers-runtime-confirm" defer></script>
 <script src="/js/10-users.js?v=20260503-account-delete-feedback" defer></script>
 <script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
 <script src="/js/25-community.js?v=20260518-inline-media" defer></script>
@@ -6534,8 +6538,8 @@
 <script src="/js/35-drive.js?v=20260517-share-expiry-picker" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
 <!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
-<script src="/js/36-comfyui.js?v=20260520-no-comfyui-wait-limit" defer></script>
-<script src="/js/36-comfyui-workflows.js?v=20260520-no-comfyui-wait-limit" defer></script>
+<script src="/js/36-comfyui.js?v=20260520-embedding-empty-hide" defer></script>
+<script src="/js/36-comfyui-workflows.js?v=20260520-embedding-empty-hide" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/41-game-modules.js?v=20260518-game-ux" defer></script>
 <script src="/js/games/game-view-registry.js?v=20260513-legacy-modules" defer></script>
@@ -6544,7 +6548,7 @@
 <script src="/js/42-experiments.js?v=20260518-two-experiments" defer></script>
 <script src="/js/39-videos.js?v=20260518-video-overview" defer></script>
 <script src="/js/40-auth-users.js?v=20260517-avatar-cropper" defer></script>
-<script src="/js/50-admin.js?v=20260519-comfyui-default-api" defer></script>
+<script src="/js/50-admin.js?v=20260520-diffusers-runtime-confirm" defer></script>
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>
 <script src="/js/55-economy.js?v=20260517-trading-snapshot-warmup" defer></script>
 <script src="/js/56-trading.js?v=20260517-trading-snapshot-warmup" defer></script>

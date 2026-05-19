@@ -48,6 +48,7 @@ COMFYUI_DEFAULT_SETTINGS = {
     ),
     "comfyui_diffusers_device": os.environ.get("COMFYUI_DIFFUSERS_DEVICE", "auto"),
     "comfyui_diffusers_dtype": os.environ.get("COMFYUI_DIFFUSERS_DTYPE", "auto"),
+    "comfyui_allow_in_process_diffusers": False,
 }
 
 COMFYUI_SETTING_KEYS = tuple(COMFYUI_DEFAULT_SETTINGS)

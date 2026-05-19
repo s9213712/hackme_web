@@ -4115,6 +4115,7 @@ function updateComfyuiConnectionModeFields() {
   const civitaiInput = $("s-comfyui-civitai-api-key");
   const hfTokenInput = $("s-comfyui-huggingface-api-token");
   const hfTokenClear = $("s-comfyui-huggingface-api-token-clear");
+  const allowInProcessDiffusers = $("s-comfyui-allow-in-process-diffusers");
   if (localBox) localBox.style.display = mode === "local" ? "" : "none";
   if (remoteBox) remoteBox.style.display = mode === "remote" ? "" : "none";
   if (diffusersBox) diffusersBox.style.display = mode === "diffusers" ? "" : "none";
@@ -4122,12 +4123,13 @@ function updateComfyuiConnectionModeFields() {
   if (civitaiInput) civitaiInput.disabled = mode !== "local";
   if (hfTokenInput) hfTokenInput.disabled = mode !== "diffusers";
   if (hfTokenClear) hfTokenClear.disabled = mode !== "diffusers";
+  if (allowInProcessDiffusers) allowInProcessDiffusers.disabled = mode !== "diffusers";
   const status = $("comfyui-test-connection-status");
   if (status && !status.dataset.userTouched) {
     status.textContent = mode === "local"
       ? "本地模式會測試本地 API；若產圖時 API 未啟動，後端會嘗試執行啟動腳本。"
       : (mode === "diffusers"
-        ? "Diffusers 模式會檢查 Hugging Face repo 與 Python 套件，產圖時由後端直接用 diffusers 載入模型。"
+        ? "Diffusers 模式會檢查 Hugging Face repo 與 Python 套件；只有勾選主程序資源風險確認後才允許直接推論。"
         : "遠端模式只負責呼叫指定 API 生圖，無法透過 API 把模型下載回本站的本地 ComfyUI，所以會隱藏本地模型下載與 Civitai API Key。");
     status.style.color = "var(--muted)";
   }
@@ -4415,6 +4417,7 @@ async function loadSettings() {
   if ($("s-comfyui-huggingface-api-token-clear")) $("s-comfyui-huggingface-api-token-clear").checked = false;
   if ($("s-comfyui-diffusers-device")) $("s-comfyui-diffusers-device").value = s.comfyui_diffusers_device || "auto";
   if ($("s-comfyui-diffusers-dtype")) $("s-comfyui-diffusers-dtype").value = s.comfyui_diffusers_dtype || "auto";
+  if ($("s-comfyui-allow-in-process-diffusers")) $("s-comfyui-allow-in-process-diffusers").checked = !!s.comfyui_allow_in_process_diffusers;
   if ($("comfyui-huggingface-api-token-state")) {
     $("comfyui-huggingface-api-token-state").textContent = s.comfyui_huggingface_api_token_configured
       ? "目前已儲存 Hugging Face API Token；留空儲存不會變更。"
@@ -6177,6 +6180,7 @@ async function saveSettings() {
     comfyui_huggingface_api_token_clear: !!$("s-comfyui-huggingface-api-token-clear")?.checked,
     comfyui_diffusers_device: $("s-comfyui-diffusers-device")?.value || "auto",
     comfyui_diffusers_dtype: $("s-comfyui-diffusers-dtype")?.value || "auto",
+    comfyui_allow_in_process_diffusers: !!$("s-comfyui-allow-in-process-diffusers")?.checked,
     comfyui_paid_api_nodes_enabled: !!$("s-comfyui-paid-api-nodes-enabled")?.checked,
     comfyui_account_api_key: ($("s-comfyui-account-api-key")?.value || "").trim(),
     comfyui_account_api_key_clear: !!$("s-comfyui-account-api-key-clear")?.checked,

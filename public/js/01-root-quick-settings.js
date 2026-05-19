@@ -117,6 +117,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
       { id: "s-comfyui-huggingface-api-token-clear", label: "清除已儲存 HF Token", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
       { id: "s-comfyui-diffusers-device", label: "Diffusers Device", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
       { id: "s-comfyui-diffusers-dtype", label: "Diffusers dtype", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
+      { id: "s-comfyui-allow-in-process-diffusers", label: "接受主程序 Diffusers 資源風險", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
       { id: "s-comfyui-max-batch-size", label: "單次張數上限" },
       { id: "s-comfyui-default-width", label: "預設寬度" },
       { id: "s-comfyui-default-height", label: "預設高度" },

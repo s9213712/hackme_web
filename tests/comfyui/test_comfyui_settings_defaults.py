@@ -9,4 +9,6 @@ def test_comfyui_defaults_use_lan_remote_api_mode():
     assert DEFAULT_COMFYUI_REMOTE_API_URL == expected_url
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_connection_mode"] == "remote"
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_remote_api_url"] == DEFAULT_COMFYUI_REMOTE_API_URL
+    assert COMFYUI_DEFAULT_SETTINGS["comfyui_allow_in_process_diffusers"] is False
     assert DEFAULT_SETTINGS["comfyui_remote_api_url"] == DEFAULT_COMFYUI_REMOTE_API_URL
+    assert DEFAULT_SETTINGS["comfyui_allow_in_process_diffusers"] is False

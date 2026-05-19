@@ -666,6 +666,11 @@ function comfyuiModeUsesSourceImage(mode = comfyuiGenerationMode()) {
   return ["img2img", "inpaint", "outpaint", "upscale", "i2v"].includes(String(mode || "").trim().toLowerCase());
 }
 
+function comfyuiShouldShowSourceImageCard(mode = comfyuiGenerationMode()) {
+  if (!isComfyuiDiffusersMode()) return true;
+  return comfyuiModeUsesSourceImage(mode) || comfyuiHasInputAsset("source") || comfyuiHasInputAsset("mask");
+}
+
 function comfyuiModeUsesMaskImage(mode = comfyuiGenerationMode()) {
   return String(mode || "").trim().toLowerCase() === "inpaint";
 }
@@ -969,7 +974,7 @@ function updateComfyuiModeVisibility() {
   if (denoiseField) denoiseField.style.display = mode === "txt2img" || mode === "upscale" ? "none" : "";
   if (upscaleField) upscaleField.style.display = comfyuiHasInputAsset("source") || comfyuiModeUsesUpscale(mode) ? "" : "none";
   if (outpaintPanel) outpaintPanel.style.display = comfyuiModeUsesOutpaint(mode) ? "" : "none";
-  if (sourceCard) sourceCard.style.display = "";
+  if (sourceCard) sourceCard.style.display = comfyuiShouldShowSourceImageCard(mode) ? "" : "none";
   if (maskCard) maskCard.style.display = comfyuiHasInputAsset("source") || comfyuiHasInputAsset("mask") || comfyuiModeUsesMaskImage(mode) ? "" : "none";
   if (controlFields) controlFields.style.display = isComfyuiControlnetEnabled() ? "" : "none";
   if (controlCard) controlCard.style.display = isComfyuiControlnetEnabled() ? "" : "none";
@@ -2334,8 +2339,10 @@ function renderComfyuiEmbeddingShortcuts(values = []) {
   comfyuiAvailableEmbeddings = Array.isArray(values) ? values.filter(Boolean).map(String) : [];
   const box = $("comfyui-embedding-shortcuts");
   if (!box) return;
+  const field = $("comfyui-embedding-shortcuts-field") || box.closest(".field");
+  if (field) field.style.display = comfyuiAvailableEmbeddings.length ? "" : "none";
   if (!comfyuiAvailableEmbeddings.length) {
-    box.innerHTML = '<span class="drive-card-sub">目前沒有可用的 Embedding。</span>';
+    box.innerHTML = "";
     return;
   }
   box.innerHTML = comfyuiAvailableEmbeddings.map((value) => (
@@ -4958,14 +4965,13 @@ const ComfyUITemplateImporter = (() => {
       fields.forEach(field => {
         const row = document.createElement("div");
         if (field.input_type === "embedding_shortcuts") {
+          const values = Array.isArray(comfyuiAvailableEmbeddings) ? comfyuiAvailableEmbeddings : [];
+          if (!values.length) return;
           row.style.display = "block";
           row.style.padding = "6px 0";
-          const values = Array.isArray(comfyuiAvailableEmbeddings) ? comfyuiAvailableEmbeddings : [];
           row.innerHTML = `<label style="display:block;margin-bottom:6px;color:var(--muted,#666);">${escapeHtmlSafe(field.label || "Embedding 快速插入")}</label>` +
             `<div class="comfyui-embedding-shortcuts">` +
-            (values.length
-              ? values.map(value => `<button class="comfyui-embedding-chip" type="button" data-comfyui-template-importer-embedding="${escapeHtmlSafe(value)}" title="插入 ${escapeHtmlSafe(value)}">${escapeHtmlSafe(value)}</button>`).join("")
-              : '<span class="drive-card-sub">目前沒有可用的 Embedding。</span>') +
+            values.map(value => `<button class="comfyui-embedding-chip" type="button" data-comfyui-template-importer-embedding="${escapeHtmlSafe(value)}" title="插入 ${escapeHtmlSafe(value)}">${escapeHtmlSafe(value)}</button>`).join("") +
             `</div>`;
           section.appendChild(row);
           return;

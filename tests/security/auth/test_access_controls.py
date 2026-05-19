@@ -626,6 +626,7 @@ def test_root_can_configure_diffusers_backend_and_hf_token_write_only():
             "comfyui_huggingface_api_token": "hf_read_token",
             "comfyui_diffusers_device": "cuda",
             "comfyui_diffusers_dtype": "float16",
+            "comfyui_allow_in_process_diffusers": True,
         },
     )
 
@@ -635,13 +636,16 @@ def test_root_can_configure_diffusers_backend_and_hf_token_write_only():
     assert state["comfyui_huggingface_api_token"] == "hf_read_token"
     assert state["comfyui_diffusers_device"] == "cuda"
     assert state["comfyui_diffusers_dtype"] == "float16"
+    assert state["comfyui_allow_in_process_diffusers"] is True
     payload = saved.get_json()["settings"]
     assert payload["comfyui_huggingface_api_token"] == ""
     assert payload["comfyui_huggingface_api_token_configured"] is True
+    assert payload["comfyui_allow_in_process_diffusers"] is True
 
-    unchanged = client.put("/api/admin/settings", json={"comfyui_huggingface_api_token": "", "comfyui_diffusers_device": "auto"})
+    unchanged = client.put("/api/admin/settings", json={"comfyui_huggingface_api_token": "", "comfyui_diffusers_device": "auto", "comfyui_allow_in_process_diffusers": False})
     assert unchanged.status_code == 200
     assert state["comfyui_huggingface_api_token"] == "hf_read_token"
+    assert state["comfyui_allow_in_process_diffusers"] is False
     assert unchanged.get_json()["settings"]["comfyui_huggingface_api_token_configured"] is True
 
     cleared = client.put("/api/admin/settings", json={"comfyui_huggingface_api_token_clear": True})
@@ -658,6 +662,7 @@ def test_diffusers_settings_reject_invalid_repo_token_and_runtime_options():
     assert client.put("/api/admin/settings", json={"comfyui_huggingface_api_token": "bad token"}).status_code == 400
     assert client.put("/api/admin/settings", json={"comfyui_diffusers_device": "tpu"}).status_code == 400
     assert client.put("/api/admin/settings", json={"comfyui_diffusers_dtype": "int8"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_allow_in_process_diffusers": "maybe"}).status_code == 400
     assert "comfyui_diffusers_model_repo" not in state
 
 

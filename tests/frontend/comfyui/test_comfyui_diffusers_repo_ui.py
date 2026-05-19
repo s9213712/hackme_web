@@ -17,6 +17,7 @@ def test_diffusers_generation_page_accepts_repo_and_variant_selection():
     assert 'id="comfyui-diffusers-model-variant"' in html
     assert 'id="comfyui-diffusers-gguf-base-repo"' in html
     assert 'id="comfyui-diffusers-repo-status"' in html
+    assert 'id="s-comfyui-allow-in-process-diffusers"' in html
 
 
 def test_diffusers_js_preflights_huggingface_repo_before_generation():
@@ -32,8 +33,8 @@ def test_diffusers_js_preflights_huggingface_repo_before_generation():
 
 def test_diffusers_cache_busts_preflight_ui_assets():
     html = _read("public/index.html")
-    assert "/js/36-comfyui.js?v=20260520-no-comfyui-wait-limit" in html
-    assert "/js/36-comfyui-workflows.js?v=20260520-no-comfyui-wait-limit" in html
+    assert "/js/36-comfyui.js?v=20260520-embedding-empty-hide" in html
+    assert "/js/36-comfyui-workflows.js?v=20260520-embedding-empty-hide" in html
 
 
 def test_diffusers_generation_progress_surfaces_huggingface_download_bytes():
@@ -47,3 +48,38 @@ def test_diffusers_generation_progress_surfaces_huggingface_download_bytes():
     assert "progress.step" in js
     assert "formatDriveBytes(writtenBytes)" in js
     assert "不設最長等待上限" in js
+
+
+def test_diffusers_txt2img_hides_source_image_card_until_needed():
+    js = _read("public/js/36-comfyui.js")
+
+    assert "function comfyuiShouldShowSourceImageCard" in js
+    assert "if (!isComfyuiDiffusersMode()) return true;" in js
+    assert 'return comfyuiModeUsesSourceImage(mode) || comfyuiHasInputAsset("source") || comfyuiHasInputAsset("mask");' in js
+    assert 'if (sourceCard) sourceCard.style.display = comfyuiShouldShowSourceImageCard(mode) ? "" : "none";' in js
+
+
+def test_diffusers_in_process_runtime_confirmation_is_in_quick_settings():
+    quick_js = _read("public/js/01-root-quick-settings.js")
+    admin_js = _read("public/js/50-admin.js")
+    html = _read("public/index.html")
+
+    assert "s-comfyui-allow-in-process-diffusers" in quick_js
+    assert "接受主程序 Diffusers 資源風險" in quick_js
+    assert "comfyui_allow_in_process_diffusers" in admin_js
+    assert "只有勾選主程序資源風險確認後才允許直接推論" in admin_js
+    assert "/js/01-root-quick-settings.js?v=20260520-diffusers-runtime-confirm" in html
+    assert "/js/50-admin.js?v=20260520-diffusers-runtime-confirm" in html
+
+
+def test_embedding_quick_insert_hides_when_no_embeddings_are_available():
+    html = _read("public/index.html")
+    comfyui_js = _read("public/js/36-comfyui.js")
+    workflows_js = _read("public/js/36-comfyui-workflows.js")
+
+    assert 'id="comfyui-embedding-shortcuts-field" style="display:none;"' in html
+    assert 'const field = $("comfyui-embedding-shortcuts-field") || box.closest(".field");' in comfyui_js
+    assert 'field.style.display = comfyuiAvailableEmbeddings.length ? "" : "none";' in comfyui_js
+    assert 'box.innerHTML = "";' in comfyui_js
+    assert "if (!values.length) return;" in comfyui_js
+    assert 'if (!values.length) return "";' in workflows_js

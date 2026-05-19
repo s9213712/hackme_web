@@ -42,6 +42,14 @@ def _env_flag(name, *, default=False):
     return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def _settings_flag(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
 def _format_bytes(value):
     size = max(0, int(value or 0))
     units = ("B", "KB", "MB", "GB", "TB")
@@ -102,6 +110,7 @@ class DiffusersClient:
         device="auto",
         dtype="auto",
         base_url="",
+        allow_in_process_runtime=False,
     ):
         self.model_repo = str(model_repo or "").strip()
         self.token = str(token or "").strip()
@@ -110,6 +119,7 @@ class DiffusersClient:
         self.device_setting = str(device or "auto").strip().lower()
         self.dtype_setting = str(dtype or "auto").strip().lower()
         self.base_url = str(base_url or diffusers_backend_url(self.model_repo))
+        self.allow_in_process_runtime = bool(allow_in_process_runtime)
         self.timeout = 30
 
     @classmethod
@@ -127,6 +137,7 @@ class DiffusersClient:
             device=settings.get("comfyui_diffusers_device") or "auto",
             dtype=settings.get("comfyui_diffusers_dtype") or "auto",
             base_url=backend_url or diffusers_backend_url(model_repo),
+            allow_in_process_runtime=_settings_flag(settings.get("comfyui_allow_in_process_diffusers")),
         )
 
     def _effective_model_repo(self, params=None):
@@ -145,12 +156,13 @@ class DiffusersClient:
             raise ComfyUIError("Diffusers 模式尚未設定 Hugging Face model repo，例如 dhead/waiIllustriousSDXL_v150")
 
     def _ensure_in_process_runtime_allowed(self):
-        if _env_flag("HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS", default=False):
+        if self.allow_in_process_runtime or _env_flag("HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS", default=False):
             return
         raise ComfyUIError(
             "Diffusers 模式會在 Flask 主程序內載入模型並執行推論，可能占用大量 RAM/VRAM/CPU；"
             "本站預設停用這條路徑。請改用外部 ComfyUI local/remote backend。"
-            "若你明確接受主程序資源風險，才設定 HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS=1。"
+            "若 root 明確接受主程序資源風險，請在右上角 AI 產圖快速設定勾選確認，"
+            "或設定 HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS=1。"
         )
 
     def _effective_model_variant(self, params=None):

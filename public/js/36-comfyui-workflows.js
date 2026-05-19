@@ -1919,12 +1919,11 @@ function renderComfyuiUpscaleBreakpointControl(detail = comfyuiSelectedTemplateD
 
 function renderComfyuiTemplateEmbeddingShortcuts(field) {
   const values = Array.isArray(comfyuiAvailableEmbeddings) ? comfyuiAvailableEmbeddings : [];
+  if (!values.length) return "";
   const targetAttr = comfyuiTemplateEmbeddingTargetIds(field).join("|");
-  const content = values.length
-    ? values.map((value) => (
-      `<button class="comfyui-embedding-chip" type="button" data-comfyui-template-embedding="${sanitize(value)}" data-comfyui-template-embedding-targets="${sanitize(targetAttr)}" title="插入 / 移除 ${sanitize(value)}">${sanitize(value)}</button>`
-    )).join("")
-    : '<span class="drive-card-sub">目前沒有可用的 Embedding。</span>';
+  const content = values.map((value) => (
+    `<button class="comfyui-embedding-chip" type="button" data-comfyui-template-embedding="${sanitize(value)}" data-comfyui-template-embedding-targets="${sanitize(targetAttr)}" title="插入 / 移除 ${sanitize(value)}">${sanitize(value)}</button>`
+  )).join("");
   return `
     <div class="comfyui-template-field-card is-wide">
       <label>${sanitize(field?.label || "Embedding 快速插入")}</label>
