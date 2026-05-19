@@ -65,8 +65,17 @@ def _clean_option_list(values):
     cleaned = []
     for item in values or []:
         if isinstance(item, dict):
-            item = item.get("name") or item.get("filename") or item.get("value") or ""
+            item = (
+                item.get("name")
+                or item.get("file_name")
+                or item.get("filename")
+                or item.get("value")
+                or item.get("file_path")
+                or ""
+            )
         text = str(item or "").strip()
+        if "/" in text or "\\" in text:
+            text = text.replace("\\", "/").rsplit("/", 1)[-1]
         if text:
             cleaned.append(text)
     return cleaned
@@ -237,7 +246,10 @@ class ComfyUIClient:
         return self._list_node_input_options("VAELoader", "vae_name")
 
     def get_embeddings(self):
-        data = self._json_request("/embeddings")
+        try:
+            data = self._json_request("/embeddings")
+        except ComfyUIError:
+            return self._get_lora_manager_embeddings()
         if isinstance(data, list):
             values = data
         elif isinstance(data, dict):
@@ -253,6 +265,32 @@ class ComfyUIClient:
             values = []
         if not isinstance(values, list):
             values = []
+        cleaned = _clean_option_list(values)
+        return cleaned or self._get_lora_manager_embeddings()
+
+    def _get_lora_manager_embeddings(self):
+        values = []
+        total_pages = 1
+        for page in range(1, 51):
+            path = f"/api/lm/embeddings/list?{urllib.parse.urlencode({'page': page, 'page_size': 200})}"
+            try:
+                data = self._json_request(path)
+            except ComfyUIError:
+                break
+            if isinstance(data, list):
+                items = data
+            elif isinstance(data, dict):
+                items = data.get("items") or data.get("embeddings") or data.get("models") or []
+                try:
+                    total_pages = max(1, min(50, int(data.get("total_pages") or total_pages or 1)))
+                except Exception:
+                    total_pages = 1
+            else:
+                items = []
+            if isinstance(items, list):
+                values.extend(items)
+            if page >= total_pages:
+                break
         return _clean_option_list(values)
 
     def health_check(self, *, timeout=3):

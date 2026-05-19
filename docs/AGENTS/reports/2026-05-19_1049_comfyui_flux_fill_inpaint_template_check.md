@@ -33,11 +33,16 @@ Date: 2026-05-19 10:49 Asia/Taipei
    - Some workflows expose multiple positive or negative `CLIPTextEncode` / `CLIPTextEncodeFlux` fields for one model path. Reusing the generic positive/negative labels made it unclear whether edits should apply globally or only to a single node.
    - Fix: detect repeated positive or negative prompt fields, show a `提示詞共用` selector before the template cards, and block execution until the user chooses either global sharing or independent fields. In shared mode, edits sync only fields with the same prompt role.
 
+8. Fixed: embeddings were not detected when ComfyUI LoRA Manager owns `/embeddings`.
+   - On the LAN ComfyUI host, `/embeddings` returns the LoRA Manager HTML page instead of the native ComfyUI JSON list, so the backend treated embeddings as unavailable.
+   - Fix: keep the native `/embeddings` path, but fall back to LoRA Manager `/api/lm/embeddings/list` with pagination and read `file_name` / `file_path` values from `ComfyUI/models/embeddings`.
+
 ## Validation
 
 - `python3 scripts/comfyui/materialize_system_workflows.py`: 25 origin bundles materialized; `origin_flux_fill_inpaint` is 12 nodes and allowlisted.
-- `pytest -q tests/comfyui`: passed after upload-import, `not_required` remap, seed-after, and prompt-sharing regression coverage.
+- `pytest -q tests/comfyui`: passed after upload-import, `not_required` remap, seed-after, prompt-sharing, and LoRA Manager embedding fallback regression coverage.
 - `pytest tests/comfyui/storage/test_comfyui_storage.py tests/comfyui/test_template_run_gate.py tests/comfyui/test_template_remap.py`: 55 passed.
+- `pytest -q tests/comfyui/test_client_embeddings.py tests/comfyui/test_template_capability.py tests/comfyui/test_template_run_gate.py`: passed.
 - `pytest -q tests/frontend/comfyui/test_comfyui_workflow_template_ui.py`: 16 passed.
 - `pytest -q tests/frontend/comfyui`: 62 passed.
 - `node --check public/js/36-comfyui.js` and `node --check public/js/36-comfyui-workflows.js`: passed.
@@ -48,6 +53,7 @@ Date: 2026-05-19 10:49 Asia/Taipei
 - `curl -k -sS -I https://127.0.0.1:5010/`: returned `HTTP/1.1 200 OK`.
 - Isolated asset check: `public/index.html`, `public/js/36-comfyui-workflows.js`, and `public/styles.css` include `20260519-template-prompt-sharing` and the `data-comfyui-template-prompt-sharing` UI hook.
 - `/api/comfyui/workflows`: returned exactly one `origin_flux_fill_inpaint` official preset with `purpose=inpaint`, `generation_mode=inpaint`.
+- LAN ComfyUI embedding fallback at `http://192.168.18.19:8188`: read 22 embeddings through `/api/lm/embeddings/list`, including `Smooth_Negative-neg`, `Smooth_Quality`, and `lazyhand`.
 - LAN ComfyUI preflight at `http://192.168.18.19:8188`: `preflight_pass`, no missing nodes, no missing models.
 - LAN ComfyUI acceptance-only: accepted prompt and returned prompt id `94017386-de0f-4985-a2c3-2ad52a897b81`; output generation intentionally skipped.
 
