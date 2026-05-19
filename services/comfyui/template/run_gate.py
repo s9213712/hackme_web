@@ -116,6 +116,8 @@ def _is_user_editable(field_obj: InputField) -> bool:
     if (field_obj.class_type, field_obj.input_name) in {
         ("SaveImage", "filename_prefix"),
         ("SaveVideo", "filename_prefix"),
+        ("SaveAudio", "filename_prefix"),
+        ("SaveAudioMP3", "filename_prefix"),
     }:
         return False
     if (field_obj.class_type, field_obj.input_name) in PROTECTED_IMAGE_INPUTS:

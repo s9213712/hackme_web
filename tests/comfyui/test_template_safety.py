@@ -114,6 +114,18 @@ def test_rewrite_save_image_prefix_handles_save_video_nodes():
     assert out["10"]["inputs"]["filename_prefix"] == "hackme/42/video9"
 
 
+def test_rewrite_save_image_prefix_handles_save_audio_nodes():
+    workflow = {
+        **TXT2IMG,
+        "107": {"class_type": "SaveAudioMP3", "inputs": {"filename_prefix": "audio/ace", "audio": ["18", 0], "quality": "V0"}},
+        "108": {"class_type": "SaveAudio", "inputs": {"filename_prefix": "audio/wav", "audio": ["18", 0]}},
+    }
+    out = rewrite_save_image_prefix(workflow, user_id=42, run_id="audio9")
+    assert out["9"]["inputs"]["filename_prefix"] == "hackme/42/audio9"
+    assert out["107"]["inputs"]["filename_prefix"] == "hackme/42/audio9"
+    assert out["108"]["inputs"]["filename_prefix"] == "hackme/42/audio9"
+
+
 def test_rewrite_save_image_prefix_rejects_empty_run_id():
     with pytest.raises(SafetyError, match="run_id"):
         rewrite_save_image_prefix(TXT2IMG, user_id=1, run_id="")

@@ -230,6 +230,7 @@ def _label_zh(field_obj: InputField, label_context: dict[str, Any] | None = None
         ("VAEEncodeForInpaint", "grow_mask_by"): "遮罩外擴",
         ("SaveImage", "filename_prefix"): "輸出檔名前綴（系統會改寫）",
         ("SaveVideo", "filename_prefix"): "影片輸出檔名前綴（系統會改寫）",
+        ("SaveAudio", "filename_prefix"): "音訊輸出檔名前綴（系統會改寫）",
         ("SaveAudioMP3", "filename_prefix"): "音訊輸出檔名前綴（系統會改寫）",
         ("ByteDanceSeedreamNode", "prompt"): "生成提示詞",
         ("ByteDanceSeedreamNode", "model"): "Seedream 模型",
@@ -336,6 +337,7 @@ def _safe_current_value(raw_value: Any) -> Any:
 _SYSTEM_REWRITTEN_FIELDS = {
     ("SaveImage", "filename_prefix"),
     ("SaveVideo", "filename_prefix"),
+    ("SaveAudio", "filename_prefix"),
     ("SaveAudioMP3", "filename_prefix"),
 }
 

@@ -58,6 +58,7 @@ _WIDGET_ORDER_OVERRIDES: dict[str, list[str]] = {
     "CreateVideo": ["fps"],
     "SaveImage": ["filename_prefix"],
     "SaveVideo": ["filename_prefix", "format", "codec"],
+    "SaveAudio": ["filename_prefix"],
     "SaveAudioMP3": ["filename_prefix", "quality"],
     "LoadVideo": ["file", "upload"],
     "ControlNetLoader": ["control_net_name"],

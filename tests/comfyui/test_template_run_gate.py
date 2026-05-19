@@ -115,6 +115,33 @@ def test_happy_path_all_gates_pass():
     assert result.audit_metadata["overall"] == "SUPPORTED"
 
 
+def test_save_audio_filename_prefix_is_system_rewritten_not_required():
+    workflow = {
+        **TXT2IMG,
+        "107": {"class_type": "SaveAudioMP3", "inputs": {"audio": ["8", 0], "filename_prefix": "audio/ace_step", "quality": "V0"}},
+    }
+    result = run_workflow_through_gates(
+        raw_workflow=workflow,
+        user_inputs=_full_user_inputs(),
+        image_field_assignments={},
+        actor={"id": 1, "username": "alice"},
+        user_id=1,
+        run_id="ace123",
+        conn=None,
+        comfyui_client=_stub_client(
+            classes={
+                "CheckpointLoaderSimple", "EmptyLatentImage", "CLIPTextEncode",
+                "KSampler", "VAEDecode", "SaveImage", "SaveAudioMP3",
+            },
+            models=["v1-5.safetensors"],
+        ),
+        upload_callback=_stub_upload,
+    )
+
+    assert result.workflow["107"]["inputs"]["filename_prefix"] == "hackme/1/ace123"
+    assert result.workflow["107"]["inputs"]["quality"] == "V0"
+
+
 def test_locked_model_loader_fields_are_not_required_or_overridden():
     workflow = {
         "61": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_06b_base.safetensors"}},

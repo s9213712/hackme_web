@@ -74,7 +74,7 @@ def next_safe_node_id(workflow: dict[str, Any]) -> int:
 # ----------------------------------------------------------------------------
 
 
-_SAVE_OUTPUT_CLASS_TYPES = {"SaveImage", "SaveVideo"}
+_SAVE_OUTPUT_CLASS_TYPES = {"SaveImage", "SaveVideo", "SaveAudio", "SaveAudioMP3"}
 
 
 def rewrite_save_image_prefix(
@@ -87,7 +87,7 @@ def rewrite_save_image_prefix(
 
     Author-supplied prefixes are not trusted — they could include path
     traversal, leak sibling users' filenames, or collide across runs. We
-    rewrite every SaveImage / SaveVideo node's filename_prefix to
+    rewrite every SaveImage / SaveVideo / SaveAudio node's filename_prefix to
     ``hackme/<user_id>/<run_id>``, which keeps outputs isolated per user
     and per run on the ComfyUI side.
 

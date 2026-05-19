@@ -134,6 +134,7 @@ _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     # Save filename — text but not user-editable in UI (overwritten by §7.2)
     ("SaveImage", "filename_prefix"): FieldCategory.TEXT,
     ("SaveVideo", "filename_prefix"): FieldCategory.TEXT,
+    ("SaveAudio", "filename_prefix"): FieldCategory.TEXT,
     ("SaveAudioMP3", "filename_prefix"): FieldCategory.TEXT,
     ("ByteDanceSeedreamNode", "prompt"): FieldCategory.TEXT,
     ("GrokImageEditNode", "prompt"): FieldCategory.TEXT,
