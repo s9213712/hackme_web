@@ -47,6 +47,7 @@ SYSTEM_WORKFLOW_IDS = (
     "origin_sdpose_multi_person",
     "origin_sam3_segmentation",
     "origin_multi_method_upscale",
+    "origin_multi_method_upscale_mode_test",
     "origin_capybara_video_edit",
     "origin_wan_vace_inpainting",
     "origin_wan22_14b_i2v_subgraphed",

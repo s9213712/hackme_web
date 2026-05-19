@@ -57,6 +57,9 @@ class FakeComfyUIClient:
     def get_vaes(self):
         return ["sdxl_vae.safetensors", "anime_vae.pt"]
 
+    def get_clip_vision_models(self):
+        return ["sigclip_vision_patch14_384.safetensors"]
+
     def get_embeddings(self):
         return ["badhandv4.pt", "easynegative.safetensors"]
 
@@ -90,6 +93,7 @@ class FakeComfyUIClient:
                 "PiDiNetPreprocessor",
                 "SoftEdgePreprocessor",
                 "TilePreprocessor",
+                "CLIPVisionLoader",
             ],
             "controlnet_models": [
                 "control_v11p_sd15_canny.safetensors",
@@ -101,6 +105,7 @@ class FakeComfyUIClient:
                 "control_v11f1e_sd15_tile.safetensors",
             ],
             "upscale_models": ["4x-UltraSharp.pth", "RealESRGAN_x4plus.pth"],
+            "clip_vision_models": ["sigclip_vision_patch14_384.safetensors"],
             "controlnet_types": {
                 "canny": {
                     "label": "Canny",
@@ -2361,6 +2366,28 @@ def test_comfyui_latent_upscale_models_fall_back_to_model_folder_api(monkeypatch
     assert seen_paths == ["/object_info/LatentUpscaleModelLoader", "/api/models/latent_upscale_models"]
 
 
+def test_comfyui_clip_vision_models_fall_back_to_model_folder_api(monkeypatch):
+    client = ComfyUIClient("http://fake-comfyui")
+    seen_paths = []
+
+    def fake_json_request(path, **_kwargs):
+        seen_paths.append(path)
+        if path == "/object_info/CLIPVisionLoader":
+            return {
+                "CLIPVisionLoader": {
+                    "input": {"required": {"clip_name": ["COMBO", {"options": []}]}}
+                }
+            }
+        if path == "/api/models/clip_vision":
+            return ["sigclip_vision_patch14_384.safetensors"]
+        raise AssertionError(f"unexpected path {path}")
+
+    monkeypatch.setattr(client, "_json_request", fake_json_request)
+
+    assert client.get_clip_vision_models() == ["sigclip_vision_patch14_384.safetensors"]
+    assert seen_paths == ["/object_info/CLIPVisionLoader", "/api/models/clip_vision"]
+
+
 def test_comfyui_capabilities_fall_back_to_latent_upscale_model_folder_api(monkeypatch):
     client = ComfyUIClient("http://fake-comfyui")
 
@@ -2385,6 +2412,54 @@ def test_comfyui_capabilities_fall_back_to_latent_upscale_model_folder_api(monke
     capabilities = client.get_capabilities()
 
     assert capabilities["latent_upscale_models"] == ["3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]
+
+
+def test_comfyui_capabilities_fall_back_to_clip_vision_model_folder_api(monkeypatch):
+    client = ComfyUIClient("http://fake-comfyui")
+
+    def fake_json_request(path, **_kwargs):
+        if path == "/object_info":
+            return {
+                "CLIPVisionLoader": {
+                    "input": {"required": {"clip_name": ["COMBO", {"options": []}]}}
+                }
+            }
+        if path == "/api/models/clip_vision":
+            return ["sigclip_vision_patch14_384.safetensors"]
+        if path in {"/api/models/upscale_models", "/api/models/latent_upscale_models"}:
+            return []
+        raise AssertionError(f"unexpected path {path}")
+
+    monkeypatch.setattr(client, "_json_request", fake_json_request)
+    capabilities = client.get_capabilities()
+
+    assert capabilities["clip_vision_models"] == ["sigclip_vision_patch14_384.safetensors"]
+
+
+def test_comfyui_workflow_dependency_status_accepts_clip_vision_models(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+    workflow = {
+        "10": {
+            "class_type": "CLIPVisionLoader",
+            "inputs": {"clip_name": "sigclip_vision_patch14_384.safetensors"},
+        },
+        "20": {
+            "class_type": "PreviewImage",
+            "inputs": {"images": ["30", 0]},
+        },
+    }
+    preset = _import_workflow_preset(client, workflow, title="Clip Vision Workflow")
+
+    detail = client.get(f"/api/comfyui/workflows/{preset['id']}")
+    assert detail.status_code == 200
+    dependency = detail.get_json()["preset"]["dependency_status"]
+
+    assert dependency["available"] is True
+    assert dependency["missing_models"] == []
 
 
 def test_comfyui_workflow_chains_loras_between_checkpoint_and_sampler():

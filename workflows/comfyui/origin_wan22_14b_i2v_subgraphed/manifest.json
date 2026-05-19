@@ -48,7 +48,6 @@
   "name": "WAN 2.2 14B I2V Subgraphed",
   "origin_source_path": "video/i2v/03_video_wan2_2_14B_i2v_subgraphed.json",
   "output_kinds": [
-    "image",
     "video"
   ],
   "required_controlnets": [],

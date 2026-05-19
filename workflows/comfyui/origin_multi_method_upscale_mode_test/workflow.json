@@ -1,0 +1,285 @@
+{
+  "16": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Positive Prompt"
+    },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "87",
+        1
+      ],
+      "text": "anime style, masterpiece, highres, full body, solo, adult cat-eared cosplayer wearing a modest casual outfit in a cozy bedroom, soft lighting, detailed eyes, clean lines"
+    }
+  },
+  "3": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Origin"
+    },
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 6,
+      "denoise": 1,
+      "latent_image": [
+        "56",
+        0
+      ],
+      "model": [
+        "87",
+        0
+      ],
+      "negative": [
+        "40",
+        0
+      ],
+      "positive": [
+        "16",
+        0
+      ],
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "seed": 616879224443392,
+      "steps": 30
+    }
+  },
+  "4": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Origin"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "SDXL\\illustrious(IL)\\WAI系列\\waiIllustriousSDXL_v160.safetensors"
+    }
+  },
+  "40": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Negative Prompt"
+    },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "87",
+        1
+      ],
+      "text": "embedding:lazy series\\IL\\lazyneg"
+    }
+  },
+  "56": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Origin"
+    },
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "batch_size": 1,
+      "height": 1024,
+      "width": 1024
+    }
+  },
+  "61": {
+    "_meta": {
+      "group_title": "Latent 放大",
+      "title": "Latent 放大"
+    },
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 6.5,
+      "denoise": 0.7,
+      "latent_image": [
+        "63",
+        0
+      ],
+      "model": [
+        "4",
+        0
+      ],
+      "negative": [
+        "40",
+        0
+      ],
+      "positive": [
+        "16",
+        0
+      ],
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "seed": 67742897374064,
+      "steps": 30
+    }
+  },
+  "63": {
+    "_meta": {
+      "group_title": "Latent 放大",
+      "title": "Latent 放大"
+    },
+    "class_type": "LatentUpscaleBy",
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "scale_by": 2,
+      "upscale_method": "nearest-exact"
+    }
+  },
+  "64": {
+    "_meta": {
+      "group_title": "Latent 放大",
+      "title": "Latent 放大"
+    },
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "61",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    }
+  },
+  "66": {
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": [
+        "64",
+        0
+      ]
+    }
+  },
+  "71": {
+    "_meta": {
+      "group_title": "模型放大",
+      "title": "模型放大"
+    },
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "image": [
+        "64",
+        0
+      ],
+      "upscale_model": [
+        "77",
+        0
+      ]
+    }
+  },
+  "73": {
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": [
+        "71",
+        0
+      ]
+    }
+  },
+  "76": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "71",
+        0
+      ]
+    }
+  },
+  "77": {
+    "_meta": {
+      "group_title": "模型放大",
+      "title": "模型放大"
+    },
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "ESRGAN\\OmniSR_X4_DIV2K.safetensors"
+    }
+  },
+  "8": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Origin"
+    },
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    }
+  },
+  "86": {
+    "_meta": {
+      "group_title": "Lora",
+      "title": "Lora"
+    },
+    "class_type": "LoraLoader",
+    "inputs": {
+      "clip": [
+        "4",
+        1
+      ],
+      "lora_name": "SDXL\\Artists\\Anmi style\\anmi-000096.safetensors",
+      "model": [
+        "4",
+        0
+      ],
+      "strength_clip": 1,
+      "strength_model": 0.8
+    }
+  },
+  "87": {
+    "_meta": {
+      "group_title": "Lora",
+      "title": "Lora"
+    },
+    "class_type": "LoraLoader",
+    "inputs": {
+      "clip": [
+        "86",
+        1
+      ],
+      "lora_name": "SDXL\\illustrious\\TRexstyle-12V2Rev.safetensors",
+      "model": [
+        "86",
+        0
+      ],
+      "strength_clip": 1,
+      "strength_model": 0.9
+    }
+  },
+  "93": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Origin"
+    },
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "test",
+      "images": [
+        "8",
+        0
+      ]
+    }
+  },
+  "94": {
+    "_meta": {
+      "group_title": "Origin",
+      "title": "Origin"
+    },
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ]
+    }
+  }
+}

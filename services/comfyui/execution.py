@@ -26,6 +26,7 @@ OUTPUT_NODE_CLASS_PRIORITY = {
 }
 VIDEO_OUTPUT_CLASS_TYPES = {"SaveVideo", "VHS_VideoCombine"}
 AUDIO_OUTPUT_CLASS_TYPES = {"SaveAudio", "SaveAudioMP3"}
+PREVIEW_IMAGE_OUTPUT_CLASS_TYPES = {"PreviewImage", "MaskPreview"}
 VIDEO_OUTPUT_EXTENSIONS = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".gif"}
 AUDIO_OUTPUT_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac"}
 TRANSIENT_ERROR_MARKERS = (
@@ -368,10 +369,22 @@ def _output_ref_bucket(raw_key, normalized_key, *, filename="", class_type=""):
     return normalized_key
 
 
+def _workflow_suppresses_preview_image_outputs(workflow):
+    if not isinstance(workflow, dict):
+        return False
+    classes = {
+        str((node or {}).get("class_type") or "").strip()
+        for node in workflow.values()
+        if isinstance(node, dict)
+    }
+    return bool(classes & VIDEO_OUTPUT_CLASS_TYPES) and "SaveImage" not in classes
+
+
 def collect_output_refs(record, workflow=None):
     outputs = (record or {}).get("outputs") or {}
     found = {"images": [], "videos": [], "audio": [], "other": []}
     seen = set()
+    suppress_preview_images = _workflow_suppresses_preview_image_outputs(workflow)
     for _node_id, output in _sorted_output_items(outputs, workflow=workflow):
         if not isinstance(output, dict):
             continue
@@ -396,6 +409,12 @@ def collect_output_refs(record, workflow=None):
                     filename=filename,
                     class_type=source_class_type,
                 )
+                if (
+                    bucket == "images"
+                    and suppress_preview_images
+                    and source_class_type in PREVIEW_IMAGE_OUTPUT_CLASS_TYPES
+                ):
+                    continue
                 payload = {
                     "filename": filename,
                     "subfolder": str(item.get("subfolder") or "").strip(),

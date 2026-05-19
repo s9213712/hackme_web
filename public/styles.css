@@ -1891,9 +1891,16 @@
     }
 
     .comfyui-generated-media-card video,
-    .comfyui-generated-media-card audio {
+    .comfyui-generated-media-card audio,
+    .comfyui-generated-media-card img {
       width: 100%;
       max-height: 420px;
+    }
+
+    .comfyui-generated-media-card img {
+      object-fit: contain;
+      border-radius: 6px;
+      background: rgba(0,0,0,.22);
     }
 
     .comfyui-mask-editor-modal[hidden] {

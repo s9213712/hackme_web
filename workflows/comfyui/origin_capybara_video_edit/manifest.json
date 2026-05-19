@@ -37,7 +37,6 @@
   "name": "Capybara v0.1 Video Edit",
   "origin_source_path": "video/edit/video_capybara_v0_1_video_edit.json",
   "output_kinds": [
-    "image",
     "video"
   ],
   "required_controlnets": [],

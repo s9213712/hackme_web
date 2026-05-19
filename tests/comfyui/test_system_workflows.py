@@ -42,6 +42,7 @@ EXPECTED_ORIGIN_WORKFLOW_IDS = {
     "origin_sdpose_multi_person",
     "origin_sam3_segmentation",
     "origin_multi_method_upscale",
+    "origin_multi_method_upscale_mode_test",
     "origin_capybara_video_edit",
     "origin_wan_vace_inpainting",
     "origin_wan22_14b_i2v_subgraphed",
@@ -68,6 +69,56 @@ def _manifest(workflow_id):
 
 def _workflow(workflow_id):
     return json.loads((SYSTEM_DIR / workflow_id / "workflow.json").read_text(encoding="utf-8"))
+
+
+def _normalize_output_kind(kind):
+    value = str(kind or "").strip().lower()
+    if value in {"image", "images", "preview", "mask"}:
+        return "image"
+    if value in {"video", "videos", "gif", "gifs", "movie", "movies"}:
+        return "video"
+    if value in {"audio", "audios", "music", "song", "songs", "sound", "sounds"}:
+        return "audio"
+    if value in {"file", "files", "binary", "download"}:
+        return "file"
+    return ""
+
+
+def _ordered_output_kinds(kinds):
+    values = {_normalize_output_kind(kind) for kind in kinds}
+    values.discard("")
+    return [kind for kind in ("image", "video", "audio", "file") if kind in values]
+
+
+def _manifest_output_kinds(manifest):
+    return _ordered_output_kinds(manifest.get("output_kinds") or [])
+
+
+def _workflow_output_kinds(workflow):
+    output_class_kinds = {
+        "SaveImage": "image",
+        "PreviewImage": "image",
+        "MaskPreview": "image",
+        "SaveVideo": "video",
+        "VHS_VideoCombine": "video",
+        "SaveAudio": "audio",
+        "SaveAudioMP3": "audio",
+    }
+    kinds = []
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        kind = output_class_kinds.get(str(node.get("class_type") or ""))
+        if kind:
+            kinds.append(kind)
+    classes = {
+        str((node or {}).get("class_type") or "").strip()
+        for node in workflow.values()
+        if isinstance(node, dict)
+    }
+    if "video" in kinds and "SaveImage" not in classes:
+        kinds = [kind for kind in kinds if kind != "image"]
+    return _ordered_output_kinds(kinds)
 
 
 def _workflow_media_refs(workflow_id):
@@ -189,6 +240,28 @@ def test_system_manifest_schema_basics(workflow_id):
     assert isinstance(ui.get("panels"), list) and ui["panels"], (
         f"{workflow_id} has no UI panels"
     )
+
+
+@pytest.mark.parametrize("workflow_id", sorted(EXPECTED_ORIGIN_WORKFLOW_IDS))
+def test_manifest_output_kinds_match_workflow_output_nodes(workflow_id):
+    manifest = _manifest(workflow_id)
+    workflow = _workflow(workflow_id)
+
+    assert _manifest_output_kinds(manifest) == _workflow_output_kinds(workflow)
+
+
+def test_frontend_workflow_routes_infer_output_kinds_from_output_nodes_only():
+    route_sources = [
+        REPO_ROOT / "routes/comfyui_sections/workflow_routes.py",
+        REPO_ROOT / "routes/comfyui_sections/template_routes.py",
+    ]
+    for path in route_sources:
+        source = path.read_text(encoding="utf-8")
+        assert '"SaveVideo": "video"' in source
+        assert '"SaveAudioMP3"' in source
+        assert 'found.discard("image")' in source
+        assert 'any("video" in name.lower()' not in source
+        assert 'token in name.lower()' not in source
 
 
 @pytest.mark.parametrize("workflow_id", sorted(EXPECTED_ORIGIN_WORKFLOW_IDS))
@@ -338,6 +411,22 @@ def test_multi_method_upscale_keeps_origin_first_and_second_upscale_stages():
     assert fields["node:77:model_name"]["label"] == "放大 / Upscale 模型（二次放大）"
     assert ("embedding", "lazy") not in required
     assert ("embedding", "lazy series\\IL\\lazyneg") in required
+
+
+def test_multi_method_upscale_mode_test_exposes_mode_specific_labels():
+    workflow = _workflow("origin_multi_method_upscale_mode_test")
+    manifest = _manifest("origin_multi_method_upscale_mode_test")
+    fields = _ui_fields(manifest)
+
+    assert manifest["name"] == "Multi-Method Upscale Utility - Mode Test"
+    assert manifest["default_params"]["upscale_mode"] == "combined_upscale"
+    assert workflow["61"]["_meta"]["title"] == "Latent 放大"
+    assert workflow["63"]["_meta"]["title"] == "Latent 放大"
+    assert workflow["77"]["_meta"]["title"] == "模型放大"
+    assert fields["node:61:denoise"]["label"] == "Denoise（Latent 重繪）"
+    assert fields["node:63:upscale_method"]["label"] == "Latent 放大方式"
+    assert fields["node:63:scale_by"]["label"] == "Latent 放大倍率"
+    assert fields["node:77:model_name"]["label"] == "放大 / Upscale 模型（模型放大）"
 
 
 def test_ltx23_latent_upscale_model_is_not_treated_as_regular_upscaler():

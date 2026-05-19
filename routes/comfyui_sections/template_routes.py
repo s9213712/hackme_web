@@ -77,18 +77,28 @@ def register_comfyui_template_routes(app, ctx):
     workflow_preset_summary = ctx.get("workflow_preset_summary")
 
     def _template_output_kinds(workflow_json):
+        output_class_kinds = {
+            "SaveImage": "image",
+            "PreviewImage": "image",
+            "MaskPreview": "image",
+            "SaveVideo": "video",
+            "VHS_VideoCombine": "video",
+            "SaveAudio": "music",
+            "SaveAudioMP3": "music",
+        }
+        found = {
+            output_class_kinds.get(str((node or {}).get("class_type") or "").strip())
+            for node in (workflow_json or {}).values()
+            if isinstance(node, dict)
+        }
         classes = {
             str((node or {}).get("class_type") or "").strip()
             for node in (workflow_json or {}).values()
             if isinstance(node, dict)
         }
-        output_kinds = []
-        if any(name in classes for name in {"SaveImage", "PreviewImage", "VAEDecode"}):
-            output_kinds.append("image")
-        if any("video" in name.lower() for name in classes):
-            output_kinds.append("video")
-        if any(token in name.lower() for name in classes for token in ("audio", "music", "wave", "wav")):
-            output_kinds.append("music")
+        if found and "video" in found and "SaveImage" not in classes:
+            found.discard("image")
+        output_kinds = [kind for kind in ("image", "video", "music") if kind in found]
         if not output_kinds:
             output_kinds.append("image")
         return output_kinds

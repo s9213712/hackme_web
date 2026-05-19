@@ -225,6 +225,7 @@ def register_comfyui_runtime_routes(app, ctx):
                 "controlnet_models": [],
                 "upscale_models": [],
                 "latent_upscale_models": [],
+                "clip_vision_models": [],
                 "diffusion_models": [],
                 "clip_models": [],
                 "controlnet_types": {},
@@ -252,6 +253,12 @@ def register_comfyui_runtime_routes(app, ctx):
                 latent_upscale_models = active_client.get_latent_upscale_models()
         except ComfyUIError:
             latent_upscale_models = []
+        try:
+            clip_vision_models = list((capabilities or {}).get("clip_vision_models") or [])
+            if not clip_vision_models and hasattr(active_client, "get_clip_vision_models"):
+                clip_vision_models = active_client.get_clip_vision_models()
+        except ComfyUIError:
+            clip_vision_models = []
         lora_details = _build_lora_details(loras)
         model_families = (capabilities or {}).get("model_families") or []
         return json_resp({
@@ -272,6 +279,7 @@ def register_comfyui_runtime_routes(app, ctx):
             "controlnet_models": (capabilities or {}).get("controlnet_models") or [],
             "upscale_models": (capabilities or {}).get("upscale_models") or [],
             "latent_upscale_models": latent_upscale_models,
+            "clip_vision_models": clip_vision_models,
             "diffusion_models": (capabilities or {}).get("diffusion_models") or [],
             "clip_models": (capabilities or {}).get("clip_models") or [],
             "controlnet_types": (capabilities or {}).get("controlnet_types") or {},

@@ -146,6 +146,7 @@ _MODEL_BUCKET_CLIENT_METHODS: dict[str, str] = {
     "controlnet": "get_controlnet_models",
     "upscale_model": "get_upscale_models",
     "latent_upscale_model": "get_latent_upscale_models",
+    "clip_vision": "get_clip_vision_models",
 }
 
 

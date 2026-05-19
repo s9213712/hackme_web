@@ -222,11 +222,17 @@ def test_multi_method_upscale_template_has_runtime_breakpoint_selector():
     css = _read("public/styles.css")
 
     assert 'const COMFYUI_MULTI_METHOD_UPSCALE_ID = "origin_multi_method_upscale";' in workflow_js
+    assert 'const COMFYUI_MULTI_METHOD_UPSCALE_MODE_TEST_ID = "origin_multi_method_upscale_mode_test";' in workflow_js
     assert "function renderComfyuiUpscaleBreakpointControl" in workflow_js
     assert "function comfyuiUpscaleBreakpointRunSpec" in workflow_js
     assert 'data-comfyui-upscale-breakpoint="1"' in workflow_js
+    assert 'value="model_upscale"' in workflow_js
+    assert 'value="latent_upscale"' in workflow_js
+    assert 'value="combined_upscale"' in workflow_js
+    assert 'mode: normalizeComfyuiUpscaleBreakpointValue(detail, stage)' in workflow_js
     assert "upscale_breakpoint: upscaleBreakpointSpec || undefined" in workflow_js
     assert "comfyuiTemplateIsHiddenUpscaleBreakpointField(detail, field)" in workflow_js
+    assert 'stage === "model_upscale" && ["61", "63"].includes(nodeId)' in workflow_js
     assert ".comfyui-upscale-breakpoint-card" in css
 
 

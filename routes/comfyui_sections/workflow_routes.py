@@ -311,18 +311,28 @@ def register_comfyui_workflow_routes(app, ctx):
         return patched
 
     def _workflow_output_kinds(workflow_json):
+        output_class_kinds = {
+            "SaveImage": "image",
+            "PreviewImage": "image",
+            "MaskPreview": "image",
+            "SaveVideo": "video",
+            "VHS_VideoCombine": "video",
+            "SaveAudio": "audio",
+            "SaveAudioMP3": "audio",
+        }
+        found = {
+            output_class_kinds.get(str((node or {}).get("class_type") or "").strip())
+            for node in (workflow_json or {}).values()
+            if isinstance(node, dict)
+        }
         classes = {
             str((node or {}).get("class_type") or "").strip()
             for node in (workflow_json or {}).values()
             if isinstance(node, dict)
         }
-        output_kinds = []
-        if any(name in classes for name in {"SaveImage", "PreviewImage", "VAEDecode"}):
-            output_kinds.append("image")
-        if any("video" in name.lower() for name in classes):
-            output_kinds.append("video")
-        if any(token in name.lower() for name in classes for token in ("audio", "music", "wave", "wav", "tts")):
-            output_kinds.append("audio")
+        if found and "video" in found and "SaveImage" not in classes:
+            found.discard("image")
+        output_kinds = [kind for kind in ("image", "video", "audio") if kind in found]
         if not output_kinds:
             output_kinds.append("image")
         return output_kinds
@@ -772,6 +782,10 @@ def register_comfyui_workflow_routes(app, ctx):
             runtime_dependency_row = row
             runtime_workflow_changed = False
             if is_upscale_breakpoint_workflow_id(row["system_bundle_id"]):
+                if not upscale_breakpoint:
+                    default_upscale_mode = str(default_params.get("upscale_mode") or default_params.get("upscale_breakpoint") or "").strip()
+                    if default_upscale_mode:
+                        upscale_breakpoint = {"mode": default_upscale_mode}
                 try:
                     selection = apply_upscale_breakpoint(
                         workflow_json,
@@ -784,6 +798,7 @@ def register_comfyui_workflow_routes(app, ctx):
                 user_inputs = selection.user_inputs
                 default_params = dict(default_params)
                 default_params["upscale_breakpoint"] = selection.stage
+                default_params["upscale_mode"] = selection.stage
                 runtime_workflow_changed = True
             if is_multi_compare_workflow_id(row["system_bundle_id"]) and multi_compare:
                 try:

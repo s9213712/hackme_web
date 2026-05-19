@@ -5,10 +5,12 @@ const COMFYUI_BUILTIN_VAE_LABEL = "使用各自大模型內建 VAE";
 const COMFYUI_COMPARE_TWO_CHECKPOINTS_ID = "origin_compare_2checkpoints";
 const COMFYUI_MULTI_COMPARE_CHECKPOINTS_TEST_ID = "origin_multi_compare_checkpoints_test";
 const COMFYUI_MULTI_METHOD_UPSCALE_ID = "origin_multi_method_upscale";
+const COMFYUI_MULTI_METHOD_UPSCALE_MODE_TEST_ID = "origin_multi_method_upscale_mode_test";
 const COMFYUI_COMPARE_SHARED_KSAMPLER_INPUTS = new Set(["seed", "steps", "cfg", "sampler_name", "scheduler", "denoise"]);
 const COMFYUI_OFFICIAL_TEMPLATE_MEDIA_ASSIGNMENT_PREFIX = "official-template-media:";
 const COMFYUI_MULTI_COMPARE_MAX_CHECKPOINTS = 14;
 const COMFYUI_UPSCALE_BREAKPOINT_DEFAULT = "first_upscale";
+const COMFYUI_UPSCALE_MODE_DEFAULT = "combined_upscale";
 
 function comfyuiMultiCompareMaxLoras() {
   return typeof COMFYUI_MAX_LORAS === "number" ? COMFYUI_MAX_LORAS : 8;
@@ -508,6 +510,7 @@ function renderComfyuiTemplateSelector(payload = {}, { silentReload = true } = {
         comfyuiMultiCompareState = { bundleId: "", checkpoints: [], loras: [] };
         comfyuiUpscaleBreakpointState = { bundleId: "", stage: COMFYUI_UPSCALE_BREAKPOINT_DEFAULT };
         comfyuiTemplatePromptShareMode = "independent";
+        if (typeof updateComfyuiPreviewCardForOutputKinds === "function") updateComfyuiPreviewCardForOutputKinds(["image"]);
         renderSelectedComfyuiTemplate();
         return;
       }
@@ -527,6 +530,7 @@ function renderComfyuiTemplateSelector(payload = {}, { silentReload = true } = {
       }).catch(() => {});
     }
   } else {
+    if (typeof updateComfyuiPreviewCardForOutputKinds === "function") updateComfyuiPreviewCardForOutputKinds(["image"]);
     renderSelectedComfyuiTemplate();
   }
 }
@@ -551,6 +555,7 @@ async function loadComfyuiSelectedTemplateDetail(presetId, { silent = false, app
   if (applyDefaults) {
     applyComfyuiWorkflowPresetDefaults(comfyuiSelectedTemplateDetail?.default_params || {});
   }
+  if (typeof updateComfyuiPreviewCardForOutputKinds === "function") updateComfyuiPreviewCardForOutputKinds();
   renderSelectedComfyuiTemplate();
   if (!silent) {
     setComfyuiMessage(`已切換到模板「${comfyuiSelectedTemplateDetail?.title || `Workflow #${presetId}`}」`, true);
@@ -564,6 +569,7 @@ function comfyuiWorkflowPresetMode(item = {}) {
 }
 
 function comfyuiWorkflowOutputKind(kind) {
+  if (typeof comfyuiNormalizeOutputKind === "function") return comfyuiNormalizeOutputKind(kind);
   const normalized = String(kind || "").trim().toLowerCase();
   if (["audio", "audios", "music", "song", "songs", "sound", "sounds"].includes(normalized)) return "audio";
   if (["video", "videos", "gif", "gifs"].includes(normalized)) return "video";
@@ -759,7 +765,24 @@ function comfyuiTemplateIsMultiCompareCheckpoints(detail = comfyuiSelectedTempla
 
 function comfyuiTemplateIsMultiMethodUpscale(detail = comfyuiSelectedTemplateDetail) {
   return comfyuiTemplateBundleId(detail) === COMFYUI_MULTI_METHOD_UPSCALE_ID
+    || comfyuiTemplateBundleId(detail) === COMFYUI_MULTI_METHOD_UPSCALE_MODE_TEST_ID
     || String(detail?.title || detail?.name || "").trim() === "Multi-Method Upscale Utility";
+}
+
+function comfyuiTemplateIsMultiMethodUpscaleModeTest(detail = comfyuiSelectedTemplateDetail) {
+  return comfyuiTemplateBundleId(detail) === COMFYUI_MULTI_METHOD_UPSCALE_MODE_TEST_ID
+    || String(detail?.title || detail?.name || "").trim() === "Multi-Method Upscale Utility - Mode Test";
+}
+
+function normalizeComfyuiUpscaleBreakpointValue(detail, value) {
+  const raw = String(value || "").trim();
+  if (comfyuiTemplateIsMultiMethodUpscaleModeTest(detail)) {
+    if (["model_upscale", "latent_upscale", "combined_upscale"].includes(raw)) return raw;
+    if (raw === "first_upscale") return "latent_upscale";
+    if (raw === "second_upscale") return "combined_upscale";
+    return COMFYUI_UPSCALE_MODE_DEFAULT;
+  }
+  return raw === "second_upscale" ? "second_upscale" : COMFYUI_UPSCALE_BREAKPOINT_DEFAULT;
 }
 
 function resetComfyuiUpscaleBreakpointState(detail = comfyuiSelectedTemplateDetail) {
@@ -768,10 +791,10 @@ function resetComfyuiUpscaleBreakpointState(detail = comfyuiSelectedTemplateDeta
     comfyuiUpscaleBreakpointState = { bundleId: "", stage: COMFYUI_UPSCALE_BREAKPOINT_DEFAULT };
     return;
   }
-  const existingStage = String(detail?.default_params?.upscale_breakpoint || COMFYUI_UPSCALE_BREAKPOINT_DEFAULT);
+  const existingStage = String(detail?.default_params?.upscale_mode || detail?.default_params?.upscale_breakpoint || "");
   comfyuiUpscaleBreakpointState = {
     bundleId,
-    stage: existingStage === "second_upscale" ? "second_upscale" : COMFYUI_UPSCALE_BREAKPOINT_DEFAULT,
+    stage: normalizeComfyuiUpscaleBreakpointValue(detail, existingStage),
   };
 }
 
@@ -989,7 +1012,14 @@ function comfyuiTemplateIsMultiCompareCheckpointField(detail, field = {}) {
 
 function comfyuiTemplateIsHiddenUpscaleBreakpointField(detail, field = {}) {
   if (!comfyuiTemplateIsMultiMethodUpscale(detail)) return false;
-  return comfyuiUpscaleBreakpointStage(detail) === "first_upscale" && String(field?.node_id || "") === "77";
+  const stage = comfyuiUpscaleBreakpointStage(detail);
+  const nodeId = String(field?.node_id || "");
+  if (comfyuiTemplateIsMultiMethodUpscaleModeTest(detail)) {
+    if (stage === "latent_upscale" && nodeId === "77") return true;
+    if (stage === "model_upscale" && ["61", "63"].includes(nodeId)) return true;
+    return false;
+  }
+  return stage === "first_upscale" && nodeId === "77";
 }
 
 function comfyuiTemplateIsHiddenField(detail, field = {}) {
@@ -1578,6 +1608,12 @@ function comfyuiMultiCompareRunSpec(detail = comfyuiSelectedTemplateDetail) {
 function comfyuiUpscaleBreakpointRunSpec(detail = comfyuiSelectedTemplateDetail) {
   if (!comfyuiTemplateIsMultiMethodUpscale(detail)) return null;
   const stage = comfyuiUpscaleBreakpointStage(detail);
+  if (comfyuiTemplateIsMultiMethodUpscaleModeTest(detail)) {
+    return {
+      enabled: true,
+      mode: normalizeComfyuiUpscaleBreakpointValue(detail, stage),
+    };
+  }
   return {
     enabled: true,
     stage: stage === "second_upscale" ? "second_upscale" : "first_upscale",
@@ -1850,6 +1886,22 @@ function renderComfyuiMultiCompareControl(detail = comfyuiSelectedTemplateDetail
 function renderComfyuiUpscaleBreakpointControl(detail = comfyuiSelectedTemplateDetail) {
   const state = ensureComfyuiUpscaleBreakpointState(detail);
   if (!state) return "";
+  if (comfyuiTemplateIsMultiMethodUpscaleModeTest(detail)) {
+    const mode = normalizeComfyuiUpscaleBreakpointValue(detail, state.stage);
+    return `
+      <section class="comfyui-upscale-breakpoint-card">
+        <div>
+          <div class="drive-card-title">放大方式</div>
+          <div class="drive-card-sub">選擇這次要跑模型放大、Latent 放大，或兩者組合；系統只顯示並送出對應參數。</div>
+        </div>
+        <select data-comfyui-upscale-breakpoint="1" aria-label="放大方式">
+          <option value="model_upscale"${mode === "model_upscale" ? " selected" : ""}>模型放大：Origin 圖片直接套 Upscale 模型</option>
+          <option value="latent_upscale"${mode === "latent_upscale" ? " selected" : ""}>Latent 放大：LatentUpscaleBy 後重繪輸出</option>
+          <option value="combined_upscale"${mode === "combined_upscale" ? " selected" : ""}>組合使用：Latent 放大後再套 Upscale 模型</option>
+        </select>
+      </section>
+    `;
+  }
   const stage = state.stage === "second_upscale" ? "second_upscale" : "first_upscale";
   return `
     <section class="comfyui-upscale-breakpoint-card">
@@ -2148,7 +2200,7 @@ function bindRenderedComfyuiTemplateFields(detail) {
     select.addEventListener("change", () => {
       const state = ensureComfyuiUpscaleBreakpointState(detail);
       if (!state) return;
-      state.stage = select.value === "second_upscale" ? "second_upscale" : "first_upscale";
+      state.stage = normalizeComfyuiUpscaleBreakpointValue(detail, select.value);
       writeComfyuiDraft();
       renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
     });
@@ -2755,6 +2807,20 @@ async function runComfyuiWorkflowPreset(presetId) {
     if (!confirmPaidApiNodes) return;
   }
   await fetchCsrfToken({ force: true });
+  const expectedOutputKinds = comfyuiWorkflowPresetOutputKinds(templateDetail || preset);
+  if (typeof updateComfyuiPreviewCardForOutputKinds === "function") updateComfyuiPreviewCardForOutputKinds(expectedOutputKinds);
+  const preview = $("comfyui-preview");
+  if (preview && typeof comfyuiPreviewPendingText === "function") {
+    preview.innerHTML = `<div class="drive-empty">${sanitize(comfyuiPreviewPendingText(expectedOutputKinds))}</div>`;
+  }
+  const meta = $("comfyui-result-meta");
+  if (meta) meta.textContent = "";
+  comfyuiCurrentImage = null;
+  comfyuiGeneratedImages = [];
+  comfyuiGeneratedMedia = [];
+  comfyuiSelectedImageIndex = 0;
+  comfyuiSavedResult = null;
+  updateComfyuiResultButtons(false);
   setComfyuiBusy(true);
   setComfyuiMessage("正在建立 workflow 執行工作...", true);
   const workflowTimeoutSeconds = comfyuiWorkflowPresetForegroundTimeoutSeconds(preset);

@@ -16,6 +16,8 @@ def test_index_html_exposes_reusable_image_picker_and_media_modes():
     assert 'id="comfyui-mask-image-picker-btn"' in html
     assert 'id="comfyui-control-image-picker-btn"' in html
     assert 'id="comfyui-image-picker-modal"' in html
+    assert 'id="comfyui-preview-card-title"' in html
+    assert 'id="comfyui-preview-card-sub"' in html
     for mode in ("t2v", "i2v", "v2v", "t2s", "t2sv"):
         assert f'value="{mode}"' in html
 
@@ -28,6 +30,9 @@ def test_comfyui_js_imports_history_and_drive_images_for_inputs():
     assert 'apiFetch(API + "/comfyui/import-uploaded-video"' in js
     assert "cloudFileId" in js
     assert "function renderComfyuiGeneratedMedia(mediaItems" in js
+    assert "function comfyuiNormalizeOutputKind(kind)" in js
+    assert "function updateComfyuiPreviewCardForOutputKinds(kinds = null)" in js
+    assert "function comfyuiGeneratedMediaMarkup(mediaItems = [])" in js
 
 
 def test_comfyui_generation_results_lazy_load_output_previews():
@@ -37,10 +42,17 @@ def test_comfyui_generation_results_lazy_load_output_previews():
     assert 'apiFetch(API + "/comfyui/image-preview"' in js
     assert "async function hydrateComfyuiGeneratedMedia" in js
     assert 'apiFetch(API + "/comfyui/media-preview"' in js
+    assert "function comfyuiDataUrlToBlobUrl(dataUrl, cacheKey = \"\")" in js
+    assert "new Blob(chunks, { type: mimeType })" in js
+    assert "preview_url: dataUrl ? comfyuiDataUrlToBlobUrl(dataUrl, cacheKey) : \"\"" in js
+    assert "preview_url: item.preview_url || comfyuiDataUrlToBlobUrl(item.data_url, existingKey)" in js
+    assert "const src = item.preview_url || item.data_url || \"\";" in js
+    assert '<video controls preload="metadata" playsinline src="${sanitize(src)}"></video>' in js
     assert "const runImages = await hydrateComfyuiGeneratedImages(rawRunImages);" in js
     assert "const runMedia = await hydrateComfyuiGeneratedMedia(Array.isArray(json.media) ? json.media : [], jobId);" in js
     assert "const images = await hydrateComfyuiGeneratedImages(rawImages);" in workflow_js
     assert "const media = await hydrateComfyuiGeneratedMedia(Array.isArray(result.media) ? result.media : [], jobId);" in workflow_js
+    assert "updateComfyuiResultButtons(!!images.length);" in workflow_js
     assert 'throw new Error("ComfyUI 未回傳圖片");' in js
     assert 'if (!comfyuiCurrentImage?.data_url) throw new Error("ComfyUI 未回傳圖片");' not in js
     assert "function openComfyuiGeneratedImage" in js
@@ -79,6 +91,7 @@ def test_image_picker_styles_are_responsive():
     assert ".comfyui-image-picker-modal" in css
     assert ".comfyui-image-picker-list" in css
     assert ".comfyui-generated-media" in css
+    assert ".comfyui-generated-media-card img" in css
     assert ".comfyui-output-gallery" in css
     assert ".comfyui-output-main" in css
     assert ".comfyui-image-lightbox" in css

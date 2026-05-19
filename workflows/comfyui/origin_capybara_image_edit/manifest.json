@@ -37,8 +37,7 @@
   "name": "Capybara v0.1 Image Edit",
   "origin_source_path": "image/edit/Image_capybara_v0_1_image_edit.json",
   "output_kinds": [
-    "image",
-    "video"
+    "image"
   ],
   "required_controlnets": [],
   "required_custom_nodes": [],

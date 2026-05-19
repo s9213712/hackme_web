@@ -1274,6 +1274,10 @@ def register_comfyui_routes(app, deps):
             latent_upscale_models = set(active_client.get_latent_upscale_models() if hasattr(active_client, "get_latent_upscale_models") else [])
         except Exception:
             latent_upscale_models = set()
+        try:
+            clip_vision_models = set(active_client.get_clip_vision_models() if hasattr(active_client, "get_clip_vision_models") else [])
+        except Exception:
+            clip_vision_models = set()
         return {
             "models": models,
             "vaes": vaes,
@@ -1281,6 +1285,7 @@ def register_comfyui_routes(app, deps):
             "embeddings": embeddings,
             "diffusion_models": set((capabilities or {}).get("diffusion_models") or []),
             "clip_models": set((capabilities or {}).get("clip_models") or []),
+            "clip_vision_models": set((capabilities or {}).get("clip_vision_models") or []) or clip_vision_models,
             "controlnets": set((capabilities or {}).get("controlnet_models") or []),
             "upscale_models": set((capabilities or {}).get("upscale_models") or []),
             "latent_upscale_models": set((capabilities or {}).get("latent_upscale_models") or []) or latent_upscale_models,
@@ -1359,6 +1364,9 @@ def register_comfyui_routes(app, deps):
                     missing_models.append({"kind": kind, "name": name})
             elif kind in {"clip", "text_encoder"}:
                 if not model_option_available(name, sets["clip_models"]):
+                    missing_models.append({"kind": kind, "name": name})
+            elif kind in {"clip_vision", "clipvision"}:
+                if not model_option_available(name, sets["clip_vision_models"]):
                     missing_models.append({"kind": kind, "name": name})
             elif kind == "embedding":
                 if not embedding_option_available(name, sets["embeddings"]):

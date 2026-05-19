@@ -370,6 +370,9 @@ class ComfyUIClient:
     def get_latent_upscale_models(self):
         return self._list_model_loader_options("LatentUpscaleModelLoader", "model_name", "latent_upscale_models")
 
+    def get_clip_vision_models(self):
+        return self._list_model_loader_options("CLIPVisionLoader", "clip_name", "clip_vision")
+
     def get_capabilities(self):
         object_info = self.get_object_info()
         available_nodes = set(object_info.keys())
@@ -391,6 +394,7 @@ class ComfyUIClient:
         controlnet_models = _node_input_options_from_info(object_info, "ControlNetLoader", "control_net_name") if "ControlNetLoader" in available_nodes else []
         upscale_models = _node_input_options_from_info(object_info, "UpscaleModelLoader", "model_name") if "UpscaleModelLoader" in available_nodes else []
         latent_upscale_models = _node_input_options_from_info(object_info, "LatentUpscaleModelLoader", "model_name") if "LatentUpscaleModelLoader" in available_nodes else []
+        clip_vision_models = _node_input_options_from_info(object_info, "CLIPVisionLoader", "clip_name") if "CLIPVisionLoader" in available_nodes else []
         if not upscale_models:
             try:
                 upscale_models = self.get_model_folder_models("upscale_models")
@@ -401,6 +405,11 @@ class ComfyUIClient:
                 latent_upscale_models = self.get_model_folder_models("latent_upscale_models")
             except ComfyUIError:
                 latent_upscale_models = []
+        if not clip_vision_models:
+            try:
+                clip_vision_models = self.get_model_folder_models("clip_vision")
+            except ComfyUIError:
+                clip_vision_models = []
         samplers = _node_input_options_from_info(object_info, "KSampler", "sampler_name")
         schedulers = _node_input_options_from_info(object_info, "KSampler", "scheduler")
         controlnet_types = {}
@@ -438,6 +447,7 @@ class ComfyUIClient:
             "vaes": vaes,
             "diffusion_models": sorted(set(diffusion_models)),
             "clip_models": sorted(set(clip_models)),
+            "clip_vision_models": sorted(set(clip_vision_models)),
             "samplers": samplers,
             "schedulers": schedulers,
             "controlnet_models": controlnet_models,
@@ -456,7 +466,7 @@ class ComfyUIClient:
                 }
                 for key, value in GENERATION_MODE_DEFINITIONS.items()
             ],
-            "model_families": detect_model_families([*models, *loras, *vaes, *diffusion_models, *clip_models, *controlnet_models, *upscale_models, *latent_upscale_models]),
+            "model_families": detect_model_families([*models, *loras, *vaes, *diffusion_models, *clip_models, *clip_vision_models, *controlnet_models, *upscale_models, *latent_upscale_models]),
         }
 
     def upload_image_bytes(self, data, filename, *, image_type="input", overwrite=False, subfolder=""):

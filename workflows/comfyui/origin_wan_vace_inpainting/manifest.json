@@ -48,7 +48,6 @@
   "name": "WAN VACE Video Inpainting",
   "origin_source_path": "video/edit/video_wan_vace_inpainting.json",
   "output_kinds": [
-    "image",
     "video"
   ],
   "required_controlnets": [],

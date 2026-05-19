@@ -43,8 +43,7 @@
   "name": "LTX 2.3 Text-to-Video",
   "origin_source_path": "video/t2v/video_ltx2_3_t2v.json",
   "output_kinds": [
-    "video",
-    "music"
+    "video"
   ],
   "required_controlnets": [],
   "required_custom_nodes": [],

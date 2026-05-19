@@ -388,12 +388,101 @@ function comfyuiHasInputAsset(key) {
   return !!asset?.file || !!asset?.imageRef;
 }
 
+function comfyuiNormalizeOutputKind(kind) {
+  const normalized = String(kind || "").trim().toLowerCase();
+  if (["image", "images", "preview", "mask"].includes(normalized)) return "image";
+  if (["video", "videos", "gif", "gifs", "movie", "movies"].includes(normalized)) return "video";
+  if (["audio", "audios", "music", "song", "songs", "sound", "sounds", "voice", "voices"].includes(normalized)) return "audio";
+  if (["file", "files", "binary", "download"].includes(normalized)) return "file";
+  return "";
+}
+
+function comfyuiUniqueOutputKinds(kinds = []) {
+  const seen = new Set();
+  (Array.isArray(kinds) ? kinds : []).forEach((kind) => {
+    const normalized = comfyuiNormalizeOutputKind(kind);
+    if (normalized) seen.add(normalized);
+  });
+  const order = ["image", "video", "audio", "file"];
+  return order.filter((kind) => seen.has(kind));
+}
+
+function comfyuiSelectedTemplateOutputKinds() {
+  const detail = comfyuiSelectedTemplateDetail;
+  const active = detail && Number(detail?.id || 0) === Number(comfyuiSelectedTemplatePresetId || 0);
+  const declared = active && Array.isArray(detail?.output_kinds) ? comfyuiUniqueOutputKinds(detail.output_kinds) : [];
+  return declared.length ? declared : ["image"];
+}
+
+function comfyuiMediaItemKind(item = {}) {
+  const mimeType = String(item?.mime_type || "").toLowerCase();
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
+  const filename = String(item?.file_ref?.filename || item?.filename || "").toLowerCase();
+  if (/\.(png|jpe?g|webp|gif|bmp|tiff?)$/.test(filename)) return "image";
+  if (/\.(mp4|mov|webm|mkv|avi|m4v|gif)$/.test(filename)) return "video";
+  if (/\.(mp3|wav|flac|ogg|m4a|aac)$/.test(filename)) return "audio";
+  return comfyuiNormalizeOutputKind(item?.media_kind || item?.kind || item?.output_kind) || "file";
+}
+
+function comfyuiOutputKindsFromItems(images = [], media = []) {
+  const kinds = [];
+  if (Array.isArray(images) && images.length) kinds.push("image");
+  (Array.isArray(media) ? media : []).forEach((item) => kinds.push(comfyuiMediaItemKind(item)));
+  return comfyuiUniqueOutputKinds(kinds);
+}
+
+function comfyuiCurrentPreviewOutputKinds() {
+  const actual = comfyuiOutputKindsFromItems(comfyuiGeneratedImages, comfyuiGeneratedMedia);
+  return actual.length ? actual : comfyuiSelectedTemplateOutputKinds();
+}
+
+function comfyuiOutputKindLabel(kind) {
+  const normalized = comfyuiNormalizeOutputKind(kind);
+  if (normalized === "video") return "影片";
+  if (normalized === "audio") return "音訊";
+  if (normalized === "file") return "檔案";
+  return "圖片";
+}
+
+function comfyuiOutputKindsLabel(kinds = null) {
+  const normalized = comfyuiUniqueOutputKinds(Array.isArray(kinds) ? kinds : comfyuiCurrentPreviewOutputKinds());
+  const labels = (normalized.length ? normalized : ["image"]).map((kind) => comfyuiOutputKindLabel(kind));
+  if (labels.length <= 1) return labels[0] || "圖片";
+  if (labels.length === 2) return `${labels[0]}與${labels[1]}`;
+  return `${labels.slice(0, -1).join("、")}與${labels[labels.length - 1]}`;
+}
+
+function comfyuiPreviewEmptyText(kinds = null) {
+  return `尚未產生${comfyuiOutputKindsLabel(kinds)}`;
+}
+
+function comfyuiPreviewPendingText(kinds = null) {
+  return `產生${comfyuiOutputKindsLabel(kinds)}中...`;
+}
+
+function updateComfyuiPreviewCardForOutputKinds(kinds = null) {
+  const normalized = comfyuiUniqueOutputKinds(Array.isArray(kinds) ? kinds : comfyuiCurrentPreviewOutputKinds());
+  const effective = normalized.length ? normalized : ["image"];
+  const label = comfyuiOutputKindsLabel(effective);
+  const title = $("comfyui-preview-card-title");
+  const sub = $("comfyui-preview-card-sub");
+  if (title) title.textContent = `${label}結果`;
+  if (sub) sub.textContent = `等待 ComfyUI 產生${label}。`;
+  const preview = $("comfyui-preview");
+  const empty = preview?.querySelector(".drive-empty");
+  if (empty && /^尚未產生/.test(String(empty.textContent || "").trim())) {
+    empty.textContent = comfyuiPreviewEmptyText(effective);
+  }
+}
+
 function comfyuiSelectedTemplateMode() {
   const detail = comfyuiSelectedTemplateDetail;
   if (detail && Number(detail?.id || 0) === Number(comfyuiSelectedTemplatePresetId || 0)) {
     const mode = String(detail?.default_params?.generation_mode || detail?.purpose || "").trim().toLowerCase();
     if (mode && mode !== "custom") return normalizeComfyuiGenerationModeAlias(mode);
-    const outputs = Array.isArray(detail?.output_kinds) ? detail.output_kinds.map((item) => String(item || "").toLowerCase()) : [];
+    const outputs = comfyuiSelectedTemplateOutputKinds();
     if (outputs.includes("audio")) return outputs.includes("video") ? "t2sv" : "t2s";
     if (outputs.includes("video")) return comfyuiHasInputAsset("source") ? "i2v" : "t2v";
   }
@@ -1330,6 +1419,39 @@ function comfyuiImageRefCacheKey(imageRef) {
 
 const comfyuiOutputPreviewCache = new Map();
 const comfyuiMediaPreviewCache = new Map();
+const comfyuiMediaObjectUrlCache = new Map();
+
+function comfyuiDataUrlToBlobUrl(dataUrl, cacheKey = "") {
+  const text = String(dataUrl || "");
+  if (!text.startsWith("data:") || typeof URL === "undefined" || typeof Blob === "undefined") return "";
+  const key = cacheKey || text.slice(0, 160);
+  if (key && comfyuiMediaObjectUrlCache.has(key)) return comfyuiMediaObjectUrlCache.get(key);
+  const match = text.match(/^data:([^;,]*)(;base64)?,(.*)$/s);
+  if (!match) return "";
+  const mimeType = match[1] || "application/octet-stream";
+  const encoded = match[3] || "";
+  let blob;
+  try {
+    if (match[2]) {
+      const binary = atob(encoded);
+      const chunks = [];
+      for (let offset = 0; offset < binary.length; offset += 8192) {
+        const slice = binary.slice(offset, offset + 8192);
+        const bytes = new Uint8Array(slice.length);
+        for (let index = 0; index < slice.length; index += 1) bytes[index] = slice.charCodeAt(index);
+        chunks.push(bytes);
+      }
+      blob = new Blob(chunks, { type: mimeType });
+    } else {
+      blob = new Blob([decodeURIComponent(encoded)], { type: mimeType });
+    }
+    const objectUrl = URL.createObjectURL(blob);
+    if (key) comfyuiMediaObjectUrlCache.set(key, objectUrl);
+    return objectUrl;
+  } catch (err) {
+    return "";
+  }
+}
 
 async function hydrateComfyuiOutputImage(image) {
   if (!image || image.data_url || !image.image_ref?.filename) return image;
@@ -1373,7 +1495,18 @@ async function loadComfyuiMediaPreview(fileRef, jobId) {
 }
 
 async function hydrateComfyuiOutputMedia(item, jobId) {
-  if (!item || item.data_url || !item.file_ref?.filename || !jobId) return item;
+  if (!item) return item;
+  if (item.data_url) {
+    const existingKey = item.file_ref?.filename
+      ? `${jobId || "inline"}:${comfyuiImageRefCacheKey(item.file_ref)}`
+      : `inline:${String(item.data_url).slice(0, 160)}`;
+    return {
+      ...item,
+      media_kind: comfyuiMediaItemKind(item),
+      preview_url: item.preview_url || comfyuiDataUrlToBlobUrl(item.data_url, existingKey),
+    };
+  }
+  if (!item.file_ref?.filename || !jobId) return item;
   const cacheKey = `${jobId}:${comfyuiImageRefCacheKey(item.file_ref)}`;
   if (cacheKey && comfyuiMediaPreviewCache.has(cacheKey)) {
     return { ...item, ...comfyuiMediaPreviewCache.get(cacheKey) };
@@ -1381,9 +1514,12 @@ async function hydrateComfyuiOutputMedia(item, jobId) {
   try {
     await fetchCsrfToken({ force: true });
     const preview = await loadComfyuiMediaPreview(item.file_ref, jobId);
+    const dataUrl = preview.data_url || "";
     const hydrated = {
-      data_url: preview.data_url || "",
+      data_url: dataUrl,
+      preview_url: dataUrl ? comfyuiDataUrlToBlobUrl(dataUrl, cacheKey) : "",
       mime_type: preview.mime_type || item.mime_type || "application/octet-stream",
+      media_kind: comfyuiMediaItemKind({ ...item, ...preview }),
       size_bytes: Number(preview.size_bytes || item.size_bytes || 0),
       file_ref: preview.file_ref || item.file_ref,
     };
@@ -1675,12 +1811,13 @@ function stopComfyuiProgress({ complete = false, error = "", label = "" } = {}) 
     comfyuiProgressTimer = null;
   }
   if (complete) {
+    const label = comfyuiOutputKindsLabel();
     setComfyuiProgress({
       visible: true,
       running: false,
       percent: 100,
-      label: "圖片已完成",
-      detail: "ComfyUI 已回傳產圖結果"
+      label: `${label}已完成`,
+      detail: `ComfyUI 已回傳${label}結果`
     });
   } else if (error) {
     setComfyuiProgress({
@@ -1696,14 +1833,15 @@ function stopComfyuiProgress({ complete = false, error = "", label = "" } = {}) 
 }
 
 function resetComfyuiIdleUi() {
+  updateComfyuiPreviewCardForOutputKinds();
   comfyuiActiveJobId = null;
   if (!comfyuiGenerateAbortController) {
     setComfyuiBusy(false);
   }
   stopComfyuiProgress();
   const preview = $("comfyui-preview");
-  if (preview && !comfyuiCurrentImage && !comfyuiGeneratedImages.length) {
-    preview.innerHTML = `<div class="drive-empty">尚未產生圖片</div>`;
+  if (preview && !comfyuiCurrentImage && !comfyuiGeneratedImages.length && !comfyuiGeneratedMedia.length) {
+    preview.innerHTML = `<div class="drive-empty">${sanitize(comfyuiPreviewEmptyText())}</div>`;
   }
 }
 
@@ -1729,7 +1867,7 @@ function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERAT
   else if (phase === "loading") label = comfyuiConnectionMode === "diffusers" ? "載入 Diffusers 模型" : "載入模型";
   else if (phase === "running") label = comfyuiConnectionMode === "diffusers" ? "Diffusers 推論中" : "ComfyUI 執行中";
   else if (phase === "backend_unresponsive") label = "ComfyUI 後端無回應";
-  else if (phase === "completed") label = "圖片已完成";
+  else if (phase === "completed") label = `${comfyuiOutputKindsLabel()}已完成`;
   else if (phase === "error") label = "產圖失敗";
   const queueText = progress.queue_remaining !== null && progress.queue_remaining !== undefined
     ? `，佇列剩餘 ${progress.queue_remaining}`
@@ -2939,25 +3077,20 @@ function comfyuiGeneratedImageLabel(image, index = 0) {
   return "";
 }
 
-function renderComfyuiGeneratedMedia(mediaItems = []) {
-  const preview = $("comfyui-preview");
-  if (!preview) return;
+function comfyuiGeneratedMediaMarkup(mediaItems = []) {
   const items = Array.isArray(mediaItems) ? mediaItems.filter(Boolean) : [];
-  if (!items.length) {
-    preview.innerHTML = `<div class="drive-empty">尚未產生圖片</div>`;
-    return;
-  }
-  preview.innerHTML = `
+  if (!items.length) return "";
+  return `
     <div class="comfyui-generated-media">
       ${items.map((item) => {
-        const kind = item.media_kind || (String(item.mime_type || "").startsWith("audio/") ? "audio" : "video");
-        const src = item.data_url || "";
+        const kind = comfyuiMediaItemKind(item);
+        const src = item.preview_url || item.data_url || "";
         const filename = item.file_ref?.filename || "output";
         const player = !src
           ? `<div class="drive-empty">${sanitize(item.preview_error || "媒體檔已完成，正在讀取預覽。")}</div>`
           : (kind === "audio"
             ? `<audio controls src="${sanitize(src)}"></audio>`
-            : (kind === "video" ? `<video controls src="${sanitize(src)}"></video>` : `<a class="btn btn-sm" href="${sanitize(src)}" download="${sanitize(filename)}">開啟輸出檔</a>`));
+            : (kind === "video" ? `<video controls preload="metadata" playsinline src="${sanitize(src)}"></video>` : (kind === "image" ? `<img src="${sanitize(src)}" alt="${sanitize(filename)}" />` : `<a class="btn btn-sm" href="${sanitize(src)}" download="${sanitize(filename)}">開啟輸出檔</a>`)));
         return `
           <div class="comfyui-generated-media-card">
             ${player}
@@ -2967,6 +3100,19 @@ function renderComfyuiGeneratedMedia(mediaItems = []) {
       }).join("")}
     </div>
   `;
+}
+
+function renderComfyuiGeneratedMedia(mediaItems = []) {
+  const preview = $("comfyui-preview");
+  if (!preview) return;
+  const items = Array.isArray(mediaItems) ? mediaItems.filter(Boolean) : [];
+  const outputKinds = comfyuiOutputKindsFromItems([], items);
+  updateComfyuiPreviewCardForOutputKinds(outputKinds.length ? outputKinds : null);
+  if (!items.length) {
+    preview.innerHTML = `<div class="drive-empty">${sanitize(comfyuiPreviewEmptyText())}</div>`;
+    return;
+  }
+  preview.innerHTML = comfyuiGeneratedMediaMarkup(items);
 }
 
 function openComfyuiGeneratedImage(index = comfyuiSelectedImageIndex) {
@@ -3064,20 +3210,25 @@ function renderComfyuiGeneratedImages(images) {
       renderComfyuiGeneratedMedia(comfyuiGeneratedMedia);
       return;
     }
-    preview.innerHTML = `<div class="drive-empty">尚未產生圖片</div>`;
+    updateComfyuiPreviewCardForOutputKinds();
+    preview.innerHTML = `<div class="drive-empty">${sanitize(comfyuiPreviewEmptyText())}</div>`;
     return;
   }
+  const relatedMedia = Array.isArray(comfyuiGeneratedMedia) ? comfyuiGeneratedMedia : [];
+  updateComfyuiPreviewCardForOutputKinds(comfyuiOutputKindsFromItems(images, relatedMedia));
   if (images.length === 1) {
     if (!images[0].data_url) {
       preview.innerHTML = `<div class="drive-empty">圖片已完成，正在讀取預覽。</div>`;
       return;
     }
     const singleLabel = comfyuiGeneratedImageLabel(images[0], 0);
+    const mediaMarkup = comfyuiGeneratedMediaMarkup(relatedMedia);
     preview.innerHTML = `
       ${singleLabel ? `<div class="comfyui-output-label">${sanitize(singleLabel)}</div>` : ""}
       <button class="comfyui-output-main" type="button" data-comfyui-open-image="0" title="開啟大圖">
         <img loading="lazy" src="${sanitize(images[0].data_url || "")}" alt="ComfyUI generated image" />
       </button>
+      ${mediaMarkup}
     `;
     preview.querySelector("[data-comfyui-open-image]")?.addEventListener("click", () => openComfyuiGeneratedImage(0));
     return;
@@ -3103,6 +3254,7 @@ function renderComfyuiGeneratedImages(images) {
           </button>
         `).join("")}
       </div>
+      ${comfyuiGeneratedMediaMarkup(relatedMedia)}
     </div>
   `;
   preview.querySelector("[data-comfyui-open-image]")?.addEventListener("click", () => {
@@ -3667,9 +3819,10 @@ async function generateComfyuiImage() {
     setComfyuiMessage("已取消產圖扣點確認", false);
     return;
   }
+  updateComfyuiPreviewCardForOutputKinds(["image"]);
   const preview = $("comfyui-preview");
   const meta = $("comfyui-result-meta");
-  if (preview) preview.innerHTML = `<div class="drive-empty">產生圖片中...</div>`;
+  if (preview) preview.innerHTML = `<div class="drive-empty">${sanitize(comfyuiPreviewPendingText(["image"]))}</div>`;
   if (meta) meta.textContent = "";
   comfyuiCurrentImage = null;
   comfyuiGeneratedImages = [];

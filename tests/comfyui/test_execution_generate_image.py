@@ -119,6 +119,92 @@ def test_wait_for_outputs_keeps_all_completed_workflow_images():
     assert [item["filename"] for item in outputs["images"]] == ["checkpoint_a.png", "checkpoint_b.png"]
 
 
+def test_wait_for_outputs_buckets_save_video_images_as_video_media():
+    class CompletedVideoClient:
+        timeout = 1
+
+        def _json_request(self, path, *, timeout=None):
+            assert path == "/history/prompt-ltx"
+            return {
+                "prompt-ltx": {
+                    "status": {"completed": True, "status_str": "success"},
+                    "outputs": {
+                        "75": {
+                            "images": [
+                                {
+                                    "filename": "ltx_preview_00001_.mp4",
+                                    "subfolder": "hackme\\1",
+                                    "type": "output",
+                                }
+                            ],
+                            "animated": [True],
+                        }
+                    },
+                }
+            }
+
+    outputs = comfy_execution.wait_for_outputs(
+        CompletedVideoClient(),
+        "prompt-ltx",
+        timeout_seconds=10,
+        poll_interval=0.5,
+        expected_count=1,
+        wait_until_completed=True,
+        workflow={
+            "75": {"class_type": "SaveVideo", "inputs": {}},
+        },
+        error_cls=RuntimeError,
+    )
+
+    assert outputs["images"] == []
+    assert outputs["videos"][0]["filename"] == "ltx_preview_00001_.mp4"
+    assert outputs["videos"][0]["subfolder"] == "hackme\\1"
+    assert outputs["videos"][0]["output_node_id"] == "75"
+
+
+def test_wait_for_outputs_suppresses_preview_images_for_video_only_workflow():
+    class CompletedWanVaceClient:
+        timeout = 1
+
+        def _json_request(self, path, *, timeout=None):
+            assert path == "/history/prompt-wan-vace"
+            return {
+                "prompt-wan-vace": {
+                    "status": {"completed": True, "status_str": "success"},
+                    "outputs": {
+                        "214": {
+                            "images": [
+                                {"filename": "mask_preview_00001_.png", "subfolder": "", "type": "temp"},
+                                {"filename": "mask_preview_00002_.png", "subfolder": "", "type": "temp"},
+                            ]
+                        },
+                        "69": {
+                            "images": [
+                                {"filename": "wan_vace_00001_.mp4", "subfolder": "hackme\\1", "type": "output"}
+                            ]
+                        },
+                    },
+                }
+            }
+
+    outputs = comfy_execution.wait_for_outputs(
+        CompletedWanVaceClient(),
+        "prompt-wan-vace",
+        timeout_seconds=10,
+        poll_interval=0.5,
+        expected_count=1,
+        wait_until_completed=True,
+        workflow={
+            "69": {"class_type": "SaveVideo", "inputs": {}},
+            "214": {"class_type": "PreviewImage", "inputs": {}},
+        },
+        error_cls=RuntimeError,
+    )
+
+    assert outputs["images"] == []
+    assert [item["filename"] for item in outputs["videos"]] == ["wan_vace_00001_.mp4"]
+
+
 def test_wait_for_outputs_can_wait_for_completed_prompt_before_returning_first_preview(monkeypatch):
     clock = {"now": 0.0}
 
