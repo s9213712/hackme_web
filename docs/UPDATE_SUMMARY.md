@@ -1,6 +1,19 @@
 # Update Summary
 
-Release ID: `2026.05.20-166`
+Release ID: `2026.05.20-167`
+
+## 2026.05.20-167
+
+- Ran a full-site isolated QA audit covering auth, admin, Cloud Drive/E2EE,
+  video sharing/HLS, ComfyUI frontend/template schema, games, economy/trading,
+  platform centers, security headers, low-volume HTTP stress, and plaintext
+  secret scanning.
+- Fixed direct-entry security/traffic audit scripts so `header_security_check.py`
+  and `stress_test.py` can import repo modules when executed by path in CI.
+- Updated the ComfyUI media preview smoke assertion to match the current
+  MIME-aware `<video><source ...>` renderer used for generated video previews.
+- Recorded the audit artifacts and environment blockers in
+  `docs/AGENTS/reports/2026-05-20_1030_full_site_audit.md`.
 
 ## 2026.05.20-166
 

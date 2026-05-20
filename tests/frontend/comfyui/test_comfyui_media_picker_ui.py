@@ -47,7 +47,8 @@ def test_comfyui_generation_results_lazy_load_output_previews():
     assert "preview_url: dataUrl ? comfyuiDataUrlToBlobUrl(dataUrl, cacheKey) : \"\"" in js
     assert "preview_url: item.preview_url || comfyuiDataUrlToBlobUrl(item.data_url, existingKey)" in js
     assert "const src = item.preview_url || item.data_url || \"\";" in js
-    assert '<video controls preload="metadata" playsinline src="${sanitize(src)}"></video>' in js
+    assert '<video controls preload="metadata" playsinline><source src="${sanitize(src)}"' in js
+    assert 'type="${sanitize(item.mime_type || "video/mp4")}"' in js
     assert "const runImages = await hydrateComfyuiGeneratedImages(rawRunImages);" in js
     assert "const runMedia = await hydrateComfyuiGeneratedMedia(Array.isArray(json.media) ? json.media : [], jobId);" in js
     assert "const images = await hydrateComfyuiGeneratedImages(rawImages);" in workflow_js
