@@ -1496,6 +1496,12 @@ def _clone_quote(payload, *, cache_status=None):
     return cloned
 
 
+def _live_quote_cacheable(payload):
+    if not isinstance(payload, dict):
+        return False
+    return str(payload.get("price_health") or "").strip().lower() != "boot_pending"
+
+
 def _configured_provider_fetcher(service, source):
     return {
         "binance_public_api": service._fetch_binance_price_points,
@@ -1517,12 +1523,15 @@ def get_live_market_quote(service, *, market_symbol="", force_refresh=False):
     if not force_refresh and ttl > 0:
         with service._live_quote_cache_lock:
             entry = service._live_quote_cache.get(cache_key)
-            if entry and entry.get("payload") and float(entry.get("expires_at") or 0.0) > now:
-                return _clone_quote(entry["payload"], cache_status="hit")
-            if entry and entry.get("payload") and entry.get("refreshing") and float(entry.get("stale_until") or 0.0) > now:
-                return _clone_quote(entry["payload"], cache_status="stale_while_refresh")
+            cached_payload = (entry or {}).get("payload")
+            if cached_payload and not _live_quote_cacheable(cached_payload):
+                cached_payload = None
+            if cached_payload and float(entry.get("expires_at") or 0.0) > now:
+                return _clone_quote(cached_payload, cache_status="hit")
+            if cached_payload and entry and entry.get("refreshing") and float(entry.get("stale_until") or 0.0) > now:
+                return _clone_quote(cached_payload, cache_status="stale_while_refresh")
             service._live_quote_cache[cache_key] = {
-                "payload": (entry or {}).get("payload"),
+                "payload": cached_payload,
                 "expires_at": float((entry or {}).get("expires_at") or 0.0),
                 "stale_until": float((entry or {}).get("stale_until") or 0.0),
                 "refreshing": True,
@@ -1533,13 +1542,18 @@ def get_live_market_quote(service, *, market_symbol="", force_refresh=False):
         if not force_refresh and stale_ttl > 0:
             with service._live_quote_cache_lock:
                 entry = service._live_quote_cache.get(cache_key) or {}
-                if entry.get("payload") and float(entry.get("stale_until") or 0.0) > now:
+                cached_payload = entry.get("payload")
+                if cached_payload and _live_quote_cacheable(cached_payload) and float(entry.get("stale_until") or 0.0) > now:
                     entry["refreshing"] = False
-                    return _clone_quote(entry["payload"], cache_status="stale_after_refresh_error")
+                    return _clone_quote(cached_payload, cache_status="stale_after_refresh_error")
                 if entry:
                     entry["refreshing"] = False
         raise
     if not force_refresh and ttl > 0:
+        if not _live_quote_cacheable(payload):
+            with service._live_quote_cache_lock:
+                service._live_quote_cache.pop(cache_key, None)
+            return _clone_quote(payload, cache_status="refresh_uncached")
         refreshed_at = time.monotonic()
         with service._live_quote_cache_lock:
             service._live_quote_cache[cache_key] = {

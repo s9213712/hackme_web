@@ -1288,7 +1288,20 @@ def check_comfyui_editor(rec: Recorder, page, base_url: str) -> None:
         page.click('[data-comfyui-view="workflow"]')
         page.wait_for_selector('[data-comfyui-view-panel="workflow"]:not([hidden])', timeout=10000)
     load_btn = page.locator("#comfyui-workflow-load-visual-btn")
-    rec.add("comfyui_main_page_visual_button", load_btn.count() == 1 and load_btn.is_visible(), "visual workflow button present")
+    if load_btn.count() == 1 and not load_btn.is_visible():
+        page.evaluate(
+            """() => {
+                const btn = document.querySelector('#comfyui-workflow-load-visual-btn');
+                const details = btn?.closest('details');
+                if (details) details.open = true;
+            }"""
+        )
+        page.wait_for_timeout(150)
+    rec.add(
+        "comfyui_main_page_visual_button",
+        load_btn.count() == 1 and load_btn.is_visible(),
+        "visual workflow button accessible from workflow action menu",
+    )
 
 
 def check_civitai_guard(rec: Recorder, page) -> None:

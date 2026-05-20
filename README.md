@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.20-167`**
+**Current Release ID: `2026.05.20-168`**
 
 `hackme_web` 是一個部署者優先的 Flask 單機站點，整合了帳號與權限、
 Cloud Drive、ComfyUI、PointsChain、交易實驗、Snapshot/Restore 與

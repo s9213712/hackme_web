@@ -1,6 +1,19 @@
 # Update Summary
 
-Release ID: `2026.05.20-167`
+Release ID: `2026.05.20-168`
+
+## 2026.05.20-168
+
+- Re-ran the ru4vm4 full-site audit across deep Playwright, platform centers,
+  member probe, security headers, low-volume HTTP stress, ComfyUI/template UI,
+  games, video/HLS, remote downloads, CSRF, plaintext secrets, and trading.
+- Fixed the deep Playwright ComfyUI workflow action check so collapsed
+  "更多操作" buttons are opened before visibility assertions.
+- Fixed trading live-price quote caching so `boot_pending` warmup responses are
+  never served from cache; a second stable live quote can now release bot /
+  matching / risk gates promptly.
+- Recorded the new audit findings and environment blockers in
+  `docs/AGENTS/reports/2026-05-20_1055_ru4vm4_full_site_audit.md`.
 
 ## 2026.05.20-167
 
