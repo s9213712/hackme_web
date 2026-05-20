@@ -21,6 +21,7 @@ from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage.storage_albums import ensure_storage_album_schema
 from services.security.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
 from services.users.friends import ensure_social_schema
+from services.job_center import create_job
 
 
 @pytest.fixture(autouse=True)
@@ -2584,6 +2585,61 @@ def test_remote_download_task_reports_progress_and_completion(tmp_path, monkeypa
         assert job["progress_percent"] == 100
     finally:
         conn.close()
+
+
+def test_remote_download_task_status_falls_back_to_persisted_job(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+    task_id = "persisted-task"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        create_job(
+            conn,
+            owner_user_id=1,
+            created_by_user_id=1,
+            job_type="cloud_drive.remote_download.bt.torrent_file",
+            title="BT 下載：bad.torrent",
+            description="遠端 direct link / BT 下載、掃描與保存",
+            source_module="cloud_drive_remote_download",
+            source_ref=f"remote_download:{task_id}",
+            status="failed",
+            progress_percent=100,
+            stage="failed",
+            stage_detail="BT/magnet 下載失敗：tracker 無回應",
+            cancellable=False,
+            metadata={
+                "task_id": task_id,
+                "source_type": "torrent_file",
+                "filename": "bad.torrent",
+                "torrent_filename": "bad.torrent",
+                "url": "BT 檔案：bad.torrent",
+                "speed_bytes_per_sec": 0,
+            },
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+    body = status.get_json()
+
+    assert status.status_code == 200
+    assert body["task"]["id"] == task_id
+    assert body["task"]["status"] == "failed"
+    assert body["task"]["source_type"] == "torrent_file"
+    assert "tracker" in body["task"]["msg"]
+
+    listed = client.get("/api/cloud-drive/remote-download/tasks").get_json()["tasks"]
+    assert any(item["id"] == task_id and item["status"] == "failed" for item in listed)
+
+    actor_box["actor"] = _actor(2, "bob")
+    denied = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+    assert denied.status_code == 403
 
 
 def test_remote_download_task_can_pause_and_resume(tmp_path, monkeypatch):

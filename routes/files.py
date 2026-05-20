@@ -118,6 +118,7 @@ from services.job_center import (
     add_job_event as add_platform_job_event,
     create_job as create_platform_job,
     get_job_by_source as get_platform_job_by_source,
+    list_jobs as list_platform_jobs,
     update_job as update_platform_job,
 )
 from flask import Response, after_this_request, request, send_file, stream_with_context
@@ -407,8 +408,70 @@ def register_file_routes(app, deps):
             "speed_bytes_per_sec": task.get("speed_bytes_per_sec"),
             "file_id": file_info.get("file_id"),
             "file_size_bytes": file_info.get("size_bytes"),
+            "file": file_info,
             "storage_file_id": storage_info.get("id"),
             "storage_virtual_path": storage_info.get("virtual_path"),
+            "storage_file": storage_info,
+        }
+
+    def _remote_download_task_from_job(job):
+        job = dict(job or {})
+        metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+        result = job.get("result") if isinstance(job.get("result"), dict) else {}
+        data = {**metadata, **result}
+        task_id = str(data.get("task_id") or "").strip()
+        if not task_id:
+            source_ref = str(job.get("source_ref") or "")
+            if source_ref.startswith("remote_download:"):
+                task_id = source_ref.split(":", 1)[1]
+        if not task_id:
+            return None
+        status = {
+            "queued": "queued",
+            "running": "running",
+            "waiting_external": "running",
+            "paused": "paused",
+            "succeeded": "completed",
+            "failed": "failed",
+            "cancelled": "cancelled",
+            "expired": "failed",
+        }.get(str(job.get("status") or "queued"), "queued")
+        file_info = data.get("file") if isinstance(data.get("file"), dict) else {}
+        if not file_info and data.get("file_id"):
+            file_info = {
+                "file_id": data.get("file_id"),
+                "filename": data.get("filename"),
+                "size_bytes": data.get("file_size_bytes"),
+            }
+        storage_info = data.get("storage_file") if isinstance(data.get("storage_file"), dict) else {}
+        if not storage_info and data.get("storage_file_id"):
+            storage_info = {
+                "id": data.get("storage_file_id"),
+                "virtual_path": data.get("storage_virtual_path"),
+            }
+        message = str(job.get("stage_detail") or job.get("error_message") or "")
+        return {
+            "id": task_id,
+            "kind": "remote_download",
+            "source_type": data.get("source_type") or "direct",
+            "status": status,
+            "phase": job.get("stage") or status,
+            "filename": data.get("filename") or "",
+            "url": data.get("url") or "",
+            "torrent_filename": data.get("torrent_filename") or "",
+            "owner_user_id": job.get("owner_user_id"),
+            "loaded_bytes": data.get("loaded_bytes"),
+            "total_bytes": data.get("total_bytes"),
+            "progress_percent": job.get("progress_percent"),
+            "speed_bytes_per_sec": data.get("speed_bytes_per_sec") or 0,
+            "msg": message,
+            "error": job.get("error_message") or (message if status == "failed" else ""),
+            "file": file_info or None,
+            "storage_file": storage_info or None,
+            "availability_score": 0,
+            "availability_hint": "",
+            "created_at": job.get("created_at"),
+            "updated_at": job.get("updated_at"),
         }
 
     def _sync_remote_download_job(task, *, force_event=False):
@@ -1156,6 +1219,7 @@ def register_file_routes(app, deps):
         )
 
     def _task_update(task_id, **changes):
+        sync_task = None
         with _REMOTE_DOWNLOAD_TASKS_LOCK:
             task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
             if not task:
@@ -1169,6 +1233,9 @@ def register_file_routes(app, deps):
                 owner = task.get("owner_user_id")
                 if owner is not None:
                     _REMOTE_DOWNLOAD_ACTIVE_USERS.discard(int(owner))
+            sync_task = dict(task)
+        if sync_task:
+            _sync_remote_download_job(sync_task)
 
     def _task_touch(task_id):
         with _REMOTE_DOWNLOAD_TASKS_LOCK:
@@ -1248,6 +1315,21 @@ def register_file_routes(app, deps):
             _cleanup_stale_remote_download_tasks_locked()
             task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
             return dict(task) if task else None
+
+    def _get_remote_download_task_for_status(task_id):
+        task = _get_remote_download_task(str(task_id))
+        if task:
+            return task
+        conn = get_db()
+        try:
+            job = get_platform_job_by_source(
+                conn,
+                "cloud_drive_remote_download",
+                f"remote_download:{str(task_id)}",
+            )
+            return _remote_download_task_from_job(job)
+        finally:
+            conn.close()
 
     def _finalize_remote_download_task(task_id, **changes):
         task = _get_remote_download_task(task_id) or {"id": task_id}
@@ -1384,6 +1466,7 @@ def register_file_routes(app, deps):
             _cleanup_stale_remote_download_tasks_locked()
             tasks = [dict(task) for task in _REMOTE_DOWNLOAD_TASKS.values()]
         visible = []
+        seen_ids = set()
         for task in tasks:
             try:
                 owner_id = int(task.get("owner_user_id") or 0)
@@ -1391,7 +1474,24 @@ def register_file_routes(app, deps):
                 owner_id = 0
             if owner_id != actor_id:
                 continue
-            visible.append(_task_snapshot(task))
+            snapshot = _task_snapshot(task)
+            seen_ids.add(str(snapshot.get("id") or ""))
+            visible.append(snapshot)
+        conn = get_db()
+        try:
+            for job in list_platform_jobs(conn, user_id=actor_id, include_all=False, limit=50):
+                if str(job.get("source_module") or "") != "cloud_drive_remote_download":
+                    continue
+                task = _remote_download_task_from_job(job)
+                if not task:
+                    continue
+                task_id = str(task.get("id") or "")
+                if task_id in seen_ids:
+                    continue
+                seen_ids.add(task_id)
+                visible.append(_task_snapshot(task))
+        finally:
+            conn.close()
         visible.sort(key=lambda item: item.get("created_at") or "", reverse=True)
         return visible[:20]
 
@@ -2038,6 +2138,7 @@ def register_file_routes(app, deps):
         "get_db": get_db,
         "get_member_level_rule": get_member_level_rule,
         "get_remote_download_task": _get_remote_download_task,
+        "get_remote_download_task_for_status": _get_remote_download_task_for_status,
         "get_ua": get_ua,
         "is_manager": _is_manager,
         "json_resp": json_resp,
@@ -2049,6 +2150,7 @@ def register_file_routes(app, deps):
         "require_csrf": require_csrf,
         "require_csrf_safe": require_csrf_safe,
         "run_remote_download_task": _run_remote_download_task,
+        "sync_remote_download_job": _sync_remote_download_job,
         "server_file_fernet": server_file_fernet,
         "storage_root": storage_root,
         "task_snapshot": _task_snapshot,

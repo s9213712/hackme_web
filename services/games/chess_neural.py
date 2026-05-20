@@ -432,6 +432,7 @@ class IncrementalAccumulator:
         self._b3 = weights.b3
         self._weights = weights
         self._acc_stack: list[np.ndarray] = [self._b1.copy()]
+        self._baseline_stack: list[float] = [0.0]
 
     def reset(self, board: chess.Board) -> None:
         """Rebuild the accumulator from scratch for ``board``. Call
@@ -440,6 +441,7 @@ class IncrementalAccumulator:
         for idx in active_features(board):
             acc += self._W1[idx]
         self._acc_stack = [acc]
+        self._baseline_stack = [static_baseline_cp_white(board)]
 
     def stack_depth(self) -> int:
         return len(self._acc_stack)
@@ -448,12 +450,14 @@ class IncrementalAccumulator:
         """Mirror of ``chess.Board.push`` for the accumulator: clone
         the top state so the move can be tentatively applied."""
         self._acc_stack.append(self._acc_stack[-1].copy())
+        self._baseline_stack.append(self._baseline_stack[-1])
 
     def pop_state(self) -> None:
         """Mirror of ``chess.Board.pop``: discard the top state."""
         if len(self._acc_stack) <= 1:
             raise IndexError("cannot pop the root accumulator state")
         self._acc_stack.pop()
+        self._baseline_stack.pop()
 
     def _add_piece(self, square: int, piece: chess.Piece) -> None:
         self._acc_stack[-1] += self._W1[feature_index(square, piece)]
@@ -466,50 +470,20 @@ class IncrementalAccumulator:
         played from ``board``. Caller MUST call ``push_state`` first
         and ``pop_state`` after retracting the move.
 
-        ``board`` is the position BEFORE the move (so piece lookup
-        uses the move's source square correctly).
-
-        NOTE (v4): only piece-square features are updated incrementally.
-        State bits (side-to-move, castling rights, en-passant flag) are
-        NOT touched here. Callers that need accurate state-bit features
-        in the accumulator must ``reset(board)`` after pushing/popping
-        on ``board``. The runtime inference path uses ``NeuralEvaluator``
-        (full recompute), which always sees correct state bits. This
-        gap is acceptable for now; a future C extension that wants
-        true NNUE-style incremental updates should also handle state
-        bits per move (cheap: 1-3 entries flip).
+        ``board`` is the position BEFORE the move. We diff the complete
+        feature sets before/after the move, so piece-square features,
+        side-to-move, castling rights, and en-passant state all stay in
+        lockstep with the full recompute path.
         """
-        moving = board.piece_at(move.from_square)
-        if moving is None:
-            return  # null move or malformed; nothing to update.
-        self._remove_piece(move.from_square, moving)
-        if board.is_en_passant(move):
-            captured_sq = move.to_square + (-8 if moving.color == chess.WHITE else 8)
-            captured = board.piece_at(captured_sq)
-            if captured is not None:
-                self._remove_piece(captured_sq, captured)
-        else:
-            captured = board.piece_at(move.to_square)
-            if captured is not None:
-                self._remove_piece(move.to_square, captured)
-        if move.promotion is not None:
-            placed = chess.Piece(move.promotion, moving.color)
-        else:
-            placed = moving
-        self._add_piece(move.to_square, placed)
-        if board.is_castling(move):
-            # to_square: g1=6 / g8=62 kingside, c1=2 / c8=58 queenside
-            file = chess.square_file(move.to_square)
-            if file == 6:  # kingside
-                rook_from = move.to_square + 1
-                rook_to = move.to_square - 1
-            else:  # queenside
-                rook_from = move.to_square - 2
-                rook_to = move.to_square + 1
-            rook = board.piece_at(rook_from)
-            if rook is not None:
-                self._remove_piece(rook_from, rook)
-                self._add_piece(rook_to, rook)
+        before_features = set(active_features(board))
+        after_board = board.copy(stack=False)
+        after_board.push(move)
+        after_features = set(active_features(after_board))
+        for idx in before_features - after_features:
+            self._acc_stack[-1] -= self._W1[idx]
+        for idx in after_features - before_features:
+            self._acc_stack[-1] += self._W1[idx]
+        self._baseline_stack[-1] = static_baseline_cp_white(after_board)
 
     def output(self, side_to_move: chess.Color, *, board: chess.Board | None = None) -> int:
         """Run L2 + L3 over the current accumulator and return cp.
@@ -522,7 +496,7 @@ class IncrementalAccumulator:
         h1 = _clipped_relu(self._acc_stack[-1])
         h2 = _clipped_relu(h1 @ self._W2 + self._b2)
         o = h2 @ self._W3 + self._b3
-        material_cp = material_balance_cp_white(board) if board is not None else 0.0
+        material_cp = static_baseline_cp_white(board) if board is not None else self._baseline_stack[-1]
         cp_white = float(o[0]) * EVAL_SCALE + self._weights.side_to_move_bias_cp + material_cp
         cp = cp_white if side_to_move == chess.WHITE else -cp_white
         return int(cp)

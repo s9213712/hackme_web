@@ -8,6 +8,7 @@ import chess
 from flask import Flask, jsonify
 
 from routes.games import (
+    EXP1_SEARCH_DIFFICULTY,
     SCORE_RANKED_SOLO_GAMES,
     SOLO_GAME_KEYS,
     choose_computer_move,
@@ -1192,7 +1193,7 @@ def test_experiment_resign_collects_replay_without_online_learning(tmp_path, mon
     assert len(lines) == 1
     replay = json.loads(lines[0])
     assert replay["source"] == "user_games"
-    assert replay["engine_name"] == "experiment"
+    assert replay["engine_name"] == EXP1_SEARCH_DIFFICULTY
     assert replay["confidence_score"] <= 0.42
     assert replay["move_count"] == 1
     assert replay["collection_tier"] == "rejected"

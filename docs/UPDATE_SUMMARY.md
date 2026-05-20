@@ -1,6 +1,23 @@
 # Update Summary
 
-Release ID: `2026.05.20-168`
+Release ID: `2026.05.20-169`
+
+## 2026.05.20-169
+
+- Ran a deeper front/back audit after root `pytest` collection exposed archived
+  docs scripts and the first isolated full pytest pass found 17 regressions.
+- Fixed pytest discovery, pre-push API/snapshot/log-chain/smoke gates, and the
+  video-module pentest expectation so audit tooling matches the current repo
+  layout and security model.
+- Fixed ComfyUI shared-backend interrupt policy, restored the global language
+  switcher wiring, returned muted text color to the WCAG AA regression target,
+  and repaired game invite/practice/chess neural accumulator coverage.
+- Fixed Cloud Drive remote-download task status/list fallback through Job
+  Center so multi-worker polling does not turn active or failed BT tasks into
+  silent 404s; refreshed the member-probe QA script for current BT tracker and
+  video stream-readiness behavior.
+- Added a critical API contract snapshot and release-visible audit report for
+  this full front/back pass.
 
 ## 2026.05.20-168
 
@@ -603,7 +620,7 @@ Release ID: `2026.05.20-168`
 
 - Expanded the security validation script suite instead of only relying on product tests: `functional_permission_pentest.py` now covers root-only ComfyUI / Civitai search, inspect, model upload, and download-job endpoints across anonymous, user, manager, and root roles.
 - `trading_stress_pentest.py` now forces a conservative fused-price state and verifies that degraded `risk-grade price` input blocks high-risk market orders and financing opens rather than silently leaking degraded data into trading.
-- `video_module_pentest.py` now covers manager-side unlisted share-link regeneration, strict E2EE shared-video envelope boundaries, and revoked share-link blocking; `run_functional_smoke.sh` also confirms that the offline `scripts/admin/root_recovery.py` CLI remains available.
+- `video_module_pentest.py` now covers owner-side unlisted share-link regeneration while confirming manager mutation remains blocked, strict E2EE shared-video envelope boundaries, and revoked share-link blocking; `run_functional_smoke.sh` also confirms that the offline `scripts/admin/root_recovery.py` CLI remains available.
 
 ## 2026.05.05-118
 

@@ -7,8 +7,16 @@
   <!-- Security headers via HTTP (set by server/Talisman) -->
   <link rel="stylesheet" href="/styles.css?v=20260519-upscale-breakpoint" />
   <link rel="stylesheet" href="/experiments.css?v=20260517-plane-view-angle" />
+  <link rel="stylesheet" href="/i18n-language-switcher.css?v=20260520-deep-audit" />
 </head>
 <body>
+<div class="global-language-switcher" id="app-language-switcher">
+  <label for="app-language-select" data-i18n="language.label">語言</label>
+  <select id="app-language-select" data-language-select aria-label="語言">
+    <option value="zh-TW">繁體中文</option>
+    <option value="en">English</option>
+  </select>
+</div>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
 <div class="card" id="auth-card" data-login-autofill-block="__LOGIN_AUTOFILL_BLOCK__">
 

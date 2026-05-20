@@ -64,6 +64,23 @@ class SnapshotService:
                 errors.append(item)
         return {"ok": not errors, "results": results, "errors": errors}
 
+    def restore_in_progress(self):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            row = conn.execute(
+                """
+                SELECT id, snapshot_id, started_at
+                FROM snapshot_restore_events
+                WHERE status='restoring'
+                ORDER BY started_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def ensure_schema(self, conn):
         ensure_snapshot_schema(conn)
 
@@ -1007,6 +1024,14 @@ class SnapshotService:
             finally:
                 conn.close()
             return {"ok": True, "msg": "dry-run verified", "event_id": event_id, "verification": verification}
+
+        active_restore = self.restore_in_progress()
+        if active_restore:
+            return {
+                "ok": False,
+                "msg": "已有 Snapshot 還原任務進行中",
+                "restore_in_progress": active_restore,
+            }
 
         pre = self.create_snapshot(snapshot_type="pre_restore", actor=actor, notes=f"Before restore {snapshot_id}: {reason}")
         if not pre.ok:

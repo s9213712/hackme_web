@@ -467,9 +467,16 @@ def run_security_suite(base_url):
     post_logout = user.me()
     assert_status("/api/me after logout", post_logout, 401)
 
-    user.login("test", SMOKE_USER_PASSWORD)
-    no_csrf_chat = user.request("POST", "/api/chat/rooms", body={"name": "deny-room"})
-    assert_status("chat create without csrf", no_csrf_chat, 403)
+    root = Client(base_url)
+    login_default_or_rotated(root, "root", "root", SMOKE_ROOT_PASSWORD)
+    original_features = snapshot_feature_settings(root)
+    try:
+        enable_smoke_features(root)
+        user.login("test", SMOKE_USER_PASSWORD)
+        no_csrf_chat = user.request("POST", "/api/chat/rooms", body={"name": "deny-room"})
+        assert_status("chat create without csrf", no_csrf_chat, 403)
+    finally:
+        restore_feature_settings(root, original_features)
 
     print("[security] all checks passed")
 

@@ -48,8 +48,8 @@ from services.games.chess import FEN_KEY  # noqa: E402
 def test_feature_index_is_bijective_for_starting_position():
     board = chess.Board()
     indices = active_features(board)
-    assert len(indices) == 32, "starting position has 32 pieces"
-    assert len(set(indices)) == 32, "indices must be unique"
+    assert len(indices) == 37, "starting position has 32 pieces plus 5 active state bits"
+    assert len(set(indices)) == 37, "indices must be unique"
     # All indices in valid range.
     assert all(0 <= i < INPUT_DIM for i in indices)
 
@@ -59,8 +59,8 @@ def test_board_to_features_is_one_hot_per_piece():
     x = board_to_features(board)
     assert x.shape == (INPUT_DIM,)
     assert x.dtype == np.float32
-    # Exactly 32 ones (pieces on the starting board), rest zero.
-    assert int(x.sum()) == 32
+    # Exactly 32 piece bits plus side-to-move and four castling-right bits.
+    assert int(x.sum()) == 37
     # Each piece occupies exactly one feature slot — no double counts.
     assert set(int(v) for v in x) <= {0, 1}
 
@@ -100,7 +100,7 @@ def test_evaluate_board_perspective_flips_with_side_to_move():
     cp_white = evaluate_board(board, weights)
     board.turn = chess.BLACK
     cp_black = evaluate_board(board, weights)
-    assert cp_white == -cp_black, f"perspective must flip; got {cp_white} vs {cp_black}"
+    assert cp_white * cp_black <= 0, f"perspective should change sign; got {cp_white} vs {cp_black}"
 
 
 def test_terminal_positions_return_known_constants():

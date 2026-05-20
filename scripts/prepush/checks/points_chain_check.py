@@ -13,7 +13,7 @@ REQUIRED_MARKERS = (
 
 
 def run(ctx: PrepushContext) -> CheckResult:
-    paths = list((ctx.repo_root / "services").glob("*points*.py")) + [ctx.repo_root / "routes" / "economy.py"]
+    paths = list((ctx.repo_root / "services").rglob("*points*.py")) + list((ctx.repo_root / "services" / "points_chain").rglob("*.py")) + [ctx.repo_root / "routes" / "economy.py"]
     blob = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in paths if path.exists()).lower()
     missing = [{"marker": marker} for marker in REQUIRED_MARKERS if marker.lower() not in blob]
     if missing:

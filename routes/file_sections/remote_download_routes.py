@@ -34,11 +34,13 @@ def register_file_remote_download_routes(app, ctx):
     DownloadedFileStorage = ctx["DownloadedFileStorage"]
     task_snapshot = ctx["task_snapshot"]
     get_remote_download_task = ctx["get_remote_download_task"]
+    get_remote_download_task_for_status = ctx.get("get_remote_download_task_for_status", get_remote_download_task)
     list_remote_download_tasks_for_actor = ctx["list_remote_download_tasks_for_actor"]
     cleanup_stale_remote_download_tasks_locked = ctx["cleanup_stale_remote_download_tasks_locked"]
     control_remote_download_task = ctx["control_remote_download_task"]
     run_remote_download_task = ctx["run_remote_download_task"]
     remote_download_storage_path = ctx["remote_download_storage_path"]
+    sync_remote_download_job = ctx.get("sync_remote_download_job", lambda *args, **kwargs: None)
 
     remote_download_tasks = ctx["remote_download_tasks"]
     remote_download_tasks_lock = ctx["remote_download_tasks_lock"]
@@ -166,6 +168,7 @@ def register_file_remote_download_routes(app, ctx):
         }
         with remote_download_tasks_lock:
             remote_download_tasks[task_id] = task
+        sync_remote_download_job(dict(task))
         worker = threading.Thread(target=run_remote_download_task, args=(task_id,), daemon=True)
         worker.start()
         return json_resp({"ok": True, "task": task_snapshot(task)}, 202)
@@ -253,6 +256,7 @@ def register_file_remote_download_routes(app, ctx):
             }
             with remote_download_tasks_lock:
                 remote_download_tasks[task_id] = task
+            sync_remote_download_job(dict(task))
             worker = threading.Thread(target=run_remote_download_task, args=(task_id,), daemon=True)
             worker.start()
             return json_resp({"ok": True, "task": task_snapshot(task)}, 202)
@@ -266,7 +270,7 @@ def register_file_remote_download_routes(app, ctx):
         actor, err = actor_or_401()
         if err:
             return err
-        task = get_remote_download_task(str(task_id))
+        task = get_remote_download_task_for_status(str(task_id))
         if not task:
             return json_resp({"ok": False, "msg": "找不到下載任務"}), 404
         if int(task.get("owner_user_id") or 0) != int(actor_value(actor, "id")):

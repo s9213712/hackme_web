@@ -13,7 +13,7 @@ REQUIRED_SYMBOLS = (
 
 
 def run(ctx: PrepushContext) -> CheckResult:
-    source_paths = list((ctx.repo_root / "services").glob("*.py")) + list((ctx.repo_root / "routes").glob("*.py"))
+    source_paths = list((ctx.repo_root / "services").rglob("*.py")) + list((ctx.repo_root / "routes").rglob("*.py"))
     blob = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in source_paths)
     missing = [{"symbol": symbol} for symbol in REQUIRED_SYMBOLS if symbol not in blob]
     if missing:

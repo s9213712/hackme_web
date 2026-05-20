@@ -219,10 +219,12 @@ _LEGACY_DIFFICULTY_ALIASES = {
 
 def normalize_computer_difficulty(value):
     difficulty = str(value or "").strip().lower()
+    if not difficulty:
+        difficulty = "normal"
     if difficulty == "easy":
         difficulty = "normal"
     difficulty = _LEGACY_DIFFICULTY_ALIASES.get(difficulty, difficulty)
-    allowed = set(BASE_COMPUTER_DIFFICULTIES)
+    allowed = set(BASE_COMPUTER_DIFFICULTIES) | {"normal"}
     if stockfish_available():
         allowed.add(STOCKFISH_DIFFICULTY)
     return difficulty if difficulty in allowed else None
@@ -313,7 +315,7 @@ def choose_computer_move(board, side, difficulty="normal", learning_store=None, 
         move = choose_stockfish_move(board, side, depth=depth)
         if move:
             return move
-    if difficulty == EXPERIMENT_DIFFICULTY and learning_store is not None:
+    if difficulty in (EXPERIMENT_DIFFICULTY, EXP1_SEARCH_DIFFICULTY) and learning_store is not None:
         try:
             learning_store.connect().close()
         except Exception:
@@ -740,6 +742,32 @@ def user_filter_columns(conn):
         return {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
     except Exception:
         return set()
+
+
+def game_table_exists(conn, table_name):
+    try:
+        return bool(conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (table_name,)).fetchone())
+    except Exception:
+        return False
+
+
+def users_are_game_friends(conn, user_id, other_user_id):
+    if not game_table_exists(conn, "user_friends"):
+        return False
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM user_friends
+        WHERE status='accepted'
+          AND (
+            (user_id=? AND friend_user_id=?)
+            OR (friend_user_id=? AND user_id=?)
+          )
+        LIMIT 1
+        """,
+        (int(user_id), int(other_user_id), int(user_id), int(other_user_id)),
+    ).fetchone()
+    return bool(row)
 
 
 def active_user_where(conn, alias=""):
@@ -1448,18 +1476,45 @@ def register_games_routes(app, deps):
         conn = get_db()
         try:
             ensure_game_schema(conn)
-            active_filter = active_user_where(conn)
+            active_filter = active_user_where(conn, "u")
+            actor_id = int(actor["id"])
+            friend_expr = "0 AS is_friend"
+            params = [actor_id]
+            if game_table_exists(conn, "user_friends"):
+                friend_expr = """
+                    CASE WHEN EXISTS (
+                        SELECT 1
+                        FROM user_friends f
+                        WHERE f.status='accepted'
+                          AND (
+                            (f.user_id=? AND f.friend_user_id=u.id)
+                            OR (f.friend_user_id=? AND f.user_id=u.id)
+                          )
+                    ) THEN 1 ELSE 0 END AS is_friend
+                """
+                params = [actor_id, actor_id, actor_id]
             rows = conn.execute(
                 f"""
-                SELECT id, username, role
-                FROM users
-                WHERE id<>? AND {active_filter}
-                ORDER BY username COLLATE NOCASE
+                SELECT
+                    u.id,
+                    u.username,
+                    u.role,
+                    {friend_expr}
+                FROM users u
+                WHERE u.id<>?
+                  AND COALESCE(u.role, 'user') NOT IN ('root', 'super_admin')
+                  AND {active_filter}
+                ORDER BY u.username COLLATE NOCASE
                 LIMIT 200
                 """,
-                (int(actor["id"]),),
+                tuple(params),
             ).fetchall()
-            return json_resp({"ok": True, "users": [dict(row) for row in rows]})
+            users = []
+            for row in rows:
+                item = dict(row)
+                item["is_friend"] = bool(item.get("is_friend"))
+                users.append(item)
+            return json_resp({"ok": True, "users": users})
         finally:
             conn.close()
 
@@ -1590,6 +1645,8 @@ def register_games_routes(app, deps):
                 return json_resp({"ok": False, "msg": "找不到可邀請的玩家"}), 404
             if int(opponent_row["id"]) == int(actor["id"]):
                 return json_resp({"ok": False, "msg": "不能邀請自己"}), 400
+            if not users_are_game_friends(conn, actor["id"], opponent_row["id"]):
+                return json_resp({"ok": False, "msg": "只能邀請已成為好友的玩家"}), 403
             pending = conn.execute(
                 """
                 SELECT i.id
@@ -1939,6 +1996,8 @@ def register_games_routes(app, deps):
                 return json_resp({"ok": False, "msg": "找不到可邀請的玩家"}), 404
             if int(opponent_row["id"]) == int(actor["id"]):
                 return json_resp({"ok": False, "msg": "不能邀請自己"}), 400
+            if not users_are_game_friends(conn, actor["id"], opponent_row["id"]):
+                return json_resp({"ok": False, "msg": "只能邀請已成為好友的玩家"}), 403
             pending = conn.execute(
                 """
                 SELECT id FROM game_invites

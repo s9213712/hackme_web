@@ -2138,10 +2138,17 @@ def register_comfyui_routes(app, deps):
         target_backend_url = _normalize_comfyui_backend_url(binding.get("url"))
         active = _active_generation_snapshot()
         own = [item for item in active if item.get("user_id") == actor_id]
+        own_backend_urls = {
+            _normalize_comfyui_backend_url(item.get("backend_url"))
+            for item in own
+            if _normalize_comfyui_backend_url(item.get("backend_url"))
+        }
+        if not own_backend_urls and target_backend_url:
+            own_backend_urls.add(target_backend_url)
         others = [
             item for item in active
             if item.get("user_id") != actor_id
-            and _normalize_comfyui_backend_url(item.get("backend_url")) == target_backend_url
+            and _normalize_comfyui_backend_url(item.get("backend_url")) in own_backend_urls
         ]
         summary = {
             "own_active": len(own),

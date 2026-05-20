@@ -44,6 +44,7 @@
 }
 
 body.app-authenticated .global-language-switcher:not(.global-language-switcher-inline) {
+  display: none;
   top: 3.72rem;
   right: .72rem;
   z-index: 11;

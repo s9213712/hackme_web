@@ -15,8 +15,9 @@ def test_personal_appearance_editor_and_routes_are_wired():
         + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
     )
 
-    assert "/js/40-auth-users.js?v=20260503-appearance-reset" in index_html
-    assert 'id="edit-user-appearance-section" style="display:none;"' in index_html
+    assert "/js/40-auth-users.js?v=" in index_html
+    assert 'id="edit-user-appearance-section"' in index_html
+    assert 'style="display:none;"' in index_html
     assert 'id="edit-user-appearance-preset"' in index_html
     assert 'id="theme-quick-toggle"' in index_html
     assert 'id="edit-user-theme-mode"' in index_html

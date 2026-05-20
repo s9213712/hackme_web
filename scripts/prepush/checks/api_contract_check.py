@@ -8,12 +8,12 @@ from scripts.prepush.result import CheckResult
 
 CONTRACT = "tests/contracts/api_contract_snapshot.json"
 REQUIRED_APIS = (
-    "/api/health",
+    "/api/healthz",
     "/api/me",
     "/api/login",
-    "/api/server-mode/status",
-    "/api/points/status",
-    "/api/cloud-drive/list",
+    "/api/admin/server-mode",
+    "/api/points/wallet",
+    "/api/cloud-drive/files",
     "/api/trading/markets",
 )
 
@@ -31,11 +31,7 @@ def run(ctx: PrepushContext) -> CheckResult:
     if missing:
         return CheckResult.fail("API contract", "required API contract entries are missing", severity="medium", details=missing)
 
-    source_blob = "\n".join(
-        path.read_text(encoding="utf-8", errors="replace")
-        for root in ("routes",)
-        for path in sorted((ctx.repo_root / root).rglob("*.py"))
-    )
+    source_blob = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in sorted((ctx.repo_root / "routes").rglob("*.py")))
     absent = [{"endpoint": endpoint} for endpoint in REQUIRED_APIS if endpoint not in source_blob]
     if absent:
         return CheckResult.warn("API contract", "some contracted API literals were not found in routes", details=absent)

@@ -1,0 +1,41 @@
+{
+  "generated_at": "2026-05-20T00:00:00+08:00",
+  "description": "Critical API route names used by the pre-push compatibility gate. This is a route-presence contract, not a full OpenAPI schema.",
+  "endpoints": {
+    "/api/healthz": {
+      "methods": ["GET"],
+      "auth": "public",
+      "module": "routes.public"
+    },
+    "/api/me": {
+      "methods": ["GET"],
+      "auth": "session",
+      "module": "routes.public"
+    },
+    "/api/login": {
+      "methods": ["POST"],
+      "auth": "public_csrf",
+      "module": "routes.public"
+    },
+    "/api/admin/server-mode": {
+      "methods": ["GET", "POST"],
+      "auth": "admin",
+      "module": "routes.system_admin_sections.runtime_routes"
+    },
+    "/api/points/wallet": {
+      "methods": ["GET"],
+      "auth": "session",
+      "module": "routes.economy"
+    },
+    "/api/cloud-drive/files": {
+      "methods": ["GET"],
+      "auth": "session",
+      "module": "routes.files"
+    },
+    "/api/trading/markets": {
+      "methods": ["GET"],
+      "auth": "session",
+      "module": "routes.trading"
+    }
+  }
+}

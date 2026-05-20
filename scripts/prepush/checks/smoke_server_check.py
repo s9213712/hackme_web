@@ -78,8 +78,19 @@ def run(ctx: PrepushContext) -> CheckResult:
     try:
         proc, log_file = start_server(ctx, runtime_root, port)
         base_url = wait_for_server([f"https://127.0.0.1:{port}", f"http://127.0.0.1:{port}"])
-        smoke = ctx.repo_root / "tests" / "smoke_suite.py"
-        proc_smoke = utils.run_command([sys.executable, str(smoke), "--base-url", base_url, "--suite", "all"], cwd=ctx.repo_root, timeout=180)
+        smoke = ctx.repo_root / "tests" / "security" / "smoke" / "smoke_suite.py"
+        smoke_env = os.environ.copy()
+        smoke_env.update({
+            "ROOT_PASSWORD": "RootSmoke123!",
+            "MANAGER_PASSWORD": "ManagerSmoke123!",
+            "TEST_PASSWORD": "TestSmoke123!",
+        })
+        proc_smoke = utils.run_command(
+            [sys.executable, str(smoke), "--base-url", base_url, "--suite", "all"],
+            cwd=ctx.repo_root,
+            timeout=180,
+            env=smoke_env,
+        )
         if proc_smoke.returncode != 0:
             output = "\n".join((proc_smoke.stdout + proc_smoke.stderr).splitlines()[-80:])
             return CheckResult.fail(

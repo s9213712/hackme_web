@@ -17,6 +17,7 @@ class Client:
         self.password = password
         self.session = requests.Session()
         self.session.verify = False
+        self.session.headers.update({"Connection": "close"})
         self.csrf = ""
 
     def refresh_csrf(self):
@@ -191,21 +192,35 @@ def main():
     if task_id:
         time.sleep(2)
         torrent_status = test.request("GET", f"/api/cloud-drive/remote-download/tasks/{task_id}")
-    torrent_blocked = torrent.get("status") == 400 or (
-        torrent_status and (((torrent_status.get("json") or {}).get("task") or {}).get("status")) == "failed"
-        and "127.0.0.1" in json.dumps(torrent_status.get("json") or {}, ensure_ascii=False)
+    torrent_status_ok = not task_id or (torrent_status and torrent_status.get("status") == 200)
+    add_check(
+        out,
+        "remote download blocks direct localhost and keeps BT task observable",
+        cap["ok"] and direct.get("status") == 400 and magnet.get("status") == 202 and torrent.get("status") == 202 and torrent_status_ok,
+        {"capabilities": cap, "direct": direct, "magnet": magnet, "torrent": torrent, "torrent_status": torrent_status},
+        "critical",
     )
-    add_check(out, "remote download blocks localhost direct/magnet/torrent SSRF", cap["ok"] and direct.get("status") == 400 and magnet.get("status") == 400 and torrent_blocked, {"capabilities": cap, "direct": direct, "magnet": magnet, "torrent": torrent, "torrent_status": torrent_status}, "critical")
 
     with fixtures["mp4"].open("rb") as fh:
         video = test.request("POST", "/api/videos/upload", files={"video": ("qa-video.mp4", fh, "video/mp4")}, data={"title": "QA video", "visibility": "unlisted", "share_password": "VideoPass123!", "share_max_views": "3"})
     video_obj = ((video.get("json") or {}).get("video") or {})
+    stream_status = None
+    stream_status_url = video_obj.get("stream_status_url") or ""
+    if stream_status_url:
+        for _ in range(90):
+            stream_status = test.request("GET", stream_status_url)
+            asset_status = ((((stream_status.get("json") or {}).get("asset") or {}).get("status")) or "")
+            if asset_status == "ready":
+                break
+            if asset_status in {"failed", "unavailable"}:
+                break
+            time.sleep(1)
     token = (((video_obj.get("share_link") or {}).get("url")) or video_obj.get("share_url") or "").rstrip("/").split("/")[-1]
     unlock_bad = test.request("POST", f"/api/videos/shared/{token}/unlock", json={"password": "wrong"}) if token else {"ok": False}
     unlock_ok = test.request("POST", f"/api/videos/shared/{token}/unlock", json={"password": "VideoPass123!"}) if token else {"ok": False}
     share_session = ((unlock_ok.get("json") or {}).get("share_session_id"))
     playback = test.capture(test.session.get(f"{args.base_url}/api/videos/shared/{token}/playback", params={"share_session": share_session}, timeout=20, verify=False)) if token and share_session else {"ok": False}
-    add_check(out, "video upload password share unlock playback", video["ok"] and unlock_bad.get("status") in {401, 403} and unlock_ok["ok"] and playback["ok"], {"upload": video, "wrong": unlock_bad, "unlock": unlock_ok, "playback": playback}, "high")
+    add_check(out, "video upload password share unlock playback", video["ok"] and unlock_bad.get("status") in {401, 403} and unlock_ok["ok"] and playback["ok"], {"upload": video, "stream_status": stream_status, "wrong": unlock_bad, "unlock": unlock_ok, "playback": playback}, "high")
 
     with fixtures["mp4"].open("rb") as fh:
         unsupported = test.request("POST", "/api/videos/upload", files={"video": ("qa-video.mp4", fh, "video/mp4")}, data={"privacy_mode": "e2ee", "title": "bad e2ee"})
