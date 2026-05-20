@@ -1,6 +1,17 @@
 # Update Summary
 
-Release ID: `2026.05.20-162`
+Release ID: `2026.05.20-164`
+
+## 2026.05.20-164
+
+- Updated the plaintext secrets scanner rules/allowlist so CI distinguishes
+  dynamic request values and documented test fixtures from real committed
+  secrets.
+
+## 2026.05.20-163
+
+- Fixed the plaintext secrets scanner entrypoint so the security workflow can
+  import the project `scripts` package when run directly by GitHub Actions.
 
 ## 2026.05.20-162
 

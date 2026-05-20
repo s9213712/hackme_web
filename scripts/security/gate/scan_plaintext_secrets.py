@@ -20,6 +20,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from scripts.security.common_paths import REPO_ROOT as ROOT, security_reports_root
 
 DEFAULT_JSON_REPORT = security_reports_root() / "secrets_scan_report.json"
@@ -306,6 +310,10 @@ def is_safe_dynamic_assignment(rule: Rule, match: re.Match[str]) -> bool:
     if SAFE_PLACEHOLDER_RE.match(rhs):
         return True
     if rhs.startswith(("data.get(", "request.", "os.environ.", "settings.get(", "getenv(")):
+        return True
+    if rhs.startswith(("data[", "payload[", "params[", "form[", "request_json[", "body[", "item[", "headers[")):
+        return True
+    if rhs in {"reg-pw", "reg-pw-confirm"}:
         return True
     if "(" in rhs or "." in rhs:
         return True
