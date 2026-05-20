@@ -36,6 +36,10 @@ Findings and actions:
   fixtures and dynamic request values. Updated the scanner's dynamic assignment
   exemptions and the documented allowlist for tests, QA scripts, pentest
   scripts, and explicit tutorial examples.
+- Checked the next push run: `security-secrets-scan` and `playwright-qa`
+  passed on `53757d8`, while the main `ci` workflow still failed before the
+  pre-push gate because gitleaks was not installed in that workflow. Added the
+  same pinned gitleaks install step used by the dedicated secrets workflow.
 - Updated `scripts/testing/playwright_comfyui_workflow_builder_check.py` to
   reveal catalog and fixed tools through search before clicking, preserving the
   collapsed toolbox behavior.
@@ -47,6 +51,8 @@ Focused validation:
 - `python3 -m pytest tests/security/auth/test_auth_csrf_safe.py tests/frontend/comfyui/test_comfyui_diffusers_repo_ui.py tests/frontend/comfyui/test_comfyui_idle_retry.py tests/comfyui/test_diffusers_client.py tests/comfyui/generation/test_comfyui_generation.py::test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes tests/comfyui/generation/test_comfyui_generation.py::test_comfyui_diffusers_stale_progress_does_not_say_comfyui_backend tests/frontend/test_platform_centers_frontend.py -q`
 - `python3 scripts/testing/playwright_comfyui_workflow_builder_check.py`
 - `python3 scripts/security/gate/scan_plaintext_secrets.py --fail-on high --report-json /tmp/hackme_secrets_scan.json --report-md /tmp/hackme_secrets_scan.md`
+- `ALLOW_MISSING_GITLEAKS=1 python3 scripts/prepush/pre_push_checks.py --ci`
 - `python3 -m pytest tests/scripts/prepush/test_prepush_v2.py -q`
+- `python3 -m pytest tests/trading/core/test_trading_engine.py`
 - `python3 -m compileall services/users/auth.py services/comfyui/diffusers_client.py routes/comfyui.py routes/comfyui_sections/runtime_routes.py`
 - `git diff --check`

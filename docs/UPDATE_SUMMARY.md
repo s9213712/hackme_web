@@ -1,6 +1,14 @@
 # Update Summary
 
-Release ID: `2026.05.20-164`
+Release ID: `2026.05.20-165`
+
+## 2026.05.20-165
+
+- Aligned the main `ci` workflow with the dedicated secrets workflow by
+  installing gitleaks before the pre-push gate, so default-branch pushes do not
+  fail on missing CI tooling.
+- Rechecked repo cache/runtime cleanup and recorded the latest branch Actions
+  status after the security scanner fix.
 
 ## 2026.05.20-164
 
