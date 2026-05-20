@@ -4373,26 +4373,31 @@ def test_direct_provider_fallback_is_not_risk_grade_usable(tmp_path, monkeypatch
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
     trading.update_root_settings(actor=root, settings={"price_source": "binance_public_api"}, markets=[])
 
-    monkeypatch.setattr(
-        trading,
-        "_fetch_live_price_points",
-        lambda _symbol, *, with_meta=False, settings=None, conn=None: (
-            5000.0,
-            "binance_public_api",
-            {
-                "transport": "http_polling",
-                "connected": False,
-                "fallback": True,
-                "stale": True,
-                "degraded": True,
-                "confidence": "low",
-                "provider_count": 1,
-                "last_update_at": "2026-05-05T00:00:00",
-                "exclusion_reason": "websocket_disconnected",
-                "latency_ms": 88.0,
-            },
-        ),
-    )
+    fallback_meta = {
+        "transport": "http_polling",
+        "connected": False,
+        "fallback": True,
+        "stale": True,
+        "degraded": True,
+        "confidence": "low",
+        "provider_count": 1,
+        "last_update_at": "2026-05-05T00:00:00",
+        "exclusion_reason": "websocket_disconnected",
+        "latency_ms": 88.0,
+    }
+
+    def fake_live_fetch(_symbol, *, with_meta=False, settings=None, conn=None):
+        if with_meta:
+            return 5000.0, "binance_public_api", dict(fallback_meta)
+        return 5000.0, "binance_public_api"
+
+    def fake_binance_fetch(_symbol, *, settings=None, with_meta=False, conn=None):
+        if with_meta:
+            return 5000.0, dict(fallback_meta)
+        return 5000.0
+
+    monkeypatch.setattr(trading, "_fetch_live_price_points", fake_live_fetch)
+    monkeypatch.setattr(trading, "_fetch_binance_price_points", fake_binance_fetch)
 
     conn = trading.get_db()
     try:
@@ -4547,10 +4552,12 @@ def test_cached_fallback_preserves_fractional_subunit_price(tmp_path, monkeypatc
     root = _actor(3, "root", "super_admin")
     trading.update_root_settings(actor=root, settings={"price_source": "binance_public_api", "max_price_staleness_seconds": 900}, markets=[])
 
-    def boom(_symbol):
+    def boom(_symbol, **_kwargs):
         raise OSError("provider unavailable")
 
     monkeypatch.setattr(trading, "_fetch_live_price_points", boom)
+    monkeypatch.setattr(trading, "_fetch_binance_price_points", boom)
+    monkeypatch.setattr(trading, "_fetch_weighted_fused_price_points", boom)
 
     conn = trading.get_db()
     try:
@@ -4573,10 +4580,12 @@ def test_cached_fallback_preserves_decimal_part_for_whole_point_price(tmp_path, 
     root = _actor(3, "root", "super_admin")
     trading.update_root_settings(actor=root, settings={"price_source": "binance_public_api", "max_price_staleness_seconds": 900}, markets=[])
 
-    def boom(_symbol):
+    def boom(_symbol, **_kwargs):
         raise OSError("provider unavailable")
 
     monkeypatch.setattr(trading, "_fetch_live_price_points", boom)
+    monkeypatch.setattr(trading, "_fetch_binance_price_points", boom)
+    monkeypatch.setattr(trading, "_fetch_weighted_fused_price_points", boom)
 
     conn = trading.get_db()
     try:

@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.20-165`
+Release ID: `2026.05.20-166`
+
+## 2026.05.20-166
+
+- Isolated trading cached-fallback tests from external market connectivity by
+  stubbing both the configured Binance fetcher and fused fallback path, so CI
+  cannot accidentally use live public prices in unit tests.
 
 ## 2026.05.20-165
 

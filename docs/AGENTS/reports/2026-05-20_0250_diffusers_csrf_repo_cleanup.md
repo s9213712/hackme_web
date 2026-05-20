@@ -40,6 +40,11 @@ Findings and actions:
   passed on `53757d8`, while the main `ci` workflow still failed before the
   pre-push gate because gitleaks was not installed in that workflow. Added the
   same pinned gitleaks install step used by the dedicated secrets workflow.
+- Checked the following push run: gitleaks installed successfully, but the
+  pre-push gate still failed in CI. The prior visible log showed trading
+  cached-fallback unit tests using live Binance prices when CI had outbound
+  market connectivity. Updated those tests to stub the configured Binance
+  fetcher and fused fallback explicitly.
 - Updated `scripts/testing/playwright_comfyui_workflow_builder_check.py` to
   reveal catalog and fixed tools through search before clicking, preserving the
   collapsed toolbox behavior.
