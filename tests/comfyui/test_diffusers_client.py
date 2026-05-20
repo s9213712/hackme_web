@@ -1,4 +1,6 @@
 import logging
+import sys
+import warnings
 
 import pytest
 
@@ -127,6 +129,35 @@ def test_diffusers_generate_reports_download_preparation_before_heavy_loading(tm
     assert not any("hf_1234567890abcdef" in line for event in events for line in event.get("python_log_tail", []))
     assert any(event.get("phase") == "error" and "stop before loading" in event.get("detail", "") for event in events)
     assert any(event.get("error_message") == "stop before loading" for event in events)
+
+
+def test_diffusers_generate_streams_python_runtime_output_to_progress_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS", "1")
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+    events = []
+
+    def stop_after_runtime_logs(*args, **kwargs):
+        print("model_index.json: 100% 712/712 [00:00<00:00, 78.9kB/s]")
+        sys.stderr.write("Fetching 18 files: 100% 18/18 [01:13<00:00, 5.04s/it]\n")
+        warnings.warn("The secret `HF_TOKEN` does not exist in your Colab secrets.", UserWarning)
+        logging.getLogger("huggingface_hub.utils._http").warning(
+            "Warning: unauthenticated hf_1234567890abcdef requests"
+        )
+        raise ComfyUIError("stop after runtime logs")
+
+    monkeypatch.setattr(client, "_load_pipeline", stop_after_runtime_logs)
+
+    with pytest.warns(UserWarning, match="HF_TOKEN"), pytest.raises(ComfyUIError):
+        client.generate_image({"generation_mode": "txt2img", "prompt": "test"}, progress_callback=events.append)
+
+    lines = [line for event in events for line in event.get("python_log_tail", [])]
+    joined = "\n".join(lines)
+    assert "model_index.json: 100%" in joined
+    assert "Fetching 18 files: 100%" in joined
+    assert "HF_TOKEN" in joined
+    assert "huggingface_hub.utils._http" in joined
+    assert "hf_1234567890abcdef" not in joined
+    assert "hf_***" in joined
 
 
 def test_diffusers_client_upload_fetch_and_discard_round_trip(tmp_path):

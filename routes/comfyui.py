@@ -2539,8 +2539,8 @@ def register_comfyui_routes(app, deps):
                     "backend_kind": "diffusers",
                     "step": "Diffusers 產圖失敗",
                 })
-            _update_generation_job(job_id, status="error", error=str(exc), result=None)
             _update_generation_job_progress(job_id, error_progress)
+            _update_generation_job(job_id, status="error", error=str(exc), result=None)
             audit("COMFYUI_GENERATE_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])
         except Exception as exc:
             error_progress = {
@@ -2555,8 +2555,8 @@ def register_comfyui_routes(app, deps):
                     "backend_kind": "diffusers",
                     "step": "Diffusers 產圖失敗",
                 })
-            _update_generation_job(job_id, status="error", error=str(exc), result=None)
             _update_generation_job_progress(job_id, error_progress)
+            _update_generation_job(job_id, status="error", error=str(exc), result=None)
             audit("COMFYUI_GENERATE_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])
         finally:
             _unregister_active_generation(generation_token)

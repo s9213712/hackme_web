@@ -1,6 +1,15 @@
 # Update Summary
 
-Release ID: `2026.05.20-172`
+Release ID: `2026.05.20-173`
+
+## 2026.05.20-173
+
+- Captured real Hugging Face / Diffusers Python runtime output in the frontend
+  log panel, including stdout, stderr, warnings, logging records, and tqdm-style
+  download / loading progress.
+- Re-enabled Diffusers progress bars during in-process runtime execution while
+  still forwarding structured progress and redacting Hugging Face tokens from
+  `python_log_tail`.
 
 ## 2026.05.20-172
 

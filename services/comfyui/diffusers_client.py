@@ -13,9 +13,11 @@ import logging
 import mimetypes
 import os
 import re
+import sys
 import threading
 import time
 import uuid
+import warnings
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,6 +102,53 @@ class _DiffusersProgressLogHandler(logging.Handler):
         self.owner.emit_record(record)
 
 
+class _DiffusersStreamTee:
+    def __init__(self, original, owner, *, stream_name="stdout"):
+        self.original = original
+        self.owner = owner
+        self.stream_name = stream_name
+        self.buffer = ""
+        self.encoding = getattr(original, "encoding", None) or "utf-8"
+        self.errors = getattr(original, "errors", None) or "replace"
+
+    def write(self, value):
+        text = str(value or "")
+        try:
+            self.original.write(text)
+        except Exception:
+            pass
+        self._capture(text, final=False)
+        return len(text)
+
+    def flush(self):
+        try:
+            self.original.flush()
+        except Exception:
+            pass
+        self._capture("", final=True)
+
+    def isatty(self):
+        try:
+            return bool(self.original.isatty())
+        except Exception:
+            return False
+
+    def fileno(self):
+        return self.original.fileno()
+
+    def _capture(self, text, *, final=False):
+        if text:
+            self.buffer += text
+        normalized = self.buffer.replace("\r", "\n")
+        if "\n" not in normalized and not final and len(normalized) < 500:
+            return
+        parts = normalized.split("\n")
+        complete = parts if final else parts[:-1]
+        self.buffer = "" if final else parts[-1]
+        for line in complete:
+            self.owner.append_line(line)
+
+
 class _DiffusersRuntimeLogCapture:
     def __init__(self, progress_callback, *, max_lines=80):
         self.progress_callback = progress_callback
@@ -108,6 +157,11 @@ class _DiffusersRuntimeLogCapture:
         self.lock = threading.Lock()
         self.handler = None
         self.previous_levels = []
+        self.previous_stdout = None
+        self.previous_stderr = None
+        self.previous_showwarning = None
+        self.stdout_proxy = None
+        self.stderr_proxy = None
         self.active = False
         self.last_emit = 0.0
         self.formatter = logging.Formatter("%(levelname)s %(name)s: %(message)s")
@@ -124,12 +178,42 @@ class _DiffusersRuntimeLogCapture:
             if logger.level == logging.NOTSET or logger.level > logging.INFO:
                 logger.setLevel(logging.INFO)
             logger.addHandler(self.handler)
+        self.previous_stdout = sys.stdout
+        self.previous_stderr = sys.stderr
+        self.stdout_proxy = _DiffusersStreamTee(self.previous_stdout, self, stream_name="stdout")
+        self.stderr_proxy = _DiffusersStreamTee(self.previous_stderr, self, stream_name="stderr")
+        sys.stdout = self.stdout_proxy
+        sys.stderr = self.stderr_proxy
+        self.previous_showwarning = warnings.showwarning
+        owner = self
+
+        def capture_warning(message, category, filename, lineno, file=None, line=None):
+            try:
+                formatted = warnings.formatwarning(message, category, filename, lineno, line)
+                owner.append_line(formatted)
+            except Exception:
+                owner.append_line(message)
+            target_file = file if file is not None else owner.previous_stderr
+            return owner.previous_showwarning(message, category, filename, lineno, file=target_file, line=line)
+
+        warnings.showwarning = capture_warning
         self.active = True
         return self
 
     def __exit__(self, exc_type, exc, tb):
         if not self.active:
             return False
+        for proxy in (self.stdout_proxy, self.stderr_proxy):
+            try:
+                proxy.flush()
+            except Exception:
+                pass
+        if sys.stdout is self.stdout_proxy and self.previous_stdout is not None:
+            sys.stdout = self.previous_stdout
+        if sys.stderr is self.stderr_proxy and self.previous_stderr is not None:
+            sys.stderr = self.previous_stderr
+        if self.previous_showwarning is not None and warnings.showwarning is not self.previous_showwarning:
+            warnings.showwarning = self.previous_showwarning
         for logger, level in self.previous_levels:
             try:
                 logger.removeHandler(self.handler)
@@ -138,20 +222,29 @@ class _DiffusersRuntimeLogCapture:
                 pass
         self.previous_levels = []
         self.handler = None
+        self.previous_stdout = None
+        self.previous_stderr = None
+        self.previous_showwarning = None
+        self.stdout_proxy = None
+        self.stderr_proxy = None
         self.active = False
         self.emit_tail(force=True)
         return False
+
+    def append_line(self, value):
+        line = _sanitize_runtime_log_line(value)
+        if not line:
+            return
+        with self.lock:
+            self.tail.append(line)
+        self.emit_tail()
 
     def emit_record(self, record):
         try:
             line = _sanitize_runtime_log_line(self.formatter.format(record))
         except Exception:
             line = _sanitize_runtime_log_line(record.getMessage())
-        if not line:
-            return
-        with self.lock:
-            self.tail.append(line)
-        self.emit_tail()
+        self.append_line(line)
 
     def emit_tail(self, *, force=False):
         if not self.progress_callback:
@@ -551,7 +644,15 @@ class DiffusersClient:
             return torch.float32
         return torch.float16 if device == "cuda" else torch.float32
 
-    def _huggingface_progress_tqdm_class(self, progress_callback, *, label="", base_percent=5, span_percent=20):
+    def _huggingface_progress_tqdm_class(
+        self,
+        progress_callback,
+        *,
+        label="",
+        base_percent=5,
+        span_percent=20,
+        log_capture=None,
+    ):
         if not progress_callback:
             return None
         try:
@@ -619,7 +720,7 @@ class DiffusersClient:
                 total = int(kwargs.get("total") or 0)
                 desc = str(kwargs.get("desc") or outer_label)
                 unit = str(kwargs.get("unit") or "")
-                kwargs["disable"] = True
+                kwargs["disable"] = False if log_capture else True
                 super().__init__(*args, **kwargs)
                 self._hackme_progress_n = initial
                 self._hackme_progress_total = total
@@ -680,7 +781,16 @@ class DiffusersClient:
             ignore.extend([f"*.{precision}.*", f"**/*.{precision}.*"])
         return base_patterns + weights, ignore
 
-    def _prefetch_diffusers_snapshot(self, model_repo, *, variant="", progress_callback=None, base_percent=5, span_percent=20):
+    def _prefetch_diffusers_snapshot(
+        self,
+        model_repo,
+        *,
+        variant="",
+        progress_callback=None,
+        base_percent=5,
+        span_percent=20,
+        log_capture=None,
+    ):
         if not progress_callback:
             return ""
         try:
@@ -707,6 +817,7 @@ class DiffusersClient:
             label=f"{model_repo}{variant_text}",
             base_percent=base_percent,
             span_percent=span_percent,
+            log_capture=log_capture,
         )
         kwargs = {
             "repo_id": model_repo,
@@ -723,6 +834,8 @@ class DiffusersClient:
             snapshot_path = snapshot_download(**kwargs)
         except Exception as exc:
             raise ComfyUIError(f"Hugging Face 模型下載失敗：{exc}") from exc
+        if log_capture:
+            log_capture.append_line(f"Download complete: {model_repo}{variant_text}")
         progress_callback({
             "phase": "loading",
             "percent": min(99, base_percent + span_percent),
@@ -747,7 +860,16 @@ class DiffusersClient:
             return AutoPipelineForInpainting
         raise ComfyUIError("Diffusers 後端目前只支援文字生圖、圖生圖與局部重繪")
 
-    def _load_pipeline(self, mode, progress_callback=None, model_repo=None, variant="", gguf_file="", gguf_base_repo=""):
+    def _load_pipeline(
+        self,
+        mode,
+        progress_callback=None,
+        model_repo=None,
+        variant="",
+        gguf_file="",
+        gguf_base_repo="",
+        log_capture=None,
+    ):
         model_repo = self._effective_model_repo({"model": model_repo})
         variant = self._effective_model_variant({"diffusers_model_variant": variant})
         gguf_file = self._effective_gguf_file({"diffusers_gguf_file": gguf_file})
@@ -796,6 +918,7 @@ class DiffusersClient:
                     dtype=dtype,
                     device=device,
                     progress_callback=progress_callback,
+                    log_capture=log_capture,
                 )
                 self._pipeline_cache[cache_key] = pipe
                 return pipe, torch, device
@@ -824,6 +947,7 @@ class DiffusersClient:
                 progress_callback=progress_callback,
                 base_percent=6,
                 span_percent=18,
+                log_capture=log_capture,
             )
             load_target = snapshot_path or model_repo
             if snapshot_path:
@@ -880,7 +1004,7 @@ class DiffusersClient:
                 raise ComfyUIError(f"Diffusers 模型移至裝置 {device} 失敗：{exc}") from exc
             if hasattr(pipe, "set_progress_bar_config"):
                 try:
-                    pipe.set_progress_bar_config(disable=True)
+                    pipe.set_progress_bar_config(disable=False)
                 except Exception:
                     pass
             if hasattr(pipe, "enable_attention_slicing"):
@@ -891,7 +1015,18 @@ class DiffusersClient:
             self._pipeline_cache[cache_key] = pipe
             return pipe, torch, device
 
-    def _load_gguf_pipeline(self, mode, *, model_repo, gguf_file, gguf_base_repo, dtype, device, progress_callback=None):
+    def _load_gguf_pipeline(
+        self,
+        mode,
+        *,
+        model_repo,
+        gguf_file,
+        gguf_base_repo,
+        dtype,
+        device,
+        progress_callback=None,
+        log_capture=None,
+    ):
         if mode != "txt2img":
             raise ComfyUIError("GGUF Diffusers 模式目前只支援文字生圖；圖生圖與局部重繪請改用一般 Diffusers repo 或 ComfyUI workflow。")
         if progress_callback:
@@ -914,6 +1049,7 @@ class DiffusersClient:
                 label=gguf_file,
                 base_percent=6,
                 span_percent=16,
+                log_capture=log_capture,
             )
             accelerated = self._enable_hf_transfer_if_available()
             if progress_callback:
@@ -979,7 +1115,7 @@ class DiffusersClient:
             raise ComfyUIError(f"GGUF pipeline 移至裝置 {device} 失敗：{exc}") from exc
         if hasattr(pipe, "set_progress_bar_config"):
             try:
-                pipe.set_progress_bar_config(disable=True)
+                pipe.set_progress_bar_config(disable=False)
             except Exception:
                 pass
         return pipe
@@ -1055,6 +1191,7 @@ class DiffusersClient:
                     variant=variant,
                     gguf_file=gguf_file,
                     gguf_base_repo=gguf_base_repo,
+                    log_capture=runtime_logs,
                 )
         except ComfyUIError as exc:
             runtime_logs.error(str(exc), step="Diffusers 模型載入失敗")
