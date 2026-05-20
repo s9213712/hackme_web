@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, 03.Points]
+    branches: [main, 03.Points, 04.BLOCKCHAIN]
   pull_request:
 
 jobs:

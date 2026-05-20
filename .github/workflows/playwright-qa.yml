@@ -3,7 +3,7 @@ name: playwright-qa
 on:
   pull_request:
   push:
-    branches: [main, 03.Points, 03b.Comfyui]
+    branches: [main, 03.Points, 03b.Comfyui, 04.BLOCKCHAIN]
   workflow_dispatch:
     inputs:
       run_deep_playwright:
