@@ -19,9 +19,10 @@
 3. 各業務模組不得自行更新 wallet balance。
 4. 所有扣款路徑必須有 idempotency key，重送不能重複扣點。
 5. 長任務先 reserve / freeze，成功 capture，失敗或取消 release；已扣款後才失敗則 refund。
-6. Safe mode、非 production mode、wallet frozen / closed 時必須阻擋寫入。
-7. 每個實作切片都要有對應 pytest；牽涉前端交易體驗時要加 Playwright 或靜態 frontend test。
-8. 每個可驗證切片完成後 commit + push 到 `04.BLOCKCHAIN`，再看 GitHub Actions。
+6. `wallet_reservations` 與 `wallet_transaction_groups` 可保存業務狀態，但不得成為獨立帳務真相來源。
+7. Safe mode、非 production mode、wallet frozen / closed 時必須阻擋寫入。
+8. 每個實作切片都要有對應 pytest；牽涉前端交易體驗時要加 Playwright 或靜態 frontend test。
+9. 每個可驗證切片完成後 commit + push 到 `04.BLOCKCHAIN`，再看 GitHub Actions。
 
 ## 現有基礎
 
@@ -67,6 +68,15 @@ Exit gate:
 - 產出 repo 內盤點文件或表格
 - 至少列出所有會寫入 `record_transaction`, `_record_transaction`, `spend_points`, `rollback_ledger` 的呼叫點
 - 標出第一批必修 blocker，不把 blocker 混進功能開發 commit
+- Snapshot 現有 wallet cache，replay 既有 ledger，先分類 mismatch 再開始 facade migration
+
+Migration / backfill gate:
+
+- 任何 schema 或 facade rollout 前，先 snapshot current wallet balances。
+- Replay 既有 `points_ledger` 並和 `points_wallets` cache 對帳。
+- 先分類 mismatch：正常 legacy 差異、資料缺失、疑似 corruption、需要人工判斷。
+- 只有在原始 reference id 可恢復時，才 backfill transaction groups。
+- 不可為了讓歷史看起來完整而 fabricated ledger history；不可恢復的 legacy event 必須用明確的 migration adjustment entry 補正，並保留 reason / operator / source report。
 
 ## Phase 1：Wallet Service Facade
 
@@ -93,11 +103,30 @@ Exit gate:
 - 統一 safe mode / production guard
 - 統一通知 job / security / audit hooks
 
+### Idempotency contract
+
+- Same actor + operation + idempotency key + same request hash must return the original result.
+- Same actor + operation + idempotency key + different request hash must return conflict.
+- Idempotency must be enforced by database-level uniqueness, not only by application memory or best-effort service checks.
+- Idempotency records must store request hash, result ledger ids, status, created_at, and expires_at.
+- Retried reserve / capture / release / refund requests must never create duplicate financial effects.
+- Conflict responses must include enough non-sensitive context for the caller to distinguish retry success from payload mismatch.
+
+### Refund / rollback boundary
+
+- `refund` 是正常業務退款，例如已扣款任務失敗、商品/服務未履約、平台補償。
+- `rollback` 是管理員、申訴或稽核修正，必須 reference 原始 ledger / transaction group。
+- `refund` 與 `rollback` 都不得刪除或修改既有 ledger，只能追加補償交易。
+- `rollback` 必須保留 actor、reason、original ledger uuid、original transaction group id、appeal / audit reference。
+- 對同一原始 ledger 的 rollback 必須 idempotent，且不得讓 wallet replay 產生負餘額或負凍結餘額。
+
 Exit gate:
 
 - facade 有單元測試
 - 既有 PointsChain 測試不退化
 - 至少一個低風險路徑切到 facade 並通過整合測試
+- idempotency conflict、retry same payload、retry different payload 都有 DB-backed 測試
+- refund / rollback 邊界有測試，確認兩者都只 append compensating ledger entries
 
 ## Phase 2：Reservation / Transaction Group
 
@@ -111,6 +140,29 @@ Exit gate:
 
 只有在現有 ledger 欄位不足時才新增表；能以現有欄位可靠完成時，不新增 schema。
 
+### Source-of-truth rule for reservations
+
+`wallet_reservations` and `wallet_transaction_groups` may store operational state, but they must not become independent financial truth. Available balance, reserved balance, frozen balance, captured balance, and refund results must be replayable from `points_ledger` or verified by a required reconciliation job. Any mismatch is a critical audit finding.
+
+具體要求：
+
+- `wallet_reservations.status` 不能單獨決定可用餘額。
+- `points_ledger` 必須能重播出凍結、解凍、扣款、退款的財務效果。
+- reservation / transaction group 只能作為業務流程索引、UI 狀態、job 關聯、對帳輔助。
+- reconciliation 必須檢查 ledger replay 結果和 reservation / transaction group 狀態是否一致。
+- mismatch 不得由前端或一般業務 API 靜默修正；必須進 root / health / security audit surface。
+
+### Policy rule rollout constraint
+
+初期 policy 先以程式碼常數或 versioned config 表達。只有在至少兩個 domain 需要可配置策略，且 audit / versioning / rollback 規則已定義後，才引入資料庫型 `wallet_policy_rules`。
+
+在引入資料庫型 policy 前必須先定義：
+
+- policy version 如何綁到 ledger / transaction group
+- 舊交易如何用原 policy replay
+- root 修改 policy 的 audit event
+- policy rollback 或停用後既有 reservation 如何處理
+
 Exit gate:
 
 - 重複 submit 不重複 reserve
@@ -118,6 +170,7 @@ Exit gate:
 - job 失敗 / 取消 release 一次
 - capture 後失敗走 refund，而不是 release
 - wallet replay 後餘額與 reservation 狀態一致
+- DB-backed reservation / transaction group 不會取代 ledger replay 作為財務真相
 
 ## Phase 3：ComfyUI 錢包化
 
@@ -130,14 +183,23 @@ Exit gate:
 - 任務成功後 capture
 - 任務失敗、取消、後端拒絕、超時等待中斷時 release
 - 若媒體已生成但前端預覽失敗，不可誤判成扣款失敗；需以 job result / output store 為準
+- `capture` 的判斷來源必須是後端 job finalization / output store 狀態，不得依賴前端 preview 成功與否
 - 批次任務要能拆出每張 / 每段 output 對應費用
 - 任務中心顯示 wallet state：reserved、captured、released、refunded
+
+ComfyUI capture authority:
+
+- Backend job finalization 是 capture authority。
+- Output store 已登記成功產物時，即使前端 preview card 載入失敗，也不得自動 release。
+- 前端 preview failure 應進 media preview / output delivery 修復流程，不應改寫 wallet state。
+- 若 backend job finalization 與 output store 狀態不一致，必須進 reconciliation，不得由前端猜測扣款結果。
 
 Exit gate:
 
 - ComfyUI generation tests 覆蓋成功、失敗、取消、重送
 - 前端測試確認餘額、預估費用、失敗回補提示
 - 不出現靜默扣款
+- 測試覆蓋「後端成功但前端 preview 失敗」時仍以 output store 決定 capture / delivery 狀態
 
 ## Phase 4：Trading 錢包語意統一
 
@@ -238,11 +300,21 @@ Exit gate:
 - Trading open order frozen vs wallet frozen
 - ComfyUI job state vs reservation state
 
+Migration / backfill checks:
+
+- Snapshot current wallet balances before migration.
+- Replay existing ledger and compare with wallet cache.
+- Classify mismatches before wallet facade rollout.
+- Backfill transaction groups only when original references are recoverable.
+- For unrecoverable legacy events, append explicit migration adjustment entries instead of fabricating historical ledger rows.
+- Migration adjustment entries must include source report hash, operator, reason, and affected user / reference scope.
+
 Exit gate:
 
 - 增加 root report 或 health report
 - CI / prepush 至少跑快速一致性檢查
 - 發現 critical mismatch 時回報 security / health center
+- migration / backfill report 能被 root 匯出與重新驗證
 
 ## Phase 8：文件與發佈
 
@@ -277,6 +349,15 @@ Exit gate:
 5. 跑 points / trading / video / comfyui 相關快速測試。
 6. Commit + push 到 `04.BLOCKCHAIN`。
 
+Initial test targets:
+
+- `tests/points/test_wallet_facade_idempotency.py`
+- `tests/points/test_wallet_facade_reservation.py`
+- `tests/points/test_wallet_replay_reserved_balance.py`
+- `tests/comfyui/test_comfyui_wallet_reservation.py`
+- `tests/trading/test_trading_wallet_semantics.py`
+- `tests/static/test_wallet_direct_call_inventory.py`
+
 ## 開工前 Done Definition
 
 本計畫階段完成時，必須滿足：
@@ -290,4 +371,3 @@ Exit gate:
 - GitHub Actions 沒有紅燈
 
 滿足後才進入功能碼實作。
-
