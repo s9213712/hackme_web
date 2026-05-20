@@ -80,3 +80,27 @@ def read(conn):
     findings = scan_repo(tmp_path, roots=["routes"])
 
     assert findings == []
+
+
+def test_wallet_direct_call_inventory_detects_direct_name_and_import_alias_calls(tmp_path):
+    _write(
+        tmp_path / "routes" / "direct_calls.py",
+        """
+from services.somewhere import record_transaction as rt, rollback_ledger as rb, spend_points
+
+def direct():
+    record_transaction(user_id=1)
+    rt(user_id=1)
+    spend_points(user_id=1)
+    rollback_ledger(ledger_uuid='a')
+    rb(ledger_uuid='b')
+""",
+    )
+
+    findings = scan_repo(tmp_path, roots=["routes"])
+    symbols = [item.symbol for item in findings]
+
+    assert symbols.count("record_transaction") == 2
+    assert symbols.count("rollback_ledger") == 2
+    assert symbols.count("spend_points") == 1
+    assert {item.classification for item in findings} == {"migrate"}

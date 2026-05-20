@@ -16,7 +16,7 @@ python3 scripts/security/gate/wallet_direct_call_inventory.py \
   --md-out /tmp/wallet_inventory.md
 ```
 
-Current scanner summary, excluding `tests/`:
+Phase 0 baseline scanner summary, excluding `tests/`:
 
 | Classification | Count | Meaning |
 |---|---:|---|
@@ -24,6 +24,8 @@ Current scanner summary, excluding `tests/`:
 | `migrate` | 14 | Product code directly calls PointsChain service APIs; migrate behind Wallet Service Facade in Phase 1+ after approval. |
 | `unknown` | 0 | No current unclassified findings. |
 | `blocker` | 0 | No non-core direct official `points_wallets` balance mutation found by the scanner. |
+
+Phase 1 contract note: after adding the Wallet Service Facade skeleton, the scanner reports `47` findings with `33` retain and the same `14` migrate findings. The two new retain findings are the facade's internal append-only compensation calls inside `services/points_chain/wallet_facade.py`; no product flow has been migrated yet.
 
 ## Classification Rules
 
@@ -111,4 +113,3 @@ Important constraints for the next phase:
 - `wallet_reservations` / `wallet_transaction_groups` must not become a second financial truth source.
 - ComfyUI capture authority must remain backend finalization / output store, not frontend preview.
 - Any future non-core official `points_wallets` balance mutation must be treated as a blocker.
-

@@ -1,6 +1,16 @@
 # Update Summary
 
-Release ID: `2026.05.20-169`
+Release ID: `2026.05.20-170`
+
+## 2026.05.20-170
+
+- Added the Phase 1 Wallet Service Facade contract skeleton without wiring it
+  into ComfyUI, trading, video, storage, games, or existing route behavior.
+- Added database-level idempotency contract coverage, same-request replay /
+  different-payload conflict tests, append-only refund / rollback tests, and
+  safe-mode / sanctioned-wallet guard tests.
+- Strengthened the wallet direct-call inventory scanner for bare function calls
+  and simple imported aliases while keeping the Phase 0 migrate list unchanged.
 
 ## 2026.05.20-169
 

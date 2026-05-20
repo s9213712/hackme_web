@@ -139,6 +139,7 @@ class WalletInventoryVisitor(ast.NodeVisitor):
         self.rel = relpath(path, repo_root)
         self.lines = source.splitlines()
         self.findings: list[Finding] = []
+        self.call_aliases: dict[str, str] = {}
 
     def _add(self, *, line: int, kind: str, symbol: str, snippet: str | None = None):
         classification, rationale = _classify(self.rel, kind=kind, symbol=symbol)
@@ -158,6 +159,16 @@ class WalletInventoryVisitor(ast.NodeVisitor):
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr in TARGET_CALLS:
             self._add(line=node.lineno, kind="ledger_service_call", symbol=func.attr)
+        elif isinstance(func, ast.Name):
+            symbol = self.call_aliases.get(func.id) or (func.id if func.id in TARGET_CALLS else None)
+            if symbol:
+                self._add(line=node.lineno, kind="ledger_service_call", symbol=symbol)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom):
+        for alias in node.names:
+            if alias.name in TARGET_CALLS:
+                self.call_aliases[alias.asname or alias.name] = alias.name
         self.generic_visit(node)
 
     def visit_Constant(self, node: ast.Constant):
