@@ -5,6 +5,9 @@ on:
     branches: [main, 03.Points]
   pull_request:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   smoke-and-security:
     runs-on: ubuntu-latest
