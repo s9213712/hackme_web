@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.20-161`
+Release ID: `2026.05.20-162`
+
+## 2026.05.20-162
+
+- Enabled push-triggered GitHub Actions for the current default branch
+  `03.Points` across the smoke/security and Playwright workflows, so default
+  branch pushes no longer rely only on scheduled runs.
 
 ## 2026.05.20-161
 

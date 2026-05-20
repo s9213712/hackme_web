@@ -24,6 +24,10 @@ Findings and actions:
   `a41b4b0f3add3dac2fe274da8267aa5643b2ae8b`, where the workflow builder smoke
   assumed catalog nodes were visible even though the toolbox is now collapsed by
   category.
+- Confirmed the repository default branch is `03.Points`, but workflow push
+  triggers only covered `main` and/or the older `03b.Comfyui` branch. Updated
+  `.github/workflows/ci.yml`, `playwright-qa.yml`, and
+  `security-secrets-scan.yml` so pushes to `03.Points` run CI directly.
 - Updated `scripts/testing/playwright_comfyui_workflow_builder_check.py` to
   reveal catalog and fixed tools through search before clicking, preserving the
   collapsed toolbox behavior.
