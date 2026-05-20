@@ -37,6 +37,19 @@ class WalletServiceFacade:
     """
 
     IDEMPOTENCY_TABLE = "wallet_facade_idempotency"
+    REFUND_DIRECTION_BY_ORIGINAL = {
+        "debit": "credit",
+        "transfer_out": "transfer_in",
+        "reverse": "credit",
+    }
+    ROLLBACK_DIRECTION_BY_ORIGINAL = {
+        "credit": "reverse",
+        "transfer_in": "transfer_out",
+        "debit": "credit",
+        "transfer_out": "transfer_in",
+        "freeze": "unfreeze",
+        "unfreeze": "freeze",
+    }
 
     def __init__(self, *, points_service):
         self.points_service = points_service
@@ -148,6 +161,27 @@ class WalletServiceFacade:
             "result": result,
         }
 
+    def _complete_idempotency_row(self, conn, *, row_id, result):
+        result_json = canonical_json(result)
+        ledger_ids_json = canonical_json(self._result_ledger_ids(result))
+        now = utc_now()
+        conn.execute(
+            f"""
+            UPDATE {self.IDEMPOTENCY_TABLE}
+            SET status='completed', result_json=?, result_ledger_ids_json=?, updated_at=?
+            WHERE id=?
+            """,
+            (result_json, ledger_ids_json, now, row_id),
+        )
+        return conn.execute(f"SELECT * FROM {self.IDEMPOTENCY_TABLE} WHERE id=?", (row_id,)).fetchone()
+
+    def _resolve_wallet_user_id(self, conn, *, wallet_user_id, actor_user_id):
+        if callable(wallet_user_id):
+            wallet_user_id = wallet_user_id(conn)
+        if wallet_user_id is None:
+            wallet_user_id = actor_user_id
+        return int(wallet_user_id)
+
     def execute_idempotent(
         self,
         *,
@@ -158,6 +192,7 @@ class WalletServiceFacade:
         effect: Callable,
         wallet_user_id=None,
         expires_at=None,
+        preflight_replay: Callable | None = None,
     ):
         operation = str(operation or "").strip()
         idempotency_key = str(idempotency_key or "").strip()
@@ -171,11 +206,6 @@ class WalletServiceFacade:
             self.ensure_schema(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
-            self._assert_write_allowed(
-                conn,
-                wallet_user_id=int(wallet_user_id) if wallet_user_id is not None else int(actor_user_id),
-                operation=operation,
-            )
             row, created = self._start_idempotency_row(
                 conn,
                 actor_user_id=actor_user_id,
@@ -196,23 +226,28 @@ class WalletServiceFacade:
                 conn.commit()
                 return self._completed_payload(row)
 
+            if preflight_replay is not None:
+                existing_result = preflight_replay(conn)
+                if existing_result is not None:
+                    if not isinstance(existing_result, dict):
+                        raise ValueError("wallet facade preflight replay must return a dict")
+                    completed = self._complete_idempotency_row(conn, row_id=row["id"], result=existing_result)
+                    conn.commit()
+                    payload = self._completed_payload(completed)
+                    payload["deduplicated"] = True
+                    return payload
+
+            self._assert_write_allowed(
+                conn,
+                wallet_user_id=self._resolve_wallet_user_id(conn, wallet_user_id=wallet_user_id, actor_user_id=actor_user_id),
+                operation=operation,
+            )
             result = effect(conn)
             if result is None:
                 result = {}
             if not isinstance(result, dict):
                 raise ValueError("wallet facade effect must return a dict")
-            result_json = canonical_json(result)
-            ledger_ids_json = canonical_json(self._result_ledger_ids(result))
-            now = utc_now()
-            conn.execute(
-                f"""
-                UPDATE {self.IDEMPOTENCY_TABLE}
-                SET status='completed', result_json=?, result_ledger_ids_json=?, updated_at=?
-                WHERE id=?
-                """,
-                (result_json, ledger_ids_json, now, row["id"]),
-            )
-            completed = conn.execute(f"SELECT * FROM {self.IDEMPOTENCY_TABLE} WHERE id=?", (row["id"],)).fetchone()
+            completed = self._complete_idempotency_row(conn, row_id=row["id"], result=result)
             conn.commit()
             payload = self._completed_payload(completed)
             payload["created"] = True
@@ -232,6 +267,20 @@ class WalletServiceFacade:
             raise ValueError("ledger is tampered; repair or restore it before wallet facade compensation")
         return row
 
+    def _compensation_by_original(self, conn, *, reference_type, original_ledger_uuid):
+        row = conn.execute(
+            """
+            SELECT * FROM points_ledger
+            WHERE reference_type=? AND reference_id=?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (reference_type, str(original_ledger_uuid)),
+        ).fetchone()
+        if row and row["ledger_hash"] != compute_ledger_hash(row):
+            raise ValueError("existing compensation ledger is tampered; repair or restore it before replay")
+        return row
+
     def refund(self, *, actor, original_ledger_uuid, reason, idempotency_key):
         """Append a normal business refund for a completed debit-like ledger."""
 
@@ -240,16 +289,26 @@ class WalletServiceFacade:
         if not reason:
             raise ValueError("reason required")
 
-        def effect(conn):
+        def load_original(conn):
             original = self._ledger_by_uuid(conn, original_ledger_uuid)
-            refund_map = {
-                "debit": "credit",
-                "transfer_out": "transfer_in",
-                "reverse": "credit",
-            }
-            direction = refund_map.get(original["direction"])
+            direction = self.REFUND_DIRECTION_BY_ORIGINAL.get(original["direction"])
             if not direction:
                 raise ValueError("only debit-like ledgers can be refunded")
+            return original, direction
+
+        def preflight_replay(conn):
+            original, _direction = load_original(conn)
+            existing = self._compensation_by_original(
+                conn,
+                reference_type="ledger_refund",
+                original_ledger_uuid=original["ledger_uuid"],
+            )
+            if existing:
+                return {"ledger": self.points_service.serialize_ledger(existing, include_user_id=True)}
+            return None
+
+        def effect(conn):
+            original, direction = load_original(conn)
             row, _created = self.points_service._record_transaction(
                 conn,
                 user_id=original["user_id"],
@@ -273,7 +332,8 @@ class WalletServiceFacade:
             idempotency_key=idempotency_key,
             request_payload=request,
             effect=effect,
-            wallet_user_id=None,
+            wallet_user_id=lambda conn: load_original(conn)[0]["user_id"],
+            preflight_replay=preflight_replay,
         )
 
     def rollback(self, *, actor, original_ledger_uuid, reason, idempotency_key):
@@ -284,19 +344,26 @@ class WalletServiceFacade:
         if not reason:
             raise ValueError("reason required")
 
-        def effect(conn):
+        def load_original(conn):
             original = self._ledger_by_uuid(conn, original_ledger_uuid)
-            reverse_map = {
-                "credit": "reverse",
-                "transfer_in": "transfer_out",
-                "debit": "credit",
-                "transfer_out": "transfer_in",
-                "freeze": "unfreeze",
-                "unfreeze": "freeze",
-            }
-            direction = reverse_map.get(original["direction"])
+            direction = self.ROLLBACK_DIRECTION_BY_ORIGINAL.get(original["direction"])
             if not direction:
                 raise ValueError("unsupported rollback direction")
+            return original, direction
+
+        def preflight_replay(conn):
+            original, _direction = load_original(conn)
+            existing = self._compensation_by_original(
+                conn,
+                reference_type="ledger_rollback",
+                original_ledger_uuid=original["ledger_uuid"],
+            )
+            if existing:
+                return {"ledger": self.points_service.serialize_ledger(existing, include_user_id=True)}
+            return None
+
+        def effect(conn):
+            original, direction = load_original(conn)
             row, _created = self.points_service._record_transaction(
                 conn,
                 user_id=original["user_id"],
@@ -322,5 +389,6 @@ class WalletServiceFacade:
             idempotency_key=idempotency_key,
             request_payload=request,
             effect=effect,
-            wallet_user_id=None,
+            wallet_user_id=lambda conn: load_original(conn)[0]["user_id"],
+            preflight_replay=preflight_replay,
         )

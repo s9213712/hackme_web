@@ -1,6 +1,15 @@
 # Update Summary
 
-Release ID: `2026.05.20-170`
+Release ID: `2026.05.20-171`
+
+## 2026.05.20-171
+
+- Hardened the Phase 1 Wallet Service Facade contract so completed idempotent
+  replays bypass later write guards without duplicating effects.
+- Added compensation de-duplication for refund / rollback when the same
+  original ledger is retried with a different idempotency key.
+- Locked refund / rollback wallet guards to the target ledger user instead of
+  the acting operator wallet, with frozen / closed target wallet coverage.
 
 ## 2026.05.20-170
 
