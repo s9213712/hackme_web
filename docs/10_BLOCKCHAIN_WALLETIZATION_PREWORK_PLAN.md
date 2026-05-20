@@ -358,6 +358,12 @@ Initial test targets:
 - `tests/trading/test_trading_wallet_semantics.py`
 - `tests/static/test_wallet_direct_call_inventory.py`
 
+Phase 0 first-slice artifacts:
+
+- Value-flow inventory: [architecture/BLOCKCHAIN_WALLET_VALUE_FLOW_INVENTORY.md](architecture/BLOCKCHAIN_WALLET_VALUE_FLOW_INVENTORY.md)
+- Static scanner: `scripts/security/gate/wallet_direct_call_inventory.py`
+- Scanner test: `tests/static/test_wallet_direct_call_inventory.py`
+
 ## 開工前 Done Definition
 
 本計畫階段完成時，必須滿足：
