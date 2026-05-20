@@ -3182,6 +3182,59 @@ def test_comfyui_diffusers_stale_progress_does_not_say_comfyui_backend(tmp_path,
     assert "ComfyUI 後端" not in progress["detail"]
 
 
+def test_comfyui_diffusers_failure_reports_reason_and_python_log_tail(tmp_path):
+    class FailingDiffusersBackendClient(FakeDiffusersBackendClient):
+        def generate_image(self, params, *, timeout_seconds=180, progress_callback=None, extra_data=None):
+            if progress_callback:
+                progress_callback({
+                    "phase": "running",
+                    "percent": 40,
+                    "backend_kind": "diffusers",
+                    "detail": "Diffusers 推論啟動",
+                    "python_log_tail": ["diffusers pipeline loading", "diffusers inference failed"],
+                })
+            raise ComfyUIError("Diffusers exploded: missing tensor")
+
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "dhead/waiIllustriousSDXL_v150",
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: FailingDiffusersBackendClient(),
+        },
+    ).test_client()
+
+    started = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "model": "dhead/waiIllustriousSDXL_v150",
+            "prompt": "illustration",
+            "sampler_name": "diffusers-auto",
+            "scheduler": "default",
+            "seed": 123,
+            "confirm_billing": True,
+        },
+    )
+
+    job = _await_comfyui_job(client, started, expected_status="error")
+    progress = job["progress"]
+    assert "Diffusers exploded: missing tensor" in job["error"]
+    assert progress["backend_kind"] == "diffusers"
+    assert progress["phase"] == "error"
+    assert progress["error_message"] == "Diffusers exploded: missing tensor"
+    assert progress["step"] == "Diffusers 產圖失敗"
+    assert progress["python_log_tail"] == ["diffusers pipeline loading", "diffusers inference failed"]
+
+
 def test_comfyui_diffusers_mode_allows_generation_page_repo_override(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"

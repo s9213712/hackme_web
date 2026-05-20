@@ -2527,20 +2527,36 @@ def register_comfyui_routes(app, deps):
                 error="",
             )
         except ComfyUIError as exc:
-            _update_generation_job(job_id, status="error", error=str(exc), result=None)
-            _update_generation_job_progress(job_id, {
+            error_progress = {
                 "phase": "error",
+                "percent": 100,
                 "detail": str(exc),
+                "error_message": str(exc),
                 "completed": False,
-            })
+            }
+            if getattr(active_client, "backend_kind", "") == "diffusers":
+                error_progress.update({
+                    "backend_kind": "diffusers",
+                    "step": "Diffusers 產圖失敗",
+                })
+            _update_generation_job(job_id, status="error", error=str(exc), result=None)
+            _update_generation_job_progress(job_id, error_progress)
             audit("COMFYUI_GENERATE_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])
         except Exception as exc:
-            _update_generation_job(job_id, status="error", error=str(exc), result=None)
-            _update_generation_job_progress(job_id, {
+            error_progress = {
                 "phase": "error",
+                "percent": 100,
                 "detail": str(exc),
+                "error_message": str(exc),
                 "completed": False,
-            })
+            }
+            if getattr(active_client, "backend_kind", "") == "diffusers":
+                error_progress.update({
+                    "backend_kind": "diffusers",
+                    "step": "Diffusers 產圖失敗",
+                })
+            _update_generation_job(job_id, status="error", error=str(exc), result=None)
+            _update_generation_job_progress(job_id, error_progress)
             audit("COMFYUI_GENERATE_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])
         finally:
             _unregister_active_generation(generation_token)

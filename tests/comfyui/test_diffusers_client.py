@@ -125,6 +125,8 @@ def test_diffusers_generate_reports_download_preparation_before_heavy_loading(tm
     assert "下載 Diffusers model：owner/model" in events[0]["detail"]
     assert any("loading owner/model" in line for event in events for line in event.get("python_log_tail", []))
     assert not any("hf_1234567890abcdef" in line for event in events for line in event.get("python_log_tail", []))
+    assert any(event.get("phase") == "error" and "stop before loading" in event.get("detail", "") for event in events)
+    assert any(event.get("error_message") == "stop before loading" for event in events)
 
 
 def test_diffusers_client_upload_fetch_and_discard_round_trip(tmp_path):

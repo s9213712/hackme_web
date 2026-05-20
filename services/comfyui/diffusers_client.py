@@ -180,6 +180,17 @@ class _DiffusersRuntimeLogCapture:
             data["python_log_tail"] = lines
         self.progress_callback(data)
 
+    def error(self, message, *, step="Diffusers 失敗"):
+        self.progress({
+            "phase": "error",
+            "percent": 100,
+            "backend_kind": "diffusers",
+            "step": step,
+            "detail": str(message or "Diffusers 產圖失敗"),
+            "error_message": str(message or "Diffusers 產圖失敗"),
+            "completed": False,
+        })
+
 
 def diffusers_backend_url(repo_id=""):
     repo_id = str(repo_id or "").strip()
@@ -1035,15 +1046,22 @@ class DiffusersClient:
                 "detail": f"下載 Diffusers model：{model_repo}（{selected_label}），正在檢查 Hugging Face cache / metadata",
                 "token_used": bool(self.token),
             })
-        with runtime_logs:
-            pipe, torch, device = self._load_pipeline(
-                mode,
-                progress_callback=job_progress,
-                model_repo=model_repo,
-                variant=variant,
-                gguf_file=gguf_file,
-                gguf_base_repo=gguf_base_repo,
-            )
+        try:
+            with runtime_logs:
+                pipe, torch, device = self._load_pipeline(
+                    mode,
+                    progress_callback=job_progress,
+                    model_repo=model_repo,
+                    variant=variant,
+                    gguf_file=gguf_file,
+                    gguf_base_repo=gguf_base_repo,
+                )
+        except ComfyUIError as exc:
+            runtime_logs.error(str(exc), step="Diffusers 模型載入失敗")
+            raise
+        except Exception as exc:
+            runtime_logs.error(f"Diffusers 模型載入失敗：{exc}", step="Diffusers 模型載入失敗")
+            raise
         width = max(64, int(params.get("width") or 1024))
         height = max(64, int(params.get("height") or 1024))
         size = (width, height)
@@ -1093,11 +1111,14 @@ class DiffusersClient:
                 with torch.inference_mode():
                     output = pipe(**call_kwargs)
         except TypeError as exc:
+            runtime_logs.error(f"Diffusers pipeline 參數不相容：{exc}", step="Diffusers pipeline 參數錯誤")
             raise ComfyUIError(f"Diffusers pipeline 參數不相容：{exc}") from exc
         except Exception as exc:
+            runtime_logs.error(f"Diffusers 產圖失敗：{exc}", step="Diffusers 推論失敗")
             raise ComfyUIError(f"Diffusers 產圖失敗：{exc}") from exc
         generated_images = list(getattr(output, "images", []) or [])
         if not generated_images:
+            runtime_logs.error("Diffusers 產圖完成但沒有輸出圖片", step="Diffusers 輸出檢查失敗")
             raise ComfyUIError("Diffusers 產圖完成但沒有輸出圖片")
         if job_progress:
             job_progress({
