@@ -18,6 +18,7 @@ operator guidance.
 | PointsChain | [07_POINTSCHAIN.md](07_POINTSCHAIN.md) |
 | Trading engine | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md) |
 | Snapshot / reset / restore | [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md) |
+| Blockchain walletization prework | [10_BLOCKCHAIN_WALLETIZATION_PREWORK_PLAN.md](10_BLOCKCHAIN_WALLETIZATION_PREWORK_PLAN.md) |
 | QA and validation | [11_QA_TESTING.md](11_QA_TESTING.md) |
 | Troubleshooting | [12_TROUBLESHOOTING.md](12_TROUBLESHOOTING.md) |
 
@@ -63,6 +64,7 @@ operator guidance.
 - User profiles and friends: [social/USER_PROFILES_AND_FRIENDS.md](social/USER_PROFILES_AND_FRIENDS.md)
 - Server mode profile matrix: [server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md](server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md)
 - PointsChain v2 research: [AGENTS/research/BLOCKCHAIN/README.md](AGENTS/research/BLOCKCHAIN/README.md)
+- Blockchain walletization prework: [10_BLOCKCHAIN_WALLETIZATION_PREWORK_PLAN.md](10_BLOCKCHAIN_WALLETIZATION_PREWORK_PLAN.md)
 - Branching and release: [BRANCHING_AND_RELEASE.md](BRANCHING_AND_RELEASE.md)
 - Update summary: [UPDATE_SUMMARY.md](UPDATE_SUMMARY.md)
 - Pre-release checklist: [security/PRE_RELEASE_CHECKLIST.md](security/PRE_RELEASE_CHECKLIST.md)
