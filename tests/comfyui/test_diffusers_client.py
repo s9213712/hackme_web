@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from services.comfyui.client import ComfyUIError
@@ -99,6 +101,30 @@ def test_diffusers_client_allows_in_process_when_root_setting_confirms_risk(tmp_
         client.generate_image({"generation_mode": "txt2img", "prompt": "test"})
 
     assert "尚未設定 Hugging Face model repo" in str(exc.value)
+
+
+def test_diffusers_generate_reports_download_preparation_before_heavy_loading(tmp_path, monkeypatch):
+    monkeypatch.setenv("HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS", "1")
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+    events = []
+
+    def stop_before_loading(*args, **kwargs):
+        logging.getLogger("diffusers").info("loading owner/model with hf_1234567890abcdef")
+        raise ComfyUIError("stop before loading")
+
+    monkeypatch.setattr(client, "_load_pipeline", stop_before_loading)
+
+    with pytest.raises(ComfyUIError) as exc:
+        client.generate_image({"generation_mode": "txt2img", "prompt": "test"}, progress_callback=events.append)
+
+    assert "stop before loading" in str(exc.value)
+    assert events[0]["phase"] == "downloading"
+    assert events[0]["percent"] == 3
+    assert events[0]["backend_kind"] == "diffusers"
+    assert events[0]["step"] == "準備 Diffusers model"
+    assert "下載 Diffusers model：owner/model" in events[0]["detail"]
+    assert any("loading owner/model" in line for event in events for line in event.get("python_log_tail", []))
+    assert not any("hf_1234567890abcdef" in line for event in events for line in event.get("python_log_tail", []))
 
 
 def test_diffusers_client_upload_fetch_and_discard_round_trip(tmp_path):

@@ -53,6 +53,48 @@ def drag_between(page, source_selector: str, target_selector: str) -> None:
     page.mouse.up()
 
 
+def attach_browser_diagnostics(page, errors: list[str]) -> None:
+    page.on("console", lambda msg: errors.append(f"console.{msg.type}: {msg.text}"))
+    page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+    page.on("requestfailed", lambda req: errors.append(f"requestfailed: {req.url} {req.failure}"))
+
+
+def wait_visible(page, selector: str, *, timeout: int = 5000, label: str | None = None):
+    locator = page.locator(selector).first
+    try:
+        locator.wait_for(state="visible", timeout=timeout)
+    except Exception as exc:
+        title = label or selector
+        status_text = ""
+        try:
+            status_text = page.locator("#status").inner_text(timeout=500)
+        except Exception:
+            pass
+        body_text = ""
+        try:
+            body_text = page.locator("body").inner_text(timeout=500)[:700]
+        except Exception:
+            pass
+        diagnostics = getattr(page, "_hackme_diag_errors", [])[-12:]
+        raise AssertionError(
+            f"{title} not visible after {timeout}ms; url={page.url}; "
+            f"status={status_text!r}; diagnostics={diagnostics}; body={body_text!r}"
+        ) from exc
+    return locator
+
+
+def reveal_tool(page, selector: str, *, search: str):
+    locator = page.locator(selector).first
+    if not locator.is_visible(timeout=1000):
+        page.locator("#nodeSearchInput").fill(search)
+    return wait_visible(page, selector, timeout=5000, label=search)
+
+
+def click_tool(page, selector: str, *, search: str) -> None:
+    reveal_tool(page, selector, search=search).click()
+    page.locator("#nodeSearchInput").fill("")
+
+
 def main() -> int:
     port = free_port()
     server = subprocess.Popen(
@@ -66,6 +108,9 @@ def main() -> int:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 900})
+            diag_errors: list[str] = []
+            page._hackme_diag_errors = diag_errors
+            attach_browser_diagnostics(page, diag_errors)
             page.route(
                 "**/api/comfyui/node-catalog",
                 lambda route: route.fulfill(
@@ -91,7 +136,7 @@ def main() -> int:
                 ),
             )
             page.goto(f"http://127.0.0.1:{port}/comfyui-workflow-editor.html", wait_until="networkidle")
-            page.locator(".wf-node").first.wait_for(state="visible", timeout=8000)
+            wait_visible(page, ".wf-node", timeout=8000, label="starter workflow node")
 
             node_count = page.locator(".wf-node").count()
             edge_count = page.locator(".edge-path").count()
@@ -108,11 +153,12 @@ def main() -> int:
             page.locator("#nodeSearchInput").fill("")
 
             page.locator("#loadNodeCatalogBtn").click()
-            page.locator('[data-add-catalog-node="FluxProUltraImageNode"]').wait_for(state="visible", timeout=5000)
+            catalog_button = reveal_tool(page, '[data-add-catalog-node="FluxProUltraImageNode"]', search="FluxProUltraImageNode")
             catalog_status = page.locator("#nodeCatalogStatus").inner_text(timeout=5000)
             if "已載入 1 個節點" not in catalog_status or "付費/API Key" not in catalog_status:
                 raise AssertionError(f"catalog status did not include loaded API node warning: {catalog_status!r}")
-            page.locator('[data-add-catalog-node="FluxProUltraImageNode"]').click()
+            catalog_button.click()
+            page.locator("#nodeSearchInput").fill("")
             page.locator('.wf-node.unknown:has-text("Flux Pro Ultra")').wait_for(state="visible", timeout=5000)
             if page.locator("#nodeInput-aspect_ratio").count() != 1:
                 raise AssertionError("catalog node did not render schema-driven non-JSON controls")
@@ -156,12 +202,12 @@ def main() -> int:
             if first_edge_before == first_edge_after:
                 raise AssertionError("dragging a node did not update edge geometry")
 
-            page.locator('[data-add-node="LoadImage"]').click()
+            click_tool(page, '[data-add-node="LoadImage"]', search="LoadImage")
             page.locator('.wf-node:has-text("Load Image")').last.wait_for(state="visible", timeout=5000)
-            page.locator('[data-add-node="ImagePadForOutpaint"]').click()
+            click_tool(page, '[data-add-node="ImagePadForOutpaint"]', search="ImagePadForOutpaint")
             if page.locator('.wf-node:has-text("Outpaint Pad")').count() < 1:
                 raise AssertionError("Outpaint Pad node was not added")
-            page.locator('[data-add-node="__UnknownCustomNode__"]').click()
+            click_tool(page, '[data-add-node="__UnknownCustomNode__"]', search="Custom / API Node")
             page.locator('.wf-node.unknown:has-text("Custom / API Node")').wait_for(state="visible", timeout=5000)
             custom_status = page.locator("#status").inner_text(timeout=5000)
             if "API Key 不要寫進 inputs" not in custom_status:

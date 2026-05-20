@@ -20,7 +20,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.19-160`
+- Release ID: `2026.05.20-161`
 - Schema version: `30`
 - Release ID source: `services/platform/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -266,7 +266,10 @@ document for:
 
 All write endpoints require CSRF unless explicitly designed as public bootstrap
 or login flow. Authenticated browser clients should fetch `/api/csrf-token` and
-send `X-CSRF-Token`.
+send `X-CSRF-Token`. Authenticated CSRF rotation keeps a short recent-token
+window so a multi-tab page or concurrent request does not create false
+`invalid_authenticated` alerts immediately after a refresh; public/login CSRF
+tokens remain single-use.
 
 ## Trading Market Catalog
 
@@ -662,6 +665,10 @@ ComfyUI notes:
   should use remote ComfyUI or the external ComfyUI process, with bounded
   status/generate/interrupt timeouts. See
   [COMFYUI_PERFORMANCE_HARDENING.md](comfyui/COMFYUI_PERFORMANCE_HARDENING.md).
+- Diffusers mode reports its own progress source. During Hugging Face download,
+  model loading, and Python inference, job progress must say `Diffusers` /
+  `Hugging Face` and may include a sanitized `python_log_tail`; it must not
+  reuse ComfyUI backend-unresponsive wording.
 
 ### PointsChain
 

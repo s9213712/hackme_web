@@ -22,7 +22,8 @@ def test_diffusers_generation_page_accepts_repo_and_variant_selection():
 
 def test_diffusers_js_preflights_huggingface_repo_before_generation():
     js = _read("public/js/36-comfyui.js")
-    assert 'apiFetch(API + "/comfyui/diffusers/inspect"' in js
+    assert 'apiFetch(API + "/comfyui/diffusers/inspect?" + query.toString()' in js
+    assert "new URLSearchParams" in js
     assert "function inspectComfyuiDiffusersRepo" in js
     assert "diffusers_model_variant" in js
     assert "diffusers_gguf_file" in js
@@ -33,14 +34,22 @@ def test_diffusers_js_preflights_huggingface_repo_before_generation():
 
 def test_diffusers_cache_busts_preflight_ui_assets():
     html = _read("public/index.html")
-    assert "/js/36-comfyui.js?v=20260520-embedding-empty-hide" in html
+    assert "/js/36-comfyui.js?v=20260520-diffusers-csrf-audit" in html
     assert "/js/36-comfyui-workflows.js?v=20260520-embedding-empty-hide" in html
 
 
 def test_diffusers_generation_progress_surfaces_huggingface_download_bytes():
+    html = _read("public/index.html")
     js = _read("public/js/36-comfyui.js")
     assert 'phase === "downloading"' in js
     assert "下載 Hugging Face 模型" in js
+    assert "下載 Diffusers model" in js
+    assert "Diffusers 暫無新進度" in js
+    assert 'String(progress.backend_kind || "").toLowerCase() === "diffusers"' in js
+    assert "baseDetail = `${baseDetail}（${percent}%）`;" in js
+    assert "python_log_tail" in js
+    assert "comfyui-progress-python-log" in html
+    assert "Diffusers Python log" in html
     assert "progress.bytes_written" in js
     assert "progress.total_bytes" in js
     assert "progress.current_file" in js

@@ -318,7 +318,9 @@ function mergeComfyJobLiveProgress(job = {}, liveJob = {}) {
       backend_unresponsive: Boolean(progress.backend_unresponsive),
     },
     live_progress: true,
-    live_status_source: progress.backend_unresponsive ? "ComfyUI 無回應" : "ComfyUI",
+    live_status_source: progress.backend_unresponsive
+      ? (String(progress.backend_kind || "").toLowerCase() === "diffusers" ? "Diffusers 無新進度" : "ComfyUI 無回應")
+      : (String(progress.backend_kind || "").toLowerCase() === "diffusers" ? "Diffusers" : "ComfyUI"),
     updated_at: new Date().toISOString(),
   };
 }

@@ -32,6 +32,8 @@
 - 所有寫入 API 預設都需要：
   - session cookie
   - `X-CSRF-Token`
+- 登入後的 authenticated CSRF token 會保留短期最近值，避免多分頁或併發請求互相造成
+  `invalid_authenticated` 誤報；未登入 / 登入流程 token 仍為 single-use。
 - 本地 HTTPS 開發通常要用：
 
 ```bash
@@ -528,6 +530,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/comfyui/workflows/<preset_id>/run` | logged-in | 執行 workflow preset |
 | POST | `/api/comfyui/workflows/<preset_id>/export` | logged-in | 匯出已保存的 workflow preset JSON |
 | POST | `/api/comfyui/image-preview` | logged-in | 預覽已儲存來源圖 / 遮罩圖 / 控制圖 |
+| GET/POST | `/api/comfyui/diffusers/inspect` | logged-in | 檢查 Hugging Face Diffusers repo；GET 是安全讀取，不需 CSRF |
 | POST | `/api/comfyui/interrupt` | logged-in | 中斷生成 |
 | POST | `/api/comfyui/save` | logged-in | 儲存結果 |
 | POST | `/api/comfyui/discard` | logged-in | 丟棄結果 |

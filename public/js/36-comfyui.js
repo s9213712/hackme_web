@@ -10,6 +10,7 @@ let comfyuiServerAvailable = null;
 let comfyuiAlbumsLoaded = false;
 let comfyuiProgressTimer = null;
 let comfyuiProgressStartedAt = 0;
+let comfyuiProgressPythonLogTail = [];
 let comfyuiGenerateAbortController = null;
 let comfyuiActiveJobId = null;
 let comfyuiMaxBatchSize = 1;
@@ -636,15 +637,16 @@ async function inspectComfyuiDiffusersRepo({ quiet = false } = {}) {
   comfyuiDiffusersInspection = { repo, mode, loading: true };
   renderComfyuiDiffusersInspection();
   try {
-    await fetchCsrfToken({ force: true });
-    const res = await apiFetch(API + "/comfyui/diffusers/inspect" + comfyuiRequestQuery(), {
-      method: "POST",
-      credentials: "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRF-Token": getCsrfToken() || ""
-      },
-      body: JSON.stringify({ diffusers_model_repo: repo, generation_mode: mode })
+    const query = new URLSearchParams({
+      diffusers_model_repo: repo,
+      generation_mode: mode,
+    });
+    const suffix = comfyuiRequestQuery();
+    if (suffix.startsWith("?")) {
+      new URLSearchParams(suffix.slice(1)).forEach((value, key) => query.set(key, value));
+    }
+    const res = await apiFetch(API + "/comfyui/diffusers/inspect?" + query.toString(), {
+      credentials: "same-origin"
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `Hugging Face repo 檢查失敗（HTTP ${res.status}）`);
@@ -1794,20 +1796,35 @@ function formatComfyuiDuration(seconds) {
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
-function setComfyuiProgress({ visible = true, running = false, percent = 0, label = "", detail = "" } = {}) {
+function setComfyuiProgress({ visible = true, running = false, percent = 0, label = "", detail = "", pythonLogTail = null } = {}) {
   const panel = $("comfyui-progress-panel");
   const bar = $("comfyui-progress-bar");
   const labelEl = $("comfyui-progress-label");
   const percentEl = $("comfyui-progress-percent");
   const detailEl = $("comfyui-progress-detail");
+  const pythonLogEl = $("comfyui-progress-python-log");
   if (!panel) return;
   panel.style.display = visible ? "" : "none";
   panel.classList.toggle("running", !!running);
+  if (!visible) {
+    comfyuiProgressPythonLogTail = [];
+    if (pythonLogEl) {
+      pythonLogEl.style.display = "none";
+      pythonLogEl.textContent = "";
+    }
+  } else if (Array.isArray(pythonLogTail)) {
+    comfyuiProgressPythonLogTail = pythonLogTail.filter(Boolean).map(String).slice(-80);
+  }
   const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
   if (bar) bar.style.width = `${safePercent}%`;
   if (labelEl) labelEl.textContent = label || "等待 ComfyUI";
   if (percentEl) percentEl.textContent = `${safePercent}%`;
   if (detailEl) detailEl.textContent = detail || "";
+  if (pythonLogEl && visible) {
+    pythonLogEl.style.display = comfyuiProgressPythonLogTail.length ? "" : "none";
+    pythonLogEl.textContent = comfyuiProgressPythonLogTail.join("\n");
+    pythonLogEl.scrollTop = pythonLogEl.scrollHeight;
+  }
 }
 
 function stopComfyuiProgress({ complete = false, error = "", label = "" } = {}) {
@@ -1858,7 +1875,8 @@ function startComfyuiProgress(timeoutSeconds = COMFYUI_GENERATION_TIMEOUT_SECOND
     running: true,
     percent: 0,
     label: "已送出產圖請求",
-    detail: hasLimit ? `已等待 00:00 / 上限 ${formatComfyuiDuration(timeoutSeconds)}` : "已等待 00:00 / 不設最長等待上限"
+    detail: hasLimit ? `已等待 00:00 / 上限 ${formatComfyuiDuration(timeoutSeconds)}` : "已等待 00:00 / 不設最長等待上限",
+    pythonLogTail: []
   });
 }
 
@@ -1867,11 +1885,12 @@ function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERAT
   const percent = Math.max(0, Math.min(100, Math.round(Number(progress.percent) || 0)));
   let label = "等待 ComfyUI";
   const phase = String(progress.phase || "").toLowerCase();
+  const isDiffusersProgress = comfyuiConnectionMode === "diffusers" || String(progress.backend_kind || "").toLowerCase() === "diffusers";
   if (phase === "queued") label = "排隊中";
-  else if (phase === "downloading") label = "下載 Hugging Face 模型";
-  else if (phase === "loading") label = comfyuiConnectionMode === "diffusers" ? "載入 Diffusers 模型" : "載入模型";
-  else if (phase === "running") label = comfyuiConnectionMode === "diffusers" ? "Diffusers 推論中" : "ComfyUI 執行中";
-  else if (phase === "backend_unresponsive") label = "ComfyUI 後端無回應";
+  else if (phase === "downloading") label = isDiffusersProgress ? "下載 Diffusers model" : "下載 Hugging Face 模型";
+  else if (phase === "loading") label = isDiffusersProgress ? "載入 Diffusers 模型" : "載入模型";
+  else if (phase === "running") label = isDiffusersProgress ? "Diffusers 推論中" : "ComfyUI 執行中";
+  else if (phase === "backend_unresponsive") label = isDiffusersProgress ? "Diffusers 暫無新進度" : "ComfyUI 後端無回應";
   else if (phase === "completed") label = `${comfyuiOutputKindsLabel()}已完成`;
   else if (phase === "error") label = "產圖失敗";
   const queueText = progress.queue_remaining !== null && progress.queue_remaining !== undefined
@@ -1880,7 +1899,10 @@ function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERAT
   const nodeText = progress.current_node ? `，節點 ${progress.current_node}` : "";
   const writtenBytes = Number(progress.bytes_written || progress.downloaded_bytes || 0);
   const totalBytes = Number(progress.total_bytes || 0);
-  const baseDetail = progress.detail || "等待進度資料";
+  let baseDetail = progress.detail || "等待進度資料";
+  if (phase === "downloading" && isDiffusersProgress && percent > 0 && !/%/.test(baseDetail)) {
+    baseDetail = `${baseDetail}（${percent}%）`;
+  }
   const writtenByteText = writtenBytes > 0 && typeof formatDriveBytes === "function" ? formatDriveBytes(writtenBytes) : "";
   const totalByteText = totalBytes > 0 && typeof formatDriveBytes === "function" ? formatDriveBytes(totalBytes) : "";
   const speedBytes = Number(progress.speed_bytes_per_sec || progress.download_speed_bytes_per_sec || 0);
@@ -1900,7 +1922,8 @@ function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERAT
     running: phase !== "completed" && phase !== "error",
     percent,
     label,
-    detail
+    detail,
+    pythonLogTail: Array.isArray(progress.python_log_tail) ? progress.python_log_tail : null
   });
 }
 

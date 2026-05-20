@@ -9,12 +9,14 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import io
+import logging
 import mimetypes
 import os
 import re
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
@@ -33,6 +35,17 @@ from services.comfyui.settings import normalize_huggingface_repo_id
 DIFFUSERS_BACKEND_SCHEME = "diffusers"
 DIFFUSERS_BACKEND_NETLOC = "local"
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_HF_TOKEN_RE = re.compile(r"hf_[A-Za-z0-9]{8,}")
+_BEARER_RE = re.compile(r"(authorization\s*[:=]\s*bearer\s+|bearer\s+)[A-Za-z0-9._-]+", re.IGNORECASE)
+_DIFFUSERS_LOGGER_NAMES = (
+    "diffusers",
+    "huggingface_hub",
+    "transformers",
+    "accelerate",
+    "torch",
+    "safetensors",
+    "py.warnings",
+)
 
 
 def _env_flag(name, *, default=False):
@@ -69,6 +82,103 @@ def _format_speed(value):
     if speed <= 0:
         return ""
     return f"{_format_bytes(speed)}/s"
+
+
+def _sanitize_runtime_log_line(value):
+    text = str(value or "").replace("\r", "\n").strip()
+    text = _HF_TOKEN_RE.sub("hf_***", text)
+    text = _BEARER_RE.sub(lambda match: match.group(1) + "***", text)
+    return text[:700]
+
+
+class _DiffusersProgressLogHandler(logging.Handler):
+    def __init__(self, owner):
+        super().__init__(level=logging.INFO)
+        self.owner = owner
+
+    def emit(self, record):
+        self.owner.emit_record(record)
+
+
+class _DiffusersRuntimeLogCapture:
+    def __init__(self, progress_callback, *, max_lines=80):
+        self.progress_callback = progress_callback
+        self.max_lines = max(1, int(max_lines or 80))
+        self.tail = deque(maxlen=self.max_lines)
+        self.lock = threading.Lock()
+        self.handler = None
+        self.previous_levels = []
+        self.active = False
+        self.last_emit = 0.0
+        self.formatter = logging.Formatter("%(levelname)s %(name)s: %(message)s")
+
+    def __enter__(self):
+        if self.active or not self.progress_callback:
+            return self
+        self.handler = _DiffusersProgressLogHandler(self)
+        self.handler.setFormatter(self.formatter)
+        self.previous_levels = []
+        for name in _DIFFUSERS_LOGGER_NAMES:
+            logger = logging.getLogger(name)
+            self.previous_levels.append((logger, logger.level))
+            if logger.level == logging.NOTSET or logger.level > logging.INFO:
+                logger.setLevel(logging.INFO)
+            logger.addHandler(self.handler)
+        self.active = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if not self.active:
+            return False
+        for logger, level in self.previous_levels:
+            try:
+                logger.removeHandler(self.handler)
+                logger.setLevel(level)
+            except Exception:
+                pass
+        self.previous_levels = []
+        self.handler = None
+        self.active = False
+        self.emit_tail(force=True)
+        return False
+
+    def emit_record(self, record):
+        try:
+            line = _sanitize_runtime_log_line(self.formatter.format(record))
+        except Exception:
+            line = _sanitize_runtime_log_line(record.getMessage())
+        if not line:
+            return
+        with self.lock:
+            self.tail.append(line)
+        self.emit_tail()
+
+    def emit_tail(self, *, force=False):
+        if not self.progress_callback:
+            return
+        now = time.monotonic()
+        if not force and now - self.last_emit < 0.5:
+            return
+        with self.lock:
+            lines = list(self.tail)
+        if not lines:
+            return
+        self.last_emit = now
+        self.progress_callback({
+            "backend_kind": "diffusers",
+            "python_log_tail": lines,
+        })
+
+    def progress(self, payload):
+        if not self.progress_callback:
+            return
+        data = dict(payload or {})
+        data.setdefault("backend_kind", "diffusers")
+        with self.lock:
+            lines = list(self.tail)
+        if lines:
+            data["python_log_tail"] = lines
+        self.progress_callback(data)
 
 
 def diffusers_backend_url(repo_id=""):
@@ -912,14 +1022,28 @@ class DiffusersClient:
         params["diffusers_model_variant"] = variant
         params["diffusers_gguf_file"] = gguf_file
         params["diffusers_gguf_base_repo"] = gguf_base_repo
-        pipe, torch, device = self._load_pipeline(
-            mode,
-            progress_callback=progress_callback,
-            model_repo=model_repo,
-            variant=variant,
-            gguf_file=gguf_file,
-            gguf_base_repo=gguf_base_repo,
-        )
+        runtime_logs = _DiffusersRuntimeLogCapture(progress_callback)
+        job_progress = runtime_logs.progress if progress_callback else None
+        if job_progress:
+            selected_label = gguf_file or variant or "default"
+            job_progress({
+                "phase": "downloading",
+                "percent": 3,
+                "backend_kind": "diffusers",
+                "step": "準備 Diffusers model",
+                "current_file": gguf_file or "",
+                "detail": f"下載 Diffusers model：{model_repo}（{selected_label}），正在檢查 Hugging Face cache / metadata",
+                "token_used": bool(self.token),
+            })
+        with runtime_logs:
+            pipe, torch, device = self._load_pipeline(
+                mode,
+                progress_callback=job_progress,
+                model_repo=model_repo,
+                variant=variant,
+                gguf_file=gguf_file,
+                gguf_base_repo=gguf_base_repo,
+            )
         width = max(64, int(params.get("width") or 1024))
         height = max(64, int(params.get("height") or 1024))
         size = (width, height)
@@ -955,17 +1079,19 @@ class DiffusersClient:
             call_kwargs["image"] = self._load_ref_image(source_ref, size=size)
             call_kwargs["mask_image"] = self._load_ref_image(mask_ref, mode="L", size=size)
             call_kwargs["strength"] = float(params.get("denoise_strength") or 0.65)
-        if progress_callback:
-            progress_callback({
+        if job_progress:
+            job_progress({
                 "phase": "running",
                 "percent": 25,
+                "backend_kind": "diffusers",
                 "step": f"Diffusers {mode} 推論",
                 "current_file": "",
                 "detail": f"Diffusers 推論中：steps={call_kwargs['num_inference_steps']}，device={device}",
             })
         try:
-            with torch.inference_mode():
-                output = pipe(**call_kwargs)
+            with runtime_logs:
+                with torch.inference_mode():
+                    output = pipe(**call_kwargs)
         except TypeError as exc:
             raise ComfyUIError(f"Diffusers pipeline 參數不相容：{exc}") from exc
         except Exception as exc:
@@ -973,18 +1099,19 @@ class DiffusersClient:
         generated_images = list(getattr(output, "images", []) or [])
         if not generated_images:
             raise ComfyUIError("Diffusers 產圖完成但沒有輸出圖片")
-        if progress_callback:
-            progress_callback({
+        if job_progress:
+            job_progress({
                 "phase": "running",
                 "percent": 92,
+                "backend_kind": "diffusers",
                 "step": "保存輸出圖片",
                 "current_file": "",
                 "detail": f"Diffusers 推論完成，正在保存 {len(generated_images)} 張圖片",
             })
         images = [self._save_output_image(image, index=index) for index, image in enumerate(generated_images)]
         prompt_id = f"diffusers-{uuid.uuid4().hex}"
-        if progress_callback:
-            progress_callback({"phase": "completed", "percent": 100, "completed": True, "detail": f"Diffusers 已完成，共 {len(images)} 張"})
+        if job_progress:
+            job_progress({"phase": "completed", "percent": 100, "backend_kind": "diffusers", "completed": True, "detail": f"Diffusers 已完成，共 {len(images)} 張"})
         return {
             "prompt_id": prompt_id,
             "image_ref": images[0]["image_ref"],

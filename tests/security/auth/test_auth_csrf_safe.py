@@ -97,7 +97,7 @@ def test_require_csrf_rotates_authenticated_session_token_after_success(tmp_path
 
     assert response.status_code == 200
     assert response.get_json()["ok"] is True
-    assert auth.verify_csrf_token("stable-token", "alice") is False
+    assert auth.verify_csrf_token("stable-token", "alice") is True
     set_cookie = "\n".join(response.headers.getlist("Set-Cookie"))
     match = re.search(r"csrf_token=([^;]+);", set_cookie)
     assert match
@@ -136,13 +136,73 @@ def test_require_csrf_safe_rotates_authenticated_session_token_after_success(tmp
 
     assert response.status_code == 200
     assert response.get_json()["ok"] is True
-    assert auth.verify_csrf_token("safe-token", "alice") is False
+    assert auth.verify_csrf_token("safe-token", "alice") is True
     set_cookie = "\n".join(response.headers.getlist("Set-Cookie"))
     match = re.search(r"csrf_token=([^;]+);", set_cookie)
     assert match
     rotated = match.group(1)
     assert rotated != "safe-token"
     assert auth.verify_csrf_token(rotated, "alice") is True
+
+
+def test_authenticated_csrf_rotation_keeps_recent_tokens_but_prunes_oldest(tmp_path):
+    db_path = tmp_path / "csrf.sqlite"
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS csrf_tokens (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, expires_at TEXT NOT NULL)"
+        )
+        return conn
+
+    auth.configure_auth_service(get_db=get_db, get_user_by_username=lambda username: None, fernet=None)
+    for index in range(10):
+        auth.store_csrf_token(f"token-{index}", "alice")
+
+    auth.prune_authenticated_csrf_tokens("alice", keep=3)
+
+    assert auth.verify_csrf_token("token-9", "alice") is True
+    assert auth.verify_csrf_token("token-8", "alice") is True
+    assert auth.verify_csrf_token("token-7", "alice") is True
+    assert auth.verify_csrf_token("token-0", "alice") is False
+
+
+def test_authenticated_recent_csrf_token_can_be_reused_without_false_security_event(tmp_path, monkeypatch):
+    db_path = tmp_path / "csrf.sqlite"
+    events = []
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS csrf_tokens (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, expires_at TEXT NOT NULL)"
+        )
+        return conn
+
+    auth.configure_auth_service(get_db=get_db, get_user_by_username=lambda username: None, fernet=None)
+    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: "alice" if token == "session-1" else None)
+    monkeypatch.setattr(auth, "record_security_event", lambda *args, **kwargs: events.append((args, kwargs)))
+    auth.store_csrf_token("tab-token", "alice")
+    app = Flask(__name__)
+    app.testing = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Strict"
+    app.config["SESSION_COOKIE_SECURE"] = False
+
+    @app.route("/mutate", methods=["POST"])
+    @auth.require_csrf
+    def mutate():
+        return auth.json_resp({"ok": True})
+
+    client = app.test_client()
+    client.set_cookie("session_token", "session-1")
+
+    first = client.post("/mutate", headers={"X-CSRF-Token": "tab-token"})
+    second = client.post("/mutate", headers={"X-CSRF-Token": "tab-token"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert not [event for event in events if event[0] and event[0][0] == "csrf_fail"]
 
 
 def test_require_csrf_accepts_form_field_for_public_post(monkeypatch):

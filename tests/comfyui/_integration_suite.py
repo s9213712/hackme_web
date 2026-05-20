@@ -3114,9 +3114,72 @@ def test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes(t
     )
 
     assert generated.status_code == 200, generated.get_json()
+    started = generated.get_json()
+    assert started["job"]["status"] == "running"
+    assert started["job"]["progress"]["phase"] == "downloading"
+    assert started["job"]["progress"]["backend_kind"] == "diffusers"
+    assert "下載 Diffusers model：dhead/waiIllustriousSDXL_v150" in started["job"]["progress"]["detail"]
     payload = _await_comfyui_result(client, generated)
     assert payload["image"]["image_ref"]["filename"] == "hackme_web_diffusers.png"
     assert FakeDiffusersBackendClient.last_params["model"] == "dhead/waiIllustriousSDXL_v150"
+
+
+def test_comfyui_diffusers_stale_progress_does_not_say_comfyui_backend(tmp_path, monkeypatch):
+    class SlowDiffusersBackendClient(FakeDiffusersBackendClient):
+        def generate_image(self, params, *, timeout_seconds=180, progress_callback=None, extra_data=None):
+            if progress_callback:
+                progress_callback({
+                    "phase": "downloading",
+                    "percent": 5,
+                    "backend_kind": "diffusers",
+                    "step": "Hugging Face 檔案下載",
+                    "current_file": "Downloading (incomplete total...)",
+                    "detail": "下載 Diffusers model：dhead/waiIllustriousSDXL_v150",
+                })
+            time.sleep(0.25)
+            return super().generate_image(params, timeout_seconds=timeout_seconds, progress_callback=progress_callback, extra_data=extra_data)
+
+    monkeypatch.setattr(comfyui_routes, "COMFYUI_JOB_STALE_SECONDS", 0)
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "dhead/waiIllustriousSDXL_v150",
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: SlowDiffusersBackendClient(),
+        },
+    ).test_client()
+
+    started = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "model": "dhead/waiIllustriousSDXL_v150",
+            "prompt": "illustration",
+            "sampler_name": "diffusers-auto",
+            "scheduler": "default",
+            "seed": 123,
+            "confirm_billing": True,
+        },
+    )
+    assert started.status_code == 200, started.get_json()
+    job_id = started.get_json()["job"]["job_id"]
+
+    polled = client.get(f"/api/comfyui/jobs/{job_id}")
+    assert polled.status_code == 200
+    progress = polled.get_json()["job"]["progress"]
+    assert progress["backend_unresponsive"] is True
+    assert progress["backend_kind"] == "diffusers"
+    assert progress["phase"] == "backend_unresponsive"
+    assert "Diffusers / Hugging Face 暫時沒有回報新進度" in progress["detail"]
+    assert "ComfyUI 後端" not in progress["detail"]
 
 
 def test_comfyui_diffusers_mode_allows_generation_page_repo_override(tmp_path):

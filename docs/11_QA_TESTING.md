@@ -421,6 +421,8 @@ python3 scripts/on_live_reports/snapshot_restore.py
   - 若要做 live smoke，可額外跑 `python3 scripts/comfyui/feature_probe.py --base-url https://127.0.0.1:PORT --username root --password ... --insecure --json-out /tmp/comfyui_probe.json`，確認 status、model list、txt2img、img2img、inpaint、outpaint、upscale、history rerun 全都真的能通；ControlNet 若缺模型 / node，應回 `expected_unavailable` 或明確錯誤，而不是卡死
   - 小 VRAM / 大模型載入時是否只讓 ComfyUI job 慢，不可讓主 Flask request 同步等待到 timeout 或整站下線
   - Diffusers in-process mode 未明確設定 `HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS=1` 時是否被拒絕，避免模型載入主程序
+  - Diffusers job progress 是否使用 `Diffusers / Hugging Face` 文案與 sanitized Python log tail，不可再顯示 ComfyUI backend 無回報
+  - Diffusers repo inspect 是否可用 GET 安全讀取路徑，不應因缺少 mutation CSRF token 產生 security alert
   - remote ComfyUI / local external process 的 status、interrupt、generate 是否都有 bounded timeout
 - 若本次改到影音串流 / E2EE 分享，至少補：
   - 發布影音欄位是否按下發布按鈕後才展開，不再常駐成卡片

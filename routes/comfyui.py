@@ -2113,8 +2113,13 @@ def register_comfyui_routes(app, deps):
             progress = payload["progress"]
             updated_at = float(progress.get("updated_at") or job.get("updated_at") or job.get("created_at") or 0)
             if updated_at and time.time() - updated_at >= COMFYUI_JOB_STALE_SECONDS:
+                is_diffusers = str(progress.get("backend_kind") or "").strip().lower() == "diffusers"
                 progress["phase"] = "backend_unresponsive"
-                progress["detail"] = "ComfyUI 後端暫時沒有回報進度，可能正在載入大模型或被磁碟/VRAM 壓力拖慢"
+                progress["detail"] = (
+                    "Diffusers / Hugging Face 暫時沒有回報新進度，可能正在下載大型模型、載入 pipeline，或被磁碟/VRAM 壓力拖慢"
+                    if is_diffusers
+                    else "ComfyUI 後端暫時沒有回報進度，可能正在載入大模型或被磁碟/VRAM 壓力拖慢"
+                )
                 progress["backend_unresponsive"] = True
                 progress["stale_seconds"] = int(time.time() - updated_at)
                 progress["timeout_seconds"] = int(progress.get("timeout_seconds") or DEFAULT_GENERATION_TIMEOUT_SECONDS)
@@ -2408,6 +2413,30 @@ def register_comfyui_routes(app, deps):
                 })
         return items
 
+    def _initial_generation_progress(active_client, params=None, timeout_seconds=0):
+        params = params if isinstance(params, dict) else {}
+        timeout_value = int(timeout_seconds or 0)
+        if getattr(active_client, "backend_kind", "") == "diffusers":
+            repo = str(params.get("diffusers_model_repo") or params.get("model") or getattr(active_client, "model_repo", "") or "").strip()
+            variant = str(params.get("diffusers_gguf_file") or params.get("diffusers_model_variant") or "default").strip() or "default"
+            return {
+                "phase": "downloading",
+                "percent": 1,
+                "backend_kind": "diffusers",
+                "detail": f"下載 Diffusers model：{repo or 'Hugging Face repo'}（{variant}），正在準備模型快取",
+                "step": "建立 Diffusers 下載工作",
+                "current_file": str(params.get("diffusers_gguf_file") or ""),
+                "timeout_seconds": timeout_value,
+                "timeout_unlimited": timeout_value <= 0,
+            }
+        return {
+            "phase": "queued",
+            "percent": 0,
+            "detail": "已送出至 ComfyUI 背景工作",
+            "timeout_seconds": timeout_value,
+            "timeout_unlimited": timeout_value <= 0,
+        }
+
     def _run_comfyui_generation_job(job_id, actor, params, quote, timeout_seconds, request_meta=None, backend_binding=None):
         backend_binding = backend_binding if isinstance(backend_binding, dict) else _comfyui_binding(actor)
         active_client = _client_for_url(backend_binding["url"])
@@ -2420,14 +2449,7 @@ def register_comfyui_routes(app, deps):
         audit_ip = request_meta.get("client_ip") or "-"
         audit_ua = request_meta.get("user_agent") or "-"
         _update_generation_job(job_id, status="running")
-        timeout_value = int(timeout_seconds or 0)
-        _update_generation_job_progress(job_id, {
-            "phase": "queued",
-            "percent": 0,
-            "detail": "已送出至 ComfyUI 背景工作",
-            "timeout_seconds": timeout_value,
-            "timeout_unlimited": timeout_value <= 0,
-        })
+        _update_generation_job_progress(job_id, _initial_generation_progress(active_client, params, timeout_seconds))
         try:
             result = active_client.generate_image(
                 params,
@@ -3504,6 +3526,8 @@ def register_comfyui_routes(app, deps):
         "register_active_generation": _register_active_generation,
         "generation_job_payload": _generation_job_payload,
         "image_ref_payload": _image_ref_payload,
+        "initial_generation_progress": _initial_generation_progress,
+        "update_generation_job_progress": _update_generation_job_progress,
         "run_comfyui_generation_job": _run_comfyui_generation_job,
         "start_local_comfyui": _start_local_comfyui,
         "stop_local_comfyui": _stop_local_comfyui,

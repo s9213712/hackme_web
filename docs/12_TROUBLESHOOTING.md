@@ -94,6 +94,12 @@ python3 scripts/admin/root_recovery.py --prompt-password
 
 這是預期安全行為。重新登入、重新取得 CSRF token 後再繼續操作。
 
+### TRB-AUTH-003 看到 `invalid_authenticated` CSRF 安全警訊
+
+先檢查是不是舊頁面、多分頁或腳本持續送出很久以前的 token。正常同一登入 session 的近期
+authenticated token 會被保留短暫相容窗口；若仍出現，重新整理頁面並確認前端請求使用
+`apiFetch()` 或送出 `X-CSRF-Token`，不要把 token 放在 URL query string。
+
 ## C. 權限 / Feature Flags
 
 ### TRB-FEATURE-001 看到「此功能目前已由 root 關閉」
@@ -209,6 +215,12 @@ ComfyUI 服務本身狀態。
 優先看 Security Center 的 CPU / GPU / VRAM / RAM 資源看板。小 VRAM 主機若載入大模型，
 可能因 VRAM offload、CPU RAM 與磁碟 I/O 變慢。部署上應優先使用遠端 ComfyUI 或外部
 ComfyUI process；不要把 Diffusers in-process 打開給一般服務。
+
+### TRB-AI-005 Diffusers 任務看起來卡在下載或載入
+
+Diffusers 模式不會透過 ComfyUI server。前端進度應顯示 Hugging Face 下載、
+Diffusers 載入或 Python 推論階段，並在進度面板下方顯示已遮蔽敏感資訊的 Python log tail。
+若訊息仍寫 ComfyUI 後端無回報，代表瀏覽器仍使用舊前端快取。
 
 ## G. PointsChain / Wallet / Ledger
 

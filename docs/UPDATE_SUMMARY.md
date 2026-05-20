@@ -1,6 +1,22 @@
 # Update Summary
 
-Release ID: `2026.05.19-160`
+Release ID: `2026.05.20-161`
+
+## 2026.05.20-161
+
+- Fixed Diffusers mode progress language so Hugging Face download/model-load
+  jobs no longer claim the ComfyUI backend is unresponsive; the frontend now
+  shows sanitized Diffusers Python log tail text while the job is running.
+- Reduced false CSRF security alerts from same-session multi-tab/concurrent
+  requests by keeping a short recent authenticated-token window, while keeping
+  public/login CSRF tokens single-use.
+- Changed Diffusers repo inspection to a safe read endpoint so the quick
+  settings probe no longer needs a mutation CSRF token.
+- Updated the ComfyUI workflow builder Playwright smoke so CI handles the
+  intentionally collapsed node toolbox/categories before clicking catalog or
+  built-in nodes.
+- Cleaned repo cache/runtime artifacts, refreshed release-visible docs, and
+  recorded the focused QA checks for the Diffusers/CSRF changes.
 
 ## 2026.05.19-160
 

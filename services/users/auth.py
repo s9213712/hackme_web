@@ -34,6 +34,7 @@ def _env_float(name, default, *, minimum=0.1, maximum=120.0):
 
 SESSION_TTL = 3600 * 4
 CSRF_TOKEN_TTL = SESSION_TTL
+AUTHENTICATED_CSRF_TOKEN_KEEP = 8
 SESSION_IDLE_TIMEOUT = 10 * 60
 SESSION_LAST_SEEN_REFRESH_INTERVAL = _env_int(
     "HTML_LEARNING_SESSION_LAST_SEEN_REFRESH_INTERVAL",
@@ -508,13 +509,42 @@ def delete_csrf_tokens_for_username(username):
         conn.close()
 
 
+def prune_authenticated_csrf_tokens(username, *, keep=AUTHENTICATED_CSRF_TOKEN_KEEP):
+    if not username:
+        return
+    try:
+        keep_count = max(1, int(keep or AUTHENTICATED_CSRF_TOKEN_KEEP))
+    except Exception:
+        keep_count = AUTHENTICATED_CSRF_TOKEN_KEEP
+    conn = _auth_db()
+    try:
+        now = datetime.now().isoformat()
+        conn.execute("DELETE FROM csrf_tokens WHERE expires_at<=?", (now,))
+        conn.execute(
+            """
+            DELETE FROM csrf_tokens
+            WHERE username=?
+              AND token_hash NOT IN (
+                SELECT token_hash FROM csrf_tokens
+                WHERE username=?
+                ORDER BY expires_at DESC, rowid DESC
+                LIMIT ?
+              )
+            """,
+            (username, username, keep_count),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _rotate_authenticated_csrf(response, csrf_tok, username):
     resp = make_response(response)
     if resp.status_code >= 400 or not csrf_tok or not username:
         return resp
-    consume_csrf_token(csrf_tok, username)
     new_csrf = make_csrf_token()
     store_csrf_token(new_csrf, username)
+    prune_authenticated_csrf_tokens(username)
     resp.set_cookie(
         "csrf_token",
         new_csrf,

@@ -56,6 +56,8 @@ def register_comfyui_runtime_routes(app, ctx):
     _register_active_generation = ctx["register_active_generation"]
     _run_comfyui_generation_job = ctx["run_comfyui_generation_job"]
     _generation_job_payload = ctx.get("generation_job_payload")
+    _initial_generation_progress = ctx.get("initial_generation_progress")
+    _update_generation_job_progress = ctx.get("update_generation_job_progress")
     _media_ref_payload = ctx.get("image_ref_payload")
     _start_local_comfyui = ctx["start_local_comfyui"]
     _stop_local_comfyui = ctx["stop_local_comfyui"]
@@ -292,17 +294,23 @@ def register_comfyui_runtime_routes(app, ctx):
             "storage_warnings": _comfyui_storage_warnings(),
         })
 
-    @app.route("/api/comfyui/diffusers/inspect", methods=["POST"])
-    @require_csrf
+    @app.route("/api/comfyui/diffusers/inspect", methods=["GET", "POST"])
+    @require_csrf_safe
     def comfyui_diffusers_inspect():
         actor, err = _actor_or_401()
         if err:
             return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
-        data = data if isinstance(data, dict) else {}
+        if request.method == "GET":
+            data = {
+                "diffusers_model_repo": request.args.get("diffusers_model_repo") or request.args.get("model") or request.args.get("repo"),
+                "generation_mode": request.args.get("generation_mode") or "txt2img",
+            }
+        else:
+            try:
+                data = request.get_json(force=True)
+            except Exception:
+                return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
+            data = data if isinstance(data, dict) else {}
         binding = _comfyui_binding(actor)
         active_client = _client_for_url(binding["url"])
         if not hasattr(active_client, "inspect_model_repo"):
@@ -418,6 +426,20 @@ def register_comfyui_runtime_routes(app, ctx):
                     "billing": {**quote, "confirmation_required": True},
                 }), 409
         job_id = _create_generation_job(actor)
+        initial_progress = (
+            _initial_generation_progress(active_client, params, timeout_seconds)
+            if callable(_initial_generation_progress)
+            else {
+                "phase": "queued",
+                "percent": 0,
+                "detail": "已建立產圖工作",
+                "timeout_seconds": timeout_seconds,
+                "timeout_unlimited": int(timeout_seconds or 0) <= 0,
+            }
+        )
+        if callable(_update_generation_job_progress) and str(initial_progress.get("phase") or "") != "queued":
+            _update_generation_job_progress(job_id, initial_progress)
+        initial_status = "running" if str(initial_progress.get("phase") or "") != "queued" else "queued"
         request_meta = _capture_request_audit_meta()
         worker = threading.Thread(
             target=_run_comfyui_generation_job,
@@ -430,14 +452,8 @@ def register_comfyui_runtime_routes(app, ctx):
             "async": True,
             "job": {
                 "job_id": job_id,
-                "status": "queued",
-                "progress": {
-                    "phase": "queued",
-                    "percent": 0,
-                    "detail": "已建立產圖工作",
-                    "timeout_seconds": timeout_seconds,
-                    "timeout_unlimited": int(timeout_seconds or 0) <= 0,
-                },
+                "status": initial_status,
+                "progress": initial_progress,
             },
         })
 

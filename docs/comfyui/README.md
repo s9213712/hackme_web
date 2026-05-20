@@ -15,5 +15,9 @@ Deployment note:
   `HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS=1` and should be treated as a
   deliberate local experiment because it can load large models into the Flask
   process and consume RAM / VRAM / CPU.
+- Diffusers mode is not a ComfyUI backend. Its progress text should identify
+  Hugging Face download, Diffusers model loading, and Python inference phases
+  directly; operators can inspect the sanitized Python log tail in the job
+  progress panel when a download or model load appears stalled.
 - On small VRAM hosts, prefer smaller checkpoints and Linux-native model
   storage instead of loading frequently used models from slow mounted paths.
