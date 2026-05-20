@@ -11,6 +11,7 @@ let comfyuiAlbumsLoaded = false;
 let comfyuiProgressTimer = null;
 let comfyuiProgressStartedAt = 0;
 let comfyuiProgressPythonLogTail = [];
+let comfyuiProgressBackendKind = "";
 let comfyuiGenerateAbortController = null;
 let comfyuiActiveJobId = null;
 let comfyuiMaxBatchSize = 1;
@@ -1796,7 +1797,7 @@ function formatComfyuiDuration(seconds) {
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
-function setComfyuiProgress({ visible = true, running = false, percent = 0, label = "", detail = "", pythonLogTail = null } = {}) {
+function setComfyuiProgress({ visible = true, running = false, percent = 0, label = "", detail = "", pythonLogTail = null, backendKind = "", showPythonLog = false, pythonLogPlaceholder = "" } = {}) {
   const panel = $("comfyui-progress-panel");
   const bar = $("comfyui-progress-bar");
   const labelEl = $("comfyui-progress-label");
@@ -1808,6 +1809,7 @@ function setComfyuiProgress({ visible = true, running = false, percent = 0, labe
   panel.classList.toggle("running", !!running);
   if (!visible) {
     comfyuiProgressPythonLogTail = [];
+    comfyuiProgressBackendKind = "";
     if (pythonLogEl) {
       pythonLogEl.style.display = "none";
       pythonLogEl.textContent = "";
@@ -1815,14 +1817,18 @@ function setComfyuiProgress({ visible = true, running = false, percent = 0, labe
   } else if (Array.isArray(pythonLogTail)) {
     comfyuiProgressPythonLogTail = pythonLogTail.filter(Boolean).map(String).slice(-80);
   }
+  if (backendKind) comfyuiProgressBackendKind = String(backendKind).toLowerCase();
   const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
   if (bar) bar.style.width = `${safePercent}%`;
   if (labelEl) labelEl.textContent = label || "等待 ComfyUI";
   if (percentEl) percentEl.textContent = `${safePercent}%`;
   if (detailEl) detailEl.textContent = detail || "";
   if (pythonLogEl && visible) {
-    pythonLogEl.style.display = comfyuiProgressPythonLogTail.length ? "" : "none";
-    pythonLogEl.textContent = comfyuiProgressPythonLogTail.join("\n");
+    const shouldShowPythonLog = !!showPythonLog || comfyuiProgressPythonLogTail.length > 0;
+    pythonLogEl.style.display = shouldShowPythonLog ? "" : "none";
+    pythonLogEl.textContent = comfyuiProgressPythonLogTail.length
+      ? comfyuiProgressPythonLogTail.join("\n")
+      : (pythonLogPlaceholder || "Diffusers Python log 尚未輸出；下載、載入或推論訊息會顯示在這裡。");
     pythonLogEl.scrollTop = pythonLogEl.scrollHeight;
   }
 }
@@ -1839,15 +1845,20 @@ function stopComfyuiProgress({ complete = false, error = "", label = "" } = {}) 
       running: false,
       percent: 100,
       label: `${label}已完成`,
-      detail: `ComfyUI 已回傳${label}結果`
+      detail: `ComfyUI 已回傳${label}結果`,
+      showPythonLog: comfyuiProgressBackendKind === "diffusers"
     });
   } else if (error) {
+    const showDiffusersLog = comfyuiProgressBackendKind === "diffusers" || comfyuiConnectionMode === "diffusers";
     setComfyuiProgress({
       visible: true,
       running: false,
       percent: 100,
       label: label || "產圖失敗",
-      detail: error
+      detail: error,
+      backendKind: showDiffusersLog ? "diffusers" : "",
+      showPythonLog: showDiffusersLog,
+      pythonLogPlaceholder: "Diffusers Python log 尚未輸出；請看上方失敗原因。"
     });
   } else {
     setComfyuiProgress({ visible: false });
@@ -1876,8 +1887,32 @@ function startComfyuiProgress(timeoutSeconds = COMFYUI_GENERATION_TIMEOUT_SECOND
     percent: 0,
     label: "已送出產圖請求",
     detail: hasLimit ? `已等待 00:00 / 上限 ${formatComfyuiDuration(timeoutSeconds)}` : "已等待 00:00 / 不設最長等待上限",
-    pythonLogTail: []
+    pythonLogTail: [],
+    backendKind: comfyuiConnectionMode === "diffusers" ? "diffusers" : "",
+    showPythonLog: comfyuiConnectionMode === "diffusers",
+    pythonLogPlaceholder: "等待 Diffusers Python log..."
   });
+}
+
+function comfyuiBuildJobFailureMessage(job = {}) {
+  const progress = job.progress || {};
+  const isDiffusersProgress = comfyuiConnectionMode === "diffusers" || String(progress.backend_kind || "").toLowerCase() === "diffusers";
+  const parts = [
+    job.error,
+    progress.error_message,
+    progress.error,
+    progress.detail,
+    job.msg,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .filter((value, index, list) => list.indexOf(value) === index);
+  if (!parts.length) {
+    return isDiffusersProgress
+      ? "Diffusers 產圖失敗，後端未回傳詳細原因；請查看下方 Python logs。"
+      : "ComfyUI 產圖失敗，後端未回傳詳細原因。";
+  }
+  return parts.join("；");
 }
 
 function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERATION_TIMEOUT_SECONDS) {
@@ -1923,7 +1958,12 @@ function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERAT
     percent,
     label,
     detail,
-    pythonLogTail: Array.isArray(progress.python_log_tail) ? progress.python_log_tail : null
+    pythonLogTail: Array.isArray(progress.python_log_tail) ? progress.python_log_tail : null,
+    backendKind: isDiffusersProgress ? "diffusers" : "",
+    showPythonLog: isDiffusersProgress,
+    pythonLogPlaceholder: phase === "error"
+      ? "Diffusers Python log 尚未輸出；請看上方失敗原因。"
+      : "等待 Diffusers Python log..."
   });
 }
 
@@ -1995,7 +2035,7 @@ async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds, option
       }
     }
     if (job.status === "completed" && job.result) return job.result;
-    if (job.status === "error") throw new Error(job.error || job.progress?.detail || "ComfyUI 產圖失敗");
+    if (job.status === "error") throw new Error(comfyuiBuildJobFailureMessage(job));
     await new Promise((resolve) => setTimeout(resolve, comfyuiJobPollMs()));
   }
   throw createComfyuiForegroundTimeoutError(jobId);

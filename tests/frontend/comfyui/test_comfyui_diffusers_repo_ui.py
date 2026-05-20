@@ -50,6 +50,9 @@ def test_diffusers_generation_progress_surfaces_huggingface_download_bytes():
     assert "python_log_tail" in js
     assert "comfyui-progress-python-log" in html
     assert "Diffusers Python log" in html
+    assert "showPythonLog" in js
+    assert "Diffusers Python log 尚未輸出" in js
+    assert "comfyuiBuildJobFailureMessage" in js
     assert "progress.bytes_written" in js
     assert "progress.total_bytes" in js
     assert "progress.current_file" in js

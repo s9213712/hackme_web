@@ -1,6 +1,16 @@
 # Update Summary
 
-Release ID: `2026.05.20-171`
+Release ID: `2026.05.20-172`
+
+## 2026.05.20-172
+
+- Made the ComfyUI Diffusers progress panel always show a Python log area in
+  Hugging Face mode, even before logger output has arrived.
+- Propagated Diffusers failure reasons through job progress with
+  `backend_kind`, `error_message`, and preserved `python_log_tail` so failed
+  generations do not collapse to a generic error.
+- Improved frontend job failure messages by combining backend error, progress
+  detail, and Diffusers log guidance.
 
 ## 2026.05.20-171
 

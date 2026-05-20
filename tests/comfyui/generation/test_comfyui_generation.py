@@ -11,6 +11,7 @@ from tests.comfyui._integration_suite import (
     test_comfyui_generate_rejects_when_controlnet_model_missing,
     test_comfyui_generate_rejects_when_workflow_node_missing,
     test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes,
+    test_comfyui_diffusers_failure_reports_reason_and_python_log_tail,
     test_comfyui_diffusers_stale_progress_does_not_say_comfyui_backend,
     test_comfyui_diffusers_mode_rejects_comfyui_controlnet_shortcut,
     test_comfyui_generation_does_not_charge_root,
