@@ -4823,6 +4823,135 @@
                 <label>本地 API Port</label>
                 <input type="number" id="s-comfyui-api-port" min="1" max="65535" placeholder="8192" />
               </div>
+              <details class="settings-collapse">
+                <summary>
+                  <div>
+                    <div class="drive-card-title">本地 ComfyUI main.py 性能參數</div>
+                    <div class="drive-card-sub">只在本地啟動腳本下一次啟動時生效；遠端 API 無法改變對方啟動旗標。</div>
+                  </div>
+                </summary>
+                <div class="drive-collapsible-body">
+                  <div class="grid2">
+                    <div class="field">
+                      <label>VRAM 模式</label>
+                      <select id="s-comfyui-local-vram-mode">
+                        <option value="auto">auto（官方預設）</option>
+                        <option value="gpu_only">--gpu-only</option>
+                        <option value="highvram">--highvram</option>
+                        <option value="normalvram">normalvram（不加旗標）</option>
+                        <option value="lowvram">--lowvram</option>
+                        <option value="novram">--novram</option>
+                        <option value="cpu">--cpu</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>整體精度</label>
+                      <select id="s-comfyui-local-precision">
+                        <option value="auto">auto</option>
+                        <option value="force_fp16">--force-fp16</option>
+                        <option value="force_fp32">--force-fp32</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>UNet dtype</label>
+                      <select id="s-comfyui-local-unet-dtype">
+                        <option value="auto">auto</option>
+                        <option value="fp32">--fp32-unet</option>
+                        <option value="fp64">--fp64-unet</option>
+                        <option value="bf16">--bf16-unet</option>
+                        <option value="fp16">--fp16-unet</option>
+                        <option value="fp8_e4m3fn">--fp8_e4m3fn-unet</option>
+                        <option value="fp8_e5m2">--fp8_e5m2-unet</option>
+                        <option value="fp8_e8m0fnu">--fp8_e8m0fnu-unet</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>VAE dtype</label>
+                      <select id="s-comfyui-local-vae-dtype">
+                        <option value="auto">auto</option>
+                        <option value="fp16">--fp16-vae</option>
+                        <option value="fp32">--fp32-vae</option>
+                        <option value="bf16">--bf16-vae</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Text Encoder dtype</label>
+                      <select id="s-comfyui-local-text-encoder-dtype">
+                        <option value="auto">auto</option>
+                        <option value="fp8_e4m3fn">--fp8_e4m3fn-text-enc</option>
+                        <option value="fp8_e5m2">--fp8_e5m2-text-enc</option>
+                        <option value="fp16">--fp16-text-enc</option>
+                        <option value="fp32">--fp32-text-enc</option>
+                        <option value="bf16">--bf16-text-enc</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Attention backend</label>
+                      <select id="s-comfyui-local-attention-mode">
+                        <option value="auto">auto</option>
+                        <option value="split">--use-split-cross-attention</option>
+                        <option value="quad">--use-quad-cross-attention</option>
+                        <option value="pytorch">--use-pytorch-cross-attention</option>
+                        <option value="sage">--use-sage-attention</option>
+                        <option value="flash">--use-flash-attention</option>
+                        <option value="disable_xformers">--disable-xformers</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Attention upcast</label>
+                      <select id="s-comfyui-local-upcast-attention">
+                        <option value="auto">auto</option>
+                        <option value="force">--force-upcast-attention</option>
+                        <option value="dont">--dont-upcast-attention</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>cudaMallocAsync</label>
+                      <select id="s-comfyui-local-cuda-malloc">
+                        <option value="auto">auto</option>
+                        <option value="enable">--cuda-malloc</option>
+                        <option value="disable">--disable-cuda-malloc</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Async offload</label>
+                      <select id="s-comfyui-local-async-offload">
+                        <option value="auto">auto</option>
+                        <option value="enable">--async-offload</option>
+                        <option value="disable">--disable-async-offload</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Cache 模式</label>
+                      <select id="s-comfyui-local-cache-mode">
+                        <option value="auto">auto</option>
+                        <option value="ram">--cache-ram</option>
+                        <option value="classic">--cache-classic</option>
+                        <option value="lru">--cache-lru</option>
+                        <option value="none">--cache-none</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>LRU cache 節點數</label>
+                      <input type="number" id="s-comfyui-local-cache-lru" min="0" max="10000" step="1" value="0" />
+                    </div>
+                    <div class="field">
+                      <label>保留 VRAM（GB）</label>
+                      <input type="number" id="s-comfyui-local-reserve-vram-gb" min="0" max="128" step="0.25" placeholder="留空使用官方預設" />
+                    </div>
+                    <div class="field">
+                      <label><input type="checkbox" id="s-comfyui-local-cpu-vae" /> --cpu-vae</label>
+                    </div>
+                    <div class="field">
+                      <label><input type="checkbox" id="s-comfyui-local-disable-smart-memory" /> --disable-smart-memory</label>
+                    </div>
+                    <div class="field">
+                      <label><input type="checkbox" id="s-comfyui-local-deterministic" /> --deterministic</label>
+                    </div>
+                  </div>
+                  <div class="drive-card-sub">內建啟動 template 會把這些白名單參數傳給 ComfyUI <code>main.py</code>；若使用自訂腳本，請保留 <code>"$@"</code> 或讀取 <code>COMFYUI_EXTRA_ARGS</code>。</div>
+                </div>
+              </details>
               <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">以 Linux/WSL 腳本為例：資料夾填你的 ComfyUI portable 或專案資料夾，腳本填 <code>run_in_linux.sh</code>。本地模式會下載模型到 <code>ComfyUI/models/checkpoints</code> 或 <code>ComfyUI/models/loras</code>，丟棄預覽時可刪除 output 原始檔。</div>
             </div>
             <div class="field" id="comfyui-civitai-settings" style="display:none;">
@@ -6562,7 +6691,7 @@
 
 <script src="/js/00-core.js?v=20260517-trading-snapshot-warmup" defer></script>
 <script src="/js/05-i18n.js?v=20260519-vae-builtin" defer></script>
-<script src="/js/01-root-quick-settings.js?v=20260521-diffusers-cpu-fallback" defer></script>
+<script src="/js/01-root-quick-settings.js?v=20260521-comfyui-local-main-args" defer></script>
 <script src="/js/10-users.js?v=20260503-account-delete-feedback" defer></script>
 <script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
 <script src="/js/25-community.js?v=20260518-inline-media" defer></script>
@@ -6582,7 +6711,7 @@
 <script src="/js/42-experiments.js?v=20260518-two-experiments" defer></script>
 <script src="/js/39-videos.js?v=20260518-video-overview" defer></script>
 <script src="/js/40-auth-users.js?v=20260517-avatar-cropper" defer></script>
-<script src="/js/50-admin.js?v=20260521-diffusers-cpu-fallback" defer></script>
+<script src="/js/50-admin.js?v=20260521-comfyui-local-main-args" defer></script>
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>
 <script src="/js/55-economy.js?v=20260517-trading-snapshot-warmup" defer></script>
 <script src="/js/56-trading.js?v=20260517-trading-snapshot-warmup" defer></script>

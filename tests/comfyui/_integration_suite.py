@@ -3333,7 +3333,8 @@ def test_root_can_download_local_comfyui_start_template(tmp_path):
     assert "attachment" in (response.headers.get("Content-Disposition") or "")
     payload = response.get_data(as_text=True)
     assert "COMFYUI_ROOT" in payload
-    assert 'main.py --listen "$LISTEN_HOST" --port "$LISTEN_PORT"' in payload
+    assert 'main.py --listen "$LISTEN_HOST" --port "$LISTEN_PORT" "${EXTRA_ARGS[@]}"' in payload
+    assert "COMFYUI_EXTRA_ARGS" in payload
 
 
 def test_comfyui_local_start_template_download_requires_root(tmp_path):
@@ -3478,12 +3479,14 @@ def test_local_comfyui_connection_test_attempts_autostart(tmp_path, monkeypatch)
     comfy_base.mkdir()
     (comfy_base / "run_in_linux.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     _init_db(db_path)
-    state = {"ready": False}
+    state = {"ready": False, "popen_args": None, "popen_kwargs": None}
 
     class DummyPopen:
         def __init__(self, *args, **kwargs):
             self.pid = 4321
             state["ready"] = True
+            state["popen_args"] = args
+            state["popen_kwargs"] = kwargs
 
         def poll(self):
             return None
@@ -3505,6 +3508,12 @@ def test_local_comfyui_connection_test_attempts_autostart(tmp_path, monkeypatch)
             "comfyui_local_start_script": "run_in_linux.sh",
             "comfyui_api_host": "localhost",
             "comfyui_api_port": 8192,
+            "comfyui_local_vram_mode": "lowvram",
+            "comfyui_local_precision": "force_fp16",
+            "comfyui_local_unet_dtype": "fp8_e4m3fn",
+            "comfyui_local_cpu_vae": True,
+            "comfyui_local_attention_mode": "pytorch",
+            "comfyui_local_reserve_vram_gb": "1.5",
         },
         actor=lambda: root_actor,
         extra_deps={
@@ -3530,6 +3539,18 @@ def test_local_comfyui_connection_test_attempts_autostart(tmp_path, monkeypatch)
     assert body["available"] is True
     assert body["autostart"]["attempted"] is True
     assert body["autostart"]["start"]["started"] is True
+    command = state["popen_args"][0]
+    assert command[:2] == ["bash", str(comfy_base / "run_in_linux.sh")]
+    assert "--lowvram" in command
+    assert "--force-fp16" in command
+    assert "--fp8_e4m3fn-unet" in command
+    assert "--cpu-vae" in command
+    assert "--use-pytorch-cross-attention" in command
+    assert "--reserve-vram" in command
+    assert "1.5" in command
+    env = state["popen_kwargs"]["env"]
+    assert "--lowvram" in env["COMFYUI_EXTRA_ARGS"]
+    assert "--fp8_e4m3fn-unet" in env["COMFYUI_EXTRA_ARGS_JSON"]
 
 
 def test_local_comfyui_connection_test_reports_startup_failure_detail(tmp_path, monkeypatch):

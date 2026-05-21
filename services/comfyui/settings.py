@@ -30,6 +30,61 @@ def _env_bool(name, default=False):
     return str(raw).strip().lower() not in {"0", "false", "no", "off", ""}
 
 
+def _env_choice(name, default, allowed):
+    raw = str(os.environ.get(name, default) or default).strip().lower()
+    return raw if raw in allowed else default
+
+
+def _env_int_range(name, default, minimum, maximum):
+    try:
+        value = int(os.environ.get(name, default))
+    except Exception:
+        return default
+    return min(maximum, max(minimum, value))
+
+
+def _env_float_text(name, default=""):
+    raw = str(os.environ.get(name, default) or "").strip()
+    if not raw:
+        return ""
+    try:
+        value = float(raw)
+    except Exception:
+        return ""
+    if value < 0 or value > 128:
+        return ""
+    return ("%0.3f" % value).rstrip("0").rstrip(".")
+
+
+COMFYUI_LOCAL_VRAM_MODES = {"auto", "gpu_only", "highvram", "normalvram", "lowvram", "novram", "cpu"}
+COMFYUI_LOCAL_PRECISION_MODES = {"auto", "force_fp16", "force_fp32"}
+COMFYUI_LOCAL_UNET_DTYPES = {
+    "auto",
+    "fp32",
+    "fp64",
+    "bf16",
+    "fp16",
+    "fp8_e4m3fn",
+    "fp8_e5m2",
+    "fp8_e8m0fnu",
+}
+COMFYUI_LOCAL_VAE_DTYPES = {"auto", "fp16", "fp32", "bf16"}
+COMFYUI_LOCAL_TEXT_ENCODER_DTYPES = {"auto", "fp8_e4m3fn", "fp8_e5m2", "fp16", "fp32", "bf16"}
+COMFYUI_LOCAL_ATTENTION_MODES = {
+    "auto",
+    "split",
+    "quad",
+    "pytorch",
+    "sage",
+    "flash",
+    "disable_xformers",
+}
+COMFYUI_LOCAL_UPCAST_ATTENTION_MODES = {"auto", "force", "dont"}
+COMFYUI_LOCAL_CUDA_MALLOC_MODES = {"auto", "enable", "disable"}
+COMFYUI_LOCAL_ASYNC_OFFLOAD_MODES = {"auto", "enable", "disable"}
+COMFYUI_LOCAL_CACHE_MODES = {"auto", "ram", "classic", "lru", "none"}
+
+
 COMFYUI_DEFAULT_SETTINGS = {
     "comfyui_connection_mode": os.environ.get("COMFYUI_CONNECTION_MODE", "remote"),
     "comfyui_remote_api_url": DEFAULT_COMFYUI_REMOTE_API_URL,
@@ -37,6 +92,41 @@ COMFYUI_DEFAULT_SETTINGS = {
     "comfyui_local_start_script": os.environ.get("COMFYUI_START_SCRIPT", ""),
     "comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost"),
     "comfyui_api_port": DEFAULT_COMFYUI_PORT,
+    "comfyui_local_vram_mode": _env_choice("COMFYUI_LOCAL_VRAM_MODE", "auto", COMFYUI_LOCAL_VRAM_MODES),
+    "comfyui_local_precision": _env_choice("COMFYUI_LOCAL_PRECISION", "auto", COMFYUI_LOCAL_PRECISION_MODES),
+    "comfyui_local_unet_dtype": _env_choice("COMFYUI_LOCAL_UNET_DTYPE", "auto", COMFYUI_LOCAL_UNET_DTYPES),
+    "comfyui_local_vae_dtype": _env_choice("COMFYUI_LOCAL_VAE_DTYPE", "auto", COMFYUI_LOCAL_VAE_DTYPES),
+    "comfyui_local_text_encoder_dtype": _env_choice(
+        "COMFYUI_LOCAL_TEXT_ENCODER_DTYPE",
+        "auto",
+        COMFYUI_LOCAL_TEXT_ENCODER_DTYPES,
+    ),
+    "comfyui_local_cpu_vae": _env_bool("COMFYUI_LOCAL_CPU_VAE", False),
+    "comfyui_local_attention_mode": _env_choice(
+        "COMFYUI_LOCAL_ATTENTION_MODE",
+        "auto",
+        COMFYUI_LOCAL_ATTENTION_MODES,
+    ),
+    "comfyui_local_upcast_attention": _env_choice(
+        "COMFYUI_LOCAL_UPCAST_ATTENTION",
+        "auto",
+        COMFYUI_LOCAL_UPCAST_ATTENTION_MODES,
+    ),
+    "comfyui_local_cuda_malloc": _env_choice(
+        "COMFYUI_LOCAL_CUDA_MALLOC",
+        "auto",
+        COMFYUI_LOCAL_CUDA_MALLOC_MODES,
+    ),
+    "comfyui_local_disable_smart_memory": _env_bool("COMFYUI_LOCAL_DISABLE_SMART_MEMORY", False),
+    "comfyui_local_deterministic": _env_bool("COMFYUI_LOCAL_DETERMINISTIC", False),
+    "comfyui_local_async_offload": _env_choice(
+        "COMFYUI_LOCAL_ASYNC_OFFLOAD",
+        "auto",
+        COMFYUI_LOCAL_ASYNC_OFFLOAD_MODES,
+    ),
+    "comfyui_local_cache_mode": _env_choice("COMFYUI_LOCAL_CACHE_MODE", "auto", COMFYUI_LOCAL_CACHE_MODES),
+    "comfyui_local_cache_lru": _env_int_range("COMFYUI_LOCAL_CACHE_LRU", 0, 0, 10000),
+    "comfyui_local_reserve_vram_gb": _env_float_text("COMFYUI_LOCAL_RESERVE_VRAM_GB", ""),
     "comfyui_civitai_api_key": os.environ.get("CIVITAI_API_KEY", ""),
     "comfyui_paid_api_nodes_enabled": False,
     "comfyui_account_api_key": os.environ.get("COMFYUI_ACCOUNT_API_KEY", ""),
@@ -132,6 +222,76 @@ def validate_comfyui_diffusers_device_map(value):
     if device_map in {"auto", "disabled", "none", "cuda", "balanced", "balanced_low_0", "sequential"}:
         return "disabled" if device_map == "none" else device_map
     return None
+
+
+def _validate_comfyui_choice(value, allowed, default="auto"):
+    normalized = str(value if value is not None else default).strip().lower()
+    if normalized in allowed:
+        return normalized
+    return None
+
+
+def validate_comfyui_local_vram_mode(value):
+    return _validate_comfyui_choice(value, COMFYUI_LOCAL_VRAM_MODES)
+
+
+def validate_comfyui_local_precision(value):
+    return _validate_comfyui_choice(value, COMFYUI_LOCAL_PRECISION_MODES)
+
+
+def validate_comfyui_local_unet_dtype(value):
+    return _validate_comfyui_choice(value, COMFYUI_LOCAL_UNET_DTYPES)
+
+
+def validate_comfyui_local_vae_dtype(value):
+    return _validate_comfyui_choice(value, COMFYUI_LOCAL_VAE_DTYPES)
+
+
+def validate_comfyui_local_text_encoder_dtype(value):
+    return _validate_comfyui_choice(value, COMFYUI_LOCAL_TEXT_ENCODER_DTYPES)
+
+
+def validate_comfyui_local_attention_mode(value):
+    return _validate_comfyui_choice(value, COMFYUI_LOCAL_ATTENTION_MODES)
+
+
+def validate_comfyui_local_upcast_attention(value):
+    return _validate_comfyui_choice(value, COMFYUI_LOCAL_UPCAST_ATTENTION_MODES)
+
+
+def validate_comfyui_local_cuda_malloc(value):
+    return _validate_comfyui_choice(value, COMFYUI_LOCAL_CUDA_MALLOC_MODES)
+
+
+def validate_comfyui_local_async_offload(value):
+    return _validate_comfyui_choice(value, COMFYUI_LOCAL_ASYNC_OFFLOAD_MODES)
+
+
+def validate_comfyui_local_cache_mode(value):
+    return _validate_comfyui_choice(value, COMFYUI_LOCAL_CACHE_MODES)
+
+
+def validate_comfyui_local_cache_lru(value):
+    try:
+        count = int(value)
+    except Exception:
+        return None
+    if count < 0 or count > 10000:
+        return None
+    return count
+
+
+def validate_comfyui_local_reserve_vram_gb(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        amount = float(raw)
+    except Exception:
+        return None
+    if amount < 0 or amount > 128:
+        return None
+    return ("%0.3f" % amount).rstrip("0").rstrip(".")
 
 
 def validate_comfyui_api_host(value):

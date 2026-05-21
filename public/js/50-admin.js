@@ -4120,6 +4120,23 @@ function updateComfyuiConnectionModeFields() {
   const cudaFallbackToCpu = $("s-comfyui-diffusers-cuda-fallback-to-cpu");
   const keepDownloadedModels = $("s-comfyui-diffusers-keep-downloaded-models");
   const deviceMap = $("s-comfyui-diffusers-device-map");
+  const localPerformanceFields = [
+    "s-comfyui-local-vram-mode",
+    "s-comfyui-local-precision",
+    "s-comfyui-local-unet-dtype",
+    "s-comfyui-local-vae-dtype",
+    "s-comfyui-local-text-encoder-dtype",
+    "s-comfyui-local-cpu-vae",
+    "s-comfyui-local-attention-mode",
+    "s-comfyui-local-upcast-attention",
+    "s-comfyui-local-cuda-malloc",
+    "s-comfyui-local-disable-smart-memory",
+    "s-comfyui-local-deterministic",
+    "s-comfyui-local-async-offload",
+    "s-comfyui-local-cache-mode",
+    "s-comfyui-local-cache-lru",
+    "s-comfyui-local-reserve-vram-gb",
+  ];
   if (localBox) localBox.style.display = mode === "local" ? "" : "none";
   if (remoteBox) remoteBox.style.display = mode === "remote" ? "" : "none";
   if (diffusersBox) diffusersBox.style.display = mode === "diffusers" ? "" : "none";
@@ -4132,6 +4149,10 @@ function updateComfyuiConnectionModeFields() {
   if (cudaFallbackToCpu) cudaFallbackToCpu.disabled = mode !== "diffusers";
   if (keepDownloadedModels) keepDownloadedModels.disabled = mode !== "diffusers";
   if (deviceMap) deviceMap.disabled = mode !== "diffusers";
+  localPerformanceFields.forEach((id) => {
+    const input = $(id);
+    if (input) input.disabled = mode !== "local";
+  });
   const status = $("comfyui-test-connection-status");
   if (status && !status.dataset.userTouched) {
     status.textContent = mode === "local"
@@ -4419,6 +4440,21 @@ async function loadSettings() {
   if ($("s-comfyui-local-start-script")) $("s-comfyui-local-start-script").value = s.comfyui_local_start_script || "";
   if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
   if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
+  if ($("s-comfyui-local-vram-mode")) $("s-comfyui-local-vram-mode").value = s.comfyui_local_vram_mode || "auto";
+  if ($("s-comfyui-local-precision")) $("s-comfyui-local-precision").value = s.comfyui_local_precision || "auto";
+  if ($("s-comfyui-local-unet-dtype")) $("s-comfyui-local-unet-dtype").value = s.comfyui_local_unet_dtype || "auto";
+  if ($("s-comfyui-local-vae-dtype")) $("s-comfyui-local-vae-dtype").value = s.comfyui_local_vae_dtype || "auto";
+  if ($("s-comfyui-local-text-encoder-dtype")) $("s-comfyui-local-text-encoder-dtype").value = s.comfyui_local_text_encoder_dtype || "auto";
+  if ($("s-comfyui-local-cpu-vae")) $("s-comfyui-local-cpu-vae").checked = !!s.comfyui_local_cpu_vae;
+  if ($("s-comfyui-local-attention-mode")) $("s-comfyui-local-attention-mode").value = s.comfyui_local_attention_mode || "auto";
+  if ($("s-comfyui-local-upcast-attention")) $("s-comfyui-local-upcast-attention").value = s.comfyui_local_upcast_attention || "auto";
+  if ($("s-comfyui-local-cuda-malloc")) $("s-comfyui-local-cuda-malloc").value = s.comfyui_local_cuda_malloc || "auto";
+  if ($("s-comfyui-local-disable-smart-memory")) $("s-comfyui-local-disable-smart-memory").checked = !!s.comfyui_local_disable_smart_memory;
+  if ($("s-comfyui-local-deterministic")) $("s-comfyui-local-deterministic").checked = !!s.comfyui_local_deterministic;
+  if ($("s-comfyui-local-async-offload")) $("s-comfyui-local-async-offload").value = s.comfyui_local_async_offload || "auto";
+  if ($("s-comfyui-local-cache-mode")) $("s-comfyui-local-cache-mode").value = s.comfyui_local_cache_mode || "auto";
+  if ($("s-comfyui-local-cache-lru")) $("s-comfyui-local-cache-lru").value = Number(s.comfyui_local_cache_lru || 0);
+  if ($("s-comfyui-local-reserve-vram-gb")) $("s-comfyui-local-reserve-vram-gb").value = s.comfyui_local_reserve_vram_gb || "";
   if ($("s-comfyui-civitai-api-key")) $("s-comfyui-civitai-api-key").value = s.comfyui_civitai_api_key || "";
   if ($("s-comfyui-diffusers-model-repo")) $("s-comfyui-diffusers-model-repo").value = s.comfyui_diffusers_model_repo || "";
   if ($("s-comfyui-huggingface-api-token")) $("s-comfyui-huggingface-api-token").value = "";
@@ -6186,6 +6222,21 @@ async function saveSettings() {
     comfyui_local_start_script: ($("s-comfyui-local-start-script")?.value || "").trim(),
     comfyui_api_host: ($("s-comfyui-api-host")?.value || "localhost").trim(),
     comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
+    comfyui_local_vram_mode: $("s-comfyui-local-vram-mode")?.value || "auto",
+    comfyui_local_precision: $("s-comfyui-local-precision")?.value || "auto",
+    comfyui_local_unet_dtype: $("s-comfyui-local-unet-dtype")?.value || "auto",
+    comfyui_local_vae_dtype: $("s-comfyui-local-vae-dtype")?.value || "auto",
+    comfyui_local_text_encoder_dtype: $("s-comfyui-local-text-encoder-dtype")?.value || "auto",
+    comfyui_local_cpu_vae: !!$("s-comfyui-local-cpu-vae")?.checked,
+    comfyui_local_attention_mode: $("s-comfyui-local-attention-mode")?.value || "auto",
+    comfyui_local_upcast_attention: $("s-comfyui-local-upcast-attention")?.value || "auto",
+    comfyui_local_cuda_malloc: $("s-comfyui-local-cuda-malloc")?.value || "auto",
+    comfyui_local_disable_smart_memory: !!$("s-comfyui-local-disable-smart-memory")?.checked,
+    comfyui_local_deterministic: !!$("s-comfyui-local-deterministic")?.checked,
+    comfyui_local_async_offload: $("s-comfyui-local-async-offload")?.value || "auto",
+    comfyui_local_cache_mode: $("s-comfyui-local-cache-mode")?.value || "auto",
+    comfyui_local_cache_lru: parseInt($("s-comfyui-local-cache-lru")?.value || "0", 10) || 0,
+    comfyui_local_reserve_vram_gb: ($("s-comfyui-local-reserve-vram-gb")?.value || "").trim(),
     comfyui_civitai_api_key: ($("s-comfyui-civitai-api-key")?.value || "").trim(),
     comfyui_diffusers_model_repo: ($("s-comfyui-diffusers-model-repo")?.value || "").trim(),
     comfyui_huggingface_api_token: ($("s-comfyui-huggingface-api-token")?.value || "").trim(),
