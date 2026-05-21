@@ -1,6 +1,17 @@
 # Update Summary
 
-Release ID: `2026.05.21-185`
+Release ID: `2026.05.21-186`
+
+## 2026.05.21-186
+
+- Removed the duplicate root「積分總覽」card from the wallet balance page so
+  root supply checks live in the PointsChain private-chain dashboard.
+- Rebuilt the closed-loop supply formula as inline formula cards
+  (`總上限 = 已 burn + 官方錢包 + 在外用戶總量 + 未發放 mint 量 + 交易所基金 + PROMO 基金`)
+  instead of a separate log-style box.
+- Removed the duplicate member-wallet summary from「全用戶倉位管理」and stopped
+  returning the legacy `points_wallets` wallet list from the sitewide positions
+  payload; that page now focuses on spot, margin, orders, and bots only.
 
 ## 2026.05.21-185
 

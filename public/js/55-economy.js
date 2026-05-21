@@ -361,8 +361,6 @@ function syncEconomySubpages(rootMode) {
 }
 
 function setEconomyRootLayout(rootMode) {
-  const rootBalanceCard = $("economy-root-balance-card");
-  if (rootBalanceCard) rootBalanceCard.style.display = rootMode ? "" : "none";
   const rootVirtualCard = $("economy-root-virtual-card");
   if (rootVirtualCard) rootVirtualCard.style.display = rootMode ? "" : "none";
   const manualAdjustDetails = $("economy-manual-adjust-details");
@@ -753,27 +751,18 @@ function setEconomyText(id, text) {
   if (el) el.textContent = text;
 }
 
-function renderEconomyRootBalanceSummary(report) {
-  const stats = report?.stats && typeof report.stats === "object" ? report.stats : {};
-  const circulation = stats.circulation && typeof stats.circulation === "object" ? stats.circulation : {};
-  const memberOutstanding = Number(circulation.member_outstanding_points ?? circulation.outstanding_points ?? 0);
-  const memberLedgerNet = Number(circulation.member_ledger_net_points ?? circulation.ledger_net_points ?? 0);
-  const memberGap = Number(circulation.member_supply_gap_points ?? circulation.supply_gap_points ?? 0);
-  const memberFrozen = Number(circulation.member_frozen_points ?? circulation.frozen_points ?? 0);
-  setEconomyText("economy-root-outstanding-points", formatEconomyPointsValue(memberOutstanding));
-  setEconomyText(
-    "economy-root-outstanding-detail",
-    `可用 ${formatEconomyPointsValue(circulation.member_available_points ?? circulation.available_points ?? 0)} · root ${formatEconomyPointsValue(circulation.root_outstanding_points || 0)}`,
-  );
-  setEconomyText("economy-root-ledger-net-points", formatEconomyPointsValue(memberLedgerNet));
-  setEconomyText("economy-root-supply-gap", `差額 ${formatEconomyPointsValue(memberGap)}`);
-  setEconomyText("economy-root-wallet-count", formatEconomyPointsValue(circulation.member_wallet_count ?? circulation.wallet_count ?? 0));
-  setEconomyText("economy-root-wallet-detail", `凍結 ${formatEconomyPointsValue(memberFrozen)} · root 錢包 ${formatEconomyPointsValue(circulation.root_wallet_count || 0)}`);
-  setEconomyText("economy-root-chain-coverage", formatEconomyPercentValue(circulation.sealed_coverage_percent || 0));
-  setEconomyText(
-    "economy-root-chain-coverage-detail",
-    `未封 ${formatEconomyPointsValue(circulation.unsealed_ledger_entries || 0)} / ledger ${formatEconomyPointsValue(circulation.confirmed_ledger_entries || 0)}`,
-  );
+function economyFormulaCard(label, value, tone = "") {
+  const toneClass = tone ? ` ${tone}` : "";
+  return `
+    <div class="economy-formula-card${toneClass}">
+      <span>${sanitize(label)}</span>
+      <strong>${sanitize(value)}</strong>
+    </div>
+  `;
+}
+
+function economyFormulaOperator(symbol) {
+  return `<div class="economy-formula-operator" aria-hidden="true">${sanitize(symbol)}</div>`;
 }
 
 function renderEconomyLayerSummary(report) {
@@ -822,16 +811,28 @@ function renderEconomyLayerSummary(report) {
     const total = Number(bridge.actual_supply_equation_total ?? (burned + official + outside + mintRemaining + exchange + promo));
     const maxSupply = Number(bridge.max_supply ?? supply.max_supply ?? 0);
     const gap = Number(bridge.actual_supply_equation_gap_points ?? (total - maxSupply));
-    formulaEl.textContent = [
-      `閉環公式：已 burn ${formatEconomyPointsValue(burned)}`,
-      `+ 官方錢包 ${formatEconomyPointsValue(official)}`,
-      `+ 在外用戶總量 ${formatEconomyPointsValue(outside)}`,
-      `+ 未發放 mint 量 ${formatEconomyPointsValue(mintRemaining)}`,
-      `+ 交易所基金 ${formatEconomyPointsValue(exchange)}`,
-      `+ PROMO 基金 ${formatEconomyPointsValue(promo)}`,
-      `= ${formatEconomyPointsValue(total)} / 總上限 ${formatEconomyPointsValue(maxSupply)}`,
-      `；差額 ${formatEconomyPointsValue(gap)}${gap === 0 ? "，閉環正常" : "，需查帳"}`,
-    ].join(" ");
+    const gapTone = gap === 0 ? "total" : "warning";
+    formulaEl.innerHTML = `
+      <div class="economy-supply-title">閉環公式</div>
+      <div class="economy-supply-equation-ui">
+        ${economyFormulaCard("總上限", formatEconomyPointsValue(maxSupply), "total")}
+        ${economyFormulaOperator("=")}
+        ${economyFormulaCard("已 burn", formatEconomyPointsValue(burned))}
+        ${economyFormulaOperator("+")}
+        ${economyFormulaCard("官方錢包", formatEconomyPointsValue(official))}
+        ${economyFormulaOperator("+")}
+        ${economyFormulaCard("在外用戶總量", formatEconomyPointsValue(outside))}
+        ${economyFormulaOperator("+")}
+        ${economyFormulaCard("未發放 mint 量", formatEconomyPointsValue(mintRemaining))}
+        ${economyFormulaOperator("+")}
+        ${economyFormulaCard("交易所基金", formatEconomyPointsValue(exchange))}
+        ${economyFormulaOperator("+")}
+        ${economyFormulaCard("PROMO 基金", formatEconomyPointsValue(promo))}
+        ${economyFormulaOperator("=")}
+        ${economyFormulaCard("公式總和", formatEconomyPointsValue(total), gapTone)}
+        ${economyFormulaCard("差額", `${formatEconomyPointsValue(gap)} · ${gap === 0 ? "閉環正常" : "需查帳"}`, gapTone)}
+      </div>
+    `;
   }
   setEconomyText("economy-layer-exchange-balance", formatEconomyPointsValue(fund("exchange_fund").balance || 0));
   setEconomyText("economy-layer-exchange-address", address("exchange_fund"));
@@ -905,8 +906,6 @@ function renderEconomyRootFundingPools(payload) {
 function renderEconomyRootAllPositions(payload) {
   const safe = payload && typeof payload === "object" ? payload : {};
   const summary = safe.summary && typeof safe.summary === "object" ? safe.summary : {};
-  setEconomyText("economy-root-position-users", formatEconomyPointsValue(summary.user_count || 0));
-  setEconomyText("economy-root-position-wallet-total", `在外 ${formatEconomyPointsValue(summary.total_outstanding_points || 0)}`);
   setEconomyText("economy-root-position-spot-count", formatEconomyPointsValue(summary.spot_position_count || 0));
   setEconomyText("economy-root-position-margin-count", formatEconomyPointsValue(summary.margin_position_count || 0));
   setEconomyText("economy-root-position-margin-detail", `開倉 ${formatEconomyPointsValue(summary.margin_position_count || 0)}`);
@@ -914,15 +913,6 @@ function renderEconomyRootAllPositions(payload) {
   setEconomyText("economy-root-position-orders-detail", `凍結 ${formatEconomyPointsValue(summary.frozen_order_points || 0)}`);
   setEconomyText("economy-root-position-bots", formatEconomyPointsValue(summary.total_bot_count || 0));
   setEconomyText("economy-root-position-bots-detail", `啟用 ${formatEconomyPointsValue(summary.total_enabled_bot_count || 0)} · 網格 ${formatEconomyPointsValue(summary.grid_bot_count || 0)}`);
-  renderEconomyRootList(safe.wallets || [], "economy-root-wallet-position-list", "尚無會員錢包", (row) => `
-    <div class="drive-file-row">
-      <div>
-        <strong>${sanitize(row.username || `user:${row.user_id || "-"}`)} · ${sanitize(formatEconomyPointsValue(row.outstanding_points || 0))} 點</strong>
-        <div class="drive-card-sub">可用 ${sanitize(formatEconomyPointsValue(row.points_balance || 0))} · 凍結 ${sanitize(formatEconomyPointsValue(row.points_frozen || 0))}</div>
-        <div class="drive-card-sub">wallet ${sanitize(row.wallet_status || "-")} · risk ${sanitize(row.risk_level || "-")} · ${sanitize(row.wallet_updated_at || "-")}</div>
-      </div>
-    </div>
-  `);
   renderEconomyRootList(safe.spot_positions || [], "economy-root-spot-position-list", "尚無現貨倉位", (row) => `
     <div class="drive-file-row">
       <div>
@@ -970,7 +960,6 @@ function renderEconomyRootAllPositions(payload) {
 
 function renderEconomyRootReport(report) {
   const safeReport = report && typeof report === "object" ? report : {};
-  renderEconomyRootBalanceSummary(safeReport);
   renderEconomyLayerSummary(safeReport);
   const verification = safeReport.verification && typeof safeReport.verification === "object" ? safeReport.verification : {};
   const counts = verification.counts && typeof verification.counts === "object" ? verification.counts : {};
@@ -1611,7 +1600,6 @@ function bindEconomyInlineEvents() {
     ["economy-adjust-btn", submitEconomyAdjustment],
     ["economy-account-query-btn", loadEconomyAccountLookup],
     ["economy-wallet-sanction-btn", sanctionEconomyWallet],
-    ["economy-root-balance-refresh-btn", loadEconomyRootReport],
     ["economy-root-funding-refresh-btn", loadEconomyRootTradingReadOnly],
     ["economy-root-positions-refresh-btn", loadEconomyRootTradingReadOnly],
     ["economy-root-report-btn", loadEconomyRootReport],

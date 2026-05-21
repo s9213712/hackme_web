@@ -61,8 +61,8 @@ def test_root_points_page_is_chain_operations_console():
     economy_chain_page = index_html.split('id="economy-chain-page"', 1)[1].split('id="economy-msg"', 1)[0]
     assert 'id="economy-user-summary-grid"' in economy_balance_page
     assert 'id="economy-user-ledger-card"' in economy_balance_page
-    assert 'id="economy-root-balance-card"' in economy_balance_page
-    assert 'id="economy-root-outstanding-points"' in economy_balance_page
+    assert 'id="economy-root-balance-card"' not in economy_balance_page
+    assert 'id="economy-root-outstanding-points"' not in economy_balance_page
     assert 'id="economy-root-virtual-card"' not in economy_balance_page
     assert 'id="economy-trading-summary-card"' not in economy_balance_page
     assert 'id="economy-root-virtual-card"' in economy_positions_page
@@ -71,7 +71,10 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-root-reserve-balance"' in index_html
     assert 'id="economy-root-funding-available"' in index_html
     assert 'id="economy-root-lending-pool-list"' in index_html
-    assert 'id="economy-root-wallet-position-list"' in index_html
+    assert 'id="economy-root-position-users"' not in index_html
+    assert 'id="economy-root-position-wallet-total"' not in index_html
+    assert 'id="economy-root-wallet-position-list"' not in index_html
+    assert "會員錢包摘要" not in index_html
     assert 'id="economy-root-spot-position-list"' in index_html
     assert 'id="economy-root-margin-position-list"' in index_html
     assert 'id="economy-root-bot-position-list"' in index_html
@@ -93,6 +96,10 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-layer-legacy-outstanding"' in index_html
     assert 'id="economy-layer-promo-bridged"' in index_html
     assert 'id="economy-layer-supply-formula"' in index_html
+    assert 'class="economy-supply-formula" id="economy-layer-supply-formula"' in index_html
+    assert 'class="economy-supply-equation-ui"' in index_html
+    assert 'class="economy-formula-card"' in index_html
+    assert 'class="security-log-box" id="economy-layer-supply-formula"' not in index_html
     assert 'id="economy-layer-snapshot-height"' in index_html
     assert 'id="economy-layer-derived-verify"' in index_html
     assert "<pre id=\"economy-chain-status\"" not in index_html
@@ -164,17 +171,22 @@ def test_root_points_page_is_chain_operations_console():
     assert 'fetchEconomyJson("/root/trading/sitewide/pools", { allowMissingSnapshot: true })' in economy_js
     assert 'fetchEconomyJson("/root/trading/sitewide/user-positions", { allowMissingSnapshot: true })' in economy_js
     assert 'const shouldLoadRootTrading = rootMode && ["funding-pools", "all-positions"].includes(economyActivePage);' in economy_js
-    assert "function renderEconomyRootBalanceSummary" in economy_js
+    assert "function renderEconomyRootBalanceSummary" not in economy_js
     assert "function renderEconomyLayerSummary" in economy_js
+    assert "function economyFormulaCard" in economy_js
+    assert "function economyFormulaOperator" in economy_js
     assert 'setEconomyText("economy-layer-mint-remaining"' in economy_js
     assert 'setEconomyText("economy-layer-active-supply"' in economy_js
     assert 'setEconomyText("economy-layer-legacy-outstanding"' in economy_js
     assert '"economy-layer-supply-equation"' in economy_js
     assert '"economy-layer-supply-formula"' in economy_js
     assert "閉環公式" in economy_js
+    assert "economy-root-balance-refresh-btn" not in economy_js
     assert 'setEconomyText("economy-layer-derived-verify"' in economy_js
     assert "function renderEconomyRootFundingPools" in economy_js
     assert "function renderEconomyRootAllPositions" in economy_js
+    assert 'setEconomyText("economy-root-position-users"' not in economy_js
+    assert '"economy-root-wallet-position-list"' not in economy_js
     assert 'setEconomyText("economy-root-position-bots"' in economy_js
     assert 'renderEconomyRootList(botRows, "economy-root-bot-position-list"' in economy_js
     assert "startEconomyBlockCountdown" in economy_js

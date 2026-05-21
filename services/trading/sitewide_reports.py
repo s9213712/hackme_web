@@ -92,78 +92,6 @@ def build_sitewide_user_positions_payload(service):
     conn = service.get_db()
     try:
         service.ensure_schema(conn)
-        wallet_rows = []
-        if table_columns(conn, "points_wallets"):
-            wallet_summary = dict(conn.execute(
-                """
-                SELECT
-                    COUNT(*) AS user_count,
-                    COALESCE(SUM(w.soft_balance + w.hard_balance), 0) AS total_available_points,
-                    COALESCE(SUM(w.soft_frozen + w.hard_frozen), 0) AS total_frozen_points,
-                    COALESCE(SUM(w.soft_balance + w.hard_balance + w.soft_frozen + w.hard_frozen), 0) AS total_outstanding_points
-                FROM users u
-                LEFT JOIN points_wallets w ON w.user_id=u.id
-                WHERE COALESCE(LOWER(u.username), '') != 'root'
-                """
-            ).fetchone())
-            wallet_rows = [
-                dict(row)
-                for row in conn.execute(
-                    """
-                    SELECT
-                        u.id AS user_id,
-                        u.username,
-                        u.role,
-                        u.status AS account_status,
-                        COALESCE(w.soft_balance + w.hard_balance, 0) AS points_balance,
-                        COALESCE(w.soft_frozen + w.hard_frozen, 0) AS points_frozen,
-                        COALESCE(w.soft_balance + w.hard_balance + w.soft_frozen + w.hard_frozen, 0) AS outstanding_points,
-                        COALESCE(w.wallet_status, 'missing') AS wallet_status,
-                        COALESCE(w.risk_level, 'normal') AS risk_level,
-                        w.updated_at AS wallet_updated_at
-                    FROM users u
-                    LEFT JOIN points_wallets w ON w.user_id=u.id
-                    WHERE COALESCE(LOWER(u.username), '') != 'root'
-                    ORDER BY outstanding_points DESC, u.id ASC
-                    LIMIT 100
-                    """
-                ).fetchall()
-            ]
-        else:
-            wallet_summary = dict(conn.execute(
-                """
-                SELECT
-                    COUNT(*) AS user_count,
-                    0 AS total_available_points,
-                    0 AS total_frozen_points,
-                    0 AS total_outstanding_points
-                FROM users
-                WHERE COALESCE(LOWER(username), '') != 'root'
-                """
-            ).fetchone())
-            wallet_rows = [
-                {
-                    "user_id": row["id"],
-                    "username": row["username"],
-                    "role": row["role"],
-                    "account_status": row["status"],
-                    "points_balance": 0,
-                    "points_frozen": 0,
-                    "outstanding_points": 0,
-                    "wallet_status": "missing",
-                    "risk_level": "normal",
-                    "wallet_updated_at": None,
-                }
-                for row in conn.execute(
-                    """
-                    SELECT id, username, role, status
-                    FROM users
-                    WHERE COALESCE(LOWER(username), '') != 'root'
-                    ORDER BY id ASC
-                    LIMIT 100
-                    """
-                ).fetchall()
-            ]
         spot_summary = dict(conn.execute(
             """
             SELECT COUNT(*) AS position_count
@@ -327,10 +255,6 @@ def build_sitewide_user_positions_payload(service):
             "ok": True,
             "positions": {
                 "summary": {
-                    "user_count": int(wallet_summary["user_count"] or 0),
-                    "total_available_points": int(wallet_summary["total_available_points"] or 0),
-                    "total_frozen_points": int(wallet_summary["total_frozen_points"] or 0),
-                    "total_outstanding_points": int(wallet_summary["total_outstanding_points"] or 0),
                     "spot_position_count": int(spot_summary["position_count"] or 0),
                     "margin_position_count": int(margin_summary["position_count"] or 0),
                     "open_order_count": int(order_summary["open_orders"] or 0),
@@ -344,7 +268,6 @@ def build_sitewide_user_positions_payload(service):
                     "total_enabled_bot_count": int(bot_summary["enabled_bot_count"] or 0) + int(grid_bot_summary["enabled_grid_bot_count"] or 0),
                     "root_simulated_excluded": True,
                 },
-                "wallets": wallet_rows,
                 "spot_positions": spot_positions,
                 "margin_positions": margin_positions,
                 "bots": bots,

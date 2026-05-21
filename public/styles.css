@@ -322,6 +322,72 @@
       overflow-wrap: anywhere;
     }
 
+    .economy-supply-formula {
+      margin-top: .7rem;
+      font-size: .86rem;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .economy-supply-title {
+      color: var(--muted);
+      font-size: .78rem;
+      margin-bottom: .45rem;
+    }
+
+    .economy-supply-equation-ui {
+      display: flex;
+      align-items: stretch;
+      flex-wrap: wrap;
+      gap: .45rem;
+    }
+
+    .economy-formula-card {
+      min-width: 124px;
+      min-height: 72px;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      padding: .62rem .72rem;
+      background: rgba(255,255,255,.035);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: .18rem;
+      box-sizing: border-box;
+    }
+
+    .economy-formula-card span {
+      color: var(--muted);
+      font-size: .72rem;
+    }
+
+    .economy-formula-card strong {
+      color: var(--text);
+      font-size: 1rem;
+      line-height: 1.12;
+      overflow-wrap: anywhere;
+    }
+
+    .economy-formula-card.total {
+      border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+
+    .economy-formula-card.warning {
+      border-color: rgba(255, 79, 109, .45);
+      background: rgba(255, 79, 109, .10);
+    }
+
+    .economy-formula-operator {
+      min-width: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 1.15rem;
+      font-weight: 800;
+    }
+
     #economy-wallet-identity-address,
     #economy-public-account {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;

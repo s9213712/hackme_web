@@ -2560,21 +2560,6 @@
         </div>
         <div class="msg" id="economy-wallet-onboarding-msg"></div>
       </div>
-      <div class="drive-card" id="economy-root-balance-card" style="display:none;margin-top:.75rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title">root 積分總覽</div>
-            <div class="drive-card-sub">PointsChain 在外積分、帳本淨額與封塊覆蓋狀態</div>
-          </div>
-          <button class="btn" id="economy-root-balance-refresh-btn" type="button">重新整理</button>
-        </div>
-        <div class="settings-option-grid economy-wallet-grid">
-          <div><span class="drive-card-sub">在外積分</span><strong id="economy-root-outstanding-points">-</strong><small id="economy-root-outstanding-detail">不含 root -</small></div>
-          <div><span class="drive-card-sub">帳本淨額</span><strong id="economy-root-ledger-net-points">-</strong><small id="economy-root-supply-gap">差額 -</small></div>
-          <div><span class="drive-card-sub">錢包</span><strong id="economy-root-wallet-count">-</strong><small id="economy-root-wallet-detail">凍結 -</small></div>
-          <div><span class="drive-card-sub">封塊覆蓋</span><strong id="economy-root-chain-coverage">-</strong><small id="economy-root-chain-coverage-detail">未封 -</small></div>
-        </div>
-      </div>
       <div class="drive-card" id="economy-user-ledger-card" style="margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
@@ -2711,27 +2696,20 @@
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">全用戶倉位管理</div>
-            <div class="drive-card-sub">會員 PointsChain 錢包、現貨、借貸倉位、開放掛單與交易機器人；root 模擬倉位不列入</div>
+            <div class="drive-card-sub">現貨、借貸倉位、開放掛單與交易機器人；root 模擬倉位不列入</div>
           </div>
           <button class="btn" id="economy-root-positions-refresh-btn" type="button">更新</button>
         </div>
         <div class="settings-option-grid economy-wallet-grid">
-          <div><span class="drive-card-sub">會員錢包</span><strong id="economy-root-position-users">-</strong><small id="economy-root-position-wallet-total">在外 -</small></div>
           <div><span class="drive-card-sub">現貨倉位</span><strong id="economy-root-position-spot-count">-</strong><small>非 root 會員</small></div>
           <div><span class="drive-card-sub">借貸倉位</span><strong id="economy-root-position-margin-count">-</strong><small id="economy-root-position-margin-detail">開倉 -</small></div>
           <div><span class="drive-card-sub">掛單</span><strong id="economy-root-position-orders">-</strong><small id="economy-root-position-orders-detail">凍結 -</small></div>
           <div><span class="drive-card-sub">交易機器人</span><strong id="economy-root-position-bots">-</strong><small id="economy-root-position-bots-detail">啟用 -</small></div>
         </div>
       </div>
-      <div class="drive-dashboard-grid" style="margin-top:.75rem;">
-        <div class="drive-card">
-          <div class="drive-card-title">會員錢包摘要</div>
-          <div id="economy-root-wallet-position-list" class="drive-file-list"></div>
-        </div>
-        <div class="drive-card">
-          <div class="drive-card-title">現貨倉位</div>
-          <div id="economy-root-spot-position-list" class="drive-file-list"></div>
-        </div>
+      <div class="drive-card" style="margin-top:.75rem;">
+        <div class="drive-card-title">現貨倉位</div>
+        <div id="economy-root-spot-position-list" class="drive-file-list"></div>
       </div>
       <div class="drive-card" style="margin-top:.75rem;">
         <div class="drive-card-title">借貸倉位</div>
@@ -2796,7 +2774,12 @@
           <div><span class="drive-card-sub">Replay</span><strong id="economy-layer-replay-height">-</strong><small id="economy-layer-replay-hash">derived cache</small></div>
           <div><span class="drive-card-sub">Snapshot / Verify</span><strong id="economy-layer-snapshot-height">-</strong><small id="economy-layer-derived-verify">verify -</small></div>
         </div>
-        <div class="security-log-box" id="economy-layer-supply-formula" style="margin-top:.75rem;font-size:.84rem;line-height:1.45;">閉環公式載入中...</div>
+        <div class="economy-supply-formula" id="economy-layer-supply-formula" aria-live="polite">
+          <div class="economy-supply-title">閉環公式</div>
+          <div class="economy-supply-equation-ui">
+            <div class="economy-formula-card"><span>狀態</span><strong>載入中...</strong></div>
+          </div>
+        </div>
         <div class="drive-card-sub" id="economy-chain-countdown" style="margin-top:.6rem;">封塊倒數：-</div>
         <div class="drive-card-sub" id="economy-chain-loaded-at" style="margin-top:.25rem;">最後更新 -</div>
         <details class="economy-collapse economy-chain-fold" id="economy-chain-backup-details">

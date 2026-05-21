@@ -162,8 +162,8 @@ def test_root_sitewide_user_positions_are_read_only_and_exclude_root(tmp_path):
     assert payload["ok"] is True
     assert payload["positions"]["read_only"] is True
     assert payload["positions"]["summary"]["root_simulated_excluded"] is True
-    assert payload["positions"]["summary"]["total_outstanding_points"] == 1000
-    assert [row["username"] for row in payload["positions"]["wallets"]] == ["alice"]
+    assert "total_outstanding_points" not in payload["positions"]["summary"]
+    assert "wallets" not in payload["positions"]
     assert [row["username"] for row in payload["positions"]["spot_positions"]] == ["alice"]
     assert payload["positions"]["margin_positions"][0]["interest_due_points"] == 10
     assert payload["positions"]["summary"]["open_order_count"] == 1
