@@ -4116,6 +4116,10 @@ function updateComfyuiConnectionModeFields() {
   const hfTokenInput = $("s-comfyui-huggingface-api-token");
   const hfTokenClear = $("s-comfyui-huggingface-api-token-clear");
   const allowInProcessDiffusers = $("s-comfyui-allow-in-process-diffusers");
+  const lowCpuMemUsage = $("s-comfyui-diffusers-low-cpu-mem-usage");
+  const cudaFallbackToCpu = $("s-comfyui-diffusers-cuda-fallback-to-cpu");
+  const keepDownloadedModels = $("s-comfyui-diffusers-keep-downloaded-models");
+  const deviceMap = $("s-comfyui-diffusers-device-map");
   if (localBox) localBox.style.display = mode === "local" ? "" : "none";
   if (remoteBox) remoteBox.style.display = mode === "remote" ? "" : "none";
   if (diffusersBox) diffusersBox.style.display = mode === "diffusers" ? "" : "none";
@@ -4124,6 +4128,10 @@ function updateComfyuiConnectionModeFields() {
   if (hfTokenInput) hfTokenInput.disabled = mode !== "diffusers";
   if (hfTokenClear) hfTokenClear.disabled = mode !== "diffusers";
   if (allowInProcessDiffusers) allowInProcessDiffusers.disabled = mode !== "diffusers";
+  if (lowCpuMemUsage) lowCpuMemUsage.disabled = mode !== "diffusers";
+  if (cudaFallbackToCpu) cudaFallbackToCpu.disabled = mode !== "diffusers";
+  if (keepDownloadedModels) keepDownloadedModels.disabled = mode !== "diffusers";
+  if (deviceMap) deviceMap.disabled = mode !== "diffusers";
   const status = $("comfyui-test-connection-status");
   if (status && !status.dataset.userTouched) {
     status.textContent = mode === "local"
@@ -4417,7 +4425,11 @@ async function loadSettings() {
   if ($("s-comfyui-huggingface-api-token-clear")) $("s-comfyui-huggingface-api-token-clear").checked = false;
   if ($("s-comfyui-diffusers-device")) $("s-comfyui-diffusers-device").value = s.comfyui_diffusers_device || "auto";
   if ($("s-comfyui-diffusers-dtype")) $("s-comfyui-diffusers-dtype").value = s.comfyui_diffusers_dtype || "auto";
+  if ($("s-comfyui-diffusers-device-map")) $("s-comfyui-diffusers-device-map").value = s.comfyui_diffusers_device_map || "auto";
   if ($("s-comfyui-allow-in-process-diffusers")) $("s-comfyui-allow-in-process-diffusers").checked = !!s.comfyui_allow_in_process_diffusers;
+  if ($("s-comfyui-diffusers-low-cpu-mem-usage")) $("s-comfyui-diffusers-low-cpu-mem-usage").checked = s.comfyui_diffusers_low_cpu_mem_usage !== false;
+  if ($("s-comfyui-diffusers-cuda-fallback-to-cpu")) $("s-comfyui-diffusers-cuda-fallback-to-cpu").checked = s.comfyui_diffusers_cuda_fallback_to_cpu !== false;
+  if ($("s-comfyui-diffusers-keep-downloaded-models")) $("s-comfyui-diffusers-keep-downloaded-models").checked = s.comfyui_diffusers_keep_downloaded_models !== false;
   if ($("comfyui-huggingface-api-token-state")) {
     $("comfyui-huggingface-api-token-state").textContent = s.comfyui_huggingface_api_token_configured
       ? "目前已儲存 Hugging Face API Token；留空儲存不會變更。"
@@ -6180,7 +6192,11 @@ async function saveSettings() {
     comfyui_huggingface_api_token_clear: !!$("s-comfyui-huggingface-api-token-clear")?.checked,
     comfyui_diffusers_device: $("s-comfyui-diffusers-device")?.value || "auto",
     comfyui_diffusers_dtype: $("s-comfyui-diffusers-dtype")?.value || "auto",
+    comfyui_diffusers_device_map: $("s-comfyui-diffusers-device-map")?.value || "auto",
     comfyui_allow_in_process_diffusers: !!$("s-comfyui-allow-in-process-diffusers")?.checked,
+    comfyui_diffusers_low_cpu_mem_usage: $("s-comfyui-diffusers-low-cpu-mem-usage") ? !!$("s-comfyui-diffusers-low-cpu-mem-usage").checked : true,
+    comfyui_diffusers_cuda_fallback_to_cpu: $("s-comfyui-diffusers-cuda-fallback-to-cpu") ? !!$("s-comfyui-diffusers-cuda-fallback-to-cpu").checked : true,
+    comfyui_diffusers_keep_downloaded_models: $("s-comfyui-diffusers-keep-downloaded-models") ? !!$("s-comfyui-diffusers-keep-downloaded-models").checked : true,
     comfyui_paid_api_nodes_enabled: !!$("s-comfyui-paid-api-nodes-enabled")?.checked,
     comfyui_account_api_key: ($("s-comfyui-account-api-key")?.value || "").trim(),
     comfyui_account_api_key_clear: !!$("s-comfyui-account-api-key-clear")?.checked,
@@ -6351,7 +6367,8 @@ async function testComfyuiConnection() {
         local_start_script: startScript,
         diffusers_model_repo: diffusersRepo,
         comfyui_diffusers_device: $("s-comfyui-diffusers-device")?.value || "auto",
-        comfyui_diffusers_dtype: $("s-comfyui-diffusers-dtype")?.value || "auto"
+        comfyui_diffusers_dtype: $("s-comfyui-diffusers-dtype")?.value || "auto",
+        comfyui_diffusers_cuda_fallback_to_cpu: $("s-comfyui-diffusers-cuda-fallback-to-cpu") ? !!$("s-comfyui-diffusers-cuda-fallback-to-cpu").checked : true
       })
     });
     const json = await res.json().catch(() => ({}));

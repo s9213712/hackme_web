@@ -13,12 +13,14 @@ import logging
 import mimetypes
 import os
 import re
+import shutil
 import sys
 import threading
 import time
 import uuid
 import warnings
 from collections import deque
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
@@ -39,6 +41,7 @@ DIFFUSERS_BACKEND_NETLOC = "local"
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _HF_TOKEN_RE = re.compile(r"hf_[A-Za-z0-9]{8,}")
 _BEARER_RE = re.compile(r"(authorization\s*[:=]\s*bearer\s+|bearer\s+)[A-Za-z0-9._-]+", re.IGNORECASE)
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _DIFFUSERS_LOGGER_NAMES = (
     "diffusers",
     "huggingface_hub",
@@ -87,7 +90,7 @@ def _format_speed(value):
 
 
 def _sanitize_runtime_log_line(value):
-    text = str(value or "").replace("\r", "\n").strip()
+    text = _ANSI_ESCAPE_RE.sub("", str(value or "")).replace("\r", "\n").strip()
     text = _HF_TOKEN_RE.sub("hf_***", text)
     text = _BEARER_RE.sub(lambda match: match.group(1) + "***", text)
     return text[:700]
@@ -165,6 +168,7 @@ class _DiffusersRuntimeLogCapture:
         self.active = False
         self.last_emit = 0.0
         self.formatter = logging.Formatter("%(levelname)s %(name)s: %(message)s")
+        self.transient_paths = []
 
     def __enter__(self):
         if self.active or not self.progress_callback:
@@ -231,13 +235,37 @@ class _DiffusersRuntimeLogCapture:
         self.emit_tail(force=True)
         return False
 
-    def append_line(self, value):
+    def register_transient_path(self, path):
+        try:
+            resolved = Path(path).expanduser().resolve()
+        except Exception:
+            return
+        if not resolved:
+            return
+        self.transient_paths.append(resolved)
+
+    def cleanup_transient_paths(self):
+        paths = list(self.transient_paths)
+        self.transient_paths = []
+        for path in paths:
+            try:
+                if not path.exists():
+                    continue
+                self.append_line(f"Removing transient Diffusers download cache: {path}")
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink(missing_ok=True)
+            except Exception as exc:
+                self.append_line(f"Unable to remove transient Diffusers download cache {path}: {exc}")
+
+    def append_line(self, value, *, force=False):
         line = _sanitize_runtime_log_line(value)
         if not line:
             return
         with self.lock:
             self.tail.append(line)
-        self.emit_tail()
+        self.emit_tail(force=force)
 
     def emit_record(self, record):
         try:
@@ -273,6 +301,41 @@ class _DiffusersRuntimeLogCapture:
             data["python_log_tail"] = lines
         self.progress_callback(data)
 
+    @contextmanager
+    def heartbeat(self, *, phase, percent, step, detail, interval=15, extra_payload=None):
+        if not self.progress_callback:
+            yield
+            return
+        stop_event = threading.Event()
+        interval = max(5, int(interval or 15))
+
+        def emit_loop():
+            elapsed = 0
+            while not stop_event.wait(interval):
+                elapsed += interval
+                self.append_line(f"{step}: still running after {elapsed}s", force=True)
+                payload = {
+                    "phase": phase,
+                    "percent": percent,
+                    "step": step,
+                    "detail": f"{detail}；仍在執行 {elapsed}s",
+                    "backend_kind": "diffusers",
+                }
+                if callable(extra_payload):
+                    try:
+                        payload.update(extra_payload() or {})
+                    except Exception:
+                        pass
+                self.progress(payload)
+
+        thread = threading.Thread(target=emit_loop, name="diffusers-progress-heartbeat", daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop_event.set()
+            thread.join(timeout=1)
+
     def error(self, message, *, step="Diffusers 失敗"):
         self.progress({
             "phase": "error",
@@ -307,6 +370,8 @@ class _PipelineCacheKey:
     mode: str
     device: str
     dtype: str
+    device_map: str
+    low_cpu_mem_usage: bool
     token_fingerprint: str
 
 
@@ -323,8 +388,12 @@ class DiffusersClient:
         storage_root=".",
         device="auto",
         dtype="auto",
+        device_map="auto",
+        low_cpu_mem_usage=True,
+        cuda_fallback_to_cpu=True,
         base_url="",
         allow_in_process_runtime=False,
+        keep_downloaded_models=True,
     ):
         self.model_repo = str(model_repo or "").strip()
         self.token = str(token or "").strip()
@@ -332,8 +401,14 @@ class DiffusersClient:
         self.runtime_root = self.storage_root / "_runtime" / "comfyui_diffusers"
         self.device_setting = str(device or "auto").strip().lower()
         self.dtype_setting = str(dtype or "auto").strip().lower()
+        self.device_map_setting = str(device_map or "auto").strip().lower()
+        if self.device_map_setting == "none":
+            self.device_map_setting = "disabled"
+        self.low_cpu_mem_usage = bool(low_cpu_mem_usage)
+        self.cuda_fallback_to_cpu = bool(cuda_fallback_to_cpu)
         self.base_url = str(base_url or diffusers_backend_url(self.model_repo))
         self.allow_in_process_runtime = bool(allow_in_process_runtime)
+        self.keep_downloaded_models = bool(keep_downloaded_models)
         self.timeout = 30
 
     @classmethod
@@ -350,8 +425,12 @@ class DiffusersClient:
             storage_root=storage_root,
             device=settings.get("comfyui_diffusers_device") or "auto",
             dtype=settings.get("comfyui_diffusers_dtype") or "auto",
+            device_map=settings.get("comfyui_diffusers_device_map") or "auto",
+            low_cpu_mem_usage=_settings_flag(settings.get("comfyui_diffusers_low_cpu_mem_usage", True)),
+            cuda_fallback_to_cpu=_settings_flag(settings.get("comfyui_diffusers_cuda_fallback_to_cpu", True)),
             base_url=backend_url or diffusers_backend_url(model_repo),
             allow_in_process_runtime=_settings_flag(settings.get("comfyui_allow_in_process_diffusers")),
+            keep_downloaded_models=_settings_flag(settings.get("comfyui_diffusers_keep_downloaded_models", True)),
         )
 
     def _effective_model_repo(self, params=None):
@@ -452,6 +531,13 @@ class DiffusersClient:
             return False
         os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
         return True
+
+    def _new_transient_download_dir(self, label):
+        safe_label = _SAFE_FILENAME_RE.sub("_", str(label or "model")).strip("._") or "model"
+        root = self.runtime_root / "transient_downloads"
+        path = root / f"{safe_label}_{uuid.uuid4().hex}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def health_check(self, *, timeout=3):
         self._ensure_dependencies()
@@ -644,6 +730,79 @@ class DiffusersClient:
             return torch.float32
         return torch.float16 if device == "cuda" else torch.float32
 
+    def _accelerate_available(self):
+        return importlib.util.find_spec("accelerate") is not None
+
+    def _resolve_device_map(self, device, cuda_memory=None):
+        requested = (self.device_map_setting or "auto").strip().lower()
+        if requested in {"disabled", "none", "off", "false", "0"}:
+            return ""
+        if requested == "auto":
+            if device != "cuda" or not self._accelerate_available():
+                return ""
+            total_bytes = int((cuda_memory or {}).get("cuda_total_bytes") or 0)
+            if total_bytes and total_bytes < 8 * 1024 * 1024 * 1024:
+                return "balanced"
+            return "cuda"
+        if requested in {"cuda", "balanced", "balanced_low_0", "sequential"}:
+            return requested if self._accelerate_available() else ""
+        return ""
+
+    def _cuda_memory_payload(self, torch):
+        if importlib.util.find_spec("torch") is None:
+            return {}
+        if not getattr(torch, "cuda", None) or not torch.cuda.is_available():
+            return {}
+        payload = {}
+        try:
+            payload["cuda_device_name"] = torch.cuda.get_device_name(0)
+        except Exception:
+            payload["cuda_device_name"] = "cuda"
+        try:
+            free_bytes, total_bytes = torch.cuda.mem_get_info()
+            payload["cuda_free_bytes"] = int(free_bytes)
+            payload["cuda_total_bytes"] = int(total_bytes)
+        except Exception:
+            pass
+        return payload
+
+    def _should_fallback_to_cpu_for_low_vram(self, device, cuda_memory):
+        if not self.cuda_fallback_to_cpu or self.device_setting != "auto" or device != "cuda":
+            return False
+        total_bytes = int((cuda_memory or {}).get("cuda_total_bytes") or 0)
+        return bool(total_bytes and total_bytes < 8 * 1024 * 1024 * 1024)
+
+    def _log_cuda_memory(self, torch, *, log_capture=None, progress_callback=None):
+        memory = self._cuda_memory_payload(torch)
+        if not memory:
+            return {}
+        free_bytes = int(memory.get("cuda_free_bytes") or 0)
+        total_bytes = int(memory.get("cuda_total_bytes") or 0)
+        name = memory.get("cuda_device_name") or "cuda"
+        if log_capture:
+            if total_bytes:
+                log_capture.append_line(
+                    f"CUDA device: {name}; VRAM free {_format_bytes(free_bytes)} / total {_format_bytes(total_bytes)}",
+                    force=True,
+                )
+            else:
+                log_capture.append_line(f"CUDA device: {name}; VRAM size unavailable", force=True)
+            if total_bytes and total_bytes < 8 * 1024 * 1024 * 1024:
+                log_capture.append_line(
+                    "WARNING: CUDA VRAM is below 8GB; SDXL or large Diffusers models may load very slowly or fail. "
+                    "Root can adjust Diffusers device/device_map/dtype, choose a smaller model, or use an external ComfyUI backend.",
+                    force=True,
+                )
+        if progress_callback and total_bytes:
+            progress_callback({
+                "phase": "loading",
+                "percent": 4,
+                "step": "檢查 CUDA VRAM",
+                "detail": f"CUDA {name}：VRAM 可用 {_format_bytes(free_bytes)} / {_format_bytes(total_bytes)}",
+                **memory,
+            })
+        return memory
+
     def _huggingface_progress_tqdm_class(
         self,
         progress_callback,
@@ -652,6 +811,7 @@ class DiffusersClient:
         base_percent=5,
         span_percent=20,
         log_capture=None,
+        download_tracker=None,
     ):
         if not progress_callback:
             return None
@@ -687,20 +847,37 @@ class DiffusersClient:
             desc = str(getattr(bar, "_hackme_progress_desc", "") or "").strip() or outer_label
             current_file = desc
             if unit.upper() == "B" or total > 1024 * 1024:
+                if download_tracker is not None:
+                    download_tracker["saw_any"] = True
+                    download_tracker["saw_byte_bar"] = True
+                    download_tracker["bytes_written"] = max(int(download_tracker.get("bytes_written") or 0), current)
+                    download_tracker["total_bytes"] = max(int(download_tracker.get("total_bytes") or 0), total)
                 size_text = f"{_format_bytes(current)} / {_format_bytes(total)}" if total else _format_bytes(current)
                 speed_text = _format_speed(speed)
-                detail = f"下載 {desc}：{size_text}{f'，{speed_text}' if speed_text else ''}"
+                cache_check = total <= 0 and current <= 0
+                detail = (
+                    f"檢查 {desc}：尚未偵測到下載位元組，可能是 Hugging Face cache hit 或 metadata 檢查"
+                    if cache_check
+                    else f"下載 {desc}：{size_text}{f'，{speed_text}' if speed_text else ''}"
+                )
                 payload = {
                     "phase": "downloading",
                     "percent": percent,
-                    "step": "Hugging Face 檔案下載",
+                    "step": "Hugging Face cache / download 檢查" if cache_check else "Hugging Face 檔案下載",
                     "current_file": current_file,
                     "detail": detail,
                     "bytes_written": current,
                     "total_bytes": total,
                     "speed_bytes_per_sec": int(speed) if speed > 0 else 0,
                 }
+                if cache_check:
+                    payload["cache_check"] = True
             else:
+                if download_tracker is not None:
+                    download_tracker["saw_any"] = True
+                    download_tracker["saw_item_bar"] = True
+                    download_tracker["items_current"] = max(int(download_tracker.get("items_current") or 0), current)
+                    download_tracker["items_total"] = max(int(download_tracker.get("items_total") or 0), total)
                 total_text = f"/{total}" if total else ""
                 detail = f"下載 {desc}：{current}{total_text} {unit or 'items'}"
                 payload = {
@@ -753,6 +930,12 @@ class DiffusersClient:
                 return super().close()
 
         return HuggingFaceProgressTqdm
+
+    def _download_tracker_cache_hit(self, tracker):
+        tracker = tracker or {}
+        if not tracker.get("saw_any"):
+            return False
+        return int(tracker.get("bytes_written") or 0) <= 0 and int(tracker.get("total_bytes") or 0) <= 0
 
     def _diffusers_snapshot_patterns(self, variant=""):
         base_patterns = [
@@ -812,12 +995,14 @@ class DiffusersClient:
             "token_used": bool(self.token),
             "hf_transfer_enabled": accelerated,
         })
+        download_tracker = {}
         tqdm_class = self._huggingface_progress_tqdm_class(
             progress_callback,
             label=f"{model_repo}{variant_text}",
             base_percent=base_percent,
             span_percent=span_percent,
             log_capture=log_capture,
+            download_tracker=download_tracker,
         )
         kwargs = {
             "repo_id": model_repo,
@@ -825,6 +1010,12 @@ class DiffusersClient:
             "allow_patterns": allow_patterns,
             "tqdm_class": tqdm_class,
         }
+        if not self.keep_downloaded_models:
+            transient_dir = self._new_transient_download_dir(f"snapshot_{model_repo.replace('/', '_')}")
+            kwargs["local_dir"] = str(transient_dir)
+            if log_capture:
+                log_capture.register_transient_path(transient_dir)
+                log_capture.append_line(f"Diffusers keep-downloaded-models disabled; using transient local_dir={transient_dir}")
         if ignore_patterns:
             kwargs["ignore_patterns"] = ignore_patterns
         try:
@@ -834,14 +1025,24 @@ class DiffusersClient:
             snapshot_path = snapshot_download(**kwargs)
         except Exception as exc:
             raise ComfyUIError(f"Hugging Face 模型下載失敗：{exc}") from exc
+        cache_hit = self._download_tracker_cache_hit(download_tracker)
         if log_capture:
-            log_capture.append_line(f"Download complete: {model_repo}{variant_text}")
+            suffix = " (cache hit; no network bytes reported)" if cache_hit else ""
+            log_capture.append_line(f"Download complete: {model_repo}{variant_text}{suffix}")
+        detail = (
+            f"Hugging Face cache hit：{model_repo}{variant_text} 已在本機快取，未偵測到網路下載位元組，正在載入 pipeline"
+            if cache_hit
+            else f"Hugging Face 模型已下載到本機快取，正在載入 {model_repo}{variant_text}"
+        )
         progress_callback({
             "phase": "loading",
             "percent": min(99, base_percent + span_percent),
             "step": "載入 Diffusers pipeline",
             "current_file": "",
-            "detail": f"Hugging Face 模型已下載到本機快取，正在載入 {model_repo}{variant_text}",
+            "detail": detail,
+            "cache_hit": cache_hit,
+            "bytes_written": int(download_tracker.get("bytes_written") or 0),
+            "total_bytes": int(download_tracker.get("total_bytes") or 0),
         })
         return str(snapshot_path or "")
 
@@ -869,6 +1070,8 @@ class DiffusersClient:
         gguf_file="",
         gguf_base_repo="",
         log_capture=None,
+        force_device=None,
+        cpu_fallback_attempted=False,
     ):
         model_repo = self._effective_model_repo({"model": model_repo})
         variant = self._effective_model_variant({"diffusers_model_variant": variant})
@@ -880,13 +1083,62 @@ class DiffusersClient:
             )
         self._ensure_configured(model_repo)
         if gguf_file:
+            if log_capture:
+                log_capture.append_line("Checking Python dependencies for GGUF Diffusers runtime", force=True)
             self._ensure_gguf_dependencies()
         else:
+            if log_capture:
+                log_capture.append_line("Checking Python dependencies: diffusers, torch, Pillow", force=True)
             self._ensure_dependencies()
-        import torch
+        if log_capture:
+            log_capture.append_line("Python dependency check complete")
+            log_capture.append_line("Importing torch", force=True)
+        torch_import_heartbeat = (
+            log_capture.heartbeat(
+                phase="loading",
+                percent=4,
+                step="Importing torch",
+                detail="正在載入 torch / CUDA runtime",
+            )
+            if log_capture
+            else nullcontext()
+        )
+        with torch_import_heartbeat:
+            import torch
+        if log_capture:
+            log_capture.append_line(f"Imported torch {getattr(torch, '__version__', 'unknown')}")
 
-        device = self._resolve_device(torch)
+        if log_capture:
+            log_capture.append_line("Resolving Diffusers device and dtype")
+        device = force_device or self._resolve_device(torch)
         dtype = self._resolve_dtype(torch, device)
+        cuda_memory = self._log_cuda_memory(torch, log_capture=log_capture, progress_callback=progress_callback) if device == "cuda" else {}
+        if self._should_fallback_to_cpu_for_low_vram(device, cuda_memory):
+            if log_capture:
+                log_capture.append_line(
+                    "CUDA VRAM is below Diffusers auto threshold; falling back to CPU because root enabled CUDA fallback",
+                    force=True,
+                )
+            if progress_callback:
+                progress_callback({
+                    "phase": "loading",
+                    "percent": 5,
+                    "step": "CUDA fallback to CPU",
+                    "detail": (
+                        "CUDA VRAM 低於 8GB，Diffusers auto 已改用 CPU；"
+                        "root 可在快速設定改為 cuda 強制使用 GPU，或關閉 GPU 失敗自動 CPU。"
+                    ),
+                    "token_used": bool(self.token),
+                    **cuda_memory,
+                })
+            device = "cpu"
+            dtype = self._resolve_dtype(torch, device)
+            cuda_memory = {}
+        if log_capture:
+            log_capture.append_line(
+                f"Diffusers environment ready: repo={model_repo}, mode={mode}, device={device}, dtype={dtype}"
+            )
+        resolved_device_map = self._resolve_device_map(device, cuda_memory=cuda_memory)
         cache_key = _PipelineCacheKey(
             model_repo=model_repo,
             variant=variant,
@@ -895,8 +1147,38 @@ class DiffusersClient:
             mode=mode,
             device=device,
             dtype=str(dtype),
+            device_map=resolved_device_map,
+            low_cpu_mem_usage=bool(self.low_cpu_mem_usage),
             token_fingerprint=self._token_fingerprint(),
         )
+
+        def retry_cpu_after_cuda_failure(exc, *, step):
+            if device != "cuda" or cpu_fallback_attempted or not self.cuda_fallback_to_cpu:
+                return None
+            reason = str(exc or "CUDA backend failed")
+            if log_capture:
+                log_capture.append_line(f"{step}: CUDA failed; falling back to CPU. Reason: {reason}", force=True)
+            if progress_callback:
+                progress_callback({
+                    "phase": "loading",
+                    "percent": 24,
+                    "step": "CUDA fallback to CPU",
+                    "detail": f"{step} 失敗，已依 root 設定改用 CPU 重試：{reason}",
+                    "token_used": bool(self.token),
+                    **cuda_memory,
+                })
+            return self._load_pipeline(
+                mode,
+                progress_callback=progress_callback,
+                model_repo=model_repo,
+                variant=variant,
+                gguf_file=gguf_file,
+                gguf_base_repo=gguf_base_repo,
+                log_capture=log_capture,
+                force_device="cpu",
+                cpu_fallback_attempted=True,
+            )
+
         with self._pipeline_cache_lock:
             cached = self._pipeline_cache.get(cache_key)
             if cached is not None:
@@ -910,16 +1192,22 @@ class DiffusersClient:
                     })
                 return cached, torch, device
             if gguf_file:
-                pipe = self._load_gguf_pipeline(
-                    mode,
-                    model_repo=model_repo,
-                    gguf_file=gguf_file,
-                    gguf_base_repo=gguf_base_repo,
-                    dtype=dtype,
-                    device=device,
-                    progress_callback=progress_callback,
-                    log_capture=log_capture,
-                )
+                try:
+                    pipe = self._load_gguf_pipeline(
+                        mode,
+                        model_repo=model_repo,
+                        gguf_file=gguf_file,
+                        gguf_base_repo=gguf_base_repo,
+                        dtype=dtype,
+                        device=device,
+                        progress_callback=progress_callback,
+                        log_capture=log_capture,
+                    )
+                except Exception as exc:
+                    fallback_result = retry_cpu_after_cuda_failure(exc, step="GGUF Diffusers pipeline 載入")
+                    if fallback_result is not None:
+                        return fallback_result
+                    raise
                 self._pipeline_cache[cache_key] = pipe
                 return pipe, torch, device
             if progress_callback:
@@ -932,15 +1220,46 @@ class DiffusersClient:
                     "current_file": "",
                     "token_used": bool(self.token),
                 })
-            pipeline_cls = self._pipeline_class(mode)
+            if log_capture:
+                log_capture.append_line(f"Importing Diffusers pipeline class for mode={mode}", force=True)
+            pipeline_import_heartbeat = (
+                log_capture.heartbeat(
+                    phase="loading",
+                    percent=5,
+                    step="Importing Diffusers pipeline class",
+                    detail=f"正在載入 Diffusers pipeline class：{mode}",
+                )
+                if log_capture
+                else nullcontext()
+            )
+            with pipeline_import_heartbeat:
+                pipeline_cls = self._pipeline_class(mode)
+            if log_capture:
+                log_capture.append_line(f"Selected Diffusers pipeline class: {pipeline_cls.__name__}")
             kwargs = {
                 "torch_dtype": dtype,
                 "use_safetensors": True,
             }
+            device_map = resolved_device_map
+            if device_map:
+                kwargs["device_map"] = device_map
+            if self.low_cpu_mem_usage and (device_map or self._accelerate_available()):
+                kwargs["low_cpu_mem_usage"] = True
+            if log_capture and self.device_map_setting not in {"auto", "disabled", "none"} and not device_map:
+                log_capture.append_line(
+                    f"Diffusers device_map={self.device_map_setting} requested but accelerate is unavailable; falling back to manual .to({device})",
+                    force=True,
+                )
             if variant:
                 kwargs["variant"] = variant
             if self.token:
                 kwargs["token"] = self.token
+            if log_capture:
+                log_capture.append_line(
+                    f"snapshot_download(repo_id={model_repo!r}, variant={variant or 'default'!r}, "
+                    f"token={'set' if self.token else 'not_set'})",
+                    force=True,
+                )
             snapshot_path = self._prefetch_diffusers_snapshot(
                 model_repo,
                 variant=variant,
@@ -952,55 +1271,125 @@ class DiffusersClient:
             load_target = snapshot_path or model_repo
             if snapshot_path:
                 kwargs["local_files_only"] = True
-            try:
-                pipe = pipeline_cls.from_pretrained(load_target, **kwargs)
-            except TypeError:
-                if self.token:
-                    kwargs["use_auth_token"] = kwargs.pop("token")
-                pipe = pipeline_cls.from_pretrained(load_target, **kwargs)
-            except Exception:
-                fallback_kwargs = dict(kwargs)
-                fallback_kwargs.pop("use_safetensors", None)
+            if log_capture:
+                source = "local snapshot" if snapshot_path else "remote repo"
+                log_capture.append_line(
+                    f"{pipeline_cls.__name__}.from_pretrained({source}, torch_dtype={dtype}, "
+                    f"local_files_only={bool(snapshot_path)}, device_map={kwargs.get('device_map') or 'none'}, "
+                    f"low_cpu_mem_usage={bool(kwargs.get('low_cpu_mem_usage'))})",
+                    force=True,
+                )
+            if progress_callback:
+                progress_callback({
+                    "phase": "loading",
+                    "percent": 24,
+                    "step": "載入 Diffusers pipeline",
+                    "current_file": "",
+                    "detail": (
+                        f"正在載入 {pipeline_cls.__name__} 權重：{model_repo}{f'（{variant}）' if variant else ''}"
+                        + (f"，device_map={kwargs.get('device_map')}" if kwargs.get("device_map") else "")
+                        + (f"，low_cpu_mem_usage={bool(kwargs.get('low_cpu_mem_usage'))}")
+                        + (
+                            f"，VRAM {_format_bytes(cuda_memory.get('cuda_free_bytes'))} / {_format_bytes(cuda_memory.get('cuda_total_bytes'))}"
+                            if cuda_memory.get("cuda_total_bytes")
+                            else ""
+                        )
+                    ),
+                    "token_used": bool(self.token),
+                    **cuda_memory,
+                })
+            load_heartbeat = (
+                log_capture.heartbeat(
+                    phase="loading",
+                    percent=24,
+                    step="載入 Diffusers pipeline",
+                    detail=f"正在載入 {pipeline_cls.__name__} 權重",
+                    extra_payload=lambda: self._cuda_memory_payload(torch) if device == "cuda" else {},
+                )
+                if log_capture
+                else nullcontext()
+            )
+            with load_heartbeat:
                 try:
-                    pipe = pipeline_cls.from_pretrained(load_target, **fallback_kwargs)
-                except Exception as exc:
-                    if not snapshot_path:
-                        raise ComfyUIError(f"Diffusers 模型載入失敗：{exc}") from exc
+                    pipe = pipeline_cls.from_pretrained(load_target, **kwargs)
+                except TypeError:
+                    if self.token:
+                        kwargs["use_auth_token"] = kwargs.pop("token")
+                    try:
+                        pipe = pipeline_cls.from_pretrained(load_target, **kwargs)
+                    except Exception as exc:
+                        fallback_result = retry_cpu_after_cuda_failure(exc, step="Diffusers 模型載入")
+                        if fallback_result is not None:
+                            return fallback_result
+                        raise
+                    except Exception:
+                        fallback_kwargs = dict(kwargs)
+                        fallback_kwargs.pop("use_safetensors", None)
+                        try:
+                            pipe = pipeline_cls.from_pretrained(load_target, **fallback_kwargs)
+                        except Exception as exc:
+                            fallback_result = retry_cpu_after_cuda_failure(exc, step="Diffusers 模型載入")
+                            if fallback_result is not None:
+                                return fallback_result
+                            if not snapshot_path:
+                                raise ComfyUIError(f"Diffusers 模型載入失敗：{exc}") from exc
+                            if progress_callback:
+                                progress_callback({
+                                    "phase": "downloading",
+                                    "percent": 24,
+                                    "step": "補齊 Diffusers 缺漏檔案",
+                                    "current_file": "",
+                                    "detail": "本機快取缺少部分檔案，改由 Diffusers 補齊 Hugging Face 檔案。",
+                                    "token_used": bool(self.token),
+                                })
+                            remote_kwargs = dict(kwargs)
+                            remote_kwargs.pop("local_files_only", None)
+                            try:
+                                pipe = pipeline_cls.from_pretrained(model_repo, **remote_kwargs)
+                            except TypeError:
+                                if self.token and "token" in remote_kwargs:
+                                    remote_kwargs["use_auth_token"] = remote_kwargs.pop("token")
+                                try:
+                                    pipe = pipeline_cls.from_pretrained(model_repo, **remote_kwargs)
+                                except Exception as remote_exc:
+                                    fallback_result = retry_cpu_after_cuda_failure(remote_exc, step="Diffusers 遠端補檔載入")
+                                    if fallback_result is not None:
+                                        return fallback_result
+                                    raise ComfyUIError(f"Diffusers 模型載入失敗：{remote_exc}") from remote_exc
+                            except Exception:
+                                remote_fallback_kwargs = dict(remote_kwargs)
+                                remote_fallback_kwargs.pop("use_safetensors", None)
+                                try:
+                                    pipe = pipeline_cls.from_pretrained(model_repo, **remote_fallback_kwargs)
+                                except Exception as remote_exc:
+                                    fallback_result = retry_cpu_after_cuda_failure(remote_exc, step="Diffusers 遠端補檔載入")
+                                    if fallback_result is not None:
+                                        return fallback_result
+                                    raise ComfyUIError(f"Diffusers 模型載入失敗：{remote_exc}") from remote_exc
+            try:
+                if kwargs.get("device_map") or getattr(pipe, "hf_device_map", None):
                     if progress_callback:
                         progress_callback({
-                            "phase": "downloading",
+                            "phase": "loading",
                             "percent": 24,
-                            "step": "補齊 Diffusers 缺漏檔案",
+                            "step": f"模型已分配到 {device}",
                             "current_file": "",
-                            "detail": "本機快取缺少部分檔案，改由 Diffusers 補齊 Hugging Face 檔案。",
-                            "token_used": bool(self.token),
+                            "detail": f"Diffusers pipeline 已透過 device_map 載入到 {device}",
                         })
-                    remote_kwargs = dict(kwargs)
-                    remote_kwargs.pop("local_files_only", None)
-                    try:
-                        pipe = pipeline_cls.from_pretrained(model_repo, **remote_kwargs)
-                    except TypeError:
-                        if self.token and "token" in remote_kwargs:
-                            remote_kwargs["use_auth_token"] = remote_kwargs.pop("token")
-                        pipe = pipeline_cls.from_pretrained(model_repo, **remote_kwargs)
-                    except Exception:
-                        remote_fallback_kwargs = dict(remote_kwargs)
-                        remote_fallback_kwargs.pop("use_safetensors", None)
-                        try:
-                            pipe = pipeline_cls.from_pretrained(model_repo, **remote_fallback_kwargs)
-                        except Exception as remote_exc:
-                            raise ComfyUIError(f"Diffusers 模型載入失敗：{remote_exc}") from remote_exc
-            try:
-                if progress_callback:
-                    progress_callback({
-                        "phase": "loading",
-                        "percent": 24,
-                        "step": f"移動模型到 {device}",
-                        "current_file": "",
-                        "detail": f"Diffusers pipeline 已載入，正在移至 {device}",
-                    })
-                pipe.to(device)
+                else:
+                    if progress_callback:
+                        progress_callback({
+                            "phase": "loading",
+                            "percent": 24,
+                            "step": f"移動模型到 {device}",
+                            "current_file": "",
+                            "detail": f"Diffusers pipeline 已載入，正在移至 {device}",
+                        })
+                    pipe.to(device)
             except Exception as exc:
+                fallback_result = retry_cpu_after_cuda_failure(exc, step=f"Diffusers 模型移至 {device}")
+                if fallback_result is not None:
+                    return fallback_result
                 raise ComfyUIError(f"Diffusers 模型移至裝置 {device} 失敗：{exc}") from exc
             if hasattr(pipe, "set_progress_bar_config"):
                 try:
@@ -1044,12 +1433,14 @@ class DiffusersClient:
         except Exception as exc:
             raise ComfyUIError(f"GGUF 依賴載入失敗：{exc}") from exc
         try:
+            download_tracker = {}
             tqdm_class = self._huggingface_progress_tqdm_class(
                 progress_callback,
                 label=gguf_file,
                 base_percent=6,
                 span_percent=16,
                 log_capture=log_capture,
+                download_tracker=download_tracker,
             )
             accelerated = self._enable_hf_transfer_if_available()
             if progress_callback:
@@ -1066,6 +1457,12 @@ class DiffusersClient:
                     "hf_transfer_enabled": accelerated,
                 })
             kwargs = {"repo_id": model_repo, "filename": gguf_file, "token": (self.token or None)}
+            if not self.keep_downloaded_models:
+                transient_dir = self._new_transient_download_dir(f"gguf_{model_repo.replace('/', '_')}")
+                kwargs["local_dir"] = str(transient_dir)
+                if log_capture:
+                    log_capture.register_transient_path(transient_dir)
+                    log_capture.append_line(f"Diffusers keep-downloaded-models disabled; using transient GGUF local_dir={transient_dir}")
             if tqdm_class:
                 kwargs["tqdm_class"] = tqdm_class
             try:
@@ -1073,6 +1470,25 @@ class DiffusersClient:
             except TypeError:
                 kwargs.pop("tqdm_class", None)
                 gguf_path = hf_hub_download(**kwargs)
+            cache_hit = self._download_tracker_cache_hit(download_tracker)
+            if log_capture:
+                suffix = " (cache hit; no network bytes reported)" if cache_hit else ""
+                log_capture.append_line(f"Download complete: {model_repo}/{gguf_file}{suffix}")
+            if progress_callback:
+                progress_callback({
+                    "phase": "loading",
+                    "percent": 22,
+                    "step": "載入 GGUF pipeline",
+                    "current_file": gguf_file,
+                    "detail": (
+                        f"Hugging Face cache hit：{gguf_file} 已在本機快取，未偵測到網路下載位元組，正在載入 GGUF pipeline"
+                        if cache_hit
+                        else f"GGUF 檔案已下載到本機快取，正在載入 {gguf_file}"
+                    ),
+                    "cache_hit": cache_hit,
+                    "bytes_written": int(download_tracker.get("bytes_written") or 0),
+                    "total_bytes": int(download_tracker.get("total_bytes") or 0),
+                })
         except Exception as exc:
             raise ComfyUIError(f"GGUF 檔案下載失敗，尚未載入模型：{exc}") from exc
 
@@ -1082,28 +1498,39 @@ class DiffusersClient:
         if self.token:
             common_kwargs["token"] = self.token
         try:
-            if "flux" in text:
-                from diffusers import FluxPipeline, FluxTransformer2DModel
-
-                transformer = FluxTransformer2DModel.from_single_file(
-                    gguf_path,
-                    quantization_config=quantization_config,
-                    config=gguf_base_repo,
-                    subfolder="transformer",
-                    torch_dtype=dtype,
+            load_heartbeat = (
+                log_capture.heartbeat(
+                    phase="loading",
+                    percent=24,
+                    step="載入 GGUF pipeline",
+                    detail=f"正在載入 GGUF component {gguf_file}",
                 )
-                pipe = FluxPipeline.from_pretrained(gguf_base_repo, transformer=transformer, **common_kwargs)
-            else:
-                from diffusers import StableDiffusionXLPipeline, UNet2DConditionModel
+                if log_capture
+                else nullcontext()
+            )
+            with load_heartbeat:
+                if "flux" in text:
+                    from diffusers import FluxPipeline, FluxTransformer2DModel
 
-                unet = UNet2DConditionModel.from_single_file(
-                    gguf_path,
-                    quantization_config=quantization_config,
-                    config=gguf_base_repo,
-                    subfolder="unet",
-                    torch_dtype=dtype,
-                )
-                pipe = StableDiffusionXLPipeline.from_pretrained(gguf_base_repo, unet=unet, **common_kwargs)
+                    transformer = FluxTransformer2DModel.from_single_file(
+                        gguf_path,
+                        quantization_config=quantization_config,
+                        config=gguf_base_repo,
+                        subfolder="transformer",
+                        torch_dtype=dtype,
+                    )
+                    pipe = FluxPipeline.from_pretrained(gguf_base_repo, transformer=transformer, **common_kwargs)
+                else:
+                    from diffusers import StableDiffusionXLPipeline, UNet2DConditionModel
+
+                    unet = UNet2DConditionModel.from_single_file(
+                        gguf_path,
+                        quantization_config=quantization_config,
+                        config=gguf_base_repo,
+                        subfolder="unet",
+                        torch_dtype=dtype,
+                    )
+                    pipe = StableDiffusionXLPipeline.from_pretrained(gguf_base_repo, unet=unet, **common_kwargs)
         except Exception as exc:
             raise ComfyUIError(
                 "GGUF 模型載入失敗：Diffusers GGUF 需要可用的 base Diffusers repo 與相容的 GGUF component。"
@@ -1173,6 +1600,9 @@ class DiffusersClient:
         job_progress = runtime_logs.progress if progress_callback else None
         if job_progress:
             selected_label = gguf_file or variant or "default"
+            runtime_logs.append_line(
+                f"Diffusers Python runtime starting: repo={model_repo}, mode={mode}, variant={selected_label}"
+            )
             job_progress({
                 "phase": "downloading",
                 "percent": 3,
@@ -1195,9 +1625,11 @@ class DiffusersClient:
                 )
         except ComfyUIError as exc:
             runtime_logs.error(str(exc), step="Diffusers 模型載入失敗")
+            runtime_logs.cleanup_transient_paths()
             raise
         except Exception as exc:
             runtime_logs.error(f"Diffusers 模型載入失敗：{exc}", step="Diffusers 模型載入失敗")
+            runtime_logs.cleanup_transient_paths()
             raise
         width = max(64, int(params.get("width") or 1024))
         height = max(64, int(params.get("height") or 1024))
@@ -1223,6 +1655,7 @@ class DiffusersClient:
         elif mode == "img2img":
             source_ref = params.get("source_image_ref")
             if not source_ref:
+                runtime_logs.cleanup_transient_paths()
                 raise ComfyUIError("Diffusers 圖生圖需要來源圖片")
             call_kwargs["image"] = self._load_ref_image(source_ref, size=size)
             call_kwargs["strength"] = float(params.get("denoise_strength") or 0.65)
@@ -1230,6 +1663,7 @@ class DiffusersClient:
             source_ref = params.get("source_image_ref")
             mask_ref = params.get("mask_image_ref")
             if not source_ref or not mask_ref:
+                runtime_logs.cleanup_transient_paths()
                 raise ComfyUIError("Diffusers 局部重繪需要來源圖片與遮罩圖片")
             call_kwargs["image"] = self._load_ref_image(source_ref, size=size)
             call_kwargs["mask_image"] = self._load_ref_image(mask_ref, mode="L", size=size)
@@ -1245,17 +1679,67 @@ class DiffusersClient:
             })
         try:
             with runtime_logs:
-                with torch.inference_mode():
-                    output = pipe(**call_kwargs)
+                with runtime_logs.heartbeat(
+                    phase="running",
+                    percent=25,
+                    step=f"Diffusers {mode} 推論",
+                    detail=f"Diffusers 推論中：steps={call_kwargs['num_inference_steps']}，device={device}",
+                    extra_payload=lambda: self._cuda_memory_payload(torch) if device == "cuda" else {},
+                ):
+                    with torch.inference_mode():
+                        output = pipe(**call_kwargs)
         except TypeError as exc:
             runtime_logs.error(f"Diffusers pipeline 參數不相容：{exc}", step="Diffusers pipeline 參數錯誤")
+            runtime_logs.cleanup_transient_paths()
             raise ComfyUIError(f"Diffusers pipeline 參數不相容：{exc}") from exc
         except Exception as exc:
-            runtime_logs.error(f"Diffusers 產圖失敗：{exc}", step="Diffusers 推論失敗")
-            raise ComfyUIError(f"Diffusers 產圖失敗：{exc}") from exc
+            if device == "cuda" and self.cuda_fallback_to_cpu:
+                runtime_logs.append_line(f"Diffusers inference failed on CUDA; falling back to CPU. Reason: {exc}", force=True)
+                if job_progress:
+                    job_progress({
+                        "phase": "loading",
+                        "percent": 24,
+                        "backend_kind": "diffusers",
+                        "step": "CUDA fallback to CPU",
+                        "detail": f"CUDA 推論失敗，已依 root 設定改用 CPU 重試：{exc}",
+                    })
+                try:
+                    with runtime_logs:
+                        pipe, torch, device = self._load_pipeline(
+                            mode,
+                            progress_callback=job_progress,
+                            model_repo=model_repo,
+                            variant=variant,
+                            gguf_file=gguf_file,
+                            gguf_base_repo=gguf_base_repo,
+                            log_capture=runtime_logs,
+                            force_device="cpu",
+                            cpu_fallback_attempted=True,
+                        )
+                    generator = torch.Generator(device="cpu")
+                    generator.manual_seed(seed)
+                    call_kwargs["generator"] = generator
+                    with runtime_logs:
+                        with runtime_logs.heartbeat(
+                            phase="running",
+                            percent=25,
+                            step=f"Diffusers {mode} CPU 推論",
+                            detail=f"CUDA 失敗後改用 CPU 推論：steps={call_kwargs['num_inference_steps']}",
+                        ):
+                            with torch.inference_mode():
+                                output = pipe(**call_kwargs)
+                except Exception as cpu_exc:
+                    runtime_logs.error(f"Diffusers CPU fallback 產圖失敗：{cpu_exc}", step="Diffusers CPU fallback 失敗")
+                    runtime_logs.cleanup_transient_paths()
+                    raise ComfyUIError(f"Diffusers 產圖失敗，CPU fallback 也失敗：{cpu_exc}") from cpu_exc
+            else:
+                runtime_logs.error(f"Diffusers 產圖失敗：{exc}", step="Diffusers 推論失敗")
+                runtime_logs.cleanup_transient_paths()
+                raise ComfyUIError(f"Diffusers 產圖失敗：{exc}") from exc
         generated_images = list(getattr(output, "images", []) or [])
         if not generated_images:
             runtime_logs.error("Diffusers 產圖完成但沒有輸出圖片", step="Diffusers 輸出檢查失敗")
+            runtime_logs.cleanup_transient_paths()
             raise ComfyUIError("Diffusers 產圖完成但沒有輸出圖片")
         if job_progress:
             job_progress({
@@ -1266,7 +1750,12 @@ class DiffusersClient:
                 "current_file": "",
                 "detail": f"Diffusers 推論完成，正在保存 {len(generated_images)} 張圖片",
             })
-        images = [self._save_output_image(image, index=index) for index, image in enumerate(generated_images)]
+        try:
+            images = [self._save_output_image(image, index=index) for index, image in enumerate(generated_images)]
+        except Exception:
+            runtime_logs.cleanup_transient_paths()
+            raise
+        runtime_logs.cleanup_transient_paths()
         prompt_id = f"diffusers-{uuid.uuid4().hex}"
         if job_progress:
             job_progress({"phase": "completed", "percent": 100, "backend_kind": "diffusers", "completed": True, "detail": f"Diffusers 已完成，共 {len(images)} 張"})

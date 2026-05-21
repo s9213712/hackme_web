@@ -18,6 +18,9 @@ def test_diffusers_generation_page_accepts_repo_and_variant_selection():
     assert 'id="comfyui-diffusers-gguf-base-repo"' in html
     assert 'id="comfyui-diffusers-repo-status"' in html
     assert 'id="s-comfyui-allow-in-process-diffusers"' in html
+    assert 'id="s-comfyui-diffusers-device-map"' in html
+    assert 'id="s-comfyui-diffusers-low-cpu-mem-usage"' in html
+    assert 'id="s-comfyui-diffusers-keep-downloaded-models"' in html
 
 
 def test_diffusers_js_preflights_huggingface_repo_before_generation():
@@ -34,7 +37,7 @@ def test_diffusers_js_preflights_huggingface_repo_before_generation():
 
 def test_diffusers_cache_busts_preflight_ui_assets():
     html = _read("public/index.html")
-    assert "/js/36-comfyui.js?v=20260520-diffusers-csrf-audit" in html
+    assert "/js/36-comfyui.js?v=20260521-diffusers-cpu-fallback" in html
     assert "/js/36-comfyui-workflows.js?v=20260520-embedding-empty-hide" in html
 
 
@@ -79,9 +82,17 @@ def test_diffusers_in_process_runtime_confirmation_is_in_quick_settings():
     assert "s-comfyui-allow-in-process-diffusers" in quick_js
     assert "接受主程序 Diffusers 資源風險" in quick_js
     assert "comfyui_allow_in_process_diffusers" in admin_js
+    assert "comfyui_diffusers_device_map" in admin_js
+    assert "comfyui_diffusers_low_cpu_mem_usage" in admin_js
+    assert "comfyui_diffusers_cuda_fallback_to_cpu" in admin_js
+    assert "comfyui_diffusers_keep_downloaded_models" in admin_js
     assert "只有勾選主程序資源風險確認後才允許直接推論" in admin_js
-    assert "/js/01-root-quick-settings.js?v=20260520-diffusers-runtime-confirm" in html
-    assert "/js/50-admin.js?v=20260520-diffusers-runtime-confirm" in html
+    assert "Diffusers device_map" in quick_js
+    assert "GPU 失敗改用 CPU" in quick_js
+    assert "低 RAM 載入" in quick_js
+    assert "保留已下載模型快取" in quick_js
+    assert "/js/01-root-quick-settings.js?v=20260521-diffusers-cpu-fallback" in html
+    assert "/js/50-admin.js?v=20260521-diffusers-cpu-fallback" in html
 
 
 def test_embedding_quick_insert_hides_when_no_embeddings_are_available():

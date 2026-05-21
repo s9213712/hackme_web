@@ -510,6 +510,10 @@ def get_system_settings():
         return (_SYSTEM_SETTINGS.copy() if isinstance(_SYSTEM_SETTINGS, dict) else _load_settings_from_db())
 
 
+def load_system_settings_from_db(conn=None):
+    return _load_settings_from_db(conn)
+
+
 def get_cached_system_setting(key, default=None):
     settings = _SYSTEM_SETTINGS
     if isinstance(settings, dict):

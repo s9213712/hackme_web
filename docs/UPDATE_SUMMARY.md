@@ -1,6 +1,28 @@
 # Update Summary
 
-Release ID: `2026.05.20-173`
+Release ID: `2026.05.21-175`
+
+## 2026.05.21-175
+
+- Added a root-controlled Diffusers downloaded-model cache policy, exposed in
+  the full settings panel and right-side quick settings.
+- Exposed Diffusers `device_map` and `low_cpu_mem_usage` as root-controlled
+  loading parameters so large-model behavior can be tuned per machine.
+- Added a root-controlled CUDA fallback setting so Hugging Face / Diffusers can
+  switch to CPU on low-VRAM auto runs or CUDA load / inference failures.
+- Added earlier Diffusers Python runtime checkpoints around dependency import,
+  Torch import, Hugging Face snapshot download, pipeline class selection, and
+  `from_pretrained` startup so stalled runs show where they are blocked.
+- Mark Hugging Face cache-hit runs separately when no download bytes are
+  reported, and include CUDA VRAM details in Diffusers Python logs before heavy
+  pipeline loading begins.
+- Adjusted Diffusers `device_map=auto` so CUDA devices below 8GB VRAM prefer
+  `balanced` placement instead of forcing the full pipeline onto GPU memory.
+- Adjusted Diffusers frontend progress / preview wording so Hugging Face mode no
+  longer says it is waiting for ComfyUI output.
+- Load live Diffusers settings from the database when building the backend
+  client so quick-setting changes do not get hidden by a stale gunicorn worker
+  cache.
 
 ## 2026.05.20-173
 
