@@ -364,6 +364,13 @@ Phase 0 first-slice artifacts:
 - Static scanner: `scripts/security/gate/wallet_direct_call_inventory.py`
 - Scanner test: `tests/static/test_wallet_direct_call_inventory.py`
 
+Phase 1 wallet identity / onboarding artifact:
+
+- Contract: [architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md](architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md)
+- Server code: `services/points_chain/wallet_identity.py`
+- Contract test: `tests/points/test_wallet_identity.py`
+- Boundary: no ComfyUI / Trading / Video / Storage / Games product billing flow is migrated in this slice.
+
 ## 開工前 Done Definition
 
 本計畫階段完成時，必須滿足：

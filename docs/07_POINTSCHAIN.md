@@ -32,9 +32,18 @@
 - 恢復時重建 wallet，不信任舊 wallet snapshot 自己就是正確答案
 - 全站供給相關 dashboard 應讀 ledger / report / snapshot 口徑，不應在前端自行加總後當作可信總量
 
+## 模擬鏈錢包身份
+
+- 一般會員初次登入後要先完成 PointsChain 錢包 onboarding，才能領取註冊禮。
+- 可選官方熱錢包、瀏覽器建立的自管冷錢包、匯入冷錢包或多簽 policy 錢包。
+- 自管與匯入冷錢包的私鑰只在瀏覽器內產生或匯入；伺服器只收 public JWK、地址與簽章。
+- root 可查看 mint / burn 系統錢包身份；這些身份只用於模擬供給 bookkeeping，不保存私鑰。
+
+詳細 contract 見 [architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md](architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md)。
+
 ## 自動發放規則
 
-- 新註冊一般會員會依站內規則發放註冊禮與初始配點。
+- 新註冊一般會員的註冊禮會延後到完成錢包 onboarding 後發放，且仍以 ledger idempotency 保證只入帳一次。
 - 會員生日禮金為 500 點，只在會員生日當天成功登入時發放。
 - 生日判定使用 root 設定的伺服器時區；未在生日當天登入則不補發。
 - 生日禮金透過 `birthday_gift:<year>:<user_id>` idempotency key 寫入 PointsChain，同一會員同一年最多入帳一次。
@@ -65,6 +74,7 @@
 - [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md)
 - [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md)
 - [10_BLOCKCHAIN_WALLETIZATION_PREWORK_PLAN.md](10_BLOCKCHAIN_WALLETIZATION_PREWORK_PLAN.md)
+- [architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md](architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md)
 - [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md)
 - [For_developer.md](For_developer.md)
 - [VIDEO_PLATFORM.md](video/VIDEO_PLATFORM.md)

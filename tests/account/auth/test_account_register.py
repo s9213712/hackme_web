@@ -14,7 +14,7 @@ def _passthrough(fn):
     return fn
 
 
-def _build_app(db_path):
+def _build_app(db_path, *, points_service=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -62,6 +62,7 @@ def _build_app(db_path):
         "make_token": lambda username: "session-token",
         "normalize_text": lambda value: str(value or "").strip(),
         "parse_birthdate": lambda value: value if value else "",
+        "points_service": points_service,
         "record_login_failure": lambda *args, **kwargs: None,
         "record_security_event": lambda *args, **kwargs: None,
         "require_csrf": _passthrough,
@@ -79,6 +80,46 @@ def _build_app(db_path):
     return app
 
 
+def _init_register_tables(db_path):
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                email TEXT,
+                nickname TEXT,
+                real_name TEXT,
+                birthdate TEXT,
+                id_number TEXT,
+                phone TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                role TEXT NOT NULL DEFAULT 'user',
+                member_level TEXT,
+                base_level TEXT,
+                effective_level TEXT,
+                password_strength_score INTEGER,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE user_passwords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def test_register_validation_returns_field_for_username(tmp_path):
     client = _build_app(tmp_path / "register.db").test_client()
 
@@ -91,6 +132,39 @@ def test_register_validation_returns_field_for_username(tmp_path):
     payload = response.get_json()
     assert payload["ok"] is False
     assert payload["field"] == "username"
+
+
+def test_register_defers_signup_bonus_until_wallet_onboarding(tmp_path):
+    db_path = tmp_path / "register.db"
+    _init_register_tables(db_path)
+
+    class NoSignupBonusDuringRegister:
+        def award_signup_bonus(self, **_kwargs):
+            raise AssertionError("signup bonus must be deferred until wallet onboarding")
+
+    client = _build_app(db_path, points_service=NoSignupBonusDuringRegister()).test_client()
+
+    response = client.post(
+        "/api/register",
+        json={
+            "username": "alice123",
+            "password": "GoodPass1!",
+            "password_confirm": "GoodPass1!",
+            "nickname": "Alice",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["wallet_onboarding_required"] is True
+    assert payload["signup_bonus_deferred"] is True
+    conn = sqlite3.connect(db_path)
+    try:
+        user = conn.execute("SELECT username, status FROM users WHERE username='alice123'").fetchone()
+    finally:
+        conn.close()
+    assert user == ("alice123", "pending")
 
 
 def test_register_validation_returns_field_for_password_confirmation(tmp_path):

@@ -1,6 +1,18 @@
 # Update Summary
 
-Release ID: `2026.05.21-177`
+Release ID: `2026.05.21-178`
+
+## 2026.05.21-178
+
+- Added the simulated PointsChain wallet identity layer for official hot
+  wallets, browser-held cold wallets, imported cold wallets, multisig policy
+  wallets, and mint / burn system wallet identities.
+- Deferred non-root signup bonus issuance until wallet onboarding completes,
+  while keeping existing ComfyUI, Trading, Video, Storage, Games, and product
+  billing flows untouched for this Phase 1 slice.
+- Added wallet identity contract tests for private-key rejection, public-key
+  signature binding, signup-bonus idempotency after onboarding, and system
+  wallet identity-only behavior.
 
 ## 2026.05.21-177
 

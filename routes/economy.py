@@ -6,7 +6,15 @@ import time
 
 from flask import Response, request
 
-from services.points_chain import DISPLAY_CURRENCY
+from services.points_chain import (
+    DISPLAY_CURRENCY,
+    award_signup_bonus_after_wallet_onboarding,
+    bind_self_custody_wallet,
+    create_multisig_wallet,
+    create_official_hot_wallet,
+    ensure_system_wallets,
+    wallet_onboarding_status,
+)
 from services.governance.sanction_notices import record_admin_sanction_notice
 
 
@@ -173,6 +181,110 @@ def register_economy_routes(app, deps):
         if err:
             return err
         return json_resp({"ok": True, "wallet": points_service.get_wallet(actor["id"])})
+
+    @app.route("/api/points/wallet/onboarding", methods=["GET"])
+    @require_csrf_safe
+    def points_wallet_onboarding():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        conn = points_service.get_db()
+        try:
+            points_service.ensure_schema(conn)
+            status = wallet_onboarding_status(conn, points_service=points_service, user_id=actor["id"])
+            conn.commit()
+            return json_resp({"ok": True, "onboarding": status})
+        finally:
+            conn.close()
+
+    @app.route("/api/points/wallet/onboarding", methods=["POST"])
+    @require_csrf
+    def points_wallet_onboarding_update():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        mode = str(data.get("mode") or "").strip().lower()
+        if mode not in {"official_hot", "self_custody_cold", "imported_cold", "multisig"}:
+            return json_resp({"ok": False, "msg": "wallet mode 不支援"}, 400)
+        conn = points_service.get_db()
+        try:
+            points_service.ensure_schema(conn)
+            if mode == "official_hot":
+                identity = create_official_hot_wallet(
+                    conn,
+                    user_id=actor["id"],
+                    chain_secret=getattr(points_service, "chain_secret", ""),
+                )
+            elif mode in {"self_custody_cold", "imported_cold"}:
+                identity = bind_self_custody_wallet(
+                    conn,
+                    user_id=actor["id"],
+                    wallet_type=mode,
+                    public_key_jwk=data.get("public_key_jwk") or {},
+                    address=data.get("address") or "",
+                    signature=data.get("signature") or "",
+                    backup_confirmed=bool(data.get("backup_confirmed")),
+                    label=data.get("label") or "",
+                )
+            else:
+                identity = create_multisig_wallet(
+                    conn,
+                    user_id=actor["id"],
+                    threshold=data.get("threshold"),
+                    signer_addresses=data.get("signer_addresses") or [],
+                    label=data.get("label") or "",
+                )
+            conn.commit()
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            conn.close()
+            return service_error(exc)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        bonus = None
+        if actor_value(actor, "username") != "root":
+            try:
+                bonus = award_signup_bonus_after_wallet_onboarding(
+                    points_service=points_service,
+                    user_id=actor["id"],
+                    actor={"id": actor["id"], "username": actor["username"], "role": actor["role"]},
+                )
+            except Exception as exc:
+                audit("POINTS_WALLET_ONBOARDING_BONUS_FAILED", get_client_ip(), user=actor_value(actor, "username"), success=False, ua=get_ua(), detail=str(exc))
+                bonus = {"created": False, "error": str(exc)}
+        conn = points_service.get_db()
+        try:
+            points_service.ensure_schema(conn)
+            status = wallet_onboarding_status(conn, points_service=points_service, user_id=actor["id"])
+            conn.commit()
+        finally:
+            conn.close()
+        audit("POINTS_WALLET_ONBOARDING_COMPLETED", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"mode={mode},address={(identity or {}).get('address')}")
+        return json_resp({"ok": True, "wallet_identity": identity, "signup_bonus": bonus, "onboarding": status})
+
+    @app.route("/api/root/points/system-wallets", methods=["GET"])
+    @require_csrf_safe
+    def root_points_system_wallets():
+        actor, err = root_or_403()
+        if err:
+            return err
+        conn = points_service.get_db()
+        try:
+            points_service.ensure_schema(conn)
+            wallets = ensure_system_wallets(conn, chain_secret=getattr(points_service, "chain_secret", ""))
+            conn.commit()
+            return json_resp({"ok": True, "system_wallets": wallets})
+        finally:
+            conn.close()
 
     @app.route("/api/points/ledger", methods=["GET"])
     @require_csrf_safe

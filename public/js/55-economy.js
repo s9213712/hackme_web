@@ -5,6 +5,7 @@ let economyBlockSchedule = null;
 let economyInlineEventsBound = false;
 let economyAutoRefreshTimer = null;
 let economyAutoRefreshBusy = false;
+let economyGeneratedColdWallet = null;
 const ECONOMY_PAGE_STORAGE_KEY = "hackme_web:economy:active_page";
 
 function economyPageStorageKey() {
@@ -96,6 +97,75 @@ function economyRequestId(prefix = "economy") {
     return `${prefix}:${window.crypto.randomUUID()}`;
   }
   return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
+
+function economyWalletMsg(text, ok = true) {
+  const el = $("economy-wallet-onboarding-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(el, text, ok);
+}
+
+function economyBase64UrlFromBytes(bytes) {
+  let binary = "";
+  new Uint8Array(bytes).forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function economyCanonicalPublicJwk(jwk) {
+  return {
+    crv: String(jwk?.crv || ""),
+    kty: String(jwk?.kty || ""),
+    x: String(jwk?.x || ""),
+    y: String(jwk?.y || ""),
+  };
+}
+
+async function economySha256Hex(text) {
+  const data = new TextEncoder().encode(String(text || ""));
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function economyWalletAddressFromPublicJwk(publicJwk) {
+  const canonical = JSON.stringify(economyCanonicalPublicJwk(publicJwk));
+  const publicKeyHash = await economySha256Hex(canonical);
+  const addressHash = await economySha256Hex(publicKeyHash);
+  return { address: `pc1${addressHash.slice(0, 48)}`, publicKeyHash };
+}
+
+function economyWalletBindingPayload({ address, publicKeyHash, walletType }) {
+  return JSON.stringify({
+    action: "points_wallet_bind",
+    address,
+    key_algorithm: "ECDSA_P256_SHA256",
+    public_key_hash: publicKeyHash,
+    user_id: Number(currentUserId || 0),
+    wallet_type: walletType,
+  });
+}
+
+async function economySignWalletBinding(privateKey, payload) {
+  const signature = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    privateKey,
+    new TextEncoder().encode(payload)
+  );
+  return economyBase64UrlFromBytes(signature);
+}
+
+async function economyBuildWalletBindPayload({ privateKey, publicJwk, walletType }) {
+  const { address, publicKeyHash } = await economyWalletAddressFromPublicJwk(publicJwk);
+  const payload = economyWalletBindingPayload({ address, publicKeyHash, walletType });
+  const signature = await economySignWalletBinding(privateKey, payload);
+  return {
+    mode: walletType,
+    address,
+    public_key_jwk: economyCanonicalPublicJwk(publicJwk),
+    signature,
+    backup_confirmed: true,
+  };
 }
 
 function formatPointsCurrency(currency) {
@@ -361,6 +431,145 @@ function renderEconomyWallet(wallet) {
   if (sidebarPoints) {
     sidebarPoints.dataset.points = String(pointsBalance);
     updateSidebarIdentity();
+  }
+}
+
+function formatEconomyWalletIdentityType(type) {
+  const labels = {
+    official_hot: "官方熱錢包",
+    self_custody_cold: "自管冷錢包",
+    imported_cold: "匯入冷錢包",
+    multisig: "多簽錢包",
+    mint: "Mint 錢包",
+    burn: "Burn 錢包",
+  };
+  return labels[String(type || "")] || String(type || "-");
+}
+
+function renderEconomyWalletOnboarding(onboarding) {
+  const card = $("economy-wallet-onboarding-card");
+  if (!card) return;
+  const rootMode = currentUser === "root";
+  card.style.display = rootMode ? "none" : "";
+  if (rootMode) return;
+  const wallet = onboarding?.wallet || null;
+  const required = !!onboarding?.required;
+  const actions = $("economy-wallet-onboarding-actions");
+  if (actions) actions.style.display = required ? "" : "none";
+  if ($("economy-wallet-onboarding-status")) {
+    $("economy-wallet-onboarding-status").textContent = wallet
+      ? "已綁定模擬鏈錢包；伺服器未保存用戶冷錢包私鑰。"
+      : "尚未綁定模擬鏈錢包；完成後才發放註冊禮。";
+  }
+  if ($("economy-wallet-identity-type")) $("economy-wallet-identity-type").textContent = formatEconomyWalletIdentityType(wallet?.wallet_type);
+  if ($("economy-wallet-identity-custody")) $("economy-wallet-identity-custody").textContent = wallet?.custody_mode || "-";
+  if ($("economy-wallet-identity-address")) $("economy-wallet-identity-address").textContent = wallet?.address || "-";
+  if ($("economy-wallet-identity-status")) $("economy-wallet-identity-status").textContent = wallet?.status || "-";
+  if ($("economy-wallet-signup-bonus")) {
+    $("economy-wallet-signup-bonus").textContent = onboarding?.signup_bonus_granted ? "已領取" : "待領取";
+  }
+}
+
+async function postEconomyWalletOnboarding(payload) {
+  await fetchCsrfToken({ force: true });
+  const json = await fetchEconomyJson("/points/wallet/onboarding", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  renderEconomyWalletOnboarding(json.onboarding || {});
+  if (json.signup_bonus?.created) economyWalletMsg("錢包已綁定，註冊禮已入帳。");
+  else economyWalletMsg("錢包已綁定。");
+  await loadEconomyDashboard();
+}
+
+async function useOfficialHotWallet() {
+  try {
+    await postEconomyWalletOnboarding({ mode: "official_hot" });
+  } catch (err) {
+    economyWalletMsg(err.message || "官方熱錢包建立失敗", false);
+  }
+}
+
+async function createColdWalletDraft() {
+  if (!window.crypto?.subtle) {
+    economyWalletMsg("此瀏覽器不支援 WebCrypto，無法建立冷錢包", false);
+    return;
+  }
+  try {
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"]
+    );
+    const privateJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
+    const publicJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+    economyGeneratedColdWallet = { privateKey: keyPair.privateKey, publicJwk, privateJwk };
+    if ($("economy-wallet-private-key")) $("economy-wallet-private-key").value = JSON.stringify(privateJwk, null, 2);
+    if ($("economy-wallet-private-key-confirmed")) $("economy-wallet-private-key-confirmed").checked = false;
+    economyWalletMsg("冷錢包已在瀏覽器產生。請保存私鑰後再確認綁定。");
+  } catch (err) {
+    economyWalletMsg(err.message || "冷錢包建立失敗", false);
+  }
+}
+
+async function importColdWalletFromText() {
+  if (!window.crypto?.subtle) {
+    economyWalletMsg("此瀏覽器不支援 WebCrypto，無法匯入冷錢包", false);
+    return;
+  }
+  try {
+    const raw = $("economy-wallet-private-key")?.value || "";
+    const privateJwk = JSON.parse(raw);
+    if (!privateJwk?.d) throw new Error("請貼上含 private d 欄位的 JWK 私鑰");
+    const privateKey = await crypto.subtle.importKey(
+      "jwk",
+      privateJwk,
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign"]
+    );
+    const publicJwk = economyCanonicalPublicJwk(privateJwk);
+    economyGeneratedColdWallet = { privateKey, publicJwk, privateJwk, imported: true };
+    if ($("economy-wallet-private-key-confirmed")) $("economy-wallet-private-key-confirmed").checked = false;
+    economyWalletMsg("冷錢包已匯入瀏覽器。確認已保存後即可綁定。");
+  } catch (err) {
+    economyWalletMsg(err.message || "冷錢包匯入失敗", false);
+  }
+}
+
+async function confirmColdWalletBinding() {
+  try {
+    if (!$("economy-wallet-private-key-confirmed")?.checked) {
+      economyWalletMsg("請先確認已保存私鑰", false);
+      return;
+    }
+    if (!economyGeneratedColdWallet) {
+      await importColdWalletFromText();
+      if (!economyGeneratedColdWallet) return;
+    }
+    const walletType = economyGeneratedColdWallet.imported ? "imported_cold" : "self_custody_cold";
+    const payload = await economyBuildWalletBindPayload({
+      privateKey: economyGeneratedColdWallet.privateKey,
+      publicJwk: economyGeneratedColdWallet.publicJwk,
+      walletType,
+    });
+    await postEconomyWalletOnboarding(payload);
+    economyGeneratedColdWallet = null;
+  } catch (err) {
+    economyWalletMsg(err.message || "冷錢包綁定失敗", false);
+  }
+}
+
+async function createMultisigWallet() {
+  try {
+    const signers = String($("economy-wallet-multisig-signers")?.value || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const threshold = Number($("economy-wallet-multisig-threshold")?.value || 2);
+    await postEconomyWalletOnboarding({ mode: "multisig", signer_addresses: signers, threshold });
+  } catch (err) {
+    economyWalletMsg(err.message || "多簽錢包建立失敗", false);
   }
 }
 
@@ -837,12 +1046,14 @@ async function loadEconomyDashboard() {
       }
     } else {
       stopEconomyBlockCountdown();
-      const [wallet, ledger, catalog] = await Promise.all([
+      const [wallet, ledger, catalog, onboarding] = await Promise.all([
         fetchEconomyJson("/points/wallet"),
         fetchEconomyJson(`/points/ledger?limit=50&offset=${economyLedgerOffset}`),
         fetchEconomyJson("/points/catalog"),
+        fetchEconomyJson("/points/wallet/onboarding"),
       ]);
       renderEconomyWallet(wallet.wallet);
+      renderEconomyWalletOnboarding(onboarding.onboarding || {});
       renderEconomyLedger(ledger.ledger || []);
       renderEconomyCatalog(catalog.catalog || []);
     }
@@ -1292,7 +1503,13 @@ function bindEconomyInlineEvents() {
   economyInlineEventsBound = true;
   const bindings = [
     ["economy-refresh-btn", loadEconomyDashboard],
+    ["economy-wallet-onboarding-refresh-btn", loadEconomyDashboard],
     ["economy-wallet-download-btn", downloadEconomyWalletCsv],
+    ["economy-wallet-official-hot-btn", useOfficialHotWallet],
+    ["economy-wallet-create-cold-btn", createColdWalletDraft],
+    ["economy-wallet-import-cold-btn", importColdWalletFromText],
+    ["economy-wallet-confirm-cold-btn", confirmColdWalletBinding],
+    ["economy-wallet-create-multisig-btn", createMultisigWallet],
     ["economy-trading-export-btn", downloadEconomyTradingCsv],
     ["economy-ledger-export-btn", exportEconomyLedgerCsv],
     ["economy-admin-refresh-btn", loadEconomyAdmin],

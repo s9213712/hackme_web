@@ -20,7 +20,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.21-177`
+- Release ID: `2026.05.21-178`
 - Schema version: `30`
 - Release ID source: `services/platform/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -673,6 +673,8 @@ ComfyUI notes:
 ### PointsChain
 
 - `GET /api/points/wallet`
+- `GET /api/points/wallet/onboarding`
+- `POST /api/points/wallet/onboarding`
 - `GET /api/points/ledger`
 - `GET /api/points/catalog`
 - `POST /api/points/spend`
@@ -687,6 +689,7 @@ ComfyUI notes:
 - `POST /api/root/points/chain/backups`
 - `POST /api/root/points/chain/recovery/approve`
 - `POST /api/root/points/chain/recovery/auto-handle`
+- `GET /api/root/points/system-wallets`
 
 `recovery/auto-handle` is root-only and CSRF-protected. It verifies the chain,
 returns clean status when no recovery is needed, or applies the recommended
@@ -698,6 +701,13 @@ source of truth.
 member outstanding points, root-held points, confirmed ledger net points,
 supply gap, unsealed ledger count, and sealed coverage. Use this field for
 deployment dashboards that need the current in-circulation PointsChain supply.
+
+The simulated blockchain wallet identity layer is documented in
+[architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md](architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md).
+User-created cold-wallet private keys must be generated or imported in the
+browser and are never accepted by the server. Signup bonus issuance is deferred
+until a non-root user completes wallet onboarding through an official hot wallet,
+self-custody cold wallet, imported cold wallet, or multisig policy wallet.
 
 ### Trading System
 

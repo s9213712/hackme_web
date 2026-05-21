@@ -13,6 +13,7 @@ import argon2
 from flask import make_response, request, send_from_directory
 
 from services.points_chain import BIRTHDAY_GIFT_POINTS
+from services.points_chain.wallet_identity import wallet_onboarding_status
 from services.security.access_controls import verify_internal_test_token
 from services.users.recovery import (
     create_password_reset_review_request,
@@ -191,6 +192,25 @@ def register_public_routes(app, deps):
 
     def login_autofill_block_enabled():
         return bool(get_system_settings().get("login_autofill_block_enabled", False))
+
+    def wallet_onboarding_payload(user_id):
+        if not points_service:
+            return None
+        conn = points_service.get_db() if hasattr(points_service, "get_db") else get_db()
+        try:
+            points_service.ensure_schema(conn)
+            payload = wallet_onboarding_status(conn, points_service=points_service, user_id=user_id)
+            conn.commit()
+            return payload
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            audit("POINTS_WALLET_ONBOARDING_STATUS_FAILED", get_client_ip(), ua=get_ua(), success=False, detail=str(exc))
+            return {"required": False, "error": "wallet_onboarding_status_failed"}
+        finally:
+            conn.close()
 
     def tester_token_login_allowed(conn, token, user_id):
         token = str(token or "").strip()
@@ -683,17 +703,13 @@ def register_public_routes(app, deps):
                 (cur.lastrowid, hash_password(password), now)
             )
             conn.commit()
-            new_user_id = cur.lastrowid
-            if points_service:
-                try:
-                    points_service.award_signup_bonus(
-                        user_id=new_user_id,
-                        actor={"id": new_user_id, "username": username, "role": "user"},
-                    )
-                except Exception as exc:
-                    audit("POINTS_SIGNUP_BONUS_FAILED", ip, username, ua=ua, success=False, detail=str(exc))
             audit("REGISTER_PENDING", ip, username, ua=ua, success=True, detail="awaiting manager approval")
-            return json_resp({"ok":True,"msg":"註冊申請已送出，需經管理員或最高管理者審核後才能登入"})
+            return json_resp({
+                "ok": True,
+                "msg": "註冊申請已送出，需經管理員或最高管理者審核後才能登入；初次登入後請先完成 PointsChain 錢包設定以領取註冊禮。",
+                "wallet_onboarding_required": True,
+                "signup_bonus_deferred": True,
+            })
         finally:
             conn.close()
 
@@ -908,6 +924,7 @@ def register_public_routes(app, deps):
                     "ok": True,
                     "msg": login_msg,
                     "birthday_gift": birthday_gift,
+                    "wallet_onboarding": wallet_onboarding_payload(user_row["id"]),
                     "must_change_password": bool(user_row["must_change_password"] or 0),
                     "is_default_password": bool(user_row["is_default_password"] or 0),
                 })
@@ -1253,6 +1270,7 @@ def register_public_routes(app, deps):
             "appearance_settings": appearance_settings,
             "auth_scope": dict(ctx).get("auth_scope") or dict(ctx).get("_auth_scope") or "",
             "allowed_features": list(dict(ctx).get("allowed_features") or dict(ctx).get("_allowed_features") or []),
+            "wallet_onboarding": wallet_onboarding_payload(ctx["id"]),
         })
 
     @app.route("/api/me/appearance", methods=["GET", "PUT", "DELETE"])

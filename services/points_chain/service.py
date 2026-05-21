@@ -3,6 +3,7 @@
 import threading
 
 from . import schema as _schema
+from .wallet_identity import ensure_wallet_identity_schema
 
 globals().update({name: value for name, value in _schema.__dict__.items() if not name.startswith("__")})
 
@@ -42,6 +43,7 @@ class PointsLedgerService:
             if db_path and db_path in self._schema_ready_paths:
                 return
             ensure_points_economy_schema(conn)
+            ensure_wallet_identity_schema(conn)
             if db_path:
                 self._schema_ready_paths.add(db_path)
 

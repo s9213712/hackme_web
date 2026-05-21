@@ -15,7 +15,7 @@ operator guidance.
 | End-user handbook | [04_USER_GUIDE.md](04_USER_GUIDE.md) |
 | Feature map | [05_FEATURES_OVERVIEW.md](05_FEATURES_OVERVIEW.md) |
 | Security model | [06_SECURITY_MODEL.md](06_SECURITY_MODEL.md) |
-| PointsChain | [07_POINTSCHAIN.md](07_POINTSCHAIN.md) |
+| PointsChain | [07_POINTSCHAIN.md](07_POINTSCHAIN.md), [architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md](architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md) |
 | Trading engine | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md) |
 | Snapshot / reset / restore | [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md) |
 | Blockchain walletization prework | [10_BLOCKCHAIN_WALLETIZATION_PREWORK_PLAN.md](10_BLOCKCHAIN_WALLETIZATION_PREWORK_PLAN.md) |
@@ -61,6 +61,7 @@ operator guidance.
 - Runtime reset and recovery: [ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md)
 - Nginx / systemd production templates: [../deploy/README.md](../deploy/README.md)
 - Async job / Redis / queue feasibility: [architecture/ASYNC_JOB_QUEUE_FEASIBILITY.md](architecture/ASYNC_JOB_QUEUE_FEASIBILITY.md)
+- Blockchain wallet identity contract: [architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md](architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md)
 - User profiles and friends: [social/USER_PROFILES_AND_FRIENDS.md](social/USER_PROFILES_AND_FRIENDS.md)
 - Server mode profile matrix: [server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md](server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md)
 - PointsChain v2 research: [AGENTS/research/BLOCKCHAIN/README.md](AGENTS/research/BLOCKCHAIN/README.md)

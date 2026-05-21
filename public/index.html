@@ -2517,6 +2517,49 @@
           </div>
         </div>
       </div>
+      <div class="drive-card" id="economy-wallet-onboarding-card" style="display:none;margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">區塊鏈模擬錢包</div>
+            <div class="drive-card-sub" id="economy-wallet-onboarding-status">讀取中</div>
+          </div>
+          <button class="btn" id="economy-wallet-onboarding-refresh-btn" type="button">更新</button>
+        </div>
+        <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+          <div><span class="drive-card-sub">錢包模式</span><strong id="economy-wallet-identity-type">-</strong><small id="economy-wallet-identity-custody">-</small></div>
+          <div><span class="drive-card-sub">模擬鏈地址</span><strong id="economy-wallet-identity-address">-</strong><small id="economy-wallet-identity-status">-</small></div>
+          <div><span class="drive-card-sub">註冊禮</span><strong id="economy-wallet-signup-bonus">-</strong><small>完成錢包後發放</small></div>
+        </div>
+        <div id="economy-wallet-onboarding-actions" style="margin-top:.75rem;">
+          <div class="drive-file-actions economy-inline-actions">
+            <button class="btn" id="economy-wallet-official-hot-btn" type="button">使用官方熱錢包</button>
+            <button class="btn" id="economy-wallet-create-cold-btn" type="button">建立冷錢包</button>
+            <button class="btn" id="economy-wallet-import-cold-btn" type="button">匯入冷錢包</button>
+          </div>
+          <div class="field" style="margin-top:.75rem;">
+            <label>冷錢包私鑰 JWK</label>
+            <textarea id="economy-wallet-private-key" rows="6" spellcheck="false" placeholder="建立冷錢包後會顯示一次；匯入時可貼上自己的私鑰 JWK。"></textarea>
+            <div class="drive-card-sub">私鑰只在瀏覽器中產生或匯入；送到伺服器的只有 public key、地址與簽章。</div>
+          </div>
+          <label class="drive-card-sub" style="display:flex;gap:.45rem;align-items:center;margin-top:.5rem;">
+            <input type="checkbox" id="economy-wallet-private-key-confirmed" />
+            我已保存私鑰，遺失時本站無法替我還原冷錢包。
+          </label>
+          <div class="drive-file-actions economy-inline-actions" style="margin-top:.75rem;">
+            <button class="btn btn-primary" id="economy-wallet-confirm-cold-btn" type="button">確認並綁定冷錢包</button>
+          </div>
+          <div class="field" style="margin-top:.75rem;">
+            <label>多簽 signer 地址</label>
+            <input type="text" id="economy-wallet-multisig-signers" placeholder="pc1..., pc1..." autocomplete="off" />
+            <div class="drive-card-sub">可用逗號分隔 signer 地址；目前建立 policy 錢包，不接收任何 signer 私鑰。</div>
+          </div>
+          <div class="settings-option-grid">
+            <div class="field"><label>多簽門檻</label><input type="number" id="economy-wallet-multisig-threshold" min="1" value="2" /></div>
+            <div class="field"><label>&nbsp;</label><button class="btn" id="economy-wallet-create-multisig-btn" type="button">建立多簽錢包</button></div>
+          </div>
+        </div>
+        <div class="msg" id="economy-wallet-onboarding-msg"></div>
+      </div>
       <div class="drive-card" id="economy-root-balance-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>

@@ -75,6 +75,10 @@ async function doLogin() {
       const message = `生日禮金 ${Number.isFinite(amount) ? amount : 500} 點已入帳`;
       if (typeof showAppToast === "function") showAppToast(message, true);
       else flash($("li-msg"), message, true);
+    } else if (json.wallet_onboarding?.required) {
+      const message = "請到積分系統完成 PointsChain 錢包設定以領取註冊禮。";
+      if (typeof showAppToast === "function") showAppToast(message, true);
+      else flash($("li-msg"), message, true);
     }
   } catch (e) {
     flash($("li-msg"), "網路錯誤，請稍後再試", false);
