@@ -412,6 +412,44 @@ def bind_self_custody_wallet(
     if row and int(row["user_id"] or 0) != int(user_id):
         raise ValueError("wallet address is already bound to another user")
     now = utc_now()
+    if row:
+        metadata = _json_loads(row["metadata_json"], {})
+        metadata.update({
+            "private_key_server_received": False,
+            "backup_confirmed": True,
+            "restored_requires_private_key": True,
+            "restored_at": now,
+            "previous_status": row["status"],
+        })
+        conn.execute(
+            """
+            UPDATE points_wallet_identities
+            SET wallet_type=?, custody_mode='self_custody', key_algorithm='ECDSA_P256_SHA256',
+                public_key_jwk_json=?, public_key_hash=?, server_private_key_stored=0,
+                is_primary=1, status='active', label=?, backup_confirmed_at=?,
+                imported_at=?, revoked_at=NULL, metadata_json=?, updated_at=?
+            WHERE id=?
+            """,
+            (
+                wallet_type,
+                canonical_json(jwk),
+                public_key_hash(jwk),
+                str(label or ("冷錢包" if wallet_type == "self_custody_cold" else "匯入冷錢包"))[:120],
+                now,
+                now if wallet_type == "imported_cold" else row["imported_at"],
+                canonical_json(metadata),
+                now,
+                row["id"],
+            ),
+        )
+        _record_onboarding_event(
+            conn,
+            user_id=user_id,
+            wallet_identity_id=row["id"],
+            event_type=f"{wallet_type}_restored",
+            detail={"address": address, "restore_requires_private_key": True},
+        )
+        return serialize_wallet_identity(conn.execute("SELECT * FROM points_wallet_identities WHERE id=?", (row["id"],)).fetchone())
     cur = conn.execute(
         """
         INSERT INTO points_wallet_identities (
@@ -437,6 +475,43 @@ def bind_self_custody_wallet(
     )
     _record_onboarding_event(conn, user_id=user_id, wallet_identity_id=cur.lastrowid, event_type=f"{wallet_type}_bound")
     return serialize_wallet_identity(conn.execute("SELECT * FROM points_wallet_identities WHERE id=?", (cur.lastrowid,)).fetchone())
+
+
+def delete_primary_cold_wallet(conn, *, user_id, reason=""):
+    ensure_wallet_identity_schema(conn)
+    primary = get_primary_wallet_identity(conn, user_id)
+    if not primary:
+        raise ValueError("no active wallet is bound")
+    if primary["wallet_type"] not in {"self_custody_cold", "imported_cold"} or primary["custody_mode"] != "self_custody":
+        raise ValueError("only self-custody cold wallets can be deleted; official hot wallets cannot be deleted")
+    now = utc_now()
+    metadata = _json_loads(primary["metadata_json"], {})
+    metadata.update({
+        "deleted_at": now,
+        "delete_reason": str(reason or "")[:240],
+        "restore_requires_private_key": True,
+        "financial_source_of_truth": "points_ledger",
+    })
+    conn.execute(
+        """
+        UPDATE points_wallet_identities
+        SET is_primary=0, status='lost', revoked_at=?, metadata_json=?, updated_at=?
+        WHERE id=?
+        """,
+        (now, canonical_json(metadata), now, primary["id"]),
+    )
+    _record_onboarding_event(
+        conn,
+        user_id=user_id,
+        wallet_identity_id=primary["id"],
+        event_type="cold_wallet_deleted",
+        detail={
+            "address": primary["address"],
+            "wallet_type": primary["wallet_type"],
+            "restore_requires_private_key": True,
+        },
+    )
+    return serialize_wallet_identity(conn.execute("SELECT * FROM points_wallet_identities WHERE id=?", (primary["id"],)).fetchone())
 
 
 def create_multisig_wallet(conn, *, user_id, threshold, signer_addresses, label="多簽錢包"):

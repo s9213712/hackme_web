@@ -322,6 +322,11 @@
       overflow-wrap: anywhere;
     }
 
+    #economy-root-wallet-management-card .economy-wallet-grid small[id$="-address"] {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      word-break: break-all;
+    }
+
     .economy-supply-formula {
       margin-top: .7rem;
       font-size: .86rem;

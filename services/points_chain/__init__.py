@@ -9,6 +9,7 @@ from .wallet_identity import (
     bind_self_custody_wallet,
     create_multisig_wallet,
     create_official_hot_wallet,
+    delete_primary_cold_wallet,
     ensure_system_wallets,
     ensure_wallet_identity_schema,
     serialize_wallet_identity,

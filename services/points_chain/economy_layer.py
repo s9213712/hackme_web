@@ -486,7 +486,10 @@ def replay_economy_events(conn, *, policy=None, chain_secret, persist_cache=Fals
             "address": row["address"],
             "label": row["label"],
             "balance": 0,
+            "custody_mode": row["custody_mode"],
+            "wallet_status": "active",
             "derived_cache": True,
+            "updated_at": row["updated_at"],
         }
         for fund_key, row in wallets.items()
     }

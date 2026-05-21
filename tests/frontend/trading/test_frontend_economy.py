@@ -65,6 +65,12 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-root-outstanding-points"' not in economy_balance_page
     assert 'id="economy-root-virtual-card"' not in economy_balance_page
     assert 'id="economy-trading-summary-card"' not in economy_balance_page
+    assert 'id="economy-root-wallet-management-card"' in economy_balance_page
+    assert 'id="economy-root-wallet-mint-address"' in economy_balance_page
+    assert 'id="economy-root-wallet-official-address"' in economy_balance_page
+    assert 'id="economy-root-wallet-promo-address"' in economy_balance_page
+    assert 'id="economy-root-wallet-exchange-address"' in economy_balance_page
+    assert 'id="economy-root-wallet-burn-address"' in economy_balance_page
     assert 'id="economy-root-virtual-card"' in economy_positions_page
     assert 'id="economy-trading-summary-card"' in economy_positions_page
     assert 'id="economy-asset-overview-card"' in economy_positions_page
@@ -75,6 +81,9 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-root-position-wallet-total"' not in index_html
     assert 'id="economy-root-wallet-position-list"' not in index_html
     assert "會員錢包摘要" not in index_html
+    assert 'id="economy-wallet-bound-actions"' in index_html
+    assert 'id="economy-wallet-delete-cold-btn"' in index_html
+    assert "刪除後必須提供私鑰才能恢復同一地址" in index_html
     assert 'id="economy-root-spot-position-list"' in index_html
     assert 'id="economy-root-margin-position-list"' in index_html
     assert 'id="economy-root-bot-position-list"' in index_html
@@ -93,8 +102,12 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-layer-mint-remaining"' in index_html
     assert 'id="economy-layer-active-supply"' in index_html
     assert 'id="economy-layer-circulating-supply"' in index_html
-    assert 'id="economy-layer-legacy-outstanding"' in index_html
-    assert 'id="economy-layer-promo-bridged"' in index_html
+    assert 'id="economy-layer-legacy-outstanding"' not in economy_chain_page
+    assert 'id="economy-layer-promo-bridged"' not in economy_chain_page
+    assert 'id="economy-layer-official-balance"' not in economy_chain_page
+    assert 'id="economy-layer-promo-balance"' not in economy_chain_page
+    assert 'id="economy-layer-exchange-balance"' not in economy_chain_page
+    assert 'id="economy-layer-burned-total"' not in economy_chain_page
     assert 'id="economy-layer-supply-formula"' in index_html
     assert 'class="economy-supply-formula" id="economy-layer-supply-formula"' in index_html
     assert 'class="economy-supply-equation-ui"' in index_html
@@ -162,23 +175,32 @@ def test_root_points_page_is_chain_operations_console():
     assert "function economyPositionsAvailable()" in economy_js
     assert 'const positionsAvailable = economyPositionsAvailable();' in economy_js
     assert 'positionsTab.style.display = positionsAvailable ? "" : "none";' in economy_js
-    assert 'chainTab.textContent = rootMode ? "積分私有鏈" : "審核";' in economy_js
+    assert 'chainTab.textContent = rootMode ? "積分私有鏈" : "積分管理";' in economy_js
     assert 'if (nextPage === "positions") title.textContent = "倉位管理";' in economy_js
     assert 'else if (nextPage === "funding-pools") title.textContent = "資金池管理";' in economy_js
     assert 'else if (nextPage === "all-positions") title.textContent = "全用戶倉位管理";' in economy_js
-    assert 'else title.textContent = nextPage === "chain" ? "積分私有鏈" : "積分餘額";' in economy_js
+    assert 'else title.textContent = nextPage === "chain" ? "積分私有鏈" : "錢包管理";' in economy_js
     assert 'fetchEconomyJson("/root/points/report")' in economy_js
+    assert 'fetchEconomyJson("/root/trading/sitewide/refresh"' in economy_js
     assert 'fetchEconomyJson("/root/trading/sitewide/pools", { allowMissingSnapshot: true })' in economy_js
     assert 'fetchEconomyJson("/root/trading/sitewide/user-positions", { allowMissingSnapshot: true })' in economy_js
     assert 'const shouldLoadRootTrading = rootMode && ["funding-pools", "all-positions"].includes(economyActivePage);' in economy_js
+    assert "function refreshEconomyRootTradingSnapshots" in economy_js
+    assert 'loadEconomyRootTradingReadOnly({ refreshSnapshot: true' in economy_js
+    assert 'balanceTab.textContent = rootMode ? "錢包管理" : "積分餘額";' in economy_js
     assert "function renderEconomyRootBalanceSummary" not in economy_js
     assert "function renderEconomyLayerSummary" in economy_js
     assert "function economyFormulaCard" in economy_js
     assert "function economyFormulaOperator" in economy_js
     assert 'setEconomyText("economy-layer-mint-remaining"' in economy_js
     assert 'setEconomyText("economy-layer-active-supply"' in economy_js
-    assert 'setEconomyText("economy-layer-legacy-outstanding"' in economy_js
-    assert '"economy-layer-supply-equation"' in economy_js
+    assert 'setEconomyText("economy-layer-legacy-outstanding"' not in economy_js
+    assert '"economy-layer-supply-equation"' not in economy_js
+    assert '"economy-root-wallet-management-card"' in economy_js
+    assert 'setEconomyText("economy-root-wallet-mint-address"' in economy_js
+    assert 'setEconomyText("economy-root-wallet-official-balance"' in economy_js
+    assert 'setEconomyText("economy-root-wallet-promo-status"' in economy_js
+    assert '["economy-root-wallet-refresh-btn", loadEconomyRootReport]' in economy_js
     assert '"economy-layer-supply-formula"' in economy_js
     assert "閉環公式" in economy_js
     assert "economy-root-balance-refresh-btn" not in economy_js
@@ -228,6 +250,11 @@ def test_root_points_page_is_chain_operations_console():
     assert '/admin/points/wallets/${encodeURIComponent(userId)}' in economy_js
     assert '/root/points/wallets/${encodeURIComponent(userId)}/sanction' in economy_js
     assert '["economy-wallet-sanction-btn", sanctionEconomyWallet]' in economy_js
+    assert "function deleteEconomyColdWallet" in economy_js
+    assert 'fetchEconomyJson("/points/wallet/onboarding", {\n      method: "DELETE"' in economy_js
+    assert '["economy-wallet-delete-cold-btn", deleteEconomyColdWallet]' in economy_js
+    assert 'wallet?.wallet_type === "official_hot"' in economy_js
+    assert "官方熱錢包由系統託管，不能刪除" in economy_js
     assert "economy-account-query-btn" in economy_js
     assert "會員讀取失敗" in economy_js
     assert "請先選擇要查詢的會員" in economy_js

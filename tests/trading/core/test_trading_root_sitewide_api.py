@@ -23,7 +23,8 @@ def _db(tmp_path):
     conn.execute(
         "INSERT INTO users (username, role, status) VALUES "
         "('alice', 'user', 'active'), "
-        "('root', 'super_admin', 'active')"
+        "('root', 'super_admin', 'active'), "
+        "('admin', 'manager', 'active')"
     )
     ensure_points_economy_schema(conn)
     ensure_trading_schema(conn)
@@ -150,6 +151,42 @@ def test_root_sitewide_user_positions_are_read_only_and_exclude_root(tmp_path):
             ) VALUES (2, 'BTC/POINTS', 900000000, 0, 100, '2026-01-01T00:00:00Z')
             """
         )
+        conn.execute(
+            """
+            INSERT INTO trading_spot_positions (
+                user_id, market_symbol, quantity_units, locked_quantity_units,
+                avg_cost_points, updated_at
+            ) VALUES (3, 'ETH/POINTS', 200000000, 0, 100, '2026-01-01T00:00:00Z')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO trading_margin_positions (
+                position_uuid, user_id, market_symbol, position_type, quantity_units,
+                entry_price_points, principal_points, collateral_points,
+                interest_points, interest_paid_points, status, opened_at, updated_at
+            ) VALUES (
+                'pos-admin-1', 3, 'ETH/POINTS', 'margin_long', 200000000,
+                100, 900, 100, 7, 1, 'open',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO trading_bots (
+                bot_uuid, user_id, bot_type, name, market_symbol, side, order_type,
+                quantity_text, trigger_type, trigger_price_points, enabled, max_runs,
+                run_count, cooldown_seconds, interval_hours, budget_points,
+                created_at, updated_at
+            ) VALUES (
+                'bot-admin-1', 3, 'conditional', 'admin spot bot', 'ETH/POINTS',
+                'buy', 'market', '0.2', 'price_below', 95, 1, 3,
+                1, 60, 24, 100,
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
+            )
+            """
+        )
         conn.commit()
     finally:
         conn.close()
@@ -164,13 +201,17 @@ def test_root_sitewide_user_positions_are_read_only_and_exclude_root(tmp_path):
     assert payload["positions"]["summary"]["root_simulated_excluded"] is True
     assert "total_outstanding_points" not in payload["positions"]["summary"]
     assert "wallets" not in payload["positions"]
-    assert [row["username"] for row in payload["positions"]["spot_positions"]] == ["alice"]
+    assert {row["username"] for row in payload["positions"]["spot_positions"]} == {"alice", "admin"}
+    assert {row["username"] for row in payload["positions"]["margin_positions"]} == {"alice", "admin"}
+    assert {row["username"] for row in payload["positions"]["bots"]} == {"alice", "admin"}
     assert payload["positions"]["margin_positions"][0]["interest_due_points"] == 10
+    assert payload["positions"]["summary"]["spot_position_count"] == 2
+    assert payload["positions"]["summary"]["margin_position_count"] == 2
     assert payload["positions"]["summary"]["open_order_count"] == 1
-    assert payload["positions"]["summary"]["bot_count"] == 1
+    assert payload["positions"]["summary"]["bot_count"] == 2
     assert payload["positions"]["summary"]["grid_bot_count"] == 1
-    assert payload["positions"]["summary"]["total_enabled_bot_count"] == 2
-    assert payload["positions"]["bots"][0]["name"] == "alice spot bot"
+    assert payload["positions"]["summary"]["total_enabled_bot_count"] == 3
+    assert {row["name"] for row in payload["positions"]["bots"]} == {"alice spot bot", "admin spot bot"}
     assert payload["positions"]["grid_bots"][0]["name"] == "alice grid bot"
 
 
@@ -257,3 +298,34 @@ def test_root_run_once_enqueues_background_job(tmp_path):
     assert payload["queued"] is True
     assert payload["job_key"] == "sitewide_metrics_refresh"
     assert payload["queue_uuid"]
+
+
+def test_root_sitewide_refresh_rebuilds_snapshot_before_read(tmp_path):
+    app, _points, trading, get_db = _app(tmp_path, {"id": 2, "username": "root", "role": "super_admin"})
+    conn = get_db()
+    try:
+        trading.ensure_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO trading_spot_positions (
+                user_id, market_symbol, quantity_units, locked_quantity_units,
+                avg_cost_points, updated_at
+            ) VALUES (3, 'ETH/POINTS', 200000000, 0, 100, '2026-01-01T00:00:00Z')
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    refresh = app.test_client().post("/api/root/trading/sitewide/refresh", json={"reason": "unit-test"})
+    refresh_payload = refresh.get_json()
+    response = app.test_client().get("/api/root/trading/sitewide/user-positions")
+    payload = response.get_json()
+
+    assert refresh.status_code == 200
+    assert refresh_payload["ok"] is True
+    assert "sitewide_user_positions" in refresh_payload["refresh"]["snapshot_keys"]
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["snapshot"]["source_job_key"] == "root_manual_sitewide_refresh"
+    assert [row["username"] for row in payload["positions"]["spot_positions"]] == ["admin"]

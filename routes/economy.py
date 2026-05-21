@@ -12,6 +12,7 @@ from services.points_chain import (
     bind_self_custody_wallet,
     create_multisig_wallet,
     create_official_hot_wallet,
+    delete_primary_cold_wallet,
     ensure_system_wallets,
     wallet_onboarding_status,
 )
@@ -270,6 +271,47 @@ def register_economy_routes(app, deps):
             conn.close()
         audit("POINTS_WALLET_ONBOARDING_COMPLETED", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"mode={mode},address={(identity or {}).get('address')}")
         return json_resp({"ok": True, "wallet_identity": identity, "signup_bonus": bonus, "onboarding": status})
+
+    @app.route("/api/points/wallet/onboarding", methods=["DELETE"])
+    @require_csrf
+    def points_wallet_onboarding_delete():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            data = {}
+        conn = points_service.get_db()
+        try:
+            points_service.ensure_schema(conn)
+            identity = delete_primary_cold_wallet(
+                conn,
+                user_id=actor["id"],
+                reason=data.get("reason") or "user_deleted_cold_wallet",
+            )
+            status = wallet_onboarding_status(conn, points_service=points_service, user_id=actor["id"])
+            conn.commit()
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            conn.close()
+            return service_error(exc)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        audit(
+            "POINTS_WALLET_COLD_DELETED",
+            get_client_ip(),
+            user=actor_value(actor, "username"),
+            success=True,
+            ua=get_ua(),
+            detail=f"address={(identity or {}).get('address')}",
+        )
+        return json_resp({"ok": True, "wallet_identity": identity, "onboarding": status})
 
     @app.route("/api/root/points/system-wallets", methods=["GET"])
     @require_csrf_safe

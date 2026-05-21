@@ -1841,6 +1841,28 @@ def register_trading_routes(app, deps):
         }
         return json_resp(response_payload)
 
+    @app.route("/api/root/trading/sitewide/refresh", methods=["POST"])
+    @require_csrf
+    def root_trading_sitewide_refresh():
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            result = trading_service.refresh_root_trading_snapshots(
+                source_job_key="root_manual_sitewide_refresh"
+            )
+            audit(
+                "TRADING_SITEWIDE_SNAPSHOTS_REFRESHED",
+                get_client_ip(),
+                user=actor_value(actor, "username", "root"),
+                success=True,
+                ua=get_ua(),
+                detail=json.dumps(result, ensure_ascii=False),
+            )
+            return json_resp({"ok": True, "refresh": result})
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/admin/trading/report", methods=["GET"])
     @require_csrf_safe
     def admin_trading_report():

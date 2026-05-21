@@ -13,6 +13,7 @@ from services.points_chain import (
     bind_self_custody_wallet,
     create_multisig_wallet,
     create_official_hot_wallet,
+    delete_primary_cold_wallet,
     ensure_system_wallets,
     ensure_wallet_identity_schema,
     wallet_binding_payload,
@@ -182,3 +183,69 @@ def test_official_hot_and_multisig_wallets_complete_onboarding_without_private_k
     assert multisig["metadata"]["multisig_policy"]["threshold"] == 2
     assert status["wallet"]["address"] == official["address"]
     assert status["signup_bonus_granted"] is False
+
+
+def test_cold_wallet_delete_requires_private_key_restore_and_official_hot_cannot_delete(tmp_path):
+    points = _points(tmp_path)
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_jwk = _public_jwk(private_key)
+    address = address_from_public_key(public_jwk)
+    payload = wallet_binding_payload(
+        user_id=1,
+        wallet_type="self_custody_cold",
+        address=address,
+        public_key_jwk=public_jwk,
+    )
+    signature = _signature(private_key, payload)
+
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        wallet = bind_self_custody_wallet(
+            conn,
+            user_id=1,
+            wallet_type="self_custody_cold",
+            public_key_jwk=public_jwk,
+            address=address,
+            signature=signature,
+            backup_confirmed=True,
+        )
+        deleted = delete_primary_cold_wallet(conn, user_id=1, reason="unit test")
+        status_after_delete = wallet_onboarding_status(conn, points_service=points, user_id=1)
+        restore_payload = wallet_binding_payload(
+            user_id=1,
+            wallet_type="imported_cold",
+            address=address,
+            public_key_jwk=public_jwk,
+        )
+        restored = bind_self_custody_wallet(
+            conn,
+            user_id=1,
+            wallet_type="imported_cold",
+            public_key_jwk=public_jwk,
+            address=address,
+            signature=_signature(private_key, restore_payload),
+            backup_confirmed=True,
+        )
+        status_after_restore = wallet_onboarding_status(conn, points_service=points, user_id=1)
+        official = create_official_hot_wallet(conn, user_id=2, chain_secret=points.chain_secret)
+        with pytest.raises(ValueError, match="official hot wallets cannot be deleted"):
+            delete_primary_cold_wallet(conn, user_id=2, reason="must fail")
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert wallet["address"] == address
+    assert deleted["address"] == address
+    assert deleted["status"] == "lost"
+    assert deleted["is_primary"] is False
+    assert deleted["metadata"]["restore_requires_private_key"] is True
+    assert status_after_delete["wallet"] is None
+    assert status_after_delete["wallet_required"] is True
+    assert restored["id"] == wallet["id"]
+    assert restored["address"] == address
+    assert restored["wallet_type"] == "imported_cold"
+    assert restored["status"] == "active"
+    assert restored["is_primary"] is True
+    assert status_after_restore["wallet"]["address"] == address
+    assert official["wallet_type"] == "official_hot"

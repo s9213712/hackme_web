@@ -316,6 +316,7 @@ function setEconomyActivePage(page, options = {}) {
   const allPositionsTab = $("tab-economy-all-positions");
   const chainTab = $("tab-economy-chain");
   if (balanceTab) {
+    balanceTab.textContent = rootMode ? "錢包管理" : "積分餘額";
     balanceTab.classList.toggle("active", nextPage === "balance");
     balanceTab.setAttribute("aria-selected", nextPage === "balance" ? "true" : "false");
   }
@@ -336,7 +337,7 @@ function setEconomyActivePage(page, options = {}) {
   }
   if (chainTab) {
     chainTab.style.display = chainAllowed ? "" : "none";
-    chainTab.textContent = rootMode ? "積分私有鏈" : "審核";
+    chainTab.textContent = rootMode ? "積分私有鏈" : "積分管理";
     chainTab.classList.toggle("active", chainAllowed && nextPage === "chain");
     chainTab.setAttribute("aria-selected", chainAllowed && nextPage === "chain" ? "true" : "false");
   }
@@ -345,11 +346,11 @@ function setEconomyActivePage(page, options = {}) {
     if (nextPage === "positions") title.textContent = "倉位管理";
     else if (nextPage === "funding-pools") title.textContent = "資金池管理";
     else if (nextPage === "all-positions") title.textContent = "全用戶倉位管理";
-    else if (!rootMode) title.textContent = nextPage === "chain" ? "積分審核" : "積分錢包";
-    else title.textContent = nextPage === "chain" ? "積分私有鏈" : "積分餘額";
+    else if (!rootMode) title.textContent = nextPage === "chain" ? "積分管理" : "積分錢包";
+    else title.textContent = nextPage === "chain" ? "積分私有鏈" : "錢包管理";
   }
   if (options.loadRootTrading !== false && rootTradingAllowed && ["funding-pools", "all-positions"].includes(nextPage)) {
-    loadEconomyRootTradingReadOnly();
+    loadEconomyRootTradingReadOnly({ refreshSnapshot: true });
   }
 }
 
@@ -361,6 +362,8 @@ function syncEconomySubpages(rootMode) {
 }
 
 function setEconomyRootLayout(rootMode) {
+  const rootWalletManagementCard = $("economy-root-wallet-management-card");
+  if (rootWalletManagementCard) rootWalletManagementCard.style.display = rootMode ? "" : "none";
   const rootVirtualCard = $("economy-root-virtual-card");
   if (rootVirtualCard) rootVirtualCard.style.display = rootMode ? "" : "none";
   const manualAdjustDetails = $("economy-manual-adjust-details");
@@ -473,9 +476,23 @@ function renderEconomyWalletOnboarding(onboarding) {
   card.style.display = rootMode ? "none" : "";
   if (rootMode) return;
   const wallet = onboarding?.wallet || null;
-  const required = !!onboarding?.required;
   const actions = $("economy-wallet-onboarding-actions");
-  if (actions) actions.style.display = required ? "" : "none";
+  const boundActions = $("economy-wallet-bound-actions");
+  const deleteColdBtn = $("economy-wallet-delete-cold-btn");
+  const deleteHint = $("economy-wallet-delete-hint");
+  const coldWalletBound = !!wallet && ["self_custody_cold", "imported_cold"].includes(String(wallet.wallet_type || ""));
+  if (actions) actions.style.display = wallet ? "none" : "";
+  if (boundActions) boundActions.style.display = wallet ? "" : "none";
+  if (deleteColdBtn) deleteColdBtn.style.display = coldWalletBound ? "" : "none";
+  if (deleteHint) {
+    deleteHint.textContent = coldWalletBound
+      ? "刪除後不會刪除帳本；要恢復同一地址必須貼上該冷錢包私鑰。"
+      : wallet?.wallet_type === "official_hot"
+        ? "官方熱錢包由系統託管，不能刪除。"
+        : wallet
+          ? "此錢包類型暫不支援由前台刪除。"
+          : "尚未綁定錢包。";
+  }
   if ($("economy-wallet-onboarding-status")) {
     $("economy-wallet-onboarding-status").textContent = wallet
       ? "已綁定模擬鏈錢包；伺服器未保存用戶冷錢包私鑰。"
@@ -510,6 +527,22 @@ async function useOfficialHotWallet() {
     await postEconomyWalletOnboarding({ mode: "official_hot" });
   } catch (err) {
     economyWalletMsg(err.message || "官方熱錢包建立失敗", false);
+  }
+}
+
+async function deleteEconomyColdWallet() {
+  try {
+    if (!confirm("刪除冷錢包不會刪除帳本，但之後必須提供該私鑰才能恢復同一地址。確定刪除？")) return;
+    const json = await fetchEconomyJson("/points/wallet/onboarding", {
+      method: "DELETE",
+      body: JSON.stringify({ reason: "user_deleted_cold_wallet" }),
+    });
+    renderEconomyWalletOnboarding(json.onboarding || {});
+    economyGeneratedColdWallet = null;
+    economyWalletMsg("冷錢包已移除；若要恢復同一地址，請貼上該私鑰並匯入。");
+    await loadEconomyDashboard();
+  } catch (err) {
+    economyWalletMsg(err.message || "冷錢包刪除失敗", false);
   }
 }
 
@@ -778,7 +811,14 @@ function renderEconomyLayerSummary(report) {
   const snapshot = replay.snapshot && typeof replay.snapshot === "object" ? replay.snapshot : {};
   const derivedVerify = replay.derived_verify && typeof replay.derived_verify === "object" ? replay.derived_verify : {};
   const fund = (key) => funds[key] && typeof funds[key] === "object" ? funds[key] : {};
-  const address = (key) => shortEconomyWalletAddress(fund(key).address || "");
+  const fundStatus = (key) => {
+    const item = fund(key);
+    const custody = item.custody_mode || "system";
+    const status = item.wallet_status || item.status || "active";
+    const cache = item.derived_cache ? "derived cache" : "ledger replay";
+    return `${status} · ${custody} · ${cache}`;
+  };
+  const fundAddress = (key) => fund(key).address || "-";
   setEconomyText("economy-layer-health", String(health.status || "-").toUpperCase());
   setEconomyText("economy-layer-health-detail", `原因 ${Array.isArray(health.reasons) ? health.reasons.join(", ") : "ok"}`);
   setEconomyText("economy-layer-max-supply", formatEconomyPointsValue(supply.max_supply || 0));
@@ -789,17 +829,21 @@ function renderEconomyLayerSummary(report) {
   setEconomyText("economy-layer-reserved-locked", `保留鎖定 ${formatEconomyPointsValue(supply.reserved_locked || 0)}`);
   setEconomyText("economy-layer-active-supply", formatEconomyPointsValue(supply.active_supply || 0));
   setEconomyText("economy-layer-circulating-supply", `流通 ${formatEconomyPointsValue(supply.circulating_supply || 0)} · fund ${formatEconomyPointsValue(supply.fund_supply || 0)}`);
-  setEconomyText("economy-layer-official-balance", formatEconomyPointsValue(fund("official_treasury").balance || 0));
-  setEconomyText("economy-layer-official-address", address("official_treasury"));
-  setEconomyText("economy-layer-promo-balance", formatEconomyPointsValue(fund("promo_fund").balance || 0));
-  setEconomyText("economy-layer-promo-address", address("promo_fund"));
-  setEconomyText("economy-layer-legacy-outstanding", formatEconomyPointsValue(bridge.legacy_outstanding_points || 0));
-  setEconomyText("economy-layer-legacy-gap", `未由 PROMO 扣 ${formatEconomyPointsValue(bridge.unfunded_legacy_outstanding_points || 0)}`);
-  setEconomyText("economy-layer-promo-bridged", formatEconomyPointsValue(bridge.promo_balance_after_required_debit ?? fund("promo_fund").balance ?? 0));
-  setEconomyText(
-    "economy-layer-supply-equation",
-    `${Number(bridge.actual_supply_equation_gap_points || 0) === 0 ? "公式平衡" : "公式差額"} ${formatEconomyPointsValue(bridge.actual_supply_equation_gap_points || 0)}`,
-  );
+  setEconomyText("economy-root-wallet-mint-balance", `未發放 ${formatEconomyPointsValue(supply.mint_remaining || 0)}`);
+  setEconomyText("economy-root-wallet-mint-status", fundStatus("mint"));
+  setEconomyText("economy-root-wallet-mint-address", fundAddress("mint"));
+  setEconomyText("economy-root-wallet-official-balance", formatEconomyPointsValue(fund("official_treasury").balance || 0));
+  setEconomyText("economy-root-wallet-official-status", fundStatus("official_treasury"));
+  setEconomyText("economy-root-wallet-official-address", fundAddress("official_treasury"));
+  setEconomyText("economy-root-wallet-promo-balance", formatEconomyPointsValue(fund("promo_fund").balance || 0));
+  setEconomyText("economy-root-wallet-promo-status", fundStatus("promo_fund"));
+  setEconomyText("economy-root-wallet-promo-address", fundAddress("promo_fund"));
+  setEconomyText("economy-root-wallet-exchange-balance", formatEconomyPointsValue(fund("exchange_fund").balance || 0));
+  setEconomyText("economy-root-wallet-exchange-status", fundStatus("exchange_fund"));
+  setEconomyText("economy-root-wallet-exchange-address", fundAddress("exchange_fund"));
+  setEconomyText("economy-root-wallet-burn-balance", formatEconomyPointsValue(supply.burned_total || fund("burn").balance || 0));
+  setEconomyText("economy-root-wallet-burn-status", fundStatus("burn"));
+  setEconomyText("economy-root-wallet-burn-address", fundAddress("burn"));
   const formulaEl = $("economy-layer-supply-formula");
   if (formulaEl) {
     const burned = Number(bridge.burned_total ?? supply.burned_total ?? 0);
@@ -834,10 +878,6 @@ function renderEconomyLayerSummary(report) {
       </div>
     `;
   }
-  setEconomyText("economy-layer-exchange-balance", formatEconomyPointsValue(fund("exchange_fund").balance || 0));
-  setEconomyText("economy-layer-exchange-address", address("exchange_fund"));
-  setEconomyText("economy-layer-burned-total", formatEconomyPointsValue(supply.burned_total || 0));
-  setEconomyText("economy-layer-burn-address", address("burn"));
   setEconomyText("economy-layer-replay-height", formatEconomyPointsValue(replay.height || 0));
   setEconomyText("economy-layer-replay-hash", `derived cache · ${shortEconomyWalletAddress(replay.wallet_root_hash || "")}`);
   setEconomyText("economy-layer-snapshot-height", formatEconomyPointsValue(snapshot.snapshot_height ?? replay.height ?? 0));
@@ -1151,7 +1191,9 @@ async function loadEconomyDashboard() {
     if (rootCard) rootCard.style.display = currentUser === "root" ? "" : "none";
     const rootReportOk = rootMode ? await loadEconomyRootReport() : true;
     const shouldLoadRootTrading = rootMode && ["funding-pools", "all-positions"].includes(economyActivePage);
-    const rootTradingOk = shouldLoadRootTrading ? await loadEconomyRootTradingReadOnly() : true;
+    const rootTradingOk = shouldLoadRootTrading
+      ? await loadEconomyRootTradingReadOnly({ refreshSnapshot: true, silent: true })
+      : true;
     if (typeof loadTradingDashboard === "function") {
       await loadTradingDashboard();
     }
@@ -1179,9 +1221,26 @@ async function loadEconomyRootReport() {
   }
 }
 
-async function loadEconomyRootTradingReadOnly() {
+async function refreshEconomyRootTradingSnapshots(reason = "root_economy_manual_refresh") {
+  if (currentUser !== "root") return { ok: false, skipped: true };
+  return fetchEconomyJson("/root/trading/sitewide/refresh", {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+async function loadEconomyRootTradingReadOnly(options = {}) {
   if (currentUser !== "root" || !economyPositionsAvailable()) return true;
+  const refreshSnapshot = !!(options && options.refreshSnapshot);
+  const silent = !!(options && options.silent);
   try {
+    if (refreshSnapshot) {
+      await refreshEconomyRootTradingSnapshots(
+        economyActivePage === "all-positions"
+          ? "root_all_positions_open_or_refresh"
+          : "root_funding_pools_open_or_refresh",
+      );
+    }
     const [pools, positions] = await Promise.all([
       fetchEconomyJson("/root/trading/sitewide/pools", { allowMissingSnapshot: true }),
       fetchEconomyJson("/root/trading/sitewide/user-positions", { allowMissingSnapshot: true }),
@@ -1202,6 +1261,7 @@ async function loadEconomyRootTradingReadOnly() {
     }
     renderEconomyRootFundingPools(pools.pools || {});
     renderEconomyRootAllPositions(positions.positions || {});
+    if (refreshSnapshot && !silent) economySetMsg("交易資金池與全用戶倉位快照已更新。");
     return true;
   } catch (err) {
     economySetMsg(err.message || "root 交易資金池與倉位資料讀取失敗", false);
@@ -1594,14 +1654,16 @@ function bindEconomyInlineEvents() {
     ["economy-wallet-import-cold-btn", importColdWalletFromText],
     ["economy-wallet-confirm-cold-btn", confirmColdWalletBinding],
     ["economy-wallet-create-multisig-btn", createMultisigWallet],
+    ["economy-wallet-delete-cold-btn", deleteEconomyColdWallet],
     ["economy-trading-export-btn", downloadEconomyTradingCsv],
     ["economy-ledger-export-btn", exportEconomyLedgerCsv],
     ["economy-admin-refresh-btn", loadEconomyAdmin],
     ["economy-adjust-btn", submitEconomyAdjustment],
     ["economy-account-query-btn", loadEconomyAccountLookup],
     ["economy-wallet-sanction-btn", sanctionEconomyWallet],
-    ["economy-root-funding-refresh-btn", loadEconomyRootTradingReadOnly],
-    ["economy-root-positions-refresh-btn", loadEconomyRootTradingReadOnly],
+    ["economy-root-funding-refresh-btn", () => loadEconomyRootTradingReadOnly({ refreshSnapshot: true })],
+    ["economy-root-positions-refresh-btn", () => loadEconomyRootTradingReadOnly({ refreshSnapshot: true })],
+    ["economy-root-wallet-refresh-btn", loadEconomyRootReport],
     ["economy-root-report-btn", loadEconomyRootReport],
     ["economy-backup-btn", createPointsChainBackup],
     ["economy-recovery-auto-handle-btn", autoHandlePointsChainRecovery],

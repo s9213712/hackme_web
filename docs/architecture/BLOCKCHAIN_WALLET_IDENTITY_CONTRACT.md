@@ -36,6 +36,15 @@ Cold wallets use `ECDSA_P256_SHA256`.
 
 The server-side contract is implemented in `services/points_chain/wallet_identity.py`.
 
+## Cold Wallet Deletion / Recovery
+
+Users may remove an active `self_custody_cold` or `imported_cold` wallet from
+the points balance page. Removal is not a database delete: the identity row is
+marked `lost`, `is_primary` is cleared, and ledger history remains append-only.
+Restoring the same address requires importing the private key again and passing
+the same signature verification flow. `official_hot` wallets cannot be deleted
+from the user UI because they are simulated server-managed identities.
+
 ## Signup Bonus
 
 New registrations no longer receive the signup bonus during `/api/register`.
@@ -63,6 +72,8 @@ For this phase, frontend QA should verify:
 - `使用官方熱錢包` creates a wallet and awards the signup bonus once.
 - `建立冷錢包` shows a private JWK in the browser, requires the backup checkbox, and only sends public key / address / signature to the API.
 - `匯入冷錢包` binds an existing browser-side private JWK without sending private-key material.
+- `刪除冷錢包` appears only for self-custody wallets; after removal, importing the same private key restores the same address.
+- Official hot wallets show a non-deletable hint and do not expose the delete button.
 - `建立多簽錢包` accepts signer addresses and threshold, then stores only the policy wallet.
 - Root does not see the user wallet onboarding card and can inspect mint / burn system wallet identities.
 

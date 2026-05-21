@@ -1,6 +1,25 @@
 # Update Summary
 
-Release ID: `2026.05.21-186`
+Release ID: `2026.05.21-187`
+
+## 2026.05.21-187
+
+- Added a root-only synchronous refresh endpoint for trading sitewide snapshots,
+  so root「全用戶倉位管理」rebuilds the stored report before reading it.
+- Updated the economy root funding/all-position tabs and refresh buttons to
+  refresh trading snapshots first, preventing stale reports after admin/member
+  spot, margin, order, or bot changes.
+- Extended sitewide position tests to cover manager/admin-owned trading
+  positions and the new manual snapshot refresh path.
+- Renamed root's balance tab context to「錢包管理」while keeping normal users on
+  「積分錢包」, and removed the manager-facing「審核」label from the economy tab.
+- Moved special fund wallet balances, statuses, and full addresses into root
+  「錢包管理」, leaving the private-chain dashboard's top cards for chain health,
+  supply, replay, and snapshot checks.
+- Added user cold-wallet deletion/recovery semantics: only self-custody cold
+  wallets can be removed, removal only marks the identity as lost, and restoring
+  the same address requires proving the private key again; official hot wallets
+  cannot be deleted.
 
 ## 2026.05.21-186
 
