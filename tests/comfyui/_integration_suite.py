@@ -3125,6 +3125,8 @@ def test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes(t
 
 
 def test_comfyui_diffusers_stale_progress_does_not_say_comfyui_backend(tmp_path, monkeypatch):
+    stale_progress_ready = threading.Event()
+
     class SlowDiffusersBackendClient(FakeDiffusersBackendClient):
         def generate_image(self, params, *, timeout_seconds=180, progress_callback=None, extra_data=None):
             if progress_callback:
@@ -3135,7 +3137,12 @@ def test_comfyui_diffusers_stale_progress_does_not_say_comfyui_backend(tmp_path,
                     "step": "Hugging Face 檔案下載",
                     "current_file": "Downloading (incomplete total...)",
                     "detail": "下載 Diffusers model：dhead/waiIllustriousSDXL_v150",
+                    "cache_hit": True,
+                    "bytes_written": 0,
+                    "total_bytes": 0,
+                    "python_log_tail": ["Download complete: dhead/waiIllustriousSDXL_v150 (cache hit; no network bytes reported)"],
                 })
+                stale_progress_ready.set()
             time.sleep(0.25)
             return super().generate_image(params, timeout_seconds=timeout_seconds, progress_callback=progress_callback, extra_data=extra_data)
 
@@ -3171,6 +3178,7 @@ def test_comfyui_diffusers_stale_progress_does_not_say_comfyui_backend(tmp_path,
     )
     assert started.status_code == 200, started.get_json()
     job_id = started.get_json()["job"]["job_id"]
+    assert stale_progress_ready.wait(10.0)
 
     polled = client.get(f"/api/comfyui/jobs/{job_id}")
     assert polled.status_code == 200
@@ -3179,6 +3187,9 @@ def test_comfyui_diffusers_stale_progress_does_not_say_comfyui_backend(tmp_path,
     assert progress["backend_kind"] == "diffusers"
     assert progress["phase"] == "backend_unresponsive"
     assert "Diffusers / Hugging Face 暫時沒有回報新進度" in progress["detail"]
+    assert "本機 cache" in progress["detail"]
+    assert "網路下載位元組" in progress["detail"]
+    assert "下載大型模型" not in progress["detail"]
     assert "ComfyUI 後端" not in progress["detail"]
 
 
@@ -5258,6 +5269,7 @@ def test_comfyui_frontend_is_wired():
     assert 'id="s-comfyui-diffusers-model-repo"' in index_html
     assert 'id="s-comfyui-huggingface-api-token"' in index_html
     assert 'id="s-comfyui-diffusers-device"' in index_html
+    assert 'id="s-comfyui-diffusers-cuda-fallback-to-cpu"' in index_html
     assert 'id="s-comfyui-diffusers-dtype"' in index_html
     assert 'id="s-comfyui-base-dir"' in index_html
     assert 'id="s-comfyui-local-start-script"' in index_html

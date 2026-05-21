@@ -1,5 +1,6 @@
 import logging
 import sys
+import types
 import warnings
 
 import pytest
@@ -120,11 +121,16 @@ def test_diffusers_generate_reports_download_preparation_before_heavy_loading(tm
         client.generate_image({"generation_mode": "txt2img", "prompt": "test"}, progress_callback=events.append)
 
     assert "stop before loading" in str(exc.value)
-    assert events[0]["phase"] == "downloading"
-    assert events[0]["percent"] == 3
-    assert events[0]["backend_kind"] == "diffusers"
-    assert events[0]["step"] == "準備 Diffusers model"
-    assert "下載 Diffusers model：owner/model" in events[0]["detail"]
+    prep_event = next(event for event in events if event.get("step") == "準備 Diffusers model")
+    assert prep_event["phase"] == "downloading"
+    assert prep_event["percent"] == 3
+    assert prep_event["backend_kind"] == "diffusers"
+    assert "下載 Diffusers model：owner/model" in prep_event["detail"]
+    assert any(
+        "Diffusers Python runtime starting: repo=owner/model" in line
+        for event in events
+        for line in event.get("python_log_tail", [])
+    )
     assert any("loading owner/model" in line for event in events for line in event.get("python_log_tail", []))
     assert not any("hf_1234567890abcdef" in line for event in events for line in event.get("python_log_tail", []))
     assert any(event.get("phase") == "error" and "stop before loading" in event.get("detail", "") for event in events)
@@ -138,7 +144,7 @@ def test_diffusers_generate_streams_python_runtime_output_to_progress_log(tmp_pa
 
     def stop_after_runtime_logs(*args, **kwargs):
         print("model_index.json: 100% 712/712 [00:00<00:00, 78.9kB/s]")
-        sys.stderr.write("Fetching 18 files: 100% 18/18 [01:13<00:00, 5.04s/it]\n")
+        sys.stderr.write("\x1b[AFetching 18 files: 100% 18/18 [01:13<00:00, 5.04s/it]\n")
         warnings.warn("The secret `HF_TOKEN` does not exist in your Colab secrets.", UserWarning)
         logging.getLogger("huggingface_hub.utils._http").warning(
             "Warning: unauthenticated hf_1234567890abcdef requests"
@@ -156,8 +162,180 @@ def test_diffusers_generate_streams_python_runtime_output_to_progress_log(tmp_pa
     assert "Fetching 18 files: 100%" in joined
     assert "HF_TOKEN" in joined
     assert "huggingface_hub.utils._http" in joined
+    assert "\x1b[" not in joined
     assert "hf_1234567890abcdef" not in joined
     assert "hf_***" in joined
+
+
+def test_diffusers_generate_cleans_transient_downloads_after_output_save(tmp_path, monkeypatch):
+    monkeypatch.setenv("HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS", "1")
+    client = DiffusersClient(
+        model_repo="owner/model",
+        storage_root=tmp_path,
+        keep_downloaded_models=False,
+    )
+    events = []
+    transient_paths = []
+
+    class FakeGenerator:
+        def __init__(self, device=None):
+            self.device = device
+
+        def manual_seed(self, seed):
+            return self
+
+    class FakeInferenceMode:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeTorch:
+        Generator = FakeGenerator
+
+        @staticmethod
+        def inference_mode():
+            return FakeInferenceMode()
+
+    class FakeImage:
+        def save(self, buffer, format="PNG"):
+            buffer.write(b"fake-png")
+
+    class FakePipe:
+        def __call__(self, **kwargs):
+            return type("Output", (), {"images": [FakeImage()]})()
+
+    def fake_load_pipeline(*args, **kwargs):
+        transient_dir = client._new_transient_download_dir("unit_test")
+        (transient_dir / "model.bin").write_text("downloaded", encoding="utf-8")
+        transient_paths.append(transient_dir)
+        kwargs["log_capture"].register_transient_path(transient_dir)
+        return FakePipe(), FakeTorch, "cpu"
+
+    monkeypatch.setattr(client, "_load_pipeline", fake_load_pipeline)
+
+    result = client.generate_image(
+        {"generation_mode": "txt2img", "prompt": "test", "width": 64, "height": 64, "steps": 1},
+        progress_callback=events.append,
+    )
+
+    assert result["images"]
+    assert transient_paths
+    assert not transient_paths[0].exists()
+    assert any(
+        "Removing transient Diffusers download cache" in line
+        for event in events
+        for line in event.get("python_log_tail", [])
+    )
+
+
+def test_diffusers_device_map_setting_is_root_controlled(tmp_path, monkeypatch):
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path, device_map="disabled")
+    monkeypatch.setattr(client, "_accelerate_available", lambda: True)
+
+    assert client._resolve_device_map("cuda") == ""
+
+    client.device_map_setting = "auto"
+    assert client._resolve_device_map("cuda") == "cuda"
+    assert client._resolve_device_map("cuda", cuda_memory={"cuda_total_bytes": 4 * 1024 * 1024 * 1024}) == "balanced"
+    assert client._resolve_device_map("cpu") == ""
+
+    client.device_map_setting = "balanced_low_0"
+    assert client._resolve_device_map("cuda") == "balanced_low_0"
+
+    monkeypatch.setattr(client, "_accelerate_available", lambda: False)
+    assert client._resolve_device_map("cuda") == ""
+
+
+def test_diffusers_cuda_fallback_to_cpu_is_root_controlled(tmp_path):
+    client = DiffusersClient.from_settings(
+        {"comfyui_diffusers_cuda_fallback_to_cpu": False},
+        storage_root=tmp_path,
+    )
+    assert client.cuda_fallback_to_cpu is False
+    assert client._should_fallback_to_cpu_for_low_vram("cuda", {"cuda_total_bytes": 4 * 1024 * 1024 * 1024}) is False
+
+    client = DiffusersClient.from_settings(
+        {"comfyui_diffusers_cuda_fallback_to_cpu": True, "comfyui_diffusers_device": "auto"},
+        storage_root=tmp_path,
+    )
+    assert client._should_fallback_to_cpu_for_low_vram("cuda", {"cuda_total_bytes": 4 * 1024 * 1024 * 1024}) is True
+    client.device_setting = "cuda"
+    assert client._should_fallback_to_cpu_for_low_vram("cuda", {"cuda_total_bytes": 4 * 1024 * 1024 * 1024}) is False
+    assert client._should_fallback_to_cpu_for_low_vram("cpu", {"cuda_total_bytes": 4 * 1024 * 1024 * 1024}) is False
+
+
+def test_diffusers_cuda_memory_warning_is_streamed_for_small_vram(tmp_path):
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+    events = []
+
+    class FakeCuda:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def get_device_name(index):
+            return "Small CUDA"
+
+        @staticmethod
+        def mem_get_info():
+            return 2 * 1024 * 1024 * 1024, 4 * 1024 * 1024 * 1024
+
+    class FakeTorch:
+        cuda = FakeCuda
+
+    client._log_cuda_memory(FakeTorch, log_capture=None, progress_callback=events.append)
+
+    assert events
+    assert events[-1]["cuda_device_name"] == "Small CUDA"
+    assert events[-1]["cuda_total_bytes"] == 4 * 1024 * 1024 * 1024
+    assert "VRAM 可用 2.0 GB / 4.0 GB" in events[-1]["detail"]
+
+
+def test_diffusers_snapshot_reports_cache_hit_when_no_download_bytes(tmp_path, monkeypatch):
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+    events = []
+
+    class FakeTqdm:
+        def __init__(self, *args, **kwargs):
+            self.iterable = kwargs.get("iterable")
+
+        def update(self, n=1):
+            return None
+
+        def close(self):
+            return None
+
+    def fake_snapshot_download(**kwargs):
+        tqdm_class = kwargs.get("tqdm_class")
+        assert tqdm_class is not None
+        bar = tqdm_class(total=18, desc="Fetching 18 files", unit="it")
+        bar.update(18)
+        bar.close()
+        return str(tmp_path / "hf-cache" / "owner-model")
+
+    fake_hf = types.ModuleType("huggingface_hub")
+    fake_hf.snapshot_download = fake_snapshot_download
+    fake_utils = types.ModuleType("huggingface_hub.utils")
+    fake_utils.tqdm = FakeTqdm
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hf)
+    monkeypatch.setitem(sys.modules, "huggingface_hub.utils", fake_utils)
+
+    snapshot_path = client._prefetch_diffusers_snapshot(
+        "owner/model",
+        progress_callback=events.append,
+        log_capture=None,
+    )
+
+    assert snapshot_path.endswith("owner-model")
+    loading = events[-1]
+    assert loading["phase"] == "loading"
+    assert loading["cache_hit"] is True
+    assert loading["bytes_written"] == 0
+    assert "cache hit" in loading["detail"]
+    assert "未偵測到網路下載位元組" in loading["detail"]
 
 
 def test_diffusers_client_upload_fetch_and_discard_round_trip(tmp_path):
@@ -212,3 +390,79 @@ def test_diffusers_snapshot_patterns_avoid_duplicate_precision_downloads(tmp_pat
     assert "*.fp16.safetensors" in fp16_allow
     assert "**/*.fp16.bin" in fp16_allow
     assert fp16_ignore is None
+
+
+def test_diffusers_backend_client_uses_live_settings_over_worker_cache(monkeypatch):
+    import routes.comfyui_sections.admin_helpers as admin_helpers
+
+    monkeypatch.setattr(
+        admin_helpers,
+        "load_system_settings_from_db",
+        lambda: {
+            "comfyui_diffusers_device_map": "balanced_low_0",
+            "comfyui_diffusers_low_cpu_mem_usage": True,
+        },
+    )
+    monkeypatch.setattr(
+        admin_helpers,
+        "get_system_settings",
+        lambda: {
+            "comfyui_diffusers_device_map": "disabled",
+            "comfyui_diffusers_low_cpu_mem_usage": False,
+        },
+        raising=False,
+    )
+
+    settings = admin_helpers._live_diffusers_settings()
+
+    assert settings["comfyui_diffusers_device_map"] == "balanced_low_0"
+    assert settings["comfyui_diffusers_low_cpu_mem_usage"] is True
+
+
+def test_comfyui_binding_uses_live_connection_mode_over_worker_cache(monkeypatch):
+    import routes.comfyui_sections.admin_helpers as admin_helpers
+
+    monkeypatch.setattr(
+        admin_helpers,
+        "load_system_settings_from_db",
+        lambda: {
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "owner/live-model",
+            "comfyui_remote_api_url": "http://stale-remote:8188",
+        },
+    )
+    monkeypatch.setattr(
+        admin_helpers,
+        "get_system_settings",
+        lambda: {
+            "comfyui_connection_mode": "remote",
+            "comfyui_diffusers_model_repo": "owner/stale-model",
+            "comfyui_remote_api_url": "http://stale-remote:8188",
+        },
+        raising=False,
+    )
+
+    binding = admin_helpers._comfyui_binding()
+
+    assert binding["connection_mode"] == "diffusers"
+    assert binding["url"] == diffusers_backend_url("owner/live-model")
+    assert binding["backend_scope"] == "primary"
+
+
+def test_diffusers_backend_client_falls_back_to_cached_settings(monkeypatch):
+    import routes.comfyui_sections.admin_helpers as admin_helpers
+
+    def fail_live_load():
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(admin_helpers, "load_system_settings_from_db", fail_live_load)
+    monkeypatch.setattr(
+        admin_helpers,
+        "get_system_settings",
+        lambda: {"comfyui_diffusers_device_map": "disabled"},
+        raising=False,
+    )
+
+    settings = admin_helpers._live_diffusers_settings()
+
+    assert settings["comfyui_diffusers_device_map"] == "disabled"

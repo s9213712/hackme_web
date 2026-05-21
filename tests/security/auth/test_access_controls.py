@@ -626,7 +626,11 @@ def test_root_can_configure_diffusers_backend_and_hf_token_write_only():
             "comfyui_huggingface_api_token": "hf_read_token",
             "comfyui_diffusers_device": "cuda",
             "comfyui_diffusers_dtype": "float16",
+            "comfyui_diffusers_device_map": "cuda",
             "comfyui_allow_in_process_diffusers": True,
+            "comfyui_diffusers_low_cpu_mem_usage": True,
+            "comfyui_diffusers_cuda_fallback_to_cpu": False,
+            "comfyui_diffusers_keep_downloaded_models": False,
         },
     )
 
@@ -636,16 +640,28 @@ def test_root_can_configure_diffusers_backend_and_hf_token_write_only():
     assert state["comfyui_huggingface_api_token"] == "hf_read_token"
     assert state["comfyui_diffusers_device"] == "cuda"
     assert state["comfyui_diffusers_dtype"] == "float16"
+    assert state["comfyui_diffusers_device_map"] == "cuda"
     assert state["comfyui_allow_in_process_diffusers"] is True
+    assert state["comfyui_diffusers_low_cpu_mem_usage"] is True
+    assert state["comfyui_diffusers_cuda_fallback_to_cpu"] is False
+    assert state["comfyui_diffusers_keep_downloaded_models"] is False
     payload = saved.get_json()["settings"]
     assert payload["comfyui_huggingface_api_token"] == ""
     assert payload["comfyui_huggingface_api_token_configured"] is True
     assert payload["comfyui_allow_in_process_diffusers"] is True
+    assert payload["comfyui_diffusers_device_map"] == "cuda"
+    assert payload["comfyui_diffusers_low_cpu_mem_usage"] is True
+    assert payload["comfyui_diffusers_cuda_fallback_to_cpu"] is False
+    assert payload["comfyui_diffusers_keep_downloaded_models"] is False
 
-    unchanged = client.put("/api/admin/settings", json={"comfyui_huggingface_api_token": "", "comfyui_diffusers_device": "auto", "comfyui_allow_in_process_diffusers": False})
+    unchanged = client.put("/api/admin/settings", json={"comfyui_huggingface_api_token": "", "comfyui_diffusers_device": "auto", "comfyui_allow_in_process_diffusers": False, "comfyui_diffusers_device_map": "disabled", "comfyui_diffusers_low_cpu_mem_usage": False, "comfyui_diffusers_cuda_fallback_to_cpu": True, "comfyui_diffusers_keep_downloaded_models": True})
     assert unchanged.status_code == 200
     assert state["comfyui_huggingface_api_token"] == "hf_read_token"
     assert state["comfyui_allow_in_process_diffusers"] is False
+    assert state["comfyui_diffusers_device_map"] == "disabled"
+    assert state["comfyui_diffusers_low_cpu_mem_usage"] is False
+    assert state["comfyui_diffusers_cuda_fallback_to_cpu"] is True
+    assert state["comfyui_diffusers_keep_downloaded_models"] is True
     assert unchanged.get_json()["settings"]["comfyui_huggingface_api_token_configured"] is True
 
     cleared = client.put("/api/admin/settings", json={"comfyui_huggingface_api_token_clear": True})
@@ -662,7 +678,11 @@ def test_diffusers_settings_reject_invalid_repo_token_and_runtime_options():
     assert client.put("/api/admin/settings", json={"comfyui_huggingface_api_token": "bad token"}).status_code == 400
     assert client.put("/api/admin/settings", json={"comfyui_diffusers_device": "tpu"}).status_code == 400
     assert client.put("/api/admin/settings", json={"comfyui_diffusers_dtype": "int8"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_diffusers_device_map": "everything"}).status_code == 400
     assert client.put("/api/admin/settings", json={"comfyui_allow_in_process_diffusers": "maybe"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_diffusers_low_cpu_mem_usage": "maybe"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_diffusers_cuda_fallback_to_cpu": "maybe"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_diffusers_keep_downloaded_models": "maybe"}).status_code == 400
     assert "comfyui_diffusers_model_repo" not in state
 
 

@@ -22,6 +22,14 @@ DEFAULT_COMFYUI_MAX_BATCH_SIZE = 1
 DEFAULT_COMFYUI_WIDTH = 1024
 DEFAULT_COMFYUI_HEIGHT = 1024
 
+
+def _env_bool(name, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() not in {"0", "false", "no", "off", ""}
+
+
 COMFYUI_DEFAULT_SETTINGS = {
     "comfyui_connection_mode": os.environ.get("COMFYUI_CONNECTION_MODE", "remote"),
     "comfyui_remote_api_url": DEFAULT_COMFYUI_REMOTE_API_URL,
@@ -48,7 +56,11 @@ COMFYUI_DEFAULT_SETTINGS = {
     ),
     "comfyui_diffusers_device": os.environ.get("COMFYUI_DIFFUSERS_DEVICE", "auto"),
     "comfyui_diffusers_dtype": os.environ.get("COMFYUI_DIFFUSERS_DTYPE", "auto"),
+    "comfyui_diffusers_device_map": os.environ.get("COMFYUI_DIFFUSERS_DEVICE_MAP", "auto"),
+    "comfyui_diffusers_low_cpu_mem_usage": _env_bool("COMFYUI_DIFFUSERS_LOW_CPU_MEM_USAGE", True),
+    "comfyui_diffusers_cuda_fallback_to_cpu": _env_bool("COMFYUI_DIFFUSERS_CUDA_FALLBACK_TO_CPU", True),
     "comfyui_allow_in_process_diffusers": False,
+    "comfyui_diffusers_keep_downloaded_models": _env_bool("COMFYUI_DIFFUSERS_KEEP_DOWNLOADED_MODELS", True),
 }
 
 COMFYUI_SETTING_KEYS = tuple(COMFYUI_DEFAULT_SETTINGS)
@@ -112,6 +124,13 @@ def validate_comfyui_diffusers_dtype(value):
     dtype = str(value or "auto").strip().lower()
     if dtype in {"auto", "float16", "bfloat16", "float32"}:
         return dtype
+    return None
+
+
+def validate_comfyui_diffusers_device_map(value):
+    device_map = str(value or "auto").strip().lower()
+    if device_map in {"auto", "disabled", "none", "cuda", "balanced", "balanced_low_0", "sequential"}:
+        return "disabled" if device_map == "none" else device_map
     return None
 
 

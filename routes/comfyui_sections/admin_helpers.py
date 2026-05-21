@@ -37,6 +37,7 @@ from services.platform.admin_validation import (
     validate_comfyui_api_host as shared_validate_comfyui_api_host,
     validate_comfyui_api_url as shared_validate_comfyui_api_url,
 )
+from services.platform.settings import load_system_settings_from_db
 from services.comfyui.template import runtime_comfyui_dir
 
 
@@ -165,7 +166,7 @@ def _parse_comfyui_endpoint(data):
         (data or {}).get("mode") or (data or {}).get("comfyui_connection_mode") or _configured_connection_mode()
     ) or "remote"
     if mode == "diffusers":
-        settings = get_system_settings() or {}
+        settings = _live_comfyui_settings()
         repo_id = normalize_huggingface_repo_id(
             (data or {}).get("diffusers_model_repo")
             or (data or {}).get("comfyui_diffusers_model_repo")
@@ -226,11 +227,11 @@ def _normalize_comfyui_backend_url(value):
     return "" if msg else url
 
 def _configured_connection_mode():
-    settings = get_system_settings() or {}
+    settings = _live_comfyui_settings()
     return normalize_comfyui_connection_mode(settings.get("comfyui_connection_mode")) or "remote"
 
 def _configured_comfyui_url():
-    settings = get_system_settings() or {}
+    settings = _live_comfyui_settings()
     mode = _configured_connection_mode()
     if mode == "diffusers":
         repo_id = normalize_huggingface_repo_id(settings.get("comfyui_diffusers_model_repo"), allow_blank=True) or ""
@@ -284,7 +285,7 @@ def _comfyui_binding(actor=None, *, backend_url=None):
     }
 
 def _configured_local_start_script(value=None, *, base_dir=None):
-    raw = str(value or (get_system_settings() or {}).get("comfyui_local_start_script") or "").strip()
+    raw = str(value or _live_comfyui_settings().get("comfyui_local_start_script") or "").strip()
     if not raw:
         return None, None
     base = _configured_comfyui_base_dir(base_dir)
@@ -1697,8 +1698,20 @@ def _client_for_url(url):
         return factory(url)
     if str(url or "").startswith("diffusers://"):
         return DiffusersClient.from_settings(
-            get_system_settings() or {},
+            _live_comfyui_settings(),
             storage_root=deps.get("STORAGE_DIR") or ".",
             backend_url=url,
         )
     return ComfyUIClient(url, timeout=COMFYUI_BACKEND_REQUEST_TIMEOUT_SECONDS)
+
+
+def _live_comfyui_settings():
+    try:
+        settings = load_system_settings_from_db()
+    except Exception:
+        settings = get_system_settings() or {}
+    return settings or {}
+
+
+def _live_diffusers_settings():
+    return _live_comfyui_settings()

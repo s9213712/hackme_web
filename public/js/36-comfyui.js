@@ -286,7 +286,8 @@ function setComfyuiMessage(text, ok = true) {
 
 function setComfyuiIdleSuspend(reason, active, label) {
   if (typeof setInactivitySuspendState === "function") {
-    setInactivitySuspendState(reason, !!active, label || "ComfyUI 工作中");
+    const backendLabel = comfyuiConnectionMode === "diffusers" ? "Diffusers" : "ComfyUI";
+    setInactivitySuspendState(reason, !!active, label || `${backendLabel} 工作中`);
   }
 }
 
@@ -308,7 +309,7 @@ function setComfyuiBusy(busy) {
   if (refresh) refresh.disabled = !!busy;
   if (start) start.disabled = !!busy;
   if (stop) stop.disabled = !!busy;
-  setComfyuiIdleSuspend("comfyui_generate", !!busy, "ComfyUI 產圖中");
+  setComfyuiIdleSuspend("comfyui_generate", !!busy, `${comfyuiConnectionMode === "diffusers" ? "Diffusers" : "ComfyUI"} 產圖中`);
 }
 
 function updateComfyuiStartButton() {
@@ -468,10 +469,11 @@ function updateComfyuiPreviewCardForOutputKinds(kinds = null) {
   const normalized = comfyuiUniqueOutputKinds(Array.isArray(kinds) ? kinds : comfyuiCurrentPreviewOutputKinds());
   const effective = normalized.length ? normalized : ["image"];
   const label = comfyuiOutputKindsLabel(effective);
+  const backendLabel = comfyuiConnectionMode === "diffusers" ? "Diffusers" : "ComfyUI";
   const title = $("comfyui-preview-card-title");
   const sub = $("comfyui-preview-card-sub");
   if (title) title.textContent = `${label}結果`;
-  if (sub) sub.textContent = `等待 ComfyUI 產生${label}。`;
+  if (sub) sub.textContent = `等待 ${backendLabel} 產生${label}。`;
   const preview = $("comfyui-preview");
   const empty = preview?.querySelector(".drive-empty");
   if (empty && /^尚未產生/.test(String(empty.textContent || "").trim())) {
@@ -1820,7 +1822,7 @@ function setComfyuiProgress({ visible = true, running = false, percent = 0, labe
   if (backendKind) comfyuiProgressBackendKind = String(backendKind).toLowerCase();
   const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
   if (bar) bar.style.width = `${safePercent}%`;
-  if (labelEl) labelEl.textContent = label || "等待 ComfyUI";
+  if (labelEl) labelEl.textContent = label || (comfyuiConnectionMode === "diffusers" ? "等待 Diffusers" : "等待 ComfyUI");
   if (percentEl) percentEl.textContent = `${safePercent}%`;
   if (detailEl) detailEl.textContent = detail || "";
   if (pythonLogEl && visible) {
@@ -1918,9 +1920,9 @@ function comfyuiBuildJobFailureMessage(job = {}) {
 function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERATION_TIMEOUT_SECONDS) {
   const elapsed = Math.max(0, Math.floor((Date.now() - comfyuiProgressStartedAt) / 1000));
   const percent = Math.max(0, Math.min(100, Math.round(Number(progress.percent) || 0)));
-  let label = "等待 ComfyUI";
   const phase = String(progress.phase || "").toLowerCase();
   const isDiffusersProgress = comfyuiConnectionMode === "diffusers" || String(progress.backend_kind || "").toLowerCase() === "diffusers";
+  let label = isDiffusersProgress ? "等待 Diffusers" : "等待 ComfyUI";
   if (phase === "queued") label = "排隊中";
   else if (phase === "downloading") label = isDiffusersProgress ? "下載 Diffusers model" : "下載 Hugging Face 模型";
   else if (phase === "loading") label = isDiffusersProgress ? "載入 Diffusers 模型" : "載入模型";

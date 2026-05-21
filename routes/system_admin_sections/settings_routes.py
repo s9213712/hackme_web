@@ -84,6 +84,7 @@ def register_system_admin_settings_routes(app, ctx):
     validate_comfyui_api_host = ctx["validate_comfyui_api_host"]
     validate_comfyui_api_url = ctx["validate_comfyui_api_url"]
     validate_comfyui_diffusers_device = ctx["validate_comfyui_diffusers_device"]
+    validate_comfyui_diffusers_device_map = ctx["validate_comfyui_diffusers_device_map"]
     validate_comfyui_diffusers_dtype = ctx["validate_comfyui_diffusers_dtype"]
     validate_comfyui_relative_script = ctx["validate_comfyui_relative_script"]
     validate_huggingface_api_token = ctx["validate_huggingface_api_token"]
@@ -340,11 +341,31 @@ def register_system_admin_settings_routes(app, ctx):
             if dtype is None:
                 return json_resp({"ok":False,"msg":"comfyui_diffusers_dtype 必須是 auto、float16、bfloat16 或 float32"}), 400
             data["comfyui_diffusers_dtype"] = dtype
+        if "comfyui_diffusers_device_map" in data:
+            device_map = validate_comfyui_diffusers_device_map(data.get("comfyui_diffusers_device_map"))
+            if device_map is None:
+                return json_resp({"ok":False,"msg":"comfyui_diffusers_device_map 必須是 auto、disabled、cuda、balanced、balanced_low_0 或 sequential"}), 400
+            data["comfyui_diffusers_device_map"] = device_map
         if "comfyui_allow_in_process_diffusers" in data:
             allow_diffusers = parse_strict_bool(data.get("comfyui_allow_in_process_diffusers"))
             if allow_diffusers is None:
                 return json_resp({"ok":False,"msg":"comfyui_allow_in_process_diffusers 必須是布林值 true/false"}), 400
             data["comfyui_allow_in_process_diffusers"] = allow_diffusers
+        if "comfyui_diffusers_low_cpu_mem_usage" in data:
+            low_cpu_mem_usage = parse_strict_bool(data.get("comfyui_diffusers_low_cpu_mem_usage"))
+            if low_cpu_mem_usage is None:
+                return json_resp({"ok":False,"msg":"comfyui_diffusers_low_cpu_mem_usage 必須是布林值 true/false"}), 400
+            data["comfyui_diffusers_low_cpu_mem_usage"] = low_cpu_mem_usage
+        if "comfyui_diffusers_cuda_fallback_to_cpu" in data:
+            cuda_fallback_to_cpu = parse_strict_bool(data.get("comfyui_diffusers_cuda_fallback_to_cpu"))
+            if cuda_fallback_to_cpu is None:
+                return json_resp({"ok":False,"msg":"comfyui_diffusers_cuda_fallback_to_cpu 必須是布林值 true/false"}), 400
+            data["comfyui_diffusers_cuda_fallback_to_cpu"] = cuda_fallback_to_cpu
+        if "comfyui_diffusers_keep_downloaded_models" in data:
+            keep_downloaded_models = parse_strict_bool(data.get("comfyui_diffusers_keep_downloaded_models"))
+            if keep_downloaded_models is None:
+                return json_resp({"ok":False,"msg":"comfyui_diffusers_keep_downloaded_models 必須是布林值 true/false"}), 400
+            data["comfyui_diffusers_keep_downloaded_models"] = keep_downloaded_models
         if "comfyui_max_batch_size" in data:
             try:
                 batch_size = int(data.get("comfyui_max_batch_size"))

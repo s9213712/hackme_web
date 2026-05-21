@@ -2114,12 +2114,38 @@ def register_comfyui_routes(app, deps):
             updated_at = float(progress.get("updated_at") or job.get("updated_at") or job.get("created_at") or 0)
             if updated_at and time.time() - updated_at >= COMFYUI_JOB_STALE_SECONDS:
                 is_diffusers = str(progress.get("backend_kind") or "").strip().lower() == "diffusers"
+                if is_diffusers:
+                    progress_phase = str(progress.get("phase") or "").strip().lower()
+                    progress_step = str(progress.get("step") or "")
+                    python_tail = "\n".join(str(line or "") for line in progress.get("python_log_tail") or [])
+                    bytes_written = int(progress.get("bytes_written") or 0)
+                    total_bytes = int(progress.get("total_bytes") or 0)
+                    if (
+                        progress.get("cache_hit") is True
+                        or (bytes_written <= 0 and total_bytes <= 0 and "Download complete" in python_tail)
+                    ):
+                        stale_detail = (
+                            "Diffusers / Hugging Face 暫時沒有回報新進度；前一階段已命中本機 cache，"
+                            "未偵測到網路下載位元組，目前較可能正在載入 pipeline、初始化 GPU，"
+                            "或被磁碟/VRAM 壓力拖慢。"
+                        )
+                    elif progress_phase == "loading" or "pipeline" in progress_step.lower() or "Loading pipeline components" in python_tail:
+                        stale_detail = (
+                            "Diffusers / Hugging Face 暫時沒有回報新進度，目前正在載入 pipeline、初始化 GPU，"
+                            "或被磁碟/VRAM 壓力拖慢；這不代表仍在網路下載。"
+                        )
+                    elif bytes_written > 0 or total_bytes > 0:
+                        stale_detail = (
+                            "Diffusers / Hugging Face 暫時沒有回報新進度，可能仍在下載大型模型，"
+                            "或被網路/磁碟壓力拖慢。"
+                        )
+                    else:
+                        stale_detail = (
+                            "Diffusers / Hugging Face 暫時沒有回報新進度，可能正在檢查 Hugging Face cache、"
+                            "載入 pipeline，或被磁碟/VRAM 壓力拖慢。"
+                        )
                 progress["phase"] = "backend_unresponsive"
-                progress["detail"] = (
-                    "Diffusers / Hugging Face 暫時沒有回報新進度，可能正在下載大型模型、載入 pipeline，或被磁碟/VRAM 壓力拖慢"
-                    if is_diffusers
-                    else "ComfyUI 後端暫時沒有回報進度，可能正在載入大模型或被磁碟/VRAM 壓力拖慢"
-                )
+                progress["detail"] = stale_detail if is_diffusers else "ComfyUI 後端暫時沒有回報進度，可能正在載入大模型或被磁碟/VRAM 壓力拖慢"
                 progress["backend_unresponsive"] = True
                 progress["stale_seconds"] = int(time.time() - updated_at)
                 progress["timeout_seconds"] = int(progress.get("timeout_seconds") or DEFAULT_GENERATION_TIMEOUT_SECONDS)
