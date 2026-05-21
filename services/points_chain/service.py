@@ -610,6 +610,27 @@ class PointsLedgerService:
         payload["total_soft_spent"] = int(statement["spent"])
         payload["total_hard_earned"] = 0
         payload["total_hard_spent"] = 0
+        identity_balances = self._wallet_identity_balances_for_user(conn, user_id)
+        payload["account_points_balance"] = int(payload.get("points_balance") or 0)
+        payload["account_points_frozen"] = int(payload.get("points_frozen") or 0)
+        payload["active_wallet_address"] = identity_balances.get("primary_address") or ""
+        payload["wallet_identity_source"] = "legacy_account"
+        if identity_balances.get("has_identity"):
+            active_address = identity_balances.get("primary_address") or ""
+            active = (identity_balances.get("balances") or {}).get(active_address, {"balance": 0, "frozen": 0})
+            active_balance = int(active.get("balance") or 0)
+            active_frozen = int(active.get("frozen") or 0)
+            payload["points_balance"] = active_balance
+            payload["points_frozen"] = active_frozen
+            payload["soft_balance"] = active_balance
+            payload["soft_frozen"] = active_frozen
+            payload["hard_balance"] = 0
+            payload["hard_frozen"] = 0
+            payload["wallet_identity_source"] = "active_wallet" if active_address else "no_active_wallet"
+            payload["wallet_identity_balances"] = {
+                address: {"points_balance": int(item.get("balance") or 0), "points_frozen": int(item.get("frozen") or 0)}
+                for address, item in sorted((identity_balances.get("balances") or {}).items())
+            }
         return payload
 
     def get_wallet(self, user_id):
@@ -701,6 +722,113 @@ class PointsLedgerService:
         legacy_account = self._public_account_id(user_id)
         return address or legacy_account, ("用戶模擬鏈錢包" if address else "Legacy 帳本身份"), address, legacy_account
 
+    def _wallet_identity_state_for_user(self, conn, user_id):
+        try:
+            rows = conn.execute(
+                """
+                SELECT * FROM points_wallet_identities
+                WHERE user_id=?
+                ORDER BY id ASC
+                """,
+                (int(user_id),),
+            ).fetchall()
+        except Exception:
+            return {"has_identity": False, "primary": None, "addresses": set()}
+        primary = None
+        addresses = set()
+        for row in rows:
+            address = str(row["address"] or "")
+            if address:
+                addresses.add(address)
+            if int(row["is_primary"] or 0) and row["status"] in {"pending_backup", "active"}:
+                primary = row
+        return {"has_identity": bool(rows), "primary": primary, "addresses": addresses}
+
+    def _legacy_counterparty_account(self, value):
+        try:
+            return self._public_account_id(int(value))
+        except Exception:
+            return ""
+
+    def _legacy_ledger_wallet_flow_descriptor(self, conn, row, public_metadata=None):
+        public_metadata = public_metadata if isinstance(public_metadata, dict) else {}
+        direction = str(row["direction"] or "")
+        action_type = str(row["action_type"] or "")
+        user_address = row["public_account_id"] or self._public_account_id(row["user_id"])
+        user_label = "Legacy 帳本身份"
+        legacy_account = user_address
+        if direction in {"credit", "transfer_in"}:
+            source_address = ""
+            source_label = ""
+            source_fund_key = self._points_ledger_credit_source_fund(action_type)
+            if action_type == "video_tip_credit":
+                source_address = self._legacy_counterparty_account(public_metadata.get("from_user_id"))
+                source_label = "打賞付款帳本身份"
+                source_fund_key = None
+            elif action_type == "video_tip_platform_fee":
+                source_address = self._legacy_counterparty_account(public_metadata.get("from_user_id"))
+                source_label = "平台費付款帳本身份"
+                source_fund_key = None
+            if source_fund_key:
+                source_label, source_address = self._economy_fund_flow_ref(source_fund_key)
+            walletized = bool(source_fund_key or source_address)
+            return {
+                "source_fund_key": source_fund_key,
+                "destination_fund_key": None,
+                "source_label": source_label or "來源帳本身份",
+                "source_wallet_address": source_address,
+                "destination_label": user_label,
+                "destination_wallet_address": user_address,
+                "target_wallet_address": "",
+                "legacy_public_account_id": legacy_account,
+                "walletized": walletized,
+                "walletization_note": "legacy row without immutable wallet-flow snapshot",
+            }
+        if direction in {"debit", "transfer_out", "reverse"}:
+            destination_address = ""
+            destination_label = ""
+            destination_fund_key = self._points_ledger_debit_destination_fund(action_type)
+            if action_type == "video_tip_debit":
+                destination_address = self._legacy_counterparty_account(public_metadata.get("to_user_id"))
+                destination_label = "打賞收款帳本身份"
+            if destination_fund_key:
+                destination_label, destination_address = self._economy_fund_flow_ref(destination_fund_key)
+            walletized = bool(destination_fund_key or destination_address)
+            return {
+                "source_fund_key": None,
+                "destination_fund_key": destination_fund_key,
+                "source_label": user_label,
+                "source_wallet_address": user_address,
+                "destination_label": destination_label or "目的帳本身份",
+                "destination_wallet_address": destination_address,
+                "target_wallet_address": "",
+                "legacy_public_account_id": legacy_account,
+                "walletized": walletized,
+                "walletization_note": "legacy row without immutable wallet-flow snapshot",
+            }
+        if direction in {"freeze", "unfreeze"}:
+            return {
+                "source_fund_key": None,
+                "destination_fund_key": None,
+                "source_label": user_label,
+                "source_wallet_address": user_address,
+                "destination_label": user_label,
+                "destination_wallet_address": user_address,
+                "target_wallet_address": "",
+                "legacy_public_account_id": legacy_account,
+                "internal_movement": True,
+                "walletized": True,
+                "walletization_note": "legacy row without immutable wallet-flow snapshot",
+            }
+        return {
+            "source_fund_key": None,
+            "destination_fund_key": None,
+            "target_wallet_address": "",
+            "legacy_public_account_id": legacy_account,
+            "walletized": False,
+            "walletization_note": "legacy row without immutable wallet-flow snapshot",
+        }
+
     def _economy_fund_flow_ref(self, fund_key):
         labels = {
             "mint": "MINT 發行錢包",
@@ -719,13 +847,22 @@ class PointsLedgerService:
         address, _label, _target, legacy = self._wallet_address_for_user_flow(conn, user_id)
         return address or legacy
 
-    def _legacy_credit_source_fund(self, action_type):
+    def _points_ledger_credit_source_fund(self, action_type):
         action = str(action_type or "")
         promo_actions = {
+            "daily_login",
+            "forum_post_reward",
+            "forum_comment_reward",
+            "content_like_reward",
+            "quality_post_bonus",
+            "bug_bounty_low",
+            "bug_bounty_medium",
+            "bug_bounty_high",
             "new_user_signup_bonus",
             "user_initial_grant",
             "admin_initial_grant",
             "birthday_gift",
+            "game_daily_quest",
             "game_daily_challenge_reward",
             "game_weekly_leaderboard_reward",
             "trading_bot_weekly_competition_reward",
@@ -734,23 +871,22 @@ class PointsLedgerService:
         official_actions = {
             "admin_adjust_credit",
             "admin_weekly_salary",
-            "video_tip_platform_fee",
         }
         if action in promo_actions or action.startswith("reward_"):
             return "promo_fund"
-        if action.startswith("trading_"):
-            return "exchange_fund"
         if action in official_actions:
             return "official_treasury"
-        return "official_treasury"
+        return None
 
-    def _legacy_debit_destination_fund(self, action_type):
+    def _points_ledger_debit_destination_fund(self, action_type):
         action = str(action_type or "")
-        if action.startswith("trading_"):
-            return "exchange_fund"
         if action in {"video_tip_debit"}:
             return None
-        return "burn"
+        if action.startswith("spend:") or action in {"video_boost_debit", "admin_adjust_debit"}:
+            return "burn"
+        if action.startswith("rollback:"):
+            return "burn"
+        return None
 
     def _ledger_wallet_flow_descriptor(self, conn, *, user_id, direction, action_type, public_metadata=None):
         user_address, user_label, target_address, legacy_account = self._wallet_address_for_user_flow(conn, user_id)
@@ -760,7 +896,7 @@ class PointsLedgerService:
         if direction in {"credit", "transfer_in"}:
             source_address = ""
             source_label = ""
-            source_fund_key = self._legacy_credit_source_fund(action_type)
+            source_fund_key = self._points_ledger_credit_source_fund(action_type)
             if action_type == "video_tip_credit":
                 source_address = self._counterparty_user_address(conn, public_metadata.get("from_user_id"))
                 source_label = "打賞付款錢包"
@@ -771,6 +907,7 @@ class PointsLedgerService:
                 source_fund_key = None
             if source_fund_key:
                 source_label, source_address = self._economy_fund_flow_ref(source_fund_key)
+            walletized = bool(source_fund_key or source_address)
             return {
                 "source_fund_key": source_fund_key,
                 "destination_fund_key": None,
@@ -780,17 +917,19 @@ class PointsLedgerService:
                 "destination_wallet_address": user_address,
                 "target_wallet_address": target_address,
                 "legacy_public_account_id": legacy_account,
-                "walletized": True,
+                "walletized": walletized,
+                "walletization_note": "" if walletized else "未分類舊帳本收入不再自動套用基金來源",
             }
         if direction in {"debit", "transfer_out", "reverse"}:
             destination_address = ""
             destination_label = ""
-            destination_fund_key = self._legacy_debit_destination_fund(action_type)
+            destination_fund_key = self._points_ledger_debit_destination_fund(action_type)
             if action_type == "video_tip_debit":
                 destination_address = self._counterparty_user_address(conn, public_metadata.get("to_user_id"))
                 destination_label = "打賞收款錢包"
             if destination_fund_key:
                 destination_label, destination_address = self._economy_fund_flow_ref(destination_fund_key)
+            walletized = bool(destination_fund_key or destination_address)
             return {
                 "source_fund_key": None,
                 "destination_fund_key": destination_fund_key,
@@ -800,7 +939,8 @@ class PointsLedgerService:
                 "destination_wallet_address": destination_address,
                 "target_wallet_address": target_address,
                 "legacy_public_account_id": legacy_account,
-                "walletized": True,
+                "walletized": walletized,
+                "walletization_note": "" if walletized else "未分類舊帳本支出不再自動套用基金目的地",
             }
         if direction in {"freeze", "unfreeze"}:
             return {
@@ -823,15 +963,108 @@ class PointsLedgerService:
             "walletized": False,
         }
 
-    def _append_walletized_economy_event(self, conn, *, ledger_row, public_metadata=None, actor=None):
+    def _wallet_flow_snapshot_for_ledger_write(self, conn, *, user_id, direction, action_type, public_metadata=None):
         flow = self._ledger_wallet_flow_descriptor(
             conn,
-            user_id=ledger_row["user_id"],
-            direction=ledger_row["direction"],
-            action_type=ledger_row["action_type"],
+            user_id=user_id,
+            direction=direction,
+            action_type=action_type,
+            public_metadata=public_metadata or {},
+        )
+        snapshot = {key: value for key, value in flow.items() if isinstance(value, (str, int, float, bool)) or value is None}
+        snapshot["snapshot_source"] = "ledger_write"
+        snapshot["snapshot_version"] = 1
+        return snapshot
+
+    def _ledger_metadata_with_wallet_flow_snapshot(self, conn, *, user_id, direction, action_type, public_metadata=None):
+        metadata = dict(public_metadata or {})
+        metadata.pop("wallet_flow_snapshot", None)
+        snapshot = self._wallet_flow_snapshot_for_ledger_write(
+            conn,
+            user_id=user_id,
+            direction=direction,
+            action_type=action_type,
+            public_metadata=metadata,
+        )
+        metadata["wallet_flow_snapshot"] = snapshot
+        return metadata, snapshot
+
+    def _wallet_identity_balances_for_user(self, conn, user_id):
+        state = self._wallet_identity_state_for_user(conn, user_id)
+        balances = {}
+        if not state["has_identity"]:
+            return {"has_identity": False, "primary_address": "", "balances": balances}
+        for address in state["addresses"]:
+            balances[address] = {"balance": 0, "frozen": 0}
+        rows = conn.execute(
+            """
+            SELECT * FROM points_ledger
+            WHERE user_id=? AND status='confirmed'
+            ORDER BY id ASC
+            """,
+            (int(user_id),),
+        ).fetchall()
+        for row in rows:
+            flow = self._ledger_wallet_flow_for_read(conn, row)
+            amount = int(row["amount"] or 0)
+            direction = str(row["direction"] or "")
+            if direction in {"credit", "transfer_in"}:
+                address = str(flow.get("destination_wallet_address") or "")
+                if address in balances:
+                    balances[address]["balance"] += amount
+            elif direction in {"debit", "transfer_out", "reverse"}:
+                address = str(flow.get("source_wallet_address") or "")
+                if address in balances:
+                    balances[address]["balance"] -= amount
+            elif direction == "freeze":
+                address = str(flow.get("source_wallet_address") or "")
+                if address in balances:
+                    balances[address]["balance"] -= amount
+                    balances[address]["frozen"] += amount
+            elif direction == "unfreeze":
+                address = str(flow.get("source_wallet_address") or flow.get("destination_wallet_address") or "")
+                if address in balances:
+                    balances[address]["balance"] += amount
+                    balances[address]["frozen"] -= amount
+        primary = state["primary"]
+        return {
+            "has_identity": True,
+            "primary_address": primary["address"] if primary else "",
+            "balances": balances,
+        }
+
+    def _economy_external_address_balance(self, conn, address):
+        address = str(address or "").strip()
+        if not address:
+            return 0
+        rows = conn.execute(
+            """
+            SELECT source_fund_key, source_address, destination_fund_key, destination_address, amount
+            FROM points_economy_events
+            WHERE status='confirmed'
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        balance = 0
+        for row in rows:
+            amount = int(row["amount"] or 0)
+            if not row["destination_fund_key"] and str(row["destination_address"] or "") == address:
+                balance += amount
+            if not row["source_fund_key"] and str(row["source_address"] or "") == address:
+                balance -= amount
+        return balance
+
+    def _append_walletized_economy_event(self, conn, *, ledger_row, public_metadata=None, actor=None):
+        public_metadata = public_metadata if isinstance(public_metadata, dict) else {}
+        snapshot = public_metadata.get("wallet_flow_snapshot")
+        flow = dict(snapshot) if isinstance(snapshot, dict) else self._legacy_ledger_wallet_flow_descriptor(
+            conn,
+            ledger_row,
             public_metadata=public_metadata,
         )
         if flow.get("internal_movement"):
+            return None, False
+        if not flow.get("walletized"):
             return None, False
         source_fund_key = flow.get("source_fund_key")
         destination_fund_key = flow.get("destination_fund_key")
@@ -862,6 +1095,78 @@ class PointsLedgerService:
                 "legacy_reference_id": ledger_row["reference_id"],
                 "walletization_phase": "1B",
             },
+            actor=actor,
+        )
+
+    def append_trading_reserve_economy_event(
+        self,
+        conn,
+        *,
+        reserve_event_uuid,
+        delta,
+        event_type,
+        reason="",
+        actor=None,
+        source_user_id=None,
+        order_id=None,
+        fill_id=None,
+        points_ledger_uuid=None,
+    ):
+        delta = int(delta or 0)
+        if delta == 0:
+            return None, False
+        reserve_event_uuid = str(reserve_event_uuid or "").strip()
+        if not reserve_event_uuid:
+            raise ValueError("reserve event uuid is required")
+        event_type = str(event_type or "").strip()
+        ignored = {"initial_funding", "walletized_exchange_fund_alignment"}
+        if event_type in ignored:
+            return None, False
+        amount = abs(delta)
+        counterparty_address = self._counterparty_user_address(conn, source_user_id) if source_user_id else ""
+        if not counterparty_address:
+            counterparty_address = f"trading_reserve_event:{reserve_event_uuid}"
+        bootstrap_economy_layer(conn, chain_secret=self.chain_secret, actor={"role": "system", "id": None})
+        metadata = {
+            "trading_reserve_event_uuid": reserve_event_uuid,
+            "trading_reserve_event_type": event_type,
+            "trading_reserve_reason": str(reason or ""),
+            "source_user_id": int(source_user_id) if source_user_id else None,
+            "order_id": int(order_id) if order_id else None,
+            "fill_id": int(fill_id) if fill_id else None,
+            "points_ledger_uuid": points_ledger_uuid,
+            "walletization_phase": "1B",
+            "financial_source_of_truth": "trading_reserve_pool_events",
+        }
+        if delta > 0:
+            if source_user_id and self._economy_external_address_balance(conn, counterparty_address) < amount:
+                return None, False
+            return append_economy_event(
+                conn,
+                chain_secret=self.chain_secret,
+                event_type="trading_reserve_pool_flow",
+                transaction_type=event_type,
+                source_fund_key=None,
+                source_address=counterparty_address,
+                destination_fund_key="exchange_fund",
+                destination_address=None,
+                amount=amount,
+                idempotency_key=f"trading_reserve_pool_event:{reserve_event_uuid}",
+                metadata=metadata,
+                actor=actor,
+            )
+        return append_economy_event(
+            conn,
+            chain_secret=self.chain_secret,
+            event_type="trading_reserve_pool_flow",
+            transaction_type=event_type,
+            source_fund_key="exchange_fund",
+            source_address=None,
+            destination_fund_key=None,
+            destination_address=counterparty_address,
+            amount=amount,
+            idempotency_key=f"trading_reserve_pool_event:{reserve_event_uuid}",
+            metadata=metadata,
             actor=actor,
         )
 
@@ -898,13 +1203,11 @@ class PointsLedgerService:
         return {"checked": len(rows), "created": created, "skipped": skipped, "complete": len(rows) < max(1, int(limit or 1000))}
 
     def _ledger_wallet_flow_for_read(self, conn, row):
-        return self._ledger_wallet_flow_descriptor(
-            conn,
-            user_id=row["user_id"],
-            direction=row["direction"],
-            action_type=row["action_type"],
-            public_metadata=_json_loads(row["public_metadata_json"], {}),
-        )
+        public_metadata = _json_loads(row["public_metadata_json"], {})
+        snapshot = public_metadata.get("wallet_flow_snapshot") if isinstance(public_metadata, dict) else None
+        if isinstance(snapshot, dict):
+            return dict(snapshot)
+        return self._legacy_ledger_wallet_flow_descriptor(conn, row, public_metadata=public_metadata)
 
     def _serialize_ledger_for_read(self, conn, row, *, include_user_id=False):
         data = self.serialize_ledger(row, include_user_id=include_user_id)
@@ -1179,39 +1482,65 @@ class PointsLedgerService:
         frozen_col = self._frozen_column(currency_type)
         earned_col = self._earned_column(currency_type)
         spent_col = self._spent_column(currency_type)
-        balance_before = int(wallet[balance_col])
-        frozen_before = int(wallet[frozen_col])
+        public_metadata, wallet_flow_snapshot = self._ledger_metadata_with_wallet_flow_snapshot(
+            conn,
+            user_id=user_id,
+            direction=direction,
+            action_type=action_type,
+            public_metadata=public_metadata or {},
+        )
+        account_balance_before = int(wallet[balance_col])
+        account_frozen_before = int(wallet[frozen_col])
+        identity_balances = self._wallet_identity_balances_for_user(conn, user_id)
+        if identity_balances.get("has_identity"):
+            active_address = str(identity_balances.get("primary_address") or "")
+            if not active_address:
+                raise ValueError("active wallet identity is required")
+            active = (identity_balances.get("balances") or {}).get(active_address, {"balance": 0, "frozen": 0})
+            balance_before = int(active.get("balance") or 0)
+            frozen_before = int(active.get("frozen") or 0)
+        else:
+            balance_before = account_balance_before
+            frozen_before = account_frozen_before
         balance_after = balance_before
         frozen_after = frozen_before
+        account_balance_after = account_balance_before
+        account_frozen_after = account_frozen_before
         earned_delta = 0
         spent_delta = 0
 
         if direction in {"credit", "transfer_in"}:
             balance_after += amount
+            account_balance_after += amount
         elif direction in {"debit", "transfer_out", "reverse"}:
             if balance_before < amount:
                 raise ValueError("insufficient balance")
             balance_after -= amount
+            account_balance_after -= amount
         elif direction == "freeze":
             if balance_before < amount:
                 raise ValueError("insufficient balance")
             balance_after -= amount
             frozen_after += amount
+            account_balance_after -= amount
+            account_frozen_after += amount
         elif direction == "unfreeze":
             if frozen_before < amount:
                 raise ValueError("insufficient frozen balance")
             balance_after += amount
             frozen_after -= amount
+            account_balance_after += amount
+            account_frozen_after -= amount
 
         earned_delta, spent_delta = self._wallet_statement_deltas(
             direction=direction,
             amount=amount,
             action_type=action_type,
-            public_metadata=public_metadata or {},
+            public_metadata=public_metadata,
         )
-        public_json = _metadata_json_checked(public_metadata or {}, label="public_metadata")
+        public_json = _metadata_json_checked(public_metadata, label="public_metadata")
         private_json = _metadata_json_checked(private_metadata or {}, label="private_metadata")
-        meta_hash = metadata_hash(public_metadata or {}, private_metadata or {}, sensitive_metadata_encrypted or "")
+        meta_hash = metadata_hash(public_metadata, private_metadata or {}, sensitive_metadata_encrypted or "")
         now = utc_now()
         ledger_uuid = str(uuid.uuid4())
         ledger_data = {
@@ -1273,13 +1602,13 @@ class PointsLedgerService:
             SET {balance_col}=?, {frozen_col}=?, {earned_col}={earned_col}+?, {spent_col}={spent_col}+?, updated_at=?
             WHERE user_id=?
             """,
-            (balance_after, frozen_after, earned_delta, spent_delta, now, int(user_id)),
+            (account_balance_after, account_frozen_after, earned_delta, spent_delta, now, int(user_id)),
         )
         row = conn.execute("SELECT * FROM points_ledger WHERE id=?", (cur.lastrowid,)).fetchone()
         economy_event, economy_created = self._append_walletized_economy_event(
             conn,
             ledger_row=row,
-            public_metadata=public_metadata or {},
+            public_metadata=public_metadata,
             actor=actor,
         )
         self._audit_log(
@@ -1297,6 +1626,7 @@ class PointsLedgerService:
                 "reference_id": reference_id,
                 "walletized_economy_event_uuid": economy_event["event_uuid"] if economy_event else "",
                 "walletized_economy_event_created": bool(economy_created),
+                "wallet_flow_snapshot": wallet_flow_snapshot,
             },
         )
         return row, True

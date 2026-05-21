@@ -1,6 +1,24 @@
 # Update Summary
 
-Release ID: `2026.05.21-188`
+Release ID: `2026.05.21-189`
+
+## 2026.05.21-189
+
+- Removed the legacy `trading_` prefix fund guess from PointsChain walletized
+  ledger replay. User spot principal, position movement, and other trading
+  asset swaps no longer inflate `EXCHANGE` fund.
+- Mirrored explicit trading reserve-pool events into PointsChain economy events
+  only when they represent real exchange fund inflow/outflow, such as retained
+  fees, interest, repayments, reserve allocation, principal lending, or profit
+  paid.
+- Added immutable wallet-flow snapshots to new ledger rows so historical
+  transaction details keep the wallet address used at write time. Deleting cold
+  wallet A, binding cold wallet B, or restoring A no longer rewrites old ledger
+  display.
+- Wallet read payloads now report active wallet-derived balances when a user has
+  wallet identities. A deleted/lost cold wallet leaves the account ledger intact
+  but the current active wallet balance displays as zero until the original
+  private key restores that wallet.
 
 ## 2026.05.21-188
 

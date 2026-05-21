@@ -265,3 +265,116 @@ def test_cold_wallet_delete_requires_private_key_restore_and_official_hot_cannot
     assert restored["is_primary"] is True
     assert status_after_restore["wallet"]["address"] == address
     assert official["wallet_type"] == "official_hot"
+
+
+def test_wallet_ledger_flow_snapshot_survives_cold_wallet_delete_switch_and_restore(tmp_path):
+    points = _points(tmp_path)
+    key_a = ec.generate_private_key(ec.SECP256R1())
+    public_a = _public_jwk(key_a)
+    address_a = address_from_public_key(public_a)
+    payload_a = wallet_binding_payload(
+        user_id=1,
+        wallet_type="self_custody_cold",
+        address=address_a,
+        public_key_jwk=public_a,
+    )
+    key_b = ec.generate_private_key(ec.SECP256R1())
+    public_b = _public_jwk(key_b)
+    address_b = address_from_public_key(public_b)
+    payload_b = wallet_binding_payload(
+        user_id=1,
+        wallet_type="self_custody_cold",
+        address=address_b,
+        public_key_jwk=public_b,
+    )
+
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        bind_self_custody_wallet(
+            conn,
+            user_id=1,
+            wallet_type="self_custody_cold",
+            public_key_jwk=public_a,
+            address=address_a,
+            signature=_signature(key_a, payload_a),
+            backup_confirmed=True,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    bonus = award_signup_bonus_after_wallet_onboarding(
+        points_service=points,
+        user_id=1,
+        actor={"id": 1, "username": "alice", "role": "user"},
+    )
+    assert bonus["created"] is True
+    ledger_after_a = points.list_ledger(user_id=1, limit=1)[0]
+    assert ledger_after_a["wallet_flow"]["destination_wallet_address"] == address_a
+    assert points.get_wallet(1)["points_balance"] == 100
+
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        delete_primary_cold_wallet(conn, user_id=1, reason="lost A")
+        conn.commit()
+    finally:
+        conn.close()
+    assert points.get_wallet(1)["points_balance"] == 0
+    assert points.list_ledger(user_id=1, limit=1)[0]["wallet_flow"]["destination_wallet_address"] == address_a
+
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        bind_self_custody_wallet(
+            conn,
+            user_id=1,
+            wallet_type="self_custody_cold",
+            public_key_jwk=public_b,
+            address=address_b,
+            signature=_signature(key_b, payload_b),
+            backup_confirmed=True,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    assert points.get_wallet(1)["points_balance"] == 0
+    assert points.list_ledger(user_id=1, limit=1)[0]["wallet_flow"]["destination_wallet_address"] == address_a
+    with pytest.raises(ValueError, match="insufficient balance"):
+        points.record_transaction(
+            user_id=1,
+            currency_type="points",
+            direction="debit",
+            amount=1,
+            action_type="spend:post_cost_standard",
+        )
+
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        delete_primary_cold_wallet(conn, user_id=1, reason="switch back to A")
+        restore_payload = wallet_binding_payload(
+            user_id=1,
+            wallet_type="imported_cold",
+            address=address_a,
+            public_key_jwk=public_a,
+        )
+        restored = bind_self_custody_wallet(
+            conn,
+            user_id=1,
+            wallet_type="imported_cold",
+            public_key_jwk=public_a,
+            address=address_a,
+            signature=_signature(key_a, restore_payload),
+            backup_confirmed=True,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert restored["address"] == address_a
+    assert points.get_wallet(1)["points_balance"] == 100
+    ledger_after_restore = points.list_ledger(user_id=1, limit=1)[0]
+    assert ledger_after_restore["wallet_flow"]["destination_wallet_address"] == address_a
+    assert ledger_after_restore["public_metadata"]["wallet_flow_snapshot"]["destination_wallet_address"] == address_a

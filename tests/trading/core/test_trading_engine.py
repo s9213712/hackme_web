@@ -698,7 +698,7 @@ def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp
         currency_type="points",
         direction="credit",
         amount=2000,
-        action_type="test_funding",
+        action_type="admin_adjust_credit",
     )
 
     result = trading.place_order(
@@ -736,7 +736,7 @@ def test_mixed_trial_and_real_points_buy_only_records_real_points_on_chain(tmp_p
         currency_type="points",
         direction="credit",
         amount=2000,
-        action_type="test_funding",
+        action_type="admin_adjust_credit",
     )
 
     result = trading.place_order(
@@ -766,6 +766,72 @@ def test_mixed_trial_and_real_points_buy_only_records_real_points_on_chain(tmp_p
         "trading_spot_buy": 250,
     }
     assert points.get_wallet(1)["points_balance"] == 1750
+
+
+def test_spot_trade_principal_does_not_enter_exchange_fund_only_fee_does(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=7000,
+        action_type="admin_adjust_credit",
+    )
+    before_exchange = points.economy_stats()["economy_layer"]["funds"]["exchange_fund"]["balance"]
+
+    buy = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="1",
+    )
+    after_buy = points.economy_stats()["economy_layer"]
+    assert buy["order"]["status"] == "filled"
+    assert after_buy["funds"]["exchange_fund"]["balance"] == before_exchange
+
+    result = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="sell",
+        order_type="market",
+        quantity="1",
+    )
+
+    fill = trading.user_dashboard(user_id=1)["fills"][0]
+    fee = int(fill["fee_points"] or 0)
+    assert result["order"]["status"] == "filled"
+    assert fee > 0
+    after = points.economy_stats()["economy_layer"]
+    assert after["funds"]["exchange_fund"]["balance"] == before_exchange + fee
+
+    conn = trading.get_db()
+    try:
+        trading_events = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT transaction_type, amount, metadata_json
+                FROM points_economy_events
+                WHERE event_type='trading_reserve_pool_flow'
+                ORDER BY id ASC
+                """
+            ).fetchall()
+        ]
+        walletized_principal = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM points_economy_events
+            WHERE idempotency_key LIKE 'walletized_ledger:%'
+              AND metadata_json LIKE '%trading_spot_buy%'
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert [event["transaction_type"] for event in trading_events] == ["fee_retained"]
+    assert int(trading_events[0]["amount"]) == fee
+    assert int(walletized_principal["count"] or 0) == 0
 
 
 def test_fee_points_ceil_positive_fractional_fee_for_integer_point_ledger():
@@ -965,7 +1031,7 @@ def test_new_points_markets_short_borrow_uses_non_btc_eth_apr_group_and_closes(t
             "PAXG/POINTS": 3300.0,
         },
     )
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={
@@ -1412,7 +1478,7 @@ def test_grid_bot_audit_marks_orphan_open_orders_as_red(tmp_path):
 
 def test_grid_bot_stop_loss_disables_bot_and_cancels_open_orders(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     _deplete_trial_credit(trading, user_id=1)
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
     created = trading.create_grid_bot(
@@ -2028,7 +2094,7 @@ def test_workflow_live_scan_uses_window_low_for_stop_loss_after_previous_scan(tm
         {"time_ms": base_ms + 60_000, "close_points": 110.0, "high_points": 110.0, "low_points": 94.0},
     ]
     points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="1.0")
     trading.test_prices["ETH/POINTS"] = 110.0
     workflow = {
@@ -2086,7 +2152,7 @@ def test_workflow_live_scan_does_not_false_trigger_from_pre_scan_window_break(tm
         {"time_ms": base_ms + 120_000, "close_points": 110.0, "high_points": 110.0, "low_points": 105.0},
     ]
     points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="1.0")
     trading.test_prices["ETH/POINTS"] = 110.0
     workflow = {
@@ -2143,7 +2209,7 @@ def test_workflow_live_scan_uses_window_high_for_take_profit(tmp_path):
         {"time_ms": base_ms + 60_000, "close_points": 96.0, "high_points": 106.0, "low_points": 95.0},
     ]
     points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="1.0")
     trading.test_prices["ETH/POINTS"] = 96.0
     workflow = {
@@ -2199,7 +2265,7 @@ def test_spot_risk_target_scan_auto_closes_position(tmp_path):
         {"time_ms": base_ms + 60_000, "close_points": 110.0, "high_points": 110.0, "low_points": 94.0},
     ]
     points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     trading.place_order(
         actor=_actor(),
         market_symbol="ETH/POINTS",
@@ -2227,7 +2293,7 @@ def test_margin_risk_target_scan_auto_closes_position(tmp_path):
         {"time_ms": base_ms + 60_000, "close_points": 108.0, "high_points": 108.0, "low_points": 94.0},
     ]
     points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=10000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=10000, action_type="admin_adjust_credit")
     opened = trading.open_margin_position(
         actor=_actor(),
         market_symbol="ETH/POINTS",
@@ -2263,7 +2329,7 @@ def test_dca_bot_stop_loss_auto_closes_existing_position(tmp_path):
         {"time_ms": base_ms + 60_000, "close_points": 108.0, "high_points": 108.0, "low_points": 94.0},
     ]
     points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="1.0")
     trading.test_prices["ETH/POINTS"] = 108.0
     trading.save_trading_bot(
@@ -2786,7 +2852,7 @@ def test_grid_bot_scans_and_fills_when_price_crosses_level_in_cfd_mode(tmp_path)
         currency_type="points",
         direction="credit",
         amount=5000,
-        action_type="test_funding",
+        action_type="admin_adjust_credit",
     )
     trading.test_prices["ETH/POINTS"] = 100
     trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=100, confirm_jump=True)
@@ -2843,7 +2909,7 @@ def test_grid_buy_inventory_stays_locked_until_grid_sell_uses_it(tmp_path):
         currency_type="points",
         direction="credit",
         amount=5000,
-        action_type="test_funding",
+        action_type="admin_adjust_credit",
     )
 
     buy = trading.place_order(
@@ -2908,7 +2974,7 @@ def test_delete_grid_bot_can_sell_or_keep_reserved_base_inventory(tmp_path):
         currency_type="points",
         direction="credit",
         amount=5000,
-        action_type="test_funding",
+        action_type="admin_adjust_credit",
     )
     trading.test_prices["ETH/POINTS"] = 100
     trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=100, confirm_jump=True)
@@ -2956,7 +3022,7 @@ def test_grid_bot_scan_window_low_can_fill_buy_limit(tmp_path):
         {"time_ms": 1_700_000_000_000, "close_points": 100.0, "high_points": 100.0, "low_points": 90.0},
     ]
     points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="admin_adjust_credit")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="2.0")
     created = trading.create_grid_bot(
         actor=_actor(),
@@ -2984,7 +3050,7 @@ def test_grid_bot_scan_window_high_can_fill_sell_limit(tmp_path):
         {"time_ms": 1_700_000_000_000, "close_points": 100.0, "high_points": 110.0, "low_points": 100.0},
     ]
     points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="admin_adjust_credit")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="2.0")
     trading.create_grid_bot(
         actor=_actor(),
@@ -3009,7 +3075,7 @@ def test_grid_bot_scan_window_high_can_fill_sell_limit(tmp_path):
 def test_grid_bot_create_is_all_or_nothing_when_initial_orders_fail(tmp_path):
     points, trading = _services(tmp_path)
     root = _actor(3, "root", "super_admin")
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="admin_adjust_credit")
     trading.test_prices["ETH/POINTS"] = 100
     trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=100, confirm_jump=True)
 
@@ -3060,7 +3126,7 @@ def test_increase_trading_bot_max_runs_updates_limit(tmp_path):
 
 def test_workflow_budget_caps_buy_percent_order_size(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=10000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=10000, action_type="admin_adjust_credit")
     workflow = {
         "version": 1,
         "strategy_kind": "workflow",
@@ -3108,7 +3174,7 @@ def test_workflow_budget_caps_buy_percent_order_size(tmp_path):
 
 def test_adjust_workflow_budget_respects_open_order_floor(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=10000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=10000, action_type="admin_adjust_credit")
     workflow = {
         "version": 1,
         "strategy_kind": "workflow",
@@ -3360,7 +3426,7 @@ def test_insufficient_trading_balance_creates_notification(tmp_path):
 
 def test_emergency_market_close_sells_all_with_double_fee(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.place_order(
         actor=_actor(),
         market_symbol="ETH/POINTS",
@@ -3458,7 +3524,7 @@ def test_trial_credit_expiry_cancels_open_sell_orders_before_reclaim(tmp_path):
 
 def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     _deplete_trial_credit(trading, user_id=1)
 
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
@@ -3504,7 +3570,7 @@ def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
 
 def test_spot_wallet_cumulative_statement_counts_realized_loss_not_principal(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     _deplete_trial_credit(trading, user_id=1)
 
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
@@ -3527,7 +3593,7 @@ def test_spot_wallet_cumulative_statement_counts_realized_loss_not_principal(tmp
 
 def test_market_order_uses_live_price_instead_of_stale_manual_price(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=500, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=500, action_type="admin_adjust_credit")
 
     result = trading.place_order(
         actor=_actor(),
@@ -3546,7 +3612,7 @@ def test_market_order_uses_live_price_instead_of_stale_manual_price(tmp_path):
 
 def test_live_price_failure_uses_recent_last_good_price(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
 
     first = trading.place_order(
         actor=_actor(),
@@ -3577,7 +3643,7 @@ def test_live_price_provider_allows_market_order_when_binance_is_down(tmp_path, 
     get_db = _db(tmp_path)
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
     trading = TradingEngineService(get_db=get_db, points_service=points)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.update_root_settings(actor=_actor(3, "root", "super_admin"), settings={"price_source": "binance_public_api"}, markets=[])
     _stamp_all_markets_boot_ready(trading)
     urls = []
@@ -3609,7 +3675,7 @@ def test_live_price_provider_allows_market_order_when_public_fallback_chain_is_u
     get_db = _db(tmp_path)
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
     trading = TradingEngineService(get_db=get_db, points_service=points)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.update_root_settings(actor=_actor(3, "root", "super_admin"), settings={"price_source": "binance_public_api"}, markets=[])
     _stamp_all_markets_boot_ready(trading)
     urls = []
@@ -4665,7 +4731,7 @@ def test_live_price_provider_preserves_fractional_price_points(tmp_path):
 def test_update_market_and_limit_order_preserve_decimal_price_points(tmp_path):
     points, trading = _services(tmp_path)
     root = _actor(3, "root", "super_admin")
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     updated = trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points="5000.125", confirm_jump=True)
     trading.test_prices["ETH/POINTS"] = 5000.125
 
@@ -4854,7 +4920,7 @@ def test_root_contract_open_respects_futures_enabled(tmp_path):
 
 def test_limit_buy_can_be_cancelled_and_unfreezes_points(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
 
     order = trading.place_order(
         actor=_actor(),
@@ -4877,7 +4943,7 @@ def test_limit_buy_can_be_cancelled_and_unfreezes_points(tmp_path):
 
 def test_limit_order_matcher_executes_when_price_reaches_limit(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
 
     order = trading.place_order(
         actor=_actor(),
@@ -4906,7 +4972,7 @@ def test_limit_order_matcher_executes_when_price_reaches_limit(tmp_path):
 
 def test_sell_payout_does_not_consume_experimental_reserve_pool(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
 
     trading.update_market(
@@ -4925,7 +4991,7 @@ def test_sell_payout_does_not_consume_experimental_reserve_pool(tmp_path):
     trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
     trading.test_prices["ETH/POINTS"] = 5000
 
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding_again")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
     sold = trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.05")
     assert sold["order"]["status"] == "filled"
@@ -4936,7 +5002,8 @@ def test_sell_payout_does_not_consume_experimental_reserve_pool(tmp_path):
 
 def test_root_reserve_allocation_debits_source_wallet_and_audits(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=2, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=2, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
+    before_exchange = points.economy_stats()["economy_layer"]["funds"]["exchange_fund"]["balance"]
 
     result = trading.allocate_reserve(
         actor=_actor(3, "root", "super_admin"),
@@ -4950,6 +5017,34 @@ def test_root_reserve_allocation_debits_source_wallet_and_audits(tmp_path):
     report = trading.root_report()
     assert report["reserve_events"][0]["reason"] == "ROOT_RESERVE_ALLOCATION"
     assert report["audit_events"][0]["event_type"] == "TRADING_RESERVE_ALLOCATED"
+    after_exchange = points.economy_stats()["economy_layer"]["funds"]["exchange_fund"]["balance"]
+    assert after_exchange == before_exchange + 250
+
+    conn = trading.get_db()
+    try:
+        events = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT transaction_type, amount
+                FROM points_economy_events
+                WHERE event_type='trading_reserve_pool_flow'
+                ORDER BY id ASC
+                """
+            ).fetchall()
+        ]
+        double_counted_ledger = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM points_economy_events
+            WHERE idempotency_key LIKE 'walletized_ledger:%'
+              AND metadata_json LIKE '%trading_reserve_allocation%'
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+    assert events == [{"transaction_type": "root_reserve_allocation", "amount": 250}]
+    assert int(double_counted_ledger["count"] or 0) == 0
 
 
 def test_price_jump_requires_explicit_confirmation(tmp_path):
@@ -5080,7 +5175,7 @@ def test_margin_positions_use_asset_specific_apr_groups_and_hourly_interest_meta
 
 def test_trading_volume_stats_accumulate_spot_and_margin_activity_for_future_vip_logic(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={"borrowing_enabled": True},
@@ -5160,7 +5255,7 @@ def test_margin_profit_allows_collateral_withdrawal_with_lower_maintenance_ratio
 
 def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
 
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
@@ -5226,7 +5321,7 @@ def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(t
 
 def test_margin_fee_uses_full_notional_and_settles_on_close(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={"borrowing_enabled": True, "borrow_interest_percent_daily": 0},
@@ -5255,7 +5350,7 @@ def test_margin_fee_uses_full_notional_and_settles_on_close(tmp_path):
 
 def test_margin_open_and_close_are_included_in_trade_history(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={"borrowing_enabled": True},
@@ -5293,7 +5388,7 @@ def test_margin_open_and_close_are_included_in_trade_history(tmp_path):
 
 def test_margin_interest_charges_by_started_hour_not_whole_day(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={"borrowing_enabled": True, "borrow_interest_percent_daily": 24},
@@ -5397,7 +5492,7 @@ def test_margin_interest_charges_minimum_point_for_fractional_due(tmp_path):
 
 def test_margin_open_rejects_when_funding_pool_is_insufficient(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={"borrowing_enabled": True},
@@ -5433,7 +5528,7 @@ def test_margin_open_does_not_require_unsettled_fee_upfront(tmp_path):
     points, trading = _services(tmp_path)
     trading.user_dashboard(user_id=1)
     _deplete_trial_credit(trading)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1100, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1100, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={
@@ -5463,7 +5558,7 @@ def test_margin_open_does_not_require_unsettled_fee_upfront(tmp_path):
 
 def test_margin_open_requires_buffer_so_liquidation_price_starts_beyond_entry(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={
@@ -5524,7 +5619,7 @@ def test_margin_open_requires_buffer_so_liquidation_price_starts_beyond_entry(tm
 
 def test_margin_risk_includes_break_even_and_interest_raises_thresholds(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={
@@ -5568,7 +5663,7 @@ def test_margin_risk_includes_break_even_and_interest_raises_thresholds(tmp_path
 
 def test_margin_open_is_idempotent_for_client_key(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
 
     first = trading.open_margin_position(
         actor=_actor(),
@@ -5653,7 +5748,7 @@ def test_hourly_margin_interest_capitalizes_when_wallet_balance_is_insufficient(
 
 def test_margin_collateral_add_is_idempotent_with_client_key(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     opened = trading.open_margin_position(
         actor=_actor(),
         market_symbol="ETH/POINTS",
@@ -5684,7 +5779,7 @@ def test_margin_collateral_add_is_idempotent_with_client_key(tmp_path):
 
 def test_margin_collateral_add_is_idempotent_without_client_key(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     opened = trading.open_margin_position(
         actor=_actor(),
         market_symbol="ETH/POINTS",
@@ -5713,7 +5808,7 @@ def test_margin_collateral_add_is_idempotent_without_client_key(tmp_path):
 
 def test_expired_trial_margin_collateral_can_be_closed_without_negative_accounting(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     opened = trading.open_margin_position(
         actor=_actor(),
         market_symbol="ETH/POINTS",
@@ -5741,7 +5836,7 @@ def test_expired_trial_margin_collateral_can_be_closed_without_negative_accounti
 
 def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={
@@ -5781,7 +5876,7 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
 
 def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=202, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=202, action_type="admin_adjust_credit")
     _deplete_trial_credit(trading, user_id=1)
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
@@ -5823,7 +5918,7 @@ def test_margin_liquidation_scan_uses_window_low_for_recovered_price(tmp_path):
         {"time_ms": 1_700_000_000_000, "close_points": 5000.0, "high_points": 5000.0, "low_points": 3300.0},
     ]
     points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 5000.0}, candles=candles)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=202, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=202, action_type="admin_adjust_credit")
     _deplete_trial_credit(trading, user_id=1)
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
@@ -5852,7 +5947,7 @@ def test_margin_liquidation_scan_uses_window_low_for_recovered_price(tmp_path):
 
 def test_margin_liquidation_scan_skips_when_fused_price_is_conservative(tmp_path, monkeypatch):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     _deplete_trial_credit(trading, user_id=1)
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
@@ -5902,7 +5997,7 @@ def test_margin_liquidation_scan_skips_when_fused_price_is_conservative(tmp_path
 
 def test_close_margin_position_rejects_high_risk_blocked_price(tmp_path, monkeypatch):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     _deplete_trial_credit(trading, user_id=1)
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
@@ -5945,7 +6040,7 @@ def test_close_margin_position_rejects_high_risk_blocked_price(tmp_path, monkeyp
 
 def test_close_margin_position_rejects_public_price_override(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     _deplete_trial_credit(trading, user_id=1)
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
@@ -6003,7 +6098,7 @@ def test_margin_risk_payload_accepts_margin_short_alias(tmp_path):
 
 def test_margin_risk_notification_failure_emits_audit(tmp_path, monkeypatch):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={
@@ -6047,7 +6142,7 @@ def test_internal_test_force_liquidation_cannot_read_production_margin_position(
         conn.commit()
     finally:
         conn.close()
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=202, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=202, action_type="admin_adjust_credit")
     _deplete_trial_credit(trading, user_id=1)
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
@@ -6187,7 +6282,7 @@ def test_internal_test_liquidation_scan_returns_disabled_without_prod_side_effec
 
 def test_cross_margin_free_margin_prevents_single_position_liquidation(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     _deplete_trial_credit(trading, user_id=1)
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
@@ -6224,7 +6319,7 @@ def test_cross_margin_free_margin_prevents_single_position_liquidation(tmp_path)
 
 def test_margin_scan_notifies_user_when_position_is_near_liquidation(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={
@@ -6257,7 +6352,7 @@ def test_margin_scan_notifies_user_when_position_is_near_liquidation(tmp_path):
 
 def test_margin_scan_notifies_user_when_price_jumps_sharply(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={
@@ -6293,7 +6388,7 @@ def test_margin_scan_notifies_user_when_price_jumps_sharply(tmp_path):
 
 def test_force_liquidation_rechecks_recovered_position(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={"borrowing_enabled": True, "margin_liquidation_enabled": True, "margin_maintenance_percent": 15},
@@ -6318,7 +6413,7 @@ def test_force_liquidation_rechecks_recovered_position(tmp_path):
 
 def test_margin_collateral_tampering_enters_trading_safe_mode(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="admin_adjust_credit")
     trading.update_root_settings(actor=_actor(3, "root", "super_admin"), settings={"borrowing_enabled": True}, markets=[])
     opened = trading.open_margin_position(
         actor=_actor(),
@@ -6340,7 +6435,7 @@ def test_margin_collateral_tampering_enters_trading_safe_mode(tmp_path):
 
 def test_position_replay_mismatch_enters_trading_safe_mode(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
 
     conn = trading.get_db()
@@ -6356,7 +6451,7 @@ def test_position_replay_mismatch_enters_trading_safe_mode(tmp_path):
 
 def test_reserve_pool_tampering_enters_trading_safe_mode(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
 
     conn = trading.get_db()
@@ -6373,7 +6468,7 @@ def test_reserve_pool_tampering_enters_trading_safe_mode(tmp_path):
 
 def test_open_order_frozen_tampering_enters_trading_safe_mode(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     order = trading.place_order(
         actor=_actor(),
         market_symbol="ETH/POINTS",
@@ -6395,7 +6490,7 @@ def test_open_order_frozen_tampering_enters_trading_safe_mode(tmp_path):
 
 def test_sell_order_rejects_zero_net_credit_before_locking_position(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.00000001")
     trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", fee_rate_percent=50)
 
@@ -6415,7 +6510,7 @@ def test_sell_order_rejects_zero_net_credit_before_locking_position(tmp_path):
 
 def test_trading_writes_stop_when_pointschain_enters_safe_mode(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="admin_adjust_credit")
 
     conn = trading.get_db()
     points.ensure_schema(conn)
@@ -6483,7 +6578,7 @@ def test_workflow_branch_steps_are_persisted_and_do_not_repeat(tmp_path):
 
 def test_incremental_spot_buys_keep_average_cost_sane(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=15000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=15000, action_type="admin_adjust_credit")
 
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="2")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.5")
@@ -6530,7 +6625,7 @@ def test_incremental_spot_buys_keep_average_cost_sane(tmp_path):
 
 def test_workflow_buy_amount_runs_after_incremental_spot_buys(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=15000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=15000, action_type="admin_adjust_credit")
 
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="2")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.5")

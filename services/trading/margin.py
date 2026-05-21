@@ -818,6 +818,7 @@ def open_margin_position(
                 event_type="margin_principal_lent",
                 reason="TRADING_MARGIN_PRINCIPAL_LENT",
                 actor=actor,
+                source_user_id=user_id,
             )
         now = _now_text()
         if margin_positions_table == "test_shadow_margin_positions":
@@ -1461,6 +1462,7 @@ def close_margin_position(
                 event_type="margin_principal_repaid",
                 reason="TRADING_MARGIN_PRINCIPAL_REPAID",
                 actor=actor,
+                source_user_id=user_id,
             )
         if is_root_simulated:
             simulated_return = max(0, collateral + delta)
@@ -1514,6 +1516,7 @@ def close_margin_position(
                 event_type="margin_profit_paid",
                 reason="TRADING_MARGIN_PROFIT_PAID",
                 actor=actor,
+                source_user_id=user_id,
             )
             if collateral_trial:
                 service._release_trial_margin_collateral(
@@ -1615,6 +1618,7 @@ def close_margin_position(
                 event_type="margin_fee_retained",
                 reason="TRADING_MARGIN_CLOSE_FEE",
                 actor=actor,
+                source_user_id=user_id,
             )
         if interest and not is_root_simulated:
             service._reserve_delta(
@@ -1623,6 +1627,7 @@ def close_margin_position(
                 event_type="margin_interest_retained",
                 reason="TRADING_MARGIN_INTEREST",
                 actor=actor,
+                source_user_id=user_id,
             )
         now = _now_text()
         next_status = "liquidated" if force_liquidation else "closed"

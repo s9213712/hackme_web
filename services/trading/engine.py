@@ -1910,6 +1910,7 @@ class TradingEngineService:
         if next_balance < 0:
             raise ValueError("trading funding pool is insufficient")
         now = _now()
+        event_uuid = str(uuid.uuid4())
         conn.execute(
             "UPDATE trading_reserve_pool SET balance_points=?, updated_at=?, updated_by=? WHERE id=1",
             (next_balance, now, self._actor_id(actor)),
@@ -1922,7 +1923,7 @@ class TradingEngineService:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                str(uuid.uuid4()),
+                event_uuid,
                 int(delta),
                 next_balance,
                 event_type,
@@ -1934,6 +1935,18 @@ class TradingEngineService:
                 points_ledger_uuid,
                 now,
             ),
+        )
+        self.points_service.append_trading_reserve_economy_event(
+            conn,
+            reserve_event_uuid=event_uuid,
+            delta=int(delta),
+            event_type=event_type,
+            reason=reason,
+            actor=actor,
+            source_user_id=source_user_id,
+            order_id=order_id,
+            fill_id=fill_id,
+            points_ledger_uuid=points_ledger_uuid,
         )
         return next_balance
 

@@ -90,7 +90,7 @@ def test_economy_stats_reports_member_circulating_supply(tmp_path):
         currency_type="points",
         direction="credit",
         amount=100,
-        action_type="member_credit",
+        action_type="admin_adjust_credit",
         idempotency_key="member:credit",
     )
     service.record_transaction(
@@ -98,7 +98,7 @@ def test_economy_stats_reports_member_circulating_supply(tmp_path):
         currency_type="points",
         direction="debit",
         amount=30,
-        action_type="member_debit",
+        action_type="spend:post_cost_standard",
         idempotency_key="member:debit",
     )
     service.record_transaction(
@@ -106,7 +106,7 @@ def test_economy_stats_reports_member_circulating_supply(tmp_path):
         currency_type="points",
         direction="credit",
         amount=50,
-        action_type="root_credit",
+        action_type="admin_adjust_credit",
         idempotency_key="root:credit",
     )
 
@@ -131,6 +131,29 @@ def test_economy_stats_reports_member_circulating_supply(tmp_path):
     assert bridge["actual_supply_equation_gap_points"] == 0
     assert bridge["bridged_supply_equation_gap_points"] == 0
     assert bridge["bridged_supply_equation_balanced"] is True
+
+
+def test_unknown_ledger_actions_do_not_guess_fund_flows(tmp_path):
+    service = _service(tmp_path)
+
+    tx = service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=100,
+        action_type="legacy_unknown_credit",
+        idempotency_key="unknown:credit",
+    )
+
+    stats = service.economy_stats()["economy_layer"]
+    ledger = service.list_ledger(user_id=1, limit=1)[0]
+
+    assert tx["created"] is True
+    assert stats["funds"]["official_treasury"]["balance"] == 10_000_000
+    assert stats["funds"]["promo_fund"]["balance"] == 5_000_000
+    assert stats["funds"]["exchange_fund"]["balance"] == 5_000_000
+    assert ledger["wallet_flow"]["walletized"] is False
+    assert "不再自動套用基金" in ledger["wallet_flow"]["walletization_note"]
 
 
 def test_walletized_admin_adjust_debits_official_fund(tmp_path):

@@ -743,6 +743,7 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                 event_type="fee_retained",
                 reason="TRADING_FEE",
                 actor=actor,
+                source_user_id=user_id,
                 order_id=order["id"],
             )
     else:
@@ -859,6 +860,7 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                     event_type="fee_retained",
                     reason="TRADING_FEE",
                     actor=actor,
+                    source_user_id=user_id,
                     order_id=order["id"],
                 )
         next_total_units = (
