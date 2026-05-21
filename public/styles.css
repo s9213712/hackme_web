@@ -374,6 +374,11 @@
       overflow-wrap: anywhere;
     }
 
+    .economy-ledger-wallet-flow {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
     .trading-bot-tag {
       display: inline-block;
       font-size: .72rem;

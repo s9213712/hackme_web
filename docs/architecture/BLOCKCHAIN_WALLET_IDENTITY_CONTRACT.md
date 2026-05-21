@@ -43,6 +43,18 @@ For non-root users, the bonus is issued after wallet onboarding completes. The
 award remains idempotent through the existing `new_user_signup_bonus` ledger
 action; retrying onboarding does not create duplicate bonus entries.
 
+## Ledger Display IDs
+
+The legacy `public_account_id` remains an HMAC-based PointsChain ledger identity
+for proof and compatibility. It is not a simulated blockchain address. New
+wallet identities use `pc1...` addresses, and ledger reads include a read-only
+`wallet_flow` projection so UI can display issuance and spend direction as
+wallet-address flow without changing the underlying append-only ledger rows.
+
+`ledger_uuid` is the transaction id of a ledger row. It is used for proof,
+rollback, refund references, and audit lookup; it is not a source or destination
+wallet address.
+
 ## Frontend Checks
 
 For this phase, frontend QA should verify:

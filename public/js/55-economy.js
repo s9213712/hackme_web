@@ -234,8 +234,26 @@ function formatEconomyLedgerSource(row) {
   if (meta.game_key) parts.push(`遊戲：${meta.game_key}`);
   if (meta.difficulty) parts.push(`難度：${meta.difficulty}`);
   if (meta.score !== undefined && meta.score !== null && meta.score !== "") parts.push(`分數：${meta.score}`);
-  if (row?.reference_id) parts.push(`來源：${row.reference_id}`);
+  if (row?.reference_id) parts.push(`參照：${row.reference_id}`);
   return parts.join(" · ");
+}
+
+function shortEconomyWalletAddress(value) {
+  const text = String(value || "").trim();
+  if (!text || text === "-") return "-";
+  if (text.length <= 24) return text;
+  return `${text.slice(0, 12)}…${text.slice(-8)}`;
+}
+
+function formatEconomyLedgerWalletFlow(row) {
+  const flow = row?.wallet_flow && typeof row.wallet_flow === "object" ? row.wallet_flow : null;
+  if (!flow?.source_wallet_address && !flow?.destination_wallet_address) return "";
+  const sourceLabel = flow.source_label || "來源地址";
+  const destLabel = flow.destination_label || "目的地址";
+  const source = shortEconomyWalletAddress(flow.source_wallet_address);
+  const dest = shortEconomyWalletAddress(flow.destination_wallet_address);
+  if (flow.internal_movement) return `地址流：${sourceLabel} ${source} 內部異動`;
+  return `地址流：${sourceLabel} ${source} → ${destLabel} ${dest}`;
 }
 
 function formatEconomyCountdown(seconds) {
@@ -426,7 +444,11 @@ function renderEconomyWallet(wallet) {
   if ($("economy-soft-frozen")) $("economy-soft-frozen").textContent = `凍結 ${pointsFrozen}`;
   if ($("economy-hard-frozen")) $("economy-hard-frozen").textContent = "凍結 0";
   if ($("economy-wallet-status")) $("economy-wallet-status").textContent = wallet.wallet_status || "-";
-  if ($("economy-public-account")) $("economy-public-account").textContent = wallet.public_account_id || "-";
+  if ($("economy-public-account")) {
+    const accountId = wallet.public_account_id || "";
+    $("economy-public-account").textContent = accountId ? `Legacy 帳本 ID：${shortEconomyWalletAddress(accountId)}` : "Legacy 帳本 ID：-";
+    $("economy-public-account").title = accountId;
+  }
   const sidebarPoints = $("sidebar-points");
   if (sidebarPoints) {
     sidebarPoints.dataset.points = String(pointsBalance);
@@ -666,13 +688,15 @@ function renderEconomyLedger(rows, targetId = "economy-ledger-list") {
   }
   list.innerHTML = rows.map((row) => {
     const source = formatEconomyLedgerSource(row);
+    const walletFlow = formatEconomyLedgerWalletFlow(row);
     return `
       <div class="drive-file-row">
         <div>
           <strong>${sanitize(formatEconomyLedgerAmount(row))}</strong>
           <div class="drive-card-sub">${sanitize(formatEconomyLedgerAction(row.action_type))} · ${sanitize(row.created_at || "")}</div>
+          ${walletFlow ? `<div class="drive-card-sub economy-ledger-wallet-flow">${sanitize(walletFlow)}</div>` : ""}
           ${source ? `<div class="drive-card-sub">${sanitize(source)}</div>` : ""}
-          <div class="economy-ledger-hash">${sanitize(row.ledger_uuid || row.ledger_hash || "")}</div>
+          <div class="economy-ledger-hash">Ledger UUID：${sanitize(row.ledger_uuid || row.ledger_hash || "")}</div>
         </div>
         <button class="btn" type="button" data-economy-proof="${sanitize(row.ledger_uuid || "")}">Proof</button>
       </div>

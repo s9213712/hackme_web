@@ -1,6 +1,15 @@
 # Update Summary
 
-Release ID: `2026.05.21-179`
+Release ID: `2026.05.21-180`
+
+## 2026.05.21-180
+
+- Added a read-only wallet-address flow projection to PointsChain ledger reads
+  so credits display as official issuance wallet to user `pc1...` wallet when a
+  wallet identity exists.
+- Clarified economy wallet / ledger labels: legacy `public_account_id` is now
+  labeled as a legacy ledger identity, and ledger UUIDs are explicitly labeled
+  as transaction IDs instead of source addresses.
 
 ## 2026.05.21-179
 

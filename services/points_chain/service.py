@@ -3,7 +3,7 @@
 import threading
 
 from . import schema as _schema
-from .wallet_identity import ensure_wallet_identity_schema
+from .wallet_identity import ensure_wallet_identity_schema, system_wallet_address
 
 globals().update({name: value for name, value in _schema.__dict__.items() if not name.startswith("__")})
 
@@ -639,6 +639,67 @@ class PointsLedgerService:
             data["user_id"] = row["user_id"]
             data["created_by"] = row["created_by"]
             data["created_by_role"] = row["created_by_role"]
+        return data
+
+    def _primary_wallet_address_for_read(self, conn, user_id):
+        try:
+            row = conn.execute(
+                """
+                SELECT address FROM points_wallet_identities
+                WHERE user_id=? AND is_primary=1 AND status IN ('pending_backup', 'active')
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(user_id),),
+            ).fetchone()
+            return row["address"] if row else ""
+        except Exception:
+            return ""
+
+    def _ledger_wallet_flow_for_read(self, conn, row):
+        target_address = self._primary_wallet_address_for_read(conn, row["user_id"])
+        legacy_account = row["public_account_id"] or self._public_account_id(row["user_id"])
+        recipient = target_address or legacy_account
+        recipient_label = "用戶模擬鏈錢包" if target_address else "Legacy 帳本身份"
+        mint_address = system_wallet_address(self.chain_secret, "mint")
+        burn_address = system_wallet_address(self.chain_secret, "burn")
+        direction = row["direction"]
+        if direction in {"credit", "transfer_in"}:
+            return {
+                "source_label": "官方發行錢包",
+                "source_wallet_address": mint_address,
+                "destination_label": recipient_label,
+                "destination_wallet_address": recipient,
+                "target_wallet_address": target_address,
+                "legacy_public_account_id": legacy_account,
+            }
+        if direction in {"debit", "transfer_out", "reverse"}:
+            return {
+                "source_label": recipient_label,
+                "source_wallet_address": recipient,
+                "destination_label": "系統回收 / 服務扣款錢包",
+                "destination_wallet_address": burn_address,
+                "target_wallet_address": target_address,
+                "legacy_public_account_id": legacy_account,
+            }
+        if direction in {"freeze", "unfreeze"}:
+            return {
+                "source_label": recipient_label,
+                "source_wallet_address": recipient,
+                "destination_label": recipient_label,
+                "destination_wallet_address": recipient,
+                "target_wallet_address": target_address,
+                "legacy_public_account_id": legacy_account,
+                "internal_movement": True,
+            }
+        return {
+            "target_wallet_address": target_address,
+            "legacy_public_account_id": legacy_account,
+        }
+
+    def _serialize_ledger_for_read(self, conn, row, *, include_user_id=False):
+        data = self.serialize_ledger(row, include_user_id=include_user_id)
+        data["wallet_flow"] = self._ledger_wallet_flow_for_read(conn, row)
         return data
 
     def _balance_column(self, currency_type):
@@ -1439,7 +1500,7 @@ class PointsLedgerService:
                 ).fetchall()
             else:
                 rows = conn.execute("SELECT * FROM points_ledger ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
-            return [self.serialize_ledger(row, include_user_id=include_user_id) for row in rows]
+            return [self._serialize_ledger_for_read(conn, row, include_user_id=include_user_id) for row in rows]
         finally:
             conn.close()
 
@@ -1932,7 +1993,7 @@ class PointsLedgerService:
             if not ledger:
                 return None
             if not ledger["chain_block_id"]:
-                return {"sealed": False, "ledger": self.serialize_ledger(ledger), "ledger_hash": ledger["ledger_hash"]}
+                return {"sealed": False, "ledger": self._serialize_ledger_for_read(conn, ledger), "ledger_hash": ledger["ledger_hash"]}
             block = conn.execute("SELECT * FROM points_chain_blocks WHERE id=?", (ledger["chain_block_id"],)).fetchone()
             rows = conn.execute(
                 "SELECT id, ledger_hash FROM points_ledger WHERE id BETWEEN ? AND ? ORDER BY id ASC",
@@ -1945,6 +2006,7 @@ class PointsLedgerService:
                 "sealed": True,
                 "ledger_uuid": ledger["ledger_uuid"],
                 "public_account_id": ledger["public_account_id"],
+                "wallet_flow": self._ledger_wallet_flow_for_read(conn, ledger),
                 "ledger_hash": ledger["ledger_hash"],
                 "block_number": block["block_number"],
                 "merkle_root": block["merkle_root"],

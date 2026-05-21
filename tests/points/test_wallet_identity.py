@@ -148,6 +148,12 @@ def test_self_custody_wallet_rejects_private_key_material_and_awards_signup_afte
     assert first_bonus["created"] is True
     assert second_bonus["already_granted"] is True
     assert points.get_wallet(1)["points_balance"] == 100
+    ledger = points.list_ledger(user_id=1, limit=1)[0]
+    assert ledger["ledger_uuid"]
+    assert ledger["wallet_flow"]["source_label"] == "官方發行錢包"
+    assert ledger["wallet_flow"]["destination_wallet_address"] == address
+    assert ledger["wallet_flow"]["target_wallet_address"] == address
+    assert ledger["wallet_flow"]["legacy_public_account_id"] == ledger["public_account_id"]
 
 
 def test_official_hot_and_multisig_wallets_complete_onboarding_without_private_key(tmp_path):
@@ -173,4 +179,3 @@ def test_official_hot_and_multisig_wallets_complete_onboarding_without_private_k
     assert multisig["metadata"]["multisig_policy"]["threshold"] == 2
     assert status["wallet"]["address"] == official["address"]
     assert status["signup_bonus_granted"] is False
-
