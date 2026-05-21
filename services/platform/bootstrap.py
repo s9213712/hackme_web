@@ -101,12 +101,21 @@ def _default_password_policy_disabled():
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _relax_default_password_gate_for_dev_defaults():
+    if _env_bool("HACKME_DEV_SECURITY_ENABLED", False):
+        return False
+    return _env_bool("HACKME_DEV_DEFAULT_ACCOUNT_PASSWORDS", False)
+
+
 def _mark_default_account_password(conn, user_id, now):
     if _default_password_policy_disabled():
         return
+    relax_default_gate = _relax_default_password_gate_for_dev_defaults()
+    must_change = 0 if relax_default_gate else 1
+    is_default = 0 if relax_default_gate else 1
     conn.execute(
-        "UPDATE users SET must_change_password=1, is_default_password=1, updated_at=? WHERE id=?",
-        (now, user_id)
+        "UPDATE users SET must_change_password=?, is_default_password=?, updated_at=? WHERE id=?",
+        (must_change, is_default, now, user_id)
     )
 
 

@@ -62,6 +62,13 @@ def ensure_wallet_identity_schema(conn):
     )
     conn.execute(
         """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_points_wallet_identity_one_official_hot
+        ON points_wallet_identities(user_id)
+        WHERE user_id IS NOT NULL AND wallet_type='official_hot' AND status IN ('pending_backup', 'active')
+        """
+    )
+    conn.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_points_wallet_identity_user
         ON points_wallet_identities(user_id, status, created_at)
         """
@@ -376,9 +383,18 @@ def ensure_system_wallets(conn, *, chain_secret):
 
 def create_official_hot_wallet(conn, *, user_id, chain_secret, label="官方熱錢包"):
     ensure_wallet_identity_schema(conn)
-    existing = get_primary_wallet_identity(conn, user_id)
+    existing = conn.execute(
+        """
+        SELECT * FROM points_wallet_identities
+        WHERE user_id=? AND wallet_type='official_hot' AND status IN ('pending_backup', 'active')
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (int(user_id),),
+    ).fetchone()
     if existing:
         return serialize_wallet_identity(existing)
+    primary = get_primary_wallet_identity(conn, user_id)
     now = utc_now()
     address = official_hot_wallet_address(chain_secret, user_id)
     cur = conn.execute(
@@ -388,12 +404,13 @@ def create_official_hot_wallet(conn, *, user_id, chain_secret, label="官方熱�
             public_key_jwk_json, public_key_hash, server_private_key_stored,
             is_primary, status, label, backup_confirmed_at, metadata_json,
             created_at, updated_at
-        ) VALUES (?, ?, 'official_hot', 'server_hot', 'SYSTEM_SIMULATED_V1', '{}', ?, 0, 1, 'active', ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, 'official_hot', 'server_hot', 'SYSTEM_SIMULATED_V1', '{}', ?, 0, ?, 'active', ?, ?, ?, ?, ?)
         """,
         (
             int(user_id),
             address,
             sha256_text(address),
+            0 if primary else 1,
             str(label or "官方熱錢包")[:120],
             now,
             canonical_json({"server_managed": True, "private_key_exportable": False}),
@@ -434,11 +451,7 @@ def bind_self_custody_wallet(
         public_key_jwk=jwk,
         signature=signature,
     )
-    existing = get_primary_wallet_identity(conn, user_id)
-    if existing:
-        if existing["address"] == address:
-            return serialize_wallet_identity(existing)
-        raise ValueError("primary wallet already exists")
+    primary = get_primary_wallet_identity(conn, user_id)
     row = conn.execute("SELECT * FROM points_wallet_identities WHERE address=?", (address,)).fetchone()
     if row and int(row["user_id"] or 0) != int(user_id):
         raise ValueError("wallet address is already bound to another user")
@@ -457,7 +470,7 @@ def bind_self_custody_wallet(
             UPDATE points_wallet_identities
             SET wallet_type=?, custody_mode='self_custody', key_algorithm='ECDSA_P256_SHA256',
                 public_key_jwk_json=?, public_key_hash=?, server_private_key_stored=0,
-                is_primary=1, status='active', label=?, backup_confirmed_at=?,
+                is_primary=?, status='active', label=?, backup_confirmed_at=?,
                 imported_at=?, revoked_at=NULL, metadata_json=?, updated_at=?
             WHERE id=?
             """,
@@ -465,6 +478,7 @@ def bind_self_custody_wallet(
                 wallet_type,
                 canonical_json(jwk),
                 public_key_hash(jwk),
+                1 if not primary or primary["address"] == address else 0,
                 str(label or ("冷錢包" if wallet_type == "self_custody_cold" else "匯入冷錢包"))[:120],
                 now,
                 now if wallet_type == "imported_cold" else row["imported_at"],
@@ -488,7 +502,7 @@ def bind_self_custody_wallet(
             public_key_jwk_json, public_key_hash, server_private_key_stored,
             is_primary, status, label, backup_confirmed_at, imported_at,
             metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, 'self_custody', 'ECDSA_P256_SHA256', ?, ?, 0, 1, 'active', ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, 'self_custody', 'ECDSA_P256_SHA256', ?, ?, 0, ?, 'active', ?, ?, ?, ?, ?, ?)
         """,
         (
             int(user_id),
@@ -496,6 +510,7 @@ def bind_self_custody_wallet(
             wallet_type,
             canonical_json(jwk),
             public_key_hash(jwk),
+            0 if primary else 1,
             str(label or ("冷錢包" if wallet_type == "self_custody_cold" else "匯入冷錢包"))[:120],
             now,
             now if wallet_type == "imported_cold" else None,
@@ -508,9 +523,20 @@ def bind_self_custody_wallet(
     return serialize_wallet_identity(conn.execute("SELECT * FROM points_wallet_identities WHERE id=?", (cur.lastrowid,)).fetchone())
 
 
-def delete_primary_cold_wallet(conn, *, user_id, reason=""):
+def delete_cold_wallet(conn, *, user_id, address="", reason=""):
     ensure_wallet_identity_schema(conn)
-    primary = get_primary_wallet_identity(conn, user_id)
+    address = str(address or "").strip().lower()
+    if address:
+        primary = conn.execute(
+            """
+            SELECT * FROM points_wallet_identities
+            WHERE user_id=? AND address=? AND status IN ('pending_backup', 'active')
+            LIMIT 1
+            """,
+            (int(user_id), normalize_wallet_address(address)),
+        ).fetchone()
+    else:
+        primary = get_primary_wallet_identity(conn, user_id)
     if not primary:
         raise ValueError("no active wallet is bound")
     if primary["wallet_type"] not in {"self_custody_cold", "imported_cold"} or primary["custody_mode"] != "self_custody":
@@ -531,6 +557,25 @@ def delete_primary_cold_wallet(conn, *, user_id, reason=""):
         """,
         (now, canonical_json(metadata), now, primary["id"]),
     )
+    if int(primary["is_primary"] or 0):
+        replacement = conn.execute(
+            """
+            SELECT id FROM points_wallet_identities
+            WHERE user_id=? AND status IN ('pending_backup', 'active')
+            ORDER BY CASE WHEN wallet_type='official_hot' THEN 1 ELSE 0 END, created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (int(user_id),),
+        ).fetchone()
+        if replacement:
+            conn.execute(
+                """
+                UPDATE points_wallet_identities
+                SET is_primary=1, updated_at=?
+                WHERE id=?
+                """,
+                (now, replacement["id"]),
+            )
     _record_onboarding_event(
         conn,
         user_id=user_id,
@@ -543,6 +588,10 @@ def delete_primary_cold_wallet(conn, *, user_id, reason=""):
         },
     )
     return serialize_wallet_identity(conn.execute("SELECT * FROM points_wallet_identities WHERE id=?", (primary["id"],)).fetchone())
+
+
+def delete_primary_cold_wallet(conn, *, user_id, reason=""):
+    return delete_cold_wallet(conn, user_id=user_id, reason=reason)
 
 
 def create_multisig_wallet(conn, *, user_id, threshold, signer_addresses, label="多簽錢包"):

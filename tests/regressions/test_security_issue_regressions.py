@@ -204,8 +204,9 @@ def test_member_rights_changes_send_notice_and_appeal_path():
     assert 'action_label=f"角色 {from_role} -> {to_role}"' in users
     assert "def notify_member_points_action" in economy
     assert "會員點數權益變更" in economy
-    assert "POINTS_ADMIN_ADJUST" in economy
-    assert "POINTS_WALLET_SANCTION" in economy
+    assert "blockchain_permission_model" in economy
+    assert "私有鏈模式已停用手動加減積分" in economy
+    assert "私有鏈模式不允許 root 直接處分用戶錢包" in economy
     assert "points_ledger_uuid" in notices
     assert "points_service.rollback_ledger" in appeals
     assert 'link="/appeals"' in notices
@@ -220,7 +221,7 @@ def test_member_rights_changes_send_notice_and_appeal_path():
     assert "violation_id < 0" in appeals
     assert "LEFT JOIN admin_sanction_appeal_contexts asc2" not in appeals
     assert "LEFT JOIN admin_sanction_appeal_contexts asc2" not in violations
-    assert "appealable=(direction != \"credit\")" in economy
+    assert "用戶授權交易觸發" in economy
     assert "appealable=False" in users
 
 
@@ -296,7 +297,9 @@ def test_manual_points_adjustment_is_root_only():
         1,
     )[0]
 
-    assert "actor, err = root_or_403()" in adjust_route
+    assert '"code": "blockchain_permission_model"' in adjust_route
+    assert "官方發點需改走官方錢包送單" in adjust_route
+    assert "points_service.record_transaction" not in adjust_route
     assert "actor, err = manager_or_403()" not in adjust_route
 
 

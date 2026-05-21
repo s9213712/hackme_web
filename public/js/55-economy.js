@@ -6,6 +6,8 @@ let economyInlineEventsBound = false;
 let economyAutoRefreshTimer = null;
 let economyAutoRefreshBusy = false;
 let economyGeneratedColdWallet = null;
+let economyExplorerLastQuery = "";
+let economyExplorerCountdownTimer = null;
 const ECONOMY_PAGE_STORAGE_KEY = "hackme_web:economy:active_page";
 
 function economyPageStorageKey() {
@@ -101,6 +103,22 @@ function economyRequestId(prefix = "economy") {
 
 function economyWalletMsg(text, ok = true) {
   const el = $("economy-wallet-onboarding-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(el, text, ok);
+}
+
+function economyExplorerMsg(text, ok = true) {
+  const el = $("economy-explorer-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(el, text, ok);
+}
+
+function economyTransferMsg(text, ok = true) {
+  const el = $("economy-transfer-msg");
   if (!el) return;
   el.textContent = text || "";
   el.style.color = ok ? "#4caf50" : "#ff4f6d";
@@ -210,6 +228,11 @@ function formatEconomyLedgerAction(actionType) {
     new_user_signup_bonus: "註冊獎勵",
     birthday_gift: "生日禮金",
     user_initial_grant: "會員初始配點",
+    chain_acceleration_fee: "鏈上加速費用",
+    wallet_transfer: "鏈上轉帳",
+    wallet_transfer_out: "鏈上轉帳",
+    wallet_transfer_in: "鏈上轉帳入帳",
+    wallet_transfer_fee: "鏈上手續費",
   };
   if (labels[action]) return labels[action];
   if (action.startsWith("rollback:")) return `Rollback：${formatEconomyLedgerAction(action.slice("rollback:".length))}`;
@@ -283,10 +306,12 @@ function setEconomyActivePage(page, options = {}) {
   const chainAllowed = canManageEconomyPoints();
   const positionsAvailable = economyPositionsAvailable();
   const rootTradingAllowed = rootMode && positionsAvailable;
-  const requestedPage = ["chain", "positions", "funding-pools", "all-positions"].includes(page) ? page : "balance";
+  const requestedPage = ["chain", "explorer", "positions", "funding-pools", "all-positions"].includes(page) ? page : "balance";
   const nextPage =
     requestedPage === "chain" && chainAllowed
       ? "chain"
+      : requestedPage === "explorer"
+        ? "explorer"
       : requestedPage === "funding-pools" && rootTradingAllowed
         ? "funding-pools"
         : requestedPage === "all-positions" && rootTradingAllowed
@@ -302,15 +327,18 @@ function setEconomyActivePage(page, options = {}) {
   }
   const balancePage = $("economy-balance-page");
   const positionsPage = $("economy-positions-page");
+  const explorerPage = $("economy-explorer-page");
   const fundingPoolsPage = $("economy-funding-pools-page");
   const allPositionsPage = $("economy-all-positions-page");
   const chainPage = $("economy-chain-page");
   if (balancePage) balancePage.classList.toggle("active", nextPage === "balance");
+  if (explorerPage) explorerPage.classList.toggle("active", nextPage === "explorer");
   if (positionsPage) positionsPage.classList.toggle("active", positionsAvailable && nextPage === "positions");
   if (fundingPoolsPage) fundingPoolsPage.classList.toggle("active", rootTradingAllowed && nextPage === "funding-pools");
   if (allPositionsPage) allPositionsPage.classList.toggle("active", rootTradingAllowed && nextPage === "all-positions");
   if (chainPage) chainPage.classList.toggle("active", chainAllowed && nextPage === "chain");
   const balanceTab = $("tab-economy-balance");
+  const explorerTab = $("tab-economy-explorer");
   const positionsTab = $("tab-economy-positions");
   const fundingPoolsTab = $("tab-economy-funding-pools");
   const allPositionsTab = $("tab-economy-all-positions");
@@ -319,6 +347,11 @@ function setEconomyActivePage(page, options = {}) {
     balanceTab.textContent = rootMode ? "錢包管理" : "積分餘額";
     balanceTab.classList.toggle("active", nextPage === "balance");
     balanceTab.setAttribute("aria-selected", nextPage === "balance" ? "true" : "false");
+  }
+  if (explorerTab) {
+    explorerTab.style.display = "";
+    explorerTab.classList.toggle("active", nextPage === "explorer");
+    explorerTab.setAttribute("aria-selected", nextPage === "explorer" ? "true" : "false");
   }
   if (fundingPoolsTab) {
     fundingPoolsTab.style.display = rootTradingAllowed ? "" : "none";
@@ -344,6 +377,7 @@ function setEconomyActivePage(page, options = {}) {
   const title = $("economy-page-title");
   if (title) {
     if (nextPage === "positions") title.textContent = "倉位管理";
+    else if (nextPage === "explorer") title.textContent = "鏈上瀏覽器";
     else if (nextPage === "funding-pools") title.textContent = "資金池管理";
     else if (nextPage === "all-positions") title.textContent = "全用戶倉位管理";
     else if (!rootMode) title.textContent = nextPage === "chain" ? "積分管理" : "積分錢包";
@@ -474,8 +508,13 @@ function renderEconomyWalletOnboarding(onboarding) {
   if (!card) return;
   const rootMode = currentUser === "root";
   card.style.display = rootMode ? "none" : "";
-  if (rootMode) return;
+  const transferCard = $("economy-wallet-transfer-card");
+  if (rootMode) {
+    if (transferCard) transferCard.style.display = "none";
+    return;
+  }
   const wallet = onboarding?.wallet || null;
+  renderEconomyTransferWalletOptions(onboarding);
   const actions = $("economy-wallet-onboarding-actions");
   const boundActions = $("economy-wallet-bound-actions");
   const deleteColdBtn = $("economy-wallet-delete-cold-btn");
@@ -507,6 +546,78 @@ function renderEconomyWalletOnboarding(onboarding) {
   if ($("economy-wallet-identity-status")) $("economy-wallet-identity-status").textContent = wallet?.status || "-";
   if ($("economy-wallet-signup-bonus")) {
     $("economy-wallet-signup-bonus").textContent = onboarding?.signup_bonus_granted ? "已領取" : "待領取";
+  }
+}
+
+function renderEconomyTransferWalletOptions(onboarding = {}) {
+  const card = $("economy-wallet-transfer-card");
+  const select = $("economy-transfer-source-wallet");
+  if (!card || !select) return;
+  const wallets = Array.isArray(onboarding.wallets)
+    ? onboarding.wallets.filter((wallet) => {
+      const status = String(wallet.status || "");
+      const mode = String(wallet.custody_mode || "");
+      const type = String(wallet.wallet_type || "");
+      return status === "active" && mode !== "system" && !["mint", "burn"].includes(type) && wallet.address;
+    })
+    : [];
+  card.style.display = wallets.length ? "" : "none";
+  if (!wallets.length) {
+    select.innerHTML = `<option value="">尚無可用錢包</option>`;
+    return;
+  }
+  const previous = select.value;
+  select.innerHTML = wallets.map((wallet) => {
+    const primary = wallet.is_primary ? " · primary" : "";
+    const label = `${formatEconomyWalletIdentityType(wallet.wallet_type)}${primary} · ${shortEconomyWalletAddress(wallet.address)}`;
+    return `<option value="${sanitize(wallet.address)}">${sanitize(label)}</option>`;
+  }).join("");
+  if (previous && wallets.some((wallet) => wallet.address === previous)) select.value = previous;
+}
+
+async function submitEconomyWalletTransfer() {
+  const btn = $("economy-transfer-submit-btn");
+  const source = String($("economy-transfer-source-wallet")?.value || "").trim();
+  const destination = String($("economy-transfer-destination-wallet")?.value || "").trim();
+  const amount = Math.floor(Number($("economy-transfer-amount")?.value || 0));
+  const fee = Math.floor(Number($("economy-transfer-fee")?.value || 0));
+  const memo = String($("economy-transfer-memo")?.value || "").trim();
+  if (!source || !destination || !Number.isFinite(amount) || amount <= 0 || !Number.isFinite(fee) || fee < 0) {
+    economyTransferMsg("請確認 From、To、Value 與 Transaction Fee", false);
+    return;
+  }
+  const oldText = btn ? btn.textContent : "";
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "送單中...";
+    }
+    const json = await fetchEconomyJson("/points/transactions/submit", {
+      method: "POST",
+      body: JSON.stringify({
+        source_wallet_address: source,
+        destination_wallet_address: destination,
+        amount_points: amount,
+        fee_points: fee,
+        memo,
+        request_uuid: economyRequestId("points_chain_transfer"),
+      }),
+    });
+    const txHash = json.tx_group_hash || json.transaction?.transaction_hash || "";
+    economyTransferMsg(`交易已送出：${txHash}，等待 20/20 Proved；成交前收款方不會入帳。`);
+    if (txHash) {
+      if ($("economy-explorer-query")) $("economy-explorer-query").value = txHash;
+      setEconomyActivePage("explorer");
+      await searchEconomyExplorer(txHash);
+    }
+    await loadEconomyDashboard();
+  } catch (err) {
+    economyTransferMsg(err.message || "鏈上送單失敗", false);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || "送出交易";
+    }
   }
 }
 
@@ -1159,7 +1270,7 @@ async function loadEconomyDashboard() {
     if ($("economy-user-summary-grid")) $("economy-user-summary-grid").style.display = rootMode ? "none" : "";
     if ($("economy-user-ledger-card")) $("economy-user-ledger-card").style.display = rootMode ? "none" : "";
     setEconomyRootLayout(rootMode);
-    if (adminCard) adminCard.style.display = canManagePoints ? "" : "none";
+    if (adminCard) adminCard.style.display = "none";
     if (rootMode) {
       if ($("economy-chain-ok")) $("economy-chain-ok").textContent = "讀取中";
       if ($("economy-chain-countdown")) $("economy-chain-countdown").textContent = "封塊進度：讀取中...";
@@ -1181,12 +1292,8 @@ async function loadEconomyDashboard() {
       renderEconomyLedger(ledger.ledger || []);
       renderEconomyCatalog(catalog.catalog || []);
     }
-    if (canManagePoints) {
-      loadEconomyAdmin();
-    } else {
-      if ($("economy-admin-ledger-list")) $("economy-admin-ledger-list").innerHTML = "";
-      if ($("economy-pending-list")) $("economy-pending-list").innerHTML = "";
-    }
+    if ($("economy-admin-ledger-list")) $("economy-admin-ledger-list").innerHTML = "";
+    if ($("economy-pending-list")) $("economy-pending-list").innerHTML = "";
     const rootCard = $("economy-root-card");
     if (rootCard) rootCard.style.display = currentUser === "root" ? "" : "none";
     const rootReportOk = rootMode ? await loadEconomyRootReport() : true;
@@ -1642,6 +1749,310 @@ async function rollbackEconomyLedger() {
   }
 }
 
+function economyExplorerSecondsText(seconds) {
+  const value = Math.max(0, Number(seconds || 0));
+  if (value <= 0) return "已達成";
+  if (value < 60) return `${value} 秒`;
+  const minutes = Math.floor(value / 60);
+  const rest = value % 60;
+  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`;
+}
+
+function stopEconomyExplorerCountdown() {
+  if (economyExplorerCountdownTimer) {
+    clearInterval(economyExplorerCountdownTimer);
+    economyExplorerCountdownTimer = null;
+  }
+}
+
+function startEconomyExplorerCountdown() {
+  stopEconomyExplorerCountdown();
+  const card = document.querySelector("#economy-explorer-result .economy-explorer-finality");
+  if (!card) return;
+  const status = String(card.dataset.finalityStatus || "");
+  if (status !== "pending") return;
+  let eta = Math.max(0, Number(card.dataset.etaSeconds || 0));
+  let next = Math.max(0, Number(card.dataset.nextProofEtaSeconds || 0));
+  const etaEl = card.querySelector("[data-finality-eta-text]");
+  const nextEl = card.querySelector("[data-finality-next-text]");
+  const query = economyExplorerLastQuery || $("economy-explorer-query")?.value || "";
+  economyExplorerCountdownTimer = setInterval(() => {
+    eta = Math.max(0, eta - 1);
+    next = Math.max(0, next - 1);
+    if (etaEl) etaEl.textContent = economyExplorerSecondsText(eta);
+    if (nextEl) nextEl.textContent = economyExplorerSecondsText(next);
+    if (next <= 0 || eta <= 0) {
+      stopEconomyExplorerCountdown();
+      if (query) searchEconomyExplorer(query);
+    }
+  }, 1000);
+}
+
+function economyExplorerFinalityCard(finality = {}) {
+  const target = Number(finality.target_proved_count || 20);
+  const proved = Math.max(0, Math.min(target, Number(finality.proved_count || 0)));
+  const percent = target > 0 ? Math.round((proved / target) * 100) : 0;
+  const feePolicy = finality.chain_fee_policy && typeof finality.chain_fee_policy === "object" ? finality.chain_fee_policy : {};
+  const status = finality.finality_status === "failed"
+    ? "未成交"
+    : finality.finality_status === "sealed"
+    ? "已封塊"
+    : finality.finality_status === "proved"
+      ? "已成交"
+      : "等待 Proved";
+  const eta = economyExplorerSecondsText(finality.eta_seconds || 0);
+  const pending = String(finality.finality_status || "") === "pending";
+  const nextProofEta = pending
+    ? ` · 下一個 Proved 約 <span data-finality-next-text>${sanitize(economyExplorerSecondsText(finality.next_proof_eta_seconds || 0))}</span>`
+    : "";
+  const accelerated = finality.acceleration_fee_paid_points
+    ? ` · 鏈上加速費用 ${formatEconomyPointsValue(finality.acceleration_fee_paid_points)} 點 → ${finality.acceleration_fee_destination_label || "BURN 銷毀錢包"}`
+    : "";
+  const feeNote = feePolicy.base_fee_exempt
+    ? ` · ${feePolicy.exemption_reason || "設定自動發放交易免鏈上費用"}`
+    : "";
+  return `
+    <div class="economy-explorer-finality" data-finality-status="${sanitize(finality.finality_status || "")}" data-eta-seconds="${Number(finality.eta_seconds || 0)}" data-next-proof-eta-seconds="${Number(finality.next_proof_eta_seconds || 0)}">
+      <div class="drive-card-heading">
+        <div>
+          <div class="drive-card-title">${sanitize(status)} · ${proved}/${target} Proved</div>
+          <div class="drive-card-sub">${sanitize(finality.human_rule || "20 Proved 約 2-3 分鐘成交")} · ETA <span data-finality-eta-text>${sanitize(eta)}</span>${nextProofEta}${sanitize(feeNote)}${sanitize(accelerated)}</div>
+        </div>
+        <span class="economy-explorer-badge">${sanitize(finality.block_status || "unsealed")}</span>
+      </div>
+      <div class="economy-explorer-progress"><span style="width:${Math.max(0, Math.min(100, percent))}%;"></span></div>
+    </div>
+  `;
+}
+
+function economyExplorerFlowHtml(tx = {}) {
+  const flow = tx.wallet_flow && typeof tx.wallet_flow === "object" ? tx.wallet_flow : {};
+  const source = flow.source_wallet_address || "";
+  const dest = flow.destination_wallet_address || "";
+  const addressNode = (label, address) => address
+    ? `<button class="economy-explorer-address" type="button" data-explorer-query="${sanitize(address)}">${sanitize(label)}<strong>${sanitize(shortEconomyWalletAddress(address))}</strong></button>`
+    : `<span class="economy-explorer-address">${sanitize(label)}<strong>-</strong></span>`;
+  return `
+    <div class="economy-explorer-flow">
+      ${addressNode(flow.source_label || "來源", source)}
+      <span>→</span>
+      ${addressNode(flow.destination_label || "目的", dest)}
+    </div>
+  `;
+}
+
+function economyExplorerTxCard(tx = {}) {
+  const block = tx.block || null;
+  const finality = tx.finality || {};
+  const feePolicy = finality.chain_fee_policy && typeof finality.chain_fee_policy === "object" ? finality.chain_fee_policy : {};
+  const pending = !["sealed", "proved"].includes(String(finality.finality_status || ""));
+  const canAccelerate = pending && feePolicy.acceleration_allowed !== false;
+  const flow = tx.wallet_flow && typeof tx.wallet_flow === "object" ? tx.wallet_flow : {};
+  const feeText = feePolicy.base_fee_exempt
+    ? "免除"
+    : `${formatEconomyPointsValue(finality.transaction_fee_points || finality.acceleration_fee_paid_points || 0)} 點`;
+  const gasPriceText = feePolicy.base_fee_exempt
+    ? "0 points/proved"
+    : `${finality.gas_price_points_per_proved || 0} points/proved`;
+  return `
+    <div class="drive-card economy-explorer-card">
+      <div class="drive-card-heading">
+        <div>
+          <div class="drive-card-title">交易 ${sanitize(shortEconomyWalletAddress(tx.ledger_hash || tx.ledger_uuid || ""))}</div>
+          <div class="drive-card-sub">${sanitize(formatEconomyLedgerAction(tx.action_type))} · ${sanitize(tx.created_at || "")}</div>
+        </div>
+        <strong>${sanitize(formatEconomyLedgerAmount(tx))}</strong>
+      </div>
+      <div class="economy-explorer-kv">
+        <span>Transaction Hash</span><code>${sanitize(tx.ledger_hash || "-")}</code>
+        <span>Status</span><code>${sanitize(finality.finality_status || tx.status || "-")} · ${Number(finality.proved_count || 0)}/${Number(finality.target_proved_count || 20)} Proved</code>
+        <span>Block</span>${block ? `<button type="button" data-explorer-query="${sanitize(String(block.block_number || ""))}">#${Number(block.block_number || 0)} · ${sanitize(shortEconomyWalletAddress(block.block_hash || ""))}</button>` : `<code>Pending / Unsealed</code>`}
+        <span>Timestamp</span><code>${sanitize(tx.created_at || "-")}</code>
+        <span>From</span>${flow.source_wallet_address ? `<button type="button" data-explorer-query="${sanitize(flow.source_wallet_address)}">${sanitize(flow.source_wallet_address)}</button>` : `<code>-</code>`}
+        <span>To</span>${flow.destination_wallet_address ? `<button type="button" data-explorer-query="${sanitize(flow.destination_wallet_address)}">${sanitize(flow.destination_wallet_address)}</button>` : `<code>-</code>`}
+        <span>Value</span><code>${sanitize(formatEconomyLedgerAmount(tx))}</code>
+        <span>Transaction Fee</span><code>${sanitize(feeText)}</code>
+        <span>Gas Price</span><code>${sanitize(gasPriceText)}</code>
+        <span>Input Data</span><code>${sanitize(JSON.stringify(tx.input_data || {}))}</code>
+        <span>Ledger UUID</span><button type="button" data-explorer-query="${sanitize(tx.ledger_uuid || "")}">${sanitize(tx.ledger_uuid || "-")}</button>
+        <span>Previous</span><code>${sanitize(tx.previous_ledger_hash || "-")}</code>
+      </div>
+      ${economyExplorerFlowHtml(tx)}
+      ${economyExplorerFinalityCard(finality)}
+      ${canAccelerate ? `
+        <div class="economy-explorer-accelerate">
+          <div class="field"><label>鏈上費用</label><input type="number" id="economy-explorer-accelerate-fee" min="1" max="10000" value="10" /></div>
+          <button class="btn" id="economy-explorer-accelerate-btn" type="button" data-ledger-ref="${sanitize(tx.ledger_uuid || tx.ledger_hash || "")}">提高費用</button>
+        </div>
+      ` : pending && feePolicy.base_fee_exempt ? `<div class="drive-card-sub economy-explorer-fee-note">${sanitize(feePolicy.exemption_reason || "設定自動發放交易免鏈上費用")}</div>` : ""}
+    </div>
+  `;
+}
+
+function economyExplorerWalletCard(wallet = {}) {
+  const rows = Array.isArray(wallet.recent_transactions) ? wallet.recent_transactions : [];
+  return `
+    <div class="drive-card economy-explorer-card">
+      <div class="drive-card-heading">
+        <div>
+          <div class="drive-card-title">錢包 ${sanitize(shortEconomyWalletAddress(wallet.address || ""))}</div>
+          <div class="drive-card-sub">${sanitize(wallet.wallet_type || "-")} · ${sanitize(wallet.status || "-")}${wallet.fund_key ? ` · ${sanitize(wallet.fund_key)}` : ""}</div>
+        </div>
+        <strong>${formatEconomyPointsValue(wallet.points_balance || 0)} 點</strong>
+      </div>
+      <div class="economy-explorer-kv">
+        <span>地址</span><code>${sanitize(wallet.address || "-")}</code>
+        <span>凍結</span><code>${formatEconomyPointsValue(wallet.points_frozen || 0)} 點</code>
+        <span>交易數</span><code>${Number(wallet.transaction_count || 0)}</code>
+        <span>成交條件</span><code>${sanitize(wallet.human_rule || "20 Proved 約 2-3 分鐘成交")}</code>
+      </div>
+      <div class="drive-file-list economy-explorer-tx-list">
+        ${rows.length ? rows.map((tx) => `
+          <div class="drive-file-row">
+            <div>
+              <strong>${sanitize(formatEconomyLedgerAmount(tx))} · ${sanitize(formatEconomyLedgerAction(tx.action_type))}</strong>
+              <div class="drive-card-sub">${sanitize(tx.created_at || "")} · ${sanitize(shortEconomyWalletAddress(tx.ledger_hash || ""))}</div>
+            </div>
+            <button class="btn btn-sm" type="button" data-explorer-query="${sanitize(tx.ledger_uuid || tx.ledger_hash || "")}">查看</button>
+          </div>
+        `).join("") : `<div class="drive-empty">沒有可顯示的鏈上交易</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function economyExplorerBlockCard(block = {}) {
+  const txs = Array.isArray(block.transactions) ? block.transactions : [];
+  return `
+    <div class="drive-card economy-explorer-card">
+      <div class="drive-card-heading">
+        <div>
+          <div class="drive-card-title">區塊 #${Number(block.block_number || 0)}</div>
+          <div class="drive-card-sub">${sanitize(block.seal_status || "-")} · ${sanitize(block.sealed_at || "")}</div>
+        </div>
+        <strong>${Number(block.ledger_count || 0)} tx</strong>
+      </div>
+      <div class="economy-explorer-kv">
+        <span>Block Hash</span><code>${sanitize(block.block_hash || "-")}</code>
+        <span>Previous</span><code>${sanitize(block.previous_block_hash || "-")}</code>
+        <span>Merkle Root</span><code>${sanitize(block.merkle_root || "-")}</code>
+        <span>Anchor</span><code>${sanitize(block.anchor_status || "-")}</code>
+      </div>
+      <div class="drive-file-list economy-explorer-tx-list">
+        ${txs.length ? txs.map((tx) => `
+          <div class="drive-file-row">
+            <div>
+              <strong>${sanitize(formatEconomyLedgerAmount(tx))} · ${sanitize(formatEconomyLedgerAction(tx.action_type))}</strong>
+              <div class="drive-card-sub">${sanitize(tx.created_at || "")} · ${sanitize(shortEconomyWalletAddress(tx.ledger_hash || ""))}</div>
+            </div>
+            <button class="btn btn-sm" type="button" data-explorer-query="${sanitize(tx.ledger_uuid || tx.ledger_hash || "")}">查看</button>
+          </div>
+        `).join("") : `<div class="drive-empty">此區塊沒有交易</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function bindEconomyExplorerResultEvents() {
+  const root = $("economy-explorer-result");
+  if (!root) return;
+  root.querySelectorAll("[data-explorer-query]").forEach((btn) => {
+    if (btn.dataset.explorerBound === "1") return;
+    btn.dataset.explorerBound = "1";
+    btn.addEventListener("click", () => {
+      const query = btn.dataset.explorerQuery || "";
+      if ($("economy-explorer-query")) $("economy-explorer-query").value = query;
+      searchEconomyExplorer(query);
+    });
+  });
+  const accelerateBtn = $("economy-explorer-accelerate-btn");
+  if (accelerateBtn && accelerateBtn.dataset.explorerBound !== "1") {
+    accelerateBtn.dataset.explorerBound = "1";
+    accelerateBtn.addEventListener("click", accelerateEconomyExplorerTx);
+  }
+}
+
+function renderEconomyExplorerResult(result) {
+  const wrap = $("economy-explorer-result");
+  if (!wrap) return;
+  stopEconomyExplorerCountdown();
+  if (!result) {
+    wrap.innerHTML = `<div class="drive-empty">查無鏈上資料</div>`;
+    return;
+  }
+  if (result.kind === "transaction") wrap.innerHTML = economyExplorerTxCard(result.transaction || {});
+  else if (result.kind === "wallet") wrap.innerHTML = economyExplorerWalletCard(result.wallet || {});
+  else if (result.kind === "block") wrap.innerHTML = economyExplorerBlockCard(result.block || {});
+  else wrap.innerHTML = `<div class="drive-empty">不支援的查詢結果</div>`;
+  bindEconomyExplorerResultEvents();
+  startEconomyExplorerCountdown();
+}
+
+async function searchEconomyExplorer(query = null) {
+  const input = $("economy-explorer-query");
+  const value = String(query ?? input?.value ?? "").trim();
+  if (!value) {
+    economyExplorerMsg("請輸入交易 hash、Ledger UUID、錢包地址或區塊", false);
+    return;
+  }
+  economyExplorerLastQuery = value;
+  if (input) input.value = value;
+  const btn = $("economy-explorer-search-btn");
+  const oldText = btn ? btn.textContent : "";
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "查詢中...";
+    }
+    const json = await fetchEconomyJson(`/points/explorer/search?q=${encodeURIComponent(value)}&limit=25`);
+    renderEconomyExplorerResult(json.result);
+    economyExplorerMsg("已更新鏈上資料");
+  } catch (err) {
+    renderEconomyExplorerResult(null);
+    economyExplorerMsg(err.message || "鏈上查詢失敗", false);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || "查詢";
+    }
+  }
+}
+
+async function accelerateEconomyExplorerTx() {
+  const btn = $("economy-explorer-accelerate-btn");
+  const ledgerRef = btn?.dataset?.ledgerRef || economyExplorerLastQuery;
+  const fee = Number($("economy-explorer-accelerate-fee")?.value || 0);
+  if (!ledgerRef || !Number.isFinite(fee) || fee <= 0) {
+    economyExplorerMsg("請輸入有效鏈上費用", false);
+    return;
+  }
+  const oldText = btn ? btn.textContent : "";
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "送出中...";
+    }
+    const json = await fetchEconomyJson("/points/explorer/accelerate", {
+      method: "POST",
+      body: JSON.stringify({
+        ledger_ref: ledgerRef,
+        fee_points: Math.floor(fee),
+        request_uuid: economyRequestId("points_chain_acceleration"),
+      }),
+    });
+    renderEconomyExplorerResult(json.result);
+    economyExplorerMsg("已送出鏈上加速費用");
+    await loadEconomyDashboard();
+  } catch (err) {
+    economyExplorerMsg(err.message || "加速失敗", false);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || "提高費用";
+    }
+  }
+}
+
 function bindEconomyInlineEvents() {
   if (economyInlineEventsBound) return;
   economyInlineEventsBound = true;
@@ -1655,6 +2066,9 @@ function bindEconomyInlineEvents() {
     ["economy-wallet-confirm-cold-btn", confirmColdWalletBinding],
     ["economy-wallet-create-multisig-btn", createMultisigWallet],
     ["economy-wallet-delete-cold-btn", deleteEconomyColdWallet],
+    ["economy-transfer-submit-btn", submitEconomyWalletTransfer],
+    ["economy-explorer-search-btn", () => searchEconomyExplorer()],
+    ["economy-explorer-refresh-btn", () => searchEconomyExplorer(economyExplorerLastQuery || $("economy-explorer-query")?.value || "")],
     ["economy-trading-export-btn", downloadEconomyTradingCsv],
     ["economy-ledger-export-btn", exportEconomyLedgerCsv],
     ["economy-admin-refresh-btn", loadEconomyAdmin],
@@ -1683,6 +2097,13 @@ function bindEconomyInlineEvents() {
     tab.dataset.economyPageBound = "1";
     tab.addEventListener("click", () => setEconomyActivePage(tab.dataset.economyPage || "balance"));
   });
+  const explorerInput = $("economy-explorer-query");
+  if (explorerInput && explorerInput.dataset.economyInlineBound !== "1") {
+    explorerInput.dataset.economyInlineBound = "1";
+    explorerInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") searchEconomyExplorer();
+    });
+  }
   document.addEventListener("hackme:account-context-changed", () => {
     economyActivePage = readEconomyActivePage();
     syncEconomySubpages(currentUser === "root");

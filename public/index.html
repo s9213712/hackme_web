@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260519-upscale-breakpoint" />
+  <link rel="stylesheet" href="/styles.css?v=20260521-chain-explorer-burn" />
   <link rel="stylesheet" href="/experiments.css?v=20260517-plane-view-angle" />
   <link rel="stylesheet" href="/i18n-language-switcher.css?v=20260520-deep-audit" />
 </head>
@@ -2495,6 +2495,7 @@
         <div class="mini-title" id="economy-page-title">PointsChain 積分錢包</div>
       <div class="tabs economy-subtabs" id="economy-subtabs" aria-label="積分系統分頁">
         <button class="tab active" id="tab-economy-balance" type="button" data-economy-page="balance">積分餘額</button>
+        <button class="tab" id="tab-economy-explorer" type="button" data-economy-page="explorer">鏈上瀏覽器</button>
         <button class="tab" id="tab-economy-funding-pools" type="button" data-economy-page="funding-pools" style="display:none;">資金池管理</button>
         <button class="tab" id="tab-economy-all-positions" type="button" data-economy-page="all-positions" style="display:none;">全用戶倉位管理</button>
         <button class="tab" id="tab-economy-positions" type="button" data-economy-page="positions">倉位管理</button>
@@ -2564,6 +2565,23 @@
       </div>
       <div class="msg" id="economy-wallet-onboarding-msg"></div>
       </div>
+      <div class="drive-card" id="economy-wallet-transfer-card" style="display:none;margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">鏈上送單</div>
+            <div class="drive-card-sub">像正式區塊鏈一樣由錢包地址送出交易；手續費進官方 Treasury。</div>
+          </div>
+        </div>
+        <div class="settings-option-grid">
+          <div class="field"><label>From</label><select id="economy-transfer-source-wallet"><option value="">尚無可用錢包</option></select></div>
+          <div class="field"><label>To</label><input type="text" id="economy-transfer-destination-wallet" placeholder="pc1..." autocomplete="off" /></div>
+          <div class="field"><label>Value</label><input type="number" id="economy-transfer-amount" min="1" value="1" /></div>
+          <div class="field"><label>Transaction Fee</label><input type="number" id="economy-transfer-fee" min="0" value="1" /></div>
+          <div class="field"><label>Input Data</label><input type="text" id="economy-transfer-memo" maxlength="180" placeholder="可留空" /></div>
+          <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-transfer-submit-btn" type="button">送出交易</button></div>
+        </div>
+        <div class="msg" id="economy-transfer-msg"></div>
+      </div>
       <div class="drive-card" id="economy-root-wallet-management-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
@@ -2595,6 +2613,30 @@
           <div id="economy-ledger-list" class="drive-file-list"></div>
         </div>
       </div>
+      </div>
+      <div class="economy-subpage" id="economy-explorer-page">
+        <div class="drive-card">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">PointsChain Explorer</div>
+              <div class="drive-card-sub">交易 hash、Ledger UUID、錢包地址、區塊 hash 或區塊高度</div>
+            </div>
+            <button class="btn" id="economy-explorer-refresh-btn" type="button">重新查詢</button>
+          </div>
+          <div class="settings-option-grid economy-explorer-rule-grid" style="margin-top:.75rem;">
+            <div><span class="drive-card-sub">成交條件</span><strong>20 Proved</strong><small>模擬鏈 finality</small></div>
+            <div><span class="drive-card-sub">預估時間</span><strong>2-3 分鐘</strong><small>一般鏈上費用</small></div>
+            <div><span class="drive-card-sub">加速</span><strong>鏈上費用</strong><small>提高費用會縮短預估</small></div>
+          </div>
+          <div class="economy-explorer-search">
+            <input type="text" id="economy-explorer-query" autocomplete="off" placeholder="pc1... / ledger uuid / hash / block" />
+            <button class="btn btn-primary" id="economy-explorer-search-btn" type="button">查詢</button>
+          </div>
+          <div class="msg" id="economy-explorer-msg"></div>
+        </div>
+        <div id="economy-explorer-result" class="economy-explorer-result">
+          <div class="drive-empty">尚未查詢鏈上資料</div>
+        </div>
       </div>
       <div class="economy-subpage" id="economy-positions-page">
       <div class="drive-card" id="economy-root-virtual-card" style="display:none;margin-top:.75rem;">
@@ -6773,7 +6815,7 @@
 <script src="/js/40-auth-users.js?v=20260517-avatar-cropper" defer></script>
 <script src="/js/50-admin.js?v=20260521-comfyui-local-main-args" defer></script>
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>
-<script src="/js/55-economy.js?v=20260517-trading-snapshot-warmup" defer></script>
+<script src="/js/55-economy.js?v=20260521-chain-explorer-burn" defer></script>
 <script src="/js/56-trading.js?v=20260517-trading-snapshot-warmup" defer></script>
 <script src="/js/57-platform-centers.js?v=20260520-diffusers-csrf-audit" defer></script>
 <script src="/js/58-profile-friends.js?v=20260517-profile-avatar-upload" defer></script>

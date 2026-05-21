@@ -1,6 +1,50 @@
 # Update Summary
 
-Release ID: `2026.05.21-189`
+Release ID: `2026.05.21-192`
+
+## 2026.05.21-192
+
+- Kept development isolated servers usable with seeded default accounts:
+  `HACKME_DEV_DEFAULT_ACCOUNT_PASSWORDS=1` plus disabled dev security no longer
+  re-flags root/admin/test for first-login password reset during bootstrap.
+- Made PointsChain explorer transaction, wallet, block, and search GET routes
+  public safe reads, matching the Etherscan-style requirement that anyone with a
+  transaction hash, block reference, or wallet address can inspect chain data.
+- Added regression coverage for the relaxed development bootstrap gate and for
+  explorer GET routes staying free of login/CSRF-safe wrappers.
+
+## 2026.05.21-191
+
+- Changed user wallet transfers to a blockchain-like pending flow: submit creates
+  a transaction hash and notifies sender/recipient, but does not credit the
+  recipient until the transaction reaches 20/20 Proved.
+- Added finality countdown refresh in the PointsChain explorer so pending
+  transactions visibly count toward the next Proved step and auto-refresh when a
+  proof mark is reached.
+- Added `/api/points/transactions/submit` for user-authorized wallet-to-wallet
+  transfers with selectable source wallet, destination address, value, fee, and
+  input data memo. Transaction fees route to the official Treasury wallet.
+- Added acceptance coverage for pending transfer notifications, no early
+  recipient credit, finality-triggered append-only ledger creation, and completed
+  notifications for both users.
+
+## 2026.05.21-190
+
+- Added a logged-in PointsChain explorer page for transaction hash, Ledger UUID,
+  wallet address, block hash, and block number lookup.
+- Added simulated finality status: 20 Proved is treated as settlement, with the
+  default estimate corrected to 2-3 minutes. Pending transactions now use a
+  deterministic proof schedule so `1/20` through `19/20` looks stable and
+  realistic instead of linearly jumping on refresh.
+- Added append-only chain acceleration requests. User-paid acceleration fees are
+  recorded as normal ledger debits and routed to BURN, with idempotency conflict
+  checks to prevent duplicate or mismatched fee effects.
+- Added a chain-fee exemption policy for configured automatic distributions
+  such as signup, genesis, birthday, game, and scheduled rewards. Root manual
+  official-wallet operations remain normal manual transactions and do not inherit
+  the exemption.
+- Added explorer route and frontend coverage for sanitized transaction, wallet,
+  block, and acceleration views.
 
 ## 2026.05.21-189
 

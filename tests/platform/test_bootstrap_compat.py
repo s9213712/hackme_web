@@ -458,3 +458,70 @@ def test_init_db_marks_existing_default_account_when_env_password_still_matches(
     row = conn.execute("SELECT must_change_password, is_default_password FROM users WHERE username='root'").fetchone()
     conn.close()
     assert row == (1, 1)
+
+
+def test_init_db_relaxes_default_password_gate_for_dev_default_accounts(tmp_path, monkeypatch):
+    db_path = tmp_path / "existing-default-dev.db"
+    schema_path = Path(__file__).resolve().parents[2] / "bootstrap.schema.sql"
+
+    conn = sqlite3.connect(db_path)
+    conn.executescript(schema_path.read_text(encoding="utf-8"))
+    now = "2026-01-01T00:00:00"
+    cur = conn.execute(
+        "INSERT INTO users (username, status, role, must_change_password, is_default_password, password_changed_at, created_at, updated_at) "
+        "VALUES (?, 'active', 'super_admin', 1, 1, ?, ?, ?)",
+        ("root", "2026-01-02T00:00:00", now, now),
+    )
+    conn.execute(
+        "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
+        (cur.lastrowid, "hash:RootDefault123!", now),
+    )
+    conn.commit()
+    conn.close()
+
+    missing_json = str(tmp_path / "missing.json")
+    original_state = dict(bootstrap._STATE)
+    monkeypatch.setenv("HTML_LEARNING_ROOT_PASSWORD", "RootDefault123!")
+    monkeypatch.setenv("HACKME_DEV_DEFAULT_ACCOUNT_PASSWORDS", "1")
+    monkeypatch.setenv("HACKME_DEV_SECURITY_ENABLED", "0")
+    monkeypatch.setenv("HACKME_DEV_SERVER_MODE", "dev_ready")
+
+    try:
+        bootstrap.configure_bootstrap_service(
+            get_db=_get_db_factory(str(db_path)),
+            db_path=str(db_path),
+            schema_path=str(schema_path),
+            legacy_fail_log=missing_json,
+            legacy_blocked_ips=missing_json,
+            legacy_rate_limit=missing_json,
+            legacy_audit_log=missing_json,
+            chain_seed="seed",
+            chain_hash=lambda prev_hash, entry_json: f"{prev_hash}:{len(entry_json)}",
+            load_json=lambda path: {},
+            normalize_text=lambda value: value if isinstance(value, str) else "",
+            hash_password=lambda value: f"hash:{value}",
+            verify_password=lambda hashed, raw: hashed == f"hash:{raw}",
+            audit=_noop,
+            refresh_system_settings=_noop,
+            init_system_settings_table=_noop,
+            seed_missing_settings=_noop,
+            import_legacy_settings_files=_noop,
+            default_settings={},
+        )
+        bootstrap.init_db(
+            ensure_secure_audit_columns=_noop,
+            ensure_user_columns=_noop,
+            ensure_appeal_columns=_noop,
+            ensure_session_columns=_ensure_session_columns,
+            ensure_security_support_schema=_noop,
+            ensure_official_chat_room=_noop,
+            hash_password=lambda value: f"hash:{value}",
+        )
+    finally:
+        bootstrap._STATE.clear()
+        bootstrap._STATE.update(original_state)
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT must_change_password, is_default_password FROM users WHERE username='root'").fetchone()
+    conn.close()
+    assert row == (0, 0)

@@ -10,9 +10,14 @@ from .economy_layer import (
     ensure_economy_layer_schema,
     economy_layer_report,
 )
-from .wallet_identity import ensure_wallet_identity_schema
+from .wallet_identity import WALLET_ADDRESS_RE, ensure_wallet_identity_schema
 
 globals().update({name: value for name, value in _schema.__dict__.items() if not name.startswith("__")})
+
+EXPLORER_FINALITY_PROVED_COUNT = 20
+EXPLORER_BASE_FINALITY_MIN_SECONDS = 120
+EXPLORER_BASE_FINALITY_MAX_SECONDS = 180
+EXPLORER_MAX_ACCELERATION_FEE_POINTS = 10000
 
 
 def _connection_path(conn):
@@ -717,8 +722,27 @@ class PointsLedgerService:
         except Exception:
             return ""
 
-    def _wallet_address_for_user_flow(self, conn, user_id):
-        address = self._primary_wallet_address_for_read(conn, user_id)
+    def _wallet_identity_row_for_user_address(self, conn, user_id, address, *, active_only=True):
+        address = str(address or "").strip().lower()
+        if not address:
+            return None
+        status_filter = "AND status IN ('pending_backup', 'active')" if active_only else ""
+        try:
+            return conn.execute(
+                f"""
+                SELECT * FROM points_wallet_identities
+                WHERE user_id=? AND address=?
+                {status_filter}
+                LIMIT 1
+                """,
+                (int(user_id), address),
+            ).fetchone()
+        except Exception:
+            return None
+
+    def _wallet_address_for_user_flow(self, conn, user_id, preferred_address=None):
+        preferred = self._wallet_identity_row_for_user_address(conn, user_id, preferred_address, active_only=False)
+        address = preferred["address"] if preferred else self._primary_wallet_address_for_read(conn, user_id)
         legacy_account = self._public_account_id(user_id)
         return address or legacy_account, ("用戶模擬鏈錢包" if address else "Legacy 帳本身份"), address, legacy_account
 
@@ -878,19 +902,59 @@ class PointsLedgerService:
             return "official_treasury"
         return None
 
+    def _is_configured_auto_distribution_action(self, action_type):
+        action = str(action_type or "")
+        configured_auto_actions = {
+            "daily_login",
+            "forum_post_reward",
+            "forum_comment_reward",
+            "content_like_reward",
+            "quality_post_bonus",
+            "bug_bounty_low",
+            "bug_bounty_medium",
+            "bug_bounty_high",
+            "new_user_signup_bonus",
+            "user_initial_grant",
+            "admin_initial_grant",
+            "birthday_gift",
+            "game_daily_quest",
+            "game_daily_challenge_reward",
+            "game_weekly_leaderboard_reward",
+            "trading_bot_weekly_competition_reward",
+            "reward_thread_author",
+            "admin_weekly_salary",
+        }
+        return action in configured_auto_actions or action.startswith("reward_")
+
+    def _explorer_chain_fee_policy(self, row):
+        fee_exempt = self._is_configured_auto_distribution_action(row["action_type"])
+        return {
+            "base_fee_exempt": fee_exempt,
+            "base_fee_destination_fund_key": "burn",
+            "base_fee_destination_label": "BURN 銷毀錢包",
+            "acceleration_allowed": not fee_exempt,
+            "exemption_reason": "設定自動發放交易免鏈上費用" if fee_exempt else "",
+            "manual_official_wallet_ops_are_auto": False,
+        }
+
     def _points_ledger_debit_destination_fund(self, action_type):
         action = str(action_type or "")
         if action in {"video_tip_debit"}:
             return None
-        if action.startswith("spend:") or action in {"video_boost_debit", "admin_adjust_debit"}:
+        if action in {"wallet_transfer_fee"}:
+            return "official_treasury"
+        if action.startswith("spend:") or action in {"video_boost_debit", "admin_adjust_debit", "chain_acceleration_fee"}:
             return "burn"
         if action.startswith("rollback:"):
             return "burn"
         return None
 
     def _ledger_wallet_flow_descriptor(self, conn, *, user_id, direction, action_type, public_metadata=None):
-        user_address, user_label, target_address, legacy_account = self._wallet_address_for_user_flow(conn, user_id)
         public_metadata = public_metadata if isinstance(public_metadata, dict) else {}
+        source_override = str(public_metadata.get("source_wallet_address") or "").strip().lower()
+        destination_override = str(public_metadata.get("destination_wallet_address") or "").strip().lower()
+        preferred_user_address = destination_override if direction in {"credit", "transfer_in"} else source_override
+        user_address, user_label, target_address, legacy_account = self._wallet_address_for_user_flow(conn, user_id, preferred_user_address)
         direction = str(direction or "")
         action_type = str(action_type or "")
         if direction in {"credit", "transfer_in"}:
@@ -904,6 +968,10 @@ class PointsLedgerService:
             elif action_type == "video_tip_platform_fee":
                 source_address = self._counterparty_user_address(conn, public_metadata.get("from_user_id"))
                 source_label = "平台費付款錢包"
+                source_fund_key = None
+            elif action_type == "wallet_transfer_in":
+                source_address = source_override
+                source_label = "轉帳付款錢包"
                 source_fund_key = None
             if source_fund_key:
                 source_label, source_address = self._economy_fund_flow_ref(source_fund_key)
@@ -927,6 +995,9 @@ class PointsLedgerService:
             if action_type == "video_tip_debit":
                 destination_address = self._counterparty_user_address(conn, public_metadata.get("to_user_id"))
                 destination_label = "打賞收款錢包"
+            elif action_type == "wallet_transfer_out":
+                destination_address = destination_override
+                destination_label = "轉帳收款錢包"
             if destination_fund_key:
                 destination_label, destination_address = self._economy_fund_flow_ref(destination_fund_key)
             walletized = bool(destination_fund_key or destination_address)
@@ -1056,6 +1127,8 @@ class PointsLedgerService:
 
     def _append_walletized_economy_event(self, conn, *, ledger_row, public_metadata=None, actor=None):
         public_metadata = public_metadata if isinstance(public_metadata, dict) else {}
+        if str(ledger_row["action_type"] or "") == "wallet_transfer_in":
+            return None, False
         snapshot = public_metadata.get("wallet_flow_snapshot")
         flow = dict(snapshot) if isinstance(snapshot, dict) else self._legacy_ledger_wallet_flow_descriptor(
             conn,
@@ -1097,6 +1170,467 @@ class PointsLedgerService:
             },
             actor=actor,
         )
+
+    def _wallet_identity_owner_for_address(self, conn, address):
+        address = str(address or "").strip().lower()
+        if not WALLET_ADDRESS_RE.fullmatch(address):
+            raise ValueError("wallet address format is invalid")
+        return conn.execute(
+            """
+            SELECT * FROM points_wallet_identities
+            WHERE address=? AND status IN ('pending_backup', 'active')
+            LIMIT 1
+            """,
+            (address,),
+        ).fetchone()
+
+    def _transfer_request_payload_hash(self, payload):
+        return sha256_text(canonical_json(payload))
+
+    def _transfer_request_ledgers(self, conn, request_uuid):
+        req = conn.execute(
+            "SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?",
+            (request_uuid,),
+        ).fetchone()
+        if not req:
+            return None
+        ledgers = {}
+        for key, column in (
+            ("transfer_out_ledger", "transfer_out_ledger_uuid"),
+            ("transfer_in_ledger", "transfer_in_ledger_uuid"),
+            ("fee_ledger", "fee_ledger_uuid"),
+        ):
+            ledger_uuid = req[column]
+            if ledger_uuid:
+                row = conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (ledger_uuid,)).fetchone()
+                ledgers[key] = self._explorer_public_ledger(conn, row) if row else None
+            else:
+                ledgers[key] = None
+        return {"request": dict(req), **ledgers}
+
+    def _explorer_find_transfer_request(self, conn, ref):
+        ref = str(ref or "").strip()
+        if not ref:
+            return None
+        return conn.execute(
+            """
+            SELECT *
+            FROM points_chain_transfer_requests
+            WHERE request_uuid=?
+               OR tx_group_hash=?
+               OR transfer_out_ledger_uuid=?
+               OR transfer_in_ledger_uuid=?
+               OR fee_ledger_uuid=?
+            LIMIT 1
+            """,
+            (ref, ref, ref, ref, ref),
+        ).fetchone()
+
+    def _pending_transfer_outgoing_for_address(self, conn, address, *, exclude_request_uuid=None):
+        address = str(address or "").strip().lower()
+        if not address:
+            return 0
+        sql = """
+            SELECT COALESCE(SUM(amount_points + fee_points), 0) AS pending_total
+            FROM points_chain_transfer_requests
+            WHERE source_wallet_address=? AND status='pending'
+        """
+        params = [address]
+        if exclude_request_uuid:
+            sql += " AND request_uuid<>?"
+            params.append(str(exclude_request_uuid))
+        row = conn.execute(sql, tuple(params)).fetchone()
+        return int((row["pending_total"] if row else 0) or 0)
+
+    def _wallet_identity_balance_for_address(self, conn, *, user_id, address):
+        state = self._wallet_identity_balances_for_user(conn, int(user_id))
+        balances = state.get("balances") or {}
+        payload = balances.get(str(address or "").strip().lower())
+        return int((payload or {}).get("balance") or 0)
+
+    def _transfer_request_public_payload(self, conn, req):
+        req = dict(req)
+        fee = int(req.get("fee_points") or 0)
+        estimate = self._explorer_finality_estimate(fee)
+        pseudo_ledger = {
+            "ledger_uuid": req["request_uuid"],
+            "ledger_hash": req["tx_group_hash"],
+            "created_at": req["created_at"],
+        }
+        schedule = self._explorer_finality_schedule(pseudo_ledger, estimate)
+        finality = self._explorer_finality_from_created(
+            created_at=req["created_at"],
+            estimate=estimate,
+            schedule=schedule,
+            sealed=False,
+            fee_policy={
+                "base_fee_exempt": False,
+                "base_fee_destination_fund_key": "official_treasury",
+                "base_fee_destination_label": "官方 Treasury 錢包",
+                "acceleration_allowed": False,
+                "exemption_reason": "",
+                "manual_official_wallet_ops_are_auto": False,
+            },
+            acceleration_fee_points=fee,
+        )
+        status = str(req.get("status") or "pending")
+        if status == "confirmed" and finality["finality_status"] == "pending":
+            finality.update({
+                "proved_count": EXPLORER_FINALITY_PROVED_COUNT,
+                "proved_remaining": 0,
+                "finality_status": "proved",
+                "eta_seconds": 0,
+                "next_proof_eta_seconds": 0,
+            })
+        elif status.startswith("failed"):
+            finality.update({
+                "finality_status": "failed",
+                "block_status": "failed",
+                "eta_seconds": 0,
+                "next_proof_eta_seconds": 0,
+            })
+        out_row = conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (req.get("transfer_out_ledger_uuid") or "",)).fetchone()
+        in_row = conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (req.get("transfer_in_ledger_uuid") or "",)).fetchone()
+        fee_row = conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (req.get("fee_ledger_uuid") or "",)).fetchone()
+        block = None
+        block_source = out_row or in_row or fee_row
+        if block_source and block_source["chain_block_id"]:
+            block_row = conn.execute("SELECT * FROM points_chain_blocks WHERE id=?", (block_source["chain_block_id"],)).fetchone()
+            if block_row:
+                block = {
+                    "block_number": int(block_row["block_number"]),
+                    "block_hash": block_row["block_hash"],
+                    "sealed_at": block_row["sealed_at"],
+                    "ledger_count": int(block_row["ledger_count"]),
+                }
+                finality["block_status"] = "sealed"
+        input_data = {"memo": req.get("memo") or "", "request_uuid": req["request_uuid"]}
+        return {
+            "ledger_uuid": req["request_uuid"],
+            "ledger_hash": req["tx_group_hash"],
+            "transaction_hash": req["tx_group_hash"],
+            "previous_ledger_hash": "",
+            "public_account_id": "",
+            "currency_type": DISPLAY_CURRENCY,
+            "direction": "transfer_out",
+            "amount": int(req.get("amount_points") or 0),
+            "action_type": "wallet_transfer",
+            "reference_type": "wallet_transfer",
+            "reference_id": req["tx_group_hash"],
+            "reason": "wallet transfer",
+            "input_data": input_data,
+            "status": status,
+            "created_at": req["created_at"],
+            "chain_block_id": block_source["chain_block_id"] if block_source else None,
+            "wallet_flow": {
+                "source_fund_key": None,
+                "destination_fund_key": None,
+                "source_label": "From",
+                "source_wallet_address": req["source_wallet_address"],
+                "destination_label": "To",
+                "destination_wallet_address": req["destination_wallet_address"],
+                "target_wallet_address": "",
+                "walletized": True,
+                "walletization_note": "pending requests do not credit the recipient until 20/20 Proved",
+            },
+            "block": block,
+            "finality": finality,
+            "transfer_ledgers": {
+                "transfer_out_ledger_uuid": req.get("transfer_out_ledger_uuid") or "",
+                "transfer_in_ledger_uuid": req.get("transfer_in_ledger_uuid") or "",
+                "fee_ledger_uuid": req.get("fee_ledger_uuid") or "",
+            },
+        }
+
+    def _notify_wallet_transfer_once(self, conn, *, user_id, notification_type, title, body, tx_group_hash):
+        try:
+            from services.system.notifications import create_notification_once_if_enabled
+            create_notification_once_if_enabled(
+                conn,
+                user_id=int(user_id),
+                type=notification_type,
+                title=title,
+                body=body,
+                link=f"/#economy-explorer:{tx_group_hash}",
+            )
+        except Exception:
+            return False
+        return True
+
+    def _notify_wallet_transfer_pending(self, conn, req):
+        amount = int(req["amount_points"] or 0)
+        fee = int(req["fee_points"] or 0)
+        tx_hash = req["tx_group_hash"]
+        self._notify_wallet_transfer_once(
+            conn,
+            user_id=req["sender_user_id"],
+            notification_type="points_chain_transfer_pending",
+            title="鏈上交易已送出",
+            body=f"交易 {tx_hash} 正在等待 20/20 Proved；Value {amount} 點，Fee {fee} 點。成交前收款方不會入帳。",
+            tx_group_hash=tx_hash,
+        )
+        self._notify_wallet_transfer_once(
+            conn,
+            user_id=req["recipient_user_id"],
+            notification_type="points_chain_transfer_pending",
+            title="收到待確認鏈上交易",
+            body=f"交易 {tx_hash} 正在等待 20/20 Proved；Value {amount} 點。成交前不會入帳。",
+            tx_group_hash=tx_hash,
+        )
+
+    def _notify_wallet_transfer_completed(self, conn, req):
+        amount = int(req["amount_points"] or 0)
+        fee = int(req["fee_points"] or 0)
+        tx_hash = req["tx_group_hash"]
+        self._notify_wallet_transfer_once(
+            conn,
+            user_id=req["sender_user_id"],
+            notification_type="points_chain_transfer_completed",
+            title="鏈上交易已成交",
+            body=f"交易 {tx_hash} 已達 20/20 Proved；已扣除 Value {amount} 點與 Fee {fee} 點。",
+            tx_group_hash=tx_hash,
+        )
+        self._notify_wallet_transfer_once(
+            conn,
+            user_id=req["recipient_user_id"],
+            notification_type="points_chain_transfer_completed",
+            title="鏈上交易已入帳",
+            body=f"交易 {tx_hash} 已達 20/20 Proved；已入帳 {amount} 點。",
+            tx_group_hash=tx_hash,
+        )
+
+    def _notify_wallet_transfer_failed(self, conn, req, reason):
+        tx_hash = req["tx_group_hash"]
+        body = f"交易 {tx_hash} 未成交：{public_currency_text(reason or '交易失敗')}"
+        self._notify_wallet_transfer_once(
+            conn,
+            user_id=req["sender_user_id"],
+            notification_type="points_chain_transfer_failed",
+            title="鏈上交易未成交",
+            body=body,
+            tx_group_hash=tx_hash,
+        )
+        self._notify_wallet_transfer_once(
+            conn,
+            user_id=req["recipient_user_id"],
+            notification_type="points_chain_transfer_failed",
+            title="鏈上交易未成交",
+            body=body,
+            tx_group_hash=tx_hash,
+        )
+
+    def _maybe_finalize_transfer_request_locked(self, conn, req, *, actor=None):
+        req = dict(req)
+        if str(req.get("status") or "") != "pending":
+            return conn.execute(
+                "SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?",
+                (req["request_uuid"],),
+            ).fetchone()
+        payload = self._transfer_request_public_payload(conn, req)
+        if payload["finality"]["finality_status"] != "proved":
+            return conn.execute(
+                "SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?",
+                (req["request_uuid"],),
+            ).fetchone()
+        total_required = int(req["amount_points"] or 0) + int(req["fee_points"] or 0)
+        available = self._wallet_identity_balance_for_address(
+            conn,
+            user_id=int(req["sender_user_id"]),
+            address=req["source_wallet_address"],
+        )
+        if available < total_required:
+            conn.execute(
+                "UPDATE points_chain_transfer_requests SET status='failed_insufficient_balance' WHERE request_uuid=? AND status='pending'",
+                (req["request_uuid"],),
+            )
+            failed = conn.execute(
+                "SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?",
+                (req["request_uuid"],),
+            ).fetchone()
+            self._notify_wallet_transfer_failed(conn, failed, "sender wallet has insufficient balance at finality")
+            return failed
+        common = {
+            "tx_group_hash": req["tx_group_hash"],
+            "source_wallet_address": req["source_wallet_address"],
+            "destination_wallet_address": req["destination_wallet_address"],
+            "memo": req["memo"] or "",
+        }
+        out_row, _ = self._record_transaction(
+            conn,
+            user_id=int(req["sender_user_id"]),
+            currency_type=DISPLAY_CURRENCY,
+            direction="transfer_out",
+            amount=int(req["amount_points"]),
+            action_type="wallet_transfer_out",
+            reference_type="wallet_transfer",
+            reference_id=req["tx_group_hash"],
+            idempotency_key=f"wallet_transfer:{req['request_uuid']}:out",
+            reason="wallet transfer",
+            public_metadata={**common, "to_wallet_address": req["destination_wallet_address"]},
+            actor=actor,
+        )
+        in_row, _ = self._record_transaction(
+            conn,
+            user_id=int(req["recipient_user_id"]),
+            currency_type=DISPLAY_CURRENCY,
+            direction="transfer_in",
+            amount=int(req["amount_points"]),
+            action_type="wallet_transfer_in",
+            reference_type="wallet_transfer",
+            reference_id=req["tx_group_hash"],
+            idempotency_key=f"wallet_transfer:{req['request_uuid']}:in",
+            reason="wallet transfer",
+            public_metadata={**common, "from_wallet_address": req["source_wallet_address"]},
+            actor=actor,
+        )
+        fee_row = None
+        if int(req["fee_points"] or 0):
+            fee_row, _ = self._record_transaction(
+                conn,
+                user_id=int(req["sender_user_id"]),
+                currency_type=DISPLAY_CURRENCY,
+                direction="debit",
+                amount=int(req["fee_points"]),
+                action_type="wallet_transfer_fee",
+                reference_type="wallet_transfer",
+                reference_id=req["tx_group_hash"],
+                idempotency_key=f"wallet_transfer:{req['request_uuid']}:fee",
+                reason="wallet transfer fee",
+                public_metadata={**common, "fee_destination_fund_key": "official_treasury"},
+                actor=actor,
+            )
+        conn.execute(
+            """
+            UPDATE points_chain_transfer_requests
+            SET transfer_out_ledger_uuid=?, transfer_in_ledger_uuid=?, fee_ledger_uuid=?, status='confirmed'
+            WHERE request_uuid=? AND status='pending'
+            """,
+            (
+                out_row["ledger_uuid"],
+                in_row["ledger_uuid"],
+                fee_row["ledger_uuid"] if fee_row else None,
+                req["request_uuid"],
+            ),
+        )
+        finalized = conn.execute(
+            "SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?",
+            (req["request_uuid"],),
+        ).fetchone()
+        self._notify_wallet_transfer_completed(conn, finalized)
+        return finalized
+
+    def submit_wallet_transaction(
+        self,
+        *,
+        actor,
+        source_wallet_address,
+        destination_wallet_address,
+        amount_points,
+        fee_points=None,
+        request_uuid=None,
+        memo="",
+    ):
+        actor_id = int(actor_value(actor, "id") or 0)
+        if actor_id <= 0:
+            raise PermissionError("login required")
+        amount = int(amount_points or 0)
+        if amount <= 0:
+            raise ValueError("amount_points must be positive")
+        fee = int(fee_points if fee_points not in (None, "") else max(1, amount // 1000))
+        if fee < 0:
+            raise ValueError("fee_points must be >= 0")
+        source = str(source_wallet_address or "").strip().lower()
+        destination = str(destination_wallet_address or "").strip().lower()
+        if source == destination:
+            raise ValueError("source and destination wallets must differ")
+        request_uuid = str(request_uuid or uuid.uuid4()).strip()[:120]
+        if not request_uuid:
+            raise ValueError("request_uuid required")
+        payload = {
+            "source_wallet_address": source,
+            "destination_wallet_address": destination,
+            "amount_points": amount,
+            "fee_points": fee,
+            "memo": str(memo or "")[:240],
+            "transaction_type": "wallet_transfer",
+        }
+        request_hash = self._transfer_request_payload_hash(payload)
+        tx_group_hash = sha256_text(f"points-chain-transfer:{request_uuid}:{request_hash}")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?",
+                (request_uuid,),
+            ).fetchone()
+            if existing:
+                if existing["request_hash"] != request_hash:
+                    raise ValueError("transaction idempotency key conflict")
+                existing = self._maybe_finalize_transfer_request_locked(conn, existing, actor=actor)
+                conn.commit()
+                return {
+                    "ok": True,
+                    "created": False,
+                    "tx_group_hash": existing["tx_group_hash"],
+                    "transaction": self._transfer_request_public_payload(conn, existing),
+                    **self._transfer_request_ledgers(conn, request_uuid),
+                }
+            source_wallet = self._wallet_identity_owner_for_address(conn, source)
+            destination_wallet = self._wallet_identity_owner_for_address(conn, destination)
+            if not source_wallet or int(source_wallet["user_id"] or 0) != actor_id:
+                raise PermissionError("source wallet does not belong to current user")
+            if source_wallet["wallet_type"] in {"mint", "burn"} or source_wallet["custody_mode"] == "system":
+                raise PermissionError("system wallets cannot be spent by user transaction")
+            if not destination_wallet or not destination_wallet["user_id"]:
+                raise ValueError("destination wallet is not a known user wallet")
+            if int(destination_wallet["user_id"]) == actor_id and source == destination:
+                raise ValueError("source and destination wallets must differ")
+            source_balance = self._wallet_identity_balance_for_address(conn, user_id=actor_id, address=source)
+            pending_outgoing = self._pending_transfer_outgoing_for_address(conn, source)
+            if source_balance - pending_outgoing < amount + fee:
+                raise ValueError("insufficient balance for pending wallet transaction")
+            conn.execute(
+                """
+                INSERT INTO points_chain_transfer_requests (
+                    request_uuid, request_hash, tx_group_hash, sender_user_id, recipient_user_id,
+                    source_wallet_address, destination_wallet_address, amount_points, fee_points,
+                    memo, transfer_out_ledger_uuid, transfer_in_ledger_uuid, fee_ledger_uuid, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', ?)
+                """,
+                (
+                    request_uuid,
+                    request_hash,
+                    tx_group_hash,
+                    actor_id,
+                    int(destination_wallet["user_id"]),
+                    source,
+                    destination,
+                    amount,
+                    fee,
+                    str(memo or "")[:240],
+                    utc_now(),
+                ),
+            )
+            req = conn.execute(
+                "SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?",
+                (request_uuid,),
+            ).fetchone()
+            self._notify_wallet_transfer_pending(conn, req)
+            conn.commit()
+            return {
+                "ok": True,
+                "created": True,
+                "tx_group_hash": tx_group_hash,
+                "transaction": self._transfer_request_public_payload(conn, req),
+                **self._transfer_request_ledgers(conn, request_uuid),
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def append_trading_reserve_economy_event(
         self,
@@ -1493,10 +2027,18 @@ class PointsLedgerService:
         account_frozen_before = int(wallet[frozen_col])
         identity_balances = self._wallet_identity_balances_for_user(conn, user_id)
         if identity_balances.get("has_identity"):
-            active_address = str(identity_balances.get("primary_address") or "")
-            if not active_address:
+            ledger_address = ""
+            if direction in {"credit", "transfer_in"}:
+                ledger_address = str(wallet_flow_snapshot.get("destination_wallet_address") or "")
+            elif direction in {"debit", "transfer_out", "reverse", "freeze"}:
+                ledger_address = str(wallet_flow_snapshot.get("source_wallet_address") or "")
+            elif direction == "unfreeze":
+                ledger_address = str(wallet_flow_snapshot.get("source_wallet_address") or wallet_flow_snapshot.get("destination_wallet_address") or "")
+            if ledger_address not in (identity_balances.get("balances") or {}):
+                ledger_address = str(identity_balances.get("primary_address") or "")
+            if not ledger_address:
                 raise ValueError("active wallet identity is required")
-            active = (identity_balances.get("balances") or {}).get(active_address, {"balance": 0, "frozen": 0})
+            active = (identity_balances.get("balances") or {}).get(ledger_address, {"balance": 0, "frozen": 0})
             balance_before = int(active.get("balance") or 0)
             frozen_before = int(active.get("frozen") or 0)
         else:
@@ -2579,6 +3121,545 @@ class PointsLedgerService:
             result = self._verify_chain_on_conn(conn)
             conn.commit()
             return result
+        finally:
+            conn.close()
+
+    def _explorer_acceleration_summary(self, conn, ledger_uuid):
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM points_chain_acceleration_requests
+            WHERE ledger_uuid=? AND status='accepted'
+            ORDER BY id ASC
+            """,
+            (str(ledger_uuid or ""),),
+        ).fetchall()
+        total_fee = sum(int(row["fee_points"] or 0) for row in rows)
+        latest = dict(rows[-1]) if rows else None
+        return {
+            "count": len(rows),
+            "total_fee_points": total_fee,
+            "latest_request": latest,
+        }
+
+    def _explorer_finality_estimate(self, fee_points=0):
+        fee = max(0, min(EXPLORER_MAX_ACCELERATION_FEE_POINTS, int(fee_points or 0)))
+        reduction = min(90, (fee // 10) * 5)
+        min_seconds = max(30, EXPLORER_BASE_FINALITY_MIN_SECONDS - reduction)
+        max_seconds = max(45, EXPLORER_BASE_FINALITY_MAX_SECONDS - reduction)
+        if max_seconds < min_seconds + 15:
+            max_seconds = min_seconds + 15
+        return {
+            "target_proved_count": EXPLORER_FINALITY_PROVED_COUNT,
+            "base_seconds_min": EXPLORER_BASE_FINALITY_MIN_SECONDS,
+            "base_seconds_max": EXPLORER_BASE_FINALITY_MAX_SECONDS,
+            "estimated_seconds_min": min_seconds,
+            "estimated_seconds_max": max_seconds,
+        }
+
+    def _explorer_finality_schedule(self, ledger, estimate):
+        target = EXPLORER_FINALITY_PROVED_COUNT
+        min_seconds = max(1, int(estimate.get("estimated_seconds_min") or EXPLORER_BASE_FINALITY_MIN_SECONDS))
+        max_seconds = max(min_seconds, int(estimate.get("estimated_seconds_max") or EXPLORER_BASE_FINALITY_MAX_SECONDS))
+        seed = sha256_text(f"{ledger['ledger_uuid']}:{ledger['ledger_hash']}:{ledger['created_at']}")
+        span = max(0, max_seconds - min_seconds)
+        settlement_seconds = min_seconds + (int(seed[:8], 16) % (span + 1 if span else 1))
+        first_proof = 4 + (int(seed[8:10], 16) % 9)
+        first_proof = min(first_proof, max(1, settlement_seconds // 3))
+        remaining = max(target - 1, settlement_seconds - first_proof)
+        weights = []
+        for index in range(target - 1):
+            offset = 10 + (index * 2)
+            weights.append(70 + (int(seed[offset:offset + 2] or seed[:2], 16) % 61))
+        total_weight = max(1, sum(weights))
+        marks = [first_proof]
+        elapsed = float(first_proof)
+        for weight in weights:
+            elapsed += remaining * weight / total_weight
+            marks.append(int(round(elapsed)))
+        marks[-1] = settlement_seconds
+        for index in range(1, len(marks)):
+            if marks[index] <= marks[index - 1]:
+                marks[index] = marks[index - 1] + 1
+        if marks[-1] > settlement_seconds:
+            overflow = marks[-1] - settlement_seconds
+            marks = [max(1, mark - round(overflow * (index / max(1, target - 1)))) for index, mark in enumerate(marks)]
+            marks[-1] = settlement_seconds
+        return {
+            "settlement_seconds": settlement_seconds,
+            "first_proof_seconds": first_proof,
+            "proof_marks": marks,
+        }
+
+    def _explorer_finality_from_created(self, *, created_at, estimate, schedule, sealed=False, fee_policy=None, acceleration_fee_points=0):
+        fee_policy = fee_policy or {}
+        created = parse_utc_timestamp(created_at)
+        elapsed = 0
+        if created:
+            elapsed = max(0, int((datetime.now(timezone.utc) - created).total_seconds()))
+        if sealed:
+            proved_count = EXPLORER_FINALITY_PROVED_COUNT
+            finality_status = "sealed"
+            eta_seconds = 0
+            next_proof_eta_seconds = 0
+        else:
+            marks = schedule["proof_marks"]
+            proved_count = sum(1 for mark in marks if elapsed >= mark)
+            finality_status = "proved" if proved_count >= EXPLORER_FINALITY_PROVED_COUNT else "pending"
+            eta_seconds = max(0, schedule["settlement_seconds"] - elapsed)
+            next_mark = next((mark for mark in marks if mark > elapsed), schedule["settlement_seconds"])
+            next_proof_eta_seconds = max(0, next_mark - elapsed)
+        return {
+            **estimate,
+            "proved_count": proved_count,
+            "proved_remaining": max(0, EXPLORER_FINALITY_PROVED_COUNT - proved_count),
+            "finality_status": finality_status,
+            "block_status": "sealed" if sealed else "unsealed",
+            "elapsed_seconds": elapsed,
+            "eta_seconds": eta_seconds,
+            "next_proof_eta_seconds": next_proof_eta_seconds,
+            "settlement_seconds": schedule["settlement_seconds"],
+            "first_proof_seconds": schedule["first_proof_seconds"],
+            "finality_simulation": "deterministic_proved_schedule_v1",
+            "transaction_fee_points": 0 if fee_policy.get("base_fee_exempt") else int(acceleration_fee_points or 0),
+            "gas_price_points_per_proved": (
+                0
+                if fee_policy.get("base_fee_exempt")
+                else round((int(acceleration_fee_points or 0) or 1) / EXPLORER_FINALITY_PROVED_COUNT, 4)
+            ),
+            "chain_fee_policy": fee_policy,
+            "human_rule": "20 Proved 約 2-3 分鐘成交",
+        }
+
+    def _explorer_finality_for_ledger(self, conn, ledger):
+        accel = self._explorer_acceleration_summary(conn, ledger["ledger_uuid"])
+        estimate = self._explorer_finality_estimate(accel["total_fee_points"])
+        fee_policy = self._explorer_chain_fee_policy(ledger)
+        schedule = self._explorer_finality_schedule(ledger, estimate)
+        finality = self._explorer_finality_from_created(
+            created_at=ledger["created_at"],
+            estimate=estimate,
+            schedule=schedule,
+            sealed=bool(ledger["chain_block_id"]),
+            fee_policy=fee_policy,
+            acceleration_fee_points=accel["total_fee_points"],
+        )
+        return {
+            **finality,
+            "accelerated": accel["count"] > 0,
+            "acceleration_request_count": accel["count"],
+            "acceleration_fee_paid_points": accel["total_fee_points"],
+            "acceleration_fee_destination_fund_key": "burn" if accel["total_fee_points"] else "",
+            "acceleration_fee_destination_label": "BURN 銷毀錢包" if accel["total_fee_points"] else "",
+            "latest_acceleration_request": accel["latest_request"],
+        }
+
+    def _explorer_find_ledger(self, conn, ref):
+        ref = str(ref or "").strip()
+        if not ref:
+            return None
+        return conn.execute(
+            """
+            SELECT *
+            FROM points_ledger
+            WHERE ledger_uuid=? OR ledger_hash=?
+            LIMIT 1
+            """,
+            (ref, ref),
+        ).fetchone()
+
+    def _explorer_public_ledger(self, conn, row):
+        flow = self._ledger_wallet_flow_for_read(conn, row)
+        public_metadata = _json_loads(row["public_metadata_json"], {})
+        input_data = {
+            key: value
+            for key, value in public_metadata.items()
+            if key not in {"wallet_flow_snapshot"}
+        } if isinstance(public_metadata, dict) else {}
+        block = None
+        if row["chain_block_id"]:
+            block_row = conn.execute("SELECT * FROM points_chain_blocks WHERE id=?", (row["chain_block_id"],)).fetchone()
+            if block_row:
+                block = {
+                    "block_number": int(block_row["block_number"]),
+                    "block_hash": block_row["block_hash"],
+                    "sealed_at": block_row["sealed_at"],
+                    "ledger_count": int(block_row["ledger_count"]),
+                }
+        return {
+            "ledger_uuid": row["ledger_uuid"],
+            "ledger_hash": row["ledger_hash"],
+            "previous_ledger_hash": row["previous_ledger_hash"],
+            "public_account_id": row["public_account_id"],
+            "currency_type": DISPLAY_CURRENCY,
+            "direction": row["direction"],
+            "amount": int(row["amount"] or 0),
+            "action_type": row["action_type"],
+            "reference_type": row["reference_type"],
+            "reference_id": row["reference_id"],
+            "reason": public_currency_text(row["reason"] or ""),
+            "input_data": input_data,
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "chain_block_id": row["chain_block_id"],
+            "wallet_flow": flow,
+            "block": block,
+            "finality": self._explorer_finality_for_ledger(conn, row),
+        }
+
+    def explorer_transaction(self, ref):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            row = self._explorer_find_ledger(conn, ref)
+            if row:
+                return {"kind": "transaction", "transaction": self._explorer_public_ledger(conn, row)}
+            req = self._explorer_find_transfer_request(conn, ref)
+            if not req:
+                return None
+            if str(req["status"] or "") == "pending":
+                conn.commit()
+                conn.execute("BEGIN IMMEDIATE")
+                req = self._explorer_find_transfer_request(conn, ref)
+                req = self._maybe_finalize_transfer_request_locked(
+                    conn,
+                    req,
+                    actor={"role": "system", "username": "pointschain", "id": None},
+                )
+                conn.commit()
+            return {"kind": "transaction", "transaction": self._transfer_request_public_payload(conn, req)}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _explorer_fund_key_for_address(self, address):
+        for fund_key in ("mint", "official_treasury", "promo_fund", "exchange_fund", "burn"):
+            if economy_fund_address(self.chain_secret, fund_key) == address:
+                return fund_key
+        return ""
+
+    def _explorer_address_balance_from_ledger(self, conn, address, *, limit=25):
+        like = f"%{address}%"
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM points_ledger
+            WHERE status='confirmed'
+              AND (public_account_id=? OR public_metadata_json LIKE ?)
+            ORDER BY id ASC
+            """,
+            (address, like),
+        ).fetchall()
+        balance = 0
+        frozen = 0
+        recent = []
+        received_count = 0
+        sent_count = 0
+        total_received = 0
+        total_sent = 0
+        fees_paid = 0
+        first_seen = None
+        latest_seen = None
+        for row in rows:
+            flow = self._ledger_wallet_flow_for_read(conn, row)
+            amount = int(row["amount"] or 0)
+            direction = str(row["direction"] or "")
+            source_address = str(flow.get("source_wallet_address") or "")
+            destination_address = str(flow.get("destination_wallet_address") or "")
+            matched = source_address == address or destination_address == address or row["public_account_id"] == address
+            if not matched:
+                continue
+            if direction in {"credit", "transfer_in"} and destination_address == address:
+                balance += amount
+                received_count += 1
+                total_received += amount
+            elif direction in {"debit", "transfer_out", "reverse"} and source_address == address:
+                balance -= amount
+                sent_count += 1
+                total_sent += amount
+                if str(row["action_type"] or "") in {"wallet_transfer_fee", "chain_acceleration_fee"}:
+                    fees_paid += amount
+            elif direction == "freeze" and source_address == address:
+                balance -= amount
+                frozen += amount
+            elif direction == "unfreeze" and (source_address == address or destination_address == address):
+                balance += amount
+                frozen -= amount
+            public_tx = self._explorer_public_ledger(conn, row)
+            recent.append(public_tx)
+            first_seen = first_seen or public_tx
+            latest_seen = public_tx
+        return {
+            "points_balance": balance,
+            "points_frozen": max(0, frozen),
+            "transaction_count": len(recent),
+            "received_tx_count": received_count,
+            "sent_tx_count": sent_count,
+            "total_received_points": total_received,
+            "total_sent_points": total_sent,
+            "fees_paid_points": fees_paid,
+            "first_transaction": first_seen,
+            "latest_transaction": latest_seen,
+            "token_holdings": [
+                {
+                    "token": "POINTS",
+                    "name": "PointsChain Points",
+                    "balance": balance,
+                    "frozen": max(0, frozen),
+                }
+            ],
+            "recent_transactions": list(reversed(recent[-min(100, max(1, int(limit or 25))):])),
+        }
+
+    def explorer_wallet(self, address, *, limit=25):
+        address = str(address or "").strip().lower()
+        legacy_account = bool(re.fullmatch(r"[a-f0-9]{64}", address))
+        if not legacy_account and not WALLET_ADDRESS_RE.fullmatch(address):
+            raise ValueError("wallet address format is invalid")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            identity = conn.execute(
+                """
+                SELECT address, wallet_type, custody_mode, key_algorithm, status, label, created_at
+                FROM points_wallet_identities
+                WHERE address=?
+                LIMIT 1
+                """,
+                (address,),
+            ).fetchone()
+            fund_key = self._explorer_fund_key_for_address(address) if not legacy_account else ""
+            balance_payload = self._explorer_address_balance_from_ledger(conn, address, limit=limit)
+            if fund_key:
+                report = economy_layer_report(conn, chain_secret=self.chain_secret, actor={"role": "system", "id": None})
+                fund = (report.get("funds") or {}).get(fund_key) or {}
+                balance_payload["points_balance"] = int(fund.get("balance") or 0)
+                balance_payload["points_frozen"] = 0
+            return {
+                "kind": "wallet",
+                "wallet": {
+                    "address": address,
+                    "legacy_account": legacy_account,
+                    "fund_key": fund_key,
+                    "label": fund_key.replace("_", " ").title() if fund_key else "",
+                    "address_type": "system_fund" if fund_key else ("legacy_account" if legacy_account else "wallet"),
+                    "wallet_type": fund_key or ("legacy_account" if legacy_account else "address"),
+                    "custody_mode": "system" if fund_key else "",
+                    "status": "active" if fund_key else "",
+                    "points_balance": balance_payload["points_balance"],
+                    "points_frozen": balance_payload["points_frozen"],
+                    "transaction_count": balance_payload["transaction_count"],
+                    "received_tx_count": balance_payload["received_tx_count"],
+                    "sent_tx_count": balance_payload["sent_tx_count"],
+                    "total_received_points": balance_payload["total_received_points"],
+                    "total_sent_points": balance_payload["total_sent_points"],
+                    "fees_paid_points": balance_payload["fees_paid_points"],
+                    "token_holdings": balance_payload["token_holdings"],
+                    "first_transaction": balance_payload["first_transaction"],
+                    "latest_transaction": balance_payload["latest_transaction"],
+                    "recent_transactions": balance_payload["recent_transactions"],
+                    "finality_rule": self._explorer_finality_estimate(0),
+                    "human_rule": "20 Proved 約 2-3 分鐘成交",
+                },
+            }
+        finally:
+            conn.close()
+
+    def _explorer_block_payload(self, conn, block):
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM points_ledger
+            WHERE chain_block_id=?
+            ORDER BY id ASC
+            LIMIT 100
+            """,
+            (block["id"],),
+        ).fetchall()
+        transactions = [self._explorer_public_ledger(conn, row) for row in rows]
+        total_fees = sum(
+            int(tx.get("amount") or 0)
+            for tx in transactions
+            if str(tx.get("action_type") or "") in {"wallet_transfer_fee", "chain_acceleration_fee"}
+        )
+        gas_used = int(block["ledger_count"] or 0) * 21_000
+        gas_limit = max(21_000, gas_used + 21_000)
+        signatures = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT node_id, signature_algorithm, public_key_fingerprint, signature, signed_at
+                FROM points_chain_block_signatures
+                WHERE block_id=?
+                ORDER BY id ASC
+                """,
+                (block["id"],),
+            ).fetchall()
+        ]
+        return {
+            "block_number": int(block["block_number"]),
+            "block_height": int(block["block_number"]),
+            "block_hash": block["block_hash"],
+            "previous_block_hash": block["previous_block_hash"],
+            "merkle_root": block["merkle_root"],
+            "ledger_count": int(block["ledger_count"]),
+            "transaction_count": int(block["ledger_count"]),
+            "first_ledger_id": int(block["first_ledger_id"]),
+            "last_ledger_id": int(block["last_ledger_id"]),
+            "sealed_at": block["sealed_at"],
+            "timestamp": block["sealed_at"],
+            "seal_status": block["seal_status"],
+            "anchor_status": block["anchor_status"],
+            "fee_recipient": economy_fund_address(self.chain_secret, "official_treasury"),
+            "gas_used": gas_used,
+            "gas_limit": gas_limit,
+            "gas_used_percent": round((gas_used / gas_limit) * 100, 2) if gas_limit else 0,
+            "base_fee_per_gas": "1 point/proved",
+            "total_transaction_fees_points": total_fees,
+            "signatures": signatures,
+            "transactions": transactions,
+        }
+
+    def explorer_block(self, ref):
+        ref = str(ref or "").strip()
+        if not ref:
+            return None
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            if ref.isdigit():
+                block = conn.execute("SELECT * FROM points_chain_blocks WHERE block_number=?", (int(ref),)).fetchone()
+            else:
+                block = conn.execute("SELECT * FROM points_chain_blocks WHERE block_hash=?", (ref,)).fetchone()
+            if not block:
+                return None
+            return {"kind": "block", "block": self._explorer_block_payload(conn, block)}
+        finally:
+            conn.close()
+
+    def explorer_lookup(self, query, *, limit=25):
+        query = str(query or "").strip()
+        if not query:
+            raise ValueError("query required")
+        tx = self.explorer_transaction(query)
+        if tx:
+            return tx
+        block = self.explorer_block(query)
+        if block:
+            return block
+        normalized = query.lower()
+        if WALLET_ADDRESS_RE.fullmatch(normalized) or re.fullmatch(r"[a-f0-9]{64}", normalized):
+            return self.explorer_wallet(normalized, limit=limit)
+        return None
+
+    def _explorer_actor_can_accelerate(self, conn, *, actor, ledger):
+        role = actor_value(actor, "role", "user")
+        username = actor_value(actor, "username", "")
+        if username == "root" or role in {"manager", "super_admin"}:
+            return True
+        actor_id = int(actor_value(actor, "id") or 0)
+        if actor_id and int(ledger["user_id"]) == actor_id:
+            return True
+        flow = self._ledger_wallet_flow_for_read(conn, ledger)
+        addresses = {self._public_account_id(actor_id)}
+        state = self._wallet_identity_state_for_user(conn, actor_id)
+        addresses.update(state.get("addresses") or set())
+        return any(str(flow.get(key) or "") in addresses for key in ("source_wallet_address", "destination_wallet_address", "target_wallet_address"))
+
+    def accelerate_explorer_transaction(self, *, actor, ledger_ref, fee_points, request_uuid=None):
+        actor_id = int(actor_value(actor, "id") or 0)
+        if actor_id <= 0:
+            raise PermissionError("login required")
+        fee = int(fee_points or 0)
+        if fee <= 0:
+            raise ValueError("fee_points must be positive")
+        if fee > EXPLORER_MAX_ACCELERATION_FEE_POINTS:
+            raise ValueError(f"fee_points must be <= {EXPLORER_MAX_ACCELERATION_FEE_POINTS}")
+        request_uuid = str(request_uuid or uuid.uuid4()).strip()[:120]
+        if not request_uuid:
+            raise ValueError("request_uuid required")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            ledger = self._explorer_find_ledger(conn, ledger_ref)
+            if not ledger:
+                raise ValueError("ledger not found")
+            fee_policy = self._explorer_chain_fee_policy(ledger)
+            if not fee_policy["acceleration_allowed"]:
+                raise ValueError(fee_policy["exemption_reason"] or "this transaction is chain-fee exempt")
+            if not self._explorer_actor_can_accelerate(conn, actor=actor, ledger=ledger):
+                raise PermissionError("permission denied")
+            existing = conn.execute(
+                "SELECT * FROM points_chain_acceleration_requests WHERE request_uuid=?",
+                (request_uuid,),
+            ).fetchone()
+            if existing:
+                if existing["ledger_uuid"] != ledger["ledger_uuid"] or int(existing["fee_points"] or 0) != fee:
+                    raise ValueError("acceleration idempotency key conflict")
+                conn.commit()
+                refreshed = conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (ledger["ledger_uuid"],)).fetchone()
+                return {
+                    "ok": True,
+                    "created": False,
+                    "acceleration": dict(existing),
+                    "result": {"kind": "transaction", "transaction": self._explorer_public_ledger(conn, refreshed)},
+                }
+            estimate = self._explorer_finality_estimate(fee)
+            fee_ledger, _created = self._record_transaction(
+                conn,
+                user_id=actor_id,
+                currency_type=DISPLAY_CURRENCY,
+                direction="debit",
+                amount=fee,
+                action_type="chain_acceleration_fee",
+                reference_type="points_chain_explorer",
+                reference_id=ledger["ledger_uuid"],
+                idempotency_key=f"points_chain_acceleration:{request_uuid}",
+                reason="鏈上交易加速費用",
+                public_metadata={
+                    "accelerated_ledger_uuid": ledger["ledger_uuid"],
+                    "accelerated_ledger_hash": ledger["ledger_hash"],
+                    "target_proved_count": EXPLORER_FINALITY_PROVED_COUNT,
+                },
+                actor=actor,
+            )
+            now = utc_now()
+            conn.execute(
+                """
+                INSERT INTO points_chain_acceleration_requests (
+                    request_uuid, ledger_uuid, payer_user_id, fee_points, target_proved_count,
+                    estimated_seconds_min, estimated_seconds_max, fee_ledger_uuid, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'accepted', ?)
+                """,
+                (
+                    request_uuid,
+                    ledger["ledger_uuid"],
+                    actor_id,
+                    fee,
+                    EXPLORER_FINALITY_PROVED_COUNT,
+                    estimate["estimated_seconds_min"],
+                    estimate["estimated_seconds_max"],
+                    fee_ledger["ledger_uuid"],
+                    now,
+                ),
+            )
+            conn.commit()
+            refreshed = conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (ledger["ledger_uuid"],)).fetchone()
+            created_row = conn.execute("SELECT * FROM points_chain_acceleration_requests WHERE request_uuid=?", (request_uuid,)).fetchone()
+            return {
+                "ok": True,
+                "created": True,
+                "acceleration": dict(created_row),
+                "fee_ledger": self._explorer_public_ledger(conn, fee_ledger),
+                "result": {"kind": "transaction", "transaction": self._explorer_public_ledger(conn, refreshed)},
+            }
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

@@ -398,6 +398,12 @@ curl -k -sS https://127.0.0.1:5000/api/version
 |---|---|---|---|
 | GET | `/api/points/wallet` | logged-in | 積分錢包 |
 | GET | `/api/points/ledger` | logged-in | 個人 ledger |
+| GET | `/api/points/explorer/search?q=<query>` | public safe GET | PointsChain explorer 查交易 hash、Ledger UUID、錢包地址或區塊 |
+| GET | `/api/points/explorer/tx/<ledger_ref>` | public safe GET | 查單筆鏈上交易 |
+| GET | `/api/points/explorer/wallet/<address>` | public safe GET | 查錢包餘額與近期交易 |
+| GET | `/api/points/explorer/block/<block_ref>` | public safe GET | 查區塊狀態與交易列表 |
+| POST | `/api/points/explorer/accelerate` | logged-in | 送出模擬鏈交易加速費；費用走 append-only ledger debit 並進 BURN。設定驅動自動發放交易免鏈上費用；root 人工操作官方錢包不算自動發放 |
+| POST | `/api/points/transactions/submit` | logged-in | 用戶以自己的錢包地址送出 wallet-to-wallet 模擬鏈交易；pending 時只產生 transaction hash 與通知，不入帳收款方；達 20/20 Proved 後才 append ledger，並通知雙方成交 |
 | GET | `/api/points/wallet/export.csv` | logged-in | 匯出錢包 |
 | GET | `/api/points/catalog` | logged-in | 點數商品目錄 |
 | GET/PUT | `/api/root/economy/catalog` | root | root 調整商品目錄 |

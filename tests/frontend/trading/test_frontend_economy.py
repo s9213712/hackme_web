@@ -47,16 +47,19 @@ def test_root_points_page_is_chain_operations_console():
     assert '最近 50 筆收入 / 支出明細' in index_html
     assert 'id="economy-subtabs"' in index_html
     assert 'id="tab-economy-balance"' in index_html
+    assert 'id="tab-economy-explorer"' in index_html
     assert 'id="tab-economy-funding-pools"' in index_html
     assert 'id="tab-economy-all-positions"' in index_html
     assert 'id="tab-economy-positions"' in index_html
     assert 'id="tab-economy-chain"' in index_html
     assert 'id="economy-balance-page"' in index_html
+    assert 'id="economy-explorer-page"' in index_html
     assert 'id="economy-funding-pools-page"' in index_html
     assert 'id="economy-all-positions-page"' in index_html
     assert 'id="economy-positions-page"' in index_html
     assert 'id="economy-chain-page"' in index_html
-    economy_balance_page = index_html.split('id="economy-balance-page"', 1)[1].split('id="economy-positions-page"', 1)[0]
+    economy_balance_page = index_html.split('id="economy-balance-page"', 1)[1].split('id="economy-explorer-page"', 1)[0]
+    economy_explorer_page = index_html.split('id="economy-explorer-page"', 1)[1].split('id="economy-positions-page"', 1)[0]
     economy_positions_page = index_html.split('id="economy-positions-page"', 1)[1].split('id="economy-chain-page"', 1)[0]
     economy_chain_page = index_html.split('id="economy-chain-page"', 1)[1].split('id="economy-msg"', 1)[0]
     assert 'id="economy-user-summary-grid"' in economy_balance_page
@@ -71,6 +74,11 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-root-wallet-promo-address"' in economy_balance_page
     assert 'id="economy-root-wallet-exchange-address"' in economy_balance_page
     assert 'id="economy-root-wallet-burn-address"' in economy_balance_page
+    assert 'id="economy-explorer-query"' in economy_explorer_page
+    assert 'id="economy-explorer-search-btn"' in economy_explorer_page
+    assert 'id="economy-explorer-result"' in economy_explorer_page
+    assert "20 Proved" in economy_explorer_page
+    assert "2-3 分鐘" in economy_explorer_page
     assert 'id="economy-root-virtual-card"' in economy_positions_page
     assert 'id="economy-trading-summary-card"' in economy_positions_page
     assert 'id="economy-asset-overview-card"' in economy_positions_page
@@ -84,6 +92,10 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-wallet-bound-actions"' in index_html
     assert 'id="economy-wallet-delete-cold-btn"' in index_html
     assert "刪除後必須提供私鑰才能恢復同一地址" in index_html
+    assert 'id="economy-wallet-transfer-card"' in index_html
+    assert 'id="economy-transfer-source-wallet"' in index_html
+    assert 'id="economy-transfer-destination-wallet"' in index_html
+    assert 'id="economy-transfer-submit-btn"' in index_html
     assert 'id="economy-root-spot-position-list"' in index_html
     assert 'id="economy-root-margin-position-list"' in index_html
     assert 'id="economy-root-bot-position-list"' in index_html
@@ -168,7 +180,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "/js/90-bootstrap.js?v=" in index_html
     assert 'const rootMode = currentUser === "root";' in economy_js
     assert 'const canManagePoints = canManageEconomyPoints();' in economy_js
-    assert 'adminCard.style.display = canManagePoints ? "" : "none"' in economy_js
+    assert 'adminCard.style.display = "none"' in economy_js
     assert 'if ($("economy-admin-ledger-list")) $("economy-admin-ledger-list").innerHTML = "";' in economy_js
     assert 'if ($("economy-pending-list")) $("economy-pending-list").innerHTML = "";' in economy_js
     assert "function setEconomyActivePage(page" in economy_js
@@ -177,6 +189,7 @@ def test_root_points_page_is_chain_operations_console():
     assert 'positionsTab.style.display = positionsAvailable ? "" : "none";' in economy_js
     assert 'chainTab.textContent = rootMode ? "積分私有鏈" : "積分管理";' in economy_js
     assert 'if (nextPage === "positions") title.textContent = "倉位管理";' in economy_js
+    assert 'else if (nextPage === "explorer") title.textContent = "鏈上瀏覽器";' in economy_js
     assert 'else if (nextPage === "funding-pools") title.textContent = "資金池管理";' in economy_js
     assert 'else if (nextPage === "all-positions") title.textContent = "全用戶倉位管理";' in economy_js
     assert 'else title.textContent = nextPage === "chain" ? "積分私有鏈" : "錢包管理";' in economy_js
@@ -217,6 +230,21 @@ def test_root_points_page_is_chain_operations_console():
     assert 'currentUser === "root" || currentRole === "manager" || currentRole === "super_admin"' in economy_js
     assert "最後更新" in economy_js
     assert "bindEconomyInlineEvents" in economy_js
+    assert "function renderEconomyExplorerResult" in economy_js
+    assert 'fetchEconomyJson(`/points/explorer/search?q=${encodeURIComponent(value)}&limit=25`)' in economy_js
+    assert 'fetchEconomyJson("/points/explorer/accelerate"' in economy_js
+    assert 'fetchEconomyJson("/points/transactions/submit"' in economy_js
+    assert "function submitEconomyWalletTransfer()" in economy_js
+    assert "成交前收款方不會入帳" in economy_js
+    assert "設定自動發放交易免鏈上費用" in economy_js
+    assert "BURN 銷毀錢包" in economy_js
+    assert "下一個 Proved 約" in economy_js
+    assert "startEconomyExplorerCountdown" in economy_js
+    assert "data-finality-next-text" in economy_js
+    assert "Transaction Hash" in economy_js
+    assert "Transaction Fee" in economy_js
+    assert "Gas Price" in economy_js
+    assert "Input Data" in economy_js
     assert "economyAutoRefreshTimer" in economy_js
     assert 'currentModuleTab !== "economy"' in economy_js
     assert "function economyDashboardRefreshMs()" in economy_js

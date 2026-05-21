@@ -402,6 +402,144 @@
       word-break: break-all;
     }
 
+    .economy-explorer-rule-grid > div,
+    .economy-explorer-card,
+    .economy-explorer-finality {
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      background: rgba(255,255,255,.035);
+    }
+
+    .economy-explorer-rule-grid strong {
+      font-size: 1.2rem;
+    }
+
+    .economy-explorer-search {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: .55rem;
+      margin-top: .75rem;
+      align-items: center;
+    }
+
+    .economy-explorer-result {
+      margin-top: .75rem;
+    }
+
+    .economy-explorer-card {
+      padding: .95rem;
+    }
+
+    .economy-explorer-kv {
+      display: grid;
+      grid-template-columns: minmax(110px, .28fr) minmax(0, 1fr);
+      gap: .42rem .65rem;
+      margin-top: .75rem;
+      align-items: start;
+      font-size: .86rem;
+    }
+
+    .economy-explorer-kv span {
+      color: var(--muted);
+    }
+
+    .economy-explorer-kv code,
+    .economy-explorer-kv button,
+    .economy-explorer-address strong {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      word-break: break-all;
+      overflow-wrap: anywhere;
+    }
+
+    .economy-explorer-kv button,
+    .economy-explorer-address {
+      padding: 0;
+      border: 0;
+      color: var(--accent);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .economy-explorer-flow {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      gap: .6rem;
+      align-items: center;
+      margin-top: .75rem;
+    }
+
+    .economy-explorer-address {
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      padding: .65rem;
+      background: rgba(255,255,255,.025);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      gap: .2rem;
+    }
+
+    .economy-explorer-address:hover,
+    .economy-explorer-kv button:hover {
+      color: var(--accent-2);
+    }
+
+    .economy-explorer-address:not(button) {
+      cursor: default;
+    }
+
+    .economy-explorer-finality {
+      padding: .75rem;
+      margin-top: .75rem;
+    }
+
+    .economy-explorer-badge {
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 999px;
+      padding: .22rem .55rem;
+      color: var(--muted);
+      font-size: .75rem;
+    }
+
+    .economy-explorer-progress {
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      overflow: hidden;
+      margin-top: .65rem;
+    }
+
+    .economy-explorer-progress span {
+      display: block;
+      height: 100%;
+      background: var(--accent);
+      border-radius: inherit;
+    }
+
+    .economy-explorer-accelerate {
+      display: grid;
+      grid-template-columns: minmax(140px, 220px) auto;
+      gap: .55rem;
+      align-items: end;
+      margin-top: .75rem;
+    }
+
+    .economy-explorer-tx-list {
+      margin-top: .75rem;
+    }
+
+    @media (max-width: 720px) {
+      .economy-explorer-search,
+      .economy-explorer-flow,
+      .economy-explorer-accelerate {
+        grid-template-columns: 1fr;
+      }
+      .economy-explorer-kv {
+        grid-template-columns: 1fr;
+      }
+    }
+
     #trading-btc-signal-body {
       grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: .38rem;

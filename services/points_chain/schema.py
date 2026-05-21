@@ -423,6 +423,54 @@ def ensure_points_economy_schema(conn):
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS points_chain_acceleration_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_uuid TEXT NOT NULL UNIQUE,
+            ledger_uuid TEXT NOT NULL,
+            payer_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            fee_points INTEGER NOT NULL,
+            target_proved_count INTEGER NOT NULL DEFAULT 20,
+            estimated_seconds_min INTEGER NOT NULL,
+            estimated_seconds_max INTEGER NOT NULL,
+            fee_ledger_uuid TEXT,
+            status TEXT NOT NULL DEFAULT 'accepted',
+            created_at TEXT NOT NULL,
+            CHECK (fee_points > 0),
+            CHECK (target_proved_count > 0),
+            CHECK (estimated_seconds_min > 0),
+            CHECK (estimated_seconds_max >= estimated_seconds_min)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_chain_transfer_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_uuid TEXT NOT NULL UNIQUE,
+            request_hash TEXT NOT NULL,
+            tx_group_hash TEXT NOT NULL UNIQUE,
+            sender_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            recipient_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            source_wallet_address TEXT NOT NULL,
+            destination_wallet_address TEXT NOT NULL,
+            amount_points INTEGER NOT NULL,
+            fee_points INTEGER NOT NULL DEFAULT 0,
+            memo TEXT NOT NULL DEFAULT '',
+            transfer_out_ledger_uuid TEXT,
+            transfer_in_ledger_uuid TEXT,
+            fee_ledger_uuid TEXT,
+            status TEXT NOT NULL DEFAULT 'confirmed',
+            created_at TEXT NOT NULL,
+            CHECK (amount_points > 0),
+            CHECK (fee_points >= 0)
+        )
+        """
+    )
+    transfer_cols = table_columns(conn, "points_chain_transfer_requests")
+    if "memo" not in transfer_cols:
+        conn.execute("ALTER TABLE points_chain_transfer_requests ADD COLUMN memo TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS points_chain_nodes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             node_id TEXT NOT NULL UNIQUE,
@@ -528,6 +576,8 @@ def ensure_points_economy_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_block ON points_ledger(chain_block_id, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_pending_status ON points_pending_rewards(status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_blocks_number ON points_chain_blocks(block_number)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_accel_ledger ON points_chain_acceleration_requests(ledger_uuid, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_transfer_wallets ON points_chain_transfer_requests(source_wallet_address, destination_wallet_address, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_backup_created ON points_chain_backup_catalog(created_at)")
     # Phase 3 of SERVER_MODE_V2_IMPLEMENTATION_PLAN.md — DB-level guard.
     # Final line of defense: any non-production write to points_chain_blocks

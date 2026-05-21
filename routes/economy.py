@@ -12,6 +12,7 @@ from services.points_chain import (
     bind_self_custody_wallet,
     create_multisig_wallet,
     create_official_hot_wallet,
+    delete_cold_wallet,
     delete_primary_cold_wallet,
     ensure_system_wallets,
     wallet_onboarding_status,
@@ -284,9 +285,10 @@ def register_economy_routes(app, deps):
         conn = points_service.get_db()
         try:
             points_service.ensure_schema(conn)
-            identity = delete_primary_cold_wallet(
+            identity = delete_cold_wallet(
                 conn,
                 user_id=actor["id"],
+                address=data.get("address") or "",
                 reason=data.get("reason") or "user_deleted_cold_wallet",
             )
             status = wallet_onboarding_status(conn, points_service=points_service, user_id=actor["id"])
@@ -340,6 +342,113 @@ def register_economy_routes(app, deps):
             "ok": True,
             "ledger": points_service.list_ledger(user_id=actor["id"], limit=limit, offset=offset),
         })
+
+    @app.route("/api/points/explorer/search", methods=["GET"])
+    def points_explorer_search():
+        query = str(request.args.get("q") or "").strip()
+        if not query:
+            return json_resp({"ok": False, "msg": "請輸入交易 hash、Ledger UUID、錢包地址或區塊"}, 400)
+        limit = parse_positive_int(request.args.get("limit"), default=25, maximum=100) or 25
+        try:
+            result = points_service.explorer_lookup(query, limit=limit)
+        except Exception as exc:
+            return service_error(exc)
+        if not result:
+            return json_resp({"ok": False, "msg": "查無鏈上資料"}), 404
+        return json_resp({"ok": True, "result": result})
+
+    @app.route("/api/points/explorer/tx/<path:ledger_ref>", methods=["GET"])
+    def points_explorer_tx(ledger_ref):
+        result = points_service.explorer_transaction(ledger_ref)
+        if not result:
+            return json_resp({"ok": False, "msg": "找不到交易"}), 404
+        return json_resp({"ok": True, "result": result})
+
+    @app.route("/api/points/explorer/wallet/<path:address>", methods=["GET"])
+    def points_explorer_wallet(address):
+        limit = parse_positive_int(request.args.get("limit"), default=25, maximum=100) or 25
+        try:
+            result = points_service.explorer_wallet(address, limit=limit)
+        except Exception as exc:
+            return service_error(exc)
+        return json_resp({"ok": True, "result": result})
+
+    @app.route("/api/points/explorer/block/<path:block_ref>", methods=["GET"])
+    def points_explorer_block(block_ref):
+        result = points_service.explorer_block(block_ref)
+        if not result:
+            return json_resp({"ok": False, "msg": "找不到區塊"}), 404
+        return json_resp({"ok": True, "result": result})
+
+    @app.route("/api/points/explorer/accelerate", methods=["POST"])
+    @require_csrf
+    def points_explorer_accelerate():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        ledger_ref = str(data.get("ledger_ref") or data.get("ledger_uuid") or data.get("ledger_hash") or "").strip()
+        fee_points = parse_positive_int(data.get("fee_points"), default=None, maximum=10000)
+        request_uuid = str(data.get("request_uuid") or "").strip()
+        if not ledger_ref:
+            return json_resp({"ok": False, "msg": "ledger_ref required"}), 400
+        if fee_points is None:
+            return json_resp({"ok": False, "msg": "fee_points must be 1-10000"}), 400
+        try:
+            result = points_service.accelerate_explorer_transaction(
+                actor=actor,
+                ledger_ref=ledger_ref,
+                fee_points=fee_points,
+                request_uuid=request_uuid,
+            )
+            audit(
+                "POINTS_CHAIN_TX_ACCELERATED",
+                get_client_ip(),
+                user=actor_value(actor, "username"),
+                success=True,
+                ua=get_ua(),
+                detail=f"ledger_ref={ledger_ref},fee={fee_points}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/points/transactions/submit", methods=["POST"])
+    @require_csrf
+    def points_submit_transaction():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.submit_wallet_transaction(
+                actor=actor,
+                source_wallet_address=data.get("source_wallet_address") or data.get("from") or "",
+                destination_wallet_address=data.get("destination_wallet_address") or data.get("to") or "",
+                amount_points=data.get("amount_points") or data.get("value") or 0,
+                fee_points=data.get("fee_points"),
+                request_uuid=str(data.get("request_uuid") or "").strip() or None,
+                memo=str(data.get("memo") or ""),
+            )
+            audit(
+                "POINTS_CHAIN_TX_SUBMITTED",
+                get_client_ip(),
+                user=actor_value(actor, "username"),
+                success=True,
+                ua=get_ua(),
+                detail=f"tx_group_hash={result.get('tx_group_hash')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
 
     @app.route("/api/points/wallet/export.csv", methods=["GET"])
     @require_csrf_safe
@@ -532,126 +641,38 @@ def register_economy_routes(app, deps):
     @app.route("/api/admin/points/wallets/<int:user_id>", methods=["GET"])
     @require_csrf_safe
     def admin_points_wallet(user_id):
-        actor, err = manager_or_403()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            row = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
-        finally:
-            conn.close()
-        if not row:
-            return json_resp({"ok": False, "msg": "找不到帳號"}), 404
         return json_resp({
-            "ok": True,
-            "wallet": points_service.get_wallet(user_id),
-            "ledger": points_service.list_ledger(user_id=user_id, limit=50, include_user_id=True),
-        })
+            "ok": False,
+            "code": "blockchain_permission_model",
+            "msg": "私有鏈模式已停用依帳號查詢用戶錢包；請改用公開 Explorer 查交易 hash 或錢包地址。",
+        }, 410)
 
     @app.route("/api/root/points/wallets/<int:user_id>/sanction", methods=["POST"])
     @require_csrf
     def root_points_wallet_sanction(user_id):
-        actor, err = root_or_403()
-        if err:
-            return err
-        data, err = parse_json_body()
-        if err:
-            return err
-        try:
-            result = points_service.sanction_wallet(
-                actor=actor,
-                user_id=user_id,
-                wallet_status=str(data.get("wallet_status") or ""),
-                risk_level=str(data.get("risk_level") or ""),
-                reason=str(data.get("reason") or ""),
-                freeze_amount=int(data.get("freeze_amount") or 0),
-                unfreeze_amount=int(data.get("unfreeze_amount") or 0),
-            )
-            audit(
-                "POINTS_WALLET_SANCTION",
-                get_client_ip(),
-                user=actor["username"],
-                success=True,
-                ua=get_ua(),
-                detail=f"user_id={user_id}, status={result['wallet'].get('wallet_status')}, risk={result['wallet'].get('risk_level')}",
-            )
-            changes = []
-            if data.get("wallet_status"):
-                changes.append(f"錢包狀態 {result['wallet'].get('wallet_status')}")
-            if data.get("risk_level"):
-                changes.append(f"風險等級 {result['wallet'].get('risk_level')}")
-            if int(data.get("freeze_amount") or 0):
-                changes.append(f"凍結 {int(data.get('freeze_amount') or 0)} 點")
-            if int(data.get("unfreeze_amount") or 0):
-                changes.append(f"解凍 {int(data.get('unfreeze_amount') or 0)} 點")
-            notify_member_points_action(
-                actor=actor,
-                user_id=user_id,
-                action_label="；".join(changes) or "錢包處分",
-                reason=str(data.get("reason") or "錢包處分"),
-                points_ledger_uuid=(result.get("ledgers") or [{}])[0].get("ledger_uuid") if result.get("ledgers") else None,
-                appealable=bool(
-                    int(data.get("freeze_amount") or 0) > 0
-                    or str(data.get("wallet_status") or "").strip().lower() in {"closed", "blocked", "disabled", "frozen", "suspended"}
-                    or str(data.get("risk_level") or "").strip().lower() in {"blocked", "restricted", "high", "critical"}
-                ),
-            )
-            return json_resp(result)
-        except Exception as exc:
-            return service_error(exc)
+        return json_resp({
+            "ok": False,
+            "code": "blockchain_permission_model",
+            "msg": "私有鏈模式不允許 root 直接處分用戶錢包；請改用鏈上規則、用戶授權交易或功能凍結流程。",
+        }, 410)
 
     @app.route("/api/admin/points/ledger", methods=["GET"])
     @require_csrf_safe
     def admin_points_ledger():
-        actor, err = manager_or_403()
-        if err:
-            return err
-        limit = parse_positive_int(request.args.get("limit"), default=50, maximum=200) or 50
-        offset = max(0, int(request.args.get("offset") or 0))
-        return json_resp({"ok": True, "ledger": points_service.list_ledger(limit=limit, offset=offset, include_user_id=True)})
+        return json_resp({
+            "ok": False,
+            "code": "blockchain_permission_model",
+            "msg": "私有鏈模式已停用後台依會員列帳；請用公開 Explorer 以交易 hash、地址或區塊查詢。",
+        }, 410)
 
     @app.route("/api/admin/points/adjust", methods=["POST"])
     @require_csrf
     def admin_points_adjust():
-        actor, err = root_or_403()
-        if err:
-            return err
-        data, err = parse_json_body()
-        if err:
-            return err
-        amount = parse_positive_int(data.get("amount"), maximum=1_000_000_000)
-        if amount is None:
-            return json_resp({"ok": False, "msg": "金額必須為正數"}), 400
-        currency_type = DISPLAY_CURRENCY
-        direction = str(data.get("direction") or "").strip()
-        reason = str(data.get("reason") or "").strip()
-        try:
-            user_id = int(data.get("user_id"))
-        except Exception:
-            return json_resp({"ok": False, "msg": "user_id required"}), 400
-        try:
-            result = points_service.admin_adjust(
-                actor=actor,
-                user_id=user_id,
-                currency_type=currency_type,
-                direction=direction,
-                amount=amount,
-                reason=reason,
-                reference_id=str(data.get("reference_id") or "") or None,
-                idempotency_key=str(data.get("idempotency_key") or request.headers.get("Idempotency-Key") or "").strip() or None,
-            )
-            audit("POINTS_ADMIN_ADJUST", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"user_id={user_id}, currency=points, direction={direction}, amount={amount}")
-            notify_member_points_action(
-                actor=actor,
-                user_id=user_id,
-                action_label=f"{'加點' if direction == 'credit' else '扣點'} {amount} 點",
-                reason=reason,
-                points_ledger_uuid=(result.get("ledger") or {}).get("ledger_uuid"),
-                appealable=(direction != "credit"),
-            )
-            return json_resp(result)
-        except Exception as exc:
-            return service_error(exc)
+        return json_resp({
+            "ok": False,
+            "code": "blockchain_permission_model",
+            "msg": "私有鏈模式已停用手動加減積分；官方發點需改走官方錢包送單，用戶扣款需由用戶授權交易觸發。",
+        }, 410)
 
     @app.route("/api/admin/points/pending-rewards", methods=["GET", "POST"])
     @require_csrf_safe
@@ -921,22 +942,11 @@ def register_economy_routes(app, deps):
     @app.route("/api/root/points/ledger/<ledger_uuid>/rollback", methods=["POST"])
     @require_csrf
     def root_points_ledger_rollback(ledger_uuid):
-        actor, err = root_or_403()
-        if err:
-            return err
-        data, err = parse_json_body()
-        if err:
-            return err
-        try:
-            result = points_service.rollback_ledger(
-                actor=actor,
-                ledger_uuid=ledger_uuid,
-                reason=str(data.get("reason") or ""),
-            )
-            audit("POINTS_LEDGER_ROLLBACK", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"ledger_uuid={ledger_uuid}")
-            return json_resp(result)
-        except Exception as exc:
-            return service_error(exc)
+        return json_resp({
+            "ok": False,
+            "code": "blockchain_permission_model",
+            "msg": "私有鏈模式不允許 rollback 既有交易；修正必須以新的鏈上補償交易追加。",
+        }, 410)
 
     @app.route("/api/admin/points/economy/stats", methods=["GET"])
     @require_csrf_safe
