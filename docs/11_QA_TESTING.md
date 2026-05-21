@@ -96,6 +96,25 @@ python3 scripts/testing/playwright_platform_health_check.py
 報告會輸出到該次隔離 runtime 的 `reports/qa/playwright_platform_health_check_*.json`
 與 `.md`。這是前後端實測，不能用單純 pytest passed 取代。
 
+#### 4A. PointsChain Phase 1A economy acceptance
+
+Phase 1A / 1A.5 驗收只驗 economy foundation，不接產品交易流。最小檢查：
+
+```bash
+python3 -m pytest -q \
+  tests/economy/test_economy_layer.py \
+  tests/frontend/trading/test_frontend_economy.py \
+  tests/static/test_wallet_direct_call_inventory.py
+
+python3 scripts/security/gate/wallet_direct_call_inventory.py --fail-on-blocker
+```
+
+前端要用 isolated server 登入 root，打開「積分系統 / 積分私有鏈」，確認 max supply、
+minted total、mint remaining、reserved locked、active supply、circulating supply、
+official treasury、PROMO fund、EXCHANGE fund、BURN、replay snapshot、derived verify、
+health / stress 都由 root report replay read model 顯示。重整頁面 5 次和重啟同一
+runtime 後，`minted_total`、`replay_height`、`wallet_root_hash`、snapshot hash 必須不變。
+
 #### 5. 權限與安全掃描
 
 ```bash

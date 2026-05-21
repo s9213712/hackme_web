@@ -4,6 +4,10 @@
 
 ## Source Of Truth
 
+Status: Phase 1A foundation is implemented and Phase 1A.5 acceptance passed.
+The accepted scope is still replay/dashboard/API-read-model only; product
+traffic must not be routed into this layer before Phase 1C / 1D approval.
+
 - `points_ledger` 不得變成可直接 `UPDATE balance` 的快取真相。
 - Phase 1A 新增的 `points_economy_events` 是模擬鏈 fund wallet 的 append-only event ledger。
 - 所有 fund / wallet balance 必須能由 append-only ledger replay 重建。

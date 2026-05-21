@@ -87,6 +87,11 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-chain-countdown"' in index_html
     assert 'id="economy-chain-loaded-at"' in index_html
     assert 'id="economy-chain-status"' in index_html
+    assert 'id="economy-layer-mint-remaining"' in index_html
+    assert 'id="economy-layer-active-supply"' in index_html
+    assert 'id="economy-layer-circulating-supply"' in index_html
+    assert 'id="economy-layer-snapshot-height"' in index_html
+    assert 'id="economy-layer-derived-verify"' in index_html
     assert "<pre id=\"economy-chain-status\"" not in index_html
     assert 'id="economy-root-virtual-card"' in index_html
     assert 'id="economy-root-virtual-total"' in index_html
@@ -157,6 +162,10 @@ def test_root_points_page_is_chain_operations_console():
     assert 'fetchEconomyJson("/root/trading/sitewide/user-positions", { allowMissingSnapshot: true })' in economy_js
     assert 'const shouldLoadRootTrading = rootMode && ["funding-pools", "all-positions"].includes(economyActivePage);' in economy_js
     assert "function renderEconomyRootBalanceSummary" in economy_js
+    assert "function renderEconomyLayerSummary" in economy_js
+    assert 'setEconomyText("economy-layer-mint-remaining"' in economy_js
+    assert 'setEconomyText("economy-layer-active-supply"' in economy_js
+    assert 'setEconomyText("economy-layer-derived-verify"' in economy_js
     assert "function renderEconomyRootFundingPools" in economy_js
     assert "function renderEconomyRootAllPositions" in economy_js
     assert 'setEconomyText("economy-root-position-bots"' in economy_js

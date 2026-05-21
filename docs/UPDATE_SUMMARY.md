@@ -1,6 +1,17 @@
 # Update Summary
 
-Release ID: `2026.05.21-181`
+Release ID: `2026.05.21-182`
+
+## 2026.05.21-182
+
+- Completed the Phase 1A.5 PointsChain economy-layer acceptance review and
+  added the acceptance report / JSON evidence under `docs/AGENTS/reports`.
+- Expanded the root「積分私有鏈」dashboard so max supply, minted total, mint
+  remaining, reserved locked, active supply, circulating supply, fund balances,
+  burn, replay snapshot, derived verify, and health/stress status are visible.
+- Added economy acceptance tests for repeated bootstrap idempotency and corrupt
+  burn replay rejection, and documented the Phase 1A accepted / Phase 1B-1D
+  not-yet-connected boundary.
 
 ## 2026.05.21-181
 

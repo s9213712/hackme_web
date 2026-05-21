@@ -7,11 +7,13 @@ from services.points_chain import PointsLedgerService
 from services.points_chain.economy_layer import (
     append_economy_event,
     append_economy_incident,
+    compute_economy_event_hash,
     economy_layer_report,
     rebuild_economy_derived_balances,
     replay_economy_events,
     verify_economy_derived_balances,
 )
+from services.points_chain.schema import sha256_text, utc_now
 
 
 def _db(tmp_path):
@@ -78,6 +80,28 @@ def test_bootstrap_is_idempotent_and_replay_is_the_balance_truth(tmp_path):
     assert second["replay"]["derived_verify"]["ok"] is True
 
 
+def test_repeated_bootstrap_five_times_does_not_duplicate_mint(tmp_path):
+    points, conn = _open_economy(tmp_path)
+    try:
+        reports = [
+            economy_layer_report(conn, chain_secret=points.chain_secret, actor={"id": 1, "role": "root"})
+            for _ in range(5)
+        ]
+        conn.commit()
+        event_count = conn.execute("SELECT COUNT(*) AS count FROM points_economy_events").fetchone()["count"]
+        idempotency_count = conn.execute("SELECT COUNT(DISTINCT idempotency_key) AS count FROM points_economy_events").fetchone()["count"]
+        snapshot_count = conn.execute("SELECT COUNT(*) AS count FROM points_economy_snapshots").fetchone()["count"]
+    finally:
+        conn.close()
+
+    assert [item["bootstrap"]["created_count"] for item in reports] == [3, 0, 0, 0, 0]
+    assert event_count == 3
+    assert idempotency_count == 3
+    assert snapshot_count == 1
+    assert {item["supply"]["minted_total"] for item in reports} == {20_000_000}
+    assert {item["replay"]["height"] for item in reports} == {3}
+
+
 def test_mint_cannot_exceed_releasable_supply_without_override(tmp_path):
     points, conn = _open_economy(tmp_path)
     try:
@@ -141,6 +165,60 @@ def test_burn_only_appends_burned_total_and_never_goes_negative(tmp_path):
     assert replay["active_supply"] == 19_999_000
     assert replay["balances"]["official_treasury"]["balance"] == 9_999_000
     assert replay["balances"]["burn"]["balance"] == 1_000
+
+
+def test_replay_rejects_corrupt_burn_that_would_make_active_supply_negative(tmp_path):
+    points, conn = _open_economy(tmp_path)
+    try:
+        now = utc_now()
+        row_payload = {
+            "event_uuid": "corrupt-burn-active-negative",
+            "event_type": "burn",
+            "transaction_type": "corrupt_direct_burn",
+            "source_fund_key": None,
+            "source_address": None,
+            "destination_fund_key": "burn",
+            "destination_address": "pc1corruptburn",
+            "amount": 1,
+            "idempotency_key": "corrupt:burn:active-negative",
+            "request_hash": sha256_text("corrupt:burn:active-negative"),
+            "policy_version": "phase1_sim_economy_v1",
+            "metadata_json": "{}",
+            "previous_event_hash": None,
+            "created_at": now,
+        }
+        conn.execute(
+            """
+            INSERT INTO points_economy_events (
+                event_uuid, event_type, transaction_type, source_fund_key, source_address,
+                destination_fund_key, destination_address, amount, idempotency_key,
+                request_hash, policy_version, status, metadata_json, previous_event_hash,
+                event_hash, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?)
+            """,
+            (
+                row_payload["event_uuid"],
+                row_payload["event_type"],
+                row_payload["transaction_type"],
+                row_payload["source_fund_key"],
+                row_payload["source_address"],
+                row_payload["destination_fund_key"],
+                row_payload["destination_address"],
+                row_payload["amount"],
+                row_payload["idempotency_key"],
+                row_payload["request_hash"],
+                row_payload["policy_version"],
+                row_payload["metadata_json"],
+                row_payload["previous_event_hash"],
+                compute_economy_event_hash(row_payload),
+                now,
+            ),
+        )
+
+        with pytest.raises(ValueError, match="negative active supply"):
+            replay_economy_events(conn, chain_secret=points.chain_secret)
+    finally:
+        conn.close()
 
 
 def test_derived_balance_cache_must_verify_against_replay(tmp_path):

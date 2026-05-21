@@ -43,6 +43,10 @@
 
 ## Phase 1A 私有鏈經濟層
 
+Status: Phase 1A.5 驗收已通過。這一層目前只提供 fund wallet、replay、derived
+cache、snapshot 與 root dashboard read model；尚未接 ComfyUI、Trading、Video、
+Storage、Games 的實際扣款或獎勵 flow。
+
 - 經濟層新增 MINT、BURN、official treasury、PROMO fund、EXCHANGE fund 五種 deterministic fund wallet。
 - Bootstrap 會從 MINT idempotently 分配初始 official / promo / exchange fund，不會因重跑 root report 重複 mint。
 - `points_economy_events` 是 append-only fund event ledger；`points_economy_derived_balances` 是 `derived_cache`，可 rebuild / verify。

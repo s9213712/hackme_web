@@ -88,6 +88,10 @@ Migration / backfill gate:
 
 目標：先建立可 replay 的模擬鏈經濟地基，不開始 Phase 1C / 1D 的產品流接入。
 
+Status: implemented and accepted in Phase 1A.5. The accepted surface is still
+foundation/read-model only; ComfyUI, Trading, Video, Storage, Games, and other
+product flows remain outside this layer until Phase 1C / 1D.
+
 已批准的 Phase 1A / 1B guardrails 見
 [architecture/ECONOMY_LAYER_GUARDRAILS.md](architecture/ECONOMY_LAYER_GUARDRAILS.md)。
 

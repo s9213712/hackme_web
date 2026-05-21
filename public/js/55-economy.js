@@ -783,14 +783,20 @@ function renderEconomyLayerSummary(report) {
   const funds = layer.funds && typeof layer.funds === "object" ? layer.funds : {};
   const health = layer.health && typeof layer.health === "object" ? layer.health : {};
   const replay = layer.replay && typeof layer.replay === "object" ? layer.replay : {};
+  const snapshot = replay.snapshot && typeof replay.snapshot === "object" ? replay.snapshot : {};
+  const derivedVerify = replay.derived_verify && typeof replay.derived_verify === "object" ? replay.derived_verify : {};
   const fund = (key) => funds[key] && typeof funds[key] === "object" ? funds[key] : {};
   const address = (key) => shortEconomyWalletAddress(fund(key).address || "");
   setEconomyText("economy-layer-health", String(health.status || "-").toUpperCase());
   setEconomyText("economy-layer-health-detail", `原因 ${Array.isArray(health.reasons) ? health.reasons.join(", ") : "ok"}`);
   setEconomyText("economy-layer-max-supply", formatEconomyPointsValue(supply.max_supply || 0));
   setEconomyText("economy-layer-minted-total", `已 Mint ${formatEconomyPointsValue(supply.minted_total || 0)}`);
+  setEconomyText("economy-layer-mint-remaining", formatEconomyPointsValue(supply.mint_remaining || 0));
+  setEconomyText("economy-layer-releasable-supply", `可釋出上限 ${formatEconomyPointsValue(supply.releasable_supply || 0)}`);
   setEconomyText("economy-layer-releasable-remaining", formatEconomyPointsValue(supply.releasable_remaining || 0));
   setEconomyText("economy-layer-reserved-locked", `保留鎖定 ${formatEconomyPointsValue(supply.reserved_locked || 0)}`);
+  setEconomyText("economy-layer-active-supply", formatEconomyPointsValue(supply.active_supply || 0));
+  setEconomyText("economy-layer-circulating-supply", `流通 ${formatEconomyPointsValue(supply.circulating_supply || 0)} · fund ${formatEconomyPointsValue(supply.fund_supply || 0)}`);
   setEconomyText("economy-layer-official-balance", formatEconomyPointsValue(fund("official_treasury").balance || 0));
   setEconomyText("economy-layer-official-address", address("official_treasury"));
   setEconomyText("economy-layer-promo-balance", formatEconomyPointsValue(fund("promo_fund").balance || 0));
@@ -801,6 +807,8 @@ function renderEconomyLayerSummary(report) {
   setEconomyText("economy-layer-burn-address", address("burn"));
   setEconomyText("economy-layer-replay-height", formatEconomyPointsValue(replay.height || 0));
   setEconomyText("economy-layer-replay-hash", `derived cache · ${shortEconomyWalletAddress(replay.wallet_root_hash || "")}`);
+  setEconomyText("economy-layer-snapshot-height", formatEconomyPointsValue(snapshot.snapshot_height ?? replay.height ?? 0));
+  setEconomyText("economy-layer-derived-verify", `${derivedVerify.ok === true ? "verify ok" : "verify failed"} · ${shortEconomyWalletAddress(snapshot.wallet_root_hash || replay.wallet_root_hash || "")}`);
 }
 
 function renderEconomyRootFundingPools(payload) {

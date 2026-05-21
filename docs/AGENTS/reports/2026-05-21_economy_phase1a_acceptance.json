@@ -1,0 +1,86 @@
+{
+  "accepted": true,
+  "branch": "04.BLOCKCHAIN",
+  "commit_under_review": "218246b",
+  "scope": "Phase 1A.5 economy layer acceptance review",
+  "product_flows_connected": false,
+  "frontend_probe": {
+    "base_url": "https://127.0.0.1:54243",
+    "baseline_json": "/tmp/hackme_web_phase1a5_acceptance2/evidence/baseline.json",
+    "after_restart_json": "/tmp/hackme_web_phase1a5_acceptance2/evidence/after_restart.json",
+    "screenshots": [
+      "/tmp/hackme_web_phase1a5_acceptance2/evidence/baseline_00.png",
+      "/tmp/hackme_web_phase1a5_acceptance2/evidence/baseline_01.png",
+      "/tmp/hackme_web_phase1a5_acceptance2/evidence/baseline_02.png",
+      "/tmp/hackme_web_phase1a5_acceptance2/evidence/baseline_03.png",
+      "/tmp/hackme_web_phase1a5_acceptance2/evidence/baseline_04.png",
+      "/tmp/hackme_web_phase1a5_acceptance2/evidence/baseline_05.png",
+      "/tmp/hackme_web_phase1a5_acceptance2/evidence/after_restart_00.png"
+    ],
+    "reload_count": 5,
+    "restart_compared": true,
+    "errors": []
+  },
+  "accepted_numbers": {
+    "max_supply": 100000000,
+    "reserved_locked": 40000000,
+    "releasable_supply": 60000000,
+    "minted_total": 20000000,
+    "mint_remaining": 80000000,
+    "releasable_remaining": 40000000,
+    "burned_total": 0,
+    "active_supply": 20000000,
+    "fund_supply": 20000000,
+    "circulating_supply": 0,
+    "official_treasury": 10000000,
+    "promo_fund": 5000000,
+    "exchange_fund": 5000000,
+    "burn": 0,
+    "replay_height": 3,
+    "replay_event_hash": "bc878a529cc16ca7a999f21d4b0c126c1d9d7f925eea93ee660546a57abb9c64",
+    "wallet_root_hash": "c4d50e29df503f1ef625baf04784f46afdfc6b8f8906c9d3be6a9c7cd06a2a1c",
+    "snapshot_height": 3,
+    "snapshot_event_hash": "bc878a529cc16ca7a999f21d4b0c126c1d9d7f925eea93ee660546a57abb9c64",
+    "snapshot_wallet_root_hash": "c4d50e29df503f1ef625baf04784f46afdfc6b8f8906c9d3be6a9c7cd06a2a1c",
+    "derived_verify_ok": true,
+    "health_status": "green"
+  },
+  "commands": [
+    {
+      "command": "python3 -m pytest -q tests/economy/test_economy_layer.py",
+      "result": "8 passed"
+    },
+    {
+      "command": "node --check public/js/55-economy.js",
+      "result": "passed"
+    },
+    {
+      "command": "python3 -m pytest -q tests/economy/test_economy_layer.py tests/frontend/trading/test_frontend_economy.py",
+      "result": "17 passed"
+    },
+    {
+      "command": "python3 scripts/security/gate/wallet_direct_call_inventory.py --fail-on-blocker",
+      "result": "47 findings, 0 blockers"
+    },
+    {
+      "command": "python3 -m pytest -q tests/economy/test_economy_layer.py tests/frontend/trading/test_frontend_economy.py tests/static/test_wallet_direct_call_inventory.py tests/platform/test_release_policy.py",
+      "result": "24 passed"
+    },
+    {
+      "command": "python3 /tmp/phase1a5_frontend_probe.py --base-url https://127.0.0.1:54243 --out-dir /tmp/hackme_web_phase1a5_acceptance2/evidence --label baseline --reloads 5",
+      "result": "passed"
+    },
+    {
+      "command": "python3 /tmp/phase1a5_frontend_probe.py --base-url https://127.0.0.1:54243 --out-dir /tmp/hackme_web_phase1a5_acceptance2/evidence --label after_restart --reloads 0 --compare /tmp/hackme_web_phase1a5_acceptance2/evidence/baseline.json",
+      "result": "passed"
+    }
+  ],
+  "open_findings": {
+    "blocker": [],
+    "non_blocker": [],
+    "deferred": [
+      "Phase 1B admin dry-run / commit / ledger / replay-status / rebuild-derived-balances APIs are not implemented in this acceptance slice.",
+      "Phase 1C / 1D product flow walletization remains intentionally unconnected."
+    ]
+  }
+}
