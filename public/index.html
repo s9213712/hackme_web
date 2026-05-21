@@ -4802,6 +4802,10 @@
                 <label><input type="checkbox" id="s-comfyui-diffusers-keep-downloaded-models" /> 保留 Diffusers 已下載模型快取</label>
                 <div class="drive-card-sub">建議保留，避免每次重新下載大型模型；取消勾選時，系統會使用暫存下載目錄，任務完成或失敗後清理本次下載。</div>
               </div>
+              <div class="field">
+                <label><input type="checkbox" id="s-comfyui-diffusers-disable-xet" /> 停用 Hugging Face Xet 下載後端</label>
+                <div class="drive-card-sub">建議保持開啟。大型 GGUF 檔案使用 Xet 時可能只顯示部分進度或卡在 chunk 下載；關閉此選項可讓 root 測試 Hugging Face 預設傳輸。</div>
+              </div>
               <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">目前支援文字生圖、圖生圖與局部重繪；影片、語音、放大、ControlNet 與 ComfyUI workflow 仍走 ComfyUI 後端。</div>
             </div>
             <div id="comfyui-local-settings" style="display:none;">

@@ -23,6 +23,7 @@ from collections import deque
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+from urllib import request as urllib_request
 from urllib.parse import quote, unquote, urlparse
 
 from services.comfyui.client import ComfyUIError, ComfyUIImage
@@ -394,6 +395,7 @@ class DiffusersClient:
         base_url="",
         allow_in_process_runtime=False,
         keep_downloaded_models=True,
+        disable_xet=True,
     ):
         self.model_repo = str(model_repo or "").strip()
         self.token = str(token or "").strip()
@@ -409,6 +411,7 @@ class DiffusersClient:
         self.base_url = str(base_url or diffusers_backend_url(self.model_repo))
         self.allow_in_process_runtime = bool(allow_in_process_runtime)
         self.keep_downloaded_models = bool(keep_downloaded_models)
+        self.disable_xet = bool(disable_xet)
         self.timeout = 30
 
     @classmethod
@@ -431,6 +434,7 @@ class DiffusersClient:
             base_url=backend_url or diffusers_backend_url(model_repo),
             allow_in_process_runtime=_settings_flag(settings.get("comfyui_allow_in_process_diffusers")),
             keep_downloaded_models=_settings_flag(settings.get("comfyui_diffusers_keep_downloaded_models", True)),
+            disable_xet=_settings_flag(settings.get("comfyui_diffusers_disable_xet", True)),
         )
 
     def _effective_model_repo(self, params=None):
@@ -526,11 +530,72 @@ class DiffusersClient:
         if missing:
             raise ComfyUIError("GGUF 模式需要先安裝 Python 套件：" + ", ".join(missing))
 
-    def _enable_hf_transfer_if_available(self):
+    def _configure_huggingface_download_backend(self, *, log_capture=None):
+        if self.disable_xet:
+            os.environ["HF_HUB_DISABLE_XET"] = "1"
+            if log_capture:
+                log_capture.append_line("Hugging Face Xet backend disabled for Diffusers downloads")
+        else:
+            os.environ.pop("HF_HUB_DISABLE_XET", None)
         if importlib.util.find_spec("hf_transfer") is None:
-            return False
+            return {
+                "hf_transfer_enabled": False,
+                "xet_disabled": os.environ.get("HF_HUB_DISABLE_XET") == "1",
+            }
         os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
-        return True
+        return {
+            "hf_transfer_enabled": True,
+            "xet_disabled": os.environ.get("HF_HUB_DISABLE_XET") == "1",
+        }
+
+    def _huggingface_repo_cache_dir(self, model_repo):
+        repo_id = str(model_repo or "").strip()
+        if not repo_id:
+            return None
+        cache_root = os.environ.get("HF_HUB_CACHE")
+        if cache_root:
+            hub_cache = Path(cache_root).expanduser()
+        else:
+            hf_home = Path(os.environ.get("HF_HOME", "~/.cache/huggingface")).expanduser()
+            hub_cache = hf_home / "hub"
+        return hub_cache / ("models--" + repo_id.replace("/", "--"))
+
+    def _largest_incomplete_download_bytes(self, model_repo):
+        cache_dir = self._huggingface_repo_cache_dir(model_repo)
+        if not cache_dir:
+            return 0
+        blob_dir = cache_dir / "blobs"
+        if not blob_dir.exists():
+            return 0
+        largest = 0
+        try:
+            for path in blob_dir.glob("*.incomplete"):
+                try:
+                    largest = max(largest, int(path.stat().st_size))
+                except OSError:
+                    continue
+        except OSError:
+            return 0
+        return largest
+
+    def _download_heartbeat_payload(self, tracker, *, current_file="", model_repo=""):
+        tracker = tracker or {}
+        current = int(tracker.get("bytes_written") or 0)
+        total = int(tracker.get("total_bytes") or 0)
+        external_current = self._largest_incomplete_download_bytes(model_repo)
+        if external_current > current:
+            current = external_current
+            tracker["external_bytes_written"] = external_current
+        if total > 0:
+            tracker["external_total_bytes"] = max(int(tracker.get("external_total_bytes") or 0), total)
+        payload = {
+            "current_file": current_file,
+            "bytes_written": current,
+            "total_bytes": total,
+        }
+        if total > 0:
+            payload["percent"] = min(99, round(6 + 16 * min(1, current / total), 1))
+        return payload
 
     def _new_transient_download_dir(self, label):
         safe_label = _SAFE_FILENAME_RE.sub("_", str(label or "model")).strip("._") or "model"
@@ -538,6 +603,190 @@ class DiffusersClient:
         path = root / f"{safe_label}_{uuid.uuid4().hex}"
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def _huggingface_file_url(self, model_repo, filename):
+        repo_path = "/".join(quote(part, safe="") for part in str(model_repo or "").strip().split("/") if part)
+        file_path = quote(str(filename or "").strip().lstrip("/"), safe="/")
+        return f"https://huggingface.co/{repo_path}/resolve/main/{file_path}"
+
+    def _download_target_path(self, model_repo, filename, *, log_capture=None):
+        parts = [part for part in str(filename or "").replace("\\", "/").split("/") if part]
+        if not parts or any(part in {".", ".."} for part in parts):
+            raise ComfyUIError("Hugging Face 檔案路徑不安全")
+        if self.keep_downloaded_models:
+            safe_repo = _SAFE_FILENAME_RE.sub("_", str(model_repo or "model").replace("/", "__")).strip("._") or "model"
+            base_dir = self.runtime_root / "hf_downloads" / safe_repo
+        else:
+            base_dir = self._new_transient_download_dir(f"hf_file_{str(model_repo or 'model').replace('/', '_')}")
+            if log_capture:
+                log_capture.register_transient_path(base_dir)
+                log_capture.append_line(f"Diffusers keep-downloaded-models disabled; using transient HF file dir={base_dir}")
+        target = (base_dir / Path(*parts)).resolve()
+        try:
+            target.relative_to(base_dir.resolve())
+        except Exception as exc:
+            raise ComfyUIError("Hugging Face 檔案路徑超出允許範圍") from exc
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def _stream_huggingface_file_download(
+        self,
+        model_repo,
+        filename,
+        *,
+        progress_callback=None,
+        log_capture=None,
+        backend=None,
+        base_percent=6,
+        span_percent=16,
+    ):
+        target = self._download_target_path(model_repo, filename, log_capture=log_capture)
+        if target.exists() and target.stat().st_size > 0:
+            size = int(target.stat().st_size)
+            if log_capture:
+                log_capture.append_line(f"GGUF cache hit: {target} ({_format_bytes(size)})", force=True)
+            return str(target), {"cache_hit": True, "bytes_written": size, "total_bytes": size}
+
+        incomplete = target.with_name(target.name + ".incomplete")
+        existing = int(incomplete.stat().st_size) if incomplete.exists() else 0
+        headers = {"User-Agent": "hackme_web-diffusers/1.0"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        if existing > 0:
+            headers["Range"] = f"bytes={existing}-"
+        url = self._huggingface_file_url(model_repo, filename)
+        if log_capture:
+            resume_text = f"; resume from {_format_bytes(existing)}" if existing else ""
+            log_capture.append_line(f"Manual Hugging Face file download: {url}{resume_text}", force=True)
+
+        def emit(downloaded, total, *, speed=0, force=False):
+            if not progress_callback:
+                return
+            ratio = (downloaded / total) if total > 0 else 0
+            percent = min(99, round(float(base_percent) + float(span_percent) * min(1, ratio), 1))
+            detail = (
+                f"下載 {filename}：{_format_bytes(downloaded)} / {_format_bytes(total)}"
+                if total
+                else f"下載 {filename}：{_format_bytes(downloaded)}"
+            )
+            if speed:
+                detail += f"，{_format_speed(speed)}"
+            progress_callback({
+                "phase": "downloading",
+                "percent": percent,
+                "step": "Hugging Face GGUF 串流下載",
+                "current_file": filename,
+                "detail": detail,
+                "bytes_written": int(downloaded),
+                "total_bytes": int(total or 0),
+                "speed_bytes_per_sec": int(speed or 0),
+                **(backend or {}),
+            })
+            if force and log_capture:
+                log_capture.append_line(detail, force=True)
+
+        try:
+            request = urllib_request.Request(url, headers=headers)
+            with urllib_request.urlopen(request, timeout=60) as response:
+                status = int(getattr(response, "status", 200) or 200)
+                content_length = int(response.headers.get("Content-Length") or 0)
+                content_range = str(response.headers.get("Content-Range") or "")
+                total = 0
+                range_match = re.search(r"/(\d+)\s*$", content_range)
+                if status == 206 and range_match:
+                    total = int(range_match.group(1))
+                elif content_length:
+                    total = content_length
+                mode = "ab" if existing and status == 206 else "wb"
+                downloaded = existing if mode == "ab" else 0
+                if mode == "wb":
+                    existing = 0
+                start_at = time.monotonic()
+                last_emit = 0.0
+                emit(downloaded, total, force=True)
+                with incomplete.open(mode) as output:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        downloaded += len(chunk)
+                        now = time.monotonic()
+                        if now - last_emit >= 0.5:
+                            elapsed = max(0.001, now - start_at)
+                            emit(downloaded, total, speed=(downloaded - existing) / elapsed)
+                            last_emit = now
+                if total and downloaded < total:
+                    raise ComfyUIError(
+                        f"Hugging Face 檔案下載未完整：{_format_bytes(downloaded)} / {_format_bytes(total)}"
+                    )
+                incomplete.replace(target)
+                emit(downloaded, total or downloaded, force=True)
+                return str(target), {"cache_hit": False, "bytes_written": downloaded, "total_bytes": total or downloaded}
+        except ComfyUIError:
+            raise
+        except Exception as exc:
+            raise ComfyUIError(f"Hugging Face 檔案串流下載失敗：{exc}") from exc
+
+    def _inspect_gguf_file_metadata(self, path):
+        try:
+            from gguf import GGUFReader
+        except Exception as exc:
+            raise ComfyUIError(f"GGUF metadata 讀取失敗：缺少 gguf 套件：{exc}") from exc
+        try:
+            reader = GGUFReader(str(path))
+        except Exception as exc:
+            raise ComfyUIError(f"GGUF metadata 讀取失敗：{exc}") from exc
+        fields = set(getattr(reader, "fields", {}) or {})
+        tensors = list(getattr(reader, "tensors", []) or [])
+        tensor_names = [str(getattr(tensor, "name", "") or "") for tensor in tensors[:80]]
+        has_comfy_metadata = any(name.startswith("comfy.gguf.") for name in fields)
+        has_original_unet_names = any(
+            name.startswith(("input_blocks.", "middle_block.", "output_blocks.", "out."))
+            for name in tensor_names
+        )
+        return {
+            "field_count": len(fields),
+            "tensor_count": len(tensors),
+            "has_comfy_metadata": has_comfy_metadata,
+            "has_original_unet_names": has_original_unet_names,
+            "sample_tensors": tensor_names[:12],
+        }
+
+    def _raise_if_unsupported_diffusers_gguf(self, gguf_path, *, gguf_file="", progress_callback=None, log_capture=None):
+        metadata = self._inspect_gguf_file_metadata(gguf_path)
+        if log_capture:
+            log_capture.append_line(
+                "GGUF metadata: "
+                f"tensors={metadata['tensor_count']}, "
+                f"comfy_metadata={metadata['has_comfy_metadata']}, "
+                f"original_unet_names={metadata['has_original_unet_names']}",
+                force=True,
+            )
+        if metadata["has_comfy_metadata"] and metadata["has_original_unet_names"]:
+            sample = ", ".join(metadata["sample_tensors"][:4])
+            message = (
+                f"{gguf_file or Path(gguf_path).name} 是 ComfyUI-GGUF 原生 UNet GGUF "
+                "（metadata 含 comfy.gguf，tensor 命名為 input_blocks/output_blocks）。"
+                "本站 HF Diffusers backend 只能安全載入 Diffusers 相容 component GGUF；"
+                "此類模型請改用 ComfyUI local/remote backend，並在 workflow 使用 ComfyUI-GGUF 的 "
+                "Unet Loader (GGUF) 節點，或改選 Diffusers-format GGUF。"
+                + (f" 範例 tensor：{sample}" if sample else "")
+            )
+            if progress_callback:
+                progress_callback({
+                    "phase": "error",
+                    "percent": 100,
+                    "backend_kind": "diffusers",
+                    "step": "GGUF 格式不支援 Diffusers backend",
+                    "current_file": gguf_file,
+                    "detail": message,
+                    "error_message": message,
+                    "completed": False,
+                    "gguf_metadata": metadata,
+                })
+            raise ComfyUIError(message)
+        return metadata
 
     def health_check(self, *, timeout=3):
         self._ensure_dependencies()
@@ -832,6 +1081,9 @@ class DiffusersClient:
                 state["last_emit"] = now
             current = max(0, int(getattr(bar, "_hackme_progress_n", 0) or 0))
             total = max(0, int(getattr(bar, "_hackme_progress_total", 0) or 0))
+            if download_tracker is not None:
+                current = max(current, int(download_tracker.get("external_bytes_written") or 0))
+                total = max(total, int(download_tracker.get("external_total_bytes") or 0))
             last_current = max(0, int(getattr(bar, "_hackme_progress_last_n", 0) or 0))
             last_at = float(getattr(bar, "_hackme_progress_last_at", 0.0) or 0.0)
             previous_speed = float(getattr(bar, "_hackme_progress_speed_bytes_per_second", 0.0) or 0.0)
@@ -976,13 +1228,13 @@ class DiffusersClient:
     ):
         if not progress_callback:
             return ""
+        backend = self._configure_huggingface_download_backend(log_capture=log_capture)
         try:
             from huggingface_hub import snapshot_download
         except Exception:
             return ""
         allow_patterns, ignore_patterns = self._diffusers_snapshot_patterns(variant)
         variant_text = f"（{variant}）" if variant else ""
-        accelerated = self._enable_hf_transfer_if_available()
         progress_callback({
             "phase": "downloading",
             "percent": base_percent,
@@ -990,10 +1242,11 @@ class DiffusersClient:
             "current_file": "",
             "detail": (
                 f"準備下載 Hugging Face 模型 {model_repo}{variant_text}"
-                + ("；已啟用 hf_transfer 加速" if accelerated else "；使用 huggingface_hub 下載")
+                + ("；已啟用 hf_transfer 加速" if backend["hf_transfer_enabled"] else "；使用 huggingface_hub 下載")
+                + ("；已停用 hf_xet" if backend["xet_disabled"] else "")
             ),
             "token_used": bool(self.token),
-            "hf_transfer_enabled": accelerated,
+            **backend,
         })
         download_tracker = {}
         tqdm_class = self._huggingface_progress_tqdm_class(
@@ -1019,10 +1272,40 @@ class DiffusersClient:
         if ignore_patterns:
             kwargs["ignore_patterns"] = ignore_patterns
         try:
-            snapshot_path = snapshot_download(**kwargs)
+            heartbeat = (
+                log_capture.heartbeat(
+                    phase="downloading",
+                    percent=base_percent,
+                    step="Hugging Face 檔案下載",
+                    detail=f"正在下載/檢查 Hugging Face 模型 {model_repo}{variant_text}",
+                    extra_payload=lambda: {
+                        **self._download_heartbeat_payload(download_tracker, model_repo=model_repo),
+                        **backend,
+                    },
+                )
+                if log_capture
+                else nullcontext()
+            )
+            with heartbeat:
+                snapshot_path = snapshot_download(**kwargs)
         except TypeError:
             kwargs.pop("tqdm_class", None)
-            snapshot_path = snapshot_download(**kwargs)
+            heartbeat = (
+                log_capture.heartbeat(
+                    phase="downloading",
+                    percent=base_percent,
+                    step="Hugging Face 檔案下載",
+                    detail=f"正在下載/檢查 Hugging Face 模型 {model_repo}{variant_text}",
+                    extra_payload=lambda: {
+                        **self._download_heartbeat_payload(download_tracker, model_repo=model_repo),
+                        **backend,
+                    },
+                )
+                if log_capture
+                else nullcontext()
+            )
+            with heartbeat:
+                snapshot_path = snapshot_download(**kwargs)
         except Exception as exc:
             raise ComfyUIError(f"Hugging Face 模型下載失敗：{exc}") from exc
         cache_hit = self._download_tracker_cache_hit(download_tracker)
@@ -1092,6 +1375,68 @@ class DiffusersClient:
             self._ensure_dependencies()
         if log_capture:
             log_capture.append_line("Python dependency check complete")
+
+        prefetched_gguf_path = ""
+        prefetched_gguf_stats = None
+        if gguf_file:
+            backend = self._configure_huggingface_download_backend(log_capture=log_capture)
+            if progress_callback:
+                progress_callback({
+                    "phase": "downloading",
+                    "percent": 6,
+                    "step": "下載 GGUF component",
+                    "current_file": gguf_file,
+                    "detail": (
+                        f"準備下載 {gguf_file}"
+                        + ("；已啟用 hf_transfer 加速" if backend["hf_transfer_enabled"] else "；使用 Hugging Face 串流下載")
+                        + ("；已停用 hf_xet" if backend["xet_disabled"] else "")
+                    ),
+                    "token_used": bool(self.token),
+                    **backend,
+                })
+            heartbeat = (
+                log_capture.heartbeat(
+                    phase="downloading",
+                    percent=6,
+                    step="Hugging Face GGUF 檔案下載",
+                    detail=f"正在下載 GGUF 檔案 {gguf_file}",
+                )
+                if log_capture
+                else nullcontext()
+            )
+            with heartbeat:
+                prefetched_gguf_path, prefetched_gguf_stats = self._stream_huggingface_file_download(
+                    model_repo,
+                    gguf_file,
+                    progress_callback=progress_callback,
+                    log_capture=log_capture,
+                    backend=backend,
+                    base_percent=6,
+                    span_percent=16,
+                )
+            self._raise_if_unsupported_diffusers_gguf(
+                prefetched_gguf_path,
+                gguf_file=gguf_file,
+                progress_callback=progress_callback,
+                log_capture=log_capture,
+            )
+            if log_capture:
+                cache_hit = bool((prefetched_gguf_stats or {}).get("cache_hit"))
+                suffix = " (cache hit)" if cache_hit else ""
+                log_capture.append_line(f"Download complete: {model_repo}/{gguf_file}{suffix}", force=True)
+            if progress_callback:
+                progress_callback({
+                    "phase": "loading",
+                    "percent": 22,
+                    "step": "準備載入 GGUF runtime",
+                    "current_file": gguf_file,
+                    "detail": "GGUF 檔案已準備完成，正在載入 torch / Diffusers runtime",
+                    "cache_hit": bool((prefetched_gguf_stats or {}).get("cache_hit")),
+                    "bytes_written": int((prefetched_gguf_stats or {}).get("bytes_written") or 0),
+                    "total_bytes": int((prefetched_gguf_stats or {}).get("total_bytes") or 0),
+                })
+
+        if log_capture:
             log_capture.append_line("Importing torch", force=True)
         torch_import_heartbeat = (
             log_capture.heartbeat(
@@ -1202,6 +1547,8 @@ class DiffusersClient:
                         device=device,
                         progress_callback=progress_callback,
                         log_capture=log_capture,
+                        gguf_path=prefetched_gguf_path,
+                        download_stats=prefetched_gguf_stats,
                     )
                 except Exception as exc:
                     fallback_result = retry_cpu_after_cuda_failure(exc, step="GGUF Diffusers pipeline 載入")
@@ -1415,6 +1762,8 @@ class DiffusersClient:
         device,
         progress_callback=None,
         log_capture=None,
+        gguf_path="",
+        download_stats=None,
     ):
         if mode != "txt2img":
             raise ComfyUIError("GGUF Diffusers 模式目前只支援文字生圖；圖生圖與局部重繪請改用一般 Diffusers repo 或 ComfyUI workflow。")
@@ -1427,23 +1776,27 @@ class DiffusersClient:
                 "detail": f"正在下載/載入 GGUF 檔案 {gguf_file}",
                 "token_used": bool(self.token),
             })
+        backend = self._configure_huggingface_download_backend(log_capture=log_capture)
         try:
-            from huggingface_hub import hf_hub_download
             from diffusers import GGUFQuantizationConfig
         except Exception as exc:
             raise ComfyUIError(f"GGUF 依賴載入失敗：{exc}") from exc
         try:
-            download_tracker = {}
-            tqdm_class = self._huggingface_progress_tqdm_class(
-                progress_callback,
-                label=gguf_file,
-                base_percent=6,
-                span_percent=16,
-                log_capture=log_capture,
-                download_tracker=download_tracker,
-            )
-            accelerated = self._enable_hf_transfer_if_available()
-            if progress_callback:
+            if gguf_path:
+                download_stats = dict(download_stats or {})
+                cache_hit = bool(download_stats.get("cache_hit"))
+                if progress_callback:
+                    progress_callback({
+                        "phase": "loading",
+                        "percent": 22,
+                        "step": "載入 GGUF pipeline",
+                        "current_file": gguf_file,
+                        "detail": f"GGUF 檔案已準備完成，正在載入 {gguf_file}",
+                        "cache_hit": cache_hit,
+                        "bytes_written": int(download_stats.get("bytes_written") or 0),
+                        "total_bytes": int(download_stats.get("total_bytes") or 0),
+                    })
+            elif progress_callback:
                 progress_callback({
                     "phase": "downloading",
                     "percent": 6,
@@ -1451,44 +1804,60 @@ class DiffusersClient:
                     "current_file": gguf_file,
                     "detail": (
                         f"準備下載 {gguf_file}"
-                        + ("；已啟用 hf_transfer 加速" if accelerated else "；使用 huggingface_hub 下載")
+                        + ("；已啟用 hf_transfer 加速" if backend["hf_transfer_enabled"] else "；使用 huggingface_hub 下載")
+                        + ("；已停用 hf_xet" if backend["xet_disabled"] else "")
                     ),
                     "token_used": bool(self.token),
-                    "hf_transfer_enabled": accelerated,
+                    **backend,
                 })
-            kwargs = {"repo_id": model_repo, "filename": gguf_file, "token": (self.token or None)}
-            if not self.keep_downloaded_models:
-                transient_dir = self._new_transient_download_dir(f"gguf_{model_repo.replace('/', '_')}")
-                kwargs["local_dir"] = str(transient_dir)
+            if not gguf_path:
+                heartbeat = (
+                    log_capture.heartbeat(
+                        phase="downloading",
+                        percent=6,
+                        step="Hugging Face GGUF 檔案下載",
+                        detail=f"正在下載 GGUF 檔案 {gguf_file}",
+                    )
+                    if log_capture
+                    else nullcontext()
+                )
+                with heartbeat:
+                    gguf_path, download_stats = self._stream_huggingface_file_download(
+                        model_repo,
+                        gguf_file,
+                        progress_callback=progress_callback,
+                        log_capture=log_capture,
+                        backend=backend,
+                        base_percent=6,
+                        span_percent=16,
+                    )
+                self._raise_if_unsupported_diffusers_gguf(
+                    gguf_path,
+                    gguf_file=gguf_file,
+                    progress_callback=progress_callback,
+                    log_capture=log_capture,
+                )
+                cache_hit = bool(download_stats.get("cache_hit"))
                 if log_capture:
-                    log_capture.register_transient_path(transient_dir)
-                    log_capture.append_line(f"Diffusers keep-downloaded-models disabled; using transient GGUF local_dir={transient_dir}")
-            if tqdm_class:
-                kwargs["tqdm_class"] = tqdm_class
-            try:
-                gguf_path = hf_hub_download(**kwargs)
-            except TypeError:
-                kwargs.pop("tqdm_class", None)
-                gguf_path = hf_hub_download(**kwargs)
-            cache_hit = self._download_tracker_cache_hit(download_tracker)
-            if log_capture:
-                suffix = " (cache hit; no network bytes reported)" if cache_hit else ""
-                log_capture.append_line(f"Download complete: {model_repo}/{gguf_file}{suffix}")
-            if progress_callback:
-                progress_callback({
-                    "phase": "loading",
-                    "percent": 22,
-                    "step": "載入 GGUF pipeline",
-                    "current_file": gguf_file,
-                    "detail": (
-                        f"Hugging Face cache hit：{gguf_file} 已在本機快取，未偵測到網路下載位元組，正在載入 GGUF pipeline"
-                        if cache_hit
-                        else f"GGUF 檔案已下載到本機快取，正在載入 {gguf_file}"
-                    ),
-                    "cache_hit": cache_hit,
-                    "bytes_written": int(download_tracker.get("bytes_written") or 0),
-                    "total_bytes": int(download_tracker.get("total_bytes") or 0),
-                })
+                    suffix = " (cache hit; no network bytes reported)" if cache_hit else ""
+                    log_capture.append_line(f"Download complete: {model_repo}/{gguf_file}{suffix}")
+                if progress_callback:
+                    progress_callback({
+                        "phase": "loading",
+                        "percent": 22,
+                        "step": "載入 GGUF pipeline",
+                        "current_file": gguf_file,
+                        "detail": (
+                            f"Hugging Face cache hit：{gguf_file} 已在本機快取，未偵測到網路下載位元組，正在載入 GGUF pipeline"
+                            if cache_hit
+                            else f"GGUF 檔案已下載到本機快取，正在載入 {gguf_file}"
+                        ),
+                        "cache_hit": cache_hit,
+                        "bytes_written": int(download_stats.get("bytes_written") or 0),
+                        "total_bytes": int(download_stats.get("total_bytes") or 0),
+                    })
+        except ComfyUIError:
+            raise
         except Exception as exc:
             raise ComfyUIError(f"GGUF 檔案下載失敗，尚未載入模型：{exc}") from exc
 
@@ -1576,6 +1945,7 @@ class DiffusersClient:
 
     def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None, extra_data=None):
         self._ensure_in_process_runtime_allowed()
+        download_backend = self._configure_huggingface_download_backend()
         params = params or {}
         mode = str(params.get("generation_mode") or "txt2img").strip().lower()
         if mode not in {"txt2img", "img2img", "inpaint"}:
@@ -1611,6 +1981,7 @@ class DiffusersClient:
                 "current_file": gguf_file or "",
                 "detail": f"下載 Diffusers model：{model_repo}（{selected_label}），正在檢查 Hugging Face cache / metadata",
                 "token_used": bool(self.token),
+                **download_backend,
             })
         try:
             with runtime_logs:
@@ -1624,7 +1995,12 @@ class DiffusersClient:
                     log_capture=runtime_logs,
                 )
         except ComfyUIError as exc:
-            runtime_logs.error(str(exc), step="Diffusers 模型載入失敗")
+            error_step = (
+                "GGUF 格式不支援 Diffusers backend"
+                if "ComfyUI-GGUF 原生 UNet GGUF" in str(exc)
+                else "Diffusers 模型載入失敗"
+            )
+            runtime_logs.error(str(exc), step=error_step)
             runtime_logs.cleanup_transient_paths()
             raise
         except Exception as exc:

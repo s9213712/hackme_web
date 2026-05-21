@@ -86,6 +86,7 @@ def test_diffusers_in_process_runtime_confirmation_is_in_quick_settings():
     assert "comfyui_diffusers_low_cpu_mem_usage" in admin_js
     assert "comfyui_diffusers_cuda_fallback_to_cpu" in admin_js
     assert "comfyui_diffusers_keep_downloaded_models" in admin_js
+    assert "comfyui_diffusers_disable_xet" in admin_js
     assert "只有勾選主程序資源風險確認後才允許直接推論" in admin_js
     assert "Diffusers device_map" in quick_js
     assert "GPU 失敗改用 CPU" in quick_js

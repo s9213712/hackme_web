@@ -129,6 +129,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
       { id: "s-comfyui-allow-in-process-diffusers", label: "接受主程序 Diffusers 資源風險", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
       { id: "s-comfyui-diffusers-low-cpu-mem-usage", label: "低 RAM 載入", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
       { id: "s-comfyui-diffusers-keep-downloaded-models", label: "保留已下載模型快取", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
+      { id: "s-comfyui-diffusers-disable-xet", label: "停用 HF Xet 下載", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
       { id: "s-comfyui-max-batch-size", label: "單次張數上限" },
       { id: "s-comfyui-default-width", label: "預設寬度" },
       { id: "s-comfyui-default-height", label: "預設高度" },

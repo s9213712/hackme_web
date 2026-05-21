@@ -2072,6 +2072,28 @@ def register_comfyui_routes(app, deps):
             pass
         return updated
 
+    def _generation_job_progress_snapshot(job_id):
+        job_id = str(job_id or "")
+        with generation_jobs_lock:
+            job = generation_jobs.get(job_id)
+            if job:
+                return dict(job.get("progress") or {})
+        job = _load_generation_job_from_db(job_id)
+        return dict((job or {}).get("progress") or {})
+
+    def _diffusers_error_progress(job_id, exc):
+        previous = _generation_job_progress_snapshot(job_id)
+        previous_step = str(previous.get("step") or "").strip()
+        return {
+            "phase": "error",
+            "percent": 100,
+            "detail": str(exc),
+            "error_message": str(exc),
+            "completed": False,
+            "backend_kind": "diffusers",
+            "step": previous_step if previous.get("phase") == "error" and previous_step else "Diffusers 產圖失敗",
+        }
+
     def _get_generation_job(job_id):
         job_id = str(job_id or "")
         with generation_jobs_lock:
@@ -2561,10 +2583,7 @@ def register_comfyui_routes(app, deps):
                 "completed": False,
             }
             if getattr(active_client, "backend_kind", "") == "diffusers":
-                error_progress.update({
-                    "backend_kind": "diffusers",
-                    "step": "Diffusers 產圖失敗",
-                })
+                error_progress = _diffusers_error_progress(job_id, exc)
             _update_generation_job_progress(job_id, error_progress)
             _update_generation_job(job_id, status="error", error=str(exc), result=None)
             audit("COMFYUI_GENERATE_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])
@@ -2577,10 +2596,7 @@ def register_comfyui_routes(app, deps):
                 "completed": False,
             }
             if getattr(active_client, "backend_kind", "") == "diffusers":
-                error_progress.update({
-                    "backend_kind": "diffusers",
-                    "step": "Diffusers 產圖失敗",
-                })
+                error_progress = _diffusers_error_progress(job_id, exc)
             _update_generation_job_progress(job_id, error_progress)
             _update_generation_job(job_id, status="error", error=str(exc), result=None)
             audit("COMFYUI_GENERATE_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])

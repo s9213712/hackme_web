@@ -1,6 +1,23 @@
 # Update Summary
 
-Release ID: `2026.05.20-169`
+Release ID: `2026.05.21-170`
+
+## 2026.05.21-170
+
+- Added Hugging Face / Diffusers Python runtime logs to the ComfyUI frontend
+  progress panel, including stdout, stderr, warnings, logging, tqdm-style
+  download/loading progress, and explicit failure reasons.
+- Added root-controlled Diffusers runtime options for device, dtype,
+  `device_map`, low-memory loading, CUDA-to-CPU fallback, downloaded-model
+  retention, and Hugging Face Xet disabling.
+- Added local ComfyUI startup performance controls for VRAM mode, precision,
+  CPU VAE, attention backend, cache behavior, deterministic mode, reserved
+  VRAM, and managed extra startup arguments.
+- Added the HF Diffusers resource probe for CPU/RAM/GPU/network sampling during
+  frontend generation checks.
+- Added GGUF file streaming/download progress and fail-fast metadata detection
+  for ComfyUI-GGUF native UNet files, directing those models to ComfyUI-GGUF
+  `Unet Loader (GGUF)` workflows instead of hanging in the Diffusers backend.
 
 ## 2026.05.20-169
 

@@ -364,6 +364,7 @@ def parse_args():
     parser.add_argument("--low-cpu-mem-usage", default="true")
     parser.add_argument("--cuda-fallback-to-cpu", default="true")
     parser.add_argument("--keep-downloaded-models", default="true")
+    parser.add_argument("--disable-xet", default="true")
     parser.add_argument("--width", type=int, default=512)
     parser.add_argument("--height", type=int, default=512)
     parser.add_argument("--steps", type=int, default=2)
@@ -385,6 +386,7 @@ def main() -> int:
             "low_cpu_mem_usage": args.low_cpu_mem_usage,
             "cuda_fallback_to_cpu": args.cuda_fallback_to_cpu,
             "keep_downloaded_models": args.keep_downloaded_models,
+            "disable_xet": args.disable_xet,
         },
         "runs": [],
     }
@@ -402,6 +404,7 @@ def main() -> int:
                 "comfyui_diffusers_low_cpu_mem_usage": str(args.low_cpu_mem_usage).strip().lower() in {"1", "true", "yes", "on"},
                 "comfyui_diffusers_cuda_fallback_to_cpu": str(args.cuda_fallback_to_cpu).strip().lower() in {"1", "true", "yes", "on"},
                 "comfyui_diffusers_keep_downloaded_models": str(args.keep_downloaded_models).strip().lower() in {"1", "true", "yes", "on"},
+                "comfyui_diffusers_disable_xet": str(args.disable_xet).strip().lower() in {"1", "true", "yes", "on"},
             },
             allow_http_error=True,
             timeout=60,
