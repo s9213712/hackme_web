@@ -70,6 +70,37 @@ def test_preflight_reports_literal_missing_model_inputs():
     ]
 
 
+def test_preflight_reports_literal_missing_comfyui_gguf_unet_inputs():
+    probe = _load_probe_module()
+    object_info = {
+        "UnetLoaderGGUF": {
+            "input": {
+                "required": {
+                    "unet_name": [["available.gguf"], {}],
+                },
+            },
+        },
+    }
+    workflow = {
+        "4": {
+            "class_type": "UnetLoaderGGUF",
+            "inputs": {"unet_name": "missing.gguf"},
+        },
+    }
+
+    result = probe._preflight("missing_gguf_unet", workflow, object_info)
+
+    assert result["runnable"] is False
+    assert result["missing_models"] == [
+        {
+            "node_id": "4",
+            "class_type": "UnetLoaderGGUF",
+            "input": "unet_name",
+            "value": "missing.gguf",
+        },
+    ]
+
+
 def test_preflight_reads_combo_options_from_object_info_dict_shape():
     probe = _load_probe_module()
     object_info = {

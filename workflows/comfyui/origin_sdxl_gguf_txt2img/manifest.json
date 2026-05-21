@@ -1,0 +1,250 @@
+{
+  "conversion": {
+    "allowlist_message": "",
+    "allowlist_status": "allowlisted",
+    "class_count": 8,
+    "denied_classes": [],
+    "node_count": 9,
+    "source_format": "api_prompt",
+    "source_path": "image/txt2img/sdxl_gguf_comfyui.json",
+    "structural_status": "pass",
+    "unknown_classes": []
+  },
+  "default_params": {
+    "batch_size": 1,
+    "cfg": 7,
+    "checkpoint": "",
+    "clip": "clip_l.safetensors",
+    "clip2": "clip_g.safetensors",
+    "controlnet": null,
+    "denoise_strength": 0,
+    "diffusion_model": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+    "generation_mode": "txt2img",
+    "height": 1024,
+    "loras": [],
+    "model": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+    "negative_prompt": "low quality, blurry, watermark, bad anatomy",
+    "prompt": "masterpiece anime illustration, futuristic city street at sunset, detailed lighting, clean composition",
+    "sampler_name": "euler",
+    "scheduler": "normal",
+    "seed": 424242,
+    "steps": 24,
+    "upscale_model": "",
+    "vae": "sdxl_vae.safetensors",
+    "width": 1024
+  },
+  "description": "SDXL text-to-image workflow for ComfyUI-GGUF native UNet files. Put GGUF UNet files in ComfyUI/models/unet and install the ComfyUI-GGUF custom node.",
+  "id": "origin_sdxl_gguf_txt2img",
+  "name": "SDXL GGUF Text-to-Image (ComfyUI-GGUF)",
+  "origin_source_path": "image/txt2img/sdxl_gguf_comfyui.json",
+  "output_kinds": [
+    "image"
+  ],
+  "required_controlnets": [],
+  "required_custom_nodes": [
+    "ComfyUI-GGUF"
+  ],
+  "required_loras": [],
+  "required_models": [
+    {
+      "kind": "diffusion_model",
+      "name": "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
+    },
+    {
+      "kind": "clip",
+      "name": "clip_l.safetensors"
+    },
+    {
+      "kind": "clip",
+      "name": "clip_g.safetensors"
+    },
+    {
+      "kind": "vae",
+      "name": "sdxl_vae.safetensors"
+    }
+  ],
+  "schema_version": 1,
+  "source": "official_origin",
+  "source_format": "api_prompt",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "masterpiece anime illustration, futuristic city street at sunset, detailed lighting, clean composition",
+            "id": "node:6:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "Positive prompt (Node 6)",
+            "node_id": "6",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "low quality, blurry, watermark, bad anatomy",
+            "id": "node:7:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "Negative prompt (Node 7)",
+            "node_id": "7",
+            "required": true
+          }
+        ],
+        "id": "text",
+        "label": "Text"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "UnetLoaderGGUF",
+            "current_value": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+            "id": "node:4:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "GGUF Diffusion / UNet (Node 4)",
+            "node_id": "4",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "DualCLIPLoader",
+            "current_value": "clip_l.safetensors",
+            "id": "node:10:clip_name1",
+            "input_name": "clip_name1",
+            "input_type": "select",
+            "label": "CLIP-L (Node 10)",
+            "node_id": "10",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "DualCLIPLoader",
+            "current_value": "clip_g.safetensors",
+            "id": "node:10:clip_name2",
+            "input_name": "clip_name2",
+            "input_type": "select",
+            "label": "CLIP-G (Node 10)",
+            "node_id": "10",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "sdxl_vae.safetensors",
+            "id": "node:11:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE (Node 11)",
+            "node_id": "11",
+            "required": true
+          }
+        ],
+        "id": "model",
+        "label": "Models"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptyLatentImage",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 1024,
+            "id": "node:5:width",
+            "input_name": "width",
+            "input_type": "number",
+            "label": "Width (Node 5)",
+            "node_id": "5",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptyLatentImage",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 1024,
+            "id": "node:5:height",
+            "input_name": "height",
+            "input_type": "number",
+            "label": "Height (Node 5)",
+            "node_id": "5",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 150,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 24,
+            "id": "node:3:steps",
+            "input_name": "steps",
+            "input_type": "number",
+            "label": "Steps (Node 3)",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 30,
+              "min": 0.5,
+              "step": 0.1
+            },
+            "current_value": 7,
+            "id": "node:3:cfg",
+            "input_name": "cfg",
+            "input_type": "number",
+            "label": "CFG (Node 3)",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 424242,
+            "id": "node:3:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "Seed (Node 3)",
+            "node_id": "3",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "Sampling"
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

@@ -1,4 +1,6 @@
+import io
 import logging
+import os
 import sys
 import types
 import warnings
@@ -137,6 +139,33 @@ def test_diffusers_generate_reports_download_preparation_before_heavy_loading(tm
     assert any(event.get("error_message") == "stop before loading" for event in events)
 
 
+def test_diffusers_generate_preserves_unsupported_gguf_error_step(tmp_path, monkeypatch):
+    monkeypatch.setenv("HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS", "1")
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+    events = []
+
+    def fail_with_unsupported_gguf(*args, **kwargs):
+        raise ComfyUIError("model.gguf 是 ComfyUI-GGUF 原生 UNet GGUF，請使用 Unet Loader (GGUF)")
+
+    monkeypatch.setattr(client, "_load_pipeline", fail_with_unsupported_gguf)
+
+    with pytest.raises(ComfyUIError):
+        client.generate_image(
+            {
+                "generation_mode": "txt2img",
+                "prompt": "test",
+                "diffusers_gguf_file": "model.gguf",
+                "diffusers_model_variant": "gguf::model.gguf",
+                "diffusers_gguf_base_repo": "base/model",
+            },
+            progress_callback=events.append,
+        )
+
+    assert events[-1]["phase"] == "error"
+    assert events[-1]["step"] == "GGUF 格式不支援 Diffusers backend"
+    assert "ComfyUI-GGUF 原生 UNet GGUF" in events[-1]["error_message"]
+
+
 def test_diffusers_generate_streams_python_runtime_output_to_progress_log(tmp_path, monkeypatch):
     monkeypatch.setenv("HTML_LEARNING_ALLOW_IN_PROCESS_DIFFUSERS", "1")
     client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
@@ -266,6 +295,32 @@ def test_diffusers_cuda_fallback_to_cpu_is_root_controlled(tmp_path):
     assert client._should_fallback_to_cpu_for_low_vram("cpu", {"cuda_total_bytes": 4 * 1024 * 1024 * 1024}) is False
 
 
+def test_diffusers_hf_xet_download_backend_is_root_controlled(tmp_path, monkeypatch):
+    monkeypatch.delenv("HF_HUB_DISABLE_XET", raising=False)
+    client = DiffusersClient.from_settings(
+        {"comfyui_diffusers_disable_xet": True},
+        storage_root=tmp_path,
+    )
+
+    backend = client._configure_huggingface_download_backend()
+
+    assert client.disable_xet is True
+    assert backend["xet_disabled"] is True
+    assert os.environ["HF_HUB_DISABLE_XET"] == "1"
+
+    monkeypatch.delenv("HF_HUB_DISABLE_XET", raising=False)
+    client = DiffusersClient.from_settings(
+        {"comfyui_diffusers_disable_xet": False},
+        storage_root=tmp_path,
+    )
+
+    backend = client._configure_huggingface_download_backend()
+
+    assert client.disable_xet is False
+    assert backend["xet_disabled"] is False
+    assert "HF_HUB_DISABLE_XET" not in os.environ
+
+
 def test_diffusers_cuda_memory_warning_is_streamed_for_small_vram(tmp_path):
     client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
     events = []
@@ -376,6 +431,175 @@ def test_diffusers_huggingface_progress_tqdm_reports_download_bytes(tmp_path):
     assert "speed_bytes_per_sec" in events[-1]
     assert events[-1]["step"] == "Hugging Face 檔案下載"
     assert "model.safetensors" in events[-1]["detail"]
+
+
+def test_diffusers_download_heartbeat_uses_incomplete_cache_bytes(tmp_path, monkeypatch):
+    hf_home = tmp_path / "hf"
+    cache_dir = hf_home / "hub" / "models--owner--model" / "blobs"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "download.incomplete").write_bytes(b"x" * 123)
+    monkeypatch.setenv("HF_HOME", str(hf_home))
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+    tracker = {"bytes_written": 40, "total_bytes": 1000}
+
+    payload = client._download_heartbeat_payload(tracker, current_file="model.gguf", model_repo="owner/model")
+
+    assert payload["bytes_written"] == 123
+    assert payload["total_bytes"] == 1000
+    assert tracker["external_bytes_written"] == 123
+    assert payload["current_file"] == "model.gguf"
+
+
+def test_diffusers_stream_huggingface_file_download_reports_bytes(tmp_path, monkeypatch):
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+    events = []
+    requests = []
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Length": "6"}
+
+        def __init__(self):
+            self._body = io.BytesIO(b"abcdef")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, size=-1):
+            return self._body.read(size)
+
+    def fake_urlopen(request, timeout=60):
+        requests.append(request)
+        return FakeResponse()
+
+    monkeypatch.setattr("services.comfyui.diffusers_client.urllib_request.urlopen", fake_urlopen)
+
+    path, stats = client._stream_huggingface_file_download(
+        "owner/model",
+        "model.gguf",
+        progress_callback=events.append,
+        backend={"xet_disabled": True, "hf_transfer_enabled": False},
+    )
+
+    assert requests
+    assert requests[0].full_url == "https://huggingface.co/owner/model/resolve/main/model.gguf"
+    with open(path, "rb") as handle:
+        assert handle.read() == b"abcdef"
+    assert stats == {"cache_hit": False, "bytes_written": 6, "total_bytes": 6}
+    assert events[-1]["phase"] == "downloading"
+    assert events[-1]["step"] == "Hugging Face GGUF 串流下載"
+    assert events[-1]["bytes_written"] == 6
+    assert events[-1]["total_bytes"] == 6
+    assert events[-1]["xet_disabled"] is True
+
+
+def test_diffusers_rejects_comfyui_native_gguf_before_pipeline_load(tmp_path, monkeypatch):
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+    gguf_path = tmp_path / "model.gguf"
+    gguf_path.write_bytes(b"fake")
+    events = []
+
+    monkeypatch.setattr(
+        client,
+        "_inspect_gguf_file_metadata",
+        lambda path: {
+            "field_count": 2,
+            "tensor_count": 1,
+            "has_comfy_metadata": True,
+            "has_original_unet_names": True,
+            "sample_tensors": ["input_blocks.0.0.weight"],
+        },
+    )
+
+    with pytest.raises(ComfyUIError) as exc:
+        client._raise_if_unsupported_diffusers_gguf(
+            gguf_path,
+            gguf_file="model.gguf",
+            progress_callback=events.append,
+        )
+
+    assert "ComfyUI-GGUF 原生 UNet GGUF" in str(exc.value)
+    assert "Unet Loader (GGUF)" in str(exc.value)
+    assert events[-1]["phase"] == "error"
+    assert events[-1]["step"] == "GGUF 格式不支援 Diffusers backend"
+    assert events[-1]["gguf_metadata"]["has_comfy_metadata"] is True
+
+
+def test_diffusers_prepare_gguf_file_classifies_comfyui_native_backend(tmp_path, monkeypatch):
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+    gguf_path = tmp_path / "model.gguf"
+    gguf_path.write_bytes(b"fake-gguf")
+    events = []
+
+    monkeypatch.setattr(client, "_ensure_gguf_metadata_dependencies", lambda: None)
+    monkeypatch.setattr(
+        client,
+        "_stream_huggingface_file_download",
+        lambda *args, **kwargs: (
+            str(gguf_path),
+            {"cache_hit": False, "bytes_written": gguf_path.stat().st_size, "total_bytes": gguf_path.stat().st_size},
+        ),
+    )
+    monkeypatch.setattr(
+        client,
+        "_inspect_gguf_file_metadata",
+        lambda path: {
+            "field_count": 3,
+            "tensor_count": 12,
+            "has_comfy_metadata": True,
+            "has_original_unet_names": True,
+            "sample_tensors": ["input_blocks.0.weight"],
+        },
+    )
+
+    result = client.prepare_gguf_file_for_backend("owner/model", "model.gguf", progress_callback=events.append)
+
+    assert result["suggested_backend"] == "comfyui_gguf"
+    assert result["path"] == str(gguf_path)
+    assert events[-1]["backend_kind"] == "comfyui_gguf"
+    assert events[-1]["step"] == "GGUF backend 已判斷"
+
+
+def test_diffusers_gguf_loader_preserves_unsupported_format_error(tmp_path, monkeypatch):
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+    gguf_path = tmp_path / "model.gguf"
+    gguf_path.write_bytes(b"fake")
+    fake_diffusers = types.ModuleType("diffusers")
+    fake_diffusers.GGUFQuantizationConfig = object
+    monkeypatch.setitem(sys.modules, "diffusers", fake_diffusers)
+    monkeypatch.setattr(
+        client,
+        "_stream_huggingface_file_download",
+        lambda *args, **kwargs: (str(gguf_path), {"cache_hit": True, "bytes_written": 4, "total_bytes": 4}),
+    )
+    monkeypatch.setattr(
+        client,
+        "_inspect_gguf_file_metadata",
+        lambda path: {
+            "field_count": 2,
+            "tensor_count": 1,
+            "has_comfy_metadata": True,
+            "has_original_unet_names": True,
+            "sample_tensors": ["input_blocks.0.0.weight"],
+        },
+    )
+
+    with pytest.raises(ComfyUIError) as exc:
+        client._load_gguf_pipeline(
+            "txt2img",
+            model_repo="owner/model",
+            gguf_file="model.gguf",
+            gguf_base_repo="base/model",
+            dtype=object(),
+            device="cpu",
+            progress_callback=lambda event: None,
+        )
+
+    assert "ComfyUI-GGUF 原生 UNet GGUF" in str(exc.value)
+    assert "GGUF 檔案下載失敗" not in str(exc.value)
 
 
 def test_diffusers_snapshot_patterns_avoid_duplicate_precision_downloads(tmp_path):

@@ -151,6 +151,7 @@ COMFYUI_DEFAULT_SETTINGS = {
     "comfyui_diffusers_cuda_fallback_to_cpu": _env_bool("COMFYUI_DIFFUSERS_CUDA_FALLBACK_TO_CPU", True),
     "comfyui_allow_in_process_diffusers": False,
     "comfyui_diffusers_keep_downloaded_models": _env_bool("COMFYUI_DIFFUSERS_KEEP_DOWNLOADED_MODELS", True),
+    "comfyui_diffusers_disable_xet": _env_bool("COMFYUI_DIFFUSERS_DISABLE_XET", True),
 }
 
 COMFYUI_SETTING_KEYS = tuple(COMFYUI_DEFAULT_SETTINGS)

@@ -84,6 +84,7 @@ def test_media_workflow_allowlist_supports_video_audio_nodes():
         "AnimateDiffLoader",
         "FluxGuidance",
         "StabilityStableImageSD_3_5Node",
+        "UnetLoaderGGUF",
         "SaveAudio",
         "IndexTTSNode",
     }

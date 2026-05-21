@@ -4119,6 +4119,7 @@ function updateComfyuiConnectionModeFields() {
   const lowCpuMemUsage = $("s-comfyui-diffusers-low-cpu-mem-usage");
   const cudaFallbackToCpu = $("s-comfyui-diffusers-cuda-fallback-to-cpu");
   const keepDownloadedModels = $("s-comfyui-diffusers-keep-downloaded-models");
+  const disableXet = $("s-comfyui-diffusers-disable-xet");
   const deviceMap = $("s-comfyui-diffusers-device-map");
   const localPerformanceFields = [
     "s-comfyui-local-vram-mode",
@@ -4148,6 +4149,7 @@ function updateComfyuiConnectionModeFields() {
   if (lowCpuMemUsage) lowCpuMemUsage.disabled = mode !== "diffusers";
   if (cudaFallbackToCpu) cudaFallbackToCpu.disabled = mode !== "diffusers";
   if (keepDownloadedModels) keepDownloadedModels.disabled = mode !== "diffusers";
+  if (disableXet) disableXet.disabled = mode !== "diffusers";
   if (deviceMap) deviceMap.disabled = mode !== "diffusers";
   localPerformanceFields.forEach((id) => {
     const input = $(id);
@@ -4466,6 +4468,7 @@ async function loadSettings() {
   if ($("s-comfyui-diffusers-low-cpu-mem-usage")) $("s-comfyui-diffusers-low-cpu-mem-usage").checked = s.comfyui_diffusers_low_cpu_mem_usage !== false;
   if ($("s-comfyui-diffusers-cuda-fallback-to-cpu")) $("s-comfyui-diffusers-cuda-fallback-to-cpu").checked = s.comfyui_diffusers_cuda_fallback_to_cpu !== false;
   if ($("s-comfyui-diffusers-keep-downloaded-models")) $("s-comfyui-diffusers-keep-downloaded-models").checked = s.comfyui_diffusers_keep_downloaded_models !== false;
+  if ($("s-comfyui-diffusers-disable-xet")) $("s-comfyui-diffusers-disable-xet").checked = s.comfyui_diffusers_disable_xet !== false;
   if ($("comfyui-huggingface-api-token-state")) {
     $("comfyui-huggingface-api-token-state").textContent = s.comfyui_huggingface_api_token_configured
       ? "目前已儲存 Hugging Face API Token；留空儲存不會變更。"
@@ -6248,6 +6251,7 @@ async function saveSettings() {
     comfyui_diffusers_low_cpu_mem_usage: $("s-comfyui-diffusers-low-cpu-mem-usage") ? !!$("s-comfyui-diffusers-low-cpu-mem-usage").checked : true,
     comfyui_diffusers_cuda_fallback_to_cpu: $("s-comfyui-diffusers-cuda-fallback-to-cpu") ? !!$("s-comfyui-diffusers-cuda-fallback-to-cpu").checked : true,
     comfyui_diffusers_keep_downloaded_models: $("s-comfyui-diffusers-keep-downloaded-models") ? !!$("s-comfyui-diffusers-keep-downloaded-models").checked : true,
+    comfyui_diffusers_disable_xet: $("s-comfyui-diffusers-disable-xet") ? !!$("s-comfyui-diffusers-disable-xet").checked : true,
     comfyui_paid_api_nodes_enabled: !!$("s-comfyui-paid-api-nodes-enabled")?.checked,
     comfyui_account_api_key: ($("s-comfyui-account-api-key")?.value || "").trim(),
     comfyui_account_api_key_clear: !!$("s-comfyui-account-api-key-clear")?.checked,

@@ -31,10 +31,22 @@ from services.comfyui.template.seeding import SYSTEM_WORKFLOW_IDS  # noqa: E402
 MODEL_INPUTS = {
     "CheckpointLoaderSimple": {"ckpt_name": ("CheckpointLoaderSimple", "ckpt_name")},
     "UNETLoader": {"unet_name": ("UNETLoader", "unet_name")},
+    "UnetLoaderGGUF": {"unet_name": ("UnetLoaderGGUF", "unet_name")},
+    "UnetLoaderGGUFAdvanced": {"unet_name": ("UnetLoaderGGUFAdvanced", "unet_name")},
     "CLIPLoader": {"clip_name": ("CLIPLoader", "clip_name")},
+    "CLIPLoaderGGUF": {"clip_name": ("CLIPLoaderGGUF", "clip_name")},
     "DualCLIPLoader": {
         "clip_name1": ("DualCLIPLoader", "clip_name1"),
         "clip_name2": ("DualCLIPLoader", "clip_name2"),
+    },
+    "DualCLIPLoaderGGUF": {
+        "clip_name1": ("DualCLIPLoaderGGUF", "clip_name1"),
+        "clip_name2": ("DualCLIPLoaderGGUF", "clip_name2"),
+    },
+    "TripleCLIPLoaderGGUF": {
+        "clip_name1": ("TripleCLIPLoaderGGUF", "clip_name1"),
+        "clip_name2": ("TripleCLIPLoaderGGUF", "clip_name2"),
+        "clip_name3": ("TripleCLIPLoaderGGUF", "clip_name3"),
     },
     "VAELoader": {"vae_name": ("VAELoader", "vae_name")},
     "LoraLoader": {"lora_name": ("LoraLoader", "lora_name")},
@@ -250,11 +262,11 @@ def _apply_generation_params_to_node(node_id, node, params, negative_node_ids):
     inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
     if "checkpoint_model" in params and class_type == "CheckpointLoaderSimple" and "ckpt_name" in inputs:
         inputs["ckpt_name"] = params["checkpoint_model"]
-    if "diffusion_model" in params and class_type == "UNETLoader" and "unet_name" in inputs:
+    if "diffusion_model" in params and class_type in {"UNETLoader", "UnetLoaderGGUF", "UnetLoaderGGUFAdvanced"} and "unet_name" in inputs:
         inputs["unet_name"] = params["diffusion_model"]
-    if "clip_model" in params and class_type == "CLIPLoader" and "clip_name" in inputs:
+    if "clip_model" in params and class_type in {"CLIPLoader", "CLIPLoaderGGUF"} and "clip_name" in inputs:
         inputs["clip_name"] = params["clip_model"]
-    if "clip_model" in params and class_type in {"DualCLIPLoader", "TripleCLIPLoader"}:
+    if "clip_model" in params and class_type in {"DualCLIPLoader", "TripleCLIPLoader", "DualCLIPLoaderGGUF", "TripleCLIPLoaderGGUF"}:
         for input_name in ("clip_name1", "clip_name2", "clip_name3"):
             if input_name in inputs:
                 inputs[input_name] = params["clip_model"]

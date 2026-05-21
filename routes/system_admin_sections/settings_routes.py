@@ -444,6 +444,11 @@ def register_system_admin_settings_routes(app, ctx):
             if keep_downloaded_models is None:
                 return json_resp({"ok":False,"msg":"comfyui_diffusers_keep_downloaded_models 必須是布林值 true/false"}), 400
             data["comfyui_diffusers_keep_downloaded_models"] = keep_downloaded_models
+        if "comfyui_diffusers_disable_xet" in data:
+            disable_xet = parse_strict_bool(data.get("comfyui_diffusers_disable_xet"))
+            if disable_xet is None:
+                return json_resp({"ok":False,"msg":"comfyui_diffusers_disable_xet 必須是布林值 true/false"}), 400
+            data["comfyui_diffusers_disable_xet"] = disable_xet
         if "comfyui_max_batch_size" in data:
             try:
                 batch_size = int(data.get("comfyui_max_batch_size"))

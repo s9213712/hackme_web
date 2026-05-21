@@ -100,8 +100,16 @@ _TEMPLATE_LOCKED_MODEL_FIELDS = {
     ("TripleCLIPLoader", "clip_name1"),
     ("TripleCLIPLoader", "clip_name2"),
     ("TripleCLIPLoader", "clip_name3"),
+    ("CLIPLoaderGGUF", "clip_name"),
+    ("DualCLIPLoaderGGUF", "clip_name1"),
+    ("DualCLIPLoaderGGUF", "clip_name2"),
+    ("TripleCLIPLoaderGGUF", "clip_name1"),
+    ("TripleCLIPLoaderGGUF", "clip_name2"),
+    ("TripleCLIPLoaderGGUF", "clip_name3"),
     ("CLIPVisionLoader", "clip_name"),
     ("UNETLoader", "unet_name"),
+    ("UnetLoaderGGUF", "unet_name"),
+    ("UnetLoaderGGUFAdvanced", "unet_name"),
     ("LatentUpscaleModelLoader", "model_name"),
 }
 

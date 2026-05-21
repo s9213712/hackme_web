@@ -262,7 +262,11 @@ def inspect_huggingface_diffusers_repo(repo_value, *, token="", mode="txt2img"):
     if len(variant_options) > 1:
         warnings.append("偵測到多個精度版本，請先選擇要下載/載入的版本，避免同一模型重複下載。")
     if has_gguf_options:
-        warnings.append("GGUF 需要選擇檔案並搭配 base Diffusers repo；Diffusers 官方目前不支援直接用 Pipeline 載入 GGUF repo。")
+        warnings.append(
+            "GGUF 需要選擇檔案；Diffusers component 需搭配 base repo，"
+            "ComfyUI-GGUF 原生 UNet 會自動改走 ComfyUI workflow。"
+            "本地 ComfyUI 可由本站從 HF cache 接入，遠端 ComfyUI 需管理人先放入 models/unet。"
+        )
         if suggested_base_repo:
             warnings.append(f"已推定 base repo：{suggested_base_repo}。")
     if not variant_options:

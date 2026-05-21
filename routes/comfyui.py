@@ -8,6 +8,7 @@ import ipaddress
 import re
 import secrets
 import signal
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -1559,11 +1560,6 @@ def register_comfyui_routes(app, deps):
                     )
                     if base_repo is None:
                         return {**(capabilities or {}), "diffusers_inspection": inspection}, "GGUF base Diffusers repo 格式不合法。"
-                    if not base_repo:
-                        return (
-                            {**(capabilities or {}), "diffusers_inspection": inspection},
-                            "GGUF 需要填 base Diffusers repo，例如 stabilityai/stable-diffusion-xl-base-1.0。",
-                        )
                     params["diffusers_gguf_base_repo"] = base_repo
             if params.get("loras"):
                 return capabilities, "Diffusers 後端目前不支援本站 ComfyUI LoRA 選擇；請改用本地或遠端 ComfyUI 模式。"
@@ -2072,6 +2068,28 @@ def register_comfyui_routes(app, deps):
             pass
         return updated
 
+    def _generation_job_progress_snapshot(job_id):
+        job_id = str(job_id or "")
+        with generation_jobs_lock:
+            job = generation_jobs.get(job_id)
+            if job:
+                return dict(job.get("progress") or {})
+        job = _load_generation_job_from_db(job_id)
+        return dict((job or {}).get("progress") or {})
+
+    def _diffusers_error_progress(job_id, exc):
+        previous = _generation_job_progress_snapshot(job_id)
+        previous_step = str(previous.get("step") or "").strip()
+        return {
+            "phase": "error",
+            "percent": 100,
+            "detail": str(exc),
+            "error_message": str(exc),
+            "completed": False,
+            "backend_kind": "diffusers",
+            "step": previous_step if previous.get("phase") == "error" and previous_step else "Diffusers 產圖失敗",
+        }
+
     def _get_generation_job(job_id):
         job_id = str(job_id or "")
         with generation_jobs_lock:
@@ -2470,20 +2488,241 @@ def register_comfyui_routes(app, deps):
             "timeout_unlimited": timeout_value <= 0,
         }
 
+    def _configured_native_comfyui_url():
+        if _configured_connection_mode() != "diffusers":
+            return _configured_comfyui_url()
+        settings = get_system_settings() or {}
+        configured_url = str(settings.get("comfyui_remote_api_url") or "").strip()
+        if configured_url:
+            url, msg = _validate_comfyui_api_url(configured_url)
+            if not msg:
+                return url
+        default_url = urlparse(DEFAULT_COMFYUI_URL)
+        host = str(settings.get("comfyui_api_host") or default_url.hostname or os.environ.get("COMFYUI_API_HOST") or "localhost").strip()
+        host = host.strip("[]") or "localhost"
+        try:
+            port = int(settings.get("comfyui_api_port") or default_url.port or DEFAULT_COMFYUI_PORT)
+        except Exception:
+            port = DEFAULT_COMFYUI_PORT
+        port = min(65535, max(1, port))
+        display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        return f"http://{display_host}:{port}"
+
+    def _native_comfyui_binding_for_gguf(actor):
+        native_url = _configured_native_comfyui_url()
+        binding = _comfyui_binding(actor, backend_url=native_url)
+        binding["backend_scope"] = "auto_comfyui_gguf"
+        return binding
+
+    def _is_local_comfyui_url(url):
+        try:
+            host = str(urlparse(str(url or "")).hostname or "").strip().lower()
+        except Exception:
+            return False
+        return host in {"", "localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+    def _select_exact_or_basename(candidates, options):
+        for candidate in candidates:
+            resolved = resolve_model_option(candidate, options or [])
+            if resolved:
+                return resolved
+        return ""
+
+    def _select_enum_option(current, options, preferred):
+        values = [str(item or "").strip() for item in options or [] if str(item or "").strip()]
+        current = str(current or "").strip()
+        if current and current in values:
+            return current
+        for candidate in preferred:
+            if candidate in values:
+                return candidate
+        return values[0] if values else (preferred[0] if preferred else "")
+
+    def _select_sdxl_gguf_runtime_models(native_client, capabilities, gguf_file):
+        available_nodes = set((capabilities or {}).get("available_nodes") or [])
+        required_nodes = {"UnetLoaderGGUF", "DualCLIPLoader", "CLIPTextEncode", "EmptyLatentImage", "KSampler", "VAEDecode", "VAELoader", "SaveImage"}
+        missing_nodes = sorted(required_nodes - available_nodes)
+        if missing_nodes:
+            raise ComfyUIError(
+                "ComfyUI-GGUF 自動路由缺少 workflow 節點："
+                + ", ".join(missing_nodes)
+                + "。請在 ComfyUI 安裝/啟用 ComfyUI-GGUF custom node，並確認基本 SDXL 節點可用。"
+            )
+        diffusion_options = list((capabilities or {}).get("diffusion_models") or [])
+        unet_name = resolve_model_option(gguf_file, diffusion_options)
+        clip_options = list((capabilities or {}).get("clip_models") or [])
+        vae_options = list((capabilities or {}).get("vaes") or [])
+        clip_name1 = _select_exact_or_basename(
+            ["clip_l.safetensors", "SDXL/clip_l.safetensors", "text_encoders/clip_l.safetensors"],
+            clip_options,
+        )
+        clip_name2 = _select_exact_or_basename(
+            ["clip_g.safetensors", "SDXL/clip_g.safetensors", "text_encoders/clip_g.safetensors"],
+            clip_options,
+        )
+        vae_name = _select_exact_or_basename(
+            [
+                "sdxl_vae.safetensors",
+                "sd_xl_base_vae.safetensors",
+                "sdxl_vae_fp16fix.safetensors",
+                "SDXL/sdxl_vae.safetensors",
+                "SDXL/sd_xl_base_vae.safetensors",
+            ],
+            vae_options,
+        )
+        missing = []
+        if not unet_name:
+            missing.append(f"GGUF UNet：{gguf_file}（需位於 ComfyUI models/unet 或 diffusion_models 可列出的資料夾）")
+        if not clip_name1:
+            missing.append("CLIP-L：clip_l.safetensors")
+        if not clip_name2:
+            missing.append("CLIP-G：clip_g.safetensors")
+        if not vae_name:
+            missing.append("SDXL VAE：sdxl_vae.safetensors")
+        if missing:
+            raise ComfyUIError("ComfyUI-GGUF 自動路由缺少模型：" + "；".join(missing))
+        return {
+            "unet_name": unet_name,
+            "clip_name1": clip_name1,
+            "clip_name2": clip_name2,
+            "vae_name": vae_name,
+            "sampler_name": _select_enum_option(
+                None,
+                (capabilities or {}).get("samplers") or [],
+                [SAFE_SAMPLER_FALLBACK, "euler", "dpmpp_2m"],
+            ),
+            "scheduler": _select_enum_option(
+                None,
+                (capabilities or {}).get("schedulers") or [],
+                [SAFE_SCHEDULER_FALLBACK, "normal", "karras"],
+            ),
+        }
+
+    def _install_cached_gguf_to_local_comfyui(prepared, native_binding):
+        gguf_path = Path(str((prepared or {}).get("path") or ""))
+        gguf_file = str((prepared or {}).get("gguf_file") or gguf_path.name or "").strip()
+        filename = Path(gguf_file.replace("\\", "/")).name
+        if not filename.lower().endswith(".gguf"):
+            raise ComfyUIError("GGUF 檔名不合法，無法匯入 ComfyUI models/unet")
+        if not gguf_path.is_file():
+            raise ComfyUIError(f"GGUF 快取檔不存在，無法匯入 ComfyUI：{gguf_path}")
+        if not _is_local_comfyui_url(native_binding.get("url")):
+            raise ComfyUIError(
+                f"{gguf_file} 是 ComfyUI-GGUF 原生 UNet GGUF；遠端 ComfyUI API 無法由本站直接寫入模型檔。"
+                f"請聯絡遠端 ComfyUI 管理人把檔案放到 models/unet/{filename}，"
+                f"或切到本地 ComfyUI 並設定 COMFYUI_BASE_DIR，讓本站從 Hugging Face cache 自動接入。"
+            )
+        destination_dir, relative_dir, _label, msg = _resolve_model_destination_dir(
+            model_type="unet",
+            relative_dir="unet",
+        )
+        if msg or not destination_dir:
+            raise ComfyUIError(
+                f"{gguf_file} 是 ComfyUI-GGUF 原生 UNet GGUF；自動匯入本地 ComfyUI 失敗：{msg or '找不到 models/unet 目錄'}。"
+                f"請設定 COMFYUI_BASE_DIR，或手動放到 ComfyUI/models/unet/{filename}。"
+            )
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = (destination_dir / filename).resolve()
+        try:
+            destination.relative_to(destination_dir.resolve())
+        except ValueError as exc:
+            raise ComfyUIError("GGUF 匯入目的地超出 ComfyUI models/unet") from exc
+        if not destination.exists() or destination.stat().st_size != gguf_path.stat().st_size:
+            shutil.copy2(gguf_path, destination)
+        return filename
+
+    def _maybe_prepare_diffusers_gguf_auto_route(job_id, actor, active_client, params, backend_binding):
+        if getattr(active_client, "backend_kind", "") != "diffusers":
+            return active_client, backend_binding, params
+        gguf_file = str((params or {}).get("diffusers_gguf_file") or "").strip()
+        if not gguf_file:
+            return active_client, backend_binding, params
+        if str((params or {}).get("generation_mode") or "txt2img").strip().lower() != "txt2img":
+            raise ComfyUIError("GGUF 模式目前只支援文字生圖；影片、圖生圖或局部重繪請使用 ComfyUI workflow 模板。")
+        prepare = getattr(active_client, "prepare_gguf_file_for_backend", None)
+        if not callable(prepare):
+            return active_client, backend_binding, params
+        prepared = prepare(
+            params.get("diffusers_model_repo") or params.get("model"),
+            gguf_file,
+            progress_callback=lambda progress: _update_generation_job_progress(job_id, progress),
+        )
+        if str((prepared or {}).get("suggested_backend") or "") != "comfyui_gguf":
+            base_repo = normalize_huggingface_repo_id(params.get("diffusers_gguf_base_repo"), allow_blank=True)
+            if base_repo is None:
+                raise ComfyUIError("GGUF base Diffusers repo 格式不合法。")
+            if not base_repo:
+                raise ComfyUIError("GGUF 需要設定 base Diffusers repo，例如 stabilityai/stable-diffusion-xl-base-1.0。")
+            params["diffusers_gguf_base_repo"] = base_repo
+            return active_client, backend_binding, params
+
+        native_binding = _native_comfyui_binding_for_gguf(actor)
+        native_client = _client_for_url(native_binding["url"])
+        try:
+            capabilities = native_client.get_capabilities()
+        except Exception as exc:
+            raise ComfyUIError(f"ComfyUI-GGUF 自動路由無法連線到 ComfyUI backend：{exc}") from exc
+        diffusion_options = list((capabilities or {}).get("diffusion_models") or [])
+        gguf_option = resolve_model_option(gguf_file, diffusion_options)
+        if not gguf_option:
+            installed_name = _install_cached_gguf_to_local_comfyui(prepared, native_binding)
+            try:
+                capabilities = native_client.get_capabilities()
+            except Exception:
+                capabilities = dict(capabilities or {})
+            capabilities = dict(capabilities or {})
+            refreshed_options = list((capabilities or {}).get("diffusion_models") or [])
+            if not resolve_model_option(installed_name, refreshed_options):
+                capabilities["diffusion_models"] = sorted(set(refreshed_options + diffusion_options + [installed_name]))
+            gguf_option = resolve_model_option(installed_name, (capabilities or {}).get("diffusion_models") or []) or installed_name
+        runtime_models = _select_sdxl_gguf_runtime_models(native_client, capabilities, gguf_option)
+        routed_params = dict(params)
+        routed_params.update({
+            "backend_kind": "comfyui_gguf",
+            "generation_mode": "txt2img",
+            "model": runtime_models["unet_name"],
+            "diffusion_model": runtime_models["unet_name"],
+            "comfyui_gguf_unet_name": runtime_models["unet_name"],
+            "clip": runtime_models["clip_name1"],
+            "clip2": runtime_models["clip_name2"],
+            "vae": runtime_models["vae_name"],
+            "sampler_name": _select_enum_option(params.get("sampler_name"), (capabilities or {}).get("samplers") or [], [runtime_models["sampler_name"]]),
+            "scheduler": _select_enum_option(params.get("scheduler"), (capabilities or {}).get("schedulers") or [], [runtime_models["scheduler"]]),
+            "filename_prefix": params.get("filename_prefix") or "hackme_web_gguf",
+        })
+        _update_generation_job_progress(job_id, {
+            "phase": "routing",
+            "percent": 28,
+            "backend_kind": "comfyui_gguf",
+            "step": "切換到 ComfyUI-GGUF workflow",
+            "current_file": gguf_file,
+            "detail": f"已偵測為 ComfyUI-GGUF 原生 UNet，將使用 {native_binding.get('url')} 執行 UnetLoaderGGUF workflow。",
+            "comfyui_url": native_binding.get("url"),
+        })
+        return native_client, native_binding, routed_params
+
     def _run_comfyui_generation_job(job_id, actor, params, quote, timeout_seconds, request_meta=None, backend_binding=None):
         backend_binding = backend_binding if isinstance(backend_binding, dict) else _comfyui_binding(actor)
         active_client = _client_for_url(backend_binding["url"])
-        generation_token = _register_active_generation(
-            actor,
-            backend_url=backend_binding.get("url"),
-            backend_scope=backend_binding.get("backend_scope"),
-        )
+        generation_token = None
         request_meta = request_meta if isinstance(request_meta, dict) else {}
         audit_ip = request_meta.get("client_ip") or "-"
         audit_ua = request_meta.get("user_agent") or "-"
         _update_generation_job(job_id, status="running")
         _update_generation_job_progress(job_id, _initial_generation_progress(active_client, params, timeout_seconds))
         try:
+            active_client, backend_binding, params = _maybe_prepare_diffusers_gguf_auto_route(
+                job_id,
+                actor,
+                active_client,
+                params,
+                backend_binding,
+            )
+            generation_token = _register_active_generation(
+                actor,
+                backend_url=backend_binding.get("url"),
+                backend_scope=backend_binding.get("backend_scope"),
+            )
             result = active_client.generate_image(
                 params,
                 **_maybe_fetch_outputs_kwarg(
@@ -2561,10 +2800,7 @@ def register_comfyui_routes(app, deps):
                 "completed": False,
             }
             if getattr(active_client, "backend_kind", "") == "diffusers":
-                error_progress.update({
-                    "backend_kind": "diffusers",
-                    "step": "Diffusers 產圖失敗",
-                })
+                error_progress = _diffusers_error_progress(job_id, exc)
             _update_generation_job_progress(job_id, error_progress)
             _update_generation_job(job_id, status="error", error=str(exc), result=None)
             audit("COMFYUI_GENERATE_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])
@@ -2577,15 +2813,13 @@ def register_comfyui_routes(app, deps):
                 "completed": False,
             }
             if getattr(active_client, "backend_kind", "") == "diffusers":
-                error_progress.update({
-                    "backend_kind": "diffusers",
-                    "step": "Diffusers 產圖失敗",
-                })
+                error_progress = _diffusers_error_progress(job_id, exc)
             _update_generation_job_progress(job_id, error_progress)
             _update_generation_job(job_id, status="error", error=str(exc), result=None)
             audit("COMFYUI_GENERATE_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])
         finally:
-            _unregister_active_generation(generation_token)
+            if generation_token:
+                _unregister_active_generation(generation_token)
 
     def _comfyui_account_api_key():
         return str((get_system_settings() or {}).get("comfyui_account_api_key") or os.environ.get("COMFYUI_ACCOUNT_API_KEY") or "").strip()

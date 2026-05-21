@@ -1,0 +1,101 @@
+{
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 7,
+      "denoise": 1,
+      "latent_image": [
+        "5",
+        0
+      ],
+      "model": [
+        "4",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "seed": 424242,
+      "steps": 24
+    }
+  },
+  "4": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
+    }
+  },
+  "5": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "batch_size": 1,
+      "height": 1024,
+      "width": 1024
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "10",
+        0
+      ],
+      "text": "masterpiece anime illustration, futuristic city street at sunset, detailed lighting, clean composition"
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "10",
+        0
+      ],
+      "text": "low quality, blurry, watermark, bad anatomy"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "11",
+        0
+      ]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "hackme_web_sdxl_gguf",
+      "images": [
+        "8",
+        0
+      ]
+    }
+  },
+  "10": {
+    "class_type": "DualCLIPLoader",
+    "inputs": {
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "clip_g.safetensors",
+      "device": "default",
+      "type": "sdxl"
+    }
+  },
+  "11": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "sdxl_vae.safetensors"
+    }
+  }
+}

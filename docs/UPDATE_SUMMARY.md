@@ -1,6 +1,17 @@
 # Update Summary
 
-Release ID: `2026.05.21-176`
+Release ID: `2026.05.21-177`
+
+## 2026.05.21-177
+
+- Merged the latest `03.Points` ComfyUI / Hugging Face GGUF routing work into
+  `04.BLOCKCHAIN` while retaining the Phase 0 / Phase 1 walletization gates.
+- Added automatic GGUF backend routing for Hugging Face mode: Diffusers-compatible
+  GGUF files stay in Diffusers, while ComfyUI-GGUF native UNet files route to a
+  ComfyUI `UnetLoaderGGUF` workflow.
+- Added an SDXL GGUF text-to-image system workflow and ComfyUI-GGUF template
+  metadata, including local `models/unet` auto-attach support and explicit
+  remote ComfyUI administrator guidance.
 
 ## 2026.05.21-176
 

@@ -14,6 +14,7 @@ def test_comfyui_defaults_use_lan_remote_api_mode():
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_diffusers_low_cpu_mem_usage"] is True
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_diffusers_cuda_fallback_to_cpu"] is True
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_diffusers_keep_downloaded_models"] is True
+    assert COMFYUI_DEFAULT_SETTINGS["comfyui_diffusers_disable_xet"] is True
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_local_vram_mode"] == "auto"
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_local_precision"] == "auto"
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_local_unet_dtype"] == "auto"
@@ -28,5 +29,6 @@ def test_comfyui_defaults_use_lan_remote_api_mode():
     assert DEFAULT_SETTINGS["comfyui_diffusers_low_cpu_mem_usage"] is True
     assert DEFAULT_SETTINGS["comfyui_diffusers_cuda_fallback_to_cpu"] is True
     assert DEFAULT_SETTINGS["comfyui_diffusers_keep_downloaded_models"] is True
+    assert DEFAULT_SETTINGS["comfyui_diffusers_disable_xet"] is True
     assert DEFAULT_SETTINGS["comfyui_local_vram_mode"] == "auto"
     assert DEFAULT_SETTINGS["comfyui_local_cpu_vae"] is False

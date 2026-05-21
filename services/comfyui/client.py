@@ -379,7 +379,10 @@ class ComfyUIClient:
         models = _node_input_options_from_info(object_info, "CheckpointLoaderSimple", "ckpt_name")
         loras = _node_input_options_from_info(object_info, "LoraLoader", "lora_name") if "LoraLoader" in available_nodes else []
         vaes = _node_input_options_from_info(object_info, "VAELoader", "vae_name") if "VAELoader" in available_nodes else []
-        diffusion_models = _node_input_options_from_info(object_info, "UNETLoader", "unet_name") if "UNETLoader" in available_nodes else []
+        diffusion_models = []
+        for class_type in ("UNETLoader", "UnetLoaderGGUF", "UnetLoaderGGUFAdvanced"):
+            if class_type in available_nodes:
+                diffusion_models.extend(_node_input_options_from_info(object_info, class_type, "unet_name"))
         clip_models = []
         for class_type, input_name in (
             ("CLIPLoader", "clip_name"),
