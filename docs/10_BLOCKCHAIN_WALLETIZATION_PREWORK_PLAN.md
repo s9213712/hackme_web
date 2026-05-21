@@ -23,6 +23,8 @@
 7. Safe mode、非 production mode、wallet frozen / closed 時必須阻擋寫入。
 8. 每個實作切片都要有對應 pytest；牽涉前端交易體驗時要加 Playwright 或靜態 frontend test。
 9. 每個可驗證切片完成後 commit + push 到 `04.BLOCKCHAIN`，再看 GitHub Actions。
+10. 本階段不得把 `points_ledger` 變成可直接 `UPDATE balance` 的快取真相；所有 fund / wallet balance 必須能由 append-only ledger replay 重建。
+11. 若需要 balance cache，只能標記為 `derived_cache`，且必須有 rebuild / verify 指令或 helper。
 
 ## 現有基礎
 
@@ -81,6 +83,48 @@ Migration / backfill gate:
 ## Phase 1：Wallet Service Facade
 
 目標：新增統一語意層，讓業務模組不用知道 ledger 底層細節。
+
+### Phase 1A：Private economy layer foundation
+
+目標：先建立可 replay 的模擬鏈經濟地基，不開始 Phase 1C / 1D 的產品流接入。
+
+已批准的 Phase 1A / 1B guardrails 見
+[architecture/ECONOMY_LAYER_GUARDRAILS.md](architecture/ECONOMY_LAYER_GUARDRAILS.md)。
+
+Phase 1A 只能做：
+
+- MINT / BURN / official treasury / PROMO fund / EXCHANGE fund 的 deterministic fund wallet。
+- Versioned economy policy，包含 `max_supply`、`reserved_locked`、bootstrap allocation 與 fund watermarks。
+- Append-only economy event ledger。
+- Replay-derived balances、derived cache rebuild / verify、snapshot。
+- Root dashboard read model，所有數字來自 replay / derived view。
+- Economic incident append-only event，不自動改 balance。
+
+Phase 1A 不做：
+
+- 不遷移 ComfyUI、Trading、Video、Storage、Games 的既有交易行為。
+- 不開 user-to-user transfer。
+- 不讓 fund balance cache 成為財務真相。
+- 不新增會取代 replay 的 reservation truth。
+
+Phase 1A exit gate:
+
+- Bootstrap 重跑 idempotent，不重複 mint。
+- MINT 不得超過 `max_supply - reserved_locked` 的可釋出上限，除非明確 policy override。
+- BURN 只增加 `burned_total`，不得讓 `active_supply` 為負。
+- Dashboard 數字必須全部來自 replay / derived view，不得手填。
+- Economic incident 先只 append，不得自動改 balance。
+- `tests/economy/` 覆蓋 bootstrap、mint cap、burn、derived cache verify、incident append-only、idempotency conflict。
+
+### Phase 1B：Admin economy transfer API
+
+Phase 1B 才能新增下列 API，且仍不得接產品流：
+
+- `POST /api/admin/economy/transfers/dry-run`
+- `POST /api/admin/economy/transfers/commit`
+- `GET /api/admin/economy/ledger`
+- `GET /api/admin/economy/replay-status`
+- `POST /api/admin/economy/rebuild-derived-balances`
 
 預計 facade 操作：
 

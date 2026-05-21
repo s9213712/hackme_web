@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-目前 Release ID：`2026.05.21-180`
+目前 Release ID：`2026.05.21-181`
 
 這份文件只做導覽，不放功能流水帳。近期變更看
 [UPDATE_SUMMARY.md](UPDATE_SUMMARY.md)，完整英文索引看
@@ -50,7 +50,7 @@ Nginx 對外，Gunicorn 只綁 127.0.0.1:8000。
 | 主題 | 文件 |
 |---|---|
 | 安全模型 | [06_SECURITY_MODEL.md](06_SECURITY_MODEL.md), [SECURITY.md](SECURITY.md) |
-| PointsChain | [07_POINTSCHAIN.md](07_POINTSCHAIN.md), [architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md](architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md) |
+| PointsChain | [07_POINTSCHAIN.md](07_POINTSCHAIN.md), [architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md](architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md), [architecture/ECONOMY_LAYER_GUARDRAILS.md](architecture/ECONOMY_LAYER_GUARDRAILS.md) |
 | Trading | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [trading/README.md](trading/README.md) |
 | Snapshot / Reset / Restore | [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [ops_boundaries/README.md](ops_boundaries/README.md) |
 | 個人主頁 / 好友系統 | [social/USER_PROFILES_AND_FRIENDS.md](social/USER_PROFILES_AND_FRIENDS.md) |

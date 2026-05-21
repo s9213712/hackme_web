@@ -1,6 +1,19 @@
 # Update Summary
 
-Release ID: `2026.05.21-180`
+Release ID: `2026.05.21-181`
+
+## 2026.05.21-181
+
+- Added the Phase 1A private economy layer foundation for PointsChain with
+  deterministic MINT, BURN, official treasury, PROMO fund, and EXCHANGE fund
+  wallets.
+- Added append-only economy events, replay-derived fund balances, derived-cache
+  rebuild / verify helpers, replay snapshots, and root dashboard summary cards.
+- Documented economy-layer guardrails and added tests for bootstrap idempotency,
+  mint cap enforcement, burn replay, derived-cache verification, incident
+  append-only behavior, and idempotency conflict handling.
+- Normalized completed ComfyUI async job payloads so a completed job always
+  reports 100% progress to the frontend.
 
 ## 2026.05.21-180
 

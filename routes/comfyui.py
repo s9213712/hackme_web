@@ -2127,6 +2127,11 @@ def register_comfyui_routes(app, deps):
             "error": job.get("error") or "",
             "result": _strip_comfyui_inline_data_urls(job.get("result")),
         }
+        if payload["status"] == "completed":
+            progress = payload["progress"]
+            progress["phase"] = "completed"
+            progress["percent"] = 100
+            progress["completed"] = True
         if payload["status"] in {"queued", "running"}:
             progress = payload["progress"]
             updated_at = float(progress.get("updated_at") or job.get("updated_at") or job.get("created_at") or 0)

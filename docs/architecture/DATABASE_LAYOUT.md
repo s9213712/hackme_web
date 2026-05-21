@@ -236,7 +236,7 @@ Control-plane 專用 DB。
 | audit chain | platform audit bootstrap | `audit.db` |
 | server mode / production gate / incident | `services/snapshots/schema.py` | `control.db` |
 | snapshot metadata | `services/snapshots/schema.py` | `database.db` |
-| PointsChain / wallet / ledger | `services/points_chain/schema.py` | `database.db` |
+| PointsChain / wallet / ledger | `services/points_chain/schema.py`, `services/points_chain/economy_layer.py` | `database.db` |
 | trading | `services/trading/schema_ddl.py`, `services/trading/settings_schema.py` | `database.db` |
 | upload security | `services/security/upload_schema.py` | `database.db` |
 

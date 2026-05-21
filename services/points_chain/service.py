@@ -3,6 +3,7 @@
 import threading
 
 from . import schema as _schema
+from .economy_layer import ensure_economy_layer_schema, economy_layer_report
 from .wallet_identity import ensure_wallet_identity_schema, system_wallet_address
 
 globals().update({name: value for name, value in _schema.__dict__.items() if not name.startswith("__")})
@@ -44,6 +45,7 @@ class PointsLedgerService:
                 return
             ensure_points_economy_schema(conn)
             ensure_wallet_identity_schema(conn)
+            ensure_economy_layer_schema(conn)
             if db_path:
                 self._schema_ready_paths.add(db_path)
 
@@ -2131,11 +2133,18 @@ class PointsLedgerService:
                 "latest_ledger_at": latest["latest_ledger_at"] if latest else None,
                 "latest_wallet_at": latest["latest_wallet_at"] if latest else None,
             }
+            economy_layer = economy_layer_report(
+                conn,
+                chain_secret=self.chain_secret,
+                actor={"role": "system", "id": None},
+            )
+            conn.commit()
             return {
                 "wallets": wallet_data,
                 "ledger": ledger_data,
                 "chain": chain,
                 "circulation": circulation,
+                "economy_layer": economy_layer,
                 "currency_type": DISPLAY_CURRENCY,
             }
         finally:

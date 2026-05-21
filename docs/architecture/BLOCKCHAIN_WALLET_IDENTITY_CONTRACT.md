@@ -72,3 +72,7 @@ For this phase, frontend QA should verify:
 - No server-side custody of user-created private keys.
 - No reservation table as an independent financial source of truth.
 - No migration of existing product debit / credit behavior in this slice.
+
+The Phase 1A private economy layer extends this identity slice with MINT,
+BURN, treasury, PROMO, and EXCHANGE fund wallets. Its hard replay/cache rules
+are documented in [ECONOMY_LAYER_GUARDRAILS.md](ECONOMY_LAYER_GUARDRAILS.md).

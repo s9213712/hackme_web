@@ -41,6 +41,17 @@
 
 詳細 contract 見 [architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md](architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md)。
 
+## Phase 1A 私有鏈經濟層
+
+- 經濟層新增 MINT、BURN、official treasury、PROMO fund、EXCHANGE fund 五種 deterministic fund wallet。
+- Bootstrap 會從 MINT idempotently 分配初始 official / promo / exchange fund，不會因重跑 root report 重複 mint。
+- `points_economy_events` 是 append-only fund event ledger；`points_economy_derived_balances` 是 `derived_cache`，可 rebuild / verify。
+- Root dashboard 顯示的 max supply、reserved locked、minted、burned、fund balance、circulating supply 都來自 replay / derived view。
+- Economic incident 在 Phase 1A 只 append，不自動改 balance。
+- 目前仍不開 user-to-user transfer，也不把 ComfyUI、Trading、Video、Storage、Games 產品流接進 fund wallet。
+
+硬限制見 [architecture/ECONOMY_LAYER_GUARDRAILS.md](architecture/ECONOMY_LAYER_GUARDRAILS.md)。
+
 ## 自動發放規則
 
 - 新註冊一般會員的註冊禮會延後到完成錢包 onboarding 後發放，且仍以 ledger idempotency 保證只入帳一次。
@@ -75,6 +86,7 @@
 - [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md)
 - [10_BLOCKCHAIN_WALLETIZATION_PREWORK_PLAN.md](10_BLOCKCHAIN_WALLETIZATION_PREWORK_PLAN.md)
 - [architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md](architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md)
+- [architecture/ECONOMY_LAYER_GUARDRAILS.md](architecture/ECONOMY_LAYER_GUARDRAILS.md)
 - [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md)
 - [For_developer.md](For_developer.md)
 - [VIDEO_PLATFORM.md](video/VIDEO_PLATFORM.md)

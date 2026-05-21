@@ -140,10 +140,10 @@
 - 一句話說明：站內點數、經濟帳本、封塊與驗證系統，是交易與打賞的可信來源。
 - 設計目的：讓所有重要金額變動都走同一條可驗證鏈，而不是直接改 wallet balance。
 - 使用方法：一般使用者透過正常功能消費；root 可調整、封塊、驗證、備份、恢復。
-- 原理：ledger 是 source of truth，wallet 由 ledger replay 重建。
+- 原理：ledger 是 source of truth，wallet 由 ledger replay 重建；Phase 1A 私有鏈經濟層也以 append-only economy events replay 出 MINT、BURN、treasury、PROMO、EXCHANGE fund balances。
 - 失敗情境與提示：safe mode、chain verify fail、恢復需要人工確認、餘額顯示與鏈不一致。
-- 測試方式：credit/debit、seal/verify、backup/recovery、影片打賞、交易資金流。
-- 相關文件連結：[07_POINTSCHAIN.md](07_POINTSCHAIN.md), [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md)
+- 測試方式：credit/debit、seal/verify、backup/recovery、economy replay / derived-cache verify、影片打賞、交易資金流。
+- 相關文件連結：[07_POINTSCHAIN.md](07_POINTSCHAIN.md), [architecture/ECONOMY_LAYER_GUARDRAILS.md](architecture/ECONOMY_LAYER_GUARDRAILS.md), [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md)
 
 ### Games / Board AI
 

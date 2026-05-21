@@ -419,9 +419,10 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET | `/api/root/points/report` | root | points 報表，含目前在外積分與 ledger 淨額 |
 | GET | `/api/root/points/audit` | root | points audit |
 | POST | `/api/root/points/ledger/<ledger_uuid>/rollback` | root | rollback |
-| GET | `/api/admin/points/economy/stats` | manager | economy stats |
+| GET | `/api/admin/points/economy/stats` | manager | economy stats；包含 Phase 1A replay-derived fund summary |
 
 > 注意：`docs/AGENTS/research/BLOCKCHAIN/POINTS_TRANSFER_API.md` 是 Phase 3 規格，不代表現在已可呼叫。
+> Phase 1B 的 `/api/admin/economy/transfers/*`、ledger、replay-status、rebuild-derived-balances API 尚未開放；目前只提供既有 stats read model。
 
 ### Trading / Bots / Margin
 
