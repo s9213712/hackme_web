@@ -520,6 +520,63 @@ def test_root_can_configure_local_comfyui_script_with_absolute_path(tmp_path):
     assert state["comfyui_api_port"] == 8188
 
 
+def test_root_can_configure_local_comfyui_main_py_performance_flags():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put(
+        "/api/admin/settings",
+        json={
+            "comfyui_connection_mode": "local",
+            "comfyui_local_vram_mode": "lowvram",
+            "comfyui_local_precision": "force_fp16",
+            "comfyui_local_unet_dtype": "fp8_e4m3fn",
+            "comfyui_local_vae_dtype": "fp32",
+            "comfyui_local_text_encoder_dtype": "fp16",
+            "comfyui_local_cpu_vae": True,
+            "comfyui_local_attention_mode": "pytorch",
+            "comfyui_local_upcast_attention": "force",
+            "comfyui_local_cuda_malloc": "disable",
+            "comfyui_local_disable_smart_memory": True,
+            "comfyui_local_deterministic": True,
+            "comfyui_local_async_offload": "disable",
+            "comfyui_local_cache_mode": "lru",
+            "comfyui_local_cache_lru": 64,
+            "comfyui_local_reserve_vram_gb": "1.5",
+        },
+    )
+
+    assert res.status_code == 200
+    assert state["comfyui_local_vram_mode"] == "lowvram"
+    assert state["comfyui_local_precision"] == "force_fp16"
+    assert state["comfyui_local_unet_dtype"] == "fp8_e4m3fn"
+    assert state["comfyui_local_vae_dtype"] == "fp32"
+    assert state["comfyui_local_text_encoder_dtype"] == "fp16"
+    assert state["comfyui_local_cpu_vae"] is True
+    assert state["comfyui_local_attention_mode"] == "pytorch"
+    assert state["comfyui_local_upcast_attention"] == "force"
+    assert state["comfyui_local_cuda_malloc"] == "disable"
+    assert state["comfyui_local_disable_smart_memory"] is True
+    assert state["comfyui_local_deterministic"] is True
+    assert state["comfyui_local_async_offload"] == "disable"
+    assert state["comfyui_local_cache_mode"] == "lru"
+    assert state["comfyui_local_cache_lru"] == 64
+    assert state["comfyui_local_reserve_vram_gb"] == "1.5"
+    assert res.get_json()["settings"]["comfyui_local_cpu_vae"] is True
+
+
+def test_local_comfyui_main_py_performance_flags_reject_invalid_values():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    assert client.put("/api/admin/settings", json={"comfyui_local_vram_mode": "fastest"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_local_unet_dtype": "int4"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_local_cpu_vae": "maybe"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_local_cache_lru": 10001}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_local_reserve_vram_gb": "999"}).status_code == 400
+    assert "comfyui_local_vram_mode" not in state
+
+
 def test_root_can_leave_remote_comfyui_url_blank_when_saving_settings():
     app, state = _admin_app()
     client = app.test_client()

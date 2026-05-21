@@ -9,5 +9,11 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 LISTEN_HOST="${LISTEN_HOST:-127.0.0.1}"
 LISTEN_PORT="${LISTEN_PORT:-8192}"
 
+EXTRA_ARGS=("$@")
+if [[ ${#EXTRA_ARGS[@]} -eq 0 && -n "${COMFYUI_EXTRA_ARGS:-}" ]]; then
+  # The web app only writes allowlisted ComfyUI main.py flags here.
+  eval "EXTRA_ARGS=(${COMFYUI_EXTRA_ARGS})"
+fi
+
 cd "$COMFYUI_ROOT"
-exec "$PYTHON_BIN" main.py --listen "$LISTEN_HOST" --port "$LISTEN_PORT" "$@"
+exec "$PYTHON_BIN" main.py --listen "$LISTEN_HOST" --port "$LISTEN_PORT" "${EXTRA_ARGS[@]}"

@@ -91,8 +91,40 @@ def test_diffusers_in_process_runtime_confirmation_is_in_quick_settings():
     assert "GPU 失敗改用 CPU" in quick_js
     assert "低 RAM 載入" in quick_js
     assert "保留已下載模型快取" in quick_js
-    assert "/js/01-root-quick-settings.js?v=20260521-diffusers-cpu-fallback" in html
-    assert "/js/50-admin.js?v=20260521-diffusers-cpu-fallback" in html
+    assert "/js/01-root-quick-settings.js?v=20260521-comfyui-local-main-args" in html
+    assert "/js/50-admin.js?v=20260521-comfyui-local-main-args" in html
+
+
+def test_local_comfyui_main_py_performance_controls_are_root_configurable():
+    html = _read("public/index.html")
+    admin_js = _read("public/js/50-admin.js")
+    quick_js = _read("public/js/01-root-quick-settings.js")
+
+    for field_id in [
+        "s-comfyui-local-vram-mode",
+        "s-comfyui-local-precision",
+        "s-comfyui-local-unet-dtype",
+        "s-comfyui-local-vae-dtype",
+        "s-comfyui-local-text-encoder-dtype",
+        "s-comfyui-local-cpu-vae",
+        "s-comfyui-local-attention-mode",
+        "s-comfyui-local-upcast-attention",
+        "s-comfyui-local-cuda-malloc",
+        "s-comfyui-local-disable-smart-memory",
+        "s-comfyui-local-deterministic",
+        "s-comfyui-local-async-offload",
+        "s-comfyui-local-cache-mode",
+        "s-comfyui-local-cache-lru",
+        "s-comfyui-local-reserve-vram-gb",
+    ]:
+        assert f'id="{field_id}"' in html
+        assert field_id in admin_js
+    assert "本地 ComfyUI main.py 性能參數" in html
+    assert "遠端 API 無法改變對方啟動旗標" in html
+    assert "comfyui_local_vram_mode" in admin_js
+    assert "comfyui_local_cpu_vae" in admin_js
+    assert "本地 VRAM 模式" in quick_js
+    assert "本地 CPU VAE" in quick_js
 
 
 def test_embedding_quick_insert_hides_when_no_embeddings_are_available():

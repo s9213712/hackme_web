@@ -86,6 +86,18 @@ def register_system_admin_settings_routes(app, ctx):
     validate_comfyui_diffusers_device = ctx["validate_comfyui_diffusers_device"]
     validate_comfyui_diffusers_device_map = ctx["validate_comfyui_diffusers_device_map"]
     validate_comfyui_diffusers_dtype = ctx["validate_comfyui_diffusers_dtype"]
+    validate_comfyui_local_async_offload = ctx["validate_comfyui_local_async_offload"]
+    validate_comfyui_local_attention_mode = ctx["validate_comfyui_local_attention_mode"]
+    validate_comfyui_local_cache_lru = ctx["validate_comfyui_local_cache_lru"]
+    validate_comfyui_local_cache_mode = ctx["validate_comfyui_local_cache_mode"]
+    validate_comfyui_local_cuda_malloc = ctx["validate_comfyui_local_cuda_malloc"]
+    validate_comfyui_local_precision = ctx["validate_comfyui_local_precision"]
+    validate_comfyui_local_reserve_vram_gb = ctx["validate_comfyui_local_reserve_vram_gb"]
+    validate_comfyui_local_text_encoder_dtype = ctx["validate_comfyui_local_text_encoder_dtype"]
+    validate_comfyui_local_unet_dtype = ctx["validate_comfyui_local_unet_dtype"]
+    validate_comfyui_local_upcast_attention = ctx["validate_comfyui_local_upcast_attention"]
+    validate_comfyui_local_vae_dtype = ctx["validate_comfyui_local_vae_dtype"]
+    validate_comfyui_local_vram_mode = ctx["validate_comfyui_local_vram_mode"]
     validate_comfyui_relative_script = ctx["validate_comfyui_relative_script"]
     validate_huggingface_api_token = ctx["validate_huggingface_api_token"]
     normalize_huggingface_repo_id = ctx["normalize_huggingface_repo_id"]
@@ -292,6 +304,72 @@ def register_system_admin_settings_routes(app, ctx):
             if port < 1 or port > 65535:
                 return json_resp({"ok":False,"msg":"comfyui_api_port 必須是 1-65535"}), 400
             data["comfyui_api_port"] = port
+        local_choice_validators = {
+            "comfyui_local_vram_mode": (
+                validate_comfyui_local_vram_mode,
+                "comfyui_local_vram_mode 必須是 auto、gpu_only、highvram、normalvram、lowvram、novram 或 cpu",
+            ),
+            "comfyui_local_precision": (
+                validate_comfyui_local_precision,
+                "comfyui_local_precision 必須是 auto、force_fp16 或 force_fp32",
+            ),
+            "comfyui_local_unet_dtype": (
+                validate_comfyui_local_unet_dtype,
+                "comfyui_local_unet_dtype 必須是 auto、fp32、fp64、bf16、fp16、fp8_e4m3fn、fp8_e5m2 或 fp8_e8m0fnu",
+            ),
+            "comfyui_local_vae_dtype": (
+                validate_comfyui_local_vae_dtype,
+                "comfyui_local_vae_dtype 必須是 auto、fp16、fp32 或 bf16",
+            ),
+            "comfyui_local_text_encoder_dtype": (
+                validate_comfyui_local_text_encoder_dtype,
+                "comfyui_local_text_encoder_dtype 必須是 auto、fp8_e4m3fn、fp8_e5m2、fp16、fp32 或 bf16",
+            ),
+            "comfyui_local_attention_mode": (
+                validate_comfyui_local_attention_mode,
+                "comfyui_local_attention_mode 必須是 auto、split、quad、pytorch、sage、flash 或 disable_xformers",
+            ),
+            "comfyui_local_upcast_attention": (
+                validate_comfyui_local_upcast_attention,
+                "comfyui_local_upcast_attention 必須是 auto、force 或 dont",
+            ),
+            "comfyui_local_cuda_malloc": (
+                validate_comfyui_local_cuda_malloc,
+                "comfyui_local_cuda_malloc 必須是 auto、enable 或 disable",
+            ),
+            "comfyui_local_async_offload": (
+                validate_comfyui_local_async_offload,
+                "comfyui_local_async_offload 必須是 auto、enable 或 disable",
+            ),
+            "comfyui_local_cache_mode": (
+                validate_comfyui_local_cache_mode,
+                "comfyui_local_cache_mode 必須是 auto、ram、classic、lru 或 none",
+            ),
+        }
+        for key, (validator, message) in local_choice_validators.items():
+            if key not in data:
+                continue
+            value = validator(data.get(key))
+            if value is None:
+                return json_resp({"ok":False,"msg":message}), 400
+            data[key] = value
+        for key in ("comfyui_local_cpu_vae", "comfyui_local_disable_smart_memory", "comfyui_local_deterministic"):
+            if key not in data:
+                continue
+            parsed = parse_strict_bool(data.get(key))
+            if parsed is None:
+                return json_resp({"ok":False,"msg":f"{key} 必須是布林值 true/false"}), 400
+            data[key] = parsed
+        if "comfyui_local_cache_lru" in data:
+            cache_lru = validate_comfyui_local_cache_lru(data.get("comfyui_local_cache_lru"))
+            if cache_lru is None:
+                return json_resp({"ok":False,"msg":"comfyui_local_cache_lru 必須是 0-10000 的整數"}), 400
+            data["comfyui_local_cache_lru"] = cache_lru
+        if "comfyui_local_reserve_vram_gb" in data:
+            reserve_vram = validate_comfyui_local_reserve_vram_gb(data.get("comfyui_local_reserve_vram_gb"))
+            if reserve_vram is None:
+                return json_resp({"ok":False,"msg":"comfyui_local_reserve_vram_gb 必須留空，或填 0-128 GB 的數字"}), 400
+            data["comfyui_local_reserve_vram_gb"] = reserve_vram
         if "comfyui_civitai_api_key" in data:
             data["comfyui_civitai_api_key"] = str(data.get("comfyui_civitai_api_key") or "").strip()
         clear_comfyui_account_api_key = False

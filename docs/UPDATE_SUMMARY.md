@@ -1,6 +1,18 @@
 # Update Summary
 
-Release ID: `2026.05.21-175`
+Release ID: `2026.05.21-176`
+
+## 2026.05.21-176
+
+- Added root-controlled local ComfyUI `main.py` performance controls for VRAM
+  mode, precision, UNet/VAE/text-encoder dtype, CPU VAE, attention backend,
+  cuda malloc, async offload, cache mode, deterministic mode, smart-memory
+  behavior, and reserved VRAM.
+- Wired those controls into local ComfyUI startup through allowlisted command
+  arguments plus `COMFYUI_EXTRA_ARGS`, while keeping remote API mode clearly
+  marked as not applicable for server startup flags.
+- Updated the downloadable Linux ComfyUI startup template so custom local
+  installs can pass through the managed performance arguments.
 
 ## 2026.05.21-175
 

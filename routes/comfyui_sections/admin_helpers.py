@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import signal
+import shlex
 import socket
 import subprocess
 import tempfile
@@ -312,6 +313,111 @@ def _configured_comfyui_port(url=None):
     except Exception:
         port = DEFAULT_COMFYUI_PORT
     return min(65535, max(1, port))
+
+
+COMFYUI_LOCAL_VRAM_FLAGS = {
+    "gpu_only": "--gpu-only",
+    "highvram": "--highvram",
+    "lowvram": "--lowvram",
+    "novram": "--novram",
+    "cpu": "--cpu",
+}
+COMFYUI_LOCAL_PRECISION_FLAGS = {
+    "force_fp16": "--force-fp16",
+    "force_fp32": "--force-fp32",
+}
+COMFYUI_LOCAL_UNET_DTYPE_FLAGS = {
+    "fp32": "--fp32-unet",
+    "fp64": "--fp64-unet",
+    "bf16": "--bf16-unet",
+    "fp16": "--fp16-unet",
+    "fp8_e4m3fn": "--fp8_e4m3fn-unet",
+    "fp8_e5m2": "--fp8_e5m2-unet",
+    "fp8_e8m0fnu": "--fp8_e8m0fnu-unet",
+}
+COMFYUI_LOCAL_VAE_DTYPE_FLAGS = {
+    "fp16": "--fp16-vae",
+    "fp32": "--fp32-vae",
+    "bf16": "--bf16-vae",
+}
+COMFYUI_LOCAL_TEXT_ENCODER_DTYPE_FLAGS = {
+    "fp8_e4m3fn": "--fp8_e4m3fn-text-enc",
+    "fp8_e5m2": "--fp8_e5m2-text-enc",
+    "fp16": "--fp16-text-enc",
+    "fp32": "--fp32-text-enc",
+    "bf16": "--bf16-text-enc",
+}
+COMFYUI_LOCAL_ATTENTION_FLAGS = {
+    "split": "--use-split-cross-attention",
+    "quad": "--use-quad-cross-attention",
+    "pytorch": "--use-pytorch-cross-attention",
+    "sage": "--use-sage-attention",
+    "flash": "--use-flash-attention",
+    "disable_xformers": "--disable-xformers",
+}
+COMFYUI_LOCAL_UPCAST_ATTENTION_FLAGS = {
+    "force": "--force-upcast-attention",
+    "dont": "--dont-upcast-attention",
+}
+COMFYUI_LOCAL_CUDA_MALLOC_FLAGS = {
+    "enable": "--cuda-malloc",
+    "disable": "--disable-cuda-malloc",
+}
+COMFYUI_LOCAL_ASYNC_OFFLOAD_FLAGS = {
+    "enable": "--async-offload",
+    "disable": "--disable-async-offload",
+}
+COMFYUI_LOCAL_CACHE_FLAGS = {
+    "ram": "--cache-ram",
+    "classic": "--cache-classic",
+    "none": "--cache-none",
+}
+
+
+def _build_local_comfyui_main_args(settings=None):
+    settings = dict(settings or _live_comfyui_settings() or {})
+    args = []
+
+    def add_choice(setting_key, mapping):
+        flag = mapping.get(str(settings.get(setting_key) or "auto").strip().lower())
+        if flag:
+            args.append(flag)
+
+    add_choice("comfyui_local_vram_mode", COMFYUI_LOCAL_VRAM_FLAGS)
+    add_choice("comfyui_local_precision", COMFYUI_LOCAL_PRECISION_FLAGS)
+    add_choice("comfyui_local_unet_dtype", COMFYUI_LOCAL_UNET_DTYPE_FLAGS)
+    add_choice("comfyui_local_vae_dtype", COMFYUI_LOCAL_VAE_DTYPE_FLAGS)
+    add_choice("comfyui_local_text_encoder_dtype", COMFYUI_LOCAL_TEXT_ENCODER_DTYPE_FLAGS)
+    if settings.get("comfyui_local_cpu_vae"):
+        args.append("--cpu-vae")
+    add_choice("comfyui_local_attention_mode", COMFYUI_LOCAL_ATTENTION_FLAGS)
+    add_choice("comfyui_local_upcast_attention", COMFYUI_LOCAL_UPCAST_ATTENTION_FLAGS)
+    add_choice("comfyui_local_cuda_malloc", COMFYUI_LOCAL_CUDA_MALLOC_FLAGS)
+    if settings.get("comfyui_local_disable_smart_memory"):
+        args.append("--disable-smart-memory")
+    if settings.get("comfyui_local_deterministic"):
+        args.append("--deterministic")
+    add_choice("comfyui_local_async_offload", COMFYUI_LOCAL_ASYNC_OFFLOAD_FLAGS)
+
+    cache_mode = str(settings.get("comfyui_local_cache_mode") or "auto").strip().lower()
+    if cache_mode == "lru":
+        try:
+            cache_lru = int(settings.get("comfyui_local_cache_lru") or 0)
+        except Exception:
+            cache_lru = 0
+        args.extend(["--cache-lru", str(max(1, min(10000, cache_lru or 128)))])
+    elif cache_mode in COMFYUI_LOCAL_CACHE_FLAGS:
+        args.append(COMFYUI_LOCAL_CACHE_FLAGS[cache_mode])
+
+    reserve_vram = str(settings.get("comfyui_local_reserve_vram_gb") or "").strip()
+    if reserve_vram:
+        try:
+            reserve_value = float(reserve_vram)
+        except Exception:
+            reserve_value = None
+        if reserve_value is not None and 0 <= reserve_value <= 128:
+            args.extend(["--reserve-vram", ("%0.3f" % reserve_value).rstrip("0").rstrip(".")])
+    return args
 
 def _local_comfyui_state_path(port=None):
     safe_port = _configured_comfyui_port() if port is None else _configured_comfyui_port(f"http://localhost:{port}")
@@ -616,9 +722,15 @@ def _start_local_comfyui(actor, *, wait_seconds=2, data=None):
         return None, msg or "尚未設定 ComfyUI 本地啟動腳本"
     base = _configured_comfyui_base_dir(raw_base or None)
     project_dir = _configured_comfyui_project_dir(raw_base or None)
-    command = [str(script)]
+    local_settings = dict(_live_comfyui_settings() or {})
+    local_settings.update({
+        key: value for key, value in (data or {}).items()
+        if str(key).startswith("comfyui_local_")
+    })
+    extra_args = _build_local_comfyui_main_args(local_settings)
+    command = [str(script), *extra_args]
     if script.suffix.lower() == ".sh":
-        command = ["bash", str(script)]
+        command = ["bash", str(script), *extra_args]
     env = os.environ.copy()
     try:
         configured_port = urlparse(url or _configured_comfyui_url()).port or DEFAULT_COMFYUI_PORT
@@ -628,6 +740,8 @@ def _start_local_comfyui(actor, *, wait_seconds=2, data=None):
         "PORT": str(configured_port),
         "AUTO_PORT_SCAN": "0",
         "COMFYUI_DIR": str(project_dir or base),
+        "COMFYUI_EXTRA_ARGS": shlex.join(extra_args),
+        "COMFYUI_EXTRA_ARGS_JSON": json.dumps(extra_args, ensure_ascii=False),
     })
     start_log = None
     try:
@@ -653,6 +767,7 @@ def _start_local_comfyui(actor, *, wait_seconds=2, data=None):
             "port": int(configured_port),
             "base_dir": str(base),
             "script": str(script),
+            "extra_args": extra_args,
             "log_path": str(start_log) if start_log else "",
             "started_at": datetime.now().isoformat(),
         })
@@ -670,7 +785,7 @@ def _start_local_comfyui(actor, *, wait_seconds=2, data=None):
             msg = f"本地 ComfyUI 啟動腳本已結束（exit {return_code}）{detail}"
             audit("COMFYUI_LOCAL_AUTOSTART_ERROR", get_client_ip(), user=_actor_value(actor, "username"), success=False, ua=get_ua(), detail=msg[:180])
             return None, msg
-        audit("COMFYUI_LOCAL_AUTOSTART", get_client_ip(), user=_actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"script={script.name}")
+        audit("COMFYUI_LOCAL_AUTOSTART", get_client_ip(), user=_actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"script={script.name}, args={shlex.join(extra_args)[:120]}")
         deadline = time.time() + max(0, int(wait_seconds or 0))
         while time.time() < deadline:
             try:
