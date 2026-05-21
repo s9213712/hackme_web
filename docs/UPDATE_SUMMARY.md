@@ -1,6 +1,24 @@
 # Update Summary
 
-Release ID: `2026.05.21-184`
+Release ID: `2026.05.21-185`
+
+## 2026.05.21-185
+
+- Aligned the trading reserve / borrowing funding pool with the PointsChain
+  `EXCHANGE` fund default, so root trading pool management now starts from
+  5,000,000 POINTS instead of the legacy 10,000 bootstrap.
+- Added an idempotent legacy runtime alignment event
+  `walletized_exchange_fund_alignment` that preserves old `initial_funding`
+  history while topping existing 10,000-point pools up to the exchange fund
+  baseline.
+- Updated trading regression coverage so reserve-pool assertions and borrowing
+  pressure-rate expectations derive from the walletized exchange fund size.
+- Corrected wallet cumulative income/expense for spot trading: buy/sell
+  principal is treated as an asset swap, while realized spot PnL determines the
+  statement income or expense shown in「累計收支」.
+- Preserved Diffusers `python_log_tail` on failed ComfyUI generation jobs so
+  the frontend Python log panel still shows the failure trail instead of going
+  blank.
 
 ## 2026.05.21-184
 

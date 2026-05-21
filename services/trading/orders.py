@@ -672,6 +672,8 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                             "fee": fee,
                             "trial_used_points": trial_used,
                             "chain_spend_points": chain_spend,
+                            "statement_spent_points": 0,
+                            "statement_note": "spot buy principal is an asset swap, not cumulative spending",
                         },
                         actor=actor,
                         ctx=route_ctx,
@@ -764,6 +766,23 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
         net_credit = notional - fee
         if net_credit <= 0:
             raise ValueError("sell notional is too small after fee")
+        avg_cost = float(
+            _to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0)
+        )
+        gross_cost = notional_points(quantity_units, avg_cost) if avg_cost else 0
+        buy_fee_estimate = points_from_micropoints_ceil(buy_fee_micro)
+        sell_fee_estimate = points_from_micropoints_ceil(fee_micro)
+        net_pnl = net_credit - gross_cost
+        sell_pnl_data = {
+            "avg_cost_points": avg_cost,
+            "gross_cost_points": gross_cost,
+            "buy_fee_estimate_points": buy_fee_estimate,
+            "buy_fee_micropoints": buy_fee_micro,
+            "sell_fee_micropoints": fee_micro,
+            "settled_fee_micropoints": settled_fee_micro,
+            "sell_fee_points": sell_fee_estimate,
+            "net_pnl_points": net_pnl,
+        }
         if funding_mode == "root_simulated":
             if frozen_amount > 0:
                 service._sim_delta(conn, user_id, balance_delta=frozen_amount, locked_delta=-frozen_amount)
@@ -824,6 +843,10 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                             "fee": fee,
                             "trial_repaid_points": trial_repaid,
                             "trial_profit_points": trial_profit,
+                            "realized_pnl_points": net_pnl,
+                            "statement_earned_points": max(0, net_pnl),
+                            "statement_spent_points": max(0, -net_pnl),
+                            "statement_note": "spot sell principal is an asset swap; cumulative income/expense uses realized net PnL",
                         },
                         actor=actor,
                         ctx=route_ctx,
@@ -838,23 +861,6 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                     actor=actor,
                     order_id=order["id"],
                 )
-        avg_cost = float(
-            _to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0)
-        )
-        gross_cost = notional_points(quantity_units, avg_cost) if avg_cost else 0
-        buy_fee_estimate = points_from_micropoints_ceil(buy_fee_micro)
-        sell_fee_estimate = points_from_micropoints_ceil(fee_micro)
-        net_pnl = net_credit - gross_cost
-        sell_pnl_data = {
-            "avg_cost_points": avg_cost,
-            "gross_cost_points": gross_cost,
-            "buy_fee_estimate_points": buy_fee_estimate,
-            "buy_fee_micropoints": buy_fee_micro,
-            "sell_fee_micropoints": fee_micro,
-            "settled_fee_micropoints": settled_fee_micro,
-            "sell_fee_points": sell_fee_estimate,
-            "net_pnl_points": net_pnl,
-        }
         next_total_units = (
             int(position["quantity_units"] or 0)
             + int(position["locked_quantity_units"] or 0)

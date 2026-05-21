@@ -28,7 +28,11 @@ from contextlib import closing
 from pathlib import Path
 import py_compile
 
-from services.trading.engine import ensure_trading_schema
+from services.trading.engine import (
+    TRADING_FUNDING_POOL_INITIAL_POINTS,
+    TRADING_FUNDING_POOL_LEGACY_INITIAL_POINTS,
+    ensure_trading_schema,
+)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -350,6 +354,51 @@ def test_ensure_trading_schema_inserts_initial_reserve_pool(tmp_path):
     assert int(pool["balance_points"]) > 0, (
         "expected initial reserve_pool balance > 0 after schema seed"
     )
+    assert int(pool["balance_points"]) == TRADING_FUNDING_POOL_INITIAL_POINTS
     assert len(events) == 1, (
         f"expected exactly 1 initial_funding event, got {len(events)}"
     )
+    assert int(events[0]["balance_after"]) == TRADING_FUNDING_POOL_INITIAL_POINTS
+
+
+def test_ensure_trading_schema_aligns_legacy_reserve_pool_to_exchange_fund(tmp_path):
+    """Existing runtimes may already have the old 10k reserve seed.
+
+    Phase 1A walletization aligns that pool to the PointsChain EXCHANGE fund
+    without rewriting the legacy initial_funding event.
+    """
+    with closing(_build_fresh_db(tmp_path)) as conn:
+        conn.execute(
+            "UPDATE trading_reserve_pool SET balance_points=?, updated_at='legacy' WHERE id=1",
+            (TRADING_FUNDING_POOL_LEGACY_INITIAL_POINTS,),
+        )
+        conn.execute("DELETE FROM trading_reserve_pool_events")
+        conn.execute(
+            """
+            INSERT INTO trading_reserve_pool_events (
+                event_uuid, delta_points, balance_after, event_type, reason,
+                actor_user_id, source_user_id, order_id, fill_id, points_ledger_uuid, created_at
+            ) VALUES ('legacy-initial-funding', ?, ?, 'initial_funding', 'TRADING_FUNDING_POOL_INITIAL', NULL, NULL, NULL, NULL, NULL, 'legacy')
+            """,
+            (TRADING_FUNDING_POOL_LEGACY_INITIAL_POINTS, TRADING_FUNDING_POOL_LEGACY_INITIAL_POINTS),
+        )
+        conn.commit()
+
+        ensure_trading_schema(conn)
+        conn.commit()
+        ensure_trading_schema(conn)
+        conn.commit()
+
+        pool = conn.execute("SELECT balance_points FROM trading_reserve_pool WHERE id=1").fetchone()
+        alignment = conn.execute(
+            """
+            SELECT delta_points, balance_after FROM trading_reserve_pool_events
+            WHERE event_type='walletized_exchange_fund_alignment'
+            """
+        ).fetchall()
+
+    expected_delta = TRADING_FUNDING_POOL_INITIAL_POINTS - TRADING_FUNDING_POOL_LEGACY_INITIAL_POINTS
+    assert int(pool["balance_points"]) == TRADING_FUNDING_POOL_INITIAL_POINTS
+    assert len(alignment) == 1
+    assert int(alignment[0]["delta_points"]) == expected_delta
+    assert int(alignment[0]["balance_after"]) == TRADING_FUNDING_POOL_INITIAL_POINTS

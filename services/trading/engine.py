@@ -22,6 +22,7 @@ from services.points_chain import (
     utc_now,
     _metadata_json_checked,
 )
+from services.points_chain.economy_layer import DEFAULT_ECONOMY_POLICY
 from services.server_mode.context import SmV2Context, current_ctx
 from services.server_mode.routing import resolve_table
 from services.trading.accounting.core import (
@@ -382,7 +383,8 @@ USDT_TO_POINTS_RATE = 1
 ROOT_SIMULATED_INITIAL_POINTS = 10_000
 TRIAL_CREDIT_INITIAL_POINTS = 1_000
 TRIAL_CREDIT_DAYS = 7
-TRADING_FUNDING_POOL_INITIAL_POINTS = 10_000
+TRADING_FUNDING_POOL_LEGACY_INITIAL_POINTS = 10_000
+TRADING_FUNDING_POOL_INITIAL_POINTS = int(DEFAULT_ECONOMY_POLICY["exchange_fund_initial"])
 TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER = 4.0
 MARGIN_LONG_FINANCING_RATE_PERCENT = 90.0
 SHORT_COLLATERAL_RATE_PERCENT = 60.0
@@ -874,6 +876,36 @@ def ensure_trading_schema(conn):
             """,
             (str(uuid.uuid4()), TRADING_FUNDING_POOL_INITIAL_POINTS, next_balance, now),
         )
+    else:
+        alignment_event = conn.execute(
+            "SELECT 1 FROM trading_reserve_pool_events WHERE event_type='walletized_exchange_fund_alignment' LIMIT 1"
+        ).fetchone()
+        initial_row = conn.execute(
+            """
+            SELECT delta_points FROM trading_reserve_pool_events
+            WHERE event_type='initial_funding'
+            ORDER BY id ASC LIMIT 1
+            """
+        ).fetchone()
+        initial_points = int(initial_row["delta_points"] or 0) if initial_row else TRADING_FUNDING_POOL_LEGACY_INITIAL_POINTS
+        if not alignment_event and initial_points < TRADING_FUNDING_POOL_INITIAL_POINTS:
+            reserve = conn.execute("SELECT * FROM trading_reserve_pool WHERE id=1").fetchone()
+            balance = int(reserve["balance_points"] or 0) if reserve else 0
+            delta = TRADING_FUNDING_POOL_INITIAL_POINTS - initial_points
+            next_balance = balance + delta
+            conn.execute(
+                "UPDATE trading_reserve_pool SET balance_points=?, updated_at=?, updated_by=NULL WHERE id=1",
+                (next_balance, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO trading_reserve_pool_events (
+                    event_uuid, delta_points, balance_after, event_type, reason,
+                    actor_user_id, source_user_id, order_id, fill_id, points_ledger_uuid, created_at
+                ) VALUES (?, ?, ?, 'walletized_exchange_fund_alignment', 'POINTSCHAIN_EXCHANGE_FUND_ALIGNMENT', NULL, NULL, NULL, NULL, NULL, ?)
+                """,
+                (str(uuid.uuid4()), delta, next_balance, now),
+            )
     conn.execute(
         "INSERT OR IGNORE INTO trading_state (id, safe_mode, reason, verification_json, updated_at) VALUES (1, 0, '', '{}', ?)",
         (now,),

@@ -157,21 +157,44 @@ class PointsLedgerService:
             })
             amount = int(row["amount"])
             direction = row["direction"]
+            public_metadata = _json_loads(row["public_metadata_json"], {})
+            earned_delta, spent_delta = self._wallet_statement_deltas(
+                direction=direction,
+                amount=amount,
+                action_type=row["action_type"],
+                public_metadata=public_metadata,
+            )
             if direction in {"credit", "transfer_in"}:
                 item["balance"] += amount
-                item["earned"] += amount
             elif direction in {"debit", "transfer_out", "reverse"}:
                 item["balance"] -= amount
-                item["spent"] += amount
             elif direction == "freeze":
                 item["balance"] -= amount
                 item["frozen"] += amount
             elif direction == "unfreeze":
                 item["balance"] += amount
                 item["frozen"] -= amount
+            item["earned"] += earned_delta
+            item["spent"] += spent_delta
             if item["balance"] < 0 or item["frozen"] < 0:
                 raise ValueError(f"ledger replay would create negative wallet for user {user_id}")
         return totals
+
+    def _wallet_statement_totals_for_user(self, conn, user_id):
+        rows = conn.execute(
+            """
+            SELECT * FROM points_ledger
+            WHERE user_id=?
+            ORDER BY id ASC
+            """,
+            (int(user_id),),
+        ).fetchall()
+        return self._wallet_totals_from_ledger(rows).get(int(user_id), {
+            "balance": 0,
+            "frozen": 0,
+            "earned": 0,
+            "spent": 0,
+        })
 
     def _rebuild_wallets_from_ledger(self, conn):
         started_transaction = False
@@ -561,24 +584,33 @@ class PointsLedgerService:
         user_id = int(user_id)
         row = conn.execute("SELECT * FROM points_wallets WHERE user_id=?", (user_id,)).fetchone()
         if row:
-            return self.serialize_wallet(row)
-        return {
-            "user_id": user_id,
-            "public_account_id": self._public_account_id(user_id),
-            "currency_type": DISPLAY_CURRENCY,
-            "points_balance": 0,
-            "points_frozen": 0,
-            "total_points_earned": 0,
-            "total_points_spent": 0,
-            "soft_balance": 0,
-            "hard_balance": 0,
-            "soft_frozen": 0,
-            "hard_frozen": 0,
-            "wallet_status": "active",
-            "risk_level": "normal",
-            "created_at": None,
-            "updated_at": None,
-        }
+            payload = self.serialize_wallet(row)
+        else:
+            payload = {
+                "user_id": user_id,
+                "public_account_id": self._public_account_id(user_id),
+                "currency_type": DISPLAY_CURRENCY,
+                "points_balance": 0,
+                "points_frozen": 0,
+                "total_points_earned": 0,
+                "total_points_spent": 0,
+                "soft_balance": 0,
+                "hard_balance": 0,
+                "soft_frozen": 0,
+                "hard_frozen": 0,
+                "wallet_status": "active",
+                "risk_level": "normal",
+                "created_at": None,
+                "updated_at": None,
+            }
+        statement = self._wallet_statement_totals_for_user(conn, user_id)
+        payload["total_points_earned"] = int(statement["earned"])
+        payload["total_points_spent"] = int(statement["spent"])
+        payload["total_soft_earned"] = int(statement["earned"])
+        payload["total_soft_spent"] = int(statement["spent"])
+        payload["total_hard_earned"] = 0
+        payload["total_hard_spent"] = 0
+        return payload
 
     def get_wallet(self, user_id):
         conn = self.get_db()
@@ -586,7 +618,7 @@ class PointsLedgerService:
             self.ensure_schema(conn)
             wallet = self.ensure_wallet(conn, user_id)
             conn.commit()
-            return self.serialize_wallet(wallet)
+            return self.wallet_payload_for_read(conn, user_id)
         finally:
             conn.close()
 
@@ -895,6 +927,47 @@ class PointsLedgerService:
         normalize_currency_type(currency_type)
         return "total_soft_spent"
 
+    def _wallet_statement_deltas(self, *, direction, amount, action_type, public_metadata=None):
+        """Return display/reporting income and expense deltas for a ledger row.
+
+        Balance replay still uses the full ledger amount. These deltas drive
+        "累計收支", where spot-trade principal is an asset swap and should not
+        be counted as user spending/income.
+        """
+        direction = str(direction or "")
+        action = str(action_type or "")
+        amount = int(amount or 0)
+        metadata = public_metadata if isinstance(public_metadata, dict) else {}
+
+        def meta_int(*keys, default=None):
+            for key in keys:
+                if key not in metadata or metadata.get(key) is None:
+                    continue
+                try:
+                    return int(metadata.get(key) or 0)
+                except Exception:
+                    continue
+            return default
+
+        if action == "trading_spot_buy":
+            return 0, max(0, meta_int("statement_spent_points", "actual_expense_points", default=0) or 0)
+
+        if action == "trading_spot_sell":
+            earned = meta_int("statement_earned_points", default=None)
+            spent = meta_int("statement_spent_points", default=None)
+            if earned is not None or spent is not None:
+                return max(0, earned or 0), max(0, spent or 0)
+            realized_pnl = meta_int("realized_pnl_points", "net_pnl_points", default=None)
+            if realized_pnl is not None:
+                return max(0, realized_pnl), max(0, -realized_pnl)
+            return 0, 0
+
+        if direction in {"credit", "transfer_in"}:
+            return amount, 0
+        if direction in {"debit", "transfer_out", "reverse"}:
+            return 0, amount
+        return 0, 0
+
     def _last_ledger_hash(self, conn):
         row = conn.execute("SELECT ledger_hash FROM points_ledger ORDER BY id DESC LIMIT 1").fetchone()
         return row["ledger_hash"] if row else None
@@ -1115,12 +1188,10 @@ class PointsLedgerService:
 
         if direction in {"credit", "transfer_in"}:
             balance_after += amount
-            earned_delta = amount
         elif direction in {"debit", "transfer_out", "reverse"}:
             if balance_before < amount:
                 raise ValueError("insufficient balance")
             balance_after -= amount
-            spent_delta = amount
         elif direction == "freeze":
             if balance_before < amount:
                 raise ValueError("insufficient balance")
@@ -1132,6 +1203,12 @@ class PointsLedgerService:
             balance_after += amount
             frozen_after -= amount
 
+        earned_delta, spent_delta = self._wallet_statement_deltas(
+            direction=direction,
+            amount=amount,
+            action_type=action_type,
+            public_metadata=public_metadata or {},
+        )
         public_json = _metadata_json_checked(public_metadata or {}, label="public_metadata")
         private_json = _metadata_json_checked(private_metadata or {}, label="private_metadata")
         meta_hash = metadata_hash(public_metadata or {}, private_metadata or {}, sensitive_metadata_encrypted or "")

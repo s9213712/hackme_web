@@ -721,8 +721,8 @@ def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp
     ledger_actions = [row["action_type"] for row in points.list_ledger(user_id=1, include_user_id=True)]
     assert "trading_spot_buy" not in ledger_actions
     report = trading.root_report()
-    assert report["reserve_pool"]["balance_points"] == 10000
-    assert report["funding_pool"]["available_points"] == 10000
+    assert report["reserve_pool"]["balance_points"] == trading_engine_module.TRADING_FUNDING_POOL_INITIAL_POINTS
+    assert report["funding_pool"]["available_points"] == trading_engine_module.TRADING_FUNDING_POOL_INITIAL_POINTS
     notes = _notifications(trading, 1)
     assert notes[-1]["type"] == "trading_order_filled"
     assert notes[-1]["title"] == "交易已成交"
@@ -1413,6 +1413,7 @@ def test_grid_bot_audit_marks_orphan_open_orders_as_red(tmp_path):
 def test_grid_bot_stop_loss_disables_bot_and_cancels_open_orders(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    _deplete_trial_credit(trading, user_id=1)
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
     created = trading.create_grid_bot(
         actor=_actor(),
@@ -3458,6 +3459,7 @@ def test_trial_credit_expiry_cancels_open_sell_orders_before_reclaim(tmp_path):
 def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    _deplete_trial_credit(trading, user_id=1)
 
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
     _set_live_price(trading, symbol="ETH/POINTS", price_points=6000)
@@ -3472,6 +3474,10 @@ def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
     assert position["cost_basis_points"] == 502
     assert position["unrealized_pnl_points"] == 98
     assert dashboard_after_buy["spot_summary"]["unrealized_pnl_points"] == 98
+    wallet_after_buy = points.get_wallet(1)
+    assert wallet_after_buy["points_balance"] == 1500
+    assert wallet_after_buy["total_points_earned"] == 2000
+    assert wallet_after_buy["total_points_spent"] == 0
 
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.04")
 
@@ -3489,6 +3495,33 @@ def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
     assert position_after_sell["total_fee_points"] == 1
     assert dashboard_after_sell["spot_summary"]["realized_pnl_points"] == 39
     assert dashboard_after_sell["fills"][0]["realized_pnl_points"] == 39
+    wallet_after_sell = points.get_wallet(1)
+    assert wallet_after_sell["points_balance"] == 1739
+    assert wallet_after_sell["total_points_earned"] == 2039
+    assert wallet_after_sell["total_points_spent"] == 0
+    assert trading.verify_state()["ok"] is True
+
+
+def test_spot_wallet_cumulative_statement_counts_realized_loss_not_principal(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    _deplete_trial_credit(trading, user_id=1)
+
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
+    wallet_after_buy = points.get_wallet(1)
+    assert wallet_after_buy["points_balance"] == 500
+    assert wallet_after_buy["total_points_earned"] == 1000
+    assert wallet_after_buy["total_points_spent"] == 0
+
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=4000)
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.1")
+
+    wallet_after_loss = points.get_wallet(1)
+    assert wallet_after_loss["points_balance"] == 899
+    assert wallet_after_loss["total_points_earned"] == 1000
+    assert wallet_after_loss["total_points_spent"] == 101
+    fill = trading.user_dashboard(user_id=1)["fills"][0]
+    assert fill["realized_pnl_points"] == -101
     assert trading.verify_state()["ok"] is True
 
 
@@ -4712,7 +4745,7 @@ def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_pa
     assert dashboard["funding"]["available_points"] == 9500
     assert dashboard["funding"]["locked_points"] == 0
     assert dashboard["positions"][0]["quantity"] == "0.1"
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 10000
+    assert trading.root_report()["reserve_pool"]["balance_points"] == trading_engine_module.TRADING_FUNDING_POOL_INITIAL_POINTS
     conn = trading.get_db()
     try:
         assert conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] == 0
@@ -4887,7 +4920,7 @@ def test_sell_payout_does_not_consume_experimental_reserve_pool(tmp_path):
 
     high_price_sell = trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.05")
     assert high_price_sell["order"]["status"] == "filled"
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 10002
+    assert trading.root_report()["reserve_pool"]["balance_points"] == trading_engine_module.TRADING_FUNDING_POOL_INITIAL_POINTS + 2
 
     trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
     trading.test_prices["ETH/POINTS"] = 5000
@@ -4912,7 +4945,7 @@ def test_root_reserve_allocation_debits_source_wallet_and_audits(tmp_path):
         reason="ROOT_RESERVE_ALLOCATION",
     )
 
-    assert result["balance_points"] == 10250
+    assert result["balance_points"] == trading_engine_module.TRADING_FUNDING_POOL_INITIAL_POINTS + 250
     assert points.get_wallet(2)["points_balance"] == 750
     report = trading.root_report()
     assert report["reserve_events"][0]["reason"] == "ROOT_RESERVE_ALLOCATION"
@@ -5166,8 +5199,16 @@ def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(t
     assert points.get_wallet(1)["points_frozen"] == 0
     assert opened["funding"]["trial_credit"]["available_points"] == 800
     assert opened["funding"]["trial_credit"]["deployed_points"] == 200
-    assert opened["position"]["interest_percent_daily"] == pytest.approx(11.2)
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9700
+    expected_interest_percent = 10 * (
+        1
+        + (opened["position"]["principal_points"] / trading_engine_module.TRADING_FUNDING_POOL_INITIAL_POINTS)
+        * 4.0
+    )
+    assert opened["position"]["interest_percent_daily"] == pytest.approx(expected_interest_percent)
+    assert (
+        trading.root_report()["reserve_pool"]["balance_points"]
+        == trading_engine_module.TRADING_FUNDING_POOL_INITIAL_POINTS - 300
+    )
 
     closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
     assert closed["position"]["status"] == "closed"
@@ -5179,7 +5220,7 @@ def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(t
     assert points.get_wallet(1)["points_frozen"] == 0
     assert closed["funding"]["trial_credit"]["available_points"] == 997
     assert closed["funding"]["trial_credit"]["deployed_points"] == 0
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 10003
+    assert trading.root_report()["reserve_pool"]["balance_points"] == trading_engine_module.TRADING_FUNDING_POOL_INITIAL_POINTS + 3
     assert trading.verify_state()["ok"] is True
 
 
@@ -5277,11 +5318,22 @@ def test_margin_interest_charges_by_started_hour_not_whole_day(tmp_path):
             "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
             (opened["position"]["position_uuid"],),
         ).fetchone()
-        assert trading._margin_interest_points(row, now_text="2026-05-02T10:00:01") == 4
-        assert trading._margin_interest_points(row, now_text="2026-05-02T10:59:59") == 4
-        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:00") == 4
-        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:01") == 7
-        assert trading._margin_interest_points(row, now_text="2026-05-03T09:59:59") == 81
+        one_hour_interest = trading._margin_interest_points(row, now_text="2026-05-02T10:00:01")
+        two_hour_interest = trading._margin_interest_points(row, now_text="2026-05-02T11:00:01")
+        day_interest = trading._margin_interest_points(row, now_text="2026-05-03T09:59:59")
+        def expected_interest_points(hours):
+            micro = trading._margin_interest_due_micropoints(
+                principal=opened["position"]["principal_points"],
+                rate_percent=opened["position"]["interest_percent_daily"],
+                hours=hours,
+            )
+            return (micro + trading_engine_module.POINT_MICRO_SCALE - 1) // trading_engine_module.POINT_MICRO_SCALE
+
+        assert one_hour_interest == expected_interest_points(1)
+        assert trading._margin_interest_points(row, now_text="2026-05-02T10:59:59") == one_hour_interest
+        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:00") == one_hour_interest
+        assert two_hour_interest == expected_interest_points(2)
+        assert day_interest == expected_interest_points(24)
     finally:
         conn.close()
 
@@ -5356,7 +5408,7 @@ def test_margin_open_rejects_when_funding_pool_is_insufficient(tmp_path):
         conn.execute("BEGIN")
         trading._reserve_delta(
             conn,
-            delta=-9950,
+            delta=-(trading_engine_module.TRADING_FUNDING_POOL_INITIAL_POINTS - 50),
             event_type="test_funding_pool_drain",
             reason="TEST_FUNDING_POOL_DRAIN",
             actor=_actor(3, "root", "super_admin"),
@@ -5540,7 +5592,7 @@ def test_margin_open_is_idempotent_for_client_key(tmp_path):
     assert len([row for row in dashboard["margin_positions"] if row["status"] == "open"]) == 1
     assert dashboard["margin_positions"][0]["interest_paid_points"] == 0
     assert dashboard["margin_positions"][0]["interest_carry_micropoints"] > 0
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9700
+    assert trading.root_report()["reserve_pool"]["balance_points"] == trading_engine_module.TRADING_FUNDING_POOL_INITIAL_POINTS - 300
     assert trading.verify_state()["ok"] is True
 
 
@@ -5580,7 +5632,12 @@ def test_hourly_margin_interest_capitalizes_when_wallet_balance_is_insufficient(
     assert accrued["interest_accrued_hours"] == 2
     assert accrued["interest_paid_points"] == 0
     assert accrued["interest_points"] == 0
-    assert accrued["interest_carry_micropoints"] == 6_720_000
+    expected_carry = trading._margin_interest_due_micropoints(
+        principal=opened["position"]["principal_points"],
+        rate_percent=opened["position"]["interest_percent_daily"],
+        hours=2,
+    )
+    assert accrued["interest_carry_micropoints"] == expected_carry
     conn = trading.get_db()
     try:
         position = conn.execute(
@@ -5590,7 +5647,7 @@ def test_hourly_margin_interest_capitalizes_when_wallet_balance_is_insufficient(
     finally:
         conn.close()
     assert position["interest_points"] == 0
-    assert position["interest_carry_micropoints"] == 6_720_000
+    assert position["interest_carry_micropoints"] == expected_carry
     assert trading.verify_state()["ok"] is True
 
 
@@ -5718,7 +5775,7 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
     assert closed["interest_points"] == 3
     assert closed["position"]["interest_paid_points"] == 0
     assert closed["delta_points"] == 96
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9908
+    assert trading.root_report()["reserve_pool"]["balance_points"] == trading_engine_module.TRADING_FUNDING_POOL_INITIAL_POINTS - 92
     assert trading.verify_state()["ok"] is True
 
 
@@ -5757,7 +5814,7 @@ def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
     assert points.get_wallet(1)["points_frozen"] == 0
     notices = _notifications(trading, 1)
     assert any(row["type"] == "trading_margin_liquidated" for row in notices)
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 10001
+    assert trading.root_report()["reserve_pool"]["balance_points"] == trading_engine_module.TRADING_FUNDING_POOL_INITIAL_POINTS + 1
     assert trading.verify_state()["ok"] is True
 
 
