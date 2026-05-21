@@ -326,6 +326,29 @@ class FakeDiffusersBackendClient(FakeComfyUIClient):
         }
 
 
+class FakeNativeGgufComfyUIClient(FakeComfyUIClient):
+    base_url = "http://192.168.18.19:8188"
+
+    def get_capabilities(self):
+        payload = super().get_capabilities()
+        payload["available_nodes"] = sorted(set(payload["available_nodes"]) | {
+            "UnetLoaderGGUF",
+            "DualCLIPLoader",
+            "VAELoader",
+            "CLIPTextEncode",
+            "EmptyLatentImage",
+            "KSampler",
+            "VAEDecode",
+            "SaveImage",
+        })
+        payload["diffusion_models"] = ["WAI-NSFW-Illustrious-v140-Q8_0.gguf"]
+        payload["clip_models"] = ["clip_l.safetensors", "clip_g.safetensors"]
+        payload["vaes"] = ["SDXL/sdxl_vae.safetensors"]
+        payload["samplers"] = ["euler", "dpmpp_2m"]
+        payload["schedulers"] = ["normal", "karras"]
+        return payload
+
+
 class FailingComfyUIClient(FakeComfyUIClient):
     def generate_image(self, params, *, timeout_seconds=180, progress_callback=None):
         from services.comfyui.client import ComfyUIError
@@ -2586,6 +2609,36 @@ def test_comfyui_workflow_uses_requested_batch_size():
     assert workflow["5"]["inputs"]["batch_size"] == 4
 
 
+def test_comfyui_builds_sdxl_gguf_text_to_image_workflow():
+    workflow = ComfyUIClient("http://fake-comfyui").build_generation_workflow({
+        "generation_mode": "txt2img",
+        "model": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+        "comfyui_gguf_unet_name": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+        "clip": "clip_l.safetensors",
+        "clip2": "clip_g.safetensors",
+        "vae": "sdxl_vae.safetensors",
+        "prompt": "gguf prompt",
+        "negative_prompt": "bad",
+        "width": 1024,
+        "height": 1024,
+        "steps": 24,
+        "cfg": 7,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "seed": 123,
+        "batch_size": 1,
+        "filename_prefix": "hackme_web_gguf",
+    })
+
+    assert workflow["4"]["class_type"] == "UnetLoaderGGUF"
+    assert workflow["4"]["inputs"]["unet_name"] == "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
+    assert workflow["10"]["class_type"] == "DualCLIPLoader"
+    assert workflow["10"]["inputs"]["clip_name1"] == "clip_l.safetensors"
+    assert workflow["10"]["inputs"]["clip_name2"] == "clip_g.safetensors"
+    assert workflow["3"]["inputs"]["model"] == ["4", 0]
+    assert workflow["8"]["inputs"]["vae"] == ["11", 0]
+
+
 def test_comfyui_object_info_combo_options_are_parsed_for_upscale_models(monkeypatch):
     client = ComfyUIClient("http://fake-comfyui")
 
@@ -2705,6 +2758,46 @@ def test_comfyui_clip_vision_models_fall_back_to_model_folder_api(monkeypatch):
 
     assert client.get_clip_vision_models() == ["sigclip_vision_patch14_384.safetensors"]
     assert seen_paths == ["/object_info/CLIPVisionLoader", "/api/models/clip_vision"]
+
+
+def test_comfyui_capabilities_include_comfyui_gguf_unet_loader_options(monkeypatch):
+    client = ComfyUIClient("http://fake-comfyui")
+
+    def fake_json_request(path, **_kwargs):
+        if str(path).startswith("/api/models/"):
+            return []
+        assert path == "/object_info"
+        return {
+            "UnetLoaderGGUF": {
+                "input": {"required": {"unet_name": [["WAI-NSFW-Illustrious-v140-Q8_0.gguf"]]}}
+            },
+            "DualCLIPLoader": {
+                "input": {
+                    "required": {
+                        "clip_name1": [["clip_l.safetensors"]],
+                        "clip_name2": [["clip_g.safetensors"]],
+                    }
+                }
+            },
+            "VAELoader": {
+                "input": {"required": {"vae_name": [["sdxl_vae.safetensors"]]}}
+            },
+            "KSampler": {
+                "input": {
+                    "required": {
+                        "sampler_name": [["euler"]],
+                        "scheduler": [["normal"]],
+                    }
+                }
+            },
+        }
+
+    monkeypatch.setattr(client, "_json_request", fake_json_request)
+    capabilities = client.get_capabilities()
+
+    assert capabilities["diffusion_models"] == ["WAI-NSFW-Illustrious-v140-Q8_0.gguf"]
+    assert capabilities["clip_models"] == ["clip_g.safetensors", "clip_l.safetensors"]
+    assert capabilities["vaes"] == ["sdxl_vae.safetensors"]
 
 
 def test_comfyui_capabilities_fall_back_to_latent_upscale_model_folder_api(monkeypatch):
@@ -3122,6 +3215,221 @@ def test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes(t
     payload = _await_comfyui_result(client, generated)
     assert payload["image"]["image_ref"]["filename"] == "hackme_web_diffusers.png"
     assert FakeDiffusersBackendClient.last_params["model"] == "dhead/waiIllustriousSDXL_v150"
+
+
+def test_comfyui_diffusers_mode_auto_routes_native_gguf_to_comfyui_workflow(tmp_path):
+    class AutoRouteDiffusersBackendClient(FakeDiffusersBackendClient):
+        def prepare_gguf_file_for_backend(self, model_repo, gguf_file, *, progress_callback=None, log_capture=None):
+            if progress_callback:
+                progress_callback({
+                    "phase": "routing",
+                    "percent": 23,
+                    "backend_kind": "comfyui_gguf",
+                    "step": "GGUF backend 已判斷",
+                    "current_file": gguf_file,
+                    "detail": "偵測為 ComfyUI-GGUF 原生 UNet",
+                })
+            return {
+                "path": str(tmp_path / "WAI-NSFW-Illustrious-v140-Q8_0.gguf"),
+                "stats": {"cache_hit": True, "bytes_written": 1, "total_bytes": 1},
+                "metadata": {"has_comfy_metadata": True, "has_original_unet_names": True},
+                "suggested_backend": "comfyui_gguf",
+                "model_repo": model_repo,
+                "gguf_file": gguf_file,
+            }
+
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+
+    def factory(url):
+        if str(url).startswith("diffusers://"):
+            return AutoRouteDiffusersBackendClient()
+        return FakeNativeGgufComfyUIClient()
+
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF",
+            "comfyui_remote_api_url": "http://192.168.18.19:8188",
+            "comfyui_huggingface_api_token": "hf_read_token",
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": factory,
+        },
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "model": "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF",
+            "diffusers_gguf_file": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+            "diffusers_model_variant": "gguf::WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+            "prompt": "illustration",
+            "negative_prompt": "",
+            "sampler_name": "diffusers-auto",
+            "scheduler": "default",
+            "seed": 123,
+            "confirm_billing": True,
+        },
+    )
+
+    payload = _await_comfyui_result(client, generated)
+    assert payload["image"]["image_ref"]["filename"] == "hackme_web_00001_.png"
+    assert FakeComfyUIClient.last_params["backend_kind"] == "comfyui_gguf"
+    assert FakeComfyUIClient.last_params["model"] == "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
+    assert FakeComfyUIClient.last_params["clip"] == "clip_l.safetensors"
+    assert FakeComfyUIClient.last_params["clip2"] == "clip_g.safetensors"
+    assert FakeComfyUIClient.last_params["vae"] == "SDXL/sdxl_vae.safetensors"
+    assert FakeComfyUIClient.last_params["sampler_name"] == "euler"
+    assert FakeComfyUIClient.last_params["scheduler"] == "normal"
+
+
+def test_comfyui_diffusers_mode_local_native_gguf_installs_cached_file(tmp_path):
+    cached_gguf = tmp_path / "hf-cache" / "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
+    cached_gguf.parent.mkdir(parents=True)
+    cached_gguf.write_bytes(b"fake gguf")
+
+    class AutoRouteDiffusersBackendClient(FakeDiffusersBackendClient):
+        def prepare_gguf_file_for_backend(self, model_repo, gguf_file, *, progress_callback=None, log_capture=None):
+            return {
+                "path": str(cached_gguf),
+                "stats": {"cache_hit": True, "bytes_written": cached_gguf.stat().st_size, "total_bytes": cached_gguf.stat().st_size},
+                "metadata": {"has_comfy_metadata": True, "has_original_unet_names": True},
+                "suggested_backend": "comfyui_gguf",
+                "model_repo": model_repo,
+                "gguf_file": gguf_file,
+            }
+
+    class LocalMissingGgufComfyUIClient(FakeNativeGgufComfyUIClient):
+        base_url = "http://127.0.0.1:8188"
+
+        def get_capabilities(self):
+            payload = super().get_capabilities()
+            payload["diffusion_models"] = []
+            return payload
+
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    comfy_base = tmp_path / "ComfyUI"
+    storage_root.mkdir()
+    _init_db(db_path)
+
+    def factory(url):
+        if str(url).startswith("diffusers://"):
+            return AutoRouteDiffusersBackendClient()
+        return LocalMissingGgufComfyUIClient()
+
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF",
+            "comfyui_remote_api_url": "http://127.0.0.1:8188",
+            "comfyui_base_dir": str(comfy_base),
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": factory,
+        },
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "model": "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF",
+            "diffusers_gguf_file": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+            "diffusers_model_variant": "gguf::WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+            "prompt": "illustration",
+            "negative_prompt": "",
+            "sampler_name": "diffusers-auto",
+            "scheduler": "default",
+            "seed": 123,
+            "confirm_billing": True,
+        },
+    )
+
+    payload = _await_comfyui_result(client, generated)
+    installed = comfy_base / "models" / "unet" / "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
+    assert installed.read_bytes() == b"fake gguf"
+    assert payload["image"]["image_ref"]["filename"] == "hackme_web_00001_.png"
+    assert FakeComfyUIClient.last_params["backend_kind"] == "comfyui_gguf"
+    assert FakeComfyUIClient.last_params["model"] == "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
+
+
+def test_comfyui_diffusers_mode_remote_native_gguf_requires_remote_admin(tmp_path):
+    cached_gguf = tmp_path / "hf-cache" / "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
+    cached_gguf.parent.mkdir(parents=True)
+    cached_gguf.write_bytes(b"fake gguf")
+
+    class AutoRouteDiffusersBackendClient(FakeDiffusersBackendClient):
+        def prepare_gguf_file_for_backend(self, model_repo, gguf_file, *, progress_callback=None, log_capture=None):
+            return {
+                "path": str(cached_gguf),
+                "stats": {"cache_hit": True, "bytes_written": cached_gguf.stat().st_size, "total_bytes": cached_gguf.stat().st_size},
+                "metadata": {"has_comfy_metadata": True, "has_original_unet_names": True},
+                "suggested_backend": "comfyui_gguf",
+                "model_repo": model_repo,
+                "gguf_file": gguf_file,
+            }
+
+    class RemoteMissingGgufComfyUIClient(FakeNativeGgufComfyUIClient):
+        def get_capabilities(self):
+            payload = super().get_capabilities()
+            payload["diffusion_models"] = []
+            return payload
+
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+
+    def factory(url):
+        if str(url).startswith("diffusers://"):
+            return AutoRouteDiffusersBackendClient()
+        return RemoteMissingGgufComfyUIClient()
+
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF",
+            "comfyui_remote_api_url": "http://192.168.18.19:8188",
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": factory,
+        },
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "model": "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF",
+            "diffusers_gguf_file": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+            "diffusers_model_variant": "gguf::WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+            "prompt": "illustration",
+            "negative_prompt": "",
+            "sampler_name": "diffusers-auto",
+            "scheduler": "default",
+            "seed": 123,
+            "confirm_billing": True,
+        },
+    )
+
+    job = _await_comfyui_job(client, generated, expected_status="error")
+    assert "遠端 ComfyUI API 無法由本站直接寫入模型檔" in job["error"]
+    assert "請聯絡遠端 ComfyUI 管理人" in job["error"]
+    assert "models/unet/WAI-NSFW-Illustrious-v140-Q8_0.gguf" in job["error"]
 
 
 def test_comfyui_diffusers_stale_progress_does_not_say_comfyui_backend(tmp_path, monkeypatch):

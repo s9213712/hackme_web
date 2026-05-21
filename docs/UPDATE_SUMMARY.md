@@ -1,6 +1,16 @@
 # Update Summary
 
-Release ID: `2026.05.21-170`
+Release ID: `2026.05.21-171`
+
+## 2026.05.21-171
+
+- Added automatic GGUF backend routing for Hugging Face mode: Diffusers-compatible
+  GGUF files stay in Diffusers, while ComfyUI-GGUF native UNet files route to a
+  ComfyUI `UnetLoaderGGUF` workflow.
+- Added an SDXL GGUF text-to-image system workflow and ComfyUI-GGUF template
+  metadata, with explicit `models/unet` placement guidance for remote ComfyUI.
+- Extended ComfyUI model discovery, template allowlists, capability checks, UI
+  labels, and run gates so GGUF UNet/CLIP loader nodes are recognized.
 
 ## 2026.05.21-170
 

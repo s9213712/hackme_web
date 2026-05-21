@@ -114,7 +114,11 @@ _MODEL_BUCKET_OBJECT_INFO_PATHS: dict[str, tuple[tuple[str, str], ...]] = {
     "controlnet": (("ControlNetLoader", "control_net_name"),),
     "upscale_model": (("UpscaleModelLoader", "model_name"),),
     "latent_upscale_model": (("LatentUpscaleModelLoader", "model_name"),),
-    "diffusion_model": (("UNETLoader", "unet_name"),),
+    "diffusion_model": (
+        ("UNETLoader", "unet_name"),
+        ("UnetLoaderGGUF", "unet_name"),
+        ("UnetLoaderGGUFAdvanced", "unet_name"),
+    ),
     "clip": (
         ("CLIPLoader", "clip_name"),
         ("DualCLIPLoader", "clip_name1"),
@@ -122,6 +126,12 @@ _MODEL_BUCKET_OBJECT_INFO_PATHS: dict[str, tuple[tuple[str, str], ...]] = {
         ("TripleCLIPLoader", "clip_name1"),
         ("TripleCLIPLoader", "clip_name2"),
         ("TripleCLIPLoader", "clip_name3"),
+        ("CLIPLoaderGGUF", "clip_name"),
+        ("DualCLIPLoaderGGUF", "clip_name1"),
+        ("DualCLIPLoaderGGUF", "clip_name2"),
+        ("TripleCLIPLoaderGGUF", "clip_name1"),
+        ("TripleCLIPLoaderGGUF", "clip_name2"),
+        ("TripleCLIPLoaderGGUF", "clip_name3"),
     ),
     "clip_vision": (("CLIPVisionLoader", "clip_name"),),
 }

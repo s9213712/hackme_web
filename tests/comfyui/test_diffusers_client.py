@@ -528,6 +528,41 @@ def test_diffusers_rejects_comfyui_native_gguf_before_pipeline_load(tmp_path, mo
     assert events[-1]["gguf_metadata"]["has_comfy_metadata"] is True
 
 
+def test_diffusers_prepare_gguf_file_classifies_comfyui_native_backend(tmp_path, monkeypatch):
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+    gguf_path = tmp_path / "model.gguf"
+    gguf_path.write_bytes(b"fake-gguf")
+    events = []
+
+    monkeypatch.setattr(client, "_ensure_gguf_metadata_dependencies", lambda: None)
+    monkeypatch.setattr(
+        client,
+        "_stream_huggingface_file_download",
+        lambda *args, **kwargs: (
+            str(gguf_path),
+            {"cache_hit": False, "bytes_written": gguf_path.stat().st_size, "total_bytes": gguf_path.stat().st_size},
+        ),
+    )
+    monkeypatch.setattr(
+        client,
+        "_inspect_gguf_file_metadata",
+        lambda path: {
+            "field_count": 3,
+            "tensor_count": 12,
+            "has_comfy_metadata": True,
+            "has_original_unet_names": True,
+            "sample_tensors": ["input_blocks.0.weight"],
+        },
+    )
+
+    result = client.prepare_gguf_file_for_backend("owner/model", "model.gguf", progress_callback=events.append)
+
+    assert result["suggested_backend"] == "comfyui_gguf"
+    assert result["path"] == str(gguf_path)
+    assert events[-1]["backend_kind"] == "comfyui_gguf"
+    assert events[-1]["step"] == "GGUF backend 已判斷"
+
+
 def test_diffusers_gguf_loader_preserves_unsupported_format_error(tmp_path, monkeypatch):
     client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
     gguf_path = tmp_path / "model.gguf"

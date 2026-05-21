@@ -156,6 +156,112 @@ def build_text_to_image_workflow(params, *, error_cls):
     return workflow
 
 
+def build_gguf_text_to_image_base(params, *, error_cls):
+    unet_name = str(params.get("comfyui_gguf_unet_name") or params.get("diffusion_model") or params.get("model") or "").strip()
+    clip_name1 = str(params.get("clip") or params.get("clip_name1") or "").strip()
+    clip_name2 = str(params.get("clip2") or params.get("clip_name2") or "").strip()
+    vae_name = str(params.get("vae") or "").strip()
+    if not unet_name:
+        raise error_cls("ComfyUI-GGUF workflow 缺少 UNet GGUF 模型")
+    if not clip_name1 or not clip_name2:
+        raise error_cls("ComfyUI-GGUF workflow 缺少 SDXL CLIP-L / CLIP-G 文字編碼器")
+    if not vae_name:
+        raise error_cls("ComfyUI-GGUF workflow 缺少 VAE；請選擇 SDXL VAE")
+
+    workflow = {
+        "4": {
+            "class_type": "UnetLoaderGGUF",
+            "inputs": {"unet_name": unet_name},
+        },
+        "10": {
+            "class_type": "DualCLIPLoader",
+            "inputs": {
+                "clip_name1": clip_name1,
+                "clip_name2": clip_name2,
+                "type": str(params.get("clip_type") or "sdxl").strip() or "sdxl",
+                "device": str(params.get("clip_device") or "default").strip() or "default",
+            },
+        },
+        "11": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": vae_name},
+        },
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": params["prompt"], "clip": ["10", 0]},
+        },
+        "7": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": params.get("negative_prompt") or "", "clip": ["10", 0]},
+        },
+    }
+    final_model = ["4", 0]
+    final_clip = ["10", 0]
+    next_node_id = 12
+    for item in params.get("loras") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        node_id = str(next_node_id)
+        next_node_id += 1
+        workflow[node_id] = {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "model": final_model,
+                "clip": final_clip,
+                "lora_name": name,
+                "strength_model": float(item.get("strength_model", 1.0)),
+                "strength_clip": float(item.get("strength_clip", 1.0)),
+            },
+        }
+        final_model = [node_id, 0]
+        final_clip = [node_id, 1]
+    workflow["6"]["inputs"]["clip"] = final_clip
+    workflow["7"]["inputs"]["clip"] = final_clip
+    return workflow, final_model, final_clip, ["11", 0], next_node_id
+
+
+def build_gguf_text_to_image_workflow(params, *, error_cls):
+    workflow, final_model, _final_clip, vae_ref, next_node_id = build_gguf_text_to_image_base(params, error_cls=error_cls)
+    workflow["5"] = {
+        "class_type": "EmptyLatentImage",
+        "inputs": {
+            "width": int(params["width"]),
+            "height": int(params["height"]),
+            "batch_size": int(params.get("batch_size") or 1),
+        },
+    }
+    workflow["3"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": int(params["seed"]),
+            "steps": int(params["steps"]),
+            "cfg": float(params["cfg"]),
+            "sampler_name": params["sampler_name"],
+            "scheduler": params["scheduler"],
+            "denoise": 1,
+            "model": final_model,
+            "positive": ["6", 0],
+            "negative": ["7", 0],
+            "latent_image": ["5", 0],
+        },
+    }
+    workflow["8"] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["3", 0], "vae": vae_ref},
+    }
+    workflow["9"] = {
+        "class_type": "SaveImage",
+        "inputs": {
+            "filename_prefix": params.get("filename_prefix") or "hackme_web",
+            "images": ["8", 0],
+        },
+    }
+    return workflow
+
+
 def build_image_to_image_workflow(params, *, error_cls):
     workflow, final_model, _final_clip, vae_ref, next_node_id = build_text_to_image_base(params)
     source_image = params.get("source_image_ref") if isinstance(params.get("source_image_ref"), dict) else None
@@ -361,6 +467,10 @@ def build_upscale_workflow(params, *, error_cls):
 
 def build_generation_workflow(params, *, error_cls):
     mode = str(params.get("generation_mode") or "txt2img").strip().lower()
+    if params.get("comfyui_gguf_unet_name"):
+        if mode != "txt2img":
+            raise error_cls("ComfyUI-GGUF 快捷 workflow 目前只支援文字生圖；其他模式請使用 workflow 模板。")
+        return build_gguf_text_to_image_workflow(params, error_cls=error_cls)
     if mode == "txt2img":
         return build_text_to_image_workflow(params, error_cls=error_cls)
     if mode == "img2img":

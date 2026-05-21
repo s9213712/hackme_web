@@ -530,6 +530,10 @@ class DiffusersClient:
         if missing:
             raise ComfyUIError("GGUF 模式需要先安裝 Python 套件：" + ", ".join(missing))
 
+    def _ensure_gguf_metadata_dependencies(self):
+        if importlib.util.find_spec("gguf") is None:
+            raise ComfyUIError("GGUF metadata 判斷需要先安裝 Python 套件：gguf")
+
     def _configure_huggingface_download_backend(self, *, log_capture=None):
         if self.disable_xet:
             os.environ["HF_HUB_DISABLE_XET"] = "1"
@@ -751,6 +755,104 @@ class DiffusersClient:
             "has_comfy_metadata": has_comfy_metadata,
             "has_original_unet_names": has_original_unet_names,
             "sample_tensors": tensor_names[:12],
+        }
+
+    def _classify_gguf_backend(self, metadata):
+        metadata = metadata if isinstance(metadata, dict) else {}
+        if metadata.get("has_comfy_metadata") and metadata.get("has_original_unet_names"):
+            return "comfyui_gguf"
+        return "diffusers"
+
+    def prepare_gguf_file_for_backend(
+        self,
+        model_repo,
+        gguf_file,
+        *,
+        progress_callback=None,
+        log_capture=None,
+    ):
+        """Download a selected GGUF file and classify which backend should own it.
+
+        This deliberately stops before importing torch / diffusers. Native
+        ComfyUI-GGUF UNet files only need download + metadata inspection so the
+        route layer can hand them to a ComfyUI workflow instead of failing inside
+        Diffusers pipeline loading.
+        """
+        model_repo = self._effective_model_repo({"diffusers_model_repo": model_repo, "model": model_repo})
+        gguf_file = self._effective_gguf_file({"diffusers_gguf_file": gguf_file})
+        self._ensure_configured(model_repo)
+        self._ensure_gguf_metadata_dependencies()
+        backend = self._configure_huggingface_download_backend(log_capture=log_capture)
+        if progress_callback:
+            progress_callback({
+                "phase": "downloading",
+                "percent": 5,
+                "backend_kind": "diffusers",
+                "step": "判斷 GGUF backend",
+                "current_file": gguf_file,
+                "detail": (
+                    f"正在下載/檢查 {gguf_file}，完成後會自動判斷留在 Diffusers 或改走 ComfyUI-GGUF workflow"
+                    + ("；已啟用 hf_transfer 加速" if backend["hf_transfer_enabled"] else "；使用 Hugging Face 串流下載")
+                    + ("；已停用 hf_xet" if backend["xet_disabled"] else "")
+                ),
+                "token_used": bool(self.token),
+                **backend,
+            })
+        heartbeat = (
+            log_capture.heartbeat(
+                phase="downloading",
+                percent=5,
+                step="Hugging Face GGUF 檔案下載",
+                detail=f"正在下載/檢查 GGUF 檔案 {gguf_file}",
+            )
+            if log_capture
+            else nullcontext()
+        )
+        with heartbeat:
+            gguf_path, download_stats = self._stream_huggingface_file_download(
+                model_repo,
+                gguf_file,
+                progress_callback=progress_callback,
+                log_capture=log_capture,
+                backend=backend,
+                base_percent=5,
+                span_percent=16,
+            )
+        metadata = self._inspect_gguf_file_metadata(gguf_path)
+        suggested_backend = self._classify_gguf_backend(metadata)
+        if log_capture:
+            log_capture.append_line(
+                "GGUF backend classification: "
+                f"backend={suggested_backend}, "
+                f"tensors={metadata.get('tensor_count')}, "
+                f"comfy_metadata={metadata.get('has_comfy_metadata')}, "
+                f"original_unet_names={metadata.get('has_original_unet_names')}",
+                force=True,
+            )
+        if progress_callback:
+            progress_callback({
+                "phase": "routing",
+                "percent": 23,
+                "backend_kind": suggested_backend,
+                "step": "GGUF backend 已判斷",
+                "current_file": gguf_file,
+                "detail": (
+                    "偵測為 ComfyUI-GGUF 原生 UNet，將改用 ComfyUI-GGUF workflow"
+                    if suggested_backend == "comfyui_gguf"
+                    else "偵測為 Diffusers 相容 GGUF component，將繼續使用 Diffusers backend"
+                ),
+                "cache_hit": bool((download_stats or {}).get("cache_hit")),
+                "bytes_written": int((download_stats or {}).get("bytes_written") or 0),
+                "total_bytes": int((download_stats or {}).get("total_bytes") or 0),
+                "gguf_metadata": metadata,
+            })
+        return {
+            "path": str(gguf_path),
+            "stats": dict(download_stats or {}),
+            "metadata": metadata,
+            "suggested_backend": suggested_backend,
+            "model_repo": model_repo,
+            "gguf_file": gguf_file,
         }
 
     def _raise_if_unsupported_diffusers_gguf(self, gguf_path, *, gguf_file="", progress_callback=None, log_capture=None):

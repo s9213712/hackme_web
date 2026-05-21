@@ -38,6 +38,7 @@ SYSTEM_WORKFLOW_IDS = (
     "origin_anima_txt2img",
     "origin_sd35_txt2img",
     "origin_sdxl_txt2img",
+    "origin_sdxl_gguf_txt2img",
     "origin_zit_txt2img",
     "origin_flux_dev_txt2img",
     "origin_qwen_image_txt2img",

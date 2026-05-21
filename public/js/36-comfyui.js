@@ -613,7 +613,7 @@ function renderComfyuiDiffusersInspection() {
   if (status) {
     const pipeline = data.pipeline_tag ? ` · pipeline=${data.pipeline_tag}` : "";
     const variantNote = options.length > 1 ? " · 請選擇精度/GGUF 檔案" : "";
-    const ggufNote = hasGguf ? " · GGUF 會只下載所選檔案" : "";
+    const ggufNote = hasGguf ? " · GGUF 會先下載所選檔案並自動判斷 Diffusers / ComfyUI-GGUF backend" : "";
     status.textContent = `${data.repo_id || inspection.repo || ""}：${modeText}${pipeline}${variantNote}${ggufNote}${warnings.length ? `。${warnings.join(" ")}` : ""}`;
   }
 }
@@ -3685,10 +3685,6 @@ function comfyuiValidatePayloadForUi(payload) {
       const variants = Array.isArray(inspection.variant_options) ? inspection.variant_options : [];
       if (variants.length > 1 && !String(payload.diffusers_model_variant || payload.diffusers_gguf_file || "").trim()) {
         return "這個 Hugging Face repo 有多個精度/GGUF 版本，請先選擇要下載/載入的版本。";
-      }
-      const selected = comfyuiSelectedDiffusersVariantOption();
-      if (selected?.kind === "gguf" && !String(payload.diffusers_gguf_base_repo || "").trim()) {
-        return "GGUF 需要 base Diffusers repo，例如 stabilityai/stable-diffusion-xl-base-1.0。";
       }
     }
   }

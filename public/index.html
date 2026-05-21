@@ -1911,7 +1911,7 @@
             <div class="field" id="comfyui-diffusers-gguf-options" style="display:none;margin-top:.5rem;">
               <label>GGUF Base Diffusers Repo</label>
               <input type="text" id="comfyui-diffusers-gguf-base-repo" placeholder="stabilityai/stable-diffusion-xl-base-1.0" autocomplete="off" />
-              <div class="drive-card-sub">GGUF 是單一量化 component，Diffusers 需搭配 base repo 的 tokenizer、scheduler、VAE 等組件。</div>
+              <div class="drive-card-sub">Diffusers 相容 GGUF 需搭配 base repo；ComfyUI-GGUF 原生 UNet 會自動改走 ComfyUI workflow。本地 ComfyUI 可由本站從 HF cache 接入；遠端 ComfyUI 需聯絡管理人先把模型放在 models/unet。</div>
             </div>
             <div class="drive-card-sub" id="comfyui-diffusers-repo-status">貼上 repo 後會先檢查支援模式與可下載精度版本。</div>
             <div class="drive-card-sub">Diffusers 模式可在這裡輸入 namespace/model 簡寫或 Hugging Face 模型頁網址；此欄會覆蓋 root 的預設 repo。</div>

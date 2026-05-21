@@ -143,6 +143,33 @@ def test_capability_checks_diffusion_model_and_clip_buckets():
     assert cap.missing_models == {}
 
 
+def test_capability_checks_comfyui_gguf_unet_loader_bucket():
+    info = {
+        "UnetLoaderGGUF": {
+            "input": {"required": {"unet_name": [["WAI-NSFW-Illustrious-v140-Q8_0.gguf"]]}}
+        },
+        "DualCLIPLoader": {
+            "input": {
+                "required": {
+                    "clip_name1": [["clip_l.safetensors"]],
+                    "clip_name2": [["clip_g.safetensors"]],
+                }
+            }
+        },
+    }
+    client = _StubClient(info)
+    analysis = _analysis(
+        class_types={"UnetLoaderGGUF", "DualCLIPLoader"},
+        models={
+            "diffusion_model": ["WAI-NSFW-Illustrious-v140-Q8_0.gguf"],
+            "clip": ["clip_l.safetensors", "clip_g.safetensors"],
+        },
+    )
+    cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "SUPPORTED"
+    assert cap.missing_models == {}
+
+
 def test_capability_checks_clip_vision_bucket_against_clip_vision_loader_options():
     info = {
         "CLIPVisionLoader": {

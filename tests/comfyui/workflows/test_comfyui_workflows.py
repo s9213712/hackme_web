@@ -2,6 +2,8 @@ from tests.comfyui._integration_suite import (
     test_comfyui_export_current_and_run_workflow_preset_preserve_parameters,
     test_comfyui_generate_normalizes_embedding_shortcut_syntax,
     test_comfyui_inpaint_workflow_sets_grow_mask_by,
+    test_comfyui_builds_sdxl_gguf_text_to_image_workflow,
+    test_comfyui_capabilities_include_comfyui_gguf_unet_loader_options,
     test_comfyui_object_info_combo_options_are_parsed_for_upscale_models,
     test_comfyui_object_info_combo_options_are_parsed_for_latent_upscale_models,
     test_comfyui_outpaint_workflow_sets_grow_mask_by,
