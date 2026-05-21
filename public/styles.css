@@ -298,6 +298,7 @@
     }
 
     .economy-wallet-grid > div {
+      min-width: 0;
       min-height: 96px;
       border: 1px solid rgba(255,255,255,.08);
       border-radius: 8px;
@@ -309,14 +310,25 @@
     }
 
     .economy-wallet-grid strong {
+      max-width: 100%;
       font-size: 1.45rem;
       line-height: 1.1;
       color: var(--text);
+      overflow-wrap: anywhere;
     }
 
     .economy-wallet-grid small {
       color: var(--muted);
       overflow-wrap: anywhere;
+    }
+
+    #economy-wallet-identity-address,
+    #economy-public-account {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: .86rem;
+      line-height: 1.35;
+      white-space: normal;
+      word-break: break-all;
     }
 
     #trading-btc-signal-body {

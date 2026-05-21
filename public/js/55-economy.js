@@ -463,7 +463,10 @@ function renderEconomyWalletOnboarding(onboarding) {
   }
   if ($("economy-wallet-identity-type")) $("economy-wallet-identity-type").textContent = formatEconomyWalletIdentityType(wallet?.wallet_type);
   if ($("economy-wallet-identity-custody")) $("economy-wallet-identity-custody").textContent = wallet?.custody_mode || "-";
-  if ($("economy-wallet-identity-address")) $("economy-wallet-identity-address").textContent = wallet?.address || "-";
+  if ($("economy-wallet-identity-address")) {
+    $("economy-wallet-identity-address").textContent = wallet?.address || "-";
+    $("economy-wallet-identity-address").title = wallet?.address || "";
+  }
   if ($("economy-wallet-identity-status")) $("economy-wallet-identity-status").textContent = wallet?.status || "-";
   if ($("economy-wallet-signup-bonus")) {
     $("economy-wallet-signup-bonus").textContent = onboarding?.signup_bonus_granted ? "已領取" : "待領取";

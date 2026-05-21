@@ -1,6 +1,13 @@
 # Update Summary
 
-Release ID: `2026.05.21-178`
+Release ID: `2026.05.21-179`
+
+## 2026.05.21-179
+
+- Fixed the PointsChain simulated wallet address display so long `pc1...`
+  addresses wrap inside the wallet card instead of stretching the grid.
+- Kept the full address available as hover title text while using compact
+  monospace styling for address fields.
 
 ## 2026.05.21-178
 
