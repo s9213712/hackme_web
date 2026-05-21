@@ -298,7 +298,17 @@ def ensure_economy_fund_wallets(conn, *, chain_secret):
     for fund_key in ("mint", "burn", "official_treasury", "promo_fund", "exchange_fund"):
         address = economy_fund_address(chain_secret, fund_key)
         row = conn.execute("SELECT * FROM points_economy_fund_wallets WHERE fund_key=?", (fund_key,)).fetchone()
-        if not row:
+        if row and row["address"] != address:
+            conn.execute(
+                """
+                UPDATE points_economy_fund_wallets
+                SET address=?, label=?, updated_at=?
+                WHERE fund_key=?
+                """,
+                (address, DEFAULT_FUND_LABELS[fund_key], now, fund_key),
+            )
+            row = conn.execute("SELECT * FROM points_economy_fund_wallets WHERE fund_key=?", (fund_key,)).fetchone()
+        elif not row:
             conn.execute(
                 """
                 INSERT INTO points_economy_fund_wallets (

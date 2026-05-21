@@ -22,7 +22,7 @@ ComfyUI, Trading, Video, Storage, Games, bug bounty, or admin economy APIs.
 | `imported_cold` | `self_custody` | Browser imports an existing private JWK; server receives public JWK, address, and signature only. |
 | `multisig` | `multisig` | Server stores the signer-address policy and threshold, not signer private keys. |
 | `mint` | `system` | System identity for simulated issuance bookkeeping. |
-| `burn` | `system` | System identity for simulated burn bookkeeping. |
+| `burn` | `system` | Fixed null-style address `pc1000...0000` for simulated burn bookkeeping. |
 
 ## Cold Wallet Binding
 

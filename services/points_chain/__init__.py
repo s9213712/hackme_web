@@ -7,6 +7,7 @@ from .wallet_identity import (
     address_from_public_key,
     award_signup_bonus_after_wallet_onboarding,
     bind_self_custody_wallet,
+    BURN_WALLET_ADDRESS,
     create_multisig_wallet,
     create_official_hot_wallet,
     delete_primary_cold_wallet,

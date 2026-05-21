@@ -1,6 +1,14 @@
 # Update Summary
 
-Release ID: `2026.05.21-187`
+Release ID: `2026.05.21-188`
+
+## 2026.05.21-188
+
+- Changed the simulated BURN wallet to the fixed null-style address
+  `pc1000000000000000000000000000000000000000000000000`.
+- System wallet and economy fund bootstrap now realign existing BURN wallet
+  rows to that fixed address without rewriting append-only ledger or economy
+  event history.
 
 ## 2026.05.21-187
 

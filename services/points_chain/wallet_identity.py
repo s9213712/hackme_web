@@ -21,6 +21,7 @@ SYSTEM_WALLET_IDENTITY_TYPES = {"mint", "burn"}
 WALLET_CUSTODY_MODES = {"server_hot", "self_custody", "multisig", "system"}
 WALLET_IDENTITY_STATUSES = {"pending_backup", "active", "revoked", "lost", "disabled"}
 WALLET_KEY_ALGORITHMS = {"ECDSA_P256_SHA256", "MULTISIG_POLICY_V1", "SYSTEM_SIMULATED_V1"}
+BURN_WALLET_ADDRESS = "pc1" + ("0" * 48)
 
 
 def _sql_in(values):
@@ -150,6 +151,8 @@ def system_wallet_address(chain_secret, wallet_type):
     wallet_type = str(wallet_type or "").strip().lower()
     if wallet_type not in SYSTEM_WALLET_IDENTITY_TYPES:
         raise ValueError("system wallet type must be mint or burn")
+    if wallet_type == "burn":
+        return BURN_WALLET_ADDRESS
     return address_from_hash(f"system:{wallet_type}:{chain_secret or ''}")
 
 
@@ -314,6 +317,34 @@ def ensure_system_wallets(conn, *, chain_secret):
     for wallet_type in ("mint", "burn"):
         address = system_wallet_address(chain_secret, wallet_type)
         row = conn.execute("SELECT * FROM points_wallet_identities WHERE address=?", (address,)).fetchone()
+        if not row:
+            row = conn.execute(
+                """
+                SELECT * FROM points_wallet_identities
+                WHERE user_id IS NULL AND wallet_type=? AND custody_mode='system'
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                (wallet_type,),
+            ).fetchone()
+            if row and row["address"] != address:
+                now = utc_now()
+                conn.execute(
+                    """
+                    UPDATE points_wallet_identities
+                    SET address=?, public_key_hash=?, label=?, metadata_json=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        address,
+                        sha256_text(address),
+                        "Mint wallet" if wallet_type == "mint" else "Burn wallet",
+                        canonical_json({"system_wallet": wallet_type, "financial_source_of_truth": "points_ledger"}),
+                        now,
+                        row["id"],
+                    ),
+                )
+                row = conn.execute("SELECT * FROM points_wallet_identities WHERE id=?", (row["id"],)).fetchone()
         if row:
             created.append(serialize_wallet_identity(row))
             continue

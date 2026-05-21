@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, utils
 
 from services.platform.db_mode_triggers import register_app_mode_function
 from services.points_chain import (
+    BURN_WALLET_ADDRESS,
     PointsLedgerService,
     address_from_public_key,
     award_signup_bonus_after_wallet_onboarding,
@@ -91,6 +92,21 @@ def test_system_mint_and_burn_wallets_are_identity_only(tmp_path):
     assert [item["wallet_type"] for item in wallets] == ["mint", "burn"]
     assert all(item["custody_mode"] == "system" for item in wallets)
     assert all(item["server_private_key_stored"] is False for item in wallets)
+    assert wallets[1]["address"] == BURN_WALLET_ADDRESS
+    assert BURN_WALLET_ADDRESS == "pc1" + ("0" * 48)
+
+    conn = points.get_db()
+    try:
+        conn.execute(
+            "UPDATE points_wallet_identities SET address=?, public_key_hash=? WHERE wallet_type='burn'",
+            ("pc1" + ("b" * 48), "legacy-burn-hash"),
+        )
+        realigned = ensure_system_wallets(conn, chain_secret=points.chain_secret)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert realigned[1]["address"] == BURN_WALLET_ADDRESS
 
 
 def test_self_custody_wallet_rejects_private_key_material_and_awards_signup_after_binding(tmp_path):

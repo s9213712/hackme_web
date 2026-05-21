@@ -3,7 +3,7 @@ import sqlite3
 import pytest
 
 from services.platform.db_mode_triggers import register_app_mode_function
-from services.points_chain import PointsLedgerService
+from services.points_chain import BURN_WALLET_ADDRESS, PointsLedgerService
 from services.points_chain.economy_layer import (
     append_economy_event,
     append_economy_incident,
@@ -165,6 +165,7 @@ def test_burn_only_appends_burned_total_and_never_goes_negative(tmp_path):
     assert replay["active_supply"] == 19_999_000
     assert replay["balances"]["official_treasury"]["balance"] == 9_999_000
     assert replay["balances"]["burn"]["balance"] == 1_000
+    assert replay["balances"]["burn"]["address"] == BURN_WALLET_ADDRESS
 
 
 def test_replay_rejects_corrupt_burn_that_would_make_active_supply_negative(tmp_path):
