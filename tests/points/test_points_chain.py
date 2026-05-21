@@ -110,7 +110,9 @@ def test_economy_stats_reports_member_circulating_supply(tmp_path):
         idempotency_key="root:credit",
     )
 
-    circulation = service.economy_stats()["circulation"]
+    stats = service.economy_stats()
+    circulation = stats["circulation"]
+    bridge = stats["economy_layer"]["legacy_bridge"]
 
     assert circulation["outstanding_points"] == 120
     assert circulation["member_outstanding_points"] == 70
@@ -120,6 +122,41 @@ def test_economy_stats_reports_member_circulating_supply(tmp_path):
     assert circulation["ledger_net_points"] == 120
     assert circulation["member_ledger_net_points"] == 70
     assert circulation["member_supply_gap_points"] == 0
+    assert bridge["legacy_outstanding_points"] == 70
+    assert bridge["root_outstanding_points"] == 50
+    assert bridge["total_legacy_outstanding_points"] == 120
+    assert bridge["unfunded_legacy_outstanding_points"] == 0
+    assert bridge["promo_balance"] == 5_000_000
+    assert bridge["promo_balance_after_required_debit"] == 5_000_000
+    assert bridge["actual_supply_equation_gap_points"] == 0
+    assert bridge["bridged_supply_equation_gap_points"] == 0
+    assert bridge["bridged_supply_equation_balanced"] is True
+
+
+def test_walletized_admin_adjust_debits_official_fund(tmp_path):
+    service = _service(tmp_path)
+
+    service.admin_adjust(
+        actor={"id": 3, "username": "root", "role": "super_admin"},
+        user_id=2,
+        currency_type="points",
+        direction="credit",
+        amount=10_000,
+        reason="manual funding",
+        idempotency_key="admin-adjust-official-walletized",
+    )
+
+    stats = service.economy_stats()["economy_layer"]
+    ledger = service.list_ledger(user_id=2, limit=1)[0]
+
+    assert stats["funds"]["official_treasury"]["balance"] == 9_990_000
+    assert stats["supply"]["circulating_supply"] == 10_000
+    assert stats["supply_equation"]["official_treasury_balance"] == 9_990_000
+    assert stats["supply_equation"]["total_legacy_outstanding_points"] == 10_000
+    assert stats["supply_equation"]["actual_supply_equation_gap_points"] == 0
+    assert ledger["wallet_flow"]["source_label"] == "官方 Treasury 錢包"
+    assert ledger["wallet_flow"]["destination_label"] in {"用戶模擬鏈錢包", "Legacy 帳本身份"}
+    assert ledger["wallet_flow"]["walletized"] is True
 
 
 def test_rebuild_wallets_from_ledger_starts_its_own_transaction_when_needed(tmp_path):

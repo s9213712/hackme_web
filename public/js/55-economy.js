@@ -783,6 +783,9 @@ function renderEconomyLayerSummary(report) {
   const funds = layer.funds && typeof layer.funds === "object" ? layer.funds : {};
   const health = layer.health && typeof layer.health === "object" ? layer.health : {};
   const replay = layer.replay && typeof layer.replay === "object" ? layer.replay : {};
+  const bridge = layer.supply_equation && typeof layer.supply_equation === "object"
+    ? layer.supply_equation
+    : (layer.legacy_bridge && typeof layer.legacy_bridge === "object" ? layer.legacy_bridge : {});
   const snapshot = replay.snapshot && typeof replay.snapshot === "object" ? replay.snapshot : {};
   const derivedVerify = replay.derived_verify && typeof replay.derived_verify === "object" ? replay.derived_verify : {};
   const fund = (key) => funds[key] && typeof funds[key] === "object" ? funds[key] : {};
@@ -801,6 +804,35 @@ function renderEconomyLayerSummary(report) {
   setEconomyText("economy-layer-official-address", address("official_treasury"));
   setEconomyText("economy-layer-promo-balance", formatEconomyPointsValue(fund("promo_fund").balance || 0));
   setEconomyText("economy-layer-promo-address", address("promo_fund"));
+  setEconomyText("economy-layer-legacy-outstanding", formatEconomyPointsValue(bridge.legacy_outstanding_points || 0));
+  setEconomyText("economy-layer-legacy-gap", `未由 PROMO 扣 ${formatEconomyPointsValue(bridge.unfunded_legacy_outstanding_points || 0)}`);
+  setEconomyText("economy-layer-promo-bridged", formatEconomyPointsValue(bridge.promo_balance_after_required_debit ?? fund("promo_fund").balance ?? 0));
+  setEconomyText(
+    "economy-layer-supply-equation",
+    `${Number(bridge.actual_supply_equation_gap_points || 0) === 0 ? "公式平衡" : "公式差額"} ${formatEconomyPointsValue(bridge.actual_supply_equation_gap_points || 0)}`,
+  );
+  const formulaEl = $("economy-layer-supply-formula");
+  if (formulaEl) {
+    const burned = Number(bridge.burned_total ?? supply.burned_total ?? 0);
+    const official = Number(bridge.official_treasury_balance ?? fund("official_treasury").balance ?? 0);
+    const outside = Number(bridge.total_legacy_outstanding_points ?? 0);
+    const mintRemaining = Number(bridge.mint_remaining ?? supply.mint_remaining ?? 0);
+    const exchange = Number(bridge.exchange_fund_balance ?? fund("exchange_fund").balance ?? 0);
+    const promo = Number(bridge.promo_fund_balance ?? fund("promo_fund").balance ?? 0);
+    const total = Number(bridge.actual_supply_equation_total ?? (burned + official + outside + mintRemaining + exchange + promo));
+    const maxSupply = Number(bridge.max_supply ?? supply.max_supply ?? 0);
+    const gap = Number(bridge.actual_supply_equation_gap_points ?? (total - maxSupply));
+    formulaEl.textContent = [
+      `閉環公式：已 burn ${formatEconomyPointsValue(burned)}`,
+      `+ 官方錢包 ${formatEconomyPointsValue(official)}`,
+      `+ 在外用戶總量 ${formatEconomyPointsValue(outside)}`,
+      `+ 未發放 mint 量 ${formatEconomyPointsValue(mintRemaining)}`,
+      `+ 交易所基金 ${formatEconomyPointsValue(exchange)}`,
+      `+ PROMO 基金 ${formatEconomyPointsValue(promo)}`,
+      `= ${formatEconomyPointsValue(total)} / 總上限 ${formatEconomyPointsValue(maxSupply)}`,
+      `；差額 ${formatEconomyPointsValue(gap)}${gap === 0 ? "，閉環正常" : "，需查帳"}`,
+    ].join(" ");
+  }
   setEconomyText("economy-layer-exchange-balance", formatEconomyPointsValue(fund("exchange_fund").balance || 0));
   setEconomyText("economy-layer-exchange-address", address("exchange_fund"));
   setEconomyText("economy-layer-burned-total", formatEconomyPointsValue(supply.burned_total || 0));

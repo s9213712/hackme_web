@@ -1,6 +1,32 @@
 # Update Summary
 
-Release ID: `2026.05.21-182`
+Release ID: `2026.05.21-184`
+
+## 2026.05.21-184
+
+- Started the full-site walletization cutover by wiring the shared
+  `PointsLedgerService._record_transaction` path into the append-only economy
+  event ledger, so normal grants and spends now change fund-wallet balances.
+- Closed the major display/accounting gap: signup and default grants flow from
+  PROMO, manual root credits flow from official treasury, service spends flow
+  to BURN, and trading actions flow through EXCHANGE at the fund-ledger level.
+- Updated ledger wallet-flow projection so rows no longer pretend MINT sends
+  directly to users; fund source/destination labels now match the closed-loop
+  wallet event generated for the ledger row.
+
+## 2026.05.21-183
+
+- Added a read-only Phase 1A.5 legacy bridge report so legacy admin/test signup
+  grants are visible in the economy dashboard without mutating PROMO Fund
+  events or connecting product reward flows.
+- The root「積分私有鏈」dashboard now shows legacy user outstanding points,
+  PROMO debit required for a future bridge, PROMO balance after that bridge,
+  and the supply-equation gap using
+  `burned + official + user_outstanding + mint_remaining + exchange + promo`.
+- Isolated ComfyUI billing helper dependencies per app instance so async
+  generation jobs cannot charge through a points service overwritten by another
+  test/server instance.
+- Added regression coverage for the bridge math and frontend dashboard fields.
 
 ## 2026.05.21-182
 

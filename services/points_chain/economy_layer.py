@@ -337,6 +337,8 @@ def append_economy_event(
     transaction_type,
     source_fund_key,
     destination_fund_key,
+    source_address=None,
+    destination_address=None,
     amount,
     idempotency_key,
     metadata=None,
@@ -347,10 +349,16 @@ def append_economy_event(
     wallets = ensure_economy_fund_wallets(conn, chain_secret=chain_secret)
     source_fund_key = str(source_fund_key or "").strip().lower() or None
     destination_fund_key = str(destination_fund_key or "").strip().lower() or None
-    if source_fund_key not in ECONOMY_FUND_KEYS:
+    if source_fund_key is not None and source_fund_key not in ECONOMY_FUND_KEYS:
         raise ValueError("source fund is unsupported")
-    if destination_fund_key not in ECONOMY_FUND_KEYS:
+    if destination_fund_key is not None and destination_fund_key not in ECONOMY_FUND_KEYS:
         raise ValueError("destination fund is unsupported")
+    source_address = str(source_address or "").strip()
+    destination_address = str(destination_address or "").strip()
+    if source_fund_key is None and not source_address:
+        raise ValueError("source address is required when source fund is omitted")
+    if destination_fund_key is None and not destination_address:
+        raise ValueError("destination address is required when destination fund is omitted")
     amount = int(amount)
     if amount <= 0:
         raise ValueError("economy event amount must be positive")
@@ -375,7 +383,7 @@ def append_economy_event(
         releasable = int(policy["max_supply"]) - int(policy["reserved_locked"])
         if int(replay["minted_total"]) + amount > releasable:
             raise ValueError("mint would exceed releasable supply")
-    elif source_fund_key != "mint":
+    elif source_fund_key is not None and source_fund_key != "mint":
         source_balance = int((replay.get("balances") or {}).get(source_fund_key, {}).get("balance") or 0)
         if source_balance < amount:
             raise ValueError("source fund balance is insufficient")
@@ -383,8 +391,8 @@ def append_economy_event(
     now = utc_now()
     event_uuid = str(uuid.uuid4())
     previous_hash = _last_economy_event_hash(conn)
-    source_address = wallets[source_fund_key]["address"]
-    destination_address = wallets[destination_fund_key]["address"]
+    source_address = wallets[source_fund_key]["address"] if source_fund_key else source_address
+    destination_address = wallets[destination_fund_key]["address"] if destination_fund_key else destination_address
     row_payload = {
         "event_uuid": event_uuid,
         "event_type": str(event_type),
@@ -570,6 +578,79 @@ def economy_health(*, policy, minted_total, balances):
     return {"status": status, "reasons": reasons or ["ok"]}
 
 
+def _int_value(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def economy_supply_equation_report(*, replay, circulation=None):
+    """Build the root closed-loop supply equation from replay and wallet cache."""
+
+    circulation = circulation if isinstance(circulation, dict) else {}
+    balances = replay.get("balances") if isinstance(replay.get("balances"), dict) else {}
+    promo_balance = _int_value((balances.get("promo_fund") or {}).get("balance"))
+    official_balance = _int_value((balances.get("official_treasury") or {}).get("balance"))
+    exchange_balance = _int_value((balances.get("exchange_fund") or {}).get("balance"))
+    legacy_outstanding = _int_value(circulation.get("member_outstanding_points"))
+    root_outstanding = _int_value(circulation.get("root_outstanding_points"))
+    total_legacy_outstanding = legacy_outstanding + root_outstanding
+    economy_circulating = _int_value(replay.get("circulating_supply"))
+    max_supply = _int_value(replay.get("max_supply"))
+    burned_total = _int_value(replay.get("burned_total"))
+    mint_remaining = _int_value(replay.get("mint_remaining"))
+
+    unfunded_legacy = max(0, total_legacy_outstanding - economy_circulating)
+    promo_after_required_debit = promo_balance - unfunded_legacy
+    actual_total = burned_total + official_balance + exchange_balance + promo_balance + total_legacy_outstanding + mint_remaining
+    bridged_total = (
+        burned_total
+        + official_balance
+        + exchange_balance
+        + promo_after_required_debit
+        + total_legacy_outstanding
+        + mint_remaining
+    )
+    actual_gap = actual_total - max_supply
+    bridged_gap = bridged_total - max_supply
+    status = "balanced"
+    if unfunded_legacy > promo_balance:
+        status = "blocker"
+    elif actual_gap != 0:
+        status = "legacy_gap"
+
+    return {
+        "phase": "1B_walletized_replay",
+        "status": status,
+        "legacy_outstanding_points": legacy_outstanding,
+        "root_outstanding_points": root_outstanding,
+        "total_legacy_outstanding_points": total_legacy_outstanding,
+        "burned_total": burned_total,
+        "official_treasury_balance": official_balance,
+        "exchange_fund_balance": exchange_balance,
+        "promo_fund_balance": promo_balance,
+        "mint_remaining": mint_remaining,
+        "max_supply": max_supply,
+        "economy_circulating_supply": economy_circulating,
+        "unfunded_legacy_outstanding_points": unfunded_legacy,
+        "promo_debit_required_points": unfunded_legacy,
+        "promo_balance": promo_balance,
+        "promo_balance_after_required_debit": promo_after_required_debit,
+        "actual_supply_equation_total": actual_total,
+        "actual_supply_equation_gap_points": actual_gap,
+        "bridged_supply_equation_total": bridged_total,
+        "bridged_supply_equation_gap_points": bridged_gap,
+        "bridged_supply_equation_balanced": bridged_gap == 0,
+        "formula": "burned + official_treasury + user_outstanding + mint_remaining + exchange_fund + promo_fund = max_supply",
+        "note": "Closed-loop status is balanced when actual_supply_equation_gap_points is zero.",
+    }
+
+
+def economy_legacy_bridge_report(*, replay, circulation=None):
+    return economy_supply_equation_report(replay=replay, circulation=circulation)
+
+
 def rebuild_economy_derived_balances(conn, *, replay=None, chain_secret=None):
     if replay is None:
         replay = replay_economy_events(conn, chain_secret=chain_secret, persist_cache=False)
@@ -702,7 +783,7 @@ def append_economy_incident(conn, *, severity, category, trigger, automatic_acti
     return conn.execute("SELECT * FROM points_economy_incidents WHERE id=?", (cur.lastrowid,)).fetchone()
 
 
-def economy_layer_report(conn, *, chain_secret, actor=None):
+def economy_layer_report(conn, *, chain_secret, actor=None, circulation=None):
     bootstrap = bootstrap_economy_layer(conn, chain_secret=chain_secret, actor=actor)
     replay = replay_economy_events(conn, policy=bootstrap["policy"], chain_secret=chain_secret, persist_cache=False)
     derived = rebuild_economy_derived_balances(conn, replay=replay)
@@ -718,6 +799,7 @@ def economy_layer_report(conn, *, chain_secret, actor=None):
             """
         ).fetchall()
     ]
+    supply_equation = economy_supply_equation_report(replay=replay, circulation=circulation)
     return {
         "phase": "1A",
         "guardrail": "append_only_replay_source_of_truth",
@@ -745,6 +827,8 @@ def economy_layer_report(conn, *, chain_secret, actor=None):
             "derived_verify": derived_verify,
             "snapshot": snapshot,
         },
+        "legacy_bridge": supply_equation,
+        "supply_equation": supply_equation,
         "health": replay["health"],
         "incidents": incidents,
     }

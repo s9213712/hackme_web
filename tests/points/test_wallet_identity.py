@@ -150,10 +150,13 @@ def test_self_custody_wallet_rejects_private_key_material_and_awards_signup_afte
     assert points.get_wallet(1)["points_balance"] == 100
     ledger = points.list_ledger(user_id=1, limit=1)[0]
     assert ledger["ledger_uuid"]
-    assert ledger["wallet_flow"]["source_label"] == "官方發行錢包"
+    assert ledger["wallet_flow"]["source_label"] == "PROMO 獎勵基金"
     assert ledger["wallet_flow"]["destination_wallet_address"] == address
     assert ledger["wallet_flow"]["target_wallet_address"] == address
     assert ledger["wallet_flow"]["legacy_public_account_id"] == ledger["public_account_id"]
+    stats = points.economy_stats()["economy_layer"]
+    assert stats["funds"]["promo_fund"]["balance"] == 4_999_900
+    assert stats["supply"]["circulating_supply"] == 100
 
 
 def test_official_hot_and_multisig_wallets_complete_onboarding_without_private_key(tmp_path):

@@ -3,8 +3,14 @@
 import threading
 
 from . import schema as _schema
-from .economy_layer import ensure_economy_layer_schema, economy_layer_report
-from .wallet_identity import ensure_wallet_identity_schema, system_wallet_address
+from .economy_layer import (
+    append_economy_event,
+    bootstrap_economy_layer,
+    economy_fund_address,
+    ensure_economy_layer_schema,
+    economy_layer_report,
+)
+from .wallet_identity import ensure_wallet_identity_schema
 
 globals().update({name: value for name, value in _schema.__dict__.items() if not name.startswith("__")})
 
@@ -658,46 +664,215 @@ class PointsLedgerService:
         except Exception:
             return ""
 
-    def _ledger_wallet_flow_for_read(self, conn, row):
-        target_address = self._primary_wallet_address_for_read(conn, row["user_id"])
-        legacy_account = row["public_account_id"] or self._public_account_id(row["user_id"])
-        recipient = target_address or legacy_account
-        recipient_label = "用戶模擬鏈錢包" if target_address else "Legacy 帳本身份"
-        mint_address = system_wallet_address(self.chain_secret, "mint")
-        burn_address = system_wallet_address(self.chain_secret, "burn")
-        direction = row["direction"]
+    def _wallet_address_for_user_flow(self, conn, user_id):
+        address = self._primary_wallet_address_for_read(conn, user_id)
+        legacy_account = self._public_account_id(user_id)
+        return address or legacy_account, ("用戶模擬鏈錢包" if address else "Legacy 帳本身份"), address, legacy_account
+
+    def _economy_fund_flow_ref(self, fund_key):
+        labels = {
+            "mint": "MINT 發行錢包",
+            "burn": "BURN 銷毀錢包",
+            "official_treasury": "官方 Treasury 錢包",
+            "promo_fund": "PROMO 獎勵基金",
+            "exchange_fund": "EXCHANGE 交易所基金",
+        }
+        return labels.get(fund_key, fund_key or "-"), economy_fund_address(self.chain_secret, fund_key)
+
+    def _counterparty_user_address(self, conn, value):
+        try:
+            user_id = int(value)
+        except Exception:
+            return ""
+        address, _label, _target, legacy = self._wallet_address_for_user_flow(conn, user_id)
+        return address or legacy
+
+    def _legacy_credit_source_fund(self, action_type):
+        action = str(action_type or "")
+        promo_actions = {
+            "new_user_signup_bonus",
+            "user_initial_grant",
+            "admin_initial_grant",
+            "birthday_gift",
+            "game_daily_challenge_reward",
+            "game_weekly_leaderboard_reward",
+            "trading_bot_weekly_competition_reward",
+            "reward_thread_author",
+        }
+        official_actions = {
+            "admin_adjust_credit",
+            "admin_weekly_salary",
+            "video_tip_platform_fee",
+        }
+        if action in promo_actions or action.startswith("reward_"):
+            return "promo_fund"
+        if action.startswith("trading_"):
+            return "exchange_fund"
+        if action in official_actions:
+            return "official_treasury"
+        return "official_treasury"
+
+    def _legacy_debit_destination_fund(self, action_type):
+        action = str(action_type or "")
+        if action.startswith("trading_"):
+            return "exchange_fund"
+        if action in {"video_tip_debit"}:
+            return None
+        return "burn"
+
+    def _ledger_wallet_flow_descriptor(self, conn, *, user_id, direction, action_type, public_metadata=None):
+        user_address, user_label, target_address, legacy_account = self._wallet_address_for_user_flow(conn, user_id)
+        public_metadata = public_metadata if isinstance(public_metadata, dict) else {}
+        direction = str(direction or "")
+        action_type = str(action_type or "")
         if direction in {"credit", "transfer_in"}:
+            source_address = ""
+            source_label = ""
+            source_fund_key = self._legacy_credit_source_fund(action_type)
+            if action_type == "video_tip_credit":
+                source_address = self._counterparty_user_address(conn, public_metadata.get("from_user_id"))
+                source_label = "打賞付款錢包"
+                source_fund_key = None
+            elif action_type == "video_tip_platform_fee":
+                source_address = self._counterparty_user_address(conn, public_metadata.get("from_user_id"))
+                source_label = "平台費付款錢包"
+                source_fund_key = None
+            if source_fund_key:
+                source_label, source_address = self._economy_fund_flow_ref(source_fund_key)
             return {
-                "source_label": "官方發行錢包",
-                "source_wallet_address": mint_address,
-                "destination_label": recipient_label,
-                "destination_wallet_address": recipient,
+                "source_fund_key": source_fund_key,
+                "destination_fund_key": None,
+                "source_label": source_label or "來源錢包",
+                "source_wallet_address": source_address,
+                "destination_label": user_label,
+                "destination_wallet_address": user_address,
                 "target_wallet_address": target_address,
                 "legacy_public_account_id": legacy_account,
+                "walletized": True,
             }
         if direction in {"debit", "transfer_out", "reverse"}:
+            destination_address = ""
+            destination_label = ""
+            destination_fund_key = self._legacy_debit_destination_fund(action_type)
+            if action_type == "video_tip_debit":
+                destination_address = self._counterparty_user_address(conn, public_metadata.get("to_user_id"))
+                destination_label = "打賞收款錢包"
+            if destination_fund_key:
+                destination_label, destination_address = self._economy_fund_flow_ref(destination_fund_key)
             return {
-                "source_label": recipient_label,
-                "source_wallet_address": recipient,
-                "destination_label": "系統回收 / 服務扣款錢包",
-                "destination_wallet_address": burn_address,
+                "source_fund_key": None,
+                "destination_fund_key": destination_fund_key,
+                "source_label": user_label,
+                "source_wallet_address": user_address,
+                "destination_label": destination_label or "目的錢包",
+                "destination_wallet_address": destination_address,
                 "target_wallet_address": target_address,
                 "legacy_public_account_id": legacy_account,
+                "walletized": True,
             }
         if direction in {"freeze", "unfreeze"}:
             return {
-                "source_label": recipient_label,
-                "source_wallet_address": recipient,
-                "destination_label": recipient_label,
-                "destination_wallet_address": recipient,
+                "source_fund_key": None,
+                "destination_fund_key": None,
+                "source_label": user_label,
+                "source_wallet_address": user_address,
+                "destination_label": user_label,
+                "destination_wallet_address": user_address,
                 "target_wallet_address": target_address,
                 "legacy_public_account_id": legacy_account,
                 "internal_movement": True,
+                "walletized": True,
             }
         return {
+            "source_fund_key": None,
+            "destination_fund_key": None,
             "target_wallet_address": target_address,
             "legacy_public_account_id": legacy_account,
+            "walletized": False,
         }
+
+    def _append_walletized_economy_event(self, conn, *, ledger_row, public_metadata=None, actor=None):
+        flow = self._ledger_wallet_flow_descriptor(
+            conn,
+            user_id=ledger_row["user_id"],
+            direction=ledger_row["direction"],
+            action_type=ledger_row["action_type"],
+            public_metadata=public_metadata,
+        )
+        if flow.get("internal_movement"):
+            return None, False
+        source_fund_key = flow.get("source_fund_key")
+        destination_fund_key = flow.get("destination_fund_key")
+        source_address = "" if source_fund_key else flow.get("source_wallet_address")
+        destination_address = "" if destination_fund_key else flow.get("destination_wallet_address")
+        if not source_fund_key and not source_address:
+            return None, False
+        if not destination_fund_key and not destination_address:
+            return None, False
+        bootstrap_economy_layer(conn, chain_secret=self.chain_secret, actor={"role": "system", "id": None})
+        return append_economy_event(
+            conn,
+            chain_secret=self.chain_secret,
+            event_type="legacy_walletized_flow",
+            transaction_type=str(ledger_row["action_type"] or "points_ledger"),
+            source_fund_key=source_fund_key,
+            source_address=source_address,
+            destination_fund_key=destination_fund_key,
+            destination_address=destination_address,
+            amount=int(ledger_row["amount"]),
+            idempotency_key=f"walletized_ledger:{ledger_row['ledger_uuid']}",
+            metadata={
+                "legacy_ledger_uuid": ledger_row["ledger_uuid"],
+                "legacy_action_type": ledger_row["action_type"],
+                "legacy_direction": ledger_row["direction"],
+                "legacy_user_id": int(ledger_row["user_id"]),
+                "legacy_reference_type": ledger_row["reference_type"],
+                "legacy_reference_id": ledger_row["reference_id"],
+                "walletization_phase": "1B",
+            },
+            actor=actor,
+        )
+
+    def _backfill_walletized_ledger_events(self, conn, *, limit=1000):
+        self.ensure_schema(conn)
+        bootstrap_economy_layer(conn, chain_secret=self.chain_secret, actor={"role": "system", "id": None})
+        rows = conn.execute(
+            """
+            SELECT l.*
+            FROM points_ledger l
+            WHERE l.status='confirmed'
+              AND NOT EXISTS (
+                SELECT 1 FROM points_economy_events e
+                WHERE e.idempotency_key='walletized_ledger:' || l.ledger_uuid
+              )
+            ORDER BY l.id ASC
+            LIMIT ?
+            """,
+            (max(1, int(limit or 1000)),),
+        ).fetchall()
+        created = 0
+        skipped = 0
+        for row in rows:
+            event, was_created = self._append_walletized_economy_event(
+                conn,
+                ledger_row=row,
+                public_metadata=_json_loads(row["public_metadata_json"], {}),
+                actor={"role": "system", "id": None},
+            )
+            if event and was_created:
+                created += 1
+            else:
+                skipped += 1
+        return {"checked": len(rows), "created": created, "skipped": skipped, "complete": len(rows) < max(1, int(limit or 1000))}
+
+    def _ledger_wallet_flow_for_read(self, conn, row):
+        return self._ledger_wallet_flow_descriptor(
+            conn,
+            user_id=row["user_id"],
+            direction=row["direction"],
+            action_type=row["action_type"],
+            public_metadata=_json_loads(row["public_metadata_json"], {}),
+        )
 
     def _serialize_ledger_for_read(self, conn, row, *, include_user_id=False):
         data = self.serialize_ledger(row, include_user_id=include_user_id)
@@ -1024,6 +1199,12 @@ class PointsLedgerService:
             (balance_after, frozen_after, earned_delta, spent_delta, now, int(user_id)),
         )
         row = conn.execute("SELECT * FROM points_ledger WHERE id=?", (cur.lastrowid,)).fetchone()
+        economy_event, economy_created = self._append_walletized_economy_event(
+            conn,
+            ledger_row=row,
+            public_metadata=public_metadata or {},
+            actor=actor,
+        )
         self._audit_log(
             conn,
             "LEDGER_APPEND",
@@ -1032,7 +1213,14 @@ class PointsLedgerService:
             actor=actor,
             target_user_id=int(user_id),
             ledger_id=row["id"],
-            metadata={"currency_type": DISPLAY_CURRENCY, "action_type": action_type, "reference_type": reference_type, "reference_id": reference_id},
+            metadata={
+                "currency_type": DISPLAY_CURRENCY,
+                "action_type": action_type,
+                "reference_type": reference_type,
+                "reference_id": reference_id,
+                "walletized_economy_event_uuid": economy_event["event_uuid"] if economy_event else "",
+                "walletized_economy_event_created": bool(economy_created),
+            },
         )
         return row, True
 
@@ -2137,7 +2325,18 @@ class PointsLedgerService:
                 conn,
                 chain_secret=self.chain_secret,
                 actor={"role": "system", "id": None},
+                circulation=circulation,
             )
+            if not economy_layer.get("legacy_bridge", {}).get("bridged_supply_equation_balanced"):
+                backfill = self._backfill_walletized_ledger_events(conn)
+                if backfill.get("created"):
+                    economy_layer = economy_layer_report(
+                        conn,
+                        chain_secret=self.chain_secret,
+                        actor={"role": "system", "id": None},
+                        circulation=circulation,
+                    )
+                    economy_layer["walletization_backfill"] = backfill
             conn.commit()
             return {
                 "wallets": wallet_data,

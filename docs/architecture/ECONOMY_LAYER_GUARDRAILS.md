@@ -4,15 +4,22 @@
 
 ## Source Of Truth
 
-Status: Phase 1A foundation is implemented and Phase 1A.5 acceptance passed.
-The accepted scope is still replay/dashboard/API-read-model only; product
-traffic must not be routed into this layer before Phase 1C / 1D approval.
+Status: Phase 1A foundation and Phase 1A.5 acceptance passed. Phase 1B
+walletization cutover has started at the shared PointsChain transaction entry,
+so new ledger writes append economy events and fund wallet balances are derived
+from replay.
+The intended economy is closed-loop: points may only enter circulation from
+MINT-backed fund wallets, and rewards / grants must eventually be represented
+as append-only transfers from PROMO, official treasury, exchange, or another
+approved fund.
 
 - `points_ledger` 不得變成可直接 `UPDATE balance` 的快取真相。
 - Phase 1A 新增的 `points_economy_events` 是模擬鏈 fund wallet 的 append-only event ledger。
 - 所有 fund / wallet balance 必須能由 append-only ledger replay 重建。
 - `points_wallets` 與 `points_economy_derived_balances` 只能是 `derived_cache`。
 - 任何 derived cache 必須提供 rebuild / verify path；verify mismatch 是 audit finding，不得由前端靜默修正。
+- Phase 1A.5 的 `legacy_bridge` 只能揭露既有 legacy `points_ledger` 在外用戶積分與 PROMO Fund 應橋接差額；它不得自動補寫 PROMO debit、不得改 legacy wallet balance，也不得取代 replay 真相。
+- Phase 1B cutover requires all new `points_ledger` writes through `PointsLedgerService._record_transaction` to also append a closed-loop `points_economy_events` row. The old ledger row is compatibility/audit output, not the fund balance source of truth.
 
 ## Forbidden Operations
 
@@ -31,6 +38,7 @@ traffic must not be routed into this layer before Phase 1C / 1D approval.
 - MINT is capped by `max_supply - reserved_locked`.
 - BURN only increases `burned_total`; active supply cannot become negative.
 - Dashboard supply / fund balances are derived from replay and verified cache, not manual fields.
+- Dashboard must disclose legacy member outstanding points separately until product reward flows are formally bridged into PROMO append-only events.
 - Economic incidents are append-only and do not mutate balances.
 - Snapshots record replay height, last event hash, wallet root hash, minted total, burned total, active supply, and circulating supply.
 

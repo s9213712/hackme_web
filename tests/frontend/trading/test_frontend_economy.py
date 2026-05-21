@@ -90,6 +90,9 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-layer-mint-remaining"' in index_html
     assert 'id="economy-layer-active-supply"' in index_html
     assert 'id="economy-layer-circulating-supply"' in index_html
+    assert 'id="economy-layer-legacy-outstanding"' in index_html
+    assert 'id="economy-layer-promo-bridged"' in index_html
+    assert 'id="economy-layer-supply-formula"' in index_html
     assert 'id="economy-layer-snapshot-height"' in index_html
     assert 'id="economy-layer-derived-verify"' in index_html
     assert "<pre id=\"economy-chain-status\"" not in index_html
@@ -165,6 +168,10 @@ def test_root_points_page_is_chain_operations_console():
     assert "function renderEconomyLayerSummary" in economy_js
     assert 'setEconomyText("economy-layer-mint-remaining"' in economy_js
     assert 'setEconomyText("economy-layer-active-supply"' in economy_js
+    assert 'setEconomyText("economy-layer-legacy-outstanding"' in economy_js
+    assert '"economy-layer-supply-equation"' in economy_js
+    assert '"economy-layer-supply-formula"' in economy_js
+    assert "閉環公式" in economy_js
     assert 'setEconomyText("economy-layer-derived-verify"' in economy_js
     assert "function renderEconomyRootFundingPools" in economy_js
     assert "function renderEconomyRootAllPositions" in economy_js
