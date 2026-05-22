@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Inventory direct wallet and ledger write touchpoints.
 
-This Phase 0 scanner is intentionally observational: it classifies direct
-PointsChain calls and wallet-balance SQL mutations so reviewers can decide what
-to retain or migrate before Phase 1 introduces a wallet facade.
+This scanner is a PointsChain MVP RC1 guardrail. Runtime product code must not
+write financial truth directly; it should enter through approved Economy /
+PointsChain facades. Findings classified as ``blocker_product_bypass`` fail the
+release gate when ``--fail-on-blocker`` is used.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ TARGET_CALLS = {
     "spend_points",
     "rollback_ledger",
 }
+BLOCKER_CLASSIFICATIONS = {"blocker_product_bypass"}
 OFFICIAL_WALLET_TABLE = "points_wallets"
 SHADOW_WALLET_TABLE = "test_shadow_wallets"
 MUTATION_TABLES = {OFFICIAL_WALLET_TABLE, SHADOW_WALLET_TABLE}
@@ -114,22 +116,22 @@ def _touches_balance_columns(value: str) -> bool:
 
 def _classify(rel: str, *, kind: str, symbol: str) -> tuple[str, str]:
     if rel.startswith("tests/"):
-        return "retain", "test fixture or regression coverage"
+        return "test_helper", "test fixture or regression coverage"
     if rel.startswith("scripts/"):
-        return "retain", "operator or validation script; keep inventoried but outside runtime wallet facade migration"
+        return "test_helper", "operator or validation script outside runtime product accounting"
     if rel.startswith("services/points_chain/"):
-        return "retain", "PointsChain core implementation is the current ledger source"
+        return "allowed_internal_primitive", "PointsChain core implementation may append replayable ledger events"
     if rel.startswith("services/trading/shadow.py") or rel.startswith("services/snapshots/"):
-        return "retain", "server-mode or shadow-wallet isolation code, not the production points_wallets source"
+        return "allowed_internal_primitive", "server-mode or shadow-wallet isolation code, not production wallet truth"
     if kind == "direct_wallet_balance_mutation" and symbol == OFFICIAL_WALLET_TABLE:
-        return "blocker", "non-core product code mutates official wallet balance columns directly"
+        return "blocker_product_bypass", "non-core product code mutates official wallet balance columns directly"
     if kind == "direct_wallet_balance_mutation" and symbol == SHADOW_WALLET_TABLE:
-        return "unknown", "shadow wallet balance mutation needs Phase 0 review before facade migration"
+        return "migration_only", "shadow wallet balance mutation must stay outside production accounting truth"
     if symbol == "_record_transaction":
-        return "migrate", "product code uses private ledger write API directly"
+        return "blocker_product_bypass", "product code uses private ledger write API directly"
     if symbol in {"record_transaction", "spend_points", "rollback_ledger"}:
-        return "migrate", "product code calls PointsChain service directly; Phase 1 facade should absorb this path"
-    return "unknown", "scanner could not infer a safe classification"
+        return "blocker_product_bypass", "product code calls PointsChain service directly instead of an approved facade"
+    return "migration_only", "scanner could not infer a safe RC1 classification; review before release"
 
 
 class WalletInventoryVisitor(ast.NodeVisitor):
@@ -246,6 +248,7 @@ def build_payload(repo_root: Path, findings: list[Finding], *, include_tests: bo
     by_classification = Counter(item.classification for item in findings)
     by_symbol = Counter(item.symbol for item in findings)
     by_kind = Counter(item.kind for item in findings)
+    blocker_count = sum(count for key, count in by_classification.items() if key in BLOCKER_CLASSIFICATIONS)
     return {
         "ok": True,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
@@ -253,6 +256,7 @@ def build_payload(repo_root: Path, findings: list[Finding], *, include_tests: bo
         "include_tests": bool(include_tests),
         "summary": {
             "total": len(findings),
+            "blockers": blocker_count,
             "by_classification": dict(sorted(by_classification.items())),
             "by_kind": dict(sorted(by_kind.items())),
             "by_symbol": dict(sorted(by_symbol.items())),
@@ -315,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
     json_out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     md_out.write_text(render_markdown(payload), encoding="utf-8")
 
-    blocker_count = int(payload["summary"]["by_classification"].get("blocker", 0))
+    blocker_count = int(payload["summary"].get("blockers") or 0)
     print(
         "wallet direct call inventory: "
         f"{payload['summary']['total']} findings, "

@@ -43,11 +43,11 @@ def seed(points):
     findings = scan_repo(tmp_path, roots=["services", "routes"], include_tests=True)
     records = {(item.file, item.symbol, item.classification) for item in findings}
 
-    assert ("services/points_chain/service.py", "_record_transaction", "retain") in records
-    assert ("services/points_chain/service.py", "points_wallets", "retain") in records
-    assert ("routes/comfyui.py", "spend_points", "migrate") in records
-    assert ("routes/unsafe_wallet.py", "points_wallets", "blocker") in records
-    assert ("tests/points/test_seed.py", "record_transaction", "retain") in records
+    assert ("services/points_chain/service.py", "_record_transaction", "allowed_internal_primitive") in records
+    assert ("services/points_chain/service.py", "points_wallets", "allowed_internal_primitive") in records
+    assert ("routes/comfyui.py", "spend_points", "blocker_product_bypass") in records
+    assert ("routes/unsafe_wallet.py", "points_wallets", "blocker_product_bypass") in records
+    assert ("tests/points/test_seed.py", "record_transaction", "test_helper") in records
 
 
 def test_wallet_direct_call_inventory_reports_json_and_markdown(tmp_path):
@@ -63,9 +63,10 @@ def reward(points_service):
     markdown = render_markdown(payload)
 
     encoded = json.dumps(payload)
-    assert '"migrate"' in encoded
+    assert '"blocker_product_bypass"' in encoded
     assert "routes/games.py" in markdown
-    assert "| migrate | ledger_service_call | `record_transaction` |" in markdown
+    assert "| blocker_product_bypass | ledger_service_call | `record_transaction` |" in markdown
+    assert payload["summary"]["blockers"] == 1
 
 
 def test_wallet_direct_call_inventory_ignores_read_only_wallet_sql(tmp_path):
@@ -103,4 +104,4 @@ def direct():
     assert symbols.count("record_transaction") == 2
     assert symbols.count("rollback_ledger") == 2
     assert symbols.count("spend_points") == 1
-    assert {item.classification for item in findings} == {"migrate"}
+    assert {item.classification for item in findings} == {"blocker_product_bypass"}
