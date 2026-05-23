@@ -1240,11 +1240,12 @@ function renderVideoList() {
       ${videoThumbMarkup(video)}
       <div class="video-card-body">
         <strong>${sanitize(video.title || "未命名影片")}</strong>
-        <div class="drive-card-sub">${sanitize(video.owner_nickname || video.owner_username || "使用者")} · ${formatVideoCount(video.view_count, " 次觀看")}</div>
-        <div class="drive-card-sub">${sanitize(videoVisibilityLabel(video.visibility))} · 👍 ${formatVideoCount(video.like_count)} · 🪙 ${formatVideoCount(video.coin_total)}</div>
+        <div class="drive-card-sub video-card-owner">${userIdentityMarkup(video.owner_user_id, video.owner_username || video.owner_nickname || "使用者", `${formatVideoCount(video.view_count, " 次觀看")}`, "video-owner-line", video.owner_avatar_file_id || "")}</div>
+        <div class="drive-card-sub">${sanitize(videoVisibilityLabel(video.visibility))} · 👍 ${formatVideoCount(video.like_count)} · 💬 ${formatVideoCount(video.comment_count)} · 分享 ${formatVideoCount(video.share_count || 0)} · 互動 ${formatVideoCount(video.interaction_score || 0)}</div>
       </div>
     </a>
   `).join("");
+  bindAvatarFallbacks(list);
 }
 
 async function loadVideos(sort = "new", options = {}) {
@@ -1273,9 +1274,8 @@ function renderVideoComments(comments) {
   if (!comments || !comments.length) return `<div class="drive-empty">尚無留言</div>`;
   return comments.map((comment) => `
     <div class="video-comment ${comment.parent_id ? "video-comment-reply" : ""}">
-      <strong>${sanitize(comment.nickname || comment.username || "使用者")}</strong>
+      ${userIdentityMarkup(comment.user_id, comment.username || comment.nickname || "使用者", comment.created_at || "", "video-comment-author", comment.avatar_file_id || "")}
       <p>${sanitize(comment.content || "")}</p>
-      <small>${sanitize(comment.created_at || "")}</small>
     </div>
   `).join("");
 }
@@ -2633,10 +2633,12 @@ function renderVideoDetail(video, comments = [], playback = null) {
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">${sanitize(video.title || "未命名影片")}</div>
-            <div class="drive-card-sub">${sanitize(video.owner_nickname || video.owner_username || "使用者")} · ${formatVideoCount(video.view_count, " 次觀看")} · ${sanitize(videoVisibilityLabel(video.visibility))}</div>
+            <div class="drive-card-sub video-detail-owner">${userIdentityMarkup(video.owner_user_id, video.owner_username || video.owner_nickname || "使用者", `${formatVideoCount(video.view_count, " 次觀看")} · ${sanitize(videoVisibilityLabel(video.visibility))}`, "video-owner-line", video.owner_avatar_file_id || "")}</div>
+            <div class="drive-card-sub">分享 ${formatVideoCount(video.share_count || 0)} · 互動分數 ${formatVideoCount(video.interaction_score || 0)}</div>
           </div>
           <div class="drive-file-actions">
             <button class="btn" type="button" data-video-like="${Number(video.id || 0)}">${video.liked_by_me ? "取消讚" : "👍 按讚"}</button>
+            <button class="btn" type="button" data-video-social-share="${Number(video.id || 0)}">分享</button>
             <button class="btn" type="button" data-video-copy-link="${Number(video.id || 0)}">複製連結</button>
           </div>
         </div>
@@ -2839,6 +2841,64 @@ async function copyVideoLink(videoId, options = {}) {
   }
 }
 
+async function copyVideoShareText(text) {
+  const value = String(text || "");
+  if (!value) return false;
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return true;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "-1000px";
+  textarea.style.left = "-1000px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, value.length);
+  try {
+    return document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
+}
+
+async function createVideoSocialShare(videoId, options = {}) {
+  const button = options.button || null;
+  try {
+    const res = await apiFetch(API + `/videos/${encodeURIComponent(videoId)}/social-share`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    if (json.video) {
+      videoState.current = json.video;
+      videoState.videos = (videoState.videos || []).map((item) => Number(item.id) === Number(json.video.id) ? { ...item, ...json.video } : item);
+    }
+    const url = json.share_link?.url ? `${location.origin}${json.share_link.url}` : `${location.origin}${location.pathname}#videos/${encodeURIComponent(videoId)}`;
+    const embedText = json.embed_text || url;
+    const copied = await copyVideoShareText(embedText);
+    videoMsg(copied ? "分享連結已建立並複製，可貼到貼文中" : "分享連結已建立，請手動複製", true);
+    if (typeof showCopyLinkFeedback === "function") {
+      showCopyLinkFeedback(button, copied ? "分享碼已複製" : "請手動複製", copied);
+    }
+    if (!copied) window.prompt("貼到貼文的影音分享碼", embedText);
+    if (videoState.current && Number(videoState.current.id || 0) === Number(videoId || 0)) {
+      await openVideoDetail(videoId);
+    } else {
+      renderVideoList();
+    }
+  } catch (err) {
+    videoMsg(err.message || "建立分享失敗", false);
+  }
+}
+
 async function submitVideoSearch() {
   const query = normalizeVideoSearchQuery($("video-search-input")?.value || "");
   await loadVideos(videoState.sort || "new", { query });
@@ -2902,6 +2962,9 @@ document.addEventListener("submit", (event) => {
 });
 
 document.addEventListener("click", (event) => {
+  if (event.target.closest("[data-open-user-profile]")) {
+    return;
+  }
   const open = event.target.closest("[data-video-open]");
   if (open) {
     event.preventDefault();
@@ -2944,6 +3007,11 @@ document.addEventListener("click", (event) => {
   const copy = event.target.closest("[data-video-copy-link]");
   if (copy) {
     copyVideoLink(copy.dataset.videoCopyLink, { button: copy });
+    return;
+  }
+  const socialShare = event.target.closest("[data-video-social-share]");
+  if (socialShare) {
+    createVideoSocialShare(socialShare.dataset.videoSocialShare, { button: socialShare });
     return;
   }
   const prepare = event.target.closest("[data-video-prepare-stream]");

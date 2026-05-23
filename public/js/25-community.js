@@ -87,7 +87,7 @@ const COMMUNITY_INLINE_MEDIA_ACCEPTED_EXTENSIONS = {
   video: new Set(["mp4", "webm", "ogg", "ogv", "m4v", "mov"]),
   audio: new Set(["mp3", "m4a", "aac", "ogg", "oga", "wav", "webm"]),
 };
-const COMMUNITY_ANY_INLINE_MEDIA_TOKEN_RE = /\[\[comfyui-image:([A-Za-z0-9_-]+)\]\]|\[\[community-media:(image|video|audio|file):([A-Za-z0-9_-]+)(?:\|([^\]\n]{0,160}))?\]\]/g;
+const COMMUNITY_ANY_INLINE_MEDIA_TOKEN_RE = /\[\[comfyui-image:([A-Za-z0-9_-]+)\]\]|\[\[community-media:(image|video|audio|file):([A-Za-z0-9_-]+)(?:\|([^\]\n]{0,160}))?\]\]|\[\[video-share:([A-Za-z0-9_-]+)(?:\|([^\]\n]{0,160}))?\]\]/g;
 
 function canOpenCommunityReviewMode() {
   return currentRole === "manager" || currentRole === "super_admin" || canReviewCommunityThreads;
@@ -401,6 +401,7 @@ function communityPlainContent(content) {
   return String(content || "")
     .replace(/\n?\[\[comfyui-image:[A-Za-z0-9_-]+\]\]\n?/g, "\n")
     .replace(/\n?\[\[community-media:(?:image|video|audio|file):[A-Za-z0-9_-]+(?:\|[^\]\n]{0,160})?\]\]\n?/g, "\n")
+    .replace(/\n?\[\[video-share:[A-Za-z0-9_-]+(?:\|[^\]\n]{0,160})?\]\]\n?/g, "\n")
     .trim();
 }
 
@@ -410,15 +411,20 @@ function communityPreviewContentUrl(fileId) {
 
 function renderCommunityBody(content) {
   const raw = String(content || "");
-  if (typeof markdownToSafeHtml === "function") {
+  COMMUNITY_ANY_INLINE_MEDIA_TOKEN_RE.lastIndex = 0;
+  const hasInlineTokens = COMMUNITY_ANY_INLINE_MEDIA_TOKEN_RE.test(raw);
+  COMMUNITY_ANY_INLINE_MEDIA_TOKEN_RE.lastIndex = 0;
+  if (typeof markdownToSafeHtml === "function" && !hasInlineTokens) {
     return `<div class="community-body markdown-rendered">${markdownToSafeHtml(raw)}</div>`;
   }
   let lastIndex = 0;
   const parts = [];
-  raw.replace(COMMUNITY_ANY_INLINE_MEDIA_TOKEN_RE, (match, comfyuiFileId, kind, token, name, offset) => {
+  raw.replace(COMMUNITY_ANY_INLINE_MEDIA_TOKEN_RE, (match, comfyuiFileId, kind, token, name, videoToken, videoName, offset) => {
     parts.push(sanitize(raw.slice(lastIndex, offset)));
     if (comfyuiFileId) {
       parts.push(`<div class="community-share-image"><img src="${sanitize(communityPreviewContentUrl(comfyuiFileId))}" alt="ComfyUI shared image" loading="lazy" /></div>`);
+    } else if (videoToken) {
+      parts.push(communityVideoShareHtml(videoToken, videoName));
     } else {
       parts.push(communityInlineMediaHtml(kind, token, name));
     }
@@ -427,6 +433,21 @@ function renderCommunityBody(content) {
   });
   parts.push(sanitize(raw.slice(lastIndex)));
   return `<div class="community-body">${parts.join("")}</div>`;
+}
+
+function communityVideoShareHtml(token, name = "") {
+  const safeToken = String(token || "").match(/^[A-Za-z0-9_-]+$/) ? String(token) : "";
+  if (!safeToken) return "";
+  const safeName = sanitize(name || "影音分享");
+  const pageUrl = `/shared/videos/${encodeURIComponent(safeToken)}`;
+  return `
+    <figure class="community-inline-media community-inline-video-share">
+      <a href="${sanitize(pageUrl)}" target="_blank" rel="noopener noreferrer">
+        <strong>${safeName}</strong>
+        <span>站內影音分享</span>
+      </a>
+    </figure>
+  `;
 }
 
 function communityInlineMediaHtml(kind, token, name = "") {
@@ -836,7 +857,10 @@ function renderCommunityThreads(board) {
     </button>
   `).join("");
   list.querySelectorAll("button[data-open-thread]").forEach((btn) => {
-    btn.addEventListener("click", () => openCommunityThread(parseInt(btn.getAttribute("data-open-thread"), 10)));
+    btn.addEventListener("click", (event) => {
+      if (event.target.closest("[data-open-user-profile]")) return;
+      openCommunityThread(parseInt(btn.getAttribute("data-open-thread"), 10));
+    });
   });
   bindAvatarFallbacks(list);
   renderCommunityStage();

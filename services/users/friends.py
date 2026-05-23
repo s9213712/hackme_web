@@ -77,9 +77,27 @@ def ensure_user_friends_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_user_friends_friend_status ON user_friends(friend_user_id, status)")
 
 
+def ensure_user_follows_schema(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_follows (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            follower_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            followed_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(follower_user_id, followed_user_id),
+            CHECK (follower_user_id <> followed_user_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_follows_follower ON user_follows(follower_user_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_follows_followed ON user_follows(followed_user_id, created_at)")
+
+
 def ensure_social_schema(conn):
     ensure_user_profile_schema(conn)
     ensure_user_friends_schema(conn)
+    ensure_user_follows_schema(conn)
 
 
 def normalized_pair(user_id, friend_user_id):
@@ -183,6 +201,64 @@ def is_blocked_relationship(conn, user_id, friend_user_id):
     except ValueError:
         return False
     return bool(row and row.get("status") == "blocked")
+
+
+def is_following(conn, follower_user_id, followed_user_id):
+    if not follower_user_id or not followed_user_id:
+        return False
+    ensure_user_follows_schema(conn)
+    if int(follower_user_id) == int(followed_user_id):
+        return False
+    row = conn.execute(
+        """
+        SELECT 1 FROM user_follows
+        WHERE follower_user_id=? AND followed_user_id=?
+        LIMIT 1
+        """,
+        (int(follower_user_id), int(followed_user_id)),
+    ).fetchone()
+    return bool(row)
+
+
+def follow_counts(conn, user_id):
+    ensure_user_follows_schema(conn)
+    uid = int(user_id)
+    follower_count = conn.execute(
+        "SELECT COUNT(*) AS total FROM user_follows WHERE followed_user_id=?",
+        (uid,),
+    ).fetchone()["total"]
+    following_count = conn.execute(
+        "SELECT COUNT(*) AS total FROM user_follows WHERE follower_user_id=?",
+        (uid,),
+    ).fetchone()["total"]
+    return {"follower_count": int(follower_count or 0), "following_count": int(following_count or 0)}
+
+
+def friend_count(conn, user_id):
+    ensure_user_friends_schema(conn)
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM user_friends
+        WHERE (user_id=? OR friend_user_id=?) AND status='accepted'
+        """,
+        (int(user_id), int(user_id)),
+    ).fetchone()
+    return int(row["total"] or 0)
+
+
+def follower_user_ids(conn, user_id):
+    ensure_user_follows_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT follower_user_id
+        FROM user_follows
+        WHERE followed_user_id=?
+        ORDER BY created_at DESC, id DESC
+        """,
+        (int(user_id),),
+    ).fetchall()
+    return [int(row["follower_user_id"]) for row in rows]
 
 
 def accepted_friend_ids(conn, user_id):
@@ -351,14 +427,21 @@ def get_profile_payload(conn, *, target_user_id, viewer=None):
     can_interact = relation["status"] == "accepted" or privileged
     if blocked_state and not privileged:
         can_interact = False
+    followed_by_viewer = bool(viewer_id and not owner and is_following(conn, viewer_id, target["id"]))
+    follow_totals = follow_counts(conn, target["id"])
     payload = {
         **_user_payload(target, profile),
         **public_fields,
         "profile_visibility": visibility,
         "friend_status": relation["status"],
         "friend_request_id": relation.get("request_id"),
+        "friend_count": friend_count(conn, target["id"]),
+        **follow_totals,
+        "follow_status": "self" if owner else ("following" if followed_by_viewer else "not_following"),
         "can_request_friend": bool(viewer_id and relation["status"] in {"none", "rejected"}),
         "can_accept_friend": bool(viewer_id and relation["status"] == "pending_incoming"),
+        "can_follow": bool(viewer_id and not owner and not blocked_state and not followed_by_viewer),
+        "can_unfollow": bool(viewer_id and not owner and followed_by_viewer),
         "can_block": bool(viewer_id and not owner and not blocked_state),
         "can_unblock": bool(viewer_id and relation["status"] == "blocked"),
         "can_pm": bool(can_interact and not owner),
@@ -585,6 +668,14 @@ def block_user(conn, actor, *, target_user_id):
             (user_a, user_b, actor["id"], now, now),
         )
         request_id = cur.lastrowid
+    conn.execute(
+        """
+        DELETE FROM user_follows
+        WHERE (follower_user_id=? AND followed_user_id=?)
+           OR (follower_user_id=? AND followed_user_id=?)
+        """,
+        (int(actor["id"]), int(target["id"]), int(target["id"]), int(actor["id"])),
+    )
     return {"status": "blocked", "target": target, "request_id": request_id}, "已封鎖使用者", 200
 
 
@@ -606,3 +697,36 @@ def unblock_user(conn, actor, *, target_user_id):
     if cur.rowcount < 1:
         return False, "找不到封鎖關係", 404
     return True, "已解除封鎖", 200
+
+
+def follow_user(conn, actor, *, target_user_id):
+    ensure_social_schema(conn)
+    target = find_active_user(conn, user_id=target_user_id)
+    if not target:
+        return None, "找不到指定帳號", 404
+    if int(target["id"]) == int(actor["id"]):
+        return None, "不能追蹤自己", 400
+    if is_blocked_relationship(conn, actor["id"], target["id"]):
+        return None, "你與對方目前有封鎖關係，不能追蹤", 403
+    now = _now()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO user_follows (follower_user_id, followed_user_id, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (int(actor["id"]), int(target["id"]), now),
+    )
+    return {"status": "following", "target": target}, "已追蹤", 200
+
+
+def unfollow_user(conn, actor, *, target_user_id):
+    ensure_social_schema(conn)
+    if int(target_user_id) == int(actor["id"]):
+        return False, "不能取消追蹤自己", 400
+    cur = conn.execute(
+        "DELETE FROM user_follows WHERE follower_user_id=? AND followed_user_id=?",
+        (int(actor["id"]), int(target_user_id)),
+    )
+    if cur.rowcount < 1:
+        return False, "尚未追蹤此使用者", 404
+    return True, "已取消追蹤", 200

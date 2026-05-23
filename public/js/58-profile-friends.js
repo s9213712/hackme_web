@@ -2,6 +2,8 @@
 
 let currentProfileTab = "home";
 let profilePanelCache = null;
+let currentProfileViewedUserId = null;
+let currentProfileIsViewingSelf = true;
 let profileFriendsLoaded = false;
 const targetOptionCache = new Map();
 const PROFILE_AVATAR_CROPPER_MIN_ZOOM = 1;
@@ -472,19 +474,22 @@ function profileFriendStatusLabel(status) {
   }[status] || status || "-";
 }
 
-function renderProfileAvatar(targetId, profile) {
+function renderProfileAvatar(targetId, profile, { editable = true } = {}) {
   const el = $(targetId);
   if (!el) return;
   el.innerHTML = userAvatarInnerMarkup(profile?.id, profile?.username || "", profile?.avatar_file_id || "");
   if (targetId === "profile-home-avatar") {
-    el.title = "點擊上傳或更換頭像";
-    el.setAttribute("aria-label", "上傳或更換頭像");
+    el.title = editable ? "點擊上傳或更換頭像" : "個人頭像";
+    el.setAttribute("aria-label", editable ? "上傳或更換頭像" : "個人頭像");
+    el.classList.toggle("profile-avatar-upload-button", !!editable);
   }
   bindAvatarFallbacks(el);
 }
 
 function renderProfileHome(profile) {
-  renderProfileAvatar("profile-home-avatar", profile);
+  currentProfileIsViewingSelf = String(profile?.id || "") === String(currentUserId || "");
+  currentProfileViewedUserId = profile?.id || currentUserId || null;
+  renderProfileAvatar("profile-home-avatar", profile, { editable: currentProfileIsViewingSelf });
   const name = profile?.display_name || profile?.username || "-";
   const nameEl = $("profile-home-name");
   if (nameEl) nameEl.textContent = name;
@@ -503,7 +508,28 @@ function renderProfileHome(profile) {
   const visibility = $("profile-home-visibility");
   if (visibility) visibility.textContent = profile?.profile_visibility || "public";
   const code = $("profile-home-friend-code");
-  if (code) code.textContent = profile?.friend_code || "只會顯示自己的代碼";
+  if (code) code.textContent = currentProfileIsViewingSelf ? (profile?.friend_code || "-") : "非本人不顯示";
+  const friendCount = $("profile-home-friend-count");
+  if (friendCount) friendCount.textContent = String(profile?.friend_count ?? 0);
+  const followerCount = $("profile-home-follower-count");
+  if (followerCount) followerCount.textContent = String(profile?.follower_count ?? 0);
+  const followingCount = $("profile-home-following-count");
+  if (followingCount) followingCount.textContent = String(profile?.following_count ?? 0);
+  const actionRow = $("profile-home-actions");
+  if (actionRow) {
+    const targetId = Number(profile?.id || 0);
+    if (!targetId || currentProfileIsViewingSelf) {
+      actionRow.innerHTML = `<button class="btn btn-primary" type="button" data-profile-edit-self>編輯主頁</button>`;
+    } else {
+      const actions = [];
+      if (profile?.can_request_friend) actions.push(`<button class="btn" type="button" data-profile-request-viewed="${targetId}">加好友</button>`);
+      if (profile?.can_accept_friend && profile?.friend_request_id) actions.push(`<button class="btn btn-primary" type="button" data-profile-accept-viewed="${sanitize(String(profile.friend_request_id))}">接受好友</button>`);
+      if (profile?.can_follow) actions.push(`<button class="btn btn-primary" type="button" data-profile-follow="${targetId}">追蹤</button>`);
+      if (profile?.can_unfollow) actions.push(`<button class="btn" type="button" data-profile-unfollow="${targetId}">取消追蹤</button>`);
+      if (profile?.can_pm) actions.push(`<button class="btn" type="button" data-profile-pm="${sanitize(profile.username || "")}">私訊</button>`);
+      actionRow.innerHTML = actions.length ? actions.join("") : `<span class="drive-card-sub">目前沒有可執行的互動操作</span>`;
+    }
+  }
 }
 
 function fillProfileEdit(profile) {
@@ -526,12 +552,30 @@ async function loadMyProfile({ quiet = false } = {}) {
   try {
     const json = await profileReadJson(API + "/users/me/profile");
     profilePanelCache = json.profile || {};
+    currentProfileViewedUserId = profilePanelCache.id || currentUserId || null;
     renderProfileHome(profilePanelCache);
     fillProfileEdit(profilePanelCache);
     if (!quiet) profileSetMsg("");
     return profilePanelCache;
   } catch (err) {
     profileSetMsg(err.message || "個人資料讀取失敗", true);
+    return null;
+  }
+}
+
+async function loadUserProfile(userId, { quiet = false } = {}) {
+  const targetId = Number(userId || 0);
+  if (!targetId || String(targetId) === String(currentUserId || "")) {
+    return loadMyProfile({ quiet });
+  }
+  try {
+    const json = await profileReadJson(API + `/users/${encodeURIComponent(targetId)}/profile`);
+    profilePanelCache = json.profile || {};
+    renderProfileHome(profilePanelCache);
+    if (!quiet) profileSetMsg("");
+    return profilePanelCache;
+  } catch (err) {
+    profileSetMsg(err.message || "個人主頁讀取失敗", true);
     return null;
   }
 }
@@ -649,6 +693,63 @@ async function requestProfileFriend() {
     if (typeof loadChatFriends === "function") loadChatFriends();
   } catch (err) {
     profileSetMsg(err.message || "好友邀請失敗", true);
+  }
+}
+
+async function requestProfileFriendForUser(userId) {
+  const targetId = Number(userId || 0);
+  if (!targetId) return;
+  try {
+    const json = await profileReadJson(API + "/friends/request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: targetId }),
+    });
+    profileSetMsg(json.msg || "好友邀請已送出");
+    await loadUserProfile(targetId, { quiet: true });
+    if (typeof loadChatFriends === "function") loadChatFriends();
+  } catch (err) {
+    profileSetMsg(err.message || "好友邀請失敗", true);
+  }
+}
+
+async function acceptProfileFriendRequest(requestId) {
+  if (!requestId) return;
+  try {
+    const json = await profileReadJson(API + `/friends/requests/${encodeURIComponent(requestId)}/accept`, {
+      method: "POST",
+    });
+    profileSetMsg(json.msg || "已接受好友邀請");
+    await loadProfilePanel();
+    if (typeof loadChatFriends === "function") loadChatFriends();
+  } catch (err) {
+    profileSetMsg(err.message || "好友申請處理失敗", true);
+  }
+}
+
+async function followProfileUser(userId) {
+  const targetId = Number(userId || 0);
+  if (!targetId) return;
+  try {
+    const json = await profileReadJson(API + `/users/${encodeURIComponent(targetId)}/follow`, { method: "POST" });
+    profileSetMsg(json.msg || "已追蹤");
+    if (json.profile) renderProfileHome(json.profile);
+    else await loadUserProfile(targetId, { quiet: true });
+  } catch (err) {
+    profileSetMsg(err.message || "追蹤失敗", true);
+  }
+}
+
+async function unfollowProfileUser(userId) {
+  const targetId = Number(userId || 0);
+  if (!targetId) return;
+  try {
+    const json = await profileReadJson(API + `/users/${encodeURIComponent(targetId)}/follow`, { method: "DELETE" });
+    profileSetMsg(json.msg || "已取消追蹤");
+    if (json.profile) renderProfileHome(json.profile);
+    else await loadUserProfile(targetId, { quiet: true });
+  } catch (err) {
+    profileSetMsg(err.message || "取消追蹤失敗", true);
   }
 }
 
@@ -813,6 +914,10 @@ async function copyProfileFriendCode(event) {
 function switchProfileTab(tab = "home") {
   const next = ["home", "edit", "friends"].includes(tab) ? tab : "home";
   currentProfileTab = next;
+  if (next !== "home") {
+    currentProfileViewedUserId = currentUserId || null;
+    currentProfileIsViewingSelf = true;
+  }
   document.querySelectorAll("[data-profile-tab]").forEach((btn) => {
     const active = btn.dataset.profileTab === next;
     btn.classList.toggle("btn-primary", active);
@@ -839,13 +944,36 @@ function loadProfilePanel() {
     loadProfileFriends({ quiet: !profileFriendsLoaded });
     return;
   }
+  if (currentProfileTab === "home" && currentProfileViewedUserId && String(currentProfileViewedUserId) !== String(currentUserId || "")) {
+    loadUserProfile(currentProfileViewedUserId);
+    return;
+  }
   loadMyProfile();
 }
 
 function openMyProfilePanel(tab = "home") {
+  currentProfileViewedUserId = currentUserId || null;
+  currentProfileIsViewingSelf = true;
   if (typeof switchModuleTab === "function") switchModuleTab("profile");
   switchProfileTab(tab);
 }
+
+function openUserProfile(userId) {
+  const targetId = Number(userId || 0);
+  if (!targetId) return;
+  if (String(targetId) === String(currentUserId || "")) {
+    openMyProfilePanel("home");
+    return;
+  }
+  currentProfileViewedUserId = targetId;
+  currentProfileIsViewingSelf = false;
+  currentProfileTab = "home";
+  if (typeof switchModuleTab === "function") switchModuleTab("profile");
+  switchProfileTab("home");
+  loadUserProfile(targetId);
+}
+
+window.openUserProfile = openUserProfile;
 
 function bindProfileAvatarUploaderControls() {
   if (window.__profileAvatarUploaderBound) return;
@@ -924,7 +1052,9 @@ function bindProfileFriendsControls() {
   const rotateCode = $("profile-rotate-code-btn");
   if (rotateCode) rotateCode.addEventListener("click", rotateProfileFriendCode);
   const avatarButton = $("profile-home-avatar");
-  if (avatarButton) avatarButton.addEventListener("click", () => openProfileAvatarUploader({ pickFile: true }));
+  if (avatarButton) avatarButton.addEventListener("click", () => {
+    if (currentProfileIsViewingSelf) openProfileAvatarUploader({ pickFile: true });
+  });
   bindProfileAvatarUploaderControls();
   const sidebarCard = $("sidebar-user-card");
   if (sidebarCard) {
@@ -941,6 +1071,51 @@ function bindProfileFriendsControls() {
   }
   document.addEventListener("hackme:module-changed", (event) => {
     if (event?.detail?.current === "profile") loadProfilePanel();
+  });
+  document.addEventListener("click", (event) => {
+    const profileLink = event.target.closest("[data-open-user-profile]");
+    if (profileLink) {
+      event.preventDefault();
+      openUserProfile(profileLink.dataset.openUserProfile);
+      return;
+    }
+    const editSelf = event.target.closest("[data-profile-edit-self]");
+    if (editSelf) {
+      switchProfileTab("edit");
+      return;
+    }
+    const requestViewed = event.target.closest("[data-profile-request-viewed]");
+    if (requestViewed) {
+      requestProfileFriendForUser(requestViewed.dataset.profileRequestViewed);
+      return;
+    }
+    const acceptViewed = event.target.closest("[data-profile-accept-viewed]");
+    if (acceptViewed) {
+      acceptProfileFriendRequest(acceptViewed.dataset.profileAcceptViewed);
+      return;
+    }
+    const follow = event.target.closest("[data-profile-follow]");
+    if (follow) {
+      followProfileUser(follow.dataset.profileFollow);
+      return;
+    }
+    const unfollow = event.target.closest("[data-profile-unfollow]");
+    if (unfollow) {
+      unfollowProfileUser(unfollow.dataset.profileUnfollow);
+      return;
+    }
+    const pm = event.target.closest("[data-profile-pm]");
+    if (pm) {
+      openPmWithUser(pm.dataset.profilePm || "");
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    const profileLink = event.target.closest?.("[data-open-user-profile]");
+    if (!profileLink) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openUserProfile(profileLink.dataset.openUserProfile);
+    }
   });
   bindTargetUserOptionInputs();
 }

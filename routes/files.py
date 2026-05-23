@@ -826,10 +826,10 @@ def register_file_routes(app, deps):
     def _refund_storage_upgrade_spend(spend, actor, *, reason):
         ledger = (spend or {}).get("ledger") or {}
         ledger_uuid = ledger.get("ledger_uuid")
-        if not ledger_uuid or not points_service or not hasattr(points_service, "rollback_ledger"):
+        if not ledger_uuid or not points_service or not hasattr(points_service, "compensate_ledger"):
             return False
         try:
-            points_service.rollback_ledger(
+            points_service.compensate_ledger(
                 actor=actor,
                 ledger_uuid=ledger_uuid,
                 reason=reason,
@@ -2282,7 +2282,7 @@ def register_file_routes(app, deps):
         finally:
             conn.close()
         try:
-            spend = points_service.spend_points(
+            spend = points_service.rc1_facade().spend_service_fee(
                 user_id=_actor_value(actor, "id"),
                 item_key=item_key,
                 quantity=1,
