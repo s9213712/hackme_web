@@ -260,6 +260,17 @@ def register_video_routes(app, deps):
         except Exception:
             return None
 
+    def _actor_is_root(actor):
+        if not actor:
+            return False
+        try:
+            username = str(actor.get("username") or "")
+            role = str(actor.get("role") or "")
+        except Exception:
+            username = ""
+            role = ""
+        return username == "root" or role == "super_admin"
+
     def _notify_followers_of_video_activity(conn, actor, *, video_id, activity, share_link=None):
         actor_id = _actor_user_id(actor)
         if not actor_id:
@@ -646,6 +657,109 @@ def register_video_routes(app, deps):
             stage_detail="HLS 背景處理已排程；你可以先做別的事，進度會顯示在任務中心，完成後會通知。",
         )
         return asset, None, True
+
+    def _parse_hls_retry_file_id(job):
+        metadata = job.get("metadata") if isinstance(job, dict) else {}
+        if isinstance(metadata, dict) and metadata.get("file_id"):
+            return str(metadata.get("file_id") or "").strip()
+        source_ref = str((job or {}).get("source_ref") or "").strip()
+        prefix = "media_stream:"
+        if source_ref.startswith(prefix):
+            return source_ref[len(prefix):].strip()
+        return ""
+
+    def _retry_hls_platform_job(*, conn, actor, job):
+        file_id = _parse_hls_retry_file_id(job)
+        if not file_id:
+            return {"ok": False, "msg": "HLS 任務缺少檔案識別，無法重試。", "error": "missing_hls_file_id", "status_code": 400}
+        try:
+            row = _load_stream_file(conn, file_id=file_id)
+            if not _actor_is_root(actor):
+                _assert_stream_prepare_allowed(actor, row)
+            if is_e2ee_file(row):
+                return {
+                    "ok": False,
+                    "msg": "strict E2EE 影音不可由伺服器 HLS 重試；請改用 E2EE Streaming v2。",
+                    "error": "strict_e2ee_server_transcode_disabled",
+                    "status_code": 409,
+                }
+            video_row = conn.execute(
+                "SELECT id, title, owner_user_id, visibility FROM videos WHERE cloud_file_id=? AND deleted_at IS NULL LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+            title = video_row["title"] if video_row else row["original_filename_plain_for_public"]
+            owner_user_id = video_row["owner_user_id"] if video_row else row["owner_user_id"]
+            asset, stream_warning, stream_queued = _queue_stream_prepare(
+                conn,
+                file_row=row,
+                video_id=video_row["id"] if video_row else None,
+                title=title,
+                visibility=video_row["visibility"] if video_row else "private",
+                force=True,
+            )
+            conn.commit()
+            if not stream_queued:
+                latest_job = get_platform_job_by_source(conn, "media_hls_prepare", _hls_job_source_ref(row["id"])) or job
+                return {
+                    "ok": True,
+                    "job": latest_job,
+                    "asset": asset,
+                    "queued": False,
+                    "msg": stream_warning or "HLS 任務目前不需要重試，請刷新狀態。",
+                }
+            worker_started = _start_stream_prepare_worker(
+                row["id"],
+                video_id=video_row["id"] if video_row else None,
+                owner_user_id=owner_user_id,
+                title=title,
+            )
+            if not worker_started:
+                stream_warning = "HLS 背景處理程序啟動失敗，請稍後重新排程。"
+                failed_job = _sync_hls_platform_job(
+                    conn,
+                    file_row=row,
+                    video_id=video_row["id"] if video_row else None,
+                    owner_user_id=owner_user_id,
+                    title=title,
+                    status="failed",
+                    progress_percent=100,
+                    stage="launch_failed",
+                    stage_detail=stream_warning,
+                    error_message=stream_warning,
+                )
+                return {
+                    "ok": False,
+                    "job": failed_job or job,
+                    "asset": asset,
+                    "queued": False,
+                    "msg": stream_warning,
+                    "error": "hls_worker_launch_failed",
+                    "status_code": 500,
+                }
+            running_job = _sync_hls_platform_job(
+                conn,
+                file_row=row,
+                video_id=video_row["id"] if video_row else None,
+                owner_user_id=owner_user_id,
+                title=title,
+                status="running",
+                progress_percent=10,
+                stage="worker_started",
+                stage_detail="HLS 外部轉檔程序已重新啟動；你可以先做別的事，進度會顯示在任務中心。",
+            )
+            return {
+                "ok": True,
+                "job": running_job or job,
+                "asset": asset,
+                "queued": True,
+                "msg": "HLS 已重新排入背景處理，完成後會通知上傳者。",
+            }
+        except PermissionError as exc:
+            return {"ok": False, "msg": str(exc) or "沒有權限重試此 HLS 任務", "error": "forbidden", "status_code": 403}
+        except Exception as exc:
+            return {"ok": False, "msg": f"HLS 重試失敗：{exc}", "error": exc.__class__.__name__, "status_code": 400}
+
+    app.extensions.setdefault("hackme_job_retry_handlers", {})["media_hls_prepare"] = _retry_hls_platform_job
 
     def _maybe_prepare_stream_asset(conn, *, file_row, visibility, video_id=None, title=""):
         if not _settings_bool("video_stream_auto_prepare_enabled", True):

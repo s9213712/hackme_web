@@ -490,20 +490,24 @@ async function updateJobCenterJob(jobUuid, action) {
     confirmLabel: "取消任務",
     danger: true,
   }))) return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const res = await apiFetch(API + `/jobs/${encodeURIComponent(jobUuid)}/${action}`, {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" }
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!json.ok) {
-    platformCenterSetMsg("job-center-msg", json.msg || "任務更新失敗", false);
-    return;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + `/jobs/${encodeURIComponent(jobUuid)}/${action}`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) {
+      platformCenterSetMsg("job-center-msg", json.msg || "任務更新失敗", false);
+      return;
+    }
+    platformCenterSetMsg("job-center-msg", json.msg || "任務已更新", true);
+    await loadJobCenter();
+  } catch (err) {
+    platformCenterSetMsg("job-center-msg", `任務更新失敗：${err?.message || err || "請稍後重試"}`, false);
   }
-  platformCenterSetMsg("job-center-msg", json.msg || "任務已更新", true);
-  await loadJobCenter();
 }
 
 async function updateJobCenterRemoteDownloadTask(taskId, action) {

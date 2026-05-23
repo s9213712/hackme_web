@@ -52,6 +52,7 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'loadTradingAssetOverview()' in platform_js
     assert 'platformConfirm("確定要取消這個任務？"' in platform_js
     assert 'platformConfirm("確定要取消這個下載任務？"' in platform_js
+    assert '任務更新失敗：${err?.message || err || "請稍後重試"}' in platform_js
     assert 'data-job-remote-action="pause"' in platform_js
     assert 'data-job-remote-action="resume"' in platform_js
     assert 'updateJobCenterRemoteDownloadTask' in platform_js

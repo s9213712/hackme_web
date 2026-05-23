@@ -47,6 +47,11 @@ def register_job_routes(app, deps):
             return True
         return int(job.get("owner_user_id") or -1) == int(actor_value(actor, "id", -2))
 
+    def job_retry_handler(source_module):
+        handlers = app.extensions.get("hackme_job_retry_handlers") or {}
+        handler = handlers.get(str(source_module or ""))
+        return handler if callable(handler) else None
+
     @app.route("/api/jobs", methods=["GET"])
     @require_csrf_safe
     def jobs_list():
@@ -144,8 +149,21 @@ def register_job_routes(app, deps):
                 return json_resp({"ok": False, "msg": "找不到任務"}), 404
             if job.get("status") not in {"failed", "retry_wait", "expired", "cancelled"} and not is_root(actor):
                 return json_resp({"ok": False, "msg": "此任務目前不能重試"}), 400
+            handler = job_retry_handler(job.get("source_module"))
             updated = request_retry(conn, job_uuid)
             conn.commit()
+            if handler:
+                try:
+                    payload = handler(conn=conn, actor=actor, job=updated) or {}
+                    conn.commit()
+                except Exception as exc:
+                    conn.rollback()
+                    message = str(exc) or exc.__class__.__name__
+                    audit("JOB_RETRY_REQUESTED", get_client_ip(), user=actor_value(actor, "username"), success=False, ua=get_ua(), detail=f"job_uuid={job_uuid},error={message[:240]}")
+                    return json_resp({"ok": False, "msg": f"任務重試失敗：{message}", "error": "job_retry_handler_failed"}), 400
+                status_code = int(payload.pop("status_code", 200) or 200)
+                audit("JOB_RETRY_REQUESTED", get_client_ip(), user=actor_value(actor, "username"), success=status_code < 400, ua=get_ua(), detail=f"job_uuid={job_uuid},source_module={job.get('source_module')}")
+                return json_resp(payload, status_code)
             audit("JOB_RETRY_REQUESTED", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"job_uuid={job_uuid}")
             return json_resp({"ok": True, "job": updated, "msg": "已排入重試"})
         finally:
