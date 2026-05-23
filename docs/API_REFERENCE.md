@@ -392,39 +392,47 @@ curl -k -sS https://127.0.0.1:5000/api/version
 
 ### Economy / PointsChain
 
+`feature_economy_enabled` controls the basic points ledger, catalog, wallet summary, CSV export, and normal service-fee spending. `feature_points_chain_enabled` controls the heavier PointsChain layer: wallet identities, wallet-to-wallet transactions, Explorer, finality/proved status, block sealing, backups, root chain report, and official Treasury grant. When the chain flag is off, those chain endpoints return `503` with `code=points_chain_disabled`; the basic points endpoints remain available.
+
 來源：`routes/economy.py`
 
 | Method | Path | 角色 | 用途 |
 |---|---|---|---|
 | GET | `/api/points/wallet` | logged-in | 積分錢包 |
+| GET | `/api/points/wallet/onboarding` | logged-in | 查錢包 onboarding；回傳多錢包列表、付款錢包餘額、註冊禮與 `initial_grant` 狀態 |
+| POST | `/api/points/wallet/onboarding` | logged-in | 建立或綁定官方熱錢包、冷錢包、匯入冷錢包；legacy/API `multisig` 只會成為 `user_multisig_preview` 收款/觀察錢包，不能轉出 |
+| GET | `/api/admin/points/governance/treasury-signer-center` | manager+ | 官方財庫多簽 signer center：官方錢包、signer roles/weight、threshold、pending treasury proposals、可簽署項目與 readiness |
+| DELETE | `/api/points/wallet/onboarding` | logged-in | 刪除目前或指定冷錢包身份；不刪 append-only 帳本 |
 | GET | `/api/points/ledger` | logged-in | 個人 ledger |
 | GET | `/api/points/explorer/search?q=<query>` | public safe GET | PointsChain explorer 查交易 hash、Ledger UUID、錢包地址或區塊 |
 | GET | `/api/points/explorer/tx/<ledger_ref>` | public safe GET | 查單筆鏈上交易 |
 | GET | `/api/points/explorer/wallet/<address>` | public safe GET | 查錢包餘額與近期交易 |
 | GET | `/api/points/explorer/block/<block_ref>` | public safe GET | 查區塊狀態與交易列表 |
 | POST | `/api/points/explorer/accelerate` | logged-in | 送出模擬鏈交易加速費；費用走 append-only ledger debit 並進 BURN。設定驅動自動發放交易免鏈上費用；root 人工操作官方錢包不算自動發放 |
-| POST | `/api/points/transactions/submit` | logged-in | 用戶以自己的錢包地址送出 wallet-to-wallet 模擬鏈交易；pending 時只產生 transaction hash 與通知，不入帳收款方；達 20/20 Proved 後才 append ledger，並通知雙方成交 |
+| GET | `/api/points/transactions` | logged-in | 目前登入者近期 wallet-to-wallet 轉入 / 轉出交易；root 會看到全站近期 pending/confirmed 交易與官方 Treasury 發點；包含 `transaction_hash`、pending/confirmed/failed、Proved 進度與 pending 統計，不含 username 標籤 |
+| POST | `/api/points/transactions/submit` | logged-in | 用戶以自己的錢包地址送出 wallet-to-wallet 模擬鏈交易；pending 時凍結發送方 Value+Fee、產生 transaction hash 與通知，不入帳收款方；達 20/20 Proved 後才 append ledger，手續費進 BURN，並通知雙方成交 |
 | GET | `/api/points/wallet/export.csv` | logged-in | 匯出錢包 |
 | GET | `/api/points/catalog` | logged-in | 點數商品目錄 |
 | GET/PUT | `/api/root/economy/catalog` | root | root 調整商品目錄 |
 | GET | `/api/points/rules` | logged-in | 點數規則 |
-| POST | `/api/points/spend` | logged-in | 消費點數 |
+| POST | `/api/points/spend` | logged-in | 站內服務費支付；可帶 `source_wallet_address` 指定付款錢包，必須屬於登入用戶。先建立 `service_fee_reserve:*` 凍結可用額，累積達門檻後批次 `service_fee_batch_debit` 鏈上扣款；自管冷錢包需帶 `request_uuid` 與本機私鑰簽出的 `signature` |
 | GET | `/api/points/ledger/<ledger_uuid>/proof` | logged-in | ledger proof |
-| GET | `/api/admin/points/wallets/<user_id>` | manager | 單一使用者錢包 |
-| POST | `/api/root/points/wallets/<user_id>/sanction` | root | 錢包處分 |
-| GET | `/api/admin/points/ledger` | manager | 全域 ledger |
-| POST | `/api/admin/points/adjust` | manager | 調整積分 |
-| GET | `/api/admin/points/pending-rewards` | manager | 待審獎勵 |
-| POST | `/api/admin/points/pending-rewards/<pending_reward_id>/review` | manager | 審核獎勵 |
+| GET | `/api/admin/points/wallets/<user_id>` | manager | 已停用，回 410；不得用 user_id 查用戶錢包 |
+| POST | `/api/root/points/wallets/<user_id>/sanction` | root | 已停用，回 410；不得由 root 直接處分用戶錢包 |
+| GET | `/api/admin/points/ledger` | manager | 已停用，回 410；請改用公開 Explorer 以 hash、地址或區塊查詢 |
+| POST | `/api/admin/points/adjust` | manager | 已停用，回 410；不得手動加減用戶積分 |
+| POST | `/api/root/points/official-wallet/grant` | root | 官方 Treasury 對公開錢包地址發點；只接受 `destination_wallet_address`，不接受 username/user_id；送出後先建立 pending transaction hash 並通知雙方，達 20/20 Proved 後才入帳 |
+| GET | `/api/admin/points/pending-rewards` | manager | 已停用，回 410；官方發點需走官方錢包送單或治理核准規則 |
+| POST | `/api/admin/points/pending-rewards/<pending_reward_id>/review` | manager | 已停用，回 410；後台待審加點流程移除 |
 | POST | `/api/root/points/chain/seal` | root | seal chain |
 | GET | `/api/root/points/chain/verify` | root | verify chain |
 | POST | `/api/root/points/chain/recovery` | root | recovery |
 | POST | `/api/root/points/chain/recovery/auto-handle` | root | auto recovery |
 | GET | `/api/root/points/chain/backups` | root | backups |
 | POST | `/api/root/points/chain/recovery/approve` | root | approve recovery |
-| GET | `/api/root/points/report` | root | points 報表，含目前在外積分與 ledger 淨額 |
+| GET | `/api/root/points/report` | root | points 報表，含封塊、審計、異常與近期未封交易 hash |
 | GET | `/api/root/points/audit` | root | points audit |
-| POST | `/api/root/points/ledger/<ledger_uuid>/rollback` | root | rollback |
+| POST | `/api/root/points/ledger/<ledger_uuid>/rollback` | root | 已停用，回 410；修正必須追加新的鏈上補償交易 |
 | GET | `/api/admin/points/economy/stats` | manager | economy stats；包含 Phase 1A replay-derived fund summary |
 
 > 注意：`docs/AGENTS/research/BLOCKCHAIN/POINTS_TRANSFER_API.md` 是 Phase 3 規格，不代表現在已可呼叫。

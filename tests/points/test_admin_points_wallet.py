@@ -24,7 +24,7 @@ def _get_db_factory(path):
     return get_db
 
 
-def test_admin_points_wallet_returns_404_for_missing_user(tmp_path):
+def test_admin_points_wallet_user_id_lookup_is_disabled(tmp_path):
     db_path = tmp_path / "wallets.db"
     get_db = _get_db_factory(db_path)
     conn = get_db()
@@ -53,13 +53,13 @@ def test_admin_points_wallet_returns_404_for_missing_user(tmp_path):
     res_zero = app.test_client().get("/api/admin/points/wallets/0")
     res_missing = app.test_client().get("/api/admin/points/wallets/999999")
 
-    assert res_zero.status_code == 404
-    assert res_zero.get_json()["msg"] == "找不到帳號"
-    assert res_missing.status_code == 404
-    assert res_missing.get_json()["msg"] == "找不到帳號"
+    assert res_zero.status_code == 410
+    assert res_zero.get_json()["code"] == "blockchain_permission_model"
+    assert res_missing.status_code == 410
+    assert res_missing.get_json()["code"] == "blockchain_permission_model"
 
 
-def test_admin_points_wallet_returns_reward_ledger_for_wallet_income(tmp_path):
+def test_admin_points_wallet_does_not_expose_user_balance_or_reward_ledger(tmp_path):
     db_path = tmp_path / "wallets.db"
     get_db = _get_db_factory(db_path)
     conn = get_db()
@@ -103,12 +103,10 @@ def test_admin_points_wallet_returns_reward_ledger_for_wallet_income(tmp_path):
     res = app.test_client().get("/api/admin/points/wallets/2")
     payload = res.get_json()
 
-    assert res.status_code == 200
-    assert payload["wallet"]["total_points_earned"] == 25
-    assert payload["ledger"][0]["amount"] == 25
-    assert payload["ledger"][0]["action_type"] == "game_daily_challenge_reward"
-    assert payload["ledger"][0]["reason"] == "gomoku 每日任務完成獎勵"
-    assert payload["ledger"][0]["public_metadata"]["game_key"] == "gomoku"
+    assert res.status_code == 410
+    assert payload["code"] == "blockchain_permission_model"
+    assert "wallet" not in payload
+    assert "ledger" not in payload
 
     adjustments = points.list_admin_adjustments(limit=20)
     assert any(row["action_type"] == "game_daily_challenge_reward" and row["amount"] == 25 for row in adjustments)

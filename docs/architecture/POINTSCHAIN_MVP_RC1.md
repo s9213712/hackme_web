@@ -245,6 +245,24 @@ RC1 applies this enforcement to:
 - large Treasury movement
 - large exchange fund movement
 - production-profile official transfer
+- emergency rollback/recovery branch pointer changes
+
+Governance security details are locked in
+`docs/architecture/GOVERNANCE_SECURITY_MODEL.md`. The important RC1 invariant is
+that governance passing does not equal official wallet control: official
+treasury proposals still require execution-bundle hash verification and
+official multisig signing after the vote.
+
+RC1 multisig scope is intentionally narrow:
+
+- spend-capable multisig exists only for `wallet_type=official_treasury_multisig`
+  with `wallet_scope=official_treasury`
+- general user multisig is hidden/preview only and is downgraded to
+  `spend_capability=receive_only`
+- user multisig can receive and be observed, but transfer/service-fee/wallet-fee
+  spend paths must reject it server-side
+- manager+ governance UI must expose Treasury Signer Center for signer list,
+  role/weight, threshold, pending proposals, timelock, and readiness
 
 Development and isolated profiles may allow root single approval, but the UI and
 reports must mark it as a dev override. Production requires root plus admin,
@@ -345,6 +363,7 @@ These items are explicitly out of scope for RC1:
 - DAO governance
 - public Etherscan-like standalone indexer
 - fully decentralized multisig wallet protocol
+- general-user spendable multisig wallets
 - new paid product features
 - expanded exchange gameplay
 

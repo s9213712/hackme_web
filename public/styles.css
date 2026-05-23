@@ -347,6 +347,68 @@
       gap: .45rem;
     }
 
+    .economy-branch-tree {
+      display: grid;
+      gap: .45rem;
+      margin-top: .65rem;
+    }
+
+    .economy-branch-node {
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      background: rgba(255,255,255,.035);
+      padding: .55rem .65rem;
+    }
+
+    .economy-branch-node[open] {
+      background: rgba(255,255,255,.055);
+    }
+
+    .economy-branch-node > summary {
+      cursor: pointer;
+      list-style-position: outside;
+    }
+
+    .economy-branch-title {
+      display: inline-flex;
+      align-items: center;
+      gap: .45rem;
+      flex-wrap: wrap;
+      word-break: break-all;
+    }
+
+    .economy-branch-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      border-radius: 999px;
+      padding: .1rem .45rem;
+      font-size: .72rem;
+      font-weight: 700;
+      background: rgba(255,255,255,.08);
+      color: var(--muted);
+    }
+
+    .economy-branch-badge.canonical {
+      color: #9be9a8;
+      background: rgba(35,134,54,.18);
+    }
+
+    .economy-branch-badge.archived {
+      color: #ffb74d;
+      background: rgba(255,183,77,.14);
+    }
+
+    .economy-branch-meta {
+      display: grid;
+      gap: .25rem;
+      margin-top: .5rem;
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
     .economy-formula-card {
       min-width: 124px;
       min-height: 72px;
@@ -974,6 +1036,19 @@
       color: var(--muted);
       font-size: .68rem;
       font-weight: 500;
+    }
+
+    .video-owner-line,
+    .video-comment-author {
+      max-width: 100%;
+    }
+
+    .video-owner-line .user-avatar,
+    .video-comment-author .user-avatar {
+      width: 1.8rem;
+      height: 1.8rem;
+      flex-basis: 1.8rem;
+      font-size: .72rem;
     }
 
     .user-table-identity {
@@ -4542,24 +4617,24 @@
 
     .profile-summary {
       display: grid;
-      grid-template-columns: 88px minmax(0, 1fr);
-      gap: .9rem;
+      grid-template-columns: 132px minmax(0, 1fr);
+      gap: 1.15rem;
       align-items: center;
-      padding: .9rem 0;
+      padding: 1rem 0 1.1rem;
       border-bottom: 1px solid rgba(255,255,255,.08);
     }
 
     .profile-avatar-large {
       position: relative;
-      width: 88px;
-      height: 88px;
-      inline-size: 88px;
-      block-size: 88px;
-      min-inline-size: 88px;
-      max-inline-size: 88px;
-      min-block-size: 88px;
-      max-block-size: 88px;
-      flex: 0 0 88px;
+      width: 132px;
+      height: 132px;
+      inline-size: 132px;
+      block-size: 132px;
+      min-inline-size: 132px;
+      max-inline-size: 132px;
+      min-block-size: 132px;
+      max-block-size: 132px;
+      flex: 0 0 132px;
       border-radius: 50%;
       display: grid;
       place-items: center;
@@ -4659,7 +4734,7 @@
     .profile-summary-main {
       min-width: 0;
       display: grid;
-      gap: .35rem;
+      gap: .42rem;
     }
 
     .profile-summary-main h3,
@@ -4668,9 +4743,23 @@
       overflow-wrap: anywhere;
     }
 
+    .profile-summary-main h3 {
+      font-size: clamp(1.35rem, 1.1rem + .8vw, 2rem);
+      line-height: 1.12;
+    }
+
     .profile-bio {
       color: var(--text);
       line-height: 1.6;
+    }
+
+    .profile-home-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .45rem;
+      align-items: center;
+      min-height: 2.1rem;
+      margin-top: .25rem;
     }
 
     .profile-stats-grid strong {
@@ -4728,6 +4817,35 @@
       font-size: .68rem;
       font-weight: 700;
       vertical-align: middle;
+    }
+
+    .identity-profile-link {
+      cursor: pointer;
+      border-radius: 8px;
+      transition: background .16s ease, box-shadow .16s ease;
+    }
+
+    .identity-profile-link:hover,
+    .identity-profile-link:focus-visible {
+      background: rgba(255,255,255,.07);
+      box-shadow: 0 0 0 3px rgba(255,255,255,.06);
+      outline: none;
+    }
+
+    .community-inline-video-share a {
+      display: grid;
+      gap: .18rem;
+      padding: .65rem .75rem;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      text-decoration: none;
+    }
+
+    .community-inline-video-share span {
+      color: var(--muted);
+      font-size: .78rem;
     }
 
     .user-target-badges {
@@ -10274,6 +10392,15 @@
       .profile-friend-columns {
         grid-template-columns: 1fr;
         display: grid;
+      }
+
+      .profile-summary {
+        justify-items: center;
+        text-align: center;
+      }
+
+      .profile-home-actions {
+        justify-content: center;
       }
 
       .chat-msg {

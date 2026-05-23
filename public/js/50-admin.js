@@ -4588,6 +4588,7 @@ const FEATURE_SETTING_KEYS = [
   "feature_privacy_uploads_enabled",
   "feature_comfyui_enabled",
   "feature_economy_enabled",
+  "feature_points_chain_enabled",
   "feature_trading_enabled",
   "feature_games_enabled",
   "feature_videos_enabled"
@@ -4616,7 +4617,8 @@ const FEATURE_SETTING_LABELS = {
   feature_videos_enabled: "影音分享",
   feature_games_enabled: "遊戲區 / 西洋棋",
   feature_comfyui_enabled: "ComfyUI AI 產圖",
-  feature_economy_enabled: "PointsChain 積分系統",
+  feature_economy_enabled: "基本積分系統",
+  feature_points_chain_enabled: "PointsChain 私有鏈",
   feature_trading_enabled: "積分交易所",
   feature_personalization_enabled: "個人外觀覆寫",
   feature_social_search_enabled: "社交 / 搜尋",
@@ -4630,12 +4632,12 @@ const FEATURE_DEPENDENCY_RULES = {
     description: "Storage / 相簿需要先有雲端硬碟父功能。",
   },
   feature_trading_enabled: {
-    required: ["feature_economy_enabled"],
-    description: "積分交易所必須依附在 PointsChain 上。",
+    required: ["feature_economy_enabled", "feature_points_chain_enabled"],
+    description: "積分交易所必須依附在基本積分與 PointsChain 私有鏈上。",
   },
   feature_videos_enabled: {
-    recommended: ["feature_privacy_uploads_enabled", "feature_economy_enabled"],
-    description: "影音若搭配雲端硬碟與 PointsChain，才有上傳、保存與打賞等完整服務。",
+    recommended: ["feature_privacy_uploads_enabled", "feature_economy_enabled", "feature_points_chain_enabled"],
+    description: "影音若搭配雲端硬碟、基本積分與 PointsChain，才有上傳、保存與打賞等完整服務。",
   },
   feature_comfyui_enabled: {
     recommended: ["feature_privacy_uploads_enabled"],
@@ -4705,7 +4707,7 @@ const FEATURE_SERVICE_BUNDLES = [
   {
     key: "raspberry-lite",
     label: "Raspberry 套餐",
-    description: "輕量主機預設：保留帳號、社群、附件、雲端硬碟與遊戲；關閉 ComfyUI、影音、PointsChain 與交易等較吃 CPU / I/O / 長連線的模組。",
+    description: "輕量主機預設：保留帳號、社群、附件、雲端硬碟、遊戲與基本積分；關閉 ComfyUI、影音、PointsChain 私有鏈與交易等較吃 CPU / I/O / 長連線的模組。",
     features: [
       ...FEATURE_MINIMUM_BUNDLE_FEATURES,
       "feature_accounts_enabled",
@@ -4718,6 +4720,7 @@ const FEATURE_SERVICE_BUNDLES = [
       "feature_attachments_enabled",
       "feature_privacy_uploads_enabled",
       "feature_storage_albums_enabled",
+      "feature_economy_enabled",
       "feature_games_enabled",
       "feature_social_search_enabled",
       "feature_account_security_enabled",
@@ -4764,11 +4767,12 @@ const FEATURE_SERVICE_BUNDLES = [
   {
     key: "video-suite",
     label: "影音分享整套",
-    description: "影音、雲端硬碟與 PointsChain 一起開。",
+    description: "影音、雲端硬碟、基本積分與 PointsChain 一起開。",
     features: [
       "feature_videos_enabled",
       "feature_privacy_uploads_enabled",
       "feature_economy_enabled",
+      "feature_points_chain_enabled",
     ],
   },
   {
@@ -4783,9 +4787,10 @@ const FEATURE_SERVICE_BUNDLES = [
   {
     key: "economy-suite",
     label: "積分交易整套",
-    description: "PointsChain 與積分交易所一起開。",
+    description: "基本積分、PointsChain 私有鏈與積分交易所一起開。",
     features: [
       "feature_economy_enabled",
+      "feature_points_chain_enabled",
       "feature_trading_enabled",
     ],
   },
@@ -4960,7 +4965,8 @@ const SECURITY_CONTROL_KEYS = [
   "browser_only_mode_enabled",
   "integrity_guard_enabled",
   "integrity_guard_strict_mode",
-  "feature_economy_enabled"
+  "feature_economy_enabled",
+  "feature_points_chain_enabled"
 ];
 const SECURITY_THRESHOLD_KEYS = [
   "max_login_failures",
@@ -4985,7 +4991,8 @@ const SECURITY_FIELD_LABELS = {
   browser_only_mode_enabled: "Browser-only 模式",
   integrity_guard_enabled: "Integrity Guard",
   integrity_guard_strict_mode: "Integrity strict mode",
-  feature_economy_enabled: "PointsChain / 積分私有鏈",
+  feature_economy_enabled: "基本積分系統",
+  feature_points_chain_enabled: "PointsChain 私有鏈",
   feature_videos_enabled: "影音分享模組",
   max_login_failures: "登入失敗鎖定次數",
   block_duration_minutes: "封鎖時長（分鐘）",

@@ -15,13 +15,16 @@ from .schema import canonical_json, sha256_text, utc_now
 
 
 WALLET_ADDRESS_RE = re.compile(r"^pc1[a-f0-9]{48}$")
-WALLET_IDENTITY_TYPES = {"official_hot", "self_custody_cold", "imported_cold", "multisig", "mint", "burn"}
-USER_WALLET_IDENTITY_TYPES = {"official_hot", "self_custody_cold", "imported_cold", "multisig"}
+WALLET_IDENTITY_TYPES = {"official_hot", "self_custody_cold", "imported_cold", "multisig", "user_multisig_preview", "official_treasury_multisig", "mint", "burn"}
+USER_WALLET_IDENTITY_TYPES = {"official_hot", "self_custody_cold", "imported_cold", "multisig", "user_multisig_preview"}
 SYSTEM_WALLET_IDENTITY_TYPES = {"mint", "burn"}
 WALLET_CUSTODY_MODES = {"server_hot", "self_custody", "multisig", "system"}
+WALLET_SCOPES = {"user", "official_treasury", "system_reserve", "exchange_fund"}
+WALLET_SPEND_CAPABILITIES = {"enabled", "receive_only", "disabled"}
 WALLET_IDENTITY_STATUSES = {"pending_backup", "active", "revoked", "lost", "disabled"}
 WALLET_KEY_ALGORITHMS = {"ECDSA_P256_SHA256", "MULTISIG_POLICY_V1", "SYSTEM_SIMULATED_V1"}
 BURN_WALLET_ADDRESS = "pc1" + ("0" * 48)
+ADDRESS_DISPUTE_SIGNATURE_PURPOSES = {"address_dispute_open", "address_dispute_reply"}
 
 
 def _sql_in(values):
@@ -47,11 +50,53 @@ def ensure_wallet_identity_schema(conn):
             backup_confirmed_at TEXT,
             imported_at TEXT,
             revoked_at TEXT,
+            wallet_scope TEXT NOT NULL DEFAULT 'user' CHECK (wallet_scope IN ({_sql_in(WALLET_SCOPES)})),
+            spend_capability TEXT NOT NULL DEFAULT 'enabled' CHECK (spend_capability IN ({_sql_in(WALLET_SPEND_CAPABILITIES)})),
             metadata_json TEXT NOT NULL DEFAULT '{{}}',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
         """
+    )
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(points_wallet_identities)").fetchall()}
+    if "wallet_scope" not in cols:
+        conn.execute("ALTER TABLE points_wallet_identities ADD COLUMN wallet_scope TEXT NOT NULL DEFAULT 'user'")
+    if "spend_capability" not in cols:
+        conn.execute("ALTER TABLE points_wallet_identities ADD COLUMN spend_capability TEXT NOT NULL DEFAULT 'enabled'")
+    now = utc_now()
+    conn.execute(
+        """
+        UPDATE points_wallet_identities
+        SET wallet_scope='system_reserve',
+            spend_capability='disabled',
+            updated_at=?
+        WHERE wallet_type IN ('mint', 'burn')
+          AND (wallet_scope!='system_reserve' OR spend_capability!='disabled')
+        """,
+        (now,),
+    )
+    conn.execute(
+        """
+        UPDATE points_wallet_identities
+        SET wallet_scope='official_treasury',
+            spend_capability='enabled',
+            updated_at=?
+        WHERE wallet_type='official_treasury_multisig'
+          AND (wallet_scope!='official_treasury' OR spend_capability!='enabled')
+        """,
+        (now,),
+    )
+    conn.execute(
+        """
+        UPDATE points_wallet_identities
+        SET wallet_scope='user',
+            spend_capability='receive_only',
+            updated_at=?
+        WHERE custody_mode='multisig'
+          AND wallet_type IN ('multisig', 'user_multisig_preview')
+          AND (wallet_scope!='user' OR spend_capability!='receive_only')
+        """,
+        (now,),
     )
     conn.execute(
         """
@@ -201,6 +246,118 @@ def wallet_binding_payload(*, user_id, wallet_type, address, public_key_jwk):
     }
 
 
+def wallet_transaction_payload(
+    *,
+    user_id,
+    source_wallet_address,
+    destination_wallet_address,
+    amount_points,
+    fee_points,
+    request_uuid,
+    memo="",
+    chain_branch="main",
+    proposal_id="",
+    action_type="points_wallet_transfer",
+    payload_hash="",
+    signer_key_id="",
+):
+    return {
+        "action": str(action_type or "points_wallet_transfer").strip() or "points_wallet_transfer",
+        "amount_points": int(amount_points),
+        "chain_branch": str(chain_branch or "main").strip() or "main",
+        "destination_wallet_address": normalize_wallet_address(destination_wallet_address),
+        "fee_points": int(fee_points),
+        "memo": str(memo or "")[:240],
+        "payload_hash": str(payload_hash or "").strip(),
+        "proposal_id": str(proposal_id or "").strip()[:120],
+        "request_uuid": str(request_uuid or "").strip()[:120],
+        "signer_key_id": str(signer_key_id or "").strip()[:120],
+        "source_wallet_address": normalize_wallet_address(source_wallet_address),
+        "user_id": int(user_id),
+    }
+
+
+def wallet_service_fee_payload(
+    *,
+    user_id,
+    source_wallet_address,
+    item_key,
+    quantity,
+    amount_points,
+    request_uuid,
+    reference_type="",
+    reference_id="",
+    chain_branch="main",
+    proposal_id="",
+    action_type="points_service_fee_reserve",
+    payload_hash="",
+    signer_key_id="",
+):
+    return {
+        "action": str(action_type or "points_service_fee_reserve").strip() or "points_service_fee_reserve",
+        "amount_points": int(amount_points),
+        "chain_branch": str(chain_branch or "main").strip() or "main",
+        "item_key": str(item_key or "").strip(),
+        "payload_hash": str(payload_hash or "").strip(),
+        "proposal_id": str(proposal_id or "").strip()[:120],
+        "quantity": int(quantity),
+        "reference_id": str(reference_id or "")[:240],
+        "reference_type": str(reference_type or "")[:120],
+        "request_uuid": str(request_uuid or "").strip()[:120],
+        "signer_key_id": str(signer_key_id or "").strip()[:120],
+        "source_wallet_address": normalize_wallet_address(source_wallet_address),
+        "user_id": int(user_id),
+    }
+
+
+def address_dispute_payload(
+    *,
+    tx_hash,
+    from_wallet_address,
+    to_wallet_address,
+    amount_points,
+    statement_hash,
+    evidence_hash,
+    nonce,
+    chain_branch="main",
+    purpose="address_dispute_open",
+    runtime_mode="",
+):
+    purpose = str(purpose or "").strip()
+    if purpose not in ADDRESS_DISPUTE_SIGNATURE_PURPOSES:
+        raise ValueError("address dispute signature purpose is invalid")
+    from_address = normalize_wallet_address(from_wallet_address)
+    to_address = normalize_wallet_address(to_wallet_address)
+    amount = int(amount_points)
+    if amount < 0:
+        raise ValueError("address dispute amount must be non-negative")
+    nonce = str(nonce or "").strip()
+    if len(nonce) < 8:
+        raise ValueError("address dispute nonce is required")
+    tx_hash = str(tx_hash or "").strip()
+    if not tx_hash:
+        raise ValueError("address dispute tx_hash is required")
+    statement_hash = str(statement_hash or "").strip()
+    evidence_hash = str(evidence_hash or "").strip()
+    if len(statement_hash) != 64 or len(evidence_hash) != 64:
+        raise ValueError("address dispute statement/evidence hashes are required")
+    return {
+        "amount": amount,
+        "amount_points": amount,
+        "chain_branch": str(chain_branch or "main").strip() or "main",
+        "evidence_hash": evidence_hash,
+        "from": from_address,
+        "from_wallet_address": from_address,
+        "nonce": nonce[:120],
+        "purpose": purpose,
+        "runtime_mode": str(runtime_mode or "").strip(),
+        "statement_hash": statement_hash,
+        "to": to_address,
+        "to_wallet_address": to_address,
+        "tx_hash": tx_hash,
+    }
+
+
 def _public_key_from_jwk(public_key_jwk):
     from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -234,16 +391,186 @@ def verify_wallet_binding_signature(*, user_id, wallet_type, address, public_key
     return True
 
 
+def verify_wallet_transaction_signature(
+    *,
+    user_id,
+    source_wallet_address,
+    destination_wallet_address,
+    amount_points,
+    fee_points,
+    request_uuid,
+    memo,
+    public_key_jwk,
+    signature,
+    chain_branch="main",
+    proposal_id="",
+    action_type="points_wallet_transfer",
+    payload_hash="",
+    signer_key_id="",
+):
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, utils
+
+    payload = canonical_json(wallet_transaction_payload(
+        user_id=user_id,
+        source_wallet_address=source_wallet_address,
+        destination_wallet_address=destination_wallet_address,
+        amount_points=amount_points,
+        fee_points=fee_points,
+        request_uuid=request_uuid,
+        memo=memo,
+        chain_branch=chain_branch,
+        proposal_id=proposal_id,
+        action_type=action_type,
+        payload_hash=payload_hash,
+        signer_key_id=signer_key_id,
+    )).encode("utf-8")
+    raw_signature = _b64url_decode(signature)
+    if len(raw_signature) == 64:
+        r = int.from_bytes(raw_signature[:32], "big")
+        s = int.from_bytes(raw_signature[32:], "big")
+        signature_der = utils.encode_dss_signature(r, s)
+    else:
+        signature_der = raw_signature
+    try:
+        _public_key_from_jwk(public_key_jwk).verify(signature_der, payload, ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature as exc:
+        raise ValueError("wallet transaction signature verification failed") from exc
+    return True
+
+
+def verify_wallet_service_fee_signature(
+    *,
+    user_id,
+    source_wallet_address,
+    item_key,
+    quantity,
+    amount_points,
+    request_uuid,
+    reference_type,
+    reference_id,
+    public_key_jwk,
+    signature,
+    chain_branch="main",
+    proposal_id="",
+    action_type="points_service_fee_reserve",
+    payload_hash="",
+    signer_key_id="",
+):
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, utils
+
+    payload = canonical_json(wallet_service_fee_payload(
+        user_id=user_id,
+        source_wallet_address=source_wallet_address,
+        item_key=item_key,
+        quantity=quantity,
+        amount_points=amount_points,
+        request_uuid=request_uuid,
+        reference_type=reference_type,
+        reference_id=reference_id,
+        chain_branch=chain_branch,
+        proposal_id=proposal_id,
+        action_type=action_type,
+        payload_hash=payload_hash,
+        signer_key_id=signer_key_id,
+    )).encode("utf-8")
+    raw_signature = _b64url_decode(signature)
+    if len(raw_signature) == 64:
+        r = int.from_bytes(raw_signature[:32], "big")
+        s = int.from_bytes(raw_signature[32:], "big")
+        signature_der = utils.encode_dss_signature(r, s)
+    else:
+        signature_der = raw_signature
+    try:
+        _public_key_from_jwk(public_key_jwk).verify(signature_der, payload, ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature as exc:
+        raise ValueError("wallet service fee signature verification failed") from exc
+    return True
+
+
+def verify_wallet_address_dispute_signature(
+    *,
+    tx_hash,
+    from_wallet_address,
+    to_wallet_address,
+    amount_points,
+    statement_hash,
+    evidence_hash,
+    nonce,
+    chain_branch,
+    purpose,
+    signer_wallet_address,
+    public_key_jwk,
+    signature,
+    runtime_mode="",
+):
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, utils
+
+    signer_address = normalize_wallet_address(signer_wallet_address)
+    public_jwk = canonical_public_jwk(public_key_jwk)
+    expected_address = address_from_public_key(public_jwk)
+    if signer_address != expected_address:
+        raise ValueError("address dispute signature public key does not match signer address")
+    purpose = str(purpose or "").strip()
+    if purpose == "address_dispute_open" and signer_address != normalize_wallet_address(from_wallet_address):
+        raise ValueError("address dispute opener must sign with the from address")
+    if purpose == "address_dispute_reply" and signer_address != normalize_wallet_address(to_wallet_address):
+        raise ValueError("address dispute reply must sign with the to address")
+    payload = canonical_json(address_dispute_payload(
+        tx_hash=tx_hash,
+        from_wallet_address=from_wallet_address,
+        to_wallet_address=to_wallet_address,
+        amount_points=amount_points,
+        statement_hash=statement_hash,
+        evidence_hash=evidence_hash,
+        nonce=nonce,
+        chain_branch=chain_branch,
+        purpose=purpose,
+        runtime_mode=runtime_mode,
+    )).encode("utf-8")
+    raw_signature = _b64url_decode(signature)
+    if len(raw_signature) == 64:
+        r = int.from_bytes(raw_signature[:32], "big")
+        s = int.from_bytes(raw_signature[32:], "big")
+        signature_der = utils.encode_dss_signature(r, s)
+    else:
+        signature_der = raw_signature
+    try:
+        _public_key_from_jwk(public_jwk).verify(signature_der, payload, ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature as exc:
+        raise ValueError("address dispute signature verification failed") from exc
+    return True
+
+
 def serialize_wallet_identity(row):
     if not row:
         return None
     metadata = _json_loads(row["metadata_json"], {})
+    keys = set(row.keys())
+    wallet_scope = row["wallet_scope"] if "wallet_scope" in keys else "user"
+    spend_capability = row["spend_capability"] if "spend_capability" in keys else "enabled"
+    stored_wallet_type = row["wallet_type"]
+    public_wallet_type = stored_wallet_type
+    if row["custody_mode"] == "multisig" and wallet_scope != "official_treasury":
+        public_wallet_type = "user_multisig_preview"
+        spend_capability = "receive_only"
+    elif row["custody_mode"] == "multisig" and wallet_scope == "official_treasury":
+        public_wallet_type = "official_treasury_multisig"
     return {
         "id": row["id"],
         "user_id": row["user_id"],
         "address": row["address"],
-        "wallet_type": row["wallet_type"],
+        "wallet_type": public_wallet_type,
+        "stored_wallet_type": stored_wallet_type,
+        "wallet_scope": wallet_scope,
         "custody_mode": row["custody_mode"],
+        "spend_capability": spend_capability,
+        "can_spend": bool(spend_capability == "enabled" and row["status"] == "active"),
         "key_algorithm": row["key_algorithm"],
         "public_key_hash": row["public_key_hash"],
         "server_private_key_stored": bool(row["server_private_key_stored"]),
@@ -288,14 +615,16 @@ def get_primary_wallet_identity(conn, user_id):
     ).fetchone()
 
 
-def list_wallet_identities(conn, user_id):
+def list_wallet_identities(conn, user_id, *, include_inactive=False):
     ensure_wallet_identity_schema(conn)
+    status_filter = "" if include_inactive else "AND status IN ('pending_backup', 'active')"
     return [
         serialize_wallet_identity(row)
         for row in conn.execute(
-            """
+            f"""
             SELECT * FROM points_wallet_identities
             WHERE user_id=?
+            {status_filter}
             ORDER BY is_primary DESC, created_at DESC, id DESC
             """,
             (int(user_id),),
@@ -361,9 +690,10 @@ def ensure_system_wallets(conn, *, chain_secret):
             INSERT INTO points_wallet_identities (
                 user_id, address, wallet_type, custody_mode, key_algorithm,
                 public_key_jwk_json, public_key_hash, server_private_key_stored,
-                is_primary, status, label, backup_confirmed_at, metadata_json,
+                is_primary, status, label, backup_confirmed_at, wallet_scope,
+                spend_capability, metadata_json,
                 created_at, updated_at
-            ) VALUES (NULL, ?, ?, 'system', 'SYSTEM_SIMULATED_V1', '{}', ?, 0, 0, 'active', ?, ?, ?, ?, ?)
+            ) VALUES (NULL, ?, ?, 'system', 'SYSTEM_SIMULATED_V1', '{}', ?, 0, 0, 'active', ?, ?, 'system_reserve', 'disabled', ?, ?, ?)
             """,
             (
                 address,
@@ -402,9 +732,10 @@ def create_official_hot_wallet(conn, *, user_id, chain_secret, label="官方熱�
         INSERT INTO points_wallet_identities (
             user_id, address, wallet_type, custody_mode, key_algorithm,
             public_key_jwk_json, public_key_hash, server_private_key_stored,
-            is_primary, status, label, backup_confirmed_at, metadata_json,
+            is_primary, status, label, backup_confirmed_at, wallet_scope,
+            spend_capability, metadata_json,
             created_at, updated_at
-        ) VALUES (?, ?, 'official_hot', 'server_hot', 'SYSTEM_SIMULATED_V1', '{}', ?, 0, ?, 'active', ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, 'official_hot', 'server_hot', 'SYSTEM_SIMULATED_V1', '{}', ?, 0, ?, 'active', ?, ?, 'user', 'enabled', ?, ?, ?)
         """,
         (
             int(user_id),
@@ -453,8 +784,11 @@ def bind_self_custody_wallet(
     )
     primary = get_primary_wallet_identity(conn, user_id)
     row = conn.execute("SELECT * FROM points_wallet_identities WHERE address=?", (address,)).fetchone()
-    if row and int(row["user_id"] or 0) != int(user_id):
-        raise ValueError("wallet address is already bound to another user")
+    row_user_id = int(row["user_id"] or 0) if row else 0
+    row_status = str(row["status"] or "") if row else ""
+    cross_account_lost_restore = bool(row and row_user_id != int(user_id) and row_status == "lost")
+    if row and row_user_id != int(user_id) and not cross_account_lost_restore:
+        raise ValueError("wallet address is already bound to another active user")
     now = utc_now()
     if row:
         metadata = _json_loads(row["metadata_json"], {})
@@ -464,17 +798,22 @@ def bind_self_custody_wallet(
             "restored_requires_private_key": True,
             "restored_at": now,
             "previous_status": row["status"],
+            "claimed_lost_wallet": cross_account_lost_restore,
         })
+        if cross_account_lost_restore:
+            metadata["previous_user_id"] = row_user_id
         conn.execute(
             """
             UPDATE points_wallet_identities
-            SET wallet_type=?, custody_mode='self_custody', key_algorithm='ECDSA_P256_SHA256',
+            SET user_id=?, wallet_type=?, custody_mode='self_custody', key_algorithm='ECDSA_P256_SHA256',
                 public_key_jwk_json=?, public_key_hash=?, server_private_key_stored=0,
                 is_primary=?, status='active', label=?, backup_confirmed_at=?,
-                imported_at=?, revoked_at=NULL, metadata_json=?, updated_at=?
+                imported_at=?, revoked_at=NULL, wallet_scope='user', spend_capability='enabled',
+                metadata_json=?, updated_at=?
             WHERE id=?
             """,
             (
+                int(user_id),
                 wallet_type,
                 canonical_json(jwk),
                 public_key_hash(jwk),
@@ -492,7 +831,11 @@ def bind_self_custody_wallet(
             user_id=user_id,
             wallet_identity_id=row["id"],
             event_type=f"{wallet_type}_restored",
-            detail={"address": address, "restore_requires_private_key": True},
+            detail={
+                "address": address,
+                "restore_requires_private_key": True,
+                "claimed_lost_wallet": cross_account_lost_restore,
+            },
         )
         return serialize_wallet_identity(conn.execute("SELECT * FROM points_wallet_identities WHERE id=?", (row["id"],)).fetchone())
     cur = conn.execute(
@@ -501,8 +844,8 @@ def bind_self_custody_wallet(
             user_id, address, wallet_type, custody_mode, key_algorithm,
             public_key_jwk_json, public_key_hash, server_private_key_stored,
             is_primary, status, label, backup_confirmed_at, imported_at,
-            metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, 'self_custody', 'ECDSA_P256_SHA256', ?, ?, 0, ?, 'active', ?, ?, ?, ?, ?, ?)
+            wallet_scope, spend_capability, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, 'self_custody', 'ECDSA_P256_SHA256', ?, ?, 0, ?, 'active', ?, ?, ?, 'user', 'enabled', ?, ?, ?)
         """,
         (
             int(user_id),
@@ -596,31 +939,37 @@ def delete_primary_cold_wallet(conn, *, user_id, reason=""):
 
 def create_multisig_wallet(conn, *, user_id, threshold, signer_addresses, label="多簽錢包"):
     ensure_wallet_identity_schema(conn)
-    existing = get_primary_wallet_identity(conn, user_id)
-    if existing:
-        return serialize_wallet_identity(existing)
+    primary = get_primary_wallet_identity(conn, user_id)
     policy = normalize_multisig_policy(threshold=threshold, signer_addresses=signer_addresses)
     address = multisig_wallet_address(threshold=policy["threshold"], signer_addresses=policy["signer_addresses"])
     row = conn.execute("SELECT * FROM points_wallet_identities WHERE address=?", (address,)).fetchone()
     if row and int(row["user_id"] or 0) != int(user_id):
         raise ValueError("multisig wallet address is already bound to another user")
+    if row and str(row["status"] or "") in {"pending_backup", "active"}:
+        return serialize_wallet_identity(row)
     now = utc_now()
     cur = conn.execute(
         """
         INSERT INTO points_wallet_identities (
             user_id, address, wallet_type, custody_mode, key_algorithm,
             public_key_jwk_json, public_key_hash, server_private_key_stored,
-            is_primary, status, label, backup_confirmed_at, metadata_json,
+            is_primary, status, label, backup_confirmed_at, wallet_scope,
+            spend_capability, metadata_json,
             created_at, updated_at
-        ) VALUES (?, ?, 'multisig', 'multisig', 'MULTISIG_POLICY_V1', '{}', ?, 0, 1, 'active', ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, 'multisig', 'multisig', 'MULTISIG_POLICY_V1', '{}', ?, 0, ?, 'active', ?, ?, 'user', 'receive_only', ?, ?, ?)
         """,
         (
             int(user_id),
             address,
             multisig_policy_hash(threshold=policy["threshold"], signer_addresses=policy["signer_addresses"]),
+            0 if primary else 1,
             str(label or "多簽錢包")[:120],
             now,
-            canonical_json({"multisig_policy": policy, "private_key_server_received": False}),
+            canonical_json({
+                "multisig_policy": policy,
+                "private_key_server_received": False,
+                "rc1_capability": "user_multisig_preview_receive_only",
+            }),
             now,
             now,
         ),
@@ -638,15 +987,55 @@ def wallet_onboarding_status(conn, *, points_service, user_id):
     primary = get_primary_wallet_identity(conn, user_id)
     primary_payload = serialize_wallet_identity(primary)
     bonus_granted = signup_bonus_granted(conn, user_id)
+    wallets = list_wallet_identities(conn, user_id)
+    warnings = []
+    try:
+        balance_state = points_service._wallet_identity_balances_for_user(conn, user_id) if points_service else {}
+        balances = balance_state.get("balances") or {}
+        for wallet in wallets:
+            balance = balances.get(wallet.get("address") or "", {})
+            wallet["points_balance"] = int(balance.get("balance") or 0)
+            wallet["points_frozen"] = int(balance.get("frozen") or 0)
+            wallet["pending_outgoing_points"] = int(balance.get("pending_outgoing") or 0)
+            address = str(wallet.get("address") or "").strip().lower()
+            if address and hasattr(points_service, "_address_risk_label_locked"):
+                wallet["risk_label"] = points_service._address_risk_label_locked(conn, address)
+            if address and hasattr(points_service, "_address_freeze_locked"):
+                freeze = points_service._address_freeze_locked(conn, address)
+                provisional = points_service._address_provisional_freeze_locked(conn, address) if hasattr(points_service, "_address_provisional_freeze_locked") else None
+                wallet["governance_freeze"] = freeze or provisional
+                wallet["provisional_freeze"] = provisional
+    except Exception as exc:
+        warnings.append({"code": "wallet_balance_read_failed", "message": str(exc)[:240]})
+    try:
+        initial_grant = points_service.wallet_initial_grant_status(conn, user_id) if points_service else {}
+    except Exception as exc:
+        warnings.append({"code": "initial_grant_status_failed", "message": str(exc)[:240]})
+        initial_grant = {}
+    try:
+        wallet_creation_fee = points_service.wallet_creation_fee_quote(conn, user_id) if points_service else {}
+    except Exception as exc:
+        warnings.append({"code": "wallet_creation_fee_quote_failed", "message": str(exc)[:240]})
+        wallet_creation_fee = {}
+    initial_grant_required = bool(initial_grant.get("required")) if isinstance(initial_grant, dict) else False
     return {
-        "required": not bool(primary_payload) or not bonus_granted,
+        "required": not bool(primary_payload) or not bonus_granted or initial_grant_required,
         "wallet_required": not bool(primary_payload),
         "signup_bonus_required": not bonus_granted,
         "signup_bonus_granted": bonus_granted,
+        "initial_grant_required": initial_grant_required,
+        "initial_grant": initial_grant,
         "wallet": primary_payload,
-        "wallets": list_wallet_identities(conn, user_id),
+        "wallets": wallets,
+        "wallet_creation_fee": wallet_creation_fee,
+        "warnings": warnings,
         "system_wallets": system_wallets,
-        "allowed_modes": ["official_hot", "self_custody_cold", "imported_cold", "multisig"],
+        "allowed_modes": ["official_hot", "self_custody_cold", "imported_cold"],
+        "hidden_preview_modes": ["user_multisig_preview"],
+        "multisig_policy": {
+            "rc1_user_multisig": "receive_only",
+            "rc1_official_multisig": "official_treasury_only",
+        },
         "private_key_policy": {
             "server_accepts_private_key": False,
             "client_key_algorithm": "ECDSA_P256_SHA256",

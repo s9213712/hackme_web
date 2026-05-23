@@ -13,7 +13,7 @@ from services.points_chain.economy_layer import (
     replay_economy_events,
     verify_economy_derived_balances,
 )
-from services.points_chain.schema import sha256_text, utc_now
+from services.points_chain.schema import canonical_json, sha256_text, utc_now
 
 
 def _db(tmp_path):
@@ -100,6 +100,51 @@ def test_repeated_bootstrap_five_times_does_not_duplicate_mint(tmp_path):
     assert snapshot_count == 1
     assert {item["supply"]["minted_total"] for item in reports} == {20_000_000}
     assert {item["replay"]["height"] for item in reports} == {3}
+
+
+def test_bootstrap_accepts_legacy_branchless_idempotency_hashes(tmp_path):
+    points, conn = _open_economy(tmp_path)
+    try:
+        economy_layer_report(conn, chain_secret=points.chain_secret, actor={"id": 1, "role": "root"})
+        rows = conn.execute(
+            """
+            SELECT * FROM points_economy_events
+            WHERE idempotency_key LIKE 'economy_bootstrap:%'
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        assert len(rows) == 3
+        conn.execute("DROP TRIGGER IF EXISTS trg_points_economy_events_no_update")
+        conn.execute("DROP TRIGGER IF EXISTS trg_points_economy_events_no_delete")
+        for row in rows:
+            legacy_request_hash = sha256_text(
+                canonical_json(
+                    {
+                        "event_type": row["event_type"],
+                        "transaction_type": row["transaction_type"],
+                        "source_fund_key": row["source_fund_key"],
+                        "destination_fund_key": row["destination_fund_key"],
+                        "amount": int(row["amount"]),
+                        "metadata": {"bootstrap": True, "phase": "1A"},
+                        "policy_version": row["policy_version"],
+                    }
+                )
+            )
+            row_payload = dict(row)
+            row_payload["request_hash"] = legacy_request_hash
+            conn.execute(
+                "UPDATE points_economy_events SET request_hash=?, event_hash=? WHERE id=?",
+                (legacy_request_hash, compute_economy_event_hash(row_payload), row["id"]),
+            )
+
+        points.ensure_schema(conn)
+        second = economy_layer_report(conn, chain_secret=points.chain_secret, actor={"id": 1, "role": "root"})
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert second["bootstrap"]["created_count"] == 0
+    assert second["supply"]["minted_total"] == 20_000_000
 
 
 def test_mint_cannot_exceed_releasable_supply_without_override(tmp_path):
@@ -322,3 +367,73 @@ def test_economy_event_idempotency_replays_same_request_and_conflicts_on_payload
     assert replay_created is False
     assert replayed["event_uuid"] == first["event_uuid"]
     assert event_count == 1
+
+
+def test_exchange_principal_lent_is_external_supply_not_formula_gap(tmp_path):
+    points, conn = _open_economy(tmp_path)
+    try:
+        economy_layer_report(conn, chain_secret=points.chain_secret, actor={"id": 1, "role": "root"})
+        append_economy_event(
+            conn,
+            chain_secret=points.chain_secret,
+            event_type="trading_reserve_pool_flow",
+            transaction_type="margin_principal_lent",
+            source_fund_key="exchange_fund",
+            destination_fund_key=None,
+            destination_address="pc1borrower",
+            amount=4_999_964,
+            idempotency_key="margin:principal:loan:stress",
+            metadata={"test": "loan drains liquid cash but remains a receivable"},
+            actor={"id": 1, "role": "root"},
+        )
+
+        report = economy_layer_report(
+            conn,
+            chain_secret=points.chain_secret,
+            actor={"id": 1, "role": "root"},
+            circulation={"member_outstanding_points": 0, "root_outstanding_points": 0},
+        )
+    finally:
+        conn.close()
+
+    assert report["funds"]["exchange_fund"]["balance"] == 36
+    assert report["supply"]["exchange_receivable_principal"] == 4_999_964
+    assert report["supply"]["exchange_total_assets"] == 5_000_000
+    assert report["supply"]["external_supply"] == 4_999_964
+    assert report["supply_equation"]["economy_external_circulating_points"] == 4_999_964
+    assert report["supply_equation"]["off_wallet_economy_external_points"] == 4_999_964
+    assert report["supply_equation"]["actual_supply_equation_gap_points"] == 0
+    assert report["supply_equation"]["bridged_supply_equation_gap_points"] == 0
+    assert report["supply_equation"]["bridged_supply_equation_balanced"] is True
+    assert report["health"]["status"] == "yellow"
+    assert report["health"]["reasons"] == ["exchange_fund_liquidity_critical"]
+
+
+def test_exchange_non_receivable_drain_stays_red(tmp_path):
+    points, conn = _open_economy(tmp_path)
+    try:
+        economy_layer_report(conn, chain_secret=points.chain_secret, actor={"id": 1, "role": "root"})
+        append_economy_event(
+            conn,
+            chain_secret=points.chain_secret,
+            event_type="trading_reserve_pool_flow",
+            transaction_type="margin_profit_paid",
+            source_fund_key="exchange_fund",
+            destination_fund_key=None,
+            destination_address="pc1profittaker",
+            amount=4_900_001,
+            idempotency_key="margin:profit:large",
+            metadata={"test": "non-receivable expense"},
+            actor={"id": 1, "role": "root"},
+        )
+
+        report = economy_layer_report(conn, chain_secret=points.chain_secret, actor={"id": 1, "role": "root"})
+    finally:
+        conn.close()
+
+    assert report["funds"]["exchange_fund"]["balance"] == 99_999
+    assert report["supply"]["exchange_receivable_principal"] == 0
+    assert report["supply"]["exchange_total_assets"] == 99_999
+    assert report["supply_equation"]["actual_supply_equation_gap_points"] == 0
+    assert report["health"]["status"] == "red"
+    assert report["health"]["reasons"] == ["exchange_fund_assets_critical"]

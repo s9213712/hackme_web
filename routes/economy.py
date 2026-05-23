@@ -32,6 +32,7 @@ def register_economy_routes(app, deps):
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
     points_service = deps["points_service"]
     server_mode_service = deps.get("server_mode_service")
+    get_system_settings = deps.get("get_system_settings", lambda: {})
 
     def actor_value(actor, key, default=None):
         if not actor:
@@ -91,6 +92,17 @@ def register_economy_routes(app, deps):
             return None
         return user_id if user_id > 0 else None
 
+    def active_user_wallet_rows(conn, user_id):
+        return conn.execute(
+            """
+            SELECT id, address
+            FROM points_wallet_identities
+            WHERE user_id=? AND status IN ('pending_backup', 'active')
+            ORDER BY id ASC
+            """,
+            (int(user_id),),
+        ).fetchall()
+
     def _stable_spend_key(*, user_id, item_key, quantity):
         payload = json.dumps(
             {
@@ -109,8 +121,28 @@ def register_economy_routes(app, deps):
         status = 400
         if "insufficient balance" in msg:
             status = 409
-            return json_resp({"ok": False, "msg": "點數不足，無法扣除；本次調整未寫入帳本", "code": "insufficient_balance"}), status
+            return json_resp({"ok": False, "msg": "點數不足，無法扣除；本次交易未寫入帳本", "code": "insufficient_balance"}), status
         return json_resp({"ok": False, "msg": msg}), status
+
+    def setting_bool(key, *, default=False):
+        try:
+            value = (get_system_settings() or {}).get(key, default)
+        except Exception:
+            value = default
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+        return bool(value)
+
+    def points_chain_enabled():
+        return setting_bool("feature_points_chain_enabled", default=True)
+
+    def points_chain_disabled_response():
+        return json_resp({
+            "ok": False,
+            "code": "points_chain_disabled",
+            "feature": "feature_points_chain_enabled",
+            "msg": "PointsChain 私有鏈目前已關閉；基本積分錢包、帳本、服務價格與一般扣點仍可使用。",
+        }, 503)
 
     def csv_download_response(filename, fieldnames, rows):
         buffer = io.StringIO()
@@ -190,6 +222,8 @@ def register_economy_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         conn = points_service.get_db()
         try:
             points_service.ensure_schema(conn)
@@ -205,6 +239,8 @@ def register_economy_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         data, err = parse_json_body()
         if err:
             return err
@@ -214,6 +250,10 @@ def register_economy_routes(app, deps):
         conn = points_service.get_db()
         try:
             points_service.ensure_schema(conn)
+            before_wallets = active_user_wallet_rows(conn, actor["id"])
+            before_wallet_ids = {int(row["id"]) for row in before_wallets}
+            before_wallet_addresses = {str(row["address"] or "").strip().lower() for row in before_wallets}
+            wallet_count_before = len(before_wallet_ids)
             if mode == "official_hot":
                 identity = create_official_hot_wallet(
                     conn,
@@ -239,6 +279,24 @@ def register_economy_routes(app, deps):
                     signer_addresses=data.get("signer_addresses") or [],
                     label=data.get("label") or "",
                 )
+            created_new_wallet = bool(identity and int(identity.get("id") or 0) not in before_wallet_ids)
+            creation_fee = {"charged": False, "amount_points": 0}
+            if created_new_wallet and wallet_count_before > 0:
+                fee_source = str(data.get("fee_source_wallet_address") or "").strip().lower()
+                if fee_source not in before_wallet_addresses:
+                    raise ValueError("wallet creation fee must be paid from an existing active wallet")
+                creation_fee = points_service.charge_wallet_creation_fee_locked(
+                    conn,
+                    user_id=actor["id"],
+                    source_wallet_address=fee_source,
+                    request_uuid=data.get("fee_request_uuid") or data.get("request_uuid") or "",
+                    signature=data.get("fee_signature") or data.get("wallet_signature") or "",
+                    wallet_count_before=wallet_count_before,
+                    amount_points=data.get("fee_quote_amount") if data.get("fee_quote_amount") not in (None, "") else None,
+                    mode=mode,
+                    actor={"id": actor["id"], "username": actor["username"], "role": actor["role"]},
+                )
+            points_service._rebuild_wallets_from_ledger(conn)
             conn.commit()
         except Exception as exc:
             try:
@@ -253,7 +311,16 @@ def register_economy_routes(app, deps):
             except Exception:
                 pass
         bonus = None
+        initial_grants = None
         if actor_value(actor, "username") != "root":
+            try:
+                initial_grants = points_service.award_initial_grants_after_wallet_onboarding(
+                    user_id=actor["id"],
+                    actor={"id": actor["id"], "username": actor["username"], "role": actor["role"]},
+                )
+            except Exception as exc:
+                audit("POINTS_WALLET_ONBOARDING_INITIAL_GRANT_FAILED", get_client_ip(), user=actor_value(actor, "username"), success=False, ua=get_ua(), detail=str(exc))
+                initial_grants = {"created_count": 0, "error": str(exc)}
             try:
                 bonus = award_signup_bonus_after_wallet_onboarding(
                     points_service=points_service,
@@ -271,7 +338,7 @@ def register_economy_routes(app, deps):
         finally:
             conn.close()
         audit("POINTS_WALLET_ONBOARDING_COMPLETED", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"mode={mode},address={(identity or {}).get('address')}")
-        return json_resp({"ok": True, "wallet_identity": identity, "signup_bonus": bonus, "onboarding": status})
+        return json_resp({"ok": True, "wallet_identity": identity, "creation_fee": creation_fee, "initial_grants": initial_grants, "signup_bonus": bonus, "onboarding": status})
 
     @app.route("/api/points/wallet/onboarding", methods=["DELETE"])
     @require_csrf
@@ -279,6 +346,8 @@ def register_economy_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             data = {}
@@ -291,6 +360,7 @@ def register_economy_routes(app, deps):
                 address=data.get("address") or "",
                 reason=data.get("reason") or "user_deleted_cold_wallet",
             )
+            points_service._rebuild_wallets_from_ledger(conn)
             status = wallet_onboarding_status(conn, points_service=points_service, user_id=actor["id"])
             conn.commit()
         except Exception as exc:
@@ -321,6 +391,8 @@ def register_economy_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         conn = points_service.get_db()
         try:
             points_service.ensure_schema(conn)
@@ -345,6 +417,8 @@ def register_economy_routes(app, deps):
 
     @app.route("/api/points/explorer/search", methods=["GET"])
     def points_explorer_search():
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         query = str(request.args.get("q") or "").strip()
         if not query:
             return json_resp({"ok": False, "msg": "請輸入交易 hash、Ledger UUID、錢包地址或區塊"}, 400)
@@ -359,6 +433,8 @@ def register_economy_routes(app, deps):
 
     @app.route("/api/points/explorer/tx/<path:ledger_ref>", methods=["GET"])
     def points_explorer_tx(ledger_ref):
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         result = points_service.explorer_transaction(ledger_ref)
         if not result:
             return json_resp({"ok": False, "msg": "找不到交易"}), 404
@@ -366,6 +442,8 @@ def register_economy_routes(app, deps):
 
     @app.route("/api/points/explorer/wallet/<path:address>", methods=["GET"])
     def points_explorer_wallet(address):
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         limit = parse_positive_int(request.args.get("limit"), default=25, maximum=100) or 25
         try:
             result = points_service.explorer_wallet(address, limit=limit)
@@ -375,10 +453,26 @@ def register_economy_routes(app, deps):
 
     @app.route("/api/points/explorer/block/<path:block_ref>", methods=["GET"])
     def points_explorer_block(block_ref):
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         result = points_service.explorer_block(block_ref)
         if not result:
             return json_resp({"ok": False, "msg": "找不到區塊"}), 404
         return json_resp({"ok": True, "result": result})
+
+    @app.route("/api/points/explorer/fee-estimate", methods=["GET"])
+    def points_explorer_fee_estimate():
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        try:
+            fee_points = int(request.args.get("fee_points") or 0)
+        except Exception:
+            fee_points = 0
+        fee_points = max(0, min(10000, fee_points))
+        try:
+            return json_resp({"ok": True, "estimate": points_service.explorer_fee_estimate(fee_points=fee_points)})
+        except Exception as exc:
+            return service_error(exc)
 
     @app.route("/api/points/explorer/accelerate", methods=["POST"])
     @require_csrf
@@ -386,6 +480,8 @@ def register_economy_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         data, err = parse_json_body()
         if err:
             return err
@@ -423,6 +519,8 @@ def register_economy_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         data, err = parse_json_body()
         if err:
             return err
@@ -435,6 +533,7 @@ def register_economy_routes(app, deps):
                 fee_points=data.get("fee_points"),
                 request_uuid=str(data.get("request_uuid") or "").strip() or None,
                 memo=str(data.get("memo") or ""),
+                signature=data.get("signature") or data.get("wallet_signature") or "",
             )
             audit(
                 "POINTS_CHAIN_TX_SUBMITTED",
@@ -589,6 +688,302 @@ def register_economy_routes(app, deps):
         rules = points_service.list_rules()
         return json_resp({"ok": True, "rules": [row for row in rules if row.get("enabled")]})
 
+    @app.route("/api/points/transactions", methods=["GET"])
+    @require_csrf_safe
+    def points_transactions():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        limit = parse_positive_int(request.args.get("limit"), default=50, maximum=100) or 50
+        try:
+            result = points_service.list_wallet_transactions(
+                user_id=actor["id"],
+                limit=limit,
+                actor={"id": actor["id"], "username": actor["username"], "role": actor["role"]},
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/points/governance/proposals", methods=["GET"])
+    @require_csrf_safe
+    def points_governance_proposals():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        limit = parse_positive_int(request.args.get("limit"), default=50, maximum=100) or 50
+        try:
+            return json_resp(points_service.list_governance_proposals(actor=actor, limit=limit))
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/points/governance/treasury-signer-center", methods=["GET"])
+    @require_csrf_safe
+    def admin_points_governance_treasury_signer_center():
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        limit = parse_positive_int(request.args.get("limit"), default=50, maximum=100) or 50
+        try:
+            return json_resp(points_service.official_treasury_signer_center(actor=actor, limit=limit))
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/points/governance/proposals/<path:proposal_uuid>/vote", methods=["POST"])
+    @require_csrf
+    def points_governance_vote(proposal_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.cast_governance_vote(
+                actor=actor,
+                proposal_uuid=str(proposal_uuid or "").strip(),
+                vote=data.get("vote"),
+                reason=data.get("reason") or "",
+                recovery_choice=data.get("recovery_choice") or data.get("recovery_strategy") or "",
+            )
+            audit(
+                "POINTS_CHAIN_GOVERNANCE_VOTE",
+                get_client_ip(),
+                user=actor_value(actor, "username"),
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={proposal_uuid},vote={data.get('vote')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/points/transactions/disputes", methods=["GET"])
+    @require_csrf_safe
+    def points_transaction_disputes():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        limit = parse_positive_int(request.args.get("limit"), default=50, maximum=100) or 50
+        try:
+            return json_resp(points_service.list_transaction_disputes(actor=actor, limit=limit))
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/points/transactions/disputes", methods=["POST"])
+    @require_csrf
+    def points_transaction_dispute_create():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        evidence = data.get("evidence")
+        if isinstance(evidence, str):
+            evidence = [item.strip() for item in evidence.splitlines() if item.strip()]
+        try:
+            result = points_service.create_transaction_dispute(
+                actor=actor,
+                tx_hash=data.get("tx_hash") or data.get("transaction_hash") or data.get("ledger_ref") or "",
+                statement=data.get("statement") or data.get("reason") or "",
+                victim_wallet_address=data.get("victim_wallet_address") or data.get("wallet_address") or "",
+                claimed_amount_points=data.get("claimed_amount_points") or data.get("amount_points") or 0,
+                loss_cause=data.get("loss_cause") or "unknown",
+                evidence=evidence or [],
+                public_key_jwk=data.get("public_key_jwk"),
+                signature=data.get("signature") or "",
+                signature_nonce=data.get("signature_nonce") or data.get("nonce") or "",
+                from_wallet_address=data.get("from_wallet_address") or data.get("from") or "",
+                to_wallet_address=data.get("to_wallet_address") or data.get("to") or "",
+                chain_branch=data.get("chain_branch") or "",
+            )
+            audit(
+                "POINTS_CHAIN_TX_DISPUTE_CREATED",
+                "",
+                user="address_proven_anonymous",
+                success=True,
+                ua=get_ua(),
+                detail=f"dispute_uuid={result.get('dispute', {}).get('dispute_uuid')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/points/transactions/disputes/<path:dispute_uuid>/reply", methods=["POST"])
+    @require_csrf
+    def points_transaction_dispute_reply(dispute_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        evidence = data.get("evidence")
+        if isinstance(evidence, str):
+            evidence = [item.strip() for item in evidence.splitlines() if item.strip()]
+        try:
+            result = points_service.reply_transaction_dispute(
+                actor=actor,
+                dispute_uuid=str(dispute_uuid or "").strip(),
+                statement=data.get("statement") or data.get("reason") or "",
+                evidence=evidence or [],
+                public_key_jwk=data.get("public_key_jwk"),
+                signature=data.get("signature") or "",
+                signature_nonce=data.get("signature_nonce") or data.get("nonce") or "",
+            )
+            audit(
+                "POINTS_CHAIN_TX_DISPUTE_REPLY",
+                "",
+                user="address_proven_anonymous",
+                success=True,
+                ua=get_ua(),
+                detail=f"dispute_uuid={result.get('dispute', {}).get('dispute_uuid')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/points/governance/public-proposal", methods=["POST"])
+    @require_csrf
+    def points_governance_public_proposal():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        evidence = data.get("evidence")
+        if isinstance(evidence, str):
+            evidence = [item.strip() for item in evidence.splitlines() if item.strip()]
+        try:
+            result = points_service.create_public_governance_proposal(
+                actor=actor,
+                action_type=data.get("action_type") or "",
+                title=data.get("title") or "",
+                reason=data.get("reason") or "",
+                target_address=data.get("target_address") or data.get("wallet_address") or data.get("address") or "",
+                incident_tx_hash=data.get("incident_tx_hash") or "",
+                reference=data.get("reference") or "",
+                evidence=evidence or [],
+                proposal_severity=data.get("proposal_severity") or "NORMAL",
+                description=data.get("description") or "",
+                impact_scope=data.get("impact_scope") or "",
+                risk_summary=data.get("risk_summary") or "",
+                payload=data.get("payload") if isinstance(data.get("payload"), dict) else {},
+            )
+            audit(
+                "POINTS_CHAIN_PUBLIC_GOVERNANCE_PROPOSAL",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={result.get('proposal', {}).get('proposal_uuid')},action={data.get('action_type')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/points/governance/address-risk", methods=["POST"])
+    @require_csrf
+    def points_governance_address_risk():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        evidence = data.get("evidence")
+        if isinstance(evidence, str):
+            evidence = [item.strip() for item in evidence.splitlines() if item.strip()]
+        try:
+            result = points_service.create_address_risk_proposal(
+                actor=actor,
+                wallet_address=data.get("wallet_address") or data.get("address") or "",
+                reason=data.get("reason") or "",
+                evidence=evidence,
+                reference=data.get("reference") or "",
+            )
+            audit(
+                "POINTS_CHAIN_ADDRESS_RISK_PROPOSAL",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={result.get('proposal', {}).get('proposal_uuid')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/points/governance/wallet-freeze", methods=["POST"])
+    @require_csrf
+    def points_governance_wallet_freeze():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        evidence = data.get("evidence")
+        if isinstance(evidence, str):
+            evidence = [item.strip() for item in evidence.splitlines() if item.strip()]
+        action = str(data.get("action") or "freeze").strip().lower()
+        try:
+            result = points_service.create_wallet_freeze_proposal(
+                actor=actor,
+                wallet_address=data.get("wallet_address") or data.get("address") or "",
+                reason=data.get("reason") or "",
+                evidence=evidence,
+                reference=data.get("reference") or "",
+                release=action in {"release", "unfreeze"},
+            )
+            audit(
+                "POINTS_CHAIN_WALLET_FREEZE_PROPOSAL",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={result.get('proposal', {}).get('proposal_uuid')},action={action}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/points/spend", methods=["POST"])
     @require_csrf
     def points_spend():
@@ -605,7 +1000,7 @@ def register_economy_routes(app, deps):
         if quantity is None:
             return json_resp({"ok": False, "msg": "quantity must be 1-1000"}), 400
         try:
-            result = points_service.spend_points(
+            result = points_service.rc1_facade().spend_service_fee(
                 user_id=actor["id"],
                 item_key=item_key,
                 quantity=quantity,
@@ -614,6 +1009,10 @@ def register_economy_routes(app, deps):
                 idempotency_key=_stable_spend_key(user_id=actor["id"], item_key=item_key, quantity=quantity),
                 metadata={},
                 actor=actor,
+                source_wallet_address=data.get("source_wallet_address") or "",
+                request_uuid=data.get("request_uuid") or data.get("charge_uuid") or "",
+                signature=data.get("signature") or data.get("wallet_signature") or "",
+                chain_enabled=points_chain_enabled(),
             )
             audit("POINTS_SPEND", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"item_key={item_key}, quantity={quantity}")
             return json_resp(result)
@@ -626,6 +1025,8 @@ def register_economy_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         proof = points_service.ledger_proof(ledger_uuid)
         if not proof:
             return json_resp({"ok": False, "msg": "找不到 ledger"}), 404
@@ -653,7 +1054,7 @@ def register_economy_routes(app, deps):
         return json_resp({
             "ok": False,
             "code": "blockchain_permission_model",
-            "msg": "私有鏈模式不允許 root 直接處分用戶錢包；請改用鏈上規則、用戶授權交易或功能凍結流程。",
+            "msg": "私有鏈模式不允許 root 直接處分用戶錢包；請改用治理投票的地址凍結、詐騙標記或緊急分支流程。",
         }, 410)
 
     @app.route("/api/admin/points/ledger", methods=["GET"])
@@ -671,77 +1072,555 @@ def register_economy_routes(app, deps):
         return json_resp({
             "ok": False,
             "code": "blockchain_permission_model",
-            "msg": "私有鏈模式已停用手動加減積分；官方發點需改走官方錢包送單，用戶扣款需由用戶授權交易觸發。",
+            "msg": "私有鏈模式已停用手動加減積分；官方撥款需改走治理提案與官方多簽，用戶扣款需由用戶授權交易觸發。",
         }, 410)
+
+    @app.route("/api/root/points/official-wallet/grant", methods=["POST"])
+    @require_csrf
+    def root_points_official_wallet_grant():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.create_treasury_transfer_proposal(
+                actor=actor,
+                destination_wallet_address=data.get("destination_wallet_address") or data.get("to") or "",
+                amount=data.get("amount") or data.get("amount_points") or 0,
+                reason=data.get("reason") or "",
+                reference=str(data.get("reference") or data.get("request_uuid") or "").strip(),
+                action_type=data.get("action_type") or "TREASURY_TRANSFER",
+                memo=data.get("memo") or data.get("reason") or "",
+            )
+            audit(
+                "OFFICIAL_WALLET_GRANT_PROPOSAL_SUBMITTED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={result.get('proposal', {}).get('proposal_uuid')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "code": "blockchain_permission_model", "msg": str(exc)}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/points/governance/treasury-transfer", methods=["POST"])
+    @require_csrf
+    def admin_points_governance_treasury_transfer():
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.create_treasury_transfer_proposal(
+                actor=actor,
+                destination_wallet_address=data.get("destination_wallet_address") or data.get("to") or "",
+                amount=data.get("amount") or data.get("amount_points") or 0,
+                reason=data.get("reason") or "",
+                reference=data.get("reference") or "",
+                action_type=data.get("action_type") or "TREASURY_TRANSFER",
+                memo=data.get("memo") or "",
+            )
+            audit(
+                "POINTS_CHAIN_TREASURY_TRANSFER_PROPOSAL",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={result.get('proposal', {}).get('proposal_uuid')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/points/governance/mint-request", methods=["POST"])
+    @require_csrf
+    def admin_points_governance_mint_request():
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.create_mint_request_proposal(
+                actor=actor,
+                amount=data.get("amount") or data.get("amount_points") or 0,
+                reason=data.get("reason") or "",
+                destination_fund_key=data.get("destination_fund_key") or "official_treasury",
+                reference=data.get("reference") or "",
+            )
+            audit(
+                "POINTS_CHAIN_MINT_REQUEST_PROPOSAL",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={result.get('proposal', {}).get('proposal_uuid')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/points/governance/policy", methods=["POST"])
+    @require_csrf
+    def admin_points_governance_policy():
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        payload = data.get("payload")
+        if not isinstance(payload, dict):
+            payload = {
+                "parameter_key": data.get("parameter_key") or "",
+                "parameter_value": data.get("parameter_value") or "",
+                "feature_key": data.get("feature_key") or "",
+                "burn_policy": data.get("burn_policy") or "",
+                "lockdown_scope": data.get("lockdown_scope") or "",
+                "description": data.get("description") or "",
+            }
+        try:
+            result = points_service.create_policy_governance_proposal(
+                actor=actor,
+                action_type=data.get("action_type") or "",
+                title=data.get("title") or "",
+                reason=data.get("reason") or "",
+                payload=payload,
+                reference=data.get("reference") or "",
+                proposal_severity=data.get("proposal_severity") or "NORMAL",
+                impact_scope=data.get("impact_scope") or "",
+                risk_summary=data.get("risk_summary") or "",
+            )
+            audit(
+                "POINTS_CHAIN_POLICY_GOVERNANCE_PROPOSAL",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={result.get('proposal', {}).get('proposal_uuid')},action={data.get('action_type')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/points/governance/address-risk", methods=["POST"])
+    @require_csrf
+    def root_points_governance_address_risk():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        evidence = data.get("evidence")
+        if isinstance(evidence, str):
+            evidence = [item.strip() for item in evidence.splitlines() if item.strip()]
+        try:
+            result = points_service.create_address_risk_proposal(
+                actor=actor,
+                wallet_address=data.get("wallet_address") or data.get("address") or "",
+                reason=data.get("reason") or "",
+                evidence=evidence,
+                reference=data.get("reference") or "",
+            )
+            audit(
+                "POINTS_CHAIN_ADDRESS_RISK_PROPOSAL",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={result.get('proposal', {}).get('proposal_uuid')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/points/governance/recovery-branch", methods=["POST"])
+    @require_csrf
+    def root_points_governance_recovery_branch():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        excluded = data.get("excluded_tx_hashes")
+        if isinstance(excluded, str):
+            excluded = [item.strip() for item in excluded.splitlines() if item.strip()]
+        incident_refs = data.get("incident_tx_hashes")
+        if isinstance(incident_refs, str):
+            incident_refs = [item.strip() for item in incident_refs.splitlines() if item.strip()]
+        try:
+            result = points_service.create_emergency_recovery_branch_proposal(
+                actor=actor,
+                incident_tx_hash=data.get("incident_tx_hash") or "",
+                reason=data.get("reason") or "",
+                base_block_number=data.get("base_block_number") or None,
+                base_block_hash=data.get("base_block_hash") or "",
+                excluded_tx_hashes=excluded or [],
+                recovery_strategy=data.get("recovery_strategy") or data.get("strategy") or "treasury_compensation",
+                loss_cause=data.get("loss_cause") or "protocol_fault",
+                compensation_rate_bps=data.get("compensation_rate_bps"),
+                victim_statement=data.get("victim_statement") or "",
+                victim_evidence_refs=data.get("victim_evidence_refs") or data.get("evidence_refs") or [],
+                victim_claims=data.get("victim_claims") or [],
+                incident_tx_hashes=incident_refs or [],
+                reference=data.get("reference") or "",
+            )
+            audit(
+                "POINTS_CHAIN_RECOVERY_BRANCH_PROPOSAL",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={result.get('proposal', {}).get('proposal_uuid')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/points/governance/recovery-branch", methods=["POST"])
+    @require_csrf
+    def admin_points_governance_recovery_branch():
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        excluded = data.get("excluded_tx_hashes")
+        if isinstance(excluded, str):
+            excluded = [item.strip() for item in excluded.splitlines() if item.strip()]
+        incident_refs = data.get("incident_tx_hashes")
+        if isinstance(incident_refs, str):
+            incident_refs = [item.strip() for item in incident_refs.splitlines() if item.strip()]
+        try:
+            result = points_service.create_emergency_recovery_branch_proposal(
+                actor=actor,
+                incident_tx_hash=data.get("incident_tx_hash") or "",
+                reason=data.get("reason") or "",
+                base_block_number=data.get("base_block_number") or None,
+                base_block_hash=data.get("base_block_hash") or "",
+                excluded_tx_hashes=excluded or [],
+                recovery_strategy=data.get("recovery_strategy") or data.get("strategy") or "treasury_compensation",
+                loss_cause=data.get("loss_cause") or "protocol_fault",
+                compensation_rate_bps=data.get("compensation_rate_bps"),
+                victim_statement=data.get("victim_statement") or "",
+                victim_evidence_refs=data.get("victim_evidence_refs") or data.get("evidence_refs") or [],
+                victim_claims=data.get("victim_claims") or [],
+                incident_tx_hashes=incident_refs or [],
+                reference=data.get("reference") or "",
+            )
+            audit(
+                "POINTS_CHAIN_RECOVERY_BRANCH_PROPOSAL",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={result.get('proposal', {}).get('proposal_uuid')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/points/transactions/disputes/<path:dispute_uuid>/review", methods=["POST"])
+    @require_csrf
+    def admin_points_transaction_dispute_review(dispute_uuid):
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.review_transaction_dispute(
+                actor=actor,
+                dispute_uuid=str(dispute_uuid or "").strip(),
+                status=data.get("status") or "",
+                review_note=data.get("review_note") or data.get("reason") or "",
+                recommended_strategy=data.get("recommended_strategy") or "tainted_remainder_return",
+                create_proposal=bool(data.get("create_proposal")),
+            )
+            audit(
+                "POINTS_CHAIN_TX_DISPUTE_REVIEWED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"dispute_uuid={dispute_uuid},status={data.get('status')},proposal={(result.get('proposal') or {}).get('proposal_uuid')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/points/governance/wallet-freeze", methods=["POST"])
+    @require_csrf
+    def root_points_governance_wallet_freeze():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        evidence = data.get("evidence")
+        if isinstance(evidence, str):
+            evidence = [item.strip() for item in evidence.splitlines() if item.strip()]
+        action = str(data.get("action") or "freeze").strip().lower()
+        try:
+            result = points_service.create_wallet_freeze_proposal(
+                actor=actor,
+                wallet_address=data.get("wallet_address") or data.get("address") or "",
+                reason=data.get("reason") or "",
+                evidence=evidence,
+                reference=data.get("reference") or "",
+                release=action in {"release", "unfreeze"},
+            )
+            audit(
+                "POINTS_CHAIN_WALLET_FREEZE_PROPOSAL",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={result.get('proposal', {}).get('proposal_uuid')},action={action}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/points/governance/proposals/<path:proposal_uuid>/execute", methods=["POST"])
+    @require_csrf
+    def root_points_governance_execute(proposal_uuid):
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        try:
+            result = points_service.execute_governance_proposal(
+                actor=actor,
+                proposal_uuid=str(proposal_uuid or "").strip(),
+            )
+            audit(
+                "POINTS_CHAIN_GOVERNANCE_EXECUTE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={proposal_uuid},action={result.get('result', {}).get('action')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/points/governance/proposals/<path:proposal_uuid>/execute", methods=["POST"])
+    @require_csrf
+    def admin_points_governance_execute(proposal_uuid):
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        try:
+            result = points_service.execute_governance_proposal(
+                actor=actor,
+                proposal_uuid=str(proposal_uuid or "").strip(),
+            )
+            audit(
+                "POINTS_CHAIN_GOVERNANCE_EXECUTE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={proposal_uuid},action={result.get('result', {}).get('action')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/points/governance/proposals/<path:proposal_uuid>/sponsor", methods=["POST"])
+    @require_csrf
+    def admin_points_governance_sponsor(proposal_uuid):
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        try:
+            result = points_service.sponsor_governance_proposal(
+                actor=actor,
+                proposal_uuid=str(proposal_uuid or "").strip(),
+            )
+            audit(
+                "POINTS_CHAIN_GOVERNANCE_SPONSOR",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={proposal_uuid}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/points/governance/proposals/<path:proposal_uuid>/cancel", methods=["POST"])
+    @require_csrf
+    def admin_points_governance_cancel(proposal_uuid):
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.cancel_governance_proposal(
+                actor=actor,
+                proposal_uuid=str(proposal_uuid or "").strip(),
+                reason=data.get("reason") or "",
+            )
+            audit(
+                "POINTS_CHAIN_GOVERNANCE_CANCEL",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={proposal_uuid}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/points/governance/proposals/<path:proposal_uuid>/multisig-sign", methods=["POST"])
+    @require_csrf
+    def admin_points_governance_multisig_sign(proposal_uuid):
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.sign_governance_multisig(
+                actor=actor,
+                proposal_uuid=str(proposal_uuid or "").strip(),
+                signer_wallet_address=data.get("signer_wallet_address") or data.get("wallet_address") or "",
+                signature=data.get("signature") or "",
+            )
+            audit(
+                "POINTS_CHAIN_GOVERNANCE_MULTISIG_SIGN",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={proposal_uuid}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/points/governance/proposals/<path:proposal_uuid>/veto", methods=["POST"])
+    @require_csrf
+    def root_points_governance_veto(proposal_uuid):
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.veto_governance_proposal(
+                actor=actor,
+                proposal_uuid=str(proposal_uuid or "").strip(),
+                reason=data.get("reason") or "",
+            )
+            audit(
+                "POINTS_CHAIN_GOVERNANCE_VETO",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={proposal_uuid}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
 
     @app.route("/api/admin/points/pending-rewards", methods=["GET", "POST"])
     @require_csrf_safe
     def admin_points_pending_rewards():
-        actor, err = manager_or_403()
-        if err:
-            return err
-        if request.method == "GET":
-            status = str(request.args.get("status") or "pending").strip()
-            return json_resp({"ok": True, "pending_rewards": points_service.list_pending_rewards(status=status)})
-        data, err = parse_json_body()
-        if err:
-            return err
-        amount = parse_positive_int(data.get("amount"), maximum=1_000_000_000)
-        if amount is None:
-            return json_resp({"ok": False, "msg": "金額必須為正數"}), 400
-        currency_type = DISPLAY_CURRENCY
-        action_type = str(data.get("action_type") or "manual_pending_reward").strip()[:80]
-        reference_id = str(data.get("reference_id") or "").strip()[:120]
-        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-        metadata = {k: metadata[k] for k in ("reason", "source", "moderation_case_id") if k in metadata}
-        user_id = parse_required_user_id(data.get("user_id"))
-        if user_id is None:
-            return json_resp({"ok": False, "msg": "user_id required"}), 400
-        try:
-            reward = points_service.create_pending_reward(
-                actor=actor,
-                user_id=user_id,
-                currency_type=currency_type,
-                amount=amount,
-                action_type=action_type,
-                reference_type="admin_review",
-                reference_id=reference_id,
-                metadata=metadata,
-            )
-            return json_resp({"ok": True, "pending_reward": reward})
-        except Exception as exc:
-            return service_error(exc)
+        return json_resp({
+            "ok": False,
+            "code": "blockchain_permission_model",
+            "msg": "私有鏈模式已停用後台待審加點；官方撥款需改走治理提案與官方多簽。",
+        }, 410)
 
     @app.route("/api/admin/points/pending-rewards/<int:pending_reward_id>/review", methods=["POST"])
     @require_csrf
     def admin_points_pending_reward_review(pending_reward_id):
-        actor, err = manager_or_403()
-        if err:
-            return err
-        data, err = parse_json_body()
-        if err:
-            return err
-        try:
-            result = points_service.review_pending_reward(
-                actor=actor,
-                pending_reward_id=pending_reward_id,
-                decision=str(data.get("decision") or ""),
-                review_note=str(data.get("review_note") or ""),
-            )
-            audit("POINTS_PENDING_REWARD_REVIEW", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"pending_reward_id={pending_reward_id}, decision={data.get('decision')}")
-            reward = result.get("pending_reward") or {}
-            if result.get("ledger"):
-                notify_member_points_action(
-                    actor=actor,
-                    user_id=reward.get("user_id"),
-                    action_label=f"審核通過加點 {reward.get('amount')} 點",
-                    reason=str(data.get("review_note") or "待審核獎勵通過"),
-                    points_ledger_uuid=(result.get("ledger") or {}).get("ledger_uuid"),
-                    appealable=False,
-                )
-            return json_resp({"ok": True, **result})
-        except Exception as exc:
-            return service_error(exc)
+        return json_resp({
+            "ok": False,
+            "code": "blockchain_permission_model",
+            "msg": "私有鏈模式已停用後台待審加點；官方撥款需改走治理提案與官方多簽。",
+        }, 410)
 
     @app.route("/api/root/points/chain/seal", methods=["POST"])
     @require_csrf
@@ -749,6 +1628,8 @@ def register_economy_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         data = {}
         if request.is_json:
             data = request.get_json(silent=True) or {}
@@ -766,6 +1647,8 @@ def register_economy_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         result = points_service.verify_chain()
         incident = None
         if not result.get("ok") and server_mode_service and hasattr(server_mode_service, "enter_incident_lockdown"):
@@ -786,6 +1669,8 @@ def register_economy_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         return json_resp({
             "ok": True,
             "recovery": points_service.safe_mode_status(),
@@ -798,6 +1683,8 @@ def register_economy_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         data, err = parse_json_body()
         if err:
             return err
@@ -888,6 +1775,8 @@ def register_economy_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         try:
             result = points_service.create_ledger_backup(reason="root_manual", kind="manual")
             audit("POINTS_CHAIN_BACKUP", get_client_ip(), user=actor["username"], success=bool(result.get("ok")), ua=get_ua(), detail=result.get("backup_id"))
@@ -901,6 +1790,8 @@ def register_economy_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         data, err = parse_json_body()
         if err:
             return err
@@ -928,6 +1819,8 @@ def register_economy_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         return json_resp({"ok": True, "report": points_service.root_report()})
 
     @app.route("/api/root/points/audit", methods=["GET"])
@@ -936,6 +1829,8 @@ def register_economy_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         limit = parse_positive_int(request.args.get("limit"), default=100, maximum=200) or 100
         return json_resp({"ok": True, "audit_logs": points_service.list_chain_audit_logs(limit=limit)})
 
@@ -954,4 +1849,6 @@ def register_economy_routes(app, deps):
         actor, err = manager_or_403()
         if err:
             return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
         return json_resp({"ok": True, "stats": points_service.economy_stats()})

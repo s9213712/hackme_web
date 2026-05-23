@@ -7,6 +7,10 @@ globals().update({name: value for name, value in _schema.__dict__.items() if not
 def _backup_payload(self, conn):
     def rows(sql):
         return [dict(row) for row in conn.execute(sql).fetchall()]
+    def table_rows(table, order="id ASC"):
+        if not table_columns(conn, table):
+            return []
+        return rows(f"SELECT * FROM {table} ORDER BY {order}")
 
     return {
         "schema_version": POINTS_CHAIN_SCHEMA_VERSION,
@@ -15,6 +19,22 @@ def _backup_payload(self, conn):
         "points_chain_block_signatures": rows("SELECT * FROM points_chain_block_signatures ORDER BY block_id ASC, node_id ASC"),
         "points_chain_audit_logs": rows("SELECT * FROM points_chain_audit_logs ORDER BY id ASC"),
         "points_wallets_snapshot": rows("SELECT * FROM points_wallets ORDER BY user_id ASC"),
+        "points_wallet_identities": table_rows("points_wallet_identities"),
+        "points_chain_transfer_requests": table_rows("points_chain_transfer_requests"),
+        "points_service_fee_charges": table_rows("points_service_fee_charges"),
+        "points_economy_fund_wallets": table_rows("points_economy_fund_wallets", "fund_key ASC"),
+        "points_economy_events": table_rows("points_economy_events"),
+        "points_economy_derived_balances": table_rows("points_economy_derived_balances", "fund_key ASC"),
+        "points_economy_snapshots": table_rows("points_economy_snapshots"),
+        "points_economy_incidents": table_rows("points_economy_incidents"),
+        "points_chain_governance_proposals": table_rows("points_chain_governance_proposals"),
+        "points_chain_governance_votes": table_rows("points_chain_governance_votes"),
+        "points_chain_governance_multisig_signatures": table_rows("points_chain_governance_multisig_signatures"),
+        "points_chain_governance_audit_log": table_rows("points_chain_governance_audit_log"),
+        "points_chain_governance_branches": table_rows("points_chain_governance_branches"),
+        "points_chain_address_risk_labels": table_rows("points_chain_address_risk_labels"),
+        "points_chain_address_freezes": table_rows("points_chain_address_freezes"),
+        "points_chain_address_provisional_freezes": table_rows("points_chain_address_provisional_freezes"),
     }
 
 def _chain_head_summary(self, conn):
@@ -41,14 +61,23 @@ def _verify_backup_payload(self, payload, manifest):
     if signature != self._sign_backup_manifest(core):
         errors.append({"type": "backup_signature", "message": "backup manifest HMAC mismatch"})
 
-    previous = None
+    previous_by_branch = {}
     for row in ledgers:
+        branch = str(row.get("chain_branch") or "main")
+        previous = previous_by_branch.get(branch)
         if row.get("previous_ledger_hash") != previous:
             errors.append({"type": "ledger_previous_hash", "ledger_id": row.get("id")})
         expected = compute_ledger_hash(row)
         if row.get("ledger_hash") != expected:
             errors.append({"type": "ledger_hash", "ledger_id": row.get("id"), "expected": expected, "actual": row.get("ledger_hash")})
-        previous = row.get("ledger_hash")
+        previous_by_branch[branch] = row.get("ledger_hash")
+    branches = payload.get("points_chain_governance_branches") or []
+    canonical = [row for row in branches if int(row.get("is_canonical") or 0) == 1 and int(row.get("write_enabled") or 0) == 1]
+    ledger_branches = {str(row.get("chain_branch") or "main") for row in ledgers}
+    if branches and len(canonical) != 1:
+        errors.append({"type": "canonical_branch_count", "count": len(canonical)})
+    if any(branch != "main" for branch in ledger_branches) and not branches:
+        errors.append({"type": "branch_metadata_missing", "ledger_branches": sorted(ledger_branches)})
 
     sig_by_block = {(int(row.get("block_id") or 0), row.get("node_id")): row for row in signatures}
     ledger_by_id = {int(row.get("id") or 0): row for row in ledgers}

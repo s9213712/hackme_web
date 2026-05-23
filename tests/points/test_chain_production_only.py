@@ -1,15 +1,14 @@
-"""Phase 7 of SERVER_MODE_V2_IMPLEMENTATION_PLAN.md — chain production-only guard.
+"""Phase 7 of SERVER_MODE_V2_IMPLEMENTATION_PLAN.md — chain sealing mode guard.
 
-Locks PointsChain block sealing to mode == 'production'. This is the most
-important anti-contamination invariant in the project: chain pollution is
-unrecoverable except via restore-from-backup, so the guard is verified at
-the service layer (Phase 7) and will be reinforced again at the DB layer
-(Phase 3 SQLite trigger) for defense-in-depth.
+Locks PointsChain block sealing to production and isolated dev_ready
+runtimes. Production is the live sealing mode; dev_ready is allowed so
+pre-release load tests can exercise block packaging before the runtime is
+cleared for launch.
 
 Each test exercises the guard with a different mode and asserts:
-1. Non-production raises ChainModeViolation BEFORE any SQL runs.
+1. Disallowed modes raise ChainModeViolation BEFORE any SQL runs.
 2. The violation records a `chain_mode_violation` security event.
-3. Production mode allows the seal path to proceed (we don't drive the
+3. Allowed modes let the seal path proceed (we don't drive the
    actual seal — just verify the guard returns).
 4. Mode-reader exceptions / missing reader fail closed (refuse the write).
 """
@@ -53,10 +52,16 @@ def test_seal_block_in_test_raises():
         svc.seal_block()
 
 
-def test_seal_block_in_dev_ready_raises():
+def test_seal_block_in_dev_ready_passes_guard():
     svc = _service(mode_reader=lambda: "dev_ready")
-    with pytest.raises(points_chain.ChainModeViolation):
-        svc.seal_block()
+    try:
+        result = svc.seal_block()
+    except points_chain.ChainModeViolation:
+        pytest.fail("dev_ready mode unexpectedly raised ChainModeViolation")
+    except Exception:
+        pass
+    else:
+        assert isinstance(result, dict)
 
 
 def test_seal_block_in_maintenance_raises():
@@ -152,10 +157,10 @@ def test_production_mode_passes_guard():
         assert isinstance(result, dict)
 
 
-def test_strict_equality_for_production():
-    """Only the exact string 'production' passes. 'PRODUCTION', 'prod',
-    or any partial match is treated as non-production."""
-    for spoof in ("PRODUCTION", "prod", "production ", " production", "produc", "produktion", ""):
+def test_strict_equality_for_allowed_modes():
+    """Only exact allowed mode strings pass. Case, aliases, and partial
+    matches are treated as disallowed."""
+    for spoof in ("PRODUCTION", "prod", "production ", " production", "produc", "produktion", "DEV_READY", "dev", "dev_ready ", " dev_ready", ""):
         svc = _service(mode_reader=lambda spoof=spoof: spoof)
         with pytest.raises(points_chain.ChainModeViolation):
             svc.seal_block()

@@ -35,6 +35,47 @@ DEFAULT_BACKUP_KEEP_WEEKLY = 4
 MAX_LEDGER_METADATA_JSON_BYTES = 4096
 PRICE_ITEM_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_:-]{1,79}$")
 PRICE_CATEGORY_RE = re.compile(r"^[a-z][a-z0-9_:-]{1,79}$")
+GOV_RATE_UNIT_SUFFIX = "b" + "ps"
+GOV_QUORUM_RATE_COLUMN = "quorum_" + GOV_RATE_UNIT_SUFFIX
+GOV_PASS_THRESHOLD_RATE_COLUMN = "pass_threshold_" + GOV_RATE_UNIT_SUFFIX
+GOV_YES_THRESHOLD_RATE_COLUMN = "yes_threshold_" + GOV_RATE_UNIT_SUFFIX
+GOV_VOTE_DIFFERENTIAL_REQUIRED_RATE_COLUMN = "vote_differential_required_" + GOV_RATE_UNIT_SUFFIX
+GOVERNANCE_DOMAINS = {
+    "PUBLIC_COMMON_INTEREST",
+    "OFFICIAL_TREASURY",
+    "EMERGENCY_SECURITY",
+    "PROTOCOL_PARAMETER",
+    "ADMIN_POLICY",
+}
+GOVERNANCE_ACTION_TYPES = {
+    "MARK_SCAM",
+    "FREEZE_ADDRESS",
+    "UNFREEZE_ADDRESS",
+    "ROLLBACK_BRANCH",
+    "EMERGENCY_LOCKDOWN",
+    "AUTO_BURN_POLICY",
+    "MINT_REQUEST",
+    "TREASURY_TRANSFER",
+    "EXCHANGE_FUND_REPLENISH",
+    "CONTEST_REWARD_PAYOUT",
+    "TREASURY_SIGNER_CHANGE",
+    "PARAMETER_CHANGE",
+    "FEATURE_ACTIVATION",
+    "HARD_FORK_ACCEPTANCE",
+}
+GOVERNANCE_LIFECYCLE_STATUSES = {
+    "DRAFT",
+    "REVIEW",
+    "VOTING",
+    "SUCCEEDED",
+    "FAILED",
+    "QUEUED",
+    "TIMELOCKED",
+    "EXECUTED",
+    "VETOED",
+    "EXPIRED",
+    "CANCELLED",
+}
 
 DEFAULT_RULES = (
     ("daily_login", "daily_login", "credit", "soft", 5, 5, 5, 24 * 60 * 60, 0, 0, 0, 1, 0, {"label": "每日登入"}),
@@ -195,7 +236,7 @@ def create_points_ledger_immutable_trigger(conn):
     conn.execute(
         """
         CREATE TRIGGER IF NOT EXISTS trg_points_ledger_core_immutable
-        BEFORE UPDATE OF ledger_uuid, user_id, public_account_id, currency_type, direction, amount,
+        BEFORE UPDATE OF ledger_uuid, chain_branch, user_id, public_account_id, currency_type, direction, amount,
                          balance_before, balance_after, action_type, reference_type, reference_id,
                          idempotency_key, reason, public_metadata_json, private_metadata_json,
                          sensitive_metadata_encrypted, metadata_hash, previous_ledger_hash,
@@ -203,6 +244,45 @@ def create_points_ledger_immutable_trigger(conn):
         ON points_ledger
         BEGIN
             SELECT RAISE(ABORT, 'points ledger core fields are immutable');
+        END
+        """
+    )
+
+
+def create_points_chain_block_immutable_triggers(conn):
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_points_chain_blocks_no_update
+        BEFORE UPDATE ON points_chain_blocks
+        BEGIN
+            SELECT RAISE(ABORT, 'points chain blocks are append-only');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_points_chain_blocks_no_delete
+        BEFORE DELETE ON points_chain_blocks
+        BEGIN
+            SELECT RAISE(ABORT, 'points chain blocks are append-only');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_points_chain_block_signatures_no_update
+        BEFORE UPDATE ON points_chain_block_signatures
+        BEGIN
+            SELECT RAISE(ABORT, 'points chain block signatures are append-only');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_points_chain_block_signatures_no_delete
+        BEFORE DELETE ON points_chain_block_signatures
+        BEGIN
+            SELECT RAISE(ABORT, 'points chain block signatures are append-only');
         END
         """
     )
@@ -287,6 +367,7 @@ def ensure_points_economy_schema(conn):
         CREATE TABLE IF NOT EXISTS points_ledger (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ledger_uuid TEXT NOT NULL UNIQUE,
+            chain_branch TEXT NOT NULL DEFAULT 'main',
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             public_account_id TEXT NOT NULL,
             currency_type TEXT NOT NULL,
@@ -318,6 +399,9 @@ def ensure_points_economy_schema(conn):
         )
         """
     )
+    ledger_cols = table_columns(conn, "points_ledger")
+    if "chain_branch" not in ledger_cols:
+        conn.execute("ALTER TABLE points_ledger ADD COLUMN chain_branch TEXT NOT NULL DEFAULT 'main'")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS points_rules (
@@ -447,19 +531,23 @@ def ensure_points_economy_schema(conn):
         CREATE TABLE IF NOT EXISTS points_chain_transfer_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_uuid TEXT NOT NULL UNIQUE,
+            chain_branch TEXT NOT NULL DEFAULT 'main',
             request_hash TEXT NOT NULL,
             tx_group_hash TEXT NOT NULL UNIQUE,
             sender_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             recipient_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             source_wallet_address TEXT NOT NULL,
             destination_wallet_address TEXT NOT NULL,
+            destination_unowned INTEGER NOT NULL DEFAULT 0 CHECK (destination_unowned IN (0, 1)),
             amount_points INTEGER NOT NULL,
             fee_points INTEGER NOT NULL DEFAULT 0,
+            transaction_type TEXT NOT NULL DEFAULT 'wallet_transfer',
+            source_fund_key TEXT NOT NULL DEFAULT '',
             memo TEXT NOT NULL DEFAULT '',
             transfer_out_ledger_uuid TEXT,
             transfer_in_ledger_uuid TEXT,
             fee_ledger_uuid TEXT,
-            status TEXT NOT NULL DEFAULT 'confirmed',
+            status TEXT NOT NULL DEFAULT 'pending',
             created_at TEXT NOT NULL,
             CHECK (amount_points > 0),
             CHECK (fee_points >= 0)
@@ -467,8 +555,72 @@ def ensure_points_economy_schema(conn):
         """
     )
     transfer_cols = table_columns(conn, "points_chain_transfer_requests")
+    if "chain_branch" not in transfer_cols:
+        conn.execute("ALTER TABLE points_chain_transfer_requests ADD COLUMN chain_branch TEXT NOT NULL DEFAULT 'main'")
     if "memo" not in transfer_cols:
         conn.execute("ALTER TABLE points_chain_transfer_requests ADD COLUMN memo TEXT NOT NULL DEFAULT ''")
+    if "transaction_type" not in transfer_cols:
+        conn.execute("ALTER TABLE points_chain_transfer_requests ADD COLUMN transaction_type TEXT NOT NULL DEFAULT 'wallet_transfer'")
+    if "source_fund_key" not in transfer_cols:
+        conn.execute("ALTER TABLE points_chain_transfer_requests ADD COLUMN source_fund_key TEXT NOT NULL DEFAULT ''")
+    if "destination_unowned" not in transfer_cols:
+        conn.execute("ALTER TABLE points_chain_transfer_requests ADD COLUMN destination_unowned INTEGER NOT NULL DEFAULT 0 CHECK (destination_unowned IN (0, 1))")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_service_fee_charges (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            charge_uuid TEXT NOT NULL UNIQUE,
+            chain_branch TEXT NOT NULL DEFAULT 'main',
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            item_key TEXT NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+            amount_points INTEGER NOT NULL CHECK (amount_points > 0),
+            currency_type TEXT NOT NULL DEFAULT 'soft',
+            source_wallet_address TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'reserved',
+            idempotency_key TEXT UNIQUE,
+            freeze_ledger_uuid TEXT,
+            unfreeze_ledger_uuid TEXT,
+            debit_ledger_uuid TEXT,
+            batch_uuid TEXT,
+            reference_type TEXT,
+            reference_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            settled_at TEXT,
+            cancelled_at TEXT,
+            CHECK (currency_type IN ('soft', 'hard')),
+            CHECK (status IN ('reserved', 'settled', 'cancelled'))
+        )
+        """
+    )
+    service_fee_cols = table_columns(conn, "points_service_fee_charges")
+    if "chain_branch" not in service_fee_cols:
+        conn.execute("ALTER TABLE points_service_fee_charges ADD COLUMN chain_branch TEXT NOT NULL DEFAULT 'main'")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_points_service_fee_user_status
+        ON points_service_fee_charges(user_id, status, source_wallet_address, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_points_service_fee_batch
+        ON points_service_fee_charges(batch_uuid)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_points_service_fee_item_time
+        ON points_service_fee_charges(item_key, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_points_service_fee_branch_user_status
+        ON points_service_fee_charges(chain_branch, user_id, status, source_wallet_address, created_at)
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS points_chain_nodes (
@@ -553,6 +705,272 @@ def ensure_points_economy_schema(conn):
         """
     )
     conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS points_chain_governance_proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            proposal_uuid TEXT NOT NULL UNIQUE,
+            proposal_type TEXT NOT NULL,
+            governance_domain TEXT NOT NULL DEFAULT 'PUBLIC_COMMON_INTEREST',
+            action_type TEXT NOT NULL DEFAULT 'MARK_SCAM',
+            lifecycle_status TEXT NOT NULL DEFAULT 'VOTING',
+            proposal_severity TEXT NOT NULL DEFAULT 'NORMAL',
+            sponsor_required INTEGER NOT NULL DEFAULT 0 CHECK (sponsor_required IN (0, 1)),
+            sponsor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            sponsor_role TEXT NOT NULL DEFAULT '',
+            sponsored_at TEXT,
+            proposal_deposit_points INTEGER NOT NULL DEFAULT 0,
+            proposal_deposit_status TEXT NOT NULL DEFAULT 'not_required',
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL,
+            reference TEXT NOT NULL DEFAULT '',
+            target_wallet_address TEXT NOT NULL DEFAULT '',
+            target_address TEXT NOT NULL DEFAULT '',
+            target_branch TEXT NOT NULL DEFAULT '',
+            requested_amount INTEGER NOT NULL DEFAULT 0,
+            requested_asset TEXT NOT NULL DEFAULT 'points',
+            incident_tx_hash TEXT NOT NULL DEFAULT '',
+            base_block_number INTEGER,
+            base_block_hash TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{{}}',
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            impact_scope TEXT NOT NULL DEFAULT '',
+            risk_summary TEXT NOT NULL DEFAULT '',
+            opposition_record TEXT NOT NULL DEFAULT '',
+            eligible_voters_json TEXT NOT NULL DEFAULT '[]',
+            eligible_voter_count INTEGER NOT NULL DEFAULT 0,
+            quorum_count INTEGER NOT NULL DEFAULT 0,
+            {GOV_QUORUM_RATE_COLUMN} INTEGER NOT NULL DEFAULT 0,
+            {GOV_PASS_THRESHOLD_RATE_COLUMN} INTEGER NOT NULL DEFAULT 0,
+            {GOV_YES_THRESHOLD_RATE_COLUMN} INTEGER NOT NULL DEFAULT 0,
+            {GOV_VOTE_DIFFERENTIAL_REQUIRED_RATE_COLUMN} INTEGER NOT NULL DEFAULT 0,
+            yes_count INTEGER NOT NULL DEFAULT 0,
+            no_count INTEGER NOT NULL DEFAULT 0,
+            abstain_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'voting',
+            voting_starts_at TEXT,
+            voting_ends_at TEXT,
+            timelock_until TEXT,
+            timelock_ends_at TEXT,
+            expires_at TEXT NOT NULL,
+            root_veto_allowed INTEGER NOT NULL DEFAULT 0 CHECK (root_veto_allowed IN (0, 1)),
+            root_veto_used INTEGER NOT NULL DEFAULT 0 CHECK (root_veto_used IN (0, 1)),
+            root_vetoed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            root_vetoed_at TEXT,
+            root_veto_reason TEXT NOT NULL DEFAULT '',
+            execution_payload_hash TEXT NOT NULL DEFAULT '',
+            proposer_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            proposer_role TEXT,
+            executed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            executed_at TEXT,
+            execution_result_json TEXT NOT NULL DEFAULT '{{}}',
+            prev_audit_hash TEXT NOT NULL DEFAULT '',
+            audit_hash TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CHECK (proposal_type IN ('scam_address_label', 'freeze_wallet_address', 'unfreeze_wallet_address', 'emergency_recovery_branch', 'official_treasury_operation', 'protocol_parameter_change', 'emergency_security_action', 'admin_policy_action')),
+            CHECK (governance_domain IN ('PUBLIC_COMMON_INTEREST', 'OFFICIAL_TREASURY', 'EMERGENCY_SECURITY', 'PROTOCOL_PARAMETER', 'ADMIN_POLICY')),
+            CHECK (action_type IN ('MARK_SCAM', 'FREEZE_ADDRESS', 'UNFREEZE_ADDRESS', 'ROLLBACK_BRANCH', 'EMERGENCY_LOCKDOWN', 'AUTO_BURN_POLICY', 'MINT_REQUEST', 'TREASURY_TRANSFER', 'EXCHANGE_FUND_REPLENISH', 'CONTEST_REWARD_PAYOUT', 'TREASURY_SIGNER_CHANGE', 'PARAMETER_CHANGE', 'FEATURE_ACTIVATION', 'HARD_FORK_ACCEPTANCE')),
+            CHECK (lifecycle_status IN ('DRAFT', 'REVIEW', 'VOTING', 'SUCCEEDED', 'FAILED', 'QUEUED', 'TIMELOCKED', 'EXECUTED', 'VETOED', 'EXPIRED', 'CANCELLED')),
+            CHECK (proposal_severity IN ('LOW', 'NORMAL', 'HIGH', 'CRITICAL')),
+            CHECK (proposal_deposit_status IN ('not_required', 'reserved', 'returned', 'burned')),
+            CHECK (status IN ('voting', 'passed', 'rejected', 'executed', 'expired', 'cancelled'))
+        )
+        """
+    )
+    governance_cols = table_columns(conn, "points_chain_governance_proposals")
+    governance_column_defs = {
+        "governance_domain": "TEXT NOT NULL DEFAULT 'PUBLIC_COMMON_INTEREST'",
+        "action_type": "TEXT NOT NULL DEFAULT 'MARK_SCAM'",
+        "lifecycle_status": "TEXT NOT NULL DEFAULT 'VOTING'",
+        "proposal_severity": "TEXT NOT NULL DEFAULT 'NORMAL'",
+        "sponsor_required": "INTEGER NOT NULL DEFAULT 0",
+        "sponsor_user_id": "INTEGER",
+        "sponsor_role": "TEXT NOT NULL DEFAULT ''",
+        "sponsored_at": "TEXT",
+        "proposal_deposit_points": "INTEGER NOT NULL DEFAULT 0",
+        "proposal_deposit_status": "TEXT NOT NULL DEFAULT 'not_required'",
+        "description": "TEXT NOT NULL DEFAULT ''",
+        "target_address": "TEXT NOT NULL DEFAULT ''",
+        "target_branch": "TEXT NOT NULL DEFAULT ''",
+        "requested_amount": "INTEGER NOT NULL DEFAULT 0",
+        "requested_asset": "TEXT NOT NULL DEFAULT 'points'",
+        "impact_scope": "TEXT NOT NULL DEFAULT ''",
+        "risk_summary": "TEXT NOT NULL DEFAULT ''",
+        "opposition_record": "TEXT NOT NULL DEFAULT ''",
+        GOV_YES_THRESHOLD_RATE_COLUMN: "INTEGER NOT NULL DEFAULT 0",
+        GOV_VOTE_DIFFERENTIAL_REQUIRED_RATE_COLUMN: "INTEGER NOT NULL DEFAULT 0",
+        "voting_starts_at": "TEXT",
+        "voting_ends_at": "TEXT",
+        "timelock_ends_at": "TEXT",
+        "root_veto_allowed": "INTEGER NOT NULL DEFAULT 0",
+        "root_veto_used": "INTEGER NOT NULL DEFAULT 0",
+        "root_vetoed_by": "INTEGER",
+        "root_vetoed_at": "TEXT",
+        "root_veto_reason": "TEXT NOT NULL DEFAULT ''",
+        "execution_payload_hash": "TEXT NOT NULL DEFAULT ''",
+        "prev_audit_hash": "TEXT NOT NULL DEFAULT ''",
+        "audit_hash": "TEXT NOT NULL DEFAULT ''",
+    }
+    for column, ddl in governance_column_defs.items():
+        if column not in governance_cols:
+            conn.execute(f"ALTER TABLE points_chain_governance_proposals ADD COLUMN {column} {ddl}")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_chain_governance_votes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            proposal_uuid TEXT NOT NULL REFERENCES points_chain_governance_proposals(proposal_uuid) ON DELETE CASCADE,
+            voter_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            vote TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(proposal_uuid, voter_user_id),
+            CHECK (vote IN ('yes', 'no', 'abstain'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_chain_governance_multisig_signatures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            proposal_uuid TEXT NOT NULL REFERENCES points_chain_governance_proposals(proposal_uuid) ON DELETE CASCADE,
+            signer_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            signer_wallet_address TEXT NOT NULL,
+            signature_mode TEXT NOT NULL DEFAULT 'wallet_signature',
+            signature_hash TEXT NOT NULL,
+            signed_payload_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(proposal_uuid, signer_wallet_address),
+            CHECK (signature_mode IN ('wallet_signature', 'server_attested'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_chain_governance_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            audit_uuid TEXT NOT NULL UNIQUE,
+            proposal_uuid TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            actor_role TEXT,
+            payload_hash TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            prev_audit_hash TEXT NOT NULL DEFAULT '',
+            audit_hash TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_points_chain_governance_audit_no_update
+        BEFORE UPDATE ON points_chain_governance_audit_log
+        BEGIN
+            SELECT RAISE(ABORT, 'governance audit log is append-only');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_points_chain_governance_audit_no_delete
+        BEFORE DELETE ON points_chain_governance_audit_log
+        BEGIN
+            SELECT RAISE(ABORT, 'governance audit log is append-only');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_chain_address_risk_labels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wallet_address TEXT NOT NULL UNIQUE,
+            risk_level TEXT NOT NULL DEFAULT 'suspected_scam',
+            status TEXT NOT NULL DEFAULT 'active',
+            label TEXT NOT NULL DEFAULT 'scam_warning',
+            reason TEXT NOT NULL,
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            proposal_uuid TEXT NOT NULL REFERENCES points_chain_governance_proposals(proposal_uuid) ON DELETE RESTRICT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            revoked_at TEXT,
+            CHECK (status IN ('active', 'revoked')),
+            CHECK (risk_level IN ('suspected_scam', 'confirmed_scam', 'critical_scam'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_chain_address_freezes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wallet_address TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'active',
+            reason TEXT NOT NULL,
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            freeze_proposal_uuid TEXT NOT NULL REFERENCES points_chain_governance_proposals(proposal_uuid) ON DELETE RESTRICT,
+            release_proposal_uuid TEXT REFERENCES points_chain_governance_proposals(proposal_uuid) ON DELETE RESTRICT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            released_at TEXT,
+            CHECK (status IN ('active', 'released'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_chain_address_provisional_freezes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wallet_address TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'active',
+            reason TEXT NOT NULL,
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            source_dispute_uuid TEXT NOT NULL DEFAULT '',
+            linked_proposal_uuid TEXT NOT NULL DEFAULT '',
+            reviewed_by INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            released_at TEXT,
+            CHECK (status IN ('active', 'released', 'expired'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_chain_governance_branches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch_uuid TEXT NOT NULL UNIQUE,
+            proposal_uuid TEXT NOT NULL REFERENCES points_chain_governance_proposals(proposal_uuid) ON DELETE RESTRICT,
+            parent_branch_uuid TEXT NOT NULL DEFAULT '',
+            branch_name TEXT NOT NULL,
+            base_block_number INTEGER,
+            base_block_hash TEXT NOT NULL DEFAULT '',
+            incident_tx_hash TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'proposed',
+            is_canonical INTEGER NOT NULL DEFAULT 0 CHECK (is_canonical IN (0, 1)),
+            write_enabled INTEGER NOT NULL DEFAULT 0 CHECK (write_enabled IN (0, 1)),
+            recovery_type TEXT NOT NULL DEFAULT 'canonical_pointer_only',
+            replay_plan_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            activated_at TEXT,
+            CHECK (status IN ('proposed', 'canonical_recovery', 'archived', 'read_only_archived'))
+        )
+        """
+    )
+    branch_cols = table_columns(conn, "points_chain_governance_branches")
+    if "write_enabled" not in branch_cols:
+        conn.execute("ALTER TABLE points_chain_governance_branches ADD COLUMN write_enabled INTEGER NOT NULL DEFAULT 0")
+    if "recovery_type" not in branch_cols:
+        conn.execute("ALTER TABLE points_chain_governance_branches ADD COLUMN recovery_type TEXT NOT NULL DEFAULT 'canonical_pointer_only'")
+    conn.execute(
+        """
+        UPDATE points_chain_governance_branches
+        SET write_enabled=1
+        WHERE is_canonical=1 AND write_enabled=0
+        """
+    )
+    conn.execute(
         """
         CREATE TABLE IF NOT EXISTS points_economy_daily_stats (
             stat_date TEXT PRIMARY KEY,
@@ -572,13 +990,27 @@ def ensure_points_economy_schema(conn):
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_user_time ON points_ledger(user_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_branch_user_time ON points_ledger(chain_branch, user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_action_ref ON points_ledger(action_type, reference_type, reference_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_block ON points_ledger(chain_block_id, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_pending_status ON points_pending_rewards(status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_blocks_number ON points_chain_blocks(block_number)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_accel_ledger ON points_chain_acceleration_requests(ledger_uuid, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_transfer_wallets ON points_chain_transfer_requests(source_wallet_address, destination_wallet_address, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_transfer_branch_wallets ON points_chain_transfer_requests(chain_branch, source_wallet_address, destination_wallet_address, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_backup_created ON points_chain_backup_catalog(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_governance_status ON points_chain_governance_proposals(status, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_governance_domain ON points_chain_governance_proposals(governance_domain, lifecycle_status, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_governance_action ON points_chain_governance_proposals(action_type, lifecycle_status, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_governance_proposer ON points_chain_governance_proposals(proposer_user_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_governance_type ON points_chain_governance_proposals(proposal_type, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_governance_votes_user ON points_chain_governance_votes(voter_user_id, proposal_uuid)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_governance_multisig_proposal ON points_chain_governance_multisig_signatures(proposal_uuid, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_governance_audit_proposal ON points_chain_governance_audit_log(proposal_uuid, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_address_risk_status ON points_chain_address_risk_labels(status, wallet_address)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_address_freeze_status ON points_chain_address_freezes(status, wallet_address)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_address_provisional_freeze_status ON points_chain_address_provisional_freezes(status, expires_at, wallet_address)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_branch_canonical ON points_chain_governance_branches(is_canonical, created_at)")
     # Phase 3 of SERVER_MODE_V2_IMPLEMENTATION_PLAN.md — DB-level guard.
     # Final line of defense: any non-production write to points_chain_blocks
     # is aborted by the trigger before the row hits disk. Phases 7 + 2
@@ -596,6 +1028,7 @@ def ensure_points_economy_schema(conn):
         """
     )
     create_points_ledger_immutable_trigger(conn)
+    create_points_chain_block_immutable_triggers(conn)
     now = utc_now()
     for rule in DEFAULT_RULES:
         conn.execute(
@@ -645,10 +1078,10 @@ def ensure_points_economy_schema(conn):
 class ChainModeViolation(RuntimeError):
     """Phase 7 of SERVER_MODE_V2_IMPLEMENTATION_PLAN.md.
 
-    PointsChain block writes are valid in `production` only. Any
-    attempt to seal / mutate `points_chain_blocks` from a non-
-    production runtime mode raises this exception so the call is
-    blocked before the SQL ever executes.
+    PointsChain block writes are valid in `production` and the isolated
+    development `dev_ready` mode. Any attempt to seal / mutate
+    `points_chain_blocks` from another runtime mode raises this exception
+    so the call is blocked before the SQL ever executes.
 
     Treat this exception as a release blocker — it should never
     surface in normal operation. If you see one, the audit chain has
@@ -659,5 +1092,5 @@ class ChainModeViolation(RuntimeError):
         self.mode = mode
         self.action = action
         super().__init__(
-            f"chain {action} forbidden in mode={mode!r}; production-only"
+            f"chain {action} forbidden in mode={mode!r}; production/dev_ready only"
         )

@@ -4,6 +4,7 @@ from . import schema as _schema
 from .service import PointsLedgerService
 from .wallet_facade import WalletFacadeConflict, WalletFacadeInProgress, WalletServiceFacade
 from .wallet_identity import (
+    address_dispute_payload,
     address_from_public_key,
     award_signup_bonus_after_wallet_onboarding,
     bind_self_custody_wallet,
@@ -16,6 +17,11 @@ from .wallet_identity import (
     ensure_wallet_identity_schema,
     serialize_wallet_identity,
     wallet_binding_payload,
+    wallet_service_fee_payload,
+    wallet_transaction_payload,
+    verify_wallet_address_dispute_signature,
+    verify_wallet_service_fee_signature,
+    verify_wallet_transaction_signature,
     wallet_onboarding_status,
 )
 

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260521-chain-explorer-burn" />
+  <link rel="stylesheet" href="/styles.css?v=20260523-chain-branch-tree" />
   <link rel="stylesheet" href="/experiments.css?v=20260517-plane-view-angle" />
   <link rel="stylesheet" href="/i18n-language-switcher.css?v=20260520-deep-audit" />
 </head>
@@ -430,9 +430,13 @@
             <p id="profile-home-meta">-</p>
             <p class="profile-bio" id="profile-home-bio">尚未填寫個人簡介。</p>
             <p class="drive-card-sub" id="profile-home-signature"></p>
+            <div class="profile-home-actions" id="profile-home-actions"></div>
           </div>
         </div>
         <div class="settings-option-grid profile-stats-grid">
+          <div><span class="drive-card-sub">朋友數</span><strong id="profile-home-friend-count">0</strong></div>
+          <div><span class="drive-card-sub">追蹤者</span><strong id="profile-home-follower-count">0</strong></div>
+          <div><span class="drive-card-sub">正在追蹤</span><strong id="profile-home-following-count">0</strong></div>
           <div><span class="drive-card-sub">好友狀態</span><strong id="profile-home-friend-status">本人</strong></div>
           <div><span class="drive-card-sub">主頁可見性</span><strong id="profile-home-visibility">public</strong></div>
           <div><span class="drive-card-sub">我的好友代碼</span><strong id="profile-home-friend-code">-</strong></div>
@@ -2495,10 +2499,12 @@
         <div class="mini-title" id="economy-page-title">PointsChain 積分錢包</div>
       <div class="tabs economy-subtabs" id="economy-subtabs" aria-label="積分系統分頁">
         <button class="tab active" id="tab-economy-balance" type="button" data-economy-page="balance">積分餘額</button>
+        <button class="tab" id="tab-economy-transactions" type="button" data-economy-page="transactions">交易管理</button>
         <button class="tab" id="tab-economy-explorer" type="button" data-economy-page="explorer">鏈上瀏覽器</button>
+        <button class="tab" id="tab-economy-governance" type="button" data-economy-page="governance">治理提案</button>
         <button class="tab" id="tab-economy-funding-pools" type="button" data-economy-page="funding-pools" style="display:none;">資金池管理</button>
         <button class="tab" id="tab-economy-all-positions" type="button" data-economy-page="all-positions" style="display:none;">全用戶倉位管理</button>
-        <button class="tab" id="tab-economy-positions" type="button" data-economy-page="positions">倉位管理</button>
+        <button class="tab" id="tab-economy-positions" type="button" data-economy-page="positions" style="display:none;">倉位管理</button>
         <button class="tab" id="tab-economy-chain" type="button" data-economy-page="chain">積分私有鏈</button>
       </div>
       <div class="economy-subpage active" id="economy-balance-page">
@@ -2512,7 +2518,7 @@
             </div>
           </div>
           <div class="settings-option-grid economy-wallet-grid">
-            <div><span class="drive-card-sub">全站積分</span><strong id="economy-points-balance">0</strong><small id="economy-points-frozen">凍結 0</small></div>
+            <div><span class="drive-card-sub">全站積分</span><strong id="economy-points-balance">0</strong><small id="economy-points-frozen">金額凍結 0</small></div>
             <div><span class="drive-card-sub">累計收支</span><strong id="economy-points-earned">收入 0</strong><small id="economy-points-spent">支出 0</small></div>
             <div><span class="drive-card-sub">錢包狀態</span><strong id="economy-wallet-status">-</strong><small id="economy-public-account">Legacy 帳本 ID：-</small></div>
           </div>
@@ -2521,66 +2527,84 @@
       <div class="drive-card" id="economy-wallet-onboarding-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
-            <div class="drive-card-title">區塊鏈模擬錢包</div>
+            <div class="drive-card-title">錢包管理</div>
             <div class="drive-card-sub" id="economy-wallet-onboarding-status">讀取中</div>
           </div>
           <button class="btn" id="economy-wallet-onboarding-refresh-btn" type="button">更新</button>
         </div>
         <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
-          <div><span class="drive-card-sub">錢包模式</span><strong id="economy-wallet-identity-type">-</strong><small id="economy-wallet-identity-custody">-</small></div>
-          <div><span class="drive-card-sub">模擬鏈地址</span><strong id="economy-wallet-identity-address">-</strong><small id="economy-wallet-identity-status">-</small></div>
+          <div><span class="drive-card-sub">錢包數</span><strong id="economy-wallet-count">0</strong><small id="economy-wallet-primary-note">-</small></div>
+          <div><span class="drive-card-sub">主要地址</span><strong id="economy-wallet-identity-address">-</strong><small id="economy-wallet-identity-status">-</small></div>
+          <div><span class="drive-card-sub">初始配點</span><strong id="economy-wallet-initial-grant">-</strong><small id="economy-wallet-initial-grant-note">綁定錢包後匯入</small></div>
           <div><span class="drive-card-sub">註冊禮</span><strong id="economy-wallet-signup-bonus">-</strong><small>完成錢包後發放</small></div>
         </div>
-        <div id="economy-wallet-bound-actions" class="drive-file-actions economy-inline-actions" style="display:none;margin-top:.75rem;">
-          <button class="btn btn-danger" id="economy-wallet-delete-cold-btn" type="button">刪除冷錢包</button>
-          <span class="drive-card-sub" id="economy-wallet-delete-hint">刪除後必須提供私鑰才能恢復同一地址。</span>
-        </div>
+        <div class="drive-file-list" id="economy-wallet-identity-list" style="margin-top:.75rem;"></div>
+        <div class="drive-card-sub" style="margin-top:.5rem;">冷錢包可在錢包卡片右側操作；刪除後不再列入帳戶總額，持有備份碼者可恢復該地址。</div>
+        <div id="economy-wallet-bound-actions" style="display:none;"></div>
+      </div>
+      <details class="drive-card" id="economy-wallet-create-card" style="display:none;margin-top:.75rem;">
+        <summary class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">創建錢包</div>
+            <div class="drive-card-sub">新增官方熱錢包或冷錢包；初始配點會在明確綁定錢包後匯入。一般用戶多簽在 RC1 僅保留觀察/收款能力。</div>
+          </div>
+        </summary>
         <div id="economy-wallet-onboarding-actions" style="margin-top:.75rem;">
           <div class="drive-file-actions economy-inline-actions">
             <button class="btn" id="economy-wallet-official-hot-btn" type="button">使用官方熱錢包</button>
             <button class="btn" id="economy-wallet-create-cold-btn" type="button">建立冷錢包</button>
             <button class="btn" id="economy-wallet-import-cold-btn" type="button">匯入冷錢包</button>
           </div>
+          <div class="settings-option-grid" id="economy-wallet-creation-fee-panel" style="display:none;margin-top:.75rem;">
+            <div class="field">
+              <label>建立費付款錢包</label>
+              <select id="economy-wallet-creation-fee-source"><option value="">選擇既有錢包</option></select>
+              <div class="drive-card-sub" id="economy-wallet-creation-fee-note">第一個錢包免費；第二個以上依數量指數加價，收入進官方 Treasury。</div>
+            </div>
+          </div>
+          <div class="field" id="economy-wallet-generated-panel" style="display:none;margin-top:.75rem;">
+            <label>新冷錢包地址</label>
+            <input type="text" id="economy-wallet-generated-address" readonly autocomplete="off" />
+            <label style="margin-top:.5rem;">新冷錢包私鑰備份碼</label>
+            <textarea id="economy-wallet-generated-private-key" rows="4" spellcheck="false" readonly placeholder="按建立冷錢包後顯示一次。"></textarea>
+            <div class="drive-card-sub">這只是新建草稿，不會自動匯入、綁定或接收初始配點；私鑰備份碼可恢復此地址，請離線保存，不要交給任何人。</div>
+            <div class="drive-file-actions economy-inline-actions" style="margin-top:.5rem;">
+              <button class="btn" id="economy-wallet-use-generated-cold-btn" type="button">選用此冷錢包</button>
+              <span class="drive-card-sub" id="economy-wallet-generated-selection-status">尚未選用</span>
+            </div>
+          </div>
           <div class="field" style="margin-top:.75rem;">
-            <label>冷錢包私鑰 JWK</label>
-            <textarea id="economy-wallet-private-key" rows="6" spellcheck="false" placeholder="建立冷錢包後會顯示一次；匯入時可貼上自己的私鑰 JWK。"></textarea>
-            <div class="drive-card-sub">私鑰只在瀏覽器中產生或匯入；送到伺服器的只有 public key、地址與簽章。</div>
+            <label>匯入 / 綁定冷錢包私鑰備份碼</label>
+            <textarea id="economy-wallet-private-key" rows="4" spellcheck="false" placeholder="貼上 pcw1 私鑰備份碼；也相容舊 JWK JSON。建立冷錢包不會自動填入此欄。"></textarea>
+            <div class="drive-card-sub">私鑰備份碼只在瀏覽器中產生、匯入或本機簽署；送到伺服器的只有 public key、地址與簽章。</div>
           </div>
           <label class="drive-card-sub" style="display:flex;gap:.45rem;align-items:center;margin-top:.5rem;">
             <input type="checkbox" id="economy-wallet-private-key-confirmed" />
-            我已保存私鑰，遺失時本站無法替我還原冷錢包。
+            我已離線保存私鑰備份碼，遺失時本站無法替我還原冷錢包。
           </label>
           <div class="drive-file-actions economy-inline-actions" style="margin-top:.75rem;">
             <button class="btn btn-primary" id="economy-wallet-confirm-cold-btn" type="button">確認並綁定冷錢包</button>
           </div>
-          <div class="field" style="margin-top:.75rem;">
-            <label>多簽 signer 地址</label>
-            <input type="text" id="economy-wallet-multisig-signers" placeholder="pc1..., pc1..." autocomplete="off" />
-            <div class="drive-card-sub">可用逗號分隔 signer 地址；目前建立 policy 錢包，不接收任何 signer 私鑰。</div>
-          </div>
-          <div class="settings-option-grid">
-            <div class="field"><label>多簽門檻</label><input type="number" id="economy-wallet-multisig-threshold" min="1" value="2" /></div>
-            <div class="field"><label>&nbsp;</label><button class="btn" id="economy-wallet-create-multisig-btn" type="button">建立多簽錢包</button></div>
-          </div>
       </div>
+      </details>
       <div class="msg" id="economy-wallet-onboarding-msg"></div>
-      </div>
       <div class="drive-card" id="economy-wallet-transfer-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">鏈上送單</div>
-            <div class="drive-card-sub">像正式區塊鏈一樣由錢包地址送出交易；手續費進官方 Treasury。</div>
+            <div class="drive-card-sub">像正式區塊鏈一樣由錢包地址送出交易；手續費進 BURN 銷毀錢包。</div>
           </div>
         </div>
         <div class="settings-option-grid">
           <div class="field"><label>From</label><select id="economy-transfer-source-wallet"><option value="">尚無可用錢包</option></select></div>
           <div class="field"><label>To</label><input type="text" id="economy-transfer-destination-wallet" placeholder="pc1..." autocomplete="off" /></div>
           <div class="field"><label>Value</label><input type="number" id="economy-transfer-amount" min="1" value="1" /></div>
-          <div class="field"><label>Transaction Fee</label><input type="number" id="economy-transfer-fee" min="0" value="1" /></div>
+          <div class="field"><label>Transaction Fee</label><input type="number" id="economy-transfer-fee" min="0" value="1" /><small id="economy-transfer-fee-estimate" class="drive-card-sub">預估 Proved 時間讀取中...</small></div>
           <div class="field"><label>Input Data</label><input type="text" id="economy-transfer-memo" maxlength="180" placeholder="可留空" /></div>
           <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-transfer-submit-btn" type="button">送出交易</button></div>
         </div>
         <div class="msg" id="economy-transfer-msg"></div>
+        <div id="economy-transfer-last-result" class="drive-card-sub" style="margin-top:.5rem;"></div>
       </div>
       <div class="drive-card" id="economy-root-wallet-management-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
@@ -2597,6 +2621,16 @@
           <div><span class="drive-card-sub">EXCHANGE Fund</span><strong id="economy-root-wallet-exchange-balance">-</strong><small id="economy-root-wallet-exchange-status">-</small><small id="economy-root-wallet-exchange-address">-</small></div>
           <div><span class="drive-card-sub">BURN</span><strong id="economy-root-wallet-burn-balance">-</strong><small id="economy-root-wallet-burn-status">-</small><small id="economy-root-wallet-burn-address">-</small></div>
         </div>
+        <details class="economy-collapse" id="economy-root-official-grant-details" style="margin-top:.75rem;">
+          <summary>官方 Treasury 撥款提案</summary>
+          <div class="settings-option-grid" style="margin-top:.75rem;">
+            <div class="field"><label>To 錢包地址</label><input type="text" id="economy-root-official-grant-destination" placeholder="pc1..." autocomplete="off" /></div>
+            <div class="field"><label>Value</label><input type="number" id="economy-root-official-grant-amount" min="1" value="1" /></div>
+            <div class="field"><label>Reason</label><input type="text" id="economy-root-official-grant-reason" maxlength="180" placeholder="official treasury proposal" /></div>
+            <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-root-official-grant-btn" type="button">提出撥款提案</button></div>
+          </div>
+          <div class="msg" id="economy-root-official-grant-msg"></div>
+        </details>
       </div>
       <div class="drive-card" id="economy-user-ledger-card" style="margin-top:.75rem;">
         <div class="drive-card-heading">
@@ -2614,6 +2648,24 @@
         </div>
       </div>
       </div>
+      <div class="economy-subpage" id="economy-transactions-page">
+        <div class="drive-card">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">交易管理</div>
+              <div class="drive-card-sub">近期轉入、轉出、交易 hash 與 Proved 狀態</div>
+            </div>
+            <button class="btn" id="economy-transactions-refresh-btn" type="button">重新整理</button>
+          </div>
+          <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+            <div><span class="drive-card-sub">Pending</span><strong id="economy-transactions-pending-count">0</strong><small id="economy-transactions-pending-points">待確認 0 點</small></div>
+            <div><span class="drive-card-sub">Confirmed</span><strong id="economy-transactions-confirmed-count">0</strong><small id="economy-transactions-finalized-count">本次成交 0</small></div>
+            <div><span class="drive-card-sub">Failed</span><strong id="economy-transactions-failed-count">0</strong><small>未成交不改變餘額</small></div>
+          </div>
+          <div id="economy-transactions-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+          <div class="msg" id="economy-transactions-msg"></div>
+        </div>
+      </div>
       <div class="economy-subpage" id="economy-explorer-page">
         <div class="drive-card">
           <div class="drive-card-heading">
@@ -2625,8 +2677,8 @@
           </div>
           <div class="settings-option-grid economy-explorer-rule-grid" style="margin-top:.75rem;">
             <div><span class="drive-card-sub">成交條件</span><strong>20 Proved</strong><small>模擬鏈 finality</small></div>
-            <div><span class="drive-card-sub">預估時間</span><strong>2-3 分鐘</strong><small>一般鏈上費用</small></div>
-            <div><span class="drive-card-sub">加速</span><strong>鏈上費用</strong><small>提高費用會縮短預估</small></div>
+            <div><span class="drive-card-sub">預估時間</span><strong>動態</strong><small>受鏈上忙碌度影響</small></div>
+            <div><span class="drive-card-sub">加速</span><strong>Priority Fee</strong><small>提高費用會縮短預估</small></div>
           </div>
           <div class="economy-explorer-search">
             <input type="text" id="economy-explorer-query" autocomplete="off" placeholder="pc1... / ledger uuid / hash / block" />
@@ -2636,6 +2688,129 @@
         </div>
         <div id="economy-explorer-result" class="economy-explorer-result">
           <div class="drive-empty">尚未查詢鏈上資料</div>
+        </div>
+      </div>
+      <div class="economy-subpage" id="economy-governance-page">
+        <div class="drive-card" id="economy-dispute-card" style="margin-top:.75rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">疑義交易案件</div>
+              <div class="drive-card-sub">用戶申報不會自動追回或 rollback；manager+ 審核後才可轉成治理提案。</div>
+            </div>
+            <button class="btn" id="economy-disputes-refresh-btn" type="button">更新案件</button>
+          </div>
+          <div id="economy-disputes-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+        </div>
+        <div class="drive-card" id="economy-governance-card" style="margin-top:.75rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">PointsChain 治理提案</div>
+              <div class="drive-card-sub">公共案全站多人投票且 root 無 veto；官方財庫案需 manager+ 通過、root 可 veto，執行前仍需官方多簽簽合。</div>
+            </div>
+            <div class="drive-file-actions">
+              <select id="economy-governance-category-select" style="min-width:12rem;padding:.48rem .6rem;border-radius:8px;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.12);color:inherit;">
+                <option value="all">全部治理</option>
+                <option value="dispute">選取案件</option>
+                <option value="public">公共治理</option>
+                <option value="emergency">緊急安全</option>
+                <option value="treasury">官方財庫</option>
+                <option value="mint">Mint 申請</option>
+                <option value="policy">參數 / 功能 / 銷毀</option>
+              </select>
+              <button class="btn" id="economy-governance-refresh-btn" type="button">更新治理</button>
+            </div>
+          </div>
+          <div class="drive-card-sub" id="economy-governance-selected-case" style="margin-top:.5rem;">未選取疑義交易案件。</div>
+          <div class="economy-collapse" id="economy-treasury-signer-center-card" style="display:none;margin-top:.75rem;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">官方財庫多簽 Treasury Signer Center</div>
+                <div class="drive-card-sub" id="economy-treasury-signer-center-status">讀取中</div>
+              </div>
+            </div>
+            <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+              <div><span class="drive-card-sub">官方錢包餘額</span><strong id="economy-treasury-signer-official-balance">-</strong><small id="economy-treasury-signer-official-address">-</small></div>
+              <div><span class="drive-card-sub">Signer / Threshold</span><strong id="economy-treasury-signer-threshold">-</strong><small id="economy-treasury-signer-policy">-</small></div>
+              <div><span class="drive-card-sub">待簽 / 待執行</span><strong id="economy-treasury-signer-pending-count">0</strong><small id="economy-treasury-signer-branch">-</small></div>
+            </div>
+            <div class="drive-card-sub" style="margin-top:.65rem;">治理通過不會自動取得官方錢包控制權；必須在 timelock 後完成官方多簽 threshold 才能執行。</div>
+            <div class="drive-file-list" id="economy-treasury-signer-list" style="margin-top:.75rem;"></div>
+            <div class="drive-file-list" id="economy-treasury-signer-pending-list" style="margin-top:.75rem;"></div>
+          </div>
+          <details class="economy-collapse" id="economy-public-governance-create-details" style="display:none;margin-top:.75rem;">
+            <summary>公共治理提案</summary>
+            <div class="drive-card-sub" id="economy-public-governance-hint" style="margin-top:.45rem;">trusted 以上會員可送出公共提案；一般會員需先提升信任等級。一般用戶提案會進 REVIEW，需 manager+ sponsor 才開放投票。</div>
+            <div class="settings-option-grid" style="margin-top:.65rem;">
+              <div class="field"><label>詐騙地址</label><input type="text" id="economy-governance-scam-address" placeholder="pc1..." autocomplete="off" /></div>
+              <div class="field"><label>理由</label><input type="text" id="economy-governance-scam-reason" maxlength="500" placeholder="evidence and incident reason" /></div>
+              <div class="field"><label>證據 hash</label><textarea id="economy-governance-scam-evidence" rows="2" placeholder="每行一個 tx hash / reference"></textarea></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-governance-scam-create-btn" type="button">提出詐騙標記</button></div>
+            </div>
+            <div class="settings-option-grid" style="margin-top:.65rem;">
+              <div class="field"><label>凍結 / 解凍地址</label><input type="text" id="economy-governance-freeze-address" placeholder="pc1..." autocomplete="off" /></div>
+              <div class="field"><label>動作</label><select id="economy-governance-freeze-action"><option value="freeze">凍結轉出</option><option value="unfreeze">解除凍結</option></select></div>
+              <div class="field"><label>理由</label><input type="text" id="economy-governance-freeze-reason" maxlength="500" placeholder="governance freeze reason" /></div>
+              <div class="field"><label>證據 hash</label><textarea id="economy-governance-freeze-evidence" rows="2" placeholder="每行一個 tx hash / reference"></textarea></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-governance-freeze-create-btn" type="button">提出凍結提案</button></div>
+            </div>
+          </details>
+          <details class="economy-collapse" id="economy-governance-emergency-create-details" style="display:none;margin-top:.75rem;border-color:rgba(255,95,95,.45);background:rgba(160,20,20,.12);">
+            <summary>Emergency Security</summary>
+            <div class="drive-card-sub" style="margin-top:.45rem;color:#ffb4b4;">緊急安全治理只供 manager+ / emergency council 使用；rollback branch 只切換 canonical branch pointer，不刪改舊 ledger。</div>
+            <div class="settings-option-grid" style="margin-top:.65rem;">
+              <div class="field"><label>事故交易 hash</label><input type="text" id="economy-governance-branch-incident" placeholder="ledger hash / tx hash" autocomplete="off" /></div>
+              <div class="field"><label>其他事故 hash</label><textarea id="economy-governance-branch-incident-refs" rows="2" placeholder="多位被盜者時每行一個相關 tx hash"></textarea></div>
+              <div class="field"><label>Base block</label><input type="number" id="economy-governance-branch-base-block" min="0" placeholder="可空白" /></div>
+              <div class="field"><label>Recovery 方案</label><select id="economy-governance-branch-strategy"><option value="tainted_remainder_return">用戶自負責：只退駭客未花餘額</option><option value="treasury_compensation">官方補缺</option><option value="exclude_tainted_descendants">嚴格排除污染後代</option></select></div>
+              <div class="field"><label>損失原因</label><select id="economy-governance-branch-loss-cause"><option value="private_key_leak">私鑰外洩 / 釣魚</option><option value="user_phishing">用戶釣魚</option><option value="protocol_fault">協議 / 系統缺陷</option><option value="exchange_bug">交易所錯誤</option><option value="treasury_hot_wallet_compromise">官方熱錢包外洩</option><option value="admin_negligence">管理失誤</option><option value="unknown">未定</option></select></div>
+              <div class="field"><label>理由</label><input type="text" id="economy-governance-branch-reason" maxlength="500" placeholder="why emergency branch is needed" /></div>
+              <div class="field"><label>排除交易</label><textarea id="economy-governance-branch-excluded" rows="2" placeholder="每行一個要從 recovery branch 排除的 tx hash"></textarea></div>
+              <div class="field"><label>被盜者說詞</label><textarea id="economy-governance-branch-victim-statement" rows="2" maxlength="4000" placeholder="會附在提案中供投票者判斷"></textarea></div>
+              <div class="field"><label>被盜者證據</label><textarea id="economy-governance-branch-victim-evidence" rows="2" placeholder="每行一個 evidence / tx / case ref"></textarea></div>
+              <div class="field"><label>核准 claims JSON</label><textarea id="economy-governance-branch-claims" rows="3" placeholder='[{"wallet_address":"pc1...","claim_amount_points":100,"review_status":"approved"}]'></textarea></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-governance-branch-create-btn" type="button">提出緊急分支</button></div>
+            </div>
+            <div class="settings-option-grid" style="margin-top:.65rem;">
+              <div class="field"><label>緊急鎖定範圍</label><input type="text" id="economy-governance-lockdown-scope" maxlength="240" placeholder="transfer,exchange,governance_execute" /></div>
+              <div class="field"><label>理由</label><input type="text" id="economy-governance-lockdown-reason" maxlength="500" placeholder="exploit / replay attack / treasury incident" /></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-governance-lockdown-create-btn" type="button">提出緊急鎖定</button></div>
+            </div>
+          </details>
+          <details class="economy-collapse" id="economy-governance-treasury-create-details" style="display:none;margin-top:.75rem;">
+            <summary>官方財庫提案</summary>
+            <div class="settings-option-grid" style="margin-top:.65rem;">
+              <div class="field"><label>動作</label><select id="economy-governance-treasury-action"><option value="TREASURY_TRANSFER">官方撥款</option><option value="EXCHANGE_FUND_REPLENISH">撥補交易所基金</option><option value="CONTEST_REWARD_PAYOUT">競賽獎金</option></select></div>
+              <div class="field"><label>To 錢包地址</label><input type="text" id="economy-governance-treasury-destination" placeholder="pc1..." autocomplete="off" /></div>
+              <div class="field"><label>Value</label><input type="number" id="economy-governance-treasury-amount" min="1" value="1" /></div>
+              <div class="field"><label>Reason</label><input type="text" id="economy-governance-treasury-reason" maxlength="180" placeholder="official treasury proposal" /></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-governance-treasury-create-btn" type="button">提出財庫提案</button></div>
+            </div>
+          </details>
+          <details class="economy-collapse" id="economy-governance-mint-create-details" style="display:none;margin-top:.75rem;">
+            <summary>Mint 申請</summary>
+            <div class="settings-option-grid" style="margin-top:.65rem;">
+              <div class="field"><label>Mint 到</label><select id="economy-governance-mint-destination"><option value="official_treasury">官方 Treasury</option><option value="promo_fund">PROMO Fund</option><option value="exchange_fund">EXCHANGE Fund</option></select></div>
+              <div class="field"><label>Value</label><input type="number" id="economy-governance-mint-amount" min="1" value="1" /></div>
+              <div class="field"><label>Reason</label><input type="text" id="economy-governance-mint-reason" maxlength="240" placeholder="mint reason / cap impact" /></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-governance-mint-create-btn" type="button">提出 Mint 申請</button></div>
+            </div>
+          </details>
+          <details class="economy-collapse" id="economy-governance-policy-create-details" style="display:none;margin-top:.75rem;">
+            <summary>參數 / 功能 / 銷毀政策</summary>
+            <div class="settings-option-grid" style="margin-top:.65rem;">
+              <div class="field"><label>動作</label><select id="economy-governance-policy-action"><option value="PARAMETER_CHANGE">參數變更</option><option value="FEATURE_ACTIVATION">功能啟用</option><option value="AUTO_BURN_POLICY">自動銷毀政策</option><option value="TREASURY_SIGNER_CHANGE">官方簽署者變更</option></select></div>
+              <div class="field"><label>Key / Feature</label><input type="text" id="economy-governance-policy-key" maxlength="160" placeholder="fee_model / lending / auto_burn" /></div>
+              <div class="field"><label>Value / Policy</label><input type="text" id="economy-governance-policy-value" maxlength="500" placeholder="new value / activation scope / burn rule" /></div>
+              <div class="field"><label>Reason</label><input type="text" id="economy-governance-policy-reason" maxlength="500" placeholder="why this governance change is needed" /></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-governance-policy-create-btn" type="button">提出政策提案</button></div>
+            </div>
+          </details>
+          <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+            <div><span class="drive-card-sub">提案</span><strong id="economy-governance-proposal-count">0</strong><small id="economy-governance-policy">multi-vote required</small></div>
+            <div><span class="drive-card-sub">狀態</span><strong id="economy-governance-open-count">0</strong><small>voting / passed / executed</small></div>
+          </div>
+          <div id="economy-governance-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+          <div class="msg" id="economy-governance-msg"></div>
         </div>
       </div>
       <div class="economy-subpage" id="economy-positions-page">
@@ -2784,32 +2959,11 @@
       </div>
       </div>
       <div class="economy-subpage" id="economy-chain-page">
-      <div class="drive-card" id="economy-admin-card" style="display:none;margin-top:.75rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title" id="economy-admin-card-title">手動加減分與待審核</div>
-            <div class="drive-card-sub" id="economy-admin-card-sub">這裡只負責送出補償、扣回與審核；root 的加減分歷史統一在下方明細查看</div>
-          </div>
-          <button class="btn" id="economy-admin-refresh-btn" type="button">刷新</button>
-        </div>
-        <details class="economy-collapse" id="economy-manual-adjust-details" open>
-          <summary>手動加減分</summary>
-          <div class="settings-option-grid" id="economy-adjust-panel">
-            <div class="field"><label>調整對象</label><select id="economy-adjust-user-id"><option value="">讀取會員中...</option></select></div>
-            <div class="field"><label>方向</label><select id="economy-adjust-direction"><option value="credit">加點</option><option value="debit">扣點</option></select></div>
-            <div class="field"><label>數量</label><input type="number" id="economy-adjust-amount" min="1" value="1" /></div>
-            <div class="field"><label>原因</label><input type="text" id="economy-adjust-reason" maxlength="160" placeholder="必填，會進入 audit log" /></div>
-            <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-adjust-btn" type="button">送出調整</button></div>
-          </div>
-        </details>
-        <div id="economy-admin-ledger-list" class="drive-file-list" style="margin-top:.75rem;"></div>
-        <div id="economy-pending-list" class="drive-file-list" style="margin-top:.75rem;"></div>
-      </div>
       <div class="drive-card" id="economy-root-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">PointsChain 私有鏈管理</div>
-            <div class="drive-card-sub">root 不受個人積分限制；此頁顯示 PointsChain 狀態、審計與緊急處置</div>
+            <div class="drive-card-sub">root 只管理官方鏈狀態、封塊、審計與異常恢復；用戶餘額請透過公開 Explorer 以交易 hash 或錢包地址查詢。</div>
           </div>
           <div class="drive-file-actions">
             <button class="btn" id="economy-root-report-btn" type="button">更新報告</button>
@@ -2836,23 +2990,58 @@
             <div class="economy-formula-card"><span>狀態</span><strong>載入中...</strong></div>
           </div>
         </div>
+        <details class="economy-collapse economy-chain-fold" id="economy-chain-branch-details" open>
+          <summary>分支狀況 / 簡易區塊樹</summary>
+          <div class="drive-card-sub" id="economy-branch-tree-summary">讀取中</div>
+          <div id="economy-branch-tree-list" class="economy-branch-tree"></div>
+        </details>
         <div class="drive-card-sub" id="economy-chain-countdown" style="margin-top:.6rem;">封塊倒數：-</div>
         <div class="drive-card-sub" id="economy-chain-loaded-at" style="margin-top:.25rem;">最後更新 -</div>
-        <details class="economy-collapse economy-chain-fold" id="economy-chain-backup-details">
-          <summary>封塊、備份與恢復</summary>
+        <details class="economy-collapse economy-chain-fold" id="economy-chain-seal-details" open>
+          <summary>封塊</summary>
+          <div class="drive-file-actions economy-inline-actions">
+            <button class="btn" id="economy-seal-btn" type="button">封存未封帳本</button>
+          </div>
+          <div class="drive-card" style="margin-top:.75rem;">
+            <div class="drive-card-title">最近封塊</div>
+            <div id="economy-block-list" class="drive-file-list"></div>
+          </div>
+        </details>
+        <details class="economy-collapse economy-chain-fold" id="economy-chain-audit-details">
+          <summary>審計</summary>
+          <div class="drive-card" style="margin-top:.75rem;">
+            <div class="drive-card-title">審計事件</div>
+            <div id="economy-audit-list" class="drive-file-list"></div>
+          </div>
+        </details>
+        <details class="economy-collapse economy-chain-fold" id="economy-chain-incident-details">
+          <summary>異常與恢復 Console</summary>
           <div class="drive-file-actions economy-inline-actions">
             <button class="btn" id="economy-backup-btn" type="button">建立帳本備份</button>
-            <button class="btn" id="economy-seal-btn" type="button">封存未封帳本</button>
+          </div>
+          <div class="drive-card" style="margin-top:.75rem;">
+            <div class="drive-card-title">鏈完整性異常帳本</div>
+            <div class="drive-card-sub">只顯示 ledger tamper、未確認、verify mismatch 等鏈完整性問題；治理凍結與詐騙標記顯示於下方治理/風險事件。</div>
+            <div id="economy-risk-ledger-list" class="drive-file-list"></div>
+          </div>
+          <div class="drive-card" style="margin-top:.75rem;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">治理 / 風險事件</div>
+                <div class="drive-card-sub" id="economy-governance-incident-summary">讀取中</div>
+              </div>
+            </div>
+            <div id="economy-governance-incident-list" class="drive-file-list" style="margin-top:.75rem;"></div>
           </div>
           <div class="drive-card" id="economy-recovery-card" style="margin-top:.75rem;">
             <div class="drive-card-heading">
               <div>
-                <div class="drive-card-title">帳本備份與半自動恢復</div>
-                <div class="drive-card-sub">異常時會進入 safe mode，只產生 forensic bundle 與恢復方案；root 確認後才會套用備份並由 ledger 重建 wallet。</div>
+                <div class="drive-card-title">Emergency / Recovery Console</div>
+                <div class="drive-card-sub">只處理 verify、safe mode、forensic bundle、備份與恢復方案；不得直接改餘額、沒收、處分或覆寫 ledger。</div>
               </div>
               <div class="drive-file-actions">
-                <button class="btn" id="economy-recovery-auto-handle-btn" type="button">一鍵處理 PointsChain 異常</button>
-                <button class="btn btn-danger" id="economy-recovery-approve-btn" type="button">確認恢復</button>
+                <button class="btn" id="economy-recovery-auto-handle-btn" type="button">檢查異常處理方案</button>
+                <button class="btn btn-danger" id="economy-recovery-approve-btn" type="button">確認套用健康備份</button>
               </div>
             </div>
             <div id="economy-recovery-status" class="drive-card-sub">safe mode：-</div>
@@ -2865,84 +3054,12 @@
             <div id="economy-backup-list" class="drive-file-list" style="margin-top:.75rem;"></div>
           </div>
         </details>
-        <details class="economy-collapse economy-chain-fold" id="economy-chain-account-details">
-          <summary>查詢帳戶、處分與 rollback</summary>
-          <div class="drive-card" id="economy-account-query-card" style="margin-top:.75rem;">
-            <div class="drive-card-heading">
-              <div>
-                <div class="drive-card-title">查詢帳戶積分</div>
-                <div class="drive-card-sub">root 可選擇指定帳戶，查看目前積分、凍結點數、錢包狀態與最近帳本</div>
-              </div>
-              <button class="btn" id="economy-account-query-btn" type="button">查詢</button>
-            </div>
-            <div class="settings-option-grid">
-              <div class="field"><label>查詢帳戶</label><select id="economy-query-user-id"><option value="">讀取會員中...</option></select></div>
-            </div>
-            <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
-              <div><span class="drive-card-sub">目前積分</span><strong id="economy-query-points-balance">-</strong><small id="economy-query-points-frozen">凍結 -</small></div>
-              <div><span class="drive-card-sub">累計收支</span><strong id="economy-query-points-earned">收入 -</strong><small id="economy-query-points-spent">支出 -</small></div>
-              <div><span class="drive-card-sub">錢包狀態</span><strong id="economy-query-wallet-status">-</strong><small id="economy-query-public-account">-</small></div>
-            </div>
-            <div class="drive-card-title" style="margin-top:.85rem;">最近帳本明細</div>
-            <div class="drive-card-sub">收入、支出、凍結與系統獎勵都會列在這裡，可點 Proof 查帳本證明。</div>
-            <div id="economy-query-ledger-list" class="drive-file-list" style="margin-top:.75rem;">
-              <div class="drive-empty">請先選擇帳戶並查詢</div>
-            </div>
-            <div class="drive-card" id="economy-wallet-sanction-card" style="margin-top:.75rem;">
-              <div class="drive-card-title">錢包處分</div>
-              <div class="drive-card-sub">root 可凍結、限制或禁用指定會員錢包；點數凍結/解凍會寫入 ledger。</div>
-              <div class="settings-option-grid" style="margin-top:.65rem;">
-                <div class="field">
-                  <label>錢包狀態</label>
-                  <select id="economy-wallet-sanction-status">
-                    <option value="active">正常</option>
-                    <option value="limited">限制</option>
-                    <option value="frozen">凍結</option>
-                    <option value="closed">禁用</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label>風險等級</label>
-                  <select id="economy-wallet-sanction-risk">
-                    <option value="normal">正常</option>
-                    <option value="watch">觀察</option>
-                    <option value="high">高風險</option>
-                    <option value="blocked">封鎖</option>
-                  </select>
-                </div>
-                <div class="field"><label>同時凍結點數</label><input type="number" id="economy-wallet-freeze-amount" min="0" value="0" /></div>
-                <div class="field"><label>同時解凍點數</label><input type="number" id="economy-wallet-unfreeze-amount" min="0" value="0" /></div>
-                <div class="field"><label>處分原因</label><input type="text" id="economy-wallet-sanction-reason" maxlength="180" placeholder="必填，會寫入審計" /></div>
-                <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-wallet-sanction-btn" type="button">套用處分</button></div>
-              </div>
-            </div>
-          </div>
-          <div class="settings-option-grid economy-rollback-grid" style="margin-top:.75rem;">
-            <div class="field"><label>Rollback ledger UUID</label><input type="text" id="economy-rollback-ledger-uuid" placeholder="ledger_uuid" /></div>
-            <div class="field"><label>Rollback 原因</label><input type="text" id="economy-rollback-reason" maxlength="180" placeholder="必填，會寫入審計" /></div>
-            <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-rollback-btn" type="button">Rollback 交易</button></div>
-          </div>
-        </details>
-        <details class="economy-collapse economy-chain-fold" id="economy-chain-detail-lists">
-          <summary>封塊、審計、異常與加減分明細</summary>
-          <div class="drive-dashboard-grid" style="margin-top:.75rem;">
-            <div class="drive-card">
-              <div class="drive-card-title">最近封塊</div>
-              <div id="economy-block-list" class="drive-file-list"></div>
-            </div>
-            <div class="drive-card">
-              <div class="drive-card-title">審計報告</div>
-              <div id="economy-audit-list" class="drive-file-list"></div>
-            </div>
-          </div>
+        <details class="economy-collapse economy-chain-fold" id="economy-chain-unsealed-details">
+          <summary>近期未封交易 hash</summary>
           <div class="drive-card" style="margin-top:.75rem;">
-            <div class="drive-card-title">異常 / 已 rollback 帳本</div>
-            <div id="economy-risk-ledger-list" class="drive-file-list"></div>
-          </div>
-          <div class="drive-card" style="margin-top:.75rem;">
-            <div class="drive-card-title">收入 / 加減分明細</div>
-            <div class="drive-card-sub">包含系統獎勵、管理員加減分、執行者、目標帳戶、原因與 ledger UUID</div>
-            <div id="economy-adjustment-list" class="drive-file-list"></div>
+            <div class="drive-card-title">近期未封交易 hash</div>
+            <div class="drive-card-sub">只列交易 hash、狀態與鏈上動作；詳情請點 hash 進入公開 Explorer。</div>
+            <div id="economy-unsealed-transaction-list" class="drive-file-list"></div>
           </div>
         </details>
         <div id="economy-chain-status" class="drive-card-sub economy-chain-status" style="margin-top:.75rem;">全鏈狀態尚未讀取</div>
@@ -3053,6 +3170,11 @@
             <label>下單</label>
             <button class="btn btn-primary" id="trading-submit-order-btn" type="button">送出訂單</button>
             <div class="drive-card-sub" id="trading-order-estimate" style="margin-top:.35rem;">輸入數量後顯示預估金額；停損 / 停利只會套用到買入後留下的現貨部位。</div>
+          </div>
+          <div class="field">
+            <label>交易付款錢包</label>
+            <select id="trading-payment-wallet"><option value="">讀取錢包中</option></select>
+            <div class="drive-card-sub" id="trading-payment-wallet-note" style="margin-top:.25rem;">交易所使用此錢包作為下單預設付款來源。</div>
           </div>
         </div>
         <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
@@ -3823,7 +3945,8 @@
             <div class="field"><label><input type="checkbox" id="sc-browser-only-mode-enabled" /> Browser-only 模式</label></div>
             <div class="field"><label><input type="checkbox" id="sc-integrity-guard-enabled" /> Integrity Guard</label></div>
             <div class="field"><label><input type="checkbox" id="sc-integrity-guard-strict-mode" /> Integrity strict mode</label></div>
-            <div class="field"><label><input type="checkbox" id="sc-feature-economy-enabled" /> PointsChain / 積分私有鏈</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-feature-economy-enabled" /> 基本積分系統</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-feature-points-chain-enabled" /> PointsChain 私有鏈</label></div>
             <div class="field">
               <label>root IP 白名單</label>
               <textarea id="sc-root-ip-whitelist" rows="3" placeholder="127.0.0.1, 192.168.1.10"></textarea>
@@ -3880,7 +4003,8 @@
             <div class="field"><label><input type="checkbox" id="security-profile-browser-only-mode-enabled" /> Browser-only 模式</label></div>
             <div class="field"><label><input type="checkbox" id="security-profile-integrity-guard-enabled" /> Integrity Guard</label></div>
             <div class="field"><label><input type="checkbox" id="security-profile-integrity-guard-strict-mode" /> Integrity strict mode</label></div>
-            <div class="field"><label><input type="checkbox" id="security-profile-feature-economy-enabled" /> PointsChain / 積分私有鏈</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-feature-economy-enabled" /> 基本積分系統</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-feature-points-chain-enabled" /> PointsChain 私有鏈</label></div>
             <div class="field">
               <label>root IP 白名單</label>
               <textarea id="security-profile-root-ip-whitelist" rows="3" placeholder="127.0.0.1, 192.168.1.10"></textarea>
@@ -4444,7 +4568,8 @@
             <div class="field"><label><input type="checkbox" id="s-feature-videos-enabled" /> 影音分享</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-games-enabled" /> 遊戲區 / 西洋棋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-comfyui-enabled" /> ComfyUI AI 產圖</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-economy-enabled" /> PointsChain 積分系統</label></div>
+            <div class="field"><label><input type="checkbox" id="s-feature-economy-enabled" /> 基本積分系統</label></div>
+            <div class="field"><label><input type="checkbox" id="s-feature-points-chain-enabled" /> PointsChain 私有鏈</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-trading-enabled" /> 積分交易所</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-social-search-enabled" /> 社交 / 搜尋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-advanced-security-enabled" /> 進階安全</label></div>
@@ -6815,7 +6940,7 @@
 <script src="/js/40-auth-users.js?v=20260517-avatar-cropper" defer></script>
 <script src="/js/50-admin.js?v=20260521-comfyui-local-main-args" defer></script>
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>
-<script src="/js/55-economy.js?v=20260521-chain-explorer-burn" defer></script>
+<script src="/js/55-economy.js?v=20260523-chain-branch-tree" defer></script>
 <script src="/js/56-trading.js?v=20260517-trading-snapshot-warmup" defer></script>
 <script src="/js/57-platform-centers.js?v=20260520-diffusers-csrf-audit" defer></script>
 <script src="/js/58-profile-friends.js?v=20260517-profile-avatar-upload" defer></script>

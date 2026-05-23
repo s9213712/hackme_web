@@ -19,6 +19,11 @@ ECONOMY_FUND_KEYS = {"mint", "burn", "official_treasury", "promo_fund", "exchang
 ECONOMY_EVENT_STATUSES = {"confirmed"}
 ECONOMY_INCIDENT_STATUSES = {"open", "resolved", "acknowledged"}
 ECONOMY_INCIDENT_SEVERITIES = {"info", "warning", "critical"}
+EXCHANGE_PRINCIPAL_LENT_TYPES = {
+    "margin_principal_lent",
+    "margin_collateral_withdraw_principal_lent",
+}
+EXCHANGE_PRINCIPAL_REPAID_TYPES = {"margin_principal_repaid"}
 
 DEFAULT_ECONOMY_POLICY = {
     "policy_version": ECONOMY_POLICY_VERSION,
@@ -134,6 +139,7 @@ def ensure_economy_layer_schema(conn):
         CREATE TABLE IF NOT EXISTS points_economy_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_uuid TEXT NOT NULL UNIQUE,
+            chain_branch TEXT NOT NULL DEFAULT 'main',
             event_type TEXT NOT NULL,
             transaction_type TEXT NOT NULL,
             source_fund_key TEXT CHECK (source_fund_key IS NULL OR source_fund_key IN ({_sql_in(ECONOMY_FUND_KEYS)})),
@@ -152,6 +158,15 @@ def ensure_economy_layer_schema(conn):
             created_by_role TEXT,
             created_at TEXT NOT NULL
         )
+        """
+    )
+    event_cols = {row["name"] for row in conn.execute("PRAGMA table_info(points_economy_events)").fetchall()}
+    if "chain_branch" not in event_cols:
+        conn.execute("ALTER TABLE points_economy_events ADD COLUMN chain_branch TEXT NOT NULL DEFAULT 'main'")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_points_economy_events_branch_id
+        ON points_economy_events(chain_branch, id)
         """
     )
     conn.execute(
@@ -330,13 +345,27 @@ def ensure_economy_fund_wallets(conn, *, chain_secret):
     return wallets
 
 
-def _last_economy_event_hash(conn):
-    row = conn.execute("SELECT event_hash FROM points_economy_events ORDER BY id DESC LIMIT 1").fetchone()
+def _last_economy_event_hash(conn, *, chain_branch="main"):
+    branch = str(chain_branch or "main").strip() or "main"
+    row = conn.execute(
+        """
+        SELECT event_hash FROM points_economy_events
+        WHERE chain_branch=?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (branch,),
+    ).fetchone()
     return row["event_hash"] if row else None
 
 
 def _event_request_hash(payload):
     return sha256_text(canonical_json(payload))
+
+
+def _legacy_branchless_event_request_hash(payload):
+    legacy_payload = dict(payload)
+    legacy_payload.pop("chain_branch", None)
+    return _event_request_hash(legacy_payload)
 
 
 def append_economy_event(
@@ -354,9 +383,11 @@ def append_economy_event(
     metadata=None,
     actor=None,
     allow_mint_override=False,
+    chain_branch="main",
 ):
     policy = load_economy_policy(conn)
     wallets = ensure_economy_fund_wallets(conn, chain_secret=chain_secret)
+    chain_branch = str(chain_branch or "main").strip() or "main"
     source_fund_key = str(source_fund_key or "").strip().lower() or None
     destination_fund_key = str(destination_fund_key or "").strip().lower() or None
     if source_fund_key is not None and source_fund_key not in ECONOMY_FUND_KEYS:
@@ -380,15 +411,26 @@ def append_economy_event(
         "amount": amount,
         "metadata": metadata or {},
         "policy_version": policy["policy_version"],
+        "chain_branch": chain_branch,
     }
     request_hash = _event_request_hash(request_payload)
+    legacy_branchless_request_hash = (
+        _legacy_branchless_event_request_hash(request_payload)
+        if chain_branch == "main"
+        else None
+    )
     existing = conn.execute("SELECT * FROM points_economy_events WHERE idempotency_key=?", (str(idempotency_key),)).fetchone()
     if existing:
-        if existing["request_hash"] != request_hash:
+        if str(existing["chain_branch"] if "chain_branch" in existing.keys() else "main") != chain_branch:
+            raise ValueError("economy idempotency key belongs to a different chain branch")
+        accepted_hashes = {request_hash}
+        if legacy_branchless_request_hash:
+            accepted_hashes.add(legacy_branchless_request_hash)
+        if existing["request_hash"] not in accepted_hashes:
             raise ValueError("economy idempotency key conflict")
         return existing, False
 
-    replay = replay_economy_events(conn, policy=policy, chain_secret=chain_secret, persist_cache=False)
+    replay = replay_economy_events(conn, policy=policy, chain_secret=chain_secret, persist_cache=False, chain_branch=chain_branch)
     if source_fund_key == "mint" and not allow_mint_override:
         releasable = int(policy["max_supply"]) - int(policy["reserved_locked"])
         if int(replay["minted_total"]) + amount > releasable:
@@ -400,7 +442,7 @@ def append_economy_event(
 
     now = utc_now()
     event_uuid = str(uuid.uuid4())
-    previous_hash = _last_economy_event_hash(conn)
+    previous_hash = _last_economy_event_hash(conn, chain_branch=chain_branch)
     source_address = wallets[source_fund_key]["address"] if source_fund_key else source_address
     destination_address = wallets[destination_fund_key]["address"] if destination_fund_key else destination_address
     row_payload = {
@@ -423,14 +465,15 @@ def append_economy_event(
     cur = conn.execute(
         """
         INSERT INTO points_economy_events (
-            event_uuid, event_type, transaction_type, source_fund_key, source_address,
+            event_uuid, chain_branch, event_type, transaction_type, source_fund_key, source_address,
             destination_fund_key, destination_address, amount, idempotency_key,
             request_hash, policy_version, status, metadata_json, previous_event_hash,
             event_hash, created_by, created_by_role, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?)
         """,
         (
             event_uuid,
+            chain_branch,
             row_payload["event_type"],
             row_payload["transaction_type"],
             source_fund_key,
@@ -460,9 +503,12 @@ def _actor_value(actor, key):
     return actor.get(key) if hasattr(actor, "get") else None
 
 
-def bootstrap_economy_layer(conn, *, chain_secret, actor=None):
+def bootstrap_economy_layer(conn, *, chain_secret, actor=None, chain_branch="main"):
     policy = load_economy_policy(conn)
     ensure_economy_fund_wallets(conn, chain_secret=chain_secret)
+    chain_branch = str(chain_branch or "main").strip() or "main"
+    if chain_branch != "main":
+        return {"created_event_uuids": [], "created_count": 0, "policy": policy, "branch_bootstrap": "disabled_for_recovery_branch"}
     allocations = (
         ("official_treasury", "treasury_allocation", int(policy["official_treasury_initial"])),
         ("promo_fund", "promo_allocation", int(policy["promo_fund_initial"])),
@@ -481,15 +527,17 @@ def bootstrap_economy_layer(conn, *, chain_secret, actor=None):
             idempotency_key=f"economy_bootstrap:{policy['policy_version']}:{fund_key}:{amount}",
             metadata={"bootstrap": True, "phase": "1A"},
             actor=actor,
+            chain_branch=chain_branch,
         )
         if was_created:
             created.append(row["event_uuid"])
     return {"created_event_uuids": created, "created_count": len(created), "policy": policy}
 
 
-def replay_economy_events(conn, *, policy=None, chain_secret, persist_cache=False):
+def replay_economy_events(conn, *, policy=None, chain_secret, persist_cache=False, chain_branch="main"):
     policy = policy or load_economy_policy(conn)
     wallets = ensure_economy_fund_wallets(conn, chain_secret=chain_secret)
+    chain_branch = str(chain_branch or "main").strip() or "main"
     balances = {
         fund_key: {
             "fund_key": fund_key,
@@ -503,24 +551,52 @@ def replay_economy_events(conn, *, policy=None, chain_secret, persist_cache=Fals
         }
         for fund_key, row in wallets.items()
     }
-    rows = conn.execute("SELECT * FROM points_economy_events WHERE status='confirmed' ORDER BY id ASC").fetchall()
+    rows = conn.execute(
+        "SELECT * FROM points_economy_events WHERE status='confirmed' AND chain_branch=? ORDER BY id ASC",
+        (chain_branch,),
+    ).fetchall()
     minted_total = 0
     burned_total = 0
+    external_balances = {}
+    exchange_receivable_principal = 0
     for row in rows:
         amount = int(row["amount"])
         source = row["source_fund_key"]
         dest = row["destination_fund_key"]
+        source_address = str(row["source_address"] or "")
+        dest_address = str(row["destination_address"] or "")
+        transaction_type = str(row["transaction_type"] or "")
         if source == "mint":
             minted_total += amount
         elif source:
             balances[source]["balance"] -= amount
             if balances[source]["balance"] < 0:
                 raise ValueError(f"economy replay would create negative balance for {source}")
+        elif source_address:
+            external_balances[source_address] = int(external_balances.get(source_address, 0)) - amount
+            if external_balances[source_address] < 0:
+                raise ValueError(f"economy replay would create negative external balance for {source_address}")
         if dest == "burn":
             burned_total += amount
             balances["burn"]["balance"] += amount
         elif dest:
             balances[dest]["balance"] += amount
+        elif dest_address:
+            external_balances[dest_address] = int(external_balances.get(dest_address, 0)) + amount
+        if (
+            source == "exchange_fund"
+            and not dest
+            and transaction_type in EXCHANGE_PRINCIPAL_LENT_TYPES
+        ):
+            exchange_receivable_principal += amount
+        elif (
+            not source
+            and dest == "exchange_fund"
+            and transaction_type in EXCHANGE_PRINCIPAL_REPAID_TYPES
+        ):
+            exchange_receivable_principal -= amount
+            if exchange_receivable_principal < 0:
+                raise ValueError("economy replay would create negative exchange principal receivable")
 
     releasable_supply = int(policy["max_supply"]) - int(policy["reserved_locked"])
     if minted_total > releasable_supply:
@@ -536,11 +612,27 @@ def replay_economy_events(conn, *, policy=None, chain_secret, persist_cache=Fals
     circulating_supply = active_supply - fund_supply
     if circulating_supply < 0:
         raise ValueError("economy replay would create negative circulating supply")
-    wallet_root_hash = sha256_text(canonical_json({key: item["balance"] for key, item in sorted(balances.items())}))
-    health = economy_health(policy=policy, minted_total=minted_total, balances=balances)
+    external_supply = sum(int(value or 0) for value in external_balances.values())
+    if external_supply != circulating_supply:
+        raise ValueError("economy replay external balances do not match circulating supply")
+    wallet_root_hash = sha256_text(canonical_json({
+        "external": {key: value for key, value in sorted(external_balances.items()) if int(value or 0)},
+        "funds": {key: item["balance"] for key, item in sorted(balances.items())},
+    }))
+    health = economy_health(
+        policy=policy,
+        minted_total=minted_total,
+        balances=balances,
+        exchange_receivable_principal=exchange_receivable_principal,
+    )
     result = {
         "policy": policy,
+        "chain_branch": chain_branch,
         "balances": balances,
+        "external_balances": {key: value for key, value in sorted(external_balances.items()) if int(value or 0)},
+        "external_supply": external_supply,
+        "exchange_receivable_principal": exchange_receivable_principal,
+        "exchange_total_assets": int(balances.get("exchange_fund", {}).get("balance") or 0) + exchange_receivable_principal,
         "minted_total": minted_total,
         "burned_total": burned_total,
         "active_supply": active_supply,
@@ -562,12 +654,14 @@ def replay_economy_events(conn, *, policy=None, chain_secret, persist_cache=Fals
     return result
 
 
-def economy_health(*, policy, minted_total, balances):
+def economy_health(*, policy, minted_total, balances, exchange_receivable_principal=0):
     max_supply = int(policy["max_supply"])
     mint_remaining = max_supply - int(minted_total)
     mint_remaining_ratio = mint_remaining / max_supply if max_supply else 0
     promo_balance = int(balances.get("promo_fund", {}).get("balance") or 0)
     exchange_balance = int(balances.get("exchange_fund", {}).get("balance") or 0)
+    exchange_receivable_principal = max(0, int(exchange_receivable_principal or 0))
+    exchange_assets = exchange_balance + exchange_receivable_principal
     status = "green"
     reasons = []
     if mint_remaining_ratio < 0.2:
@@ -582,12 +676,18 @@ def economy_health(*, policy, minted_total, balances):
     elif promo_balance < int(policy["promo_low_watermark"]) and status != "red":
         status = "yellow"
         reasons.append("promo_fund_low")
-    if exchange_balance < int(policy["exchange_critical_watermark"]):
+    if exchange_assets < int(policy["exchange_critical_watermark"]):
         status = "red"
-        reasons.append("exchange_fund_critical")
-    elif exchange_balance < int(policy["exchange_low_watermark"]) and status != "red":
+        reasons.append("exchange_fund_assets_critical")
+    elif exchange_assets < int(policy["exchange_low_watermark"]) and status != "red":
         status = "yellow"
-        reasons.append("exchange_fund_low")
+        reasons.append("exchange_fund_assets_low")
+    elif exchange_balance < int(policy["exchange_critical_watermark"]) and status != "red":
+        status = "yellow"
+        reasons.append("exchange_fund_liquidity_critical")
+    elif exchange_balance < int(policy["exchange_low_watermark"]) and status == "green":
+        status = "yellow"
+        reasons.append("exchange_fund_liquidity_low")
     return {"status": status, "reasons": reasons or ["ok"]}
 
 
@@ -610,19 +710,24 @@ def economy_supply_equation_report(*, replay, circulation=None):
     root_outstanding = _int_value(circulation.get("root_outstanding_points"))
     total_legacy_outstanding = legacy_outstanding + root_outstanding
     economy_circulating = _int_value(replay.get("circulating_supply"))
+    economy_external_supply = _int_value(replay.get("external_supply"))
+    if not economy_external_supply and economy_circulating:
+        economy_external_supply = economy_circulating
+    off_wallet_external = max(0, economy_external_supply - total_legacy_outstanding)
     max_supply = _int_value(replay.get("max_supply"))
     burned_total = _int_value(replay.get("burned_total"))
     mint_remaining = _int_value(replay.get("mint_remaining"))
 
-    unfunded_legacy = max(0, total_legacy_outstanding - economy_circulating)
+    unfunded_legacy = max(0, total_legacy_outstanding - economy_external_supply)
     promo_after_required_debit = promo_balance - unfunded_legacy
-    actual_total = burned_total + official_balance + exchange_balance + promo_balance + total_legacy_outstanding + mint_remaining
+    actual_total = burned_total + official_balance + exchange_balance + promo_balance + economy_external_supply + mint_remaining
     bridged_total = (
         burned_total
         + official_balance
         + exchange_balance
         + promo_after_required_debit
         + total_legacy_outstanding
+        + off_wallet_external
         + mint_remaining
     )
     actual_gap = actual_total - max_supply
@@ -630,7 +735,7 @@ def economy_supply_equation_report(*, replay, circulation=None):
     status = "balanced"
     if unfunded_legacy > promo_balance:
         status = "blocker"
-    elif actual_gap != 0:
+    elif actual_gap != 0 or bridged_gap != 0:
         status = "legacy_gap"
 
     return {
@@ -639,6 +744,11 @@ def economy_supply_equation_report(*, replay, circulation=None):
         "legacy_outstanding_points": legacy_outstanding,
         "root_outstanding_points": root_outstanding,
         "total_legacy_outstanding_points": total_legacy_outstanding,
+        "wallet_ledger_outstanding_points": total_legacy_outstanding,
+        "economy_external_circulating_points": economy_external_supply,
+        "off_wallet_economy_external_points": off_wallet_external,
+        "exchange_fund_receivable_principal_points": _int_value(replay.get("exchange_receivable_principal")),
+        "exchange_fund_total_assets_points": _int_value(replay.get("exchange_total_assets")),
         "burned_total": burned_total,
         "official_treasury_balance": official_balance,
         "exchange_fund_balance": exchange_balance,
@@ -655,8 +765,8 @@ def economy_supply_equation_report(*, replay, circulation=None):
         "bridged_supply_equation_total": bridged_total,
         "bridged_supply_equation_gap_points": bridged_gap,
         "bridged_supply_equation_balanced": bridged_gap == 0,
-        "formula": "burned + official_treasury + user_outstanding + mint_remaining + exchange_fund + promo_fund = max_supply",
-        "note": "Closed-loop status is balanced when actual_supply_equation_gap_points is zero.",
+        "formula": "burned + official_treasury + economy_external_circulating + mint_remaining + exchange_fund + promo_fund = max_supply",
+        "note": "Closed-loop status is balanced when economy replay external supply plus fund balances equals active supply; wallet outstanding is an audit component, not the whole off-fund economy.",
     }
 
 
@@ -664,9 +774,9 @@ def economy_legacy_bridge_report(*, replay, circulation=None):
     return economy_supply_equation_report(replay=replay, circulation=circulation)
 
 
-def rebuild_economy_derived_balances(conn, *, replay=None, chain_secret=None):
+def rebuild_economy_derived_balances(conn, *, replay=None, chain_secret=None, chain_branch="main"):
     if replay is None:
-        replay = replay_economy_events(conn, chain_secret=chain_secret, persist_cache=False)
+        replay = replay_economy_events(conn, chain_secret=chain_secret, persist_cache=False, chain_branch=chain_branch)
     now = utc_now()
     conn.execute("DELETE FROM points_economy_derived_balances")
     for fund_key, item in sorted((replay.get("balances") or {}).items()):
@@ -689,9 +799,9 @@ def rebuild_economy_derived_balances(conn, *, replay=None, chain_secret=None):
     return {"rebuilt": True, "replay_height": int(replay["replay_height"]), "wallet_root_hash": replay["wallet_root_hash"]}
 
 
-def verify_economy_derived_balances(conn, *, replay=None, chain_secret=None):
+def verify_economy_derived_balances(conn, *, replay=None, chain_secret=None, chain_branch="main"):
     if replay is None:
-        replay = replay_economy_events(conn, chain_secret=chain_secret, persist_cache=False)
+        replay = replay_economy_events(conn, chain_secret=chain_secret, persist_cache=False, chain_branch=chain_branch)
     cached = {
         row["fund_key"]: dict(row)
         for row in conn.execute("SELECT * FROM points_economy_derived_balances").fetchall()
@@ -722,9 +832,9 @@ def verify_economy_derived_balances(conn, *, replay=None, chain_secret=None):
     }
 
 
-def create_economy_snapshot(conn, *, replay=None, chain_secret=None, metadata=None):
+def create_economy_snapshot(conn, *, replay=None, chain_secret=None, metadata=None, chain_branch="main"):
     if replay is None:
-        replay = replay_economy_events(conn, chain_secret=chain_secret, persist_cache=False)
+        replay = replay_economy_events(conn, chain_secret=chain_secret, persist_cache=False, chain_branch=chain_branch)
     event_hash = replay.get("replay_event_hash")
     existing = conn.execute(
         """
@@ -796,9 +906,10 @@ def append_economy_incident(conn, *, severity, category, trigger, automatic_acti
     return conn.execute("SELECT * FROM points_economy_incidents WHERE id=?", (cur.lastrowid,)).fetchone()
 
 
-def economy_layer_report(conn, *, chain_secret, actor=None, circulation=None):
-    bootstrap = bootstrap_economy_layer(conn, chain_secret=chain_secret, actor=actor)
-    replay = replay_economy_events(conn, policy=bootstrap["policy"], chain_secret=chain_secret, persist_cache=False)
+def economy_layer_report(conn, *, chain_secret, actor=None, circulation=None, chain_branch="main"):
+    chain_branch = str(chain_branch or "main").strip() or "main"
+    bootstrap = bootstrap_economy_layer(conn, chain_secret=chain_secret, actor=actor, chain_branch=chain_branch)
+    replay = replay_economy_events(conn, policy=bootstrap["policy"], chain_secret=chain_secret, persist_cache=False, chain_branch=chain_branch)
     derived = rebuild_economy_derived_balances(conn, replay=replay)
     derived_verify = verify_economy_derived_balances(conn, replay=replay)
     snapshot = create_economy_snapshot(conn, replay=replay)
@@ -815,6 +926,7 @@ def economy_layer_report(conn, *, chain_secret, actor=None, circulation=None):
     supply_equation = economy_supply_equation_report(replay=replay, circulation=circulation)
     return {
         "phase": "1A",
+        "chain_branch": chain_branch,
         "guardrail": "append_only_replay_source_of_truth",
         "bootstrap": {"created_count": bootstrap["created_count"]},
         "policy": replay["policy"],
@@ -828,8 +940,11 @@ def economy_layer_report(conn, *, chain_secret, actor=None, circulation=None):
             "active_supply": replay["active_supply"],
             "fund_supply": replay["fund_supply"],
             "circulating_supply": replay["circulating_supply"],
+            "external_supply": replay["external_supply"],
             "mint_remaining": replay["mint_remaining"],
             "releasable_remaining": replay["releasable_remaining"],
+            "exchange_receivable_principal": replay["exchange_receivable_principal"],
+            "exchange_total_assets": replay["exchange_total_assets"],
         },
         "replay": {
             "height": replay["replay_height"],

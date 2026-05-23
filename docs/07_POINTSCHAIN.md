@@ -34,8 +34,10 @@
 
 ## 模擬鏈錢包身份
 
-- 一般會員初次登入後要先完成 PointsChain 錢包 onboarding，才能領取註冊禮。
-- 可選官方熱錢包、瀏覽器建立的自管冷錢包、匯入冷錢包或多簽 policy 錢包。
+- 一般會員初次登入後要先完成 PointsChain 錢包 onboarding，初始配點與註冊禮才會匯入實際錢包地址。
+- 可選官方熱錢包、瀏覽器建立的自管冷錢包或匯入冷錢包。
+- RC1 不開放一般用戶可轉出的多簽錢包；舊多簽 policy 錢包會顯示為觀察/收款模式，不能轉出、不能支付服務費。
+- 官方財庫多簽是正式功能：官方財庫提案通過與 timelock 結束後，仍需 manager+ / root signer 達到 threshold/weight 才能執行。
 - 自管與匯入冷錢包的私鑰只在瀏覽器內產生或匯入；伺服器只收 public JWK、地址與簽章。
 - root 可查看 mint / burn 系統錢包身份；這些身份只用於模擬供給 bookkeeping，不保存私鑰。
 
@@ -52,12 +54,19 @@ Storage、Games 的實際扣款或獎勵 flow。
 - `points_economy_events` 是 append-only fund event ledger；`points_economy_derived_balances` 是 `derived_cache`，可 rebuild / verify。
 - Root dashboard 顯示的 max supply、reserved locked、minted、burned、fund balance、circulating supply 都來自 replay / derived view。
 - Economic incident 在 Phase 1A 只 append，不自動改 balance。
-- 目前仍不開 user-to-user transfer，也不把 ComfyUI、Trading、Video、Storage、Games 產品流接進 fund wallet。
+- 用戶可用自己的錢包地址送出 wallet-to-wallet 模擬鏈交易；pending 階段會凍結發送方的 Value+Fee、通知雙方與提供 hash，達 20/20 Proved 後才入帳收款方。
+- Wallet-to-wallet 鏈上交易手續費歸入 BURN，不進 official treasury，避免官方 / root 交易形成自收費收益。
+- 站內高頻小額服務費不逐筆收鏈上 fee / 等 Proved；`spend_points()` 先寫 `service_fee_reserve:*`
+  freeze ledger，把付款錢包可用額轉凍結，累積達門檻後自動 append `service_fee_batch_unfreeze`
+  與 `service_fee_batch_debit` 批次結算，最終 debit 進 BURN。自管冷錢包付款時，reserve 本身也必須由私鑰簽名。
+- 「交易管理」顯示近期轉入 / 轉出、官方 Treasury 發點、transaction hash、pending/confirmed 狀態與 Proved 進度；root 可看全站近期交易，但不顯示 username 標籤。
+- ComfyUI、Trading、Video、Storage、Games 產品流仍在逐步 walletize，未完成的 legacy flow 不應再擴張。
 
 硬限制見 [architecture/ECONOMY_LAYER_GUARDRAILS.md](architecture/ECONOMY_LAYER_GUARDRAILS.md)。
 
 ## 自動發放規則
 
+- 初始配點不在 legacy 帳本身份上直接入帳；若尚未建立錢包，bootstrap / 管理者升級只記為 deferred，完成錢包 onboarding 後才匯入實際錢包。
 - 新註冊一般會員的註冊禮會延後到完成錢包 onboarding 後發放，且仍以 ledger idempotency 保證只入帳一次。
 - 會員生日禮金為 500 點，只在會員生日當天成功登入時發放。
 - 生日判定使用 root 設定的伺服器時區；未在生日當天登入則不補發。
