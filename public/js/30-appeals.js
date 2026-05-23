@@ -5,6 +5,91 @@ function appealCountdownText(totalSeconds) {
   return `${h} 小時 ${m} 分 ${s} 秒`;
 }
 
+function violationFineStatusLabel(status) {
+  return {
+    pending: "待繳",
+    overdue: "逾期",
+    paid: "已繳",
+    waived: "已豁免",
+    cancelled: "已取消",
+  }[String(status || "")] || String(status || "-");
+}
+
+function violationFineStatusColor(status) {
+  return {
+    pending: "#ffb74d",
+    overdue: "#ff4f6d",
+    paid: "#4caf50",
+    waived: "#82b1ff",
+    cancelled: "var(--muted)",
+  }[String(status || "")] || "var(--muted)";
+}
+
+function renderUserFineAppealStatus(appeals, fineUuid) {
+  const appeal = (Array.isArray(appeals) ? appeals : []).find((row) => String(row.fine_uuid || "") === String(fineUuid || ""));
+  if (!appeal) return "";
+  const statusText = { pending: "罰單申覆待審", approved: "罰單申覆已核准", rejected: "罰單申覆已駁回" };
+  const color = appeal.status === "approved" ? "#4caf50" : appeal.status === "rejected" ? "#ff4f6d" : "#ffb74d";
+  return `<div style="color:${color};font-size:.74rem;">${statusText[appeal.status] || appeal.status}${appeal.review_note ? ` · ${sanitize(appeal.review_note)}` : ""}</div>`;
+}
+
+function renderUserViolationFines(fines, fineAppeals) {
+  const host = $("appeal-fines");
+  if (!host) return;
+  const rows = Array.isArray(fines) ? fines : [];
+  if (!rows.length) {
+    host.innerHTML = "";
+    return;
+  }
+  host.innerHTML = `
+    <div style="color:var(--muted);font-size:.75rem;margin:.2rem 0;">罰單與解鎖付款</div>
+    ${rows.map((fine) => {
+      const status = String(fine.status || "");
+      const payable = !!fine.is_payable;
+      const labels = Array.isArray(fine.restriction_feature_labels) ? fine.restriction_feature_labels.join("、") : "";
+      const baseAmount = Number(fine.amount_points || 0);
+      const interest = Number(fine.overdue_interest_points || 0);
+      const dueAmount = Number(fine.amount_due_points || baseAmount + interest);
+      return `
+        <div style="border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.65rem;margin-bottom:.55rem;background:rgba(255,255,255,.035);word-break:break-all;">
+          <div style="display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;">
+            <strong>罰單 ${sanitize(String(fine.fine_uuid || "").slice(0, 18))}</strong>
+            <span style="color:${violationFineStatusColor(status)};">${violationFineStatusLabel(status)}</span>
+            <span>${dueAmount.toLocaleString()} 點</span>
+          </div>
+          ${interest > 0 ? `<div style="color:#ff8a80;font-size:.74rem;">本金 ${baseAmount.toLocaleString()} 點 · 逾期附加費 ${interest.toLocaleString()} 點</div>` : ""}
+          <div style="color:#ffcc80;margin-top:.25rem;">原因：${sanitize(fine.reason || "")}</div>
+          <div style="color:var(--muted);font-size:.74rem;">到期：${sanitize(fine.due_at || "-")} · 逾期限制：${sanitize(labels || "-")}</div>
+          ${renderUserFineAppealStatus(fineAppeals, fine.fine_uuid)}
+          ${payable ? `
+            <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.5rem;">
+              <button class="btn btn-primary" type="button" data-fine-pay="${sanitize(fine.fine_uuid)}" data-fine-amount="${dueAmount}">繳納並解鎖</button>
+              <button class="btn" type="button" data-fine-appeal="${sanitize(fine.fine_uuid)}">申覆此罰單</button>
+            </div>` : ""}
+        </div>
+      `;
+    }).join("")}
+  `;
+  host.querySelectorAll("button[data-fine-pay]").forEach((btn) => {
+    btn.addEventListener("click", () => payViolationFine(btn.getAttribute("data-fine-pay"), Number(btn.getAttribute("data-fine-amount") || 0)));
+  });
+  host.querySelectorAll("button[data-fine-appeal]").forEach((btn) => {
+    btn.addEventListener("click", () => appealViolationFine(btn.getAttribute("data-fine-appeal")));
+  });
+}
+
+function renderUserFeatureRestrictions(restrictions) {
+  const host = $("appeal-restrictions");
+  if (!host) return;
+  const rows = Array.isArray(restrictions) ? restrictions : [];
+  if (!rows.length) {
+    host.textContent = "";
+    return;
+  }
+  const labels = rows.map((row) => row.feature_label || row.feature_key || "-").join("、");
+  host.innerHTML = `<span style="color:#ff8a80;">目前因罰單逾期限制：${sanitize(labels)}</span>`;
+}
+
 async function loadUserAppeals() {
   const wrap = $("user-appeal-wrap");
   if (!wrap || !currentUser || !canAccessModule("appeals")) return;
@@ -21,6 +106,8 @@ async function loadUserAppeals() {
   }
 
   userAppeals = Array.isArray(json.appeals) ? json.appeals : [];
+  userViolationFines = Array.isArray(json.violation_fines) ? json.violation_fines : [];
+  userFeatureRestrictions = Array.isArray(json.feature_restrictions) ? json.feature_restrictions : [];
   const allViolations = Array.isArray(json.violations) ? json.violations : [];
   const governanceNotices = allViolations.filter(v => v.is_governance_notice);
   const violations = allViolations.filter(v => !v.is_governance_notice);
@@ -30,14 +117,17 @@ async function loadUserAppeals() {
   if (summaryEl) {
     const appealableCount = activeViolations.filter(v => v.can_appeal).length;
     const currentPoints = parseInt(json.violation_count || 0, 10);
-    if (!activeViolations.length) {
-      summaryEl.textContent = "目前無可申覆違規記錄";
+    const openFineCount = userViolationFines.filter((fine) => fine.is_payable).length;
+    if (!activeViolations.length && !openFineCount) {
+      summaryEl.textContent = "目前無可申覆違規或待處理罰單";
     } else if (appealableCount > 0) {
-      summaryEl.textContent = `目前違規點數 ${currentPoints}，共有 ${activeViolations.length} 筆有效違規，其中 ${appealableCount} 筆仍可逐條申覆`;
+      summaryEl.textContent = `目前違規點數 ${currentPoints}，共有 ${activeViolations.length} 筆有效違規，其中 ${appealableCount} 筆仍可逐條申覆，待處理罰單 ${openFineCount} 筆`;
     } else {
-      summaryEl.textContent = `目前違規點數 ${currentPoints}，共有 ${activeViolations.length} 筆有效違規，目前沒有可提交的新申覆`;
+      summaryEl.textContent = `目前違規點數 ${currentPoints}，共有 ${activeViolations.length} 筆有效違規，待處理罰單 ${openFineCount} 筆`;
     }
   }
+  renderUserFeatureRestrictions(userFeatureRestrictions);
+  renderUserViolationFines(userViolationFines, json.violation_fine_appeals || []);
 
   const listEl = $("appeal-entries");
   if (!listEl) return;
@@ -111,6 +201,84 @@ async function loadUserAppeals() {
   listEl.querySelectorAll("button[data-appeal-submit]").forEach((btn) => {
     btn.addEventListener("click", () => submitAppeal(parseInt(btn.getAttribute("data-appeal-submit"), 10)));
   });
+}
+
+async function payViolationFine(fineUuid, amount) {
+  const fineId = String(fineUuid || "").trim();
+  if (!fineId) {
+    flash($("appeal-msg"), "找不到罰單編號", false);
+    return;
+  }
+  const defaultWallet = typeof readEconomyDefaultSpendWalletAddress === "function" ? readEconomyDefaultSpendWalletAddress() : "";
+  const sourceWallet = prompt("付款錢包地址；可留空使用主錢包，冷錢包會要求本機簽署。", defaultWallet || "");
+  if (sourceWallet === null) return;
+  const requestUuid = typeof economyRequestId === "function"
+    ? economyRequestId("violation_fine")
+    : (crypto?.randomUUID ? crypto.randomUUID() : `violation_fine:${Date.now()}`);
+  let signature = "";
+  try {
+    if (sourceWallet && typeof economyBuildServiceFeeSignature === "function") {
+      signature = await economyBuildServiceFeeSignature({
+        source: sourceWallet,
+        itemKey: "violation_fine",
+        quantity: 1,
+        amount: Number(amount || 0),
+        requestUuid,
+        referenceType: "violation_fine",
+        referenceId: fineId,
+      });
+    }
+  } catch (err) {
+    flash($("appeal-msg"), err?.message || "罰款付款簽署失敗，未送出", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/violation-fines/" + encodeURIComponent(fineId) + "/pay", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({
+      source_wallet_address: String(sourceWallet || "").trim(),
+      request_uuid: requestUuid,
+      signature,
+    }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    flash($("appeal-msg"), json.msg || "罰款已繳納，逾期限制已解除", true);
+    await loadUserAppeals();
+    if (typeof loadEconomyDashboard === "function") loadEconomyDashboard();
+  } else {
+    flash($("appeal-msg"), json.msg || "罰款付款失敗", false);
+  }
+}
+
+async function appealViolationFine(fineUuid) {
+  const fineId = String(fineUuid || "").trim();
+  if (!fineId) return;
+  const reason = prompt("請輸入罰單申覆理由（例如：違規已撤銷、罰單金額錯誤、已完成補正）", "");
+  if (reason === null) return;
+  const clean = String(reason || "").trim();
+  if (clean.length < 8) {
+    flash($("appeal-msg"), "罰單申覆理由至少 8 字", false);
+    return;
+  }
+  if (clean.length > 500) {
+    flash($("appeal-msg"), "罰單申覆理由請控制在 500 字內", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/violation-fines/" + encodeURIComponent(fineId) + "/appeal", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ reason: clean }),
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("appeal-msg"), json.msg || (json.ok ? "罰單申覆已提交" : "罰單申覆提交失敗"), !!json.ok);
+  if (json.ok) await loadUserAppeals();
 }
 
 async function submitAppeal(violationId) {
