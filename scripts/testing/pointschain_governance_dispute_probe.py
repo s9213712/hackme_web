@@ -203,6 +203,13 @@ def main() -> int:
                 root_governance_hint or admin_or_user_prompt,
                 json.dumps({"username": args.username, "message": transaction_msg, "dialogs": dialogs}, ensure_ascii=False),
             )
+            if args.username != "root":
+                first_dialog_message = dialogs[0]["message"] if dialogs else ""
+                check(
+                    "transaction_dispute_prompt_discloses_statement_minimum",
+                    "至少 12 字" in first_dialog_message,
+                    first_dialog_message,
+                )
 
         result["ok"] = all(item["ok"] for item in result["checks"])
         browser.close()

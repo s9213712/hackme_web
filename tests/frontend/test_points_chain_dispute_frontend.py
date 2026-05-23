@@ -15,6 +15,11 @@ def test_transaction_dispute_frontend_uses_account_bound_official_hot_proof():
     assert "使用帳號持有狀態回覆，不要求私鑰" in economy_js
     assert "root 帳號不使用匿名地址疑義流程" in economy_js
     assert "官方錢包或官方地址事故請改走官方治理" in economy_js
+    assert "ECONOMY_ADDRESS_DISPUTE_MIN_STATEMENT_CHARS = 12" in economy_js
+    assert "function economyPromptAddressDisputeStatement" in economy_js
+    assert "疑義交易說明太短" in economy_js
+    assert "To 地址回覆太短" in economy_js
+    assert "至少 ${ECONOMY_ADDRESS_DISPUTE_MIN_STATEMENT_CHARS} 字" in economy_js
     assert "等待 From 地址本機簽署疑義交易" in economy_js
     assert "createEconomyTransactionDispute(btn.dataset.disputeTx || \"\")" not in economy_js
 

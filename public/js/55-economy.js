@@ -26,6 +26,7 @@ const ECONOMY_PAGE_STORAGE_KEY = "hackme_web:economy:active_page";
 const ECONOMY_SPEND_WALLET_STORAGE_KEY = "hackme_web:economy:default_spend_wallet";
 const ECONOMY_COLD_BACKUP_PREFIX = "pcw1.p256";
 const ECONOMY_GOV_RATE_UNIT_SUFFIX = "b" + "ps";
+const ECONOMY_ADDRESS_DISPUTE_MIN_STATEMENT_CHARS = 12;
 
 function economyPageStorageKey() {
   return typeof accountScopedStorageKey === "function" ? accountScopedStorageKey(ECONOMY_PAGE_STORAGE_KEY) : ECONOMY_PAGE_STORAGE_KEY;
@@ -210,6 +211,24 @@ function economyNotifySuccess(text, { msgFn = economySetMsg, label = "PointsChai
     showAppToast(`${label}：${message}`, true, { duration: 4200 });
   }
   return message;
+}
+
+function economyAddressDisputeStatementLength(text) {
+  return Array.from(String(text || "").trim()).length;
+}
+
+function economyPromptAddressDisputeStatement({ promptText, cancelText, shortText, msgFn }) {
+  while (true) {
+    const statement = prompt(promptText, "");
+    if (statement === null) {
+      msgFn(cancelText, false);
+      return null;
+    }
+    const normalized = String(statement || "").trim();
+    const length = economyAddressDisputeStatementLength(normalized);
+    if (length >= ECONOMY_ADDRESS_DISPUTE_MIN_STATEMENT_CHARS) return normalized;
+    msgFn(`${shortText}（目前 ${length}/${ECONOMY_ADDRESS_DISPUTE_MIN_STATEMENT_CHARS} 字），請補充原因與佐證後再送出。`, false);
+  }
 }
 
 function economyWarningSuffix(json) {
@@ -1371,11 +1390,13 @@ async function createEconomyTransactionDispute(input = {}) {
     economyTransactionMsg("疑義交易需要 From、To 與交易點數才能建立地址簽章。", false);
     return;
   }
-  const statement = prompt("請描述疑義交易原因、你主張的事實與佐證。此內容會提供 root 程序審查；請勿填入帳號、暱稱、email。");
-  if (statement === null) {
-    economyTransactionMsg("已取消疑義交易申報。", false);
-    return;
-  }
+  const statement = economyPromptAddressDisputeStatement({
+    promptText: `請描述疑義交易原因、你主張的事實與佐證，至少 ${ECONOMY_ADDRESS_DISPUTE_MIN_STATEMENT_CHARS} 字。此內容會提供 root 程序審查；請勿填入帳號、暱稱、email。`,
+    cancelText: "已取消疑義交易申報。",
+    shortText: "疑義交易說明太短",
+    msgFn: economyTransactionMsg,
+  });
+  if (statement === null) return;
   const lossCause = prompt("損失原因：private_key_leak / user_phishing / protocol_fault / exchange_bug / unknown", "private_key_leak") || "unknown";
   const evidence = prompt("證據 refs，每行一個 tx hash、截圖編號或案件號（可留空）", "") || "";
   try {
@@ -1531,11 +1552,13 @@ async function replyEconomyTransactionDispute(input = {}) {
     economyGovernanceMsg("缺少疑義交易回覆所需的地址或交易資料。", false);
     return;
   }
-  const statement = prompt("To 地址持有人回覆。只能寫地址層證據與事實，請勿填入 user id、用戶名、暱稱、email 或帳號資訊。");
-  if (statement === null) {
-    economyGovernanceMsg("已取消 To 地址回覆。", false);
-    return;
-  }
+  const statement = economyPromptAddressDisputeStatement({
+    promptText: `To 地址持有人回覆，至少 ${ECONOMY_ADDRESS_DISPUTE_MIN_STATEMENT_CHARS} 字。只能寫地址層證據與事實，請勿填入 user id、用戶名、暱稱、email 或帳號資訊。`,
+    cancelText: "已取消 To 地址回覆。",
+    shortText: "To 地址回覆太短",
+    msgFn: economyGovernanceMsg,
+  });
+  if (statement === null) return;
   const evidence = prompt("To 地址證據 refs，每行一個 tx hash、截圖編號或案件號（可留空）", "") || "";
   try {
     const toWallet = economyWalletByAddress(toAddress);
