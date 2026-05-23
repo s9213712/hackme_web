@@ -4,7 +4,9 @@
 
 - Release: RC1.1-A Operational Integrity Drills
 - Branch: `04b.BLOCKCHAIN_RC1.1`
-- Closure commit: `b7e7055`
+- Closure reference: branch head `04b.BLOCKCHAIN_RC1.1` after the signoff
+  closure commit series. Use `git log -1` on the pushed branch for the exact
+  current SHA.
 - Status: PASS / CLOSED
 
 ## Scope
@@ -41,6 +43,8 @@ Artifact manifest:
 
 - status: PASS
 - commit recorded by manifest: `b7e7055`
+- note: the manifest was generated before the signoff-only closure commit; this
+  is expected because artifacts are not committed as source
 - secret scan: PASS
 - artifact count: 4
 
