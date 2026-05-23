@@ -2,6 +2,13 @@ from datetime import datetime, timedelta
 from flask import request
 
 from services.governance.sanction_notices import ensure_admin_sanction_appeal_schema, restore_admin_sanction_context
+from services.governance.violation_fines import (
+    active_feature_restrictions,
+    list_violation_fine_appeals,
+    list_violation_fines,
+    mark_violation_fine_paid,
+    submit_violation_fine_appeal,
+)
 
 
 def register_appeal_routes(app, deps):
@@ -76,6 +83,10 @@ def register_appeal_routes(app, deps):
             "created_at": r["created_at"],
             "is_governance_notice": True,
         }
+
+    def _fine_charge_uuid(fine_uuid, actor_id):
+        clean = str(fine_uuid or "").replace(":", "_")
+        return f"violation_fine:{int(actor_id)}:{clean}"
 
     @app.route("/api/appeals", methods=["GET"])
     @require_csrf_safe
@@ -201,6 +212,11 @@ def register_appeal_routes(app, deps):
                 item["appeal"] = _serialize_appeal_row(appeal) if appeal else None
                 violations.append(item)
 
+            fines, _fine_total = list_violation_fines(conn, user_id=user_id, limit=50)
+            fine_appeals, _fine_appeal_total = list_violation_fine_appeals(conn, user_id=user_id, limit=50)
+            feature_restrictions = active_feature_restrictions(conn, user_id=user_id)
+            conn.commit()
+
             return json_resp({
                 "ok": True,
                 "latest_violation": _serialize_violation_row(latest_violation),
@@ -209,6 +225,9 @@ def register_appeal_routes(app, deps):
                 "violation_count": user_row["violation_count"] if user_row else 0,
                 "appeals": [_serialize_appeal_row(r) for r in rows],
                 "violations": violations,
+                "violation_fines": fines,
+                "violation_fine_appeals": fine_appeals,
+                "feature_restrictions": feature_restrictions,
             })
         finally:
             conn.close()
@@ -314,6 +333,97 @@ def register_appeal_routes(app, deps):
             return json_resp({"ok":True,"msg":"申覆已提交，等待超級管理員審核"})
         finally:
             conn.close()
+
+    @app.route("/api/violation-fines/<path:fine_uuid>/appeal", methods=["POST"])
+    @require_csrf
+    def submit_violation_fine_appeal_route(fine_uuid):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if actor["username"] == "root":
+            return json_resp({"ok":False,"msg":"最高管理者無需罰單申覆"}), 403
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"請求 JSON 格式錯誤"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"請求內容格式錯誤"}), 400
+        reason = normalize_text(data.get("reason"))
+        conn = get_db()
+        try:
+            appeal, created = submit_violation_fine_appeal(
+                conn,
+                fine_uuid=fine_uuid,
+                user_id=actor["id"],
+                username=actor["username"],
+                reason=reason,
+            )
+            conn.commit()
+            audit("VIOLATION_FINE_APPEAL_SUBMITTED", get_client_ip(), user=actor["username"], detail=f"fine_uuid={fine_uuid}")
+            return json_resp({"ok":True,"msg":"罰單申覆已提交","appeal":appeal,"created":created})
+        except ValueError as exc:
+            conn.rollback()
+            return json_resp({"ok":False,"msg":str(exc)}), 400
+        finally:
+            conn.close()
+
+    @app.route("/api/violation-fines/<path:fine_uuid>/pay", methods=["POST"])
+    @require_csrf
+    def pay_violation_fine_route(fine_uuid):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if actor["username"] == "root":
+            return json_resp({"ok":False,"msg":"root 不需繳罰款"}), 403
+        if not points_service or not hasattr(points_service, "pay_violation_fine"):
+            return json_resp({"ok":False,"msg":"積分鏈付款功能未啟用"}), 503
+        try:
+            data = request.get_json(force=True) or {}
+        except Exception:
+            return json_resp({"ok":False,"msg":"請求 JSON 格式錯誤"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"請求內容格式錯誤"}), 400
+        conn = get_db()
+        try:
+            fines, _total = list_violation_fines(conn, user_id=actor["id"], limit=200)
+            fine = next((item for item in fines if item["fine_uuid"] == fine_uuid), None)
+            if not fine:
+                return json_resp({"ok":False,"msg":"找不到罰單"}), 404
+            if not fine.get("is_payable"):
+                return json_resp({"ok":False,"msg":"罰單已結案，不能繳款"}), 409
+            conn.commit()
+        finally:
+            conn.close()
+        try:
+            request_uuid = str(data.get("request_uuid") or data.get("charge_uuid") or "").strip() or _fine_charge_uuid(fine_uuid, actor["id"])
+            payment = points_service.pay_violation_fine(
+                user_id=actor["id"],
+                fine_uuid=fine_uuid,
+                amount_points=fine.get("amount_due_points") or fine["amount_points"],
+                source_wallet_address=data.get("source_wallet_address") or "",
+                request_uuid=request_uuid,
+                signature=data.get("signature") or data.get("wallet_signature") or "",
+                actor=actor,
+                metadata={"fine_reason": fine.get("reason"), "policy_key": fine.get("policy_key")},
+            )
+            conn = get_db()
+            try:
+                updated = mark_violation_fine_paid(
+                    conn,
+                    fine_uuid=fine_uuid,
+                    payment_ledger_uuid=(payment.get("ledger") or {}).get("ledger_uuid") or "",
+                    payment_charge_uuid=payment.get("charge_uuid") or request_uuid,
+                    payment_source_wallet_address=data.get("source_wallet_address") or "",
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            audit("VIOLATION_FINE_PAID", get_client_ip(), user=actor["username"], detail=f"fine_uuid={fine_uuid} amount={fine.get('amount_due_points') or fine['amount_points']}")
+            return json_resp({"ok":True,"msg":"罰款已繳清，相關限制已解除","fine":updated,"payment":payment})
+        except PermissionError as exc:
+            return json_resp({"ok":False,"msg":str(exc) or "付款簽章失敗"}), 403
+        except Exception as exc:
+            return json_resp({"ok":False,"msg":str(exc) or "罰款付款失敗"}), 400
 
     @app.route("/api/admin/appeals", methods=["GET"])
     @require_csrf_safe

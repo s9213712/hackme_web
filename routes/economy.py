@@ -19,6 +19,7 @@ from services.points_chain import (
     wallet_onboarding_status,
 )
 from services.governance.sanction_notices import record_admin_sanction_notice
+from services.governance.violation_fines import assert_user_feature_allowed
 
 
 def register_economy_routes(app, deps):
@@ -116,6 +117,20 @@ def register_economy_routes(app, deps):
             status = 409
             return json_resp({"ok": False, "msg": "點數不足，無法扣除；本次交易未寫入帳本", "code": "insufficient_balance"}), status
         return json_resp({"ok": False, "msg": msg}), status
+
+    def restriction_guard(actor, feature_key):
+        if not get_db or not actor or actor_value(actor, "username") == "root":
+            return None
+        conn = get_db()
+        try:
+            allowed, msg, restrictions = assert_user_feature_allowed(conn, user_id=actor_value(actor, "id"), feature_key=feature_key)
+            if allowed:
+                conn.commit()
+                return None
+            conn.commit()
+            return json_resp({"ok": False, "msg": msg, "code": "feature_restricted_by_violation_fine", "restrictions": restrictions}), 423
+        finally:
+            conn.close()
 
     def setting_bool(key, *, default=False):
         try:
@@ -512,6 +527,9 @@ def register_economy_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
+        restricted = restriction_guard(actor, "wallet_transfer")
+        if restricted:
+            return restricted
         if not points_chain_enabled():
             return points_chain_disabled_response()
         data, err = parse_json_body()
@@ -985,6 +1003,9 @@ def register_economy_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
+        restricted = restriction_guard(actor, "service_spend")
+        if restricted:
+            return restricted
         data, err = parse_json_body()
         if err:
             return err

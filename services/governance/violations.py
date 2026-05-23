@@ -3,6 +3,8 @@ import json
 import re
 from datetime import datetime, timedelta
 
+from services.governance.violation_fines import maybe_create_three_strike_fine
+
 MAX_VIOLATIONS = {"manager": 3, "user": 5}
 NO_AUTO_PENALTY_USERS = {"admin"}
 CHAT_WARNING_CATEGORY_WORDS = {
@@ -254,6 +256,39 @@ def add_violation(user_id, username, role, points=1, reason="手動計點", trig
 
     conn = _STATE["get_db"]()
     try:
+        fine_created = None
+        if points > 0:
+            try:
+                fine_created, _created = maybe_create_three_strike_fine(
+                    conn,
+                    user_id=user_id,
+                    username=username,
+                    role=role,
+                    violation_id=violation_id,
+                    violation_count=new_count,
+                    reason=reason,
+                    actor_username=actor_username,
+                )
+                if fine_created and _created:
+                    conn.commit()
+                    _STATE["audit"](
+                        "VIOLATION_FINE_CREATED",
+                        _STATE["get_client_ip"](),
+                        user=actor_username or "system",
+                        detail=f"user_id={user_id} fine_uuid={fine_created['fine_uuid']} amount={fine_created['amount_points']}",
+                    )
+            except Exception as exc:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                _STATE["audit"](
+                    "VIOLATION_FINE_CREATE_FAILED",
+                    _STATE["get_client_ip"](),
+                    user=actor_username or "system",
+                    success=False,
+                    detail=f"user_id={user_id} violation_id={violation_id} error={exc}",
+                )
         threshold = MAX_VIOLATIONS.get(role, 5)
         if username in NO_AUTO_PENALTY_USERS:
             _STATE["audit"]("VIOLATION_TEST_ACCOUNT_NO_PENALTY", _STATE["get_client_ip"](), user="system",

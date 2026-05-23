@@ -78,6 +78,7 @@ from services.media.videos import (
     update_owner_video,
 )
 from services.system.notifications import create_notification
+from services.governance.violation_fines import assert_user_feature_allowed
 from services.users.friends import follower_user_ids
 
 
@@ -131,6 +132,14 @@ def register_video_routes(app, deps):
         if "insufficient balance" in message:
             return json_resp({"ok": False, "msg": "積分不足，無法投幣", "error": "insufficient_balance"}), 409
         return json_resp({"ok": False, "msg": message, "error": exc.__class__.__name__}), 400
+
+    def _video_publish_restriction_response(conn, actor):
+        if actor and actor["username"] == "root":
+            return None
+        allowed, msg, restrictions = assert_user_feature_allowed(conn, user_id=actor["id"], feature_key="video_publish")
+        if allowed:
+            return None
+        return json_resp({"ok": False, "msg": msg, "error": "feature_restricted_by_violation_fine", "restrictions": restrictions}), 423
 
     def _svg_placeholder_response(message, *, label="封面不可顯示"):
         safe_label = (label or "封面不可顯示").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1466,6 +1475,10 @@ def register_video_routes(app, deps):
             return sensitive
         conn = get_db()
         try:
+            restricted = _video_publish_restriction_response(conn, actor)
+            if restricted:
+                conn.commit()
+                return restricted
             cover_result = None
             cover_storage_file = None
             if cover_upload and cover_upload.filename:
@@ -1583,6 +1596,10 @@ def register_video_routes(app, deps):
         upload_id = secrets.token_hex(10)
         upload_filename = safe_public_filename(uploaded.filename)
         try:
+            restricted = _video_publish_restriction_response(conn, actor)
+            if restricted:
+                conn.commit()
+                return restricted
             upload_job = _sync_video_upload_platform_job(
                 conn,
                 upload_id=upload_id,

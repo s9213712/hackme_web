@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 from flask import Response, request
 
 from services.server.runtime import default_runtime_root
+from services.governance.violation_fines import assert_user_feature_allowed
 from services.trading.btc_bridge import (
     DEFAULT_BTC_TRADE_BRANCH,
     DEFAULT_BTC_TRADE_REPO_URL,
@@ -81,6 +82,7 @@ def register_trading_routes(app, deps):
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
     get_system_settings = deps.get("get_system_settings", lambda: {})
     get_runtime_server_mode = deps.get("get_runtime_server_mode", lambda: "production")
+    get_db = deps.get("get_db")
     background_queue_kick_lock = threading.Lock()
     background_queue_kick_active = False
 
@@ -147,6 +149,19 @@ def register_trading_routes(app, deps):
         if role_rank(role) < role_rank("manager"):
             return None, json_resp({"ok": False, "msg": "需要管理員權限"}, 403)
         return actor, None
+
+    def trading_restriction_response(actor, feature_key="trading_order"):
+        if not get_db or not actor or actor_value(actor, "username") == "root":
+            return None
+        conn = get_db()
+        try:
+            allowed, msg, restrictions = assert_user_feature_allowed(conn, user_id=actor_value(actor, "id"), feature_key=feature_key)
+            conn.commit()
+            if allowed:
+                return None
+            return json_resp({"ok": False, "msg": msg, "code": "feature_restricted_by_violation_fine", "restrictions": restrictions}), 423
+        finally:
+            conn.close()
 
     def parse_json_body():
         try:
@@ -1355,6 +1370,9 @@ def register_trading_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
+        restricted = trading_restriction_response(actor)
+        if restricted:
+            return restricted
         data, err = parse_json_body()
         if err:
             return err
@@ -1732,6 +1750,9 @@ def register_trading_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
+        restricted = trading_restriction_response(actor)
+        if restricted:
+            return restricted
         data, err = parse_json_body()
         if err:
             return err

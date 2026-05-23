@@ -46,6 +46,7 @@ from services.storage.cloud_drive import (
 )
 from services.media.previews import build_preview_metadata, preview_category
 from services.system.notifications import create_notification_if_enabled
+from services.governance.violation_fines import assert_user_feature_allowed
 from services.storage.remote_downloads import (
     DownloadedFile,
     RemoteDownloadError,
@@ -178,6 +179,14 @@ def register_file_routes(app, deps):
 
     def _is_root(actor):
         return actor and _actor_value(actor, "username") == "root"
+
+    def _upload_restriction_response(conn, actor):
+        if _is_root(actor):
+            return None
+        allowed, msg, restrictions = assert_user_feature_allowed(conn, user_id=_actor_value(actor, "id"), feature_key="cloud_upload")
+        if allowed:
+            return None
+        return json_resp({"ok": False, "msg": msg, "code": "feature_restricted_by_violation_fine", "restrictions": restrictions}), 423
 
     def _is_manager(actor):
         role = "super_admin" if actor and _actor_value(actor, "username") == "root" else _actor_value(actor, "role", "user")
@@ -2434,6 +2443,10 @@ def register_file_routes(app, deps):
             ensure_cloud_drive_attachment_schema(conn)
             ensure_storage_album_schema(conn)
             _ensure_resumable_upload_schema(conn)
+            restricted = _upload_restriction_response(conn, actor)
+            if restricted:
+                conn.commit()
+                return restricted
             rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
             capacity_error = _resumable_upload_capacity_error(conn, actor, total_bytes=total_bytes, member_rule=rule)
             if capacity_error:
@@ -2835,6 +2848,10 @@ def register_file_routes(app, deps):
                 return json_resp({"ok": True, "files": files, "storage": summary})
             if "file" not in request.files:
                 return json_resp({"ok": False, "msg": "缺少 file"}), 400
+            restricted = _upload_restriction_response(conn, actor)
+            if restricted:
+                conn.commit()
+                return restricted
             upload_policy_error = _apply_upload_transfer_policy(actor, request.files["file"])
             if upload_policy_error:
                 return upload_policy_error
