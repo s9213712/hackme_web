@@ -33,6 +33,7 @@ financial surface.
   - compiles new ops scripts
   - runs RC1.1 operational tests and snapshot tests
   - runs the isolated restore drill and emits a JSON gate artifact
+  - generates the RC1.1-A artifact manifest and runs the artifact secret scan
 
 ## Explicitly Not Included
 
@@ -56,6 +57,8 @@ RC1.1-A is acceptable when:
 - `scripts/ops/rc1_restore_drill.py` produces `ok=true`
 - `scripts/ops/export_chain_anchor.py` produces a signed checkpoint
 - `scripts/qa/points_chain_rc1_1_gate.py` returns PASS
+- `scripts/ops/rc1_1_artifact_manifest.py` reports no missing artifacts or
+  forbidden secret patterns
 
 Generated artifacts are operational output and are not the source of truth.
 They may be archived externally, but normal commits should not bundle local

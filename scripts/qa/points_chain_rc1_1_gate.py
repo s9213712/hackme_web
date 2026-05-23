@@ -90,6 +90,18 @@ def main() -> int:
                 timeout=240,
             )
         )
+    steps.append(
+        run_step(
+            "artifact_manifest_and_secret_scan",
+            [
+                sys.executable,
+                "scripts/ops/rc1_1_artifact_manifest.py",
+                "--out",
+                str(ROOT / "artifacts" / "qa" / "rc1_1_a_artifact_manifest.json"),
+            ],
+            timeout=120,
+        )
+    )
     ok = all(step["ok"] for step in steps)
     payload = {
         "release_candidate": "PointsChain RC1.1 Operational Integrity",
