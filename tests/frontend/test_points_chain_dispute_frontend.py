@@ -13,7 +13,8 @@ def test_transaction_dispute_frontend_uses_account_bound_official_hot_proof():
     assert "account_bound_proof: !!proof.account_bound_proof" in economy_js
     assert "使用帳號持有狀態建立疑義，不要求私鑰" in economy_js
     assert "使用帳號持有狀態回覆，不要求私鑰" in economy_js
-    assert "root 不能代替 From 地址持有人提出匿名疑義" not in economy_js
+    assert "root 帳號不使用匿名地址疑義流程" in economy_js
+    assert "官方錢包或官方地址事故請改走官方治理" in economy_js
     assert "等待 From 地址本機簽署疑義交易" in economy_js
     assert "createEconomyTransactionDispute(btn.dataset.disputeTx || \"\")" not in economy_js
 

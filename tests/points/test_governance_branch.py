@@ -1526,6 +1526,74 @@ def test_account_bound_official_hot_wallet_can_open_and_reply_to_dispute_without
     _assert_address_dispute_payload_is_deidentified(replied)
 
 
+def test_root_uses_governance_not_anonymous_address_disputes(tmp_path):
+    service = _service(tmp_path, user_count=10)
+    root = _actor(1, "root", "super_admin")
+    victim = _actor(3, "user3", "user", effective_level="trusted")
+    attacker = _actor(4, "user4", "user", effective_level="trusted")
+    victim_wallet = _official_hot_wallet(service, 3)
+    attacker_wallet = _official_hot_wallet(service, 4)
+    grant = _official_treasury_grant_via_governance(
+        service,
+        destination_wallet_address=victim_wallet["address"],
+        amount=100,
+        request_uuid="root-dispute-block-victim-grant",
+    )
+    _force_request_proved(service, grant["transaction_hash"])
+    service.explorer_transaction(grant["transaction_hash"])
+    transfer = service.submit_wallet_transaction(
+        actor=victim,
+        source_wallet_address=victim_wallet["address"],
+        destination_wallet_address=attacker_wallet["address"],
+        amount_points=25,
+        fee_points=1,
+        request_uuid="root-dispute-block-transfer",
+    )
+    _force_request_proved(service, transfer["transaction_hash"])
+    tx = service.explorer_transaction(transfer["transaction_hash"])["transaction"]
+
+    with pytest.raises(PermissionError, match="root 帳號不使用匿名地址疑義流程"):
+        service.create_transaction_dispute(
+            actor=root,
+            tx_hash=transfer["transaction_hash"],
+            statement="Root should handle official incidents through governance instead.",
+            victim_wallet_address=victim_wallet["address"],
+            claimed_amount_points=25,
+            loss_cause="unknown",
+            evidence=["root-dispute-block-open"],
+            signature_nonce="root-dispute-block-open",
+            from_wallet_address=victim_wallet["address"],
+            to_wallet_address=attacker_wallet["address"],
+            chain_branch=tx["chain_branch"],
+            account_bound_proof=True,
+        )
+
+    dispute = service.create_transaction_dispute(
+        actor=victim,
+        tx_hash=transfer["transaction_hash"],
+        statement="Victim uses normal account-bound address proof for this dispute.",
+        victim_wallet_address=victim_wallet["address"],
+        claimed_amount_points=25,
+        loss_cause="unknown",
+        evidence=["root-dispute-block-victim-open"],
+        signature_nonce="root-dispute-block-victim-open",
+        from_wallet_address=victim_wallet["address"],
+        to_wallet_address=attacker_wallet["address"],
+        chain_branch=tx["chain_branch"],
+        account_bound_proof=True,
+    )["dispute"]
+
+    with pytest.raises(PermissionError, match="root 帳號不使用匿名地址疑義回覆流程"):
+        service.reply_transaction_dispute(
+            actor=root,
+            dispute_uuid=dispute["dispute_uuid"],
+            statement="Root should not reply through anonymous address dispute either.",
+            evidence=["root-dispute-block-reply"],
+            signature_nonce="root-dispute-block-reply",
+            account_bound_proof=True,
+        )
+
+
 def test_address_dispute_reply_requires_to_signature_and_hides_identity_terms(tmp_path):
     service = _service(tmp_path, user_count=10)
     victim = _actor(3, "user3", "user", effective_level="trusted")

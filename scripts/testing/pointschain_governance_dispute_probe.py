@@ -46,6 +46,74 @@ def main() -> int:
         page.wait_for_selector("#tab-economy-governance", state="visible", timeout=10000)
         check("governance_tab_visible", True)
 
+        page.click("#tab-economy-balance")
+        page.wait_for_selector("#economy-balance-page.active", timeout=10000)
+        page.wait_for_selector("#economy-wallet-onboarding-card", state="attached", timeout=10000)
+        page.wait_for_timeout(800)
+        check("wallet_onboarding_card_present", page.locator("#economy-wallet-onboarding-card").count() == 1)
+        wallet_card_visible = page.locator("#economy-wallet-onboarding-card").is_visible()
+        if wallet_card_visible:
+            wallet_action_count = page.locator("#economy-wallet-identity-list [data-wallet-transfer-to]").count()
+            if wallet_action_count:
+                page.locator("#economy-wallet-identity-list [data-wallet-transfer-to]").first.click()
+                page.wait_for_selector("#economy-wallet-transfer-card", state="visible", timeout=5000)
+                page.fill("#economy-transfer-amount", "0")
+                page.click("#economy-transfer-submit-btn")
+                page.wait_for_timeout(150)
+                transfer_msg = page.locator("#economy-transfer-msg").inner_text()
+                transfer_msg_class = page.locator("#economy-transfer-msg").get_attribute("class") or ""
+                check(
+                    "wallet_transfer_invalid_input_visible_feedback",
+                    "show" in transfer_msg_class and "請確認 From、To、Value" in transfer_msg,
+                    json.dumps({"message": transfer_msg, "class": transfer_msg_class}, ensure_ascii=False),
+                )
+            else:
+                check("wallet_transfer_action_skipped_no_wallet", True, "no wallet transfer action in this account")
+
+            page.evaluate("economyTransferMsg('front-end probe transfer signing failure visible', false)")
+            synthetic_transfer_msg = page.locator("#economy-transfer-msg").inner_text()
+            synthetic_transfer_class = page.locator("#economy-transfer-msg").get_attribute("class") or ""
+            check(
+                "wallet_transfer_error_message_layer_visible",
+                "show" in synthetic_transfer_class and "err" in synthetic_transfer_class and "transfer signing failure" in synthetic_transfer_msg,
+                json.dumps({"message": synthetic_transfer_msg, "class": synthetic_transfer_class}, ensure_ascii=False),
+            )
+
+            page.eval_on_selector("#economy-wallet-create-card", "el => el.open = true")
+            page.click("#economy-wallet-create-cold-btn")
+            page.wait_for_function(
+                "() => !!document.querySelector('#economy-wallet-generated-address')?.value",
+                timeout=10000,
+            )
+            cold_create_msg = page.locator("#economy-wallet-onboarding-msg").inner_text()
+            cold_create_class = page.locator("#economy-wallet-onboarding-msg").get_attribute("class") or ""
+            check(
+                "cold_wallet_create_has_visible_feedback",
+                "show" in cold_create_class and "冷錢包" in cold_create_msg,
+                json.dumps({"message": cold_create_msg, "class": cold_create_class}, ensure_ascii=False),
+            )
+            page.click("#economy-wallet-use-generated-cold-btn")
+            page.wait_for_timeout(300)
+            cold_select_msg = page.locator("#economy-wallet-onboarding-msg").inner_text()
+            cold_select_class = page.locator("#economy-wallet-onboarding-msg").get_attribute("class") or ""
+            check(
+                "cold_wallet_use_generated_has_visible_feedback",
+                "show" in cold_select_class and "已選用" in cold_select_msg,
+                json.dumps({"message": cold_select_msg, "class": cold_select_class}, ensure_ascii=False),
+            )
+            page.locator("#economy-wallet-private-key-confirmed").set_checked(False)
+            page.click("#economy-wallet-confirm-cold-btn")
+            page.wait_for_timeout(150)
+            cold_confirm_msg = page.locator("#economy-wallet-onboarding-msg").inner_text()
+            cold_confirm_class = page.locator("#economy-wallet-onboarding-msg").get_attribute("class") or ""
+            check(
+                "cold_wallet_confirm_without_ack_visible_error",
+                "show" in cold_confirm_class and "err" in cold_confirm_class and "請先確認已保存備份碼" in cold_confirm_msg,
+                json.dumps({"message": cold_confirm_msg, "class": cold_confirm_class}, ensure_ascii=False),
+            )
+        else:
+            check("wallet_frontend_actions_skipped_for_hidden_wallet_card", True, "wallet card hidden for this role")
+
         page.click("#tab-economy-governance")
         page.wait_for_selector("#economy-governance-page.active", timeout=10000)
         page.wait_for_timeout(800)
@@ -107,14 +175,33 @@ def main() -> int:
         dispute_buttons = page.locator("#economy-transactions-list [data-dispute-tx]").count()
         check("transaction_dispute_button_rendered", dispute_buttons >= 1, f"count={dispute_buttons}")
         if dispute_buttons:
-            page.on("dialog", lambda dialog: dialog.dismiss())
-            page.locator("#economy-transactions-list [data-dispute-tx]").first.click()
+            dialogs = []
+            page.on("dialog", lambda dialog: (dialogs.append({"type": dialog.type, "message": dialog.message}), dialog.dismiss()))
+            first_dispute = page.locator("#economy-transactions-list [data-dispute-tx]").first
+            dataset = first_dispute.evaluate(
+                "el => ({tx: el.dataset.disputeTx || '', from: el.dataset.disputeFrom || '', to: el.dataset.disputeTo || '', amount: el.dataset.disputeAmount || '', branch: el.dataset.disputeBranch || '', bound: el.dataset.disputeBound || ''})"
+            )
+            check("transaction_dispute_dataset_complete", bool(dataset["tx"] and dataset["from"] and dataset["to"] and dataset["amount"]), json.dumps(dataset, ensure_ascii=False))
+            first_dispute.click()
             page.wait_for_timeout(250)
             transaction_msg = page.locator("#economy-transactions-msg").inner_text()
+            msg_class = page.locator("#economy-transactions-msg").get_attribute("class") or ""
+            root_governance_hint = args.username == "root" and "root 帳號不使用匿名地址疑義流程" in transaction_msg
+            admin_or_user_prompt = args.username != "root" and bool(dialogs)
             check(
                 "transaction_dispute_click_has_feedback",
-                "疑義交易" in transaction_msg or "root 不能代替" in transaction_msg,
-                transaction_msg,
+                "疑義交易" in transaction_msg or "匿名地址疑義" in transaction_msg or bool(dialogs),
+                json.dumps({"message": transaction_msg, "class": msg_class, "dialogs": dialogs}, ensure_ascii=False),
+            )
+            check(
+                "transaction_dispute_feedback_visible",
+                bool(dialogs) or "show" in msg_class,
+                json.dumps({"message": transaction_msg, "class": msg_class, "dialogs": dialogs}, ensure_ascii=False),
+            )
+            check(
+                "transaction_dispute_expected_prompt_or_root_hint",
+                root_governance_hint or admin_or_user_prompt,
+                json.dumps({"username": args.username, "message": transaction_msg, "dialogs": dialogs}, ensure_ascii=False),
             )
 
         result["ok"] = all(item["ok"] for item in result["checks"])

@@ -135,6 +135,13 @@ function economyInlineMsg(targetId, text, ok = true, fallbackLabel = "PointsChai
     return;
   }
   el.textContent = text || "";
+  el.classList.toggle("show", Boolean(text));
+  el.classList.toggle("ok", Boolean(text) && Boolean(ok));
+  el.classList.toggle("err", Boolean(text) && !ok);
+  el.classList.remove("info");
+  el.setAttribute("role", ok ? "status" : "alert");
+  el.setAttribute("aria-live", ok ? "polite" : "assertive");
+  el.setAttribute("aria-atomic", "true");
   el.style.color = ok ? "#4caf50" : "#ff4f6d";
   scheduleInlineMessageClear(el, text, ok);
 }
@@ -1315,7 +1322,7 @@ function renderEconomyTransactions(payload = {}) {
             data-dispute-tx="${sanitize(tx.transaction_hash || tx.tx_group_hash || "")}"
             data-dispute-from="${sanitize(tx.source_wallet_address || tx.wallet_flow?.source_wallet_address || "")}"
             data-dispute-to="${sanitize(tx.destination_wallet_address || tx.wallet_flow?.destination_wallet_address || "")}"
-            data-dispute-amount="${sanitize(tx.amount_points || tx.amount || 0)}"
+            data-dispute-amount="${sanitize(String(tx.amount_points || tx.amount || 0))}"
             data-dispute-branch="${sanitize(tx.chain_branch || tx.wallet_flow?.chain_branch || economyCurrentChainBranch || "main")}">疑義交易</button>
         </div>
       </div>
@@ -1346,6 +1353,14 @@ async function createEconomyTransactionDispute(input = {}) {
   economyTransactionMsg(hash ? `開始申報疑義交易 ${shortEconomyWalletAddress(hash)}；下一步會檢查 From 地址持有證明。` : "開始申報疑義交易。");
   if (!hash) {
     economyTransactionMsg("找不到交易 hash，無法申報疑義。", false);
+    return;
+  }
+  if (currentUser === "root") {
+    economyNotifyFailure(new Error("root 帳號不使用匿名地址疑義流程；官方錢包或官方地址事故請改走官方治理、內部帳務治理或緊急安全治理。"), {
+      msgFn: economyTransactionMsg,
+      label: "交易管理",
+      fallback: "疑義交易申報失敗",
+    });
     return;
   }
   const fromAddress = String(data.from || prompt("From 地址（冷錢包需用此地址備份碼本機簽署；官方熱錢包使用登入帳號綁定證明）", "") || "").trim().toLowerCase();
@@ -1475,7 +1490,7 @@ function renderEconomyTransactionDisputes(payload = {}) {
           data-dispute-tx="${sanitize(row.tx_hash || "")}"
           data-dispute-from="${sanitize(row.from_wallet_address || row.victim_wallet_address || "")}"
           data-dispute-to="${sanitize(row.to_wallet_address || row.suspect_wallet_address || "")}"
-          data-dispute-amount="${sanitize(row.claimed_amount_points || 0)}"
+          data-dispute-amount="${sanitize(String(row.claimed_amount_points || 0))}"
           data-dispute-branch="${sanitize(row.chain_branch || economyCurrentChainBranch || "main")}"
           data-dispute-runtime-mode="${sanitize(row.signature_runtime_mode || economyAddressDisputeRuntimeMode())}">To 地址回覆</button>`
       : "";

@@ -2207,6 +2207,8 @@ class PointsLedgerService:
         user_id = int(actor_value(actor, "id") or 0)
         if user_id <= 0:
             raise PermissionError("login required")
+        if str(actor_value(actor, "username") or "") == "root":
+            raise PermissionError("root 帳號不使用匿名地址疑義流程；官方錢包或官方地址事故請改走官方治理、內部帳務治理或緊急安全治理。")
         tx_hash = str(tx_hash or "").strip()
         if not tx_hash:
             raise ValueError("transaction hash required")
@@ -2482,6 +2484,8 @@ class PointsLedgerService:
         actor_id = int(actor_value(actor, "id") or 0)
         if actor_id <= 0:
             raise PermissionError("login required")
+        if str(actor_value(actor, "username") or "") == "root":
+            raise PermissionError("root 帳號不使用匿名地址疑義回覆流程；官方錢包或官方地址事故請改走官方治理、內部帳務治理或緊急安全治理。")
         dispute_uuid = str(dispute_uuid or "").strip()
         if not dispute_uuid:
             raise ValueError("dispute uuid required")
