@@ -85,7 +85,7 @@ def build_comfyui_billing_helpers(ctx):
     def _charge_comfyui_generation(actor, quote, *, prompt_id):
         if not quote or not points_service:
             return None
-        result = points_service.spend_points(
+        result = points_service.rc1_facade().spend_service_fee(
             user_id=actor_value(actor, "id"),
             item_key=quote["item_key"],
             quantity=quote["quantity"],

@@ -376,6 +376,12 @@ class FakePointsService:
     def get_wallet(self, user_id):
         return {"user_id": user_id, "points_balance": self.balance}
 
+    def rc1_facade(self):
+        return self
+
+    def spend_service_fee(self, **kwargs):
+        return self.spend_points(**kwargs)
+
     def spend_points(self, *, user_id, item_key, quantity=1, reference_type=None,
                      reference_id=None, idempotency_key=None, metadata=None, actor=None, override_amount=None):
         if self.fail_spend:

@@ -1,8 +1,8 @@
-"""Wallet Service Facade contract for Phase 1.
+"""Wallet Service Facade contract for PointsChain MVP RC1.
 
-This module is intentionally not wired into product routes yet.  It defines the
-idempotency and append-only write contract that later Phase 1 migrations will
-use, without changing existing ComfyUI, trading, video, storage, or game flows.
+Product modules must enter financial writes through this facade boundary.  The
+facade may delegate to PointsChain internal primitives, but runtime product code
+must not call ledger writers or mutable wallet balance paths directly.
 """
 
 from __future__ import annotations
@@ -54,6 +54,57 @@ class WalletServiceFacade:
     def __init__(self, *, points_service):
         self.points_service = points_service
         self.get_db = points_service.get_db
+
+    def spend_service_fee(self, **kwargs):
+        """Reserve/capture a product service fee through the approved RC1 path."""
+
+        return self.points_service.spend_points(**kwargs)
+
+    def grant_reward(
+        self,
+        *,
+        user_id,
+        amount,
+        action_type,
+        reference_type=None,
+        reference_id=None,
+        idempotency_key=None,
+        reason="",
+        public_metadata=None,
+        actor=None,
+        currency_type="points",
+    ):
+        """Credit an approved reward through the RC1 reward facade."""
+
+        metadata = dict(public_metadata or {})
+        metadata.setdefault("rc1_facade", "RewardDistributionFacade")
+        return self.points_service.record_transaction(
+            user_id=user_id,
+            currency_type=currency_type,
+            direction="credit",
+            amount=amount,
+            action_type=action_type,
+            reference_type=reference_type,
+            reference_id=reference_id,
+            idempotency_key=idempotency_key,
+            reason=reason,
+            public_metadata=metadata,
+            actor=actor,
+        )
+
+    def append_product_ledger_locked(self, conn, **kwargs):
+        """Append a product ledger row inside an existing transaction.
+
+        This is the narrow RC1 escape hatch for legacy flows that already hold
+        a transaction boundary, such as video and trading settlement. Product
+        callers receive an approved facade method; only this module touches the
+        private ledger primitive.
+        """
+
+        public_metadata = dict(kwargs.pop("public_metadata", {}) or {})
+        public_metadata.setdefault("rc1_facade", "PointsChainProductLedgerFacade")
+        row, created = self.points_service._record_transaction(conn, public_metadata=public_metadata, **kwargs)
+        return row, created
 
     def ensure_schema(self, conn):
         if hasattr(self.points_service, "ensure_schema"):

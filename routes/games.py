@@ -1143,16 +1143,15 @@ def register_games_routes(app, deps):
             reward_points = WEEKLY_REWARDS[index]
             ledger_uuid = None
             if points_service:
-                result = points_service.record_transaction(
+                result = points_service.rc1_facade().grant_reward(
                     user_id=row["user_id"],
-                    currency_type=DISPLAY_CURRENCY,
-                    direction="credit",
                     amount=reward_points,
                     action_type="game_weekly_leaderboard_reward",
                     reference_type="game_weekly_leaderboard",
                     reference_id=f"{GAME_KEY}:{week}:{index + 1}",
                     idempotency_key=f"game_weekly_reward:{GAME_KEY}:{week}:{row['user_id']}",
                     reason=f"西洋棋週排行榜第 {index + 1} 名獎勵",
+                    currency_type=DISPLAY_CURRENCY,
                     public_metadata={"game_key": GAME_KEY, "week": week, "rank": index + 1, "score": row["score"]},
                     actor=actor,
                 )
@@ -1219,16 +1218,15 @@ def register_games_routes(app, deps):
         wallet = None
         if points_service:
             try:
-                result = points_service.record_transaction(
+                result = points_service.rc1_facade().grant_reward(
                     user_id=int(actor["id"]),
-                    currency_type=DISPLAY_CURRENCY,
-                    direction="credit",
                     amount=reward_points,
                     action_type="game_daily_challenge_reward",
                     reference_type="game_daily_challenge",
                     reference_id=f"{game_key}:{challenge_key}",
                     idempotency_key=f"game_daily_reward:{game_key}:{challenge_key}:{actor['id']}",
                     reason=f"{game_key} 每日任務完成獎勵",
+                    currency_type=DISPLAY_CURRENCY,
                     public_metadata={
                         "game_key": game_key,
                         "challenge_key": challenge_key,

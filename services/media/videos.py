@@ -1300,14 +1300,15 @@ def boost_owner_video(conn, *, points_service, actor, video_id, amount, idempote
     amount = _safe_int(amount, 0)
     if amount < VIDEO_BOOST_MIN_POINTS or amount > VIDEO_BOOST_MAX_POINTS:
         raise ValueError(f"曝光積分必須介於 {VIDEO_BOOST_MIN_POINTS} 到 {VIDEO_BOOST_MAX_POINTS}")
-    if not points_service or not hasattr(points_service, "_record_transaction"):
+    if not points_service or not hasattr(points_service, "rc1_facade"):
         raise RuntimeError("PointsChain service is unavailable")
     if hasattr(points_service, "ensure_schema"):
         points_service.ensure_schema(conn)
+    points_facade = points_service.rc1_facade()
     actor_id = _safe_int(_actor_value(actor, "id"))
     idem = str(idempotency_key or "").strip()[:160] or uuid.uuid4().hex
     ledger_idem = f"video_boost:{actor_id}:{int(video_id)}:{amount}:{_sha256_text(idem)[:32]}"
-    ledger_row, created = points_service._record_transaction(
+    ledger_row, created = points_facade.append_product_ledger_locked(
         conn,
         user_id=actor_id,
         currency_type=DISPLAY_CURRENCY,
@@ -1672,10 +1673,11 @@ def tip_video(conn, *, points_service, actor, video_id, amount, fee_percent=5, i
     to_user_id = int(video_row["owner_user_id"])
     if from_user_id == to_user_id:
         raise ValueError("cannot tip your own video")
-    if not points_service or not hasattr(points_service, "_record_transaction"):
+    if not points_service or not hasattr(points_service, "rc1_facade"):
         raise RuntimeError("PointsChain service is unavailable")
     if hasattr(points_service, "ensure_schema"):
         points_service.ensure_schema(conn)
+    points_facade = points_service.rc1_facade()
     fee = calculate_tip_fee(amount, fee_percent)
     net = amount - fee
     fee_user_id = None
@@ -1696,7 +1698,7 @@ def tip_video(conn, *, points_service, actor, video_id, amount, fee_percent=5, i
             raise RuntimeError("official fee account is unavailable")
         fee_user_id = int(fee_user["id"])
     now = utc_now()
-    debit_row, debit_created = points_service._record_transaction(
+    debit_row, debit_created = points_facade.append_product_ledger_locked(
         conn,
         user_id=from_user_id,
         currency_type=DISPLAY_CURRENCY,
@@ -1710,7 +1712,7 @@ def tip_video(conn, *, points_service, actor, video_id, amount, fee_percent=5, i
         public_metadata={"video_id": int(video_id), "to_user_id": to_user_id, "gross_points": amount, "fee_points": fee, "net_points": net},
         actor=actor,
     )
-    credit_row, credit_created = points_service._record_transaction(
+    credit_row, credit_created = points_facade.append_product_ledger_locked(
         conn,
         user_id=to_user_id,
         currency_type=DISPLAY_CURRENCY,
@@ -1727,7 +1729,7 @@ def tip_video(conn, *, points_service, actor, video_id, amount, fee_percent=5, i
     fee_row = None
     fee_created = False
     if fee > 0:
-        fee_row, fee_created = points_service._record_transaction(
+        fee_row, fee_created = points_facade.append_product_ledger_locked(
             conn,
             user_id=fee_user_id,
             currency_type=DISPLAY_CURRENCY,

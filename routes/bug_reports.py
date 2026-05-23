@@ -134,16 +134,15 @@ def register_bug_report_routes(app, deps):
         reward = int(payload.get("reward_points") or 0)
         if not reporter_id or reward <= 0:
             raise ValueError("bug report has no reward target")
-        return points_service.record_transaction(
+        return points_service.rc1_facade().grant_reward(
             user_id=int(reporter_id),
-            currency_type=DISPLAY_CURRENCY,
-            direction="credit",
             amount=reward,
             action_type=f"valid_bug_report_{payload.get('severity') or 'medium'}",
             reference_type="bug_report",
             reference_id=payload["id"],
             idempotency_key=f"bug_report_reward:{payload['id']}",
             reason=review_note or f"valid bug report {payload.get('severity') or 'medium'}",
+            currency_type=DISPLAY_CURRENCY,
             public_metadata={
                 "bug_report_id": payload["id"],
                 "severity": payload.get("severity"),

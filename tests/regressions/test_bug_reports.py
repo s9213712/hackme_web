@@ -106,6 +106,12 @@ def test_bug_report_does_not_award_points_until_root_review(tmp_path):
     calls = []
 
     class FakePointsService:
+        def rc1_facade(self):
+            return self
+
+        def grant_reward(self, **kwargs):
+            return self.record_transaction(**kwargs)
+
         def record_transaction(self, **kwargs):
             calls.append(kwargs)
             return {

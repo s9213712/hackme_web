@@ -114,6 +114,12 @@ class FakePointsService:
         self.wallet_balance = 0
         self.by_idempotency = {}
 
+    def rc1_facade(self):
+        return self
+
+    def grant_reward(self, **kwargs):
+        return self.record_transaction(**kwargs)
+
     def record_transaction(self, **kwargs):
         key = kwargs.get("idempotency_key") or f"call:{len(self.calls)}"
         if key in self.by_idempotency:
