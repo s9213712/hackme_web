@@ -96,7 +96,7 @@ def test_audit_chain_repair_and_points_chain_recovery_buttons_live_in_correct_ar
     assert 'id="audit-chain-repair-btn"' in audit_section
     assert 'id="economy-recovery-auto-handle-btn"' not in audit_section
     assert 'id="economy-recovery-auto-handle-btn"' in economy_recovery_section
-    assert "一鍵處理 PointsChain 異常" in economy_recovery_section
+    assert "檢查異常處理方案" in economy_recovery_section
     assert 'id="economy-recovery-action-status"' in economy_recovery_section
     assert "economyRecoveryActionMsg" in economy_js
     assert 'auditChainRepair.addEventListener("click", repairIntegrityChains)' in bootstrap_js

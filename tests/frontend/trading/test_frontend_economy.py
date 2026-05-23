@@ -301,6 +301,9 @@ def test_root_points_page_is_chain_operations_console():
     assert '["economy-wallet-generated-address", "economy-wallet-generated-private-key", "economy-wallet-private-key"]' in economy_js
     assert "function economyLoadColdWalletBackup" in economy_js
     assert "function economyNotifyFailure" in economy_js
+    assert 'el.classList.toggle("show", Boolean(text));' in economy_js
+    assert 'el.classList.toggle("err", Boolean(text) && !ok);' in economy_js
+    assert 'el.setAttribute("role", ok ? "status" : "alert");' in economy_js
     assert "function selectGeneratedColdWalletForImport" in economy_js
     assert 'id="economy-wallet-generated-selection-status"' in index_html
     assert '["economy-wallet-use-generated-cold-btn", selectGeneratedColdWalletForImport]' in economy_js
@@ -323,6 +326,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "privateJwk.d = \"\";" in economy_js
     assert "等待冷錢包本機簽署" in economy_js
     assert "私鑰備份碼地址與付款錢包不一致" in economy_js
+    assert 'data-dispute-amount="${sanitize(String(tx.amount_points || tx.amount || 0))}"' in economy_js
+    assert 'data-dispute-amount="${sanitize(String(row.claimed_amount_points || 0))}"' in economy_js
     assert "signature," in economy_js
     assert "const backupCode = economyCompactColdWalletBackup(privateJwk);" in economy_js
     assert 'if ($("economy-wallet-generated-private-key")) $("economy-wallet-generated-private-key").value = backupCode;' in economy_js
@@ -1208,6 +1213,7 @@ def test_frontend_personal_browser_state_is_account_scoped():
     assert 'document.addEventListener("hackme:account-context-changed"' in trading_js
     assert "loadTradingPersonalFormState();" in trading_js
     assert "bindTradingPersonalFormPersistence();" in trading_js
+    assert 'console.warn("[trading] failed to save personal form state", err);' in trading_js
     assert "localStorage.getItem(tradingUserStorageKey(TRADING_WORKFLOW_STORAGE_KEY))" in trading_js
     assert "localStorage.setItem(tradingUserStorageKey(TRADING_WORKFLOW_STORAGE_KEY)" in trading_js
     assert "localStorage.getItem(TRADING_WORKFLOW_STORAGE_KEY)" not in trading_js

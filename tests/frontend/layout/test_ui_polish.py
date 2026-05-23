@@ -82,7 +82,7 @@ def test_privileged_surfaces_are_hidden_in_initial_markup_and_revealed_by_role()
     assert 'id="game-award-btn" type="button" style="display:none;"' in index_html
     assert 'id="economy-root-card" style="display:none;margin-top:.75rem;"' in index_html
     assert 'id="economy-root-virtual-card" style="display:none;margin-top:.75rem;"' in index_html
-    assert 'id="economy-admin-card" style="display:none;margin-top:.75rem;"' in index_html
+    assert 'id="economy-admin-card"' not in index_html
     assert 'id="trading-root-card" style="display:none;margin-bottom:.85rem;"' in index_html
 
     assert 'if (tabModuleServer) tabModuleServer.style.display = currentUser === "root" ? "" : "none";' in core_js

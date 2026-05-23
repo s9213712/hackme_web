@@ -51,7 +51,7 @@ def test_comfyui_long_running_work_suspends_idle_logout():
     comfyui = ((ROOT / "public" / "js" / "36-comfyui.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "36-comfyui-workflows.js").read_text(encoding="utf-8"))
 
     assert 'function setComfyuiIdleSuspend(reason, active, label)' in comfyui
-    assert 'setComfyuiIdleSuspend("comfyui_generate", !!busy, "ComfyUI 產圖中");' in comfyui
+    assert 'setComfyuiIdleSuspend("comfyui_generate", !!busy, `${comfyuiConnectionMode === "diffusers" ? "Diffusers" : "ComfyUI"} 產圖中`);' in comfyui
     assert 'setComfyuiIdleSuspend("comfyui_start_local", true, "ComfyUI 啟動中");' in comfyui
     assert 'setComfyuiIdleSuspend("comfyui_start_local", false, "ComfyUI 啟動中");' in comfyui
     assert 'setComfyuiIdleSuspend("comfyui_model_download", true, "ComfyUI 模型下載中");' in comfyui

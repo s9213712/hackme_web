@@ -366,7 +366,9 @@ function captureTradingPersonalFormState() {
 function saveTradingPersonalFormState() {
   try {
     localStorage.setItem(tradingUserStorageKey(TRADING_PERSONAL_FORM_STORAGE_KEY), JSON.stringify(captureTradingPersonalFormState()));
-  } catch (err) {}
+  } catch (err) {
+    console.warn("[trading] failed to save personal form state", err);
+  }
 }
 
 function applyTradingPersonalFormState(saved = {}) {
