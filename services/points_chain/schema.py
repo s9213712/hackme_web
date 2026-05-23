@@ -108,6 +108,7 @@ DEFAULT_PRICE_CATALOG = (
     ("game_virtual_item_premium", "高級虛寶", "game", INTERNAL_CURRENCY, 5, 0, 1, 50, 1, {}),
     ("username_change", "改名", "account", "soft", 200, 0, 100, 1000, 1, {}),
     ("profile_decoration", "個人頁裝飾", "account", "soft", 50, 0, 10, 250, 1, {}),
+    ("violation_fine", "違規罰款繳納", "governance", INTERNAL_CURRENCY, 300, 0, 1, 100000, 1, {"destination": "burn", "description": "違規罰款由用戶授權付款，預設銷毀以避免官方靠處分獲利。"}),
 )
 
 

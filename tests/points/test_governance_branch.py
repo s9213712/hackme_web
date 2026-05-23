@@ -2,6 +2,7 @@ import base64
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from cryptography.hazmat.primitives import hashes
@@ -21,6 +22,7 @@ from services.points_chain import (
 )
 from services.points_chain.schema import canonical_json, sha256_text
 from services.points_chain.economy_layer import append_economy_event, economy_fund_address, economy_layer_report
+import services.points_chain.service as points_service_module
 from services.trading.trading_engine import TradingEngineService, ensure_trading_schema
 
 
@@ -327,9 +329,34 @@ def _set_governance_timelock_ready(service, proposal_uuid):
     conn = service.get_db()
     try:
         service.ensure_schema(conn)
-        conn.execute(
-            "UPDATE points_chain_governance_proposals SET timelock_until='2026-01-01T00:00:00Z', timelock_ends_at='2026-01-01T00:00:00Z' WHERE proposal_uuid=?",
+        row = conn.execute(
+            "SELECT * FROM points_chain_governance_proposals WHERE proposal_uuid=?",
             (proposal_uuid,),
+        ).fetchone()
+        payload = json.loads(row["payload_json"]) if row and row["payload_json"] else {}
+        if isinstance(payload.get("execution_guard"), dict):
+            payload["execution_guard"]["timelock_until"] = "2026-01-01T00:00:00Z"
+            payload["execution_guard"]["timelock_ends_at"] = "2026-01-01T00:00:00Z"
+        execution_hash = service._governance_execution_payload_hash(
+            action_type=row["action_type"],
+            governance_domain=row["governance_domain"],
+            target_wallet_address=row["target_wallet_address"],
+            target_address=row["target_address"],
+            target_branch=row["target_branch"],
+            requested_amount=row["requested_amount"],
+            requested_asset=row["requested_asset"],
+            payload=payload,
+        )
+        conn.execute(
+            """
+            UPDATE points_chain_governance_proposals
+            SET timelock_until='2026-01-01T00:00:00Z',
+                timelock_ends_at='2026-01-01T00:00:00Z',
+                payload_json=?,
+                execution_payload_hash=?
+            WHERE proposal_uuid=?
+            """,
+            (json.dumps(payload, ensure_ascii=False, sort_keys=True), execution_hash, proposal_uuid),
         )
         conn.commit()
     finally:
@@ -699,6 +726,93 @@ def test_official_treasury_requires_multisig_after_governance_passes(tmp_path):
     assert two["multisig"]["signature_weight"] >= two["multisig"]["threshold_weight"]
     executed = service.execute_governance_proposal(actor=manager, proposal_uuid=proposal_uuid)
     assert executed["result"]["action"] == "official_treasury_transfer_submitted"
+
+
+def test_official_treasury_signer_center_exposes_offline_payload_verifier(tmp_path):
+    service = _service(tmp_path, user_count=10)
+    root = _actor(1, "root", "super_admin")
+    manager = _actor(2, "user2", "manager")
+    root_wallet = _official_hot_wallet(service, 1)
+    _official_hot_wallet(service, 2)
+    destination = _official_hot_wallet(service, 3)
+    created = service.create_treasury_transfer_proposal(
+        actor=manager,
+        destination_wallet_address=destination["address"],
+        amount=33,
+        reason="signer center offline verifier test",
+    )
+    proposal_uuid = created["proposal"]["proposal_uuid"]
+    _pass_treasury_proposal(service, proposal_uuid)
+    center = service.official_treasury_signer_center(actor=root)
+    signable = next(item for item in center["signable"] if item["proposal_uuid"] == proposal_uuid)
+    assert signable["offline_verifier_model"] == "canonical_json_sha256_v1"
+    assert signable["signing_payload"]["proposal_uuid"] == proposal_uuid
+    assert signable["signing_payload"]["execution_payload_hash"] == signable["execution_payload_hash"]
+    assert signable["signing_payload_hash"] == sha256_text(canonical_json(signable["signing_payload"]))
+    assert signable["current_signer_wallet_address"] == root_wallet["address"]
+
+
+def test_official_treasury_signer_center_reports_service_fee_income(tmp_path):
+    service = _service(tmp_path, user_count=5)
+    manager = _actor(2, "user2", "manager")
+    user = _actor(3, "user3", "user")
+    source = _official_hot_wallet(service, 3)
+    service.record_transaction(
+        user_id=3,
+        currency_type="points",
+        direction="credit",
+        amount=150,
+        action_type="user_initial_grant",
+        idempotency_key="treasury-analysis-user-funding",
+        actor=user,
+    )
+
+    service.spend_points(
+        user_id=3,
+        item_key="post_pin_24h",
+        source_wallet_address=source["address"],
+        request_uuid="treasury-analysis-service-fee",
+        idempotency_key="treasury-analysis-service-fee",
+        actor=user,
+    )
+    service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=5,
+        action_type="video_tip_platform_fee",
+        reference_type="video",
+        reference_id="unit-video",
+        idempotency_key="treasury-analysis-video-tip-fee",
+        public_metadata={"from_user_id": 3, "to_user_id": 4, "fee_points": 5},
+        actor=user,
+    )
+
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        events = conn.execute(
+            """
+            SELECT transaction_type, destination_fund_key, amount
+            FROM points_economy_events
+            WHERE transaction_type IN ('service_fee_batch_debit', 'video_tip_platform_fee')
+            ORDER BY id ASC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [(row["transaction_type"], row["destination_fund_key"], int(row["amount"])) for row in events] == [
+        ("service_fee_batch_debit", "official_treasury", 100),
+        ("video_tip_platform_fee", "official_treasury", 5),
+    ]
+
+    center = service.official_treasury_signer_center(actor=manager)
+    analysis = center["treasury_analysis"]
+    assert analysis["settlement_policy"]["actual_chain_transfer_destination_fund_key"] == "official_treasury"
+    assert analysis["summary"]["settled_service_fee_points"] == 100
+    assert any(item["transaction_type"] == "service_fee_batch_debit" for item in analysis["income_categories"])
+    assert any(item["item_key"] == "post_pin_24h" for item in analysis["service_fee_items"])
+    assert any(item["item_key"] == "video_publish_basic" for item in analysis["pricing_fit"])
 
 
 def test_mint_request_requires_idempotency_caps_multisig_and_explorer_event(tmp_path):
@@ -1121,6 +1235,87 @@ def test_governance_execute_rejects_payload_tamper_and_active_timelock(tmp_path)
     _pass_treasury_proposal(prod_service, prod_uuid)
     with pytest.raises(ValueError, match="timelock active"):
         prod_service.execute_governance_proposal(actor=manager, proposal_uuid=prod_uuid)
+
+
+def test_governance_deadline_guard_rejects_timelock_row_tamper(tmp_path):
+    service = _service(tmp_path, user_count=10, mode="production")
+    root = _actor(1, "root", "super_admin")
+    manager = _actor(2, "user2", "manager")
+    root_wallet = _official_hot_wallet(service, 1)
+    manager_wallet = _official_hot_wallet(service, 2)
+    destination = _official_hot_wallet(service, 3)
+    created = service.create_treasury_transfer_proposal(
+        actor=manager,
+        destination_wallet_address=destination["address"],
+        amount=25,
+        reason="deadline guard tamper test",
+        reference="deadline-guard",
+    )
+    proposal_uuid = created["proposal"]["proposal_uuid"]
+    _pass_treasury_proposal(service, proposal_uuid)
+    service.sign_governance_multisig(actor=root, proposal_uuid=proposal_uuid, signer_wallet_address=root_wallet["address"])
+    service.sign_governance_multisig(actor=manager, proposal_uuid=proposal_uuid, signer_wallet_address=manager_wallet["address"])
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        conn.execute(
+            "UPDATE points_chain_governance_proposals SET timelock_until='2026-01-01T00:00:00Z', timelock_ends_at='2026-01-01T00:00:00Z' WHERE proposal_uuid=?",
+            (proposal_uuid,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(ValueError, match="execution guard mismatch: timelock_until"):
+        service.execute_governance_proposal(actor=manager, proposal_uuid=proposal_uuid)
+
+
+def test_governance_clock_fast_forward_enters_safe_mode(tmp_path, monkeypatch):
+    service = _service(tmp_path, user_count=10, mode="production")
+    root = _actor(1, "root", "super_admin")
+    manager = _actor(2, "user2", "manager")
+    root_wallet = _official_hot_wallet(service, 1)
+    manager_wallet = _official_hot_wallet(service, 2)
+    destination = _official_hot_wallet(service, 3)
+    created = service.create_treasury_transfer_proposal(
+        actor=manager,
+        destination_wallet_address=destination["address"],
+        amount=25,
+        reason="clock attack timelock probe",
+        reference="clock-attack",
+    )
+    proposal_uuid = created["proposal"]["proposal_uuid"]
+    _pass_treasury_proposal(service, proposal_uuid)
+    service.sign_governance_multisig(actor=root, proposal_uuid=proposal_uuid, signer_wallet_address=root_wallet["address"])
+    signed = service.sign_governance_multisig(actor=manager, proposal_uuid=proposal_uuid, signer_wallet_address=manager_wallet["address"])
+    assert signed["multisig"]["ready"] is True
+
+    baseline_wall = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    service._governance_clock_wall = baseline_wall
+    service._governance_clock_monotonic = 1000.0
+
+    class FastForwardDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = baseline_wall + timedelta(hours=13)
+            if tz is None:
+                return value.replace(tzinfo=None)
+            return value.astimezone(tz)
+
+    class SlowMonotonic:
+        @staticmethod
+        def monotonic():
+            return 1005.0
+
+    monkeypatch.setattr(points_service_module, "datetime", FastForwardDateTime)
+    monkeypatch.setattr(points_service_module, "_monotonic_time", SlowMonotonic)
+
+    with pytest.raises(ValueError, match="governance clock guard active"):
+        service.execute_governance_proposal(actor=manager, proposal_uuid=proposal_uuid)
+
+    safe_mode = service.safe_mode_status()
+    assert safe_mode["safe_mode"] is True
+    assert safe_mode["reason"] == "governance_clock_jump_detected"
+    assert safe_mode["verification"]["violation"] == "wall_clock_fast_forward"
 
 
 def test_emergency_recovery_branch_is_governance_branch_not_ledger_rollback(tmp_path):
@@ -3062,6 +3257,45 @@ def test_multiple_recovery_forks_preserve_canonical_ledger_and_do_not_zero_funds
         assert tx["chain_branch"] != active_branch
         assert tx["branch"]["is_canonical"] is False
         assert tx["branch"]["write_enabled"] is False
+
+
+def test_root_report_filters_expired_provisional_freeze_entries(tmp_path):
+    service = _service(tmp_path, user_count=4)
+    wallet = _official_hot_wallet(service, 3)
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO points_chain_address_provisional_freezes (
+                wallet_address, status, reason, evidence_json, source_dispute_uuid,
+                linked_proposal_uuid, reviewed_by, created_at, updated_at, expires_at
+            ) VALUES (?, 'active', 'expired test freeze', '[]', 'pcdispute:expired',
+                      'pcgov:expired', 1, '2026-01-01T00:00:00Z',
+                      '2026-01-01T00:00:00Z', '2026-01-01T01:00:00Z')
+            """,
+            (wallet["address"],),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    report = service.root_report()
+
+    assert all(item is not None for item in report["governance"]["active_provisional_freezes"])
+    assert not any(
+        item.get("wallet_address") == wallet["address"]
+        for item in report["governance"]["active_provisional_freezes"]
+    )
+    conn = service.get_db()
+    try:
+        status = conn.execute(
+            "SELECT status FROM points_chain_address_provisional_freezes WHERE wallet_address=?",
+            (wallet["address"],),
+        ).fetchone()["status"]
+    finally:
+        conn.close()
+    assert status == "expired"
 
 
 def test_acceleration_cannot_bypass_pending_freeze_or_cross_branch(tmp_path):

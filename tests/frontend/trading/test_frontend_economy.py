@@ -85,6 +85,16 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-governance-scam-create-btn"' in economy_explorer_page
     assert 'id="economy-governance-freeze-create-btn"' in economy_explorer_page
     assert 'id="economy-governance-branch-create-btn"' in economy_explorer_page
+    assert 'id="economy-treasury-analysis-summary"' in economy_explorer_page
+    assert 'id="economy-treasury-service-fee-list"' in economy_explorer_page
+    assert 'id="economy-treasury-income-list"' in economy_explorer_page
+    assert 'id="economy-treasury-expense-list"' in economy_explorer_page
+    assert 'id="economy-treasury-analysis-refresh-btn"' in economy_explorer_page
+    assert 'id="economy-treasury-analysis-updated-at"' in economy_explorer_page
+    assert "payload hash" in economy_js
+    assert "signing hash" in economy_js
+    assert "execution_payload_hash" in economy_js
+    assert "signing_payload_hash" in economy_js
     assert "全站多人投票" in economy_explorer_page
     assert "20 Proved" in economy_explorer_page
     assert "受鏈上忙碌度影響" in economy_explorer_page
@@ -275,6 +285,10 @@ def test_root_points_page_is_chain_operations_console():
     assert 'fetchEconomyJson(`/points/governance/proposals/${encodeURIComponent(proposalUuid)}/vote`' in economy_js
     assert 'fetchEconomyJson(`/admin/points/governance/proposals/${encodeURIComponent(proposalUuid)}/execute`' in economy_js
     assert "economy-governance-emergency-create-details" in index_html
+    assert "function renderEconomyTreasuryAnalysis" in economy_js
+    assert "站內服務費結算" in economy_js
+    assert "actual_chain_transfer_destination_fund_key" in economy_js
+    assert '["economy-treasury-analysis-refresh-btn", () => loadEconomyTreasurySignerCenter()]' in economy_js
     assert "不會刪改舊 ledger" in economy_js
     assert 'if (value === "official_fund_transfer") return "官方基金調撥";' in economy_js
     assert 'json.msg || json.message || json.error || `HTTP ${res.status}`' in economy_js
@@ -475,6 +489,11 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-catalog-item-key"' in index_html
     assert 'id="root-catalog-storage-gb"' in index_html
     assert 'id="root-catalog-save-btn"' in index_html
+    assert 'id="root-service-fee-quick-pricing-list"' in index_html
+    assert "ROOT_SERVICE_FEE_PRICING_PRESETS" in admin_js
+    assert "saveRootServiceFeePricingPreset" in admin_js
+    assert "video_publish_basic" in admin_js
+    assert "marketplace_listing_fee" in admin_js
     assert 'id="root-trading-enabled"' in index_html
     assert 'id="root-trading-borrowing-enabled"' in index_html
     assert 'id="root-trading-borrowing-enabled" checked' in index_html

@@ -64,6 +64,21 @@ def test_video_tip_debits_viewer_credits_uploader_and_is_idempotent():
     assert wallet_owner == 95
     assert wallet_official == 5
     assert conn.execute("SELECT COUNT(*) FROM video_tips").fetchone()[0] == 1
+    tip_events = conn.execute(
+        """
+        SELECT transaction_type, source_fund_key, source_address, destination_fund_key, destination_address, amount
+        FROM points_economy_events
+        WHERE transaction_type LIKE 'video_tip_%'
+        ORDER BY id ASC
+        """
+    ).fetchall()
+    assert [(row["transaction_type"], int(row["amount"])) for row in tip_events] == [
+        ("video_tip_credit", 95),
+        ("video_tip_platform_fee", 5),
+    ]
+    assert sum(int(row["amount"]) for row in tip_events) == 100
+    assert tip_events[0]["destination_fund_key"] in {"", None}
+    assert tip_events[1]["destination_fund_key"] == "official_treasury"
 
 
 def test_video_tip_rejects_idempotency_key_reuse_for_different_tip():

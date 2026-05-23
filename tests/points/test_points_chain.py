@@ -114,12 +114,42 @@ def _force_request_proved(service, tx_hash):
 
 
 def _set_governance_timelock_ready(service, proposal_uuid):
+    ready_at = "2026-01-01T00:00:00Z"
     conn = service.get_db()
     try:
         service.ensure_schema(conn)
-        conn.execute(
-            "UPDATE points_chain_governance_proposals SET timelock_until='2026-01-01T00:00:00Z', timelock_ends_at='2026-01-01T00:00:00Z' WHERE proposal_uuid=?",
+        row = conn.execute(
+            "SELECT * FROM points_chain_governance_proposals WHERE proposal_uuid=?",
             (proposal_uuid,),
+        ).fetchone()
+        payload = json.loads(row["payload_json"] or "{}") if row else {}
+        guard = payload.get("execution_guard") if isinstance(payload, dict) else None
+        if isinstance(guard, dict):
+            guard["timelock_until"] = ready_at
+            guard["timelock_ends_at"] = ready_at
+        execution_payload_hash = service._governance_execution_payload_hash(
+            action_type=row["action_type"],
+            governance_domain=row["governance_domain"],
+            target_wallet_address=row["target_wallet_address"],
+            target_address=row["target_address"],
+            target_branch=row["target_branch"],
+            requested_amount=row["requested_amount"],
+            requested_asset=row["requested_asset"],
+            payload=payload,
+        )
+        conn.execute(
+            """
+            UPDATE points_chain_governance_proposals
+            SET timelock_until=?, timelock_ends_at=?, payload_json=?, execution_payload_hash=?
+            WHERE proposal_uuid=?
+            """,
+            (
+                ready_at,
+                ready_at,
+                json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                execution_payload_hash,
+                proposal_uuid,
+            ),
         )
         conn.commit()
     finally:

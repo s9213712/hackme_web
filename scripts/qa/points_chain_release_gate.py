@@ -148,6 +148,19 @@ def main() -> int:
         timeout=180,
     ))
     steps.append(run_step(
+        "product_service_revenue_accounting_tests",
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "tests/video/api/test_video_tips.py::test_video_tip_debits_viewer_credits_uploader_and_is_idempotent",
+            "tests/points/test_governance_branch.py::test_official_treasury_signer_center_reports_service_fee_income",
+            "tests/points/test_points_chain.py::test_spend_points_reserves_service_fee_then_batches_chain_debit",
+        ],
+        timeout=180,
+    ))
+    steps.append(run_step(
         "flask_werkzeug_hardening_tests",
         [sys.executable, "-m", "pytest", "-q", "tests/security/gates/test_flask_hardening.py"],
         timeout=180,

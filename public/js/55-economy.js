@@ -2171,7 +2171,7 @@ function renderEconomyLedger(rows, targetId = "economy-ledger-list") {
 function renderEconomyRootList(rows, targetId, emptyText, renderRow) {
   const list = $(targetId);
   if (!list) return;
-  const safeRows = Array.isArray(rows) ? rows : [];
+  const safeRows = Array.isArray(rows) ? rows.filter((row) => row !== null && row !== undefined) : [];
   if (!safeRows.length) {
     list.innerHTML = `<div class="drive-empty">${sanitize(emptyText)}</div>`;
     return;
@@ -2461,7 +2461,7 @@ function economyGovernanceIncidentRows(governance = {}) {
   const push = (kind, severity, title, detail, meta = {}) => {
     rows.push({ kind, severity, title, detail, meta });
   };
-  const riskLabels = Array.isArray(safe.active_risk_labels) ? safe.active_risk_labels : [];
+  const riskLabels = Array.isArray(safe.active_risk_labels) ? safe.active_risk_labels.filter((item) => item && typeof item === "object") : [];
   riskLabels.forEach((item) => {
     push(
       "risk_label",
@@ -2471,7 +2471,7 @@ function economyGovernanceIncidentRows(governance = {}) {
       { address: item.wallet_address || "", proposal_uuid: item.proposal_uuid || "", created_at: item.updated_at || item.created_at || "" },
     );
   });
-  const freezes = Array.isArray(safe.active_freezes) ? safe.active_freezes : [];
+  const freezes = Array.isArray(safe.active_freezes) ? safe.active_freezes.filter((item) => item && typeof item === "object") : [];
   freezes.forEach((item) => {
     push(
       "governance_freeze",
@@ -2481,7 +2481,7 @@ function economyGovernanceIncidentRows(governance = {}) {
       { address: item.wallet_address || "", proposal_uuid: item.freeze_proposal_uuid || "", created_at: item.updated_at || item.created_at || "" },
     );
   });
-  const provisional = Array.isArray(safe.active_provisional_freezes) ? safe.active_provisional_freezes : [];
+  const provisional = Array.isArray(safe.active_provisional_freezes) ? safe.active_provisional_freezes.filter((item) => item && typeof item === "object") : [];
   provisional.forEach((item) => {
     push(
       "provisional_freeze",
@@ -2491,7 +2491,7 @@ function economyGovernanceIncidentRows(governance = {}) {
       { address: item.wallet_address || "", proposal_uuid: item.linked_proposal_uuid || "", created_at: item.updated_at || item.created_at || "" },
     );
   });
-  const branches = Array.isArray(safe.branches) ? safe.branches : [];
+  const branches = Array.isArray(safe.branches) ? safe.branches.filter((item) => item && typeof item === "object") : [];
   branches.forEach((item) => {
     const canonical = Boolean(item.is_canonical);
     const writeEnabled = Boolean(item.write_enabled);
@@ -2568,7 +2568,7 @@ function renderEconomyGovernanceIncidents(governance = {}) {
 
 function renderEconomyBranchTree(governance = {}) {
   const tree = governance.branch_tree && typeof governance.branch_tree === "object" ? governance.branch_tree : {};
-  const nodes = Array.isArray(tree.nodes) ? tree.nodes : [];
+  const nodes = Array.isArray(tree.nodes) ? tree.nodes.filter((item) => item && typeof item === "object") : [];
   const summary = $("economy-branch-tree-summary");
   const list = $("economy-branch-tree-list");
   const canonical = tree.canonical_branch_uuid || "main";
@@ -3254,6 +3254,7 @@ function economyRenderGovernanceProposalCard(proposal = {}, { nested = false } =
           <div class="drive-card-sub">readiness ${sanitize(economyGovernanceReadiness(proposal))}</div>
           ${recoveryDetail}
           <div class="drive-card-sub">severity ${sanitize(proposal.proposal_severity || "NORMAL")} · ${sanitize(multisigText)} · veto ${proposal.root_veto_allowed ? "root allowed" : "not allowed"}</div>
+          ${proposal.execution_payload_hash ? `<div class="drive-card-sub">payload hash <span class="economy-ledger-hash">${sanitize(proposal.execution_payload_hash)}</span></div>` : ""}
           <div class="drive-card-sub">${sanitize(proposal.impact_scope || "")}${proposal.risk_summary ? " · " + sanitize(proposal.risk_summary) : ""}</div>
           <div class="economy-ledger-hash">${sanitize(targetDisplay || proposal.proposal_uuid || "")}</div>
           <div class="drive-card-sub">timelock ${sanitize(proposal.timelock_until || "-")} · expires ${sanitize(proposal.expires_at || "-")} · ${sanitize(vote)}</div>
@@ -3306,6 +3307,99 @@ function syncGovernanceTreasuryDestination() {
   }
 }
 
+function renderEconomyTreasuryAnalysis(payload) {
+  const analysis = payload && typeof payload === "object" ? payload : {};
+  const summary = analysis.summary && typeof analysis.summary === "object" ? analysis.summary : {};
+  const settlement = analysis.settlement_policy && typeof analysis.settlement_policy === "object" ? analysis.settlement_policy : {};
+  setEconomyText("economy-treasury-analysis-updated-at", analysis.generated_at ? `最後更新 ${analysis.generated_at}` : "等待即時資料");
+  const summaryEl = $("economy-treasury-analysis-summary");
+  if (summaryEl) {
+    const tone = analysis.status === "red" ? "bad" : (analysis.status === "yellow" ? "warn" : "good");
+    summaryEl.innerHTML = [
+      economyFormulaCard("收支狀態", String(analysis.status || "unknown").toUpperCase(), tone),
+      economyFormulaCard("官方錢包", `${formatEconomyPointsValue(summary.official_wallet_balance_points || 0)} 點`),
+      economyFormulaCard("收入 / 支出", `${formatEconomyPointsValue(summary.income_total_points || 0)} / ${formatEconomyPointsValue(summary.expense_total_points || 0)} 點`),
+      economyFormulaCard("站內服務待結算", `${formatEconomyPointsValue(summary.pending_service_fee_points || 0)} 點`),
+      economyFormulaCard("已批次結算", `${formatEconomyPointsValue(summary.settled_service_fee_points || 0)} 點`),
+      economyFormulaCard("下一次批次差額", `${formatEconomyPointsValue(summary.next_service_fee_settlement_remaining_points || 0)} 點`),
+    ].join("");
+  }
+  const serviceList = $("economy-treasury-service-fee-list");
+  if (serviceList) {
+    const items = Array.isArray(analysis.service_fee_items) ? analysis.service_fee_items : [];
+    const recent = Array.isArray(analysis.recent_service_fee_settlements) ? analysis.recent_service_fee_settlements : [];
+    const rows = [`
+      <div class="drive-file-row">
+        <div>
+          <strong>站內服務費結算</strong>
+          <div class="drive-card-sub">策略 ${sanitize(settlement.service_fee_layer || "-")} · 滿 ${formatEconomyPointsValue(settlement.threshold_points || 0)} 點批次 ${sanitize(settlement.actual_chain_transfer_action || "-")} → ${sanitize(settlement.actual_chain_transfer_destination_fund_key || "-")}</div>
+          <div class="drive-card-sub">${sanitize(settlement.note || "")}</div>
+        </div>
+      </div>
+    `];
+    rows.push(...items.slice(0, 12).map((item) => `
+      <div class="drive-file-row">
+        <div>
+          <strong>${sanitize(item.item_name || item.item_key || "-")}</strong>
+          <div class="drive-card-sub">${sanitize(item.item_key || "")} · 已結算 ${formatEconomyPointsValue(item.settled_points || 0)} 點 · 待結算 ${formatEconomyPointsValue(item.reserved_points || 0)} 點 · ${Number(item.charge_count || 0)} 筆</div>
+          <div class="drive-card-sub">最近活動 ${sanitize(item.last_activity_at || "-")}</div>
+        </div>
+      </div>
+    `));
+    if (recent.length) {
+      rows.push(`
+        <div class="drive-file-row">
+          <div>
+            <strong>最近實際鏈上批次轉帳</strong>
+            <div class="drive-card-sub">${recent.slice(0, 4).map((row) => `${formatEconomyPointsValue(row.amount_points || 0)} 點 · ${shortEconomyWalletAddress(row.ledger_uuid || "")} · ${row.created_at || "-"}`).join("<br>")}</div>
+          </div>
+        </div>
+      `);
+    }
+    serviceList.innerHTML = rows.join("") || `<div class="drive-empty">尚無站內服務費資料。</div>`;
+  }
+  const renderCategoryList = (id, title, rows, emptyText) => {
+    const list = $(id);
+    if (!list) return;
+    const items = Array.isArray(rows) ? rows : [];
+    list.innerHTML = items.length
+      ? `<div class="drive-file-row"><div><strong>${sanitize(title)}</strong><div class="drive-card-sub">依官方 Treasury fund ledger 分類。</div></div></div>` + items.slice(0, 12).map((item) => `
+          <div class="drive-file-row">
+            <div>
+              <strong>${sanitize(item.label || item.transaction_type || "-")} · ${formatEconomyPointsValue(item.amount_points || 0)} 點</strong>
+              <div class="drive-card-sub">${sanitize(item.transaction_type || "-")} · ${Number(item.count || 0)} 筆 · ${sanitize(item.latest_at || "-")}${item.ledger_only ? " · legacy ledger 補列" : ""}</div>
+            </div>
+          </div>
+        `).join("")
+      : `<div class="drive-empty">${sanitize(emptyText)}</div>`;
+  };
+  renderCategoryList("economy-treasury-income-list", "官方 Treasury 收入", analysis.income_categories, "目前沒有可見官方 Treasury 收入。");
+  renderCategoryList("economy-treasury-expense-list", "官方 Treasury 支出", analysis.expense_categories, "目前沒有可見官方 Treasury 支出。");
+  const pricingList = $("economy-treasury-pricing-fit-list");
+  if (pricingList) {
+    const fit = Array.isArray(analysis.pricing_fit) ? analysis.pricing_fit : [];
+    const manager = analysis.perspectives?.manager || {};
+    pricingList.innerHTML = `
+      <div class="drive-file-row">
+        <div>
+          <strong>服務費定價擬合</strong>
+          <div class="drive-card-sub">${sanitize(manager.summary || "以低額高頻服務費、投幣抽成、曝光型功能費支撐官方 Treasury；支出仍走治理與多簽。")}</div>
+        </div>
+      </div>
+      ${fit.slice(0, 10).map((item) => {
+        const delta = item.delta_points === null || item.delta_points === undefined ? "尚未建立" : `${Number(item.delta_points || 0) >= 0 ? "+" : ""}${Number(item.delta_points || 0)} 點`;
+        return `<div class="drive-file-row">
+          <div>
+            <strong>${sanitize(item.item_name || item.item_key || "-")} · 建議 ${formatEconomyPointsValue(item.recommended_points || 0)} 點</strong>
+            <div class="drive-card-sub">${sanitize(item.item_key || "")} · 目前 ${item.current_points === null || item.current_points === undefined ? "未設定" : `${formatEconomyPointsValue(item.current_points)} 點`} · 差額 ${sanitize(delta)}</div>
+            <div class="drive-card-sub">${sanitize(item.rationale || "")}</div>
+          </div>
+        </div>`;
+      }).join("")}
+    `;
+  }
+}
+
 function renderEconomyTreasurySignerCenter(payload = null) {
   const card = $("economy-treasury-signer-center-card");
   if (!card) return;
@@ -3335,6 +3429,7 @@ function renderEconomyTreasurySignerCenter(payload = null) {
   setEconomyText("economy-treasury-signer-policy", `${sanitize(policy.wallet_type || "official_treasury_multisig")} · ${sanitize(policy.policy_version || "-")}`);
   setEconomyText("economy-treasury-signer-pending-count", `${signable.length} / ${proposals.length}`);
   setEconomyText("economy-treasury-signer-branch", `branch ${data.canonical_branch || "-"}`);
+  renderEconomyTreasuryAnalysis(data.treasury_analysis || null);
   const signerList = $("economy-treasury-signer-list");
   if (signerList) {
     signerList.innerHTML = signers.length
@@ -3357,6 +3452,7 @@ function renderEconomyTreasurySignerCenter(payload = null) {
             <div>
               <strong>${sanitize(economyGovernanceActionLabel(item.action_type))} · ${Number(item.signature_count || 0)}/${Number(item.threshold || 0)} · weight ${Number(item.signature_weight || 0)}/${Number(item.threshold_weight || 0)}</strong>
               <div class="drive-card-sub">timelock ${sanitize(item.timelock_until || "-")} · ${sanitize(shortEconomyWalletAddress(item.target_wallet_address || ""))} · ${formatEconomyPointsValue(item.requested_amount || 0)} 點</div>
+              <div class="drive-card-sub">signing hash ${sanitize(item.signing_payload_hash || "-")} · payload ${sanitize(item.execution_payload_hash || "-")}</div>
               <div class="economy-ledger-hash">${sanitize(item.proposal_uuid || "")}</div>
             </div>
           </div>
@@ -4487,6 +4583,7 @@ function bindEconomyInlineEvents() {
     ["economy-governance-treasury-create-btn", createGovernanceTreasuryProposal],
     ["economy-governance-mint-create-btn", createGovernanceMintRequestProposal],
     ["economy-governance-policy-create-btn", createGovernancePolicyProposal],
+    ["economy-treasury-analysis-refresh-btn", () => loadEconomyTreasurySignerCenter()],
     ["economy-trading-export-btn", downloadEconomyTradingCsv],
     ["economy-ledger-export-btn", exportEconomyLedgerCsv],
     ["economy-root-funding-refresh-btn", () => loadEconomyRootTradingReadOnly({ refreshSnapshot: true })],

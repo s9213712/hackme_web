@@ -726,18 +726,30 @@ def replay_economy_events(conn, *, policy=None, chain_secret, persist_cache=Fals
 
 def economy_health(*, policy, minted_total, balances, exchange_receivable_principal=0):
     max_supply = int(policy["max_supply"])
+    releasable_supply = max(0, max_supply - int(policy.get("reserved_locked") or 0))
     mint_remaining = max_supply - int(minted_total)
+    releasable_remaining = releasable_supply - int(minted_total)
     mint_remaining_ratio = mint_remaining / max_supply if max_supply else 0
+    releasable_remaining_ratio = releasable_remaining / releasable_supply if releasable_supply else 0
     promo_balance = int(balances.get("promo_fund", {}).get("balance") or 0)
     exchange_balance = int(balances.get("exchange_fund", {}).get("balance") or 0)
     exchange_receivable_principal = max(0, int(exchange_receivable_principal or 0))
     exchange_assets = exchange_balance + exchange_receivable_principal
     status = "green"
     reasons = []
+    if releasable_remaining <= 0:
+        status = "red"
+        reasons.append("releasable_supply_exhausted")
+    elif releasable_remaining_ratio < 0.2:
+        status = "red"
+        reasons.append("releasable_remaining_below_20_percent")
+    elif releasable_remaining_ratio < 0.5:
+        status = "yellow"
+        reasons.append("releasable_remaining_below_50_percent")
     if mint_remaining_ratio < 0.2:
         status = "red"
         reasons.append("mint_remaining_below_20_percent")
-    elif mint_remaining_ratio < 0.5:
+    elif mint_remaining_ratio < 0.5 and status != "red":
         status = "yellow"
         reasons.append("mint_remaining_below_50_percent")
     if promo_balance < int(policy["promo_critical_watermark"]):

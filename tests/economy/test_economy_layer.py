@@ -173,6 +173,34 @@ def test_mint_cannot_exceed_releasable_supply_without_override(tmp_path):
     assert replay["releasable_remaining"] == 40_000_000
 
 
+def test_economy_health_warns_on_releasable_supply_exhaustion(tmp_path):
+    points, conn = _open_economy(tmp_path)
+    user_address = "pc1" + ("7" * 48)
+    try:
+        economy_layer_report(conn, chain_secret=points.chain_secret, actor={"id": 1, "role": "root"})
+        append_economy_event(
+            conn,
+            chain_secret=points.chain_secret,
+            event_type="mint",
+            transaction_type="qa_exhaust_releasable_supply",
+            source_fund_key="mint",
+            destination_fund_key=None,
+            destination_address=user_address,
+            amount=40_000_000,
+            idempotency_key="qa:health:exhaust-releasable",
+            actor={"id": 1, "role": "root"},
+        )
+
+        replay = replay_economy_events(conn, chain_secret=points.chain_secret)
+    finally:
+        conn.close()
+
+    assert replay["mint_remaining"] == 40_000_000
+    assert replay["releasable_remaining"] == 0
+    assert replay["health"]["status"] == "red"
+    assert "releasable_supply_exhausted" in replay["health"]["reasons"]
+
+
 def test_burn_only_appends_burned_total_and_never_goes_negative(tmp_path):
     points, conn = _open_economy(tmp_path)
     try:

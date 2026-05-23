@@ -1,7 +1,8 @@
 """PointsChain ledger, wallet, and verification service."""
 
+import time as _monotonic_time
 import threading
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from . import schema as _schema
 from .economy_layer import (
@@ -35,6 +36,8 @@ EXPLORER_ACCELERATED_FINALITY_MAX_SECONDS = 45
 EXPLORER_ACCELERATION_REFERENCE_FEE_POINTS = 20
 EXPLORER_MAX_ACCELERATION_FEE_POINTS = 10000
 SERVICE_BATCH_SETTLEMENT_MIN_POINTS = 100
+SERVICE_FEE_REVENUE_DESTINATION_FUND = "official_treasury"
+GOVERNANCE_CLOCK_JUMP_TOLERANCE_SECONDS = 30
 WALLET_CREATION_FEE_BASE_POINTS = 25
 WALLET_CREATION_FEE_MULTIPLIER = 2
 WALLET_CREATION_FEE_MAX_POINTS = 100_000
@@ -80,6 +83,10 @@ class PointsLedgerService:
         # safe-locked, never to production-routing.
         self._mode_reader = mode_reader
         self._security_event_recorder = security_event_recorder or (lambda *a, **kw: None)
+        self._governance_clock_lock = threading.Lock()
+        self._governance_clock_wall = datetime.now(timezone.utc)
+        self._governance_clock_monotonic = _monotonic_time.monotonic()
+        self._governance_clock_last_error = ""
 
     def rc1_facade(self):
         from .wallet_facade import WalletServiceFacade
@@ -160,6 +167,47 @@ class PointsLedgerService:
         row = self._safe_mode_row(conn)
         if row and int(row["safe_mode"] or 0):
             raise ValueError(f"PointsChain safe mode active; {action} is paused until root restores a healthy ledger backup")
+
+    def _governance_assert_clock_safe_locked(self, conn, action):
+        """Reject governance writes if wall time jumps faster than monotonic time.
+
+        This prevents a live process from accepting an artificially advanced
+        system clock as proof that a timelock or voting deadline has elapsed.
+        It is intentionally local-process protection; post-RC1 external anchors
+        and host time monitoring are still required for full host compromise.
+        """
+        wall_now = datetime.now(timezone.utc)
+        monotonic_now = _monotonic_time.monotonic()
+        with self._governance_clock_lock:
+            previous_wall = self._governance_clock_wall
+            previous_monotonic = self._governance_clock_monotonic
+            wall_elapsed = (wall_now - previous_wall).total_seconds()
+            monotonic_elapsed = monotonic_now - previous_monotonic
+            forward_jump = wall_elapsed - max(0.0, monotonic_elapsed)
+            backward_jump = -wall_elapsed
+            violation = ""
+            if forward_jump > GOVERNANCE_CLOCK_JUMP_TOLERANCE_SECONDS:
+                violation = "wall_clock_fast_forward"
+            elif backward_jump > GOVERNANCE_CLOCK_JUMP_TOLERANCE_SECONDS:
+                violation = "wall_clock_moved_backward"
+            if violation:
+                details = {
+                    "action": str(action or ""),
+                    "violation": violation,
+                    "wall_now": wall_now.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    "previous_wall": previous_wall.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    "wall_elapsed_seconds": round(wall_elapsed, 3),
+                    "monotonic_elapsed_seconds": round(monotonic_elapsed, 3),
+                    "tolerance_seconds": GOVERNANCE_CLOCK_JUMP_TOLERANCE_SECONDS,
+                    "guard_model": "wall_clock_vs_monotonic_v1",
+                }
+                self._governance_clock_last_error = canonical_json(details)
+                self._enter_safe_mode(conn, details, "governance_clock_jump_detected")
+                conn.commit()
+                raise ValueError("governance clock guard active: system clock jump detected")
+            self._governance_clock_wall = wall_now
+            self._governance_clock_monotonic = monotonic_now
+            self._governance_clock_last_error = ""
 
     def _assert_production_mode(self, action):
         """Phase 7 guard for block sealing modes.
@@ -1266,6 +1314,82 @@ class PointsLedgerService:
             payload=_json_loads(row["payload_json"], {}),
         )
 
+    def _governance_execution_guard_error(self, row, payload=None):
+        payload = payload if isinstance(payload, dict) else _json_loads(row["payload_json"], {})
+        guard = payload.get("execution_guard") if isinstance(payload, dict) else None
+        if not isinstance(guard, dict):
+            return ""
+        expected = {
+            "voting_starts_at": row["voting_starts_at"],
+            "voting_ends_at": row["voting_ends_at"],
+            "timelock_until": row["timelock_until"],
+            "timelock_ends_at": row["timelock_ends_at"],
+            "expires_at": row["expires_at"],
+            "eligible_voter_count": int(row["eligible_voter_count"] or 0),
+            "quorum_count": int(row["quorum_count"] or 0),
+            GOV_QUORUM_RATE_FIELD: int(row[GOV_QUORUM_RATE_FIELD] or 0),
+            GOV_PASS_THRESHOLD_RATE_FIELD: int(row[GOV_PASS_THRESHOLD_RATE_FIELD] or 0),
+            GOV_VOTE_DIFFERENTIAL_REQUIRED_RATE_FIELD: int(row[GOV_VOTE_DIFFERENTIAL_REQUIRED_RATE_FIELD] or 0),
+        }
+        for key, expected_value in expected.items():
+            actual = guard.get(key)
+            if isinstance(expected_value, int):
+                try:
+                    actual_value = int(actual or 0)
+                except Exception:
+                    return f"governance execution guard mismatch: {key}"
+                if actual_value != expected_value:
+                    return f"governance execution guard mismatch: {key}"
+            elif str(actual or "") != str(expected_value or ""):
+                return f"governance execution guard mismatch: {key}"
+        return ""
+
+    def _update_governance_deadline_guard_locked(self, conn, proposal_uuid, *, voting_ends_at=None, expires_at=None):
+        row = conn.execute(
+            "SELECT * FROM points_chain_governance_proposals WHERE proposal_uuid=?",
+            (str(proposal_uuid or ""),),
+        ).fetchone()
+        if not row:
+            return None
+        payload = _json_loads(row["payload_json"], {})
+        guard = payload.get("execution_guard") if isinstance(payload, dict) else None
+        if isinstance(guard, dict):
+            if voting_ends_at is not None:
+                guard["voting_ends_at"] = voting_ends_at
+            if expires_at is not None:
+                guard["expires_at"] = expires_at
+        next_voting_ends_at = row["voting_ends_at"] if voting_ends_at is None else voting_ends_at
+        next_expires_at = row["expires_at"] if expires_at is None else expires_at
+        execution_payload_hash = self._governance_execution_payload_hash(
+            action_type=row["action_type"],
+            governance_domain=row["governance_domain"],
+            target_wallet_address=row["target_wallet_address"],
+            target_address=row["target_address"],
+            target_branch=row["target_branch"],
+            requested_amount=row["requested_amount"],
+            requested_asset=row["requested_asset"],
+            payload=payload,
+        )
+        conn.execute(
+            """
+            UPDATE points_chain_governance_proposals
+            SET voting_ends_at=?, expires_at=?, payload_json=?, execution_payload_hash=?, updated_at=?
+            WHERE proposal_uuid=? AND status='voting'
+            """,
+            (
+                next_voting_ends_at,
+                next_expires_at,
+                _json_dumps(payload),
+                execution_payload_hash,
+                utc_now(),
+                row["proposal_uuid"],
+            ),
+        )
+        return conn.execute(
+            "SELECT * FROM points_chain_governance_proposals WHERE proposal_uuid=?",
+            (row["proposal_uuid"],),
+        ).fetchone()
+
     def _last_governance_audit_hash(self, conn):
         row = conn.execute("SELECT audit_hash FROM points_chain_governance_audit_log ORDER BY id DESC LIMIT 1").fetchone()
         return row["audit_hash"] if row else ""
@@ -1346,6 +1470,7 @@ class PointsLedgerService:
         governance_domain = self._governance_domain_for_action(action_type, governance_domain or "PUBLIC_COMMON_INTEREST")
         if governance_domain not in GOVERNANCE_DOMAINS:
             raise ValueError("unsupported governance domain")
+        self._governance_assert_clock_safe_locked(conn, f"create_governance_proposal:{action_type}")
         self._governance_require_proposer(actor, governance_domain)
         proposal_type = self._governance_legacy_type_for_action(action_type, conn=conn)
         title = str(title or "").strip()[:160]
@@ -1370,7 +1495,7 @@ class PointsLedgerService:
         requested_asset = public_currency_text(str(requested_asset or "points").strip().lower())[:40] or "points"
         if incident_tx_hash:
             incident_tx_hash = str(incident_tx_hash).strip()
-        payload = payload or {}
+        payload = dict(payload or {})
         proposal_severity = str(proposal_severity or "NORMAL").strip().upper()
         severity_policy = self._governance_severity_policy(proposal_severity)
         authority = self._governance_proposer_authority(
@@ -1380,16 +1505,6 @@ class PointsLedgerService:
             action_type=action_type,
             severity=proposal_severity,
             target_address=target_address,
-        )
-        execution_payload_hash = self._governance_execution_payload_hash(
-            action_type=action_type,
-            governance_domain=governance_domain,
-            target_wallet_address=target_wallet_address,
-            target_address=target_address,
-            target_branch=target_branch,
-            requested_amount=requested_amount,
-            requested_asset=requested_asset,
-            payload=payload,
         )
         policy = self._governance_policy(proposal_type, governance_domain=governance_domain, action_type=action_type)
         policy = self._governance_policy_for_payload(policy, action_type=action_type, payload=payload)
@@ -1409,6 +1524,29 @@ class PointsLedgerService:
         expires_at = self._governance_time_after(policy["expires_seconds"])
         lifecycle_status = "REVIEW" if authority["sponsor_required"] else "VOTING"
         status = "voting"
+        payload["execution_guard"] = {
+            "guard_model": "governance_deadline_snapshot_v1",
+            "voting_starts_at": now,
+            "voting_ends_at": expires_at,
+            "timelock_until": timelock_until,
+            "timelock_ends_at": timelock_until,
+            "expires_at": expires_at,
+            "eligible_voter_count": eligible_count,
+            "quorum_count": quorum_count,
+            GOV_QUORUM_RATE_FIELD: int(policy[GOV_QUORUM_RATE_FIELD]),
+            GOV_PASS_THRESHOLD_RATE_FIELD: int(policy[GOV_PASS_THRESHOLD_RATE_FIELD]),
+            GOV_VOTE_DIFFERENTIAL_REQUIRED_RATE_FIELD: int(policy[GOV_VOTE_DIFFERENTIAL_REQUIRED_RATE_FIELD]),
+        }
+        execution_payload_hash = self._governance_execution_payload_hash(
+            action_type=action_type,
+            governance_domain=governance_domain,
+            target_wallet_address=target_wallet_address,
+            target_address=target_address,
+            target_branch=target_branch,
+            requested_amount=requested_amount,
+            requested_asset=requested_asset,
+            payload=payload,
+        )
         audit = self._append_governance_audit_locked(
             conn,
             proposal_uuid=proposal_uuid,
@@ -3325,13 +3463,11 @@ class PointsLedgerService:
                     escalation_expires_at = provisional_freeze.get("expires_at") if provisional_freeze else None
                     voting_deadline = self._governance_time_after(DISPUTE_ESCALATED_FREEZE_SECONDS - DISPUTE_VOTING_GRACE_SECONDS)
                     if freeze_proposal_uuid:
-                        conn2.execute(
-                            """
-                            UPDATE points_chain_governance_proposals
-                            SET voting_ends_at=?, expires_at=?, updated_at=?
-                            WHERE proposal_uuid=? AND status='voting'
-                            """,
-                            (voting_deadline, voting_deadline, utc_now(), freeze_proposal_uuid),
+                        self._update_governance_deadline_guard_locked(
+                            conn2,
+                            freeze_proposal_uuid,
+                            voting_ends_at=voting_deadline,
+                            expires_at=voting_deadline,
                         )
                     conn2.execute(
                         """
@@ -3406,6 +3542,7 @@ class PointsLedgerService:
         try:
             self.ensure_schema(conn)
             self._governance_begin_immediate(conn)
+            self._governance_assert_clock_safe_locked(conn, "sponsor_governance_proposal")
             row = self._refresh_governance_proposal_locked(conn, proposal_uuid)
             if not row:
                 raise ValueError("proposal not found")
@@ -3554,6 +3691,7 @@ class PointsLedgerService:
         try:
             self.ensure_schema(conn)
             self._governance_begin_immediate(conn)
+            self._governance_assert_clock_safe_locked(conn, "sign_governance_multisig")
             row = self._refresh_governance_proposal_locked(conn, proposal_uuid)
             if not row:
                 raise ValueError("proposal not found")
@@ -3739,6 +3877,7 @@ class PointsLedgerService:
         try:
             self.ensure_schema(conn)
             self._governance_begin_immediate(conn)
+            self._governance_assert_clock_safe_locked(conn, "cast_governance_vote")
             row = self._refresh_governance_proposal_locked(conn, proposal_uuid)
             if not row:
                 raise ValueError("proposal not found")
@@ -4005,6 +4144,7 @@ class PointsLedgerService:
         try:
             self.ensure_schema(conn)
             self._governance_begin_immediate(conn)
+            self._governance_assert_clock_safe_locked(conn, "veto_governance_proposal")
             row = self._refresh_governance_proposal_locked(conn, proposal_uuid)
             if not row:
                 raise ValueError("proposal not found")
@@ -4065,6 +4205,7 @@ class PointsLedgerService:
         try:
             self.ensure_schema(conn)
             self._governance_begin_immediate(conn)
+            self._governance_assert_clock_safe_locked(conn, "cancel_governance_proposal")
             row = self._refresh_governance_proposal_locked(conn, proposal_uuid)
             if not row:
                 raise ValueError("proposal not found")
@@ -5068,6 +5209,7 @@ class PointsLedgerService:
         try:
             self.ensure_schema(conn)
             self._governance_begin_immediate(conn)
+            self._governance_assert_clock_safe_locked(conn, "execute_governance_proposal")
             row = self._refresh_governance_proposal_locked(conn, proposal_uuid)
             if not row:
                 raise ValueError("proposal not found")
@@ -5081,6 +5223,10 @@ class PointsLedgerService:
             expected_payload_hash = self._governance_execution_payload_hash_for_row(row)
             if row["execution_payload_hash"] != expected_payload_hash:
                 raise ValueError("governance execution payload hash mismatch")
+            payload = _json_loads(row["payload_json"], {})
+            guard_error = self._governance_execution_guard_error(row, payload)
+            if guard_error:
+                raise ValueError(guard_error)
             multisig_status = self._governance_multisig_status_locked(conn, row)
             if row["governance_domain"] == "OFFICIAL_TREASURY" and not multisig_status.get("ready"):
                 raise PermissionError(
@@ -5092,7 +5238,6 @@ class PointsLedgerService:
                 address = row["target_wallet_address"]
                 if not WALLET_ADDRESS_RE.fullmatch(address):
                     raise ValueError("proposal target wallet address invalid")
-                payload = _json_loads(row["payload_json"], {})
                 risk_level = str(payload.get("risk_level") or "confirmed_scam")
                 label = str(payload.get("label") or "governance_confirmed_scam")
                 conn.execute(
@@ -5358,7 +5503,8 @@ class PointsLedgerService:
         executable = row["status"] == "passed" and not int(row["root_veto_used"] or 0) and (not timelock_until or timelock_until <= datetime.now(timezone.utc))
         multisig_status = self._governance_multisig_status_locked(conn, row, actor=actor) if row["governance_domain"] == "OFFICIAL_TREASURY" else {"required": False, "ready": True}
         payload = _json_loads(row["payload_json"], {})
-        payload_verified = self._governance_execution_payload_hash_for_row(row) == row["execution_payload_hash"]
+        guard_error = self._governance_execution_guard_error(row, payload)
+        payload_verified = self._governance_execution_payload_hash_for_row(row) == row["execution_payload_hash"] and not guard_error
         payload = self._governance_payload_with_latest_dispute_reply_locked(conn, row, payload)
         votes_cast = int(row["yes_count"] or 0) + int(row["no_count"] or 0) + int(row["abstain_count"] or 0)
         if isinstance(payload.get("official_multisig_policy"), dict):
@@ -5446,6 +5592,8 @@ class PointsLedgerService:
                 "vote_succeeded": row["status"] == "passed",
                 "timelock_finished": not timelock_until or timelock_until <= datetime.now(timezone.utc),
                 "payload_verified": payload_verified,
+                "execution_guard_verified": not guard_error,
+                "execution_guard_error": guard_error,
                 "root_veto_clear": not int(row["root_veto_used"] or 0),
                 "multisig_ready": not multisig_status.get("required") or bool(multisig_status.get("ready")),
             },
@@ -5502,6 +5650,382 @@ class PointsLedgerService:
             raise
         finally:
             conn.close()
+
+    def _official_treasury_flow_label(self, transaction_type):
+        labels = {
+            "treasury_allocation": "創世 / Mint 撥入官方 Treasury",
+            "mint_request": "治理 Mint 撥入官方 Treasury",
+            "wallet_creation_fee": "錢包建立服務費",
+            "service_fee_batch_debit": "站內服務費批次結算",
+            "video_tip_platform_fee": "影音投幣平台抽成",
+            "official_wallet_grant": "官方錢包對外撥款",
+            "official_fund_transfer": "官方基金調度",
+            "recovery_branch_official_treasury_carry_forward": "分支官方基金承接",
+        }
+        value = str(transaction_type or "")
+        return labels.get(value, value.replace("_", " ").strip().title() or "未分類")
+
+    def _official_treasury_service_fee_price_fit_locked(self, conn):
+        catalog_rows = conn.execute(
+            """
+            SELECT item_key, item_name, category, base_price, min_price, max_price, enabled, metadata_json
+            FROM economy_price_catalog
+            ORDER BY category, item_key
+            """
+        ).fetchall()
+        catalog_by_key = {str(row["item_key"]): row for row in catalog_rows}
+        recommended = [
+            {
+                "item_key": "post_cost_standard",
+                "item_name": "一般發文成本",
+                "category": "forum",
+                "recommended_points": 1,
+                "min_price": 1,
+                "max_price": 10,
+                "rationale": "低額防洗版，低於每日登入 5 點，不阻礙一般互動。",
+            },
+            {
+                "item_key": "post_pin_24h",
+                "item_name": "文章置頂 24 小時",
+                "category": "forum",
+                "recommended_points": 100,
+                "min_price": 50,
+                "max_price": 300,
+                "rationale": "屬於曝光型功能，價格約等於 20 天每日登入。",
+            },
+            {
+                "item_key": "cloud_storage_1gb_30d",
+                "item_name": "雲端容量 1GB / 30 天",
+                "category": "cloud_drive",
+                "recommended_points": 100,
+                "min_price": 50,
+                "max_price": 500,
+                "metadata": {"storage_bytes": 1024 ** 3, "duration_days": 30, "label": "雲端容量 1GB / 30 天"},
+                "rationale": "容量是持續成本，保留比互動類更高的 sink。",
+            },
+            {
+                "item_key": "comfyui_txt2img_basic",
+                "item_name": "基礎生圖一次",
+                "category": "comfyui",
+                "recommended_points": 5,
+                "min_price": 1,
+                "max_price": 25,
+                "rationale": "等同每日登入一次，適合低門檻試用。",
+            },
+            {
+                "item_key": "comfyui_txt2img_highres",
+                "item_name": "高解析生圖一次",
+                "category": "comfyui",
+                "recommended_points": 12,
+                "min_price": 5,
+                "max_price": 60,
+                "rationale": "較高資源消耗，約基礎生圖 2-3 倍。",
+            },
+            {
+                "item_key": "video_publish_basic",
+                "item_name": "影音發布處理費",
+                "category": "video",
+                "recommended_points": 2,
+                "min_price": 1,
+                "max_price": 20,
+                "rationale": "發布低價，主要收入仍來自投幣抽成與流量分潤反向激勵。",
+            },
+            {
+                "item_key": "video_boost_24h",
+                "item_name": "影音曝光加成 24 小時",
+                "category": "video",
+                "recommended_points": 80,
+                "min_price": 30,
+                "max_price": 300,
+                "rationale": "曝光型功能需高於一般發布，避免洗推薦。",
+            },
+            {
+                "item_key": "game_entry_standard",
+                "item_name": "遊戲一般入場",
+                "category": "game",
+                "recommended_points": 1,
+                "min_price": 1,
+                "max_price": 10,
+                "rationale": "高頻低額，避免鏈上逐筆結算，採服務費小帳本。",
+            },
+            {
+                "item_key": "marketplace_listing_fee",
+                "item_name": "市集上架費",
+                "category": "marketplace",
+                "recommended_points": 3,
+                "min_price": 1,
+                "max_price": 30,
+                "rationale": "低額抑制垃圾上架，成交抽成可另走平台收入。",
+            },
+            {
+                "item_key": "ai_agent_task_basic",
+                "item_name": "AI Agent 基礎任務",
+                "category": "ai_task",
+                "recommended_points": 10,
+                "min_price": 5,
+                "max_price": 100,
+                "rationale": "比生圖高，預留外部 API / 任務排程成本。",
+            },
+            {
+                "item_key": "username_change",
+                "item_name": "改名",
+                "category": "account",
+                "recommended_points": 200,
+                "min_price": 100,
+                "max_price": 1000,
+                "rationale": "低頻身分操作，價格維持較高以降低濫用。",
+            },
+            {
+                "item_key": "wallet_creation_fee",
+                "item_name": "第二個以上錢包建立費",
+                "category": "account",
+                "recommended_points": WALLET_CREATION_FEE_BASE_POINTS,
+                "min_price": WALLET_CREATION_FEE_BASE_POINTS,
+                "max_price": WALLET_CREATION_FEE_MAX_POINTS,
+                "rationale": "第一個免費，後續依指數提高，所得入官方 Treasury。",
+                "policy": {
+                    "first_wallet_free": True,
+                    "base_points": WALLET_CREATION_FEE_BASE_POINTS,
+                    "multiplier": WALLET_CREATION_FEE_MULTIPLIER,
+                    "max_points": WALLET_CREATION_FEE_MAX_POINTS,
+                },
+            },
+        ]
+        for item in recommended:
+            current = catalog_by_key.get(item["item_key"])
+            item["current_points"] = int(current["base_price"] or 0) if current else None
+            item["enabled"] = bool(int(current["enabled"] or 0)) if current else False
+            item["delta_points"] = None if current is None else int(item["recommended_points"]) - int(current["base_price"] or 0)
+            if current and not item.get("metadata"):
+                item["metadata"] = _json_loads(current["metadata_json"], {})
+        return recommended
+
+    def _official_treasury_income_expense_analysis_locked(self, conn, *, branch, official_wallet=None, limit=25):
+        branch = str(branch or self._canonical_branch_uuid(conn) or self._main_branch_uuid())
+        limit = min(100, max(1, int(limit or 25)))
+        service_rows = conn.execute(
+            """
+            SELECT c.item_key, COALESCE(p.item_name, c.item_key) AS item_name, c.status,
+                   COUNT(*) AS count, COALESCE(SUM(c.amount_points), 0) AS amount,
+                   MIN(c.created_at) AS first_created_at, MAX(c.created_at) AS last_created_at,
+                   MAX(c.settled_at) AS last_settled_at
+            FROM points_service_fee_charges c
+            LEFT JOIN economy_price_catalog p ON p.item_key=c.item_key
+            WHERE c.chain_branch=?
+            GROUP BY c.item_key, c.status
+            ORDER BY amount DESC, c.item_key
+            """,
+            (branch,),
+        ).fetchall()
+        service_by_item = {}
+        service_status_totals = {"reserved": 0, "settled": 0, "cancelled": 0}
+        for row in service_rows:
+            key = str(row["item_key"] or "")
+            item = service_by_item.setdefault(
+                key,
+                {
+                    "item_key": key,
+                    "item_name": row["item_name"] or key,
+                    "reserved_points": 0,
+                    "settled_points": 0,
+                    "cancelled_points": 0,
+                    "charge_count": 0,
+                    "last_activity_at": "",
+                },
+            )
+            status = str(row["status"] or "")
+            amount = int(row["amount"] or 0)
+            count = int(row["count"] or 0)
+            if status in service_status_totals:
+                service_status_totals[status] += amount
+                item[f"{status}_points"] += amount
+            item["charge_count"] += count
+            item["last_activity_at"] = row["last_settled_at"] or row["last_created_at"] or item["last_activity_at"]
+
+        settlement_rows = conn.execute(
+            """
+            SELECT ledger_uuid, ledger_hash, amount, created_at, public_metadata_json
+            FROM points_ledger
+            WHERE chain_branch=? AND action_type='service_fee_batch_debit'
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (branch, limit),
+        ).fetchall()
+        recent_settlements = []
+        for row in settlement_rows:
+            metadata = _json_loads(row["public_metadata_json"], {})
+            recent_settlements.append({
+                "ledger_uuid": row["ledger_uuid"],
+                "ledger_hash": row["ledger_hash"],
+                "amount_points": int(row["amount"] or 0),
+                "created_at": row["created_at"],
+                "batch_uuid": metadata.get("batch_uuid") or "",
+                "charge_count": int(metadata.get("charge_count") or 0),
+                "destination_fund_key": SERVICE_FEE_REVENUE_DESTINATION_FUND,
+                "destination_label": "官方 Treasury",
+            })
+
+        event_rows = conn.execute(
+            """
+            SELECT event_uuid, event_type, transaction_type, source_fund_key, source_address,
+                   destination_fund_key, destination_address, amount, metadata_json, created_at
+            FROM points_economy_events
+            WHERE status='confirmed'
+              AND chain_branch=?
+              AND (source_fund_key='official_treasury' OR destination_fund_key='official_treasury')
+            ORDER BY id DESC
+            """,
+            (branch,),
+        ).fetchall()
+        income_by_type = {}
+        expense_by_type = {}
+        recent_income = []
+        recent_expense = []
+        for row in event_rows:
+            source = str(row["source_fund_key"] or "")
+            destination = str(row["destination_fund_key"] or "")
+            amount = int(row["amount"] or 0)
+            transaction_type = str(row["transaction_type"] or "")
+            bucket = None
+            recent_target = None
+            if destination == "official_treasury" and source != "official_treasury":
+                bucket = income_by_type
+                recent_target = recent_income
+            elif source == "official_treasury" and destination != "official_treasury":
+                bucket = expense_by_type
+                recent_target = recent_expense
+            if bucket is None:
+                continue
+            current = bucket.setdefault(
+                transaction_type,
+                {
+                    "transaction_type": transaction_type,
+                    "label": self._official_treasury_flow_label(transaction_type),
+                    "amount_points": 0,
+                    "count": 0,
+                    "latest_at": "",
+                },
+            )
+            current["amount_points"] += amount
+            current["count"] += 1
+            current["latest_at"] = current["latest_at"] or row["created_at"]
+            if len(recent_target) < limit:
+                recent_target.append({
+                    "event_uuid": row["event_uuid"],
+                    "transaction_type": transaction_type,
+                    "label": self._official_treasury_flow_label(transaction_type),
+                    "amount_points": amount,
+                    "source_fund_key": source,
+                    "source_address": row["source_address"] or "",
+                    "destination_fund_key": destination,
+                    "destination_address": row["destination_address"] or "",
+                    "created_at": row["created_at"],
+                    "metadata": _json_loads(row["metadata_json"], {}),
+                })
+
+        video_fee_row = conn.execute(
+            """
+            SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS amount, MAX(created_at) AS latest_at
+            FROM points_ledger
+            WHERE chain_branch=? AND action_type='video_tip_platform_fee' AND status='confirmed'
+            """,
+            (branch,),
+        ).fetchone()
+        video_fee_total = int((video_fee_row["amount"] if video_fee_row else 0) or 0)
+        if video_fee_total and "video_tip_platform_fee" not in income_by_type:
+            income_by_type["video_tip_platform_fee"] = {
+                "transaction_type": "video_tip_platform_fee",
+                "label": self._official_treasury_flow_label("video_tip_platform_fee"),
+                "amount_points": video_fee_total,
+                "count": int((video_fee_row["count"] if video_fee_row else 0) or 0),
+                "latest_at": (video_fee_row["latest_at"] if video_fee_row else "") or "",
+                "ledger_only": True,
+                "note": "歷史投幣抽成可能仍在 legacy product ledger；新事件會 walletize 到官方 Treasury fund ledger。",
+            }
+
+        income_categories = sorted(income_by_type.values(), key=lambda item: (-int(item["amount_points"]), item["transaction_type"]))
+        expense_categories = sorted(expense_by_type.values(), key=lambda item: (-int(item["amount_points"]), item["transaction_type"]))
+        income_total = sum(int(item["amount_points"]) for item in income_categories)
+        expense_total = sum(int(item["amount_points"]) for item in expense_categories)
+        reserved_total = int(service_status_totals["reserved"])
+        settled_total = int(service_status_totals["settled"])
+        official_balance = int((official_wallet or {}).get("balance") or 0)
+        projected_balance = official_balance + reserved_total
+        next_settlement_remaining = max(0, SERVICE_BATCH_SETTLEMENT_MIN_POINTS - (reserved_total % SERVICE_BATCH_SETTLEMENT_MIN_POINTS)) if reserved_total else SERVICE_BATCH_SETTLEMENT_MIN_POINTS
+        if official_balance <= 0 and (expense_total > 0 or reserved_total <= 0):
+            balance_status = "red"
+            balance_reason = "official_treasury_empty"
+        elif expense_total > income_total + reserved_total and official_balance < expense_total:
+            balance_status = "yellow"
+            balance_reason = "expenses_exceed_visible_income"
+        else:
+            balance_status = "green"
+            balance_reason = "visible_income_expense_balanced"
+        planned_expenses = [
+            {"key": "manager_salary", "label": "管理員薪水", "funding_source": "official_treasury", "governance_required": True},
+            {"key": "exchange_fund_replenish", "label": "交易所基金補助", "funding_source": "official_treasury", "governance_required": True},
+            {"key": "contest_reward_payout", "label": "競賽獎金", "funding_source": "official_treasury_or_promo", "governance_required": True},
+            {"key": "game_weekly_reward", "label": "遊戲區每週獎金", "funding_source": "promo_fund_or_official_treasury", "governance_required": True},
+            {"key": "contribution_reward", "label": "貢獻度獎金", "funding_source": "promo_fund_or_official_treasury", "governance_required": True},
+            {"key": "video_traffic_reward", "label": "影音流量獎金", "funding_source": "promo_fund_or_official_treasury", "governance_required": True},
+            {"key": "forum_traffic_reward", "label": "討論區流量獎金", "funding_source": "promo_fund_or_official_treasury", "governance_required": True},
+            {"key": "security_bounty", "label": "資安賞金", "funding_source": "official_treasury", "governance_required": True},
+            {"key": "recovery_compensation", "label": "治理補償 / 事故賠付", "funding_source": "official_treasury_or_insurance_policy", "governance_required": True},
+            {"key": "infrastructure_budget", "label": "伺服器 / 模型 / 儲存營運成本", "funding_source": "official_treasury", "governance_required": True},
+        ]
+        return {
+            "chain_branch": branch,
+            "generated_at": utc_now(),
+            "status": balance_status,
+            "reason": balance_reason,
+            "summary": {
+                "official_wallet_balance_points": official_balance,
+                "income_total_points": income_total,
+                "expense_total_points": expense_total,
+                "net_points": income_total - expense_total,
+                "pending_service_fee_points": reserved_total,
+                "settled_service_fee_points": settled_total,
+                "projected_balance_after_pending_service_fee_points": projected_balance,
+                "service_fee_batch_threshold_points": SERVICE_BATCH_SETTLEMENT_MIN_POINTS,
+                "next_service_fee_settlement_remaining_points": next_settlement_remaining,
+            },
+            "settlement_policy": {
+                "service_fee_layer": "freeze_then_batch_debit",
+                "actual_chain_transfer_action": "service_fee_batch_debit",
+                "actual_chain_transfer_destination_fund_key": SERVICE_FEE_REVENUE_DESTINATION_FUND,
+                "chain_transaction_fee_destination_fund_key": "burn",
+                "video_tip_commission_destination_fund_key": "official_treasury",
+                "threshold_points": SERVICE_BATCH_SETTLEMENT_MIN_POINTS,
+                "note": "站內服務費收入批次進官方 Treasury；鏈上交易 fee / 加速 fee 仍進 BURN。",
+            },
+            "service_fee_items": sorted(service_by_item.values(), key=lambda item: (-int(item["settled_points"] + item["reserved_points"]), item["item_key"])),
+            "recent_service_fee_settlements": recent_settlements,
+            "income_categories": income_categories,
+            "expense_categories": expense_categories,
+            "recent_income_events": recent_income,
+            "recent_expense_events": recent_expense,
+            "planned_expense_categories": planned_expenses,
+            "pricing_fit": self._official_treasury_service_fee_price_fit_locked(conn),
+            "perspectives": {
+                "user": {
+                    "status": "balanced" if balance_status != "red" else "watch",
+                    "summary": "低額站內服務先凍結再批次結算，使用者不需要每次操作等待 20 proved；鏈上轉帳 fee 仍是 burn，不會變成 root 收益。",
+                    "risks": [
+                        "高頻服務費若定價過高會抑制互動。",
+                        "自管冷錢包付款仍需本機簽章，不能靜默扣款。",
+                    ],
+                },
+                "manager": {
+                    "status": balance_status,
+                    "summary": "官方 Treasury 的可見收入需覆蓋營運支出、獎金、補償與交易所基金撥補；支出仍需治理與官方多簽。",
+                    "risks": [
+                        "若長期支出大於服務收入與投幣抽成，應先調整價格、降低補貼或提案撥補，不應直接 mint。",
+                        "服務費是營運收入；鏈上 fee burn 是供給 sink，兩者不可混用。",
+                    ],
+                },
+            },
+        }
 
     def official_treasury_signer_center(self, *, actor=None, limit=50):
         if not self._governance_is_manager_actor(actor):
@@ -5564,6 +6088,7 @@ class PointsLedgerService:
                 multisig = payload.get("multisig") if isinstance(payload.get("multisig"), dict) else {}
                 if multisig.get("required") and not multisig.get("ready") and payload.get("status") == "passed":
                     signer_address = (multisig.get("policy") or {}).get("current_signer_wallet_address") or ""
+                    signing_payload = self._governance_multisig_signing_payload(refreshed)
                     signable.append({
                         "proposal_uuid": payload.get("proposal_uuid") or "",
                         "action_type": payload.get("action_type") or "",
@@ -5571,6 +6096,9 @@ class PointsLedgerService:
                         "requested_amount": int(payload.get("requested_amount") or 0),
                         "timelock_until": payload.get("timelock_until") or "",
                         "execution_payload_hash": payload.get("execution_payload_hash") or "",
+                        "signing_payload": signing_payload,
+                        "signing_payload_hash": sha256_text(canonical_json(signing_payload)),
+                        "offline_verifier_model": "canonical_json_sha256_v1",
                         "current_signer_wallet_address": signer_address,
                         "signature_count": int(multisig.get("signature_count") or 0),
                         "threshold": int(multisig.get("threshold") or 0),
@@ -5587,6 +6115,12 @@ class PointsLedgerService:
                 "policy_error": policy_error,
                 "pending_proposals": proposals,
                 "signable": signable,
+                "treasury_analysis": self._official_treasury_income_expense_analysis_locked(
+                    conn,
+                    branch=branch,
+                    official_wallet=official_wallet,
+                    limit=limit,
+                ),
                 "canonical_branch": branch,
                 "rc1_scope": "official_treasury_multisig_only",
                 "user_multisig_policy": "receive_only_preview_no_transfer",
@@ -5803,11 +6337,31 @@ class PointsLedgerService:
             ORDER BY id DESC LIMIT 20
             """
         ).fetchall()
+        active_risk_labels = [
+            item
+            for item in (self._address_risk_label_locked(conn, row["wallet_address"]) for row in labels)
+            if item
+        ]
+        active_freezes = [
+            item
+            for item in (self._address_freeze_locked(conn, row["wallet_address"]) for row in freezes)
+            if item
+        ]
+        active_provisional_freezes = []
+        expired_provisional_freezes = 0
+        for row in provisional_freezes:
+            item = self._address_provisional_freeze_locked(conn, row["wallet_address"])
+            if item:
+                active_provisional_freezes.append(item)
+            else:
+                expired_provisional_freezes += 1
+        if expired_provisional_freezes:
+            conn.commit()
         return {
             "proposals": [self._serialize_governance_proposal(conn, row) for row in proposals],
-            "active_risk_labels": [self._address_risk_label_locked(conn, row["wallet_address"]) for row in labels],
-            "active_freezes": [self._address_freeze_locked(conn, row["wallet_address"]) for row in freezes],
-            "active_provisional_freezes": [self._address_provisional_freeze_locked(conn, row["wallet_address"]) for row in provisional_freezes],
+            "active_risk_labels": active_risk_labels,
+            "active_freezes": active_freezes,
+            "active_provisional_freezes": active_provisional_freezes,
             "audit_verify": self._governance_audit_verify_locked(conn),
             "audit_events": [
                 {
@@ -6341,6 +6895,9 @@ class PointsLedgerService:
             source_address = ""
             source_label = ""
             source_fund_key = self._points_ledger_credit_source_fund(action_type)
+            destination_fund_key = None
+            destination_label = user_label
+            destination_address = user_address
             if action_type == "video_tip_credit":
                 source_address = self._legacy_counterparty_account(public_metadata.get("from_user_id"))
                 source_label = "打賞付款帳本身份"
@@ -6349,16 +6906,19 @@ class PointsLedgerService:
                 source_address = self._legacy_counterparty_account(public_metadata.get("from_user_id"))
                 source_label = "平台費付款帳本身份"
                 source_fund_key = None
+                destination_fund_key = "official_treasury"
             if source_fund_key:
                 source_label, source_address = self._economy_fund_flow_ref(source_fund_key)
-            walletized = bool(source_fund_key or source_address)
+            if destination_fund_key:
+                destination_label, destination_address = self._economy_fund_flow_ref(destination_fund_key)
+            walletized = bool(source_fund_key or source_address or destination_fund_key)
             return {
                 "source_fund_key": source_fund_key,
-                "destination_fund_key": None,
+                "destination_fund_key": destination_fund_key,
                 "source_label": source_label or "來源帳本身份",
                 "source_wallet_address": source_address,
-                "destination_label": user_label,
-                "destination_wallet_address": user_address,
+                "destination_label": destination_label,
+                "destination_wallet_address": destination_address,
                 "target_wallet_address": "",
                 "legacy_public_account_id": legacy_account,
                 "walletized": walletized,
@@ -6371,6 +6931,19 @@ class PointsLedgerService:
             if action_type == "video_tip_debit":
                 destination_address = self._legacy_counterparty_account(public_metadata.get("to_user_id"))
                 destination_label = "打賞收款帳本身份"
+                return {
+                    "source_fund_key": None,
+                    "destination_fund_key": None,
+                    "source_label": user_label,
+                    "source_wallet_address": user_address,
+                    "destination_label": destination_label or "打賞收款帳本身份",
+                    "destination_wallet_address": destination_address,
+                    "target_wallet_address": "",
+                    "legacy_public_account_id": legacy_account,
+                    "internal_movement": True,
+                    "walletized": True,
+                    "walletization_note": "影音投幣總額扣款相容列；鏈上資金流由創作者淨收入與官方抽成列拆帳",
+                }
             if destination_fund_key:
                 destination_label, destination_address = self._economy_fund_flow_ref(destination_fund_key)
             walletized = bool(destination_fund_key or destination_address)
@@ -6533,7 +7106,9 @@ class PointsLedgerService:
             return "burn"
         if action in {"wallet_creation_fee"}:
             return "official_treasury"
-        if action.startswith("spend:") or action in {"service_fee_batch_debit", "video_boost_debit", "admin_adjust_debit", "chain_acceleration_fee"}:
+        if action in {"service_fee_batch_debit"}:
+            return SERVICE_FEE_REVENUE_DESTINATION_FUND
+        if action.startswith("spend:") or action in {"video_boost_debit", "admin_adjust_debit", "chain_acceleration_fee"}:
             return "burn"
         if action.startswith("rollback:"):
             return "burn"
@@ -6551,6 +7126,9 @@ class PointsLedgerService:
             source_address = ""
             source_label = ""
             source_fund_key = self._points_ledger_credit_source_fund(action_type)
+            destination_fund_key = None
+            destination_label = user_label
+            destination_address = user_address
             if action_type == "video_tip_credit":
                 source_address = self._counterparty_user_address(conn, public_metadata.get("from_user_id"))
                 source_label = "打賞付款錢包"
@@ -6559,20 +7137,23 @@ class PointsLedgerService:
                 source_address = self._counterparty_user_address(conn, public_metadata.get("from_user_id"))
                 source_label = "平台費付款錢包"
                 source_fund_key = None
+                destination_fund_key = "official_treasury"
             elif action_type == "wallet_transfer_in":
                 source_address = source_override
                 source_label = "轉帳付款錢包"
                 source_fund_key = None
             if source_fund_key:
                 source_label, source_address = self._economy_fund_flow_ref(source_fund_key)
-            walletized = bool(source_fund_key or source_address)
+            if destination_fund_key:
+                destination_label, destination_address = self._economy_fund_flow_ref(destination_fund_key)
+            walletized = bool(source_fund_key or source_address or destination_fund_key)
             return {
                 "source_fund_key": source_fund_key,
-                "destination_fund_key": None,
+                "destination_fund_key": destination_fund_key,
                 "source_label": source_label or "來源錢包",
                 "source_wallet_address": source_address,
-                "destination_label": user_label,
-                "destination_wallet_address": user_address,
+                "destination_label": destination_label,
+                "destination_wallet_address": destination_address,
                 "target_wallet_address": target_address,
                 "legacy_public_account_id": legacy_account,
                 "walletized": walletized,
@@ -6585,6 +7166,19 @@ class PointsLedgerService:
             if action_type == "video_tip_debit":
                 destination_address = self._counterparty_user_address(conn, public_metadata.get("to_user_id"))
                 destination_label = "打賞收款錢包"
+                return {
+                    "source_fund_key": None,
+                    "destination_fund_key": None,
+                    "source_label": user_label,
+                    "source_wallet_address": user_address,
+                    "destination_label": destination_label or "打賞收款錢包",
+                    "destination_wallet_address": destination_address,
+                    "target_wallet_address": target_address,
+                    "legacy_public_account_id": legacy_account,
+                    "internal_movement": True,
+                    "walletized": True,
+                    "walletization_note": "影音投幣總額扣款相容列；鏈上資金流由創作者淨收入與官方抽成列拆帳",
+                }
             elif action_type == "wallet_transfer_out":
                 destination_address = destination_override
                 destination_label = "轉帳收款錢包"
@@ -9203,6 +9797,88 @@ class PointsLedgerService:
                 "settlement": settlement,
                 "wallet": self.get_wallet(user_id),
                 "item": dict(item),
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def pay_violation_fine(self, *, user_id, fine_uuid, amount_points, source_wallet_address=None, request_uuid=None, signature=None, actor=None, metadata=None):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            self._assert_chain_writable(conn, "pay violation fine")
+            active_branch = self._canonical_branch_uuid(conn)
+            self._assert_canonical_write_branch(conn, active_branch)
+            amount = int(amount_points or 0)
+            if amount <= 0:
+                raise ValueError("amount must be positive")
+            fine_ref = str(fine_uuid or "").strip()
+            if not fine_ref:
+                raise ValueError("fine_uuid required")
+            source_address = str(source_wallet_address or "").strip().lower()
+            if source_address:
+                source_wallet = self._wallet_identity_row_for_user_address(conn, user_id, source_address, active_only=True)
+                if not source_wallet:
+                    raise ValueError("source wallet does not belong to current user")
+            else:
+                source_address = self._primary_wallet_address_for_read(conn, user_id) or ""
+                source_wallet = self._wallet_identity_row_for_user_address(conn, user_id, source_address, active_only=True) if source_address else None
+            if source_wallet:
+                self._assert_wallet_identity_can_spend(source_wallet, context="violation fine payment")
+                available = self._wallet_identity_available_for_address(conn, user_id=int(user_id), address=source_address)
+                if available < amount:
+                    raise ValueError("insufficient balance")
+            charge_uuid = str(request_uuid or uuid.uuid4()).strip()[:120]
+            if not charge_uuid:
+                raise ValueError("request_uuid is required")
+            self._verify_service_fee_wallet_signature(
+                conn=conn,
+                user_id=user_id,
+                source_wallet_address=source_address,
+                item_key="violation_fine",
+                quantity=1,
+                amount_points=amount,
+                request_uuid=charge_uuid,
+                reference_type="violation_fine",
+                reference_id=fine_ref,
+                signature=signature,
+                chain_branch=active_branch,
+            )
+            public_metadata = {
+                "item_key": "violation_fine",
+                "fine_uuid": fine_ref,
+                "source_wallet_address": source_address,
+                "destination_fund_key": "burn",
+                "destination_policy": "fine_payment_burn",
+                "chain_branch": active_branch,
+                **dict(metadata or {}),
+            }
+            row, created = self._record_transaction(
+                conn,
+                user_id=user_id,
+                currency_type=DISPLAY_CURRENCY,
+                direction="debit",
+                amount=amount,
+                action_type="spend:violation_fine",
+                reference_type="violation_fine",
+                reference_id=fine_ref,
+                idempotency_key=f"violation_fine:{fine_ref}:pay",
+                reason="violation fine payment to burn",
+                public_metadata=public_metadata,
+                actor=actor,
+            )
+            conn.commit()
+            return {
+                "ok": True,
+                "created": created,
+                "ledger": self.serialize_ledger(row, include_user_id=True),
+                "wallet": self.get_wallet(user_id),
+                "charge_uuid": charge_uuid,
+                "destination_fund_key": "burn",
             }
         except Exception:
             conn.rollback()
