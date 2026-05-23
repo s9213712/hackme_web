@@ -53,6 +53,12 @@
   必須有更高強度的回歸測試。
 - 若沒有補測試，必須明確說明原因與風險，不能靜默略過。
 
+每次新功能完成後，還必須依
+[FEATURE_COMPLETION_QA_GATE.md](FEATURE_COMPLETION_QA_GATE.md) 跑一次針對性
+QA gate。此 gate 必須視風險涵蓋壓力、性能、滲透攻擊、找碴、提權、違規、
+例外行為、競態與觀測檢查。未跑此 gate 或有 blocker 時，不得宣稱功能完整
+完成。
+
 ## 3. 禁止靜默失敗
 
 所有失敗都必須有清楚回饋，但不能洩漏敏感資訊。
@@ -132,6 +138,8 @@
 - 修改了哪些功能
 - 更新了哪些 README / 文件
 - 更新了哪些測試
+- 針對性 QA gate 結果：壓力、性能、滲透、找碴、提權、違規、例外行為等
+  測了哪些，結果如何
 - 新增了哪些錯誤提醒
 - 手機版檢查結果
 - 哪些計算已移到伺服器端
@@ -145,15 +153,17 @@
 
 1. 有沒有同步更新使用者文件、管理文件、開發文件？
 2. 有沒有同步補上正常、錯誤、權限不足、邊界值測試？
-3. 前端失敗時，使用者是否知道原因與下一步？
-4. root / 管理端是否能從 audit 或 log 查到線索？
-5. 手機版是否仍可操作？
-6. 關鍵計算是否仍留在伺服器端？
-7. 最終回報是否交代完功能、文件、測試、風險與未完成項？
+3. 有沒有跑針對性壓力、性能、滲透、找碴、提權、違規、例外行為測試？
+4. 前端失敗時，使用者是否知道原因與下一步？
+5. root / 管理端是否能從 audit 或 log 查到線索？
+6. 手機版是否仍可操作？
+7. 關鍵計算是否仍留在伺服器端？
+8. 最終回報是否交代完功能、文件、測試、風險與未完成項？
 
 ## 相關文件
 
 - [README.zh-TW.md](../README.zh-TW.md)
 - [For_developer.md](../For_developer.md)
 - [QA_MISSION_FOR_AGENTS.md](QA_MISSION_FOR_AGENTS.md)
+- [FEATURE_COMPLETION_QA_GATE.md](FEATURE_COMPLETION_QA_GATE.md)
 - [security/PRE_RELEASE_CHECKLIST.md](../security/PRE_RELEASE_CHECKLIST.md)
