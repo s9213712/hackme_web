@@ -335,6 +335,11 @@ Recommended post-RC1 hardening:
 - Mint in RC1 is an OFFICIAL_TREASURY `MINT_REQUEST`: manager+ proposal,
   manager+ vote, root veto allowed, timelock when configured, official multisig
   threshold, payload hash verification, then mint into the official fund.
+- Supply expansion is not a mint request. It is a constitutional
+  `PARAMETER_CHANGE` with `payload.proposal_type=SUPPLY_EXPANSION_REQUEST` and
+  `payload.execution_class=MONETARY_POLICY_AMENDMENT`; root has no veto, the
+  vote is active-user scoped with critical thresholds, and execution only
+  increases `max_supply`. Follow-up minting still requires `MINT_REQUEST`.
 - Official treasury transfer cannot be executed by root directly.
 - Official treasury transfer requires manager+ vote, optional root veto window,
   timelock elapsed, payload hash unchanged, and official multisig threshold

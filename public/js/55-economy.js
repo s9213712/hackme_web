@@ -3018,6 +3018,7 @@ function economyGovernanceActionLabel(action) {
     CONTEST_REWARD_PAYOUT: "競賽獎金",
     TREASURY_SIGNER_CHANGE: "官方簽署者變更",
     PARAMETER_CHANGE: "參數變更",
+    SUPPLY_EXPANSION_REQUEST: "憲法級增發條款",
     FEATURE_ACTIVATION: "功能啟用",
     HARD_FORK_ACCEPTANCE: "Hard fork 接受",
   };
@@ -3050,7 +3051,8 @@ function economyGovernanceCategoryForProposal(proposal = {}) {
   if (action === "MINT_REQUEST") return "mint";
   if (domain === "OFFICIAL_TREASURY" || ["TREASURY_TRANSFER", "EXCHANGE_FUND_REPLENISH", "CONTEST_REWARD_PAYOUT"].includes(action)) return "treasury";
   if (domain === "EMERGENCY_SECURITY" || ["ROLLBACK_BRANCH", "EMERGENCY_LOCKDOWN"].includes(action)) return "emergency";
-  if (domain === "PROTOCOL_PARAMETER" || domain === "ADMIN_POLICY" || ["PARAMETER_CHANGE", "FEATURE_ACTIVATION", "AUTO_BURN_POLICY", "TREASURY_SIGNER_CHANGE", "HARD_FORK_ACCEPTANCE"].includes(action)) return "policy";
+  if (String(proposal?.payload?.proposal_type || "").toUpperCase() === "SUPPLY_EXPANSION_REQUEST") return "policy";
+  if (domain === "PROTOCOL_PARAMETER" || domain === "ADMIN_POLICY" || ["PARAMETER_CHANGE", "SUPPLY_EXPANSION_REQUEST", "FEATURE_ACTIVATION", "AUTO_BURN_POLICY", "TREASURY_SIGNER_CHANGE", "HARD_FORK_ACCEPTANCE"].includes(action)) return "policy";
   return "public";
 }
 
@@ -3237,12 +3239,15 @@ function economyRenderGovernanceProposalCard(proposal = {}, { nested = false } =
   const recoveryDetail = String(proposal.action_type || "").toUpperCase() === "ROLLBACK_BRANCH"
     ? `<div class="drive-card-sub">recovery ${sanitize(proposalPayload.recovery_strategy || proposalPayload.selected_recovery_strategy || "-")} · options ${sanitize(recoveryOptions || "-")} · claims ${claims.length}</div>`
     : "";
+  const actionLabel = String(proposalPayload.proposal_type || "").toUpperCase() === "SUPPLY_EXPANSION_REQUEST"
+    ? economyGovernanceActionLabel("SUPPLY_EXPANSION_REQUEST")
+    : economyGovernanceActionLabel(proposal.action_type || proposal.proposal_type);
   const actionPanel = [votingButtons, sponsor, multisigSign, rootVeto, cancel, rootExecute].filter(Boolean).join("");
   return `
     <div class="economy-governance-proposal-card${nested ? " economy-governance-inline-proposal" : ""}">
       <div class="drive-file-row economy-governance-proposal-toggle" role="button" tabindex="0" aria-expanded="${expanded ? "true" : "false"}" data-governance-toggle-proposal="${sanitize(proposalUuid)}">
         <div>
-          <strong>${sanitize(economyGovernanceActionLabel(proposal.action_type || proposal.proposal_type))} · ${sanitize(proposal.governance_domain || "-")} · ${sanitize(proposal.lifecycle_status || economyGovernanceStatusLabel(status))}</strong>
+          <strong>${sanitize(actionLabel)} · ${sanitize(proposal.governance_domain || "-")} · ${sanitize(proposal.lifecycle_status || economyGovernanceStatusLabel(status))}</strong>
           <div class="drive-card-sub">${sanitize(proposal.reason || "")}</div>
           <div class="drive-card-sub">${sanitize(economyGovernanceProgress(proposal))}</div>
           <div class="drive-card-sub">timeline ${sanitize(economyGovernanceTimeline(proposal))}</div>
@@ -3636,6 +3641,31 @@ async function createGovernancePolicyProposal() {
   const reason = String($("economy-governance-policy-reason")?.value || "").trim();
   if (!key || !reason) {
     economyGovernanceMsg("政策提案需要 Key / Feature 與 Reason。", false);
+    return;
+  }
+  if (actionType === "SUPPLY_EXPANSION_REQUEST") {
+    const requestedDelta = Math.floor(Number(value || 0));
+    if (!Number.isFinite(requestedDelta) || requestedDelta <= 0) {
+      economyGovernanceMsg("憲法級增發條款需要在 Value 填入正數增發額。", false);
+      return;
+    }
+    try {
+      const json = await fetchEconomyJson("/admin/points/governance/supply-expansion", {
+        method: "POST",
+        body: JSON.stringify({
+          destination_fund_key: key,
+          requested_delta: requestedDelta,
+          reason,
+          financial_report: reason,
+          risk_disclosure: "Monetary policy amendment dilutes all holders and only changes max_supply.",
+          reference: economyRequestId("supply_expansion"),
+        }),
+      });
+      economyNotifySuccess(`憲法級增發條款已送出：${json.proposal?.proposal_uuid || ""}`, { msgFn: economyGovernanceMsg, label: "治理提案" });
+      await loadEconomyGovernance({ silent: true });
+    } catch (err) {
+      economyNotifyFailure(err, { msgFn: economyGovernanceMsg, label: "治理提案", fallback: "憲法級增發條款送出失敗" });
+    }
     return;
   }
   try {

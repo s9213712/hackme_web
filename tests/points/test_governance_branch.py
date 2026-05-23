@@ -319,6 +319,77 @@ def _pass_treasury_proposal(service, proposal_uuid):
     return passed
 
 
+def _set_governance_timelock_ready(service, proposal_uuid):
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        conn.execute(
+            "UPDATE points_chain_governance_proposals SET timelock_until='2026-01-01T00:00:00Z', timelock_ends_at='2026-01-01T00:00:00Z' WHERE proposal_uuid=?",
+            (proposal_uuid,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _pass_public_constitutional_proposal(service, proposal_uuid):
+    actors = [
+        _actor(1, "root", "super_admin"),
+        _actor(2, "user2", "manager"),
+        _actor(3, "user3", "user"),
+        _actor(4, "user4", "user"),
+        _actor(5, "user5", "user"),
+    ]
+    result = None
+    for actor in actors:
+        result = service.cast_governance_vote(actor=actor, proposal_uuid=proposal_uuid, vote="yes")
+    assert result["proposal"]["status"] == "passed"
+    return result
+
+
+def _force_supply_expansion_eligibility(service):
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        branch = service._canonical_branch_uuid(conn)
+        report = economy_layer_report(conn, chain_secret=service.chain_secret, actor={"role": "system", "id": None}, chain_branch=branch)
+        releasable_remaining = int(report["supply"]["releasable_remaining"] or 0)
+        if releasable_remaining > 0:
+            append_economy_event(
+                conn,
+                chain_secret=service.chain_secret,
+                event_type="mint",
+                transaction_type="qa_exhaust_releasable_supply",
+                source_fund_key="mint",
+                destination_fund_key="official_treasury",
+                amount=releasable_remaining,
+                idempotency_key="qa:supply-expansion:exhaust-releasable",
+                metadata={"fixture": True},
+                actor={"role": "system", "id": None},
+                chain_branch=branch,
+            )
+        report = economy_layer_report(conn, chain_secret=service.chain_secret, actor={"role": "system", "id": None}, chain_branch=branch)
+        for fund_key in ("official_treasury", "promo_fund", "exchange_fund"):
+            balance = int(report["funds"][fund_key]["balance"] or 0)
+            if balance > 0:
+                append_economy_event(
+                    conn,
+                    chain_secret=service.chain_secret,
+                    event_type="burn",
+                    transaction_type=f"qa_drain_{fund_key}_for_supply_expansion",
+                    source_fund_key=fund_key,
+                    destination_fund_key="burn",
+                    amount=balance,
+                    idempotency_key=f"qa:supply-expansion:drain:{fund_key}",
+                    metadata={"fixture": True},
+                    actor={"role": "system", "id": None},
+                    chain_branch=branch,
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _activate_recovery_branch(service, *, incident_tx_hash="incident-hash", excluded_tx_hashes=None, recovery_strategy="treasury_compensation"):
     root = _actor(1, "root", "super_admin")
     manager = _actor(2, "user2", "manager")
@@ -692,6 +763,166 @@ def test_mint_request_requires_idempotency_caps_multisig_and_explorer_event(tmp_
         conn.close()
     assert report["supply"]["minted_total"] == 20_000_123
     assert report["funds"]["official_treasury"]["balance"] == 10_000_123
+
+
+def test_mint_reports_supply_exhausted_when_releasable_supply_is_used(tmp_path):
+    service = _service(tmp_path, user_count=10)
+    manager = _actor(2, "user2", "manager")
+    _force_supply_expansion_eligibility(service)
+
+    with pytest.raises(ValueError, match="mint_supply_exhausted"):
+        service.create_mint_request_proposal(
+            actor=manager,
+            destination_fund_key="official_treasury",
+            amount=1,
+            reason="mint should fail once releasable supply is exhausted",
+            reference="mint-after-exhausted",
+        )
+
+
+def test_supply_expansion_request_requires_exhausted_supply_and_critical_funds(tmp_path):
+    service = _service(tmp_path, user_count=10)
+    manager = _actor(2, "user2", "manager")
+
+    with pytest.raises(ValueError, match="exhausted mint or releasable supply"):
+        service.create_supply_expansion_request_proposal(
+            actor=manager,
+            requested_delta=1_000,
+            destination_fund_key="promo_fund",
+            reason="should require exhausted supply before constitutional expansion",
+            reference="supply-expansion-not-exhausted",
+        )
+
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        branch = service._canonical_branch_uuid(conn)
+        report = economy_layer_report(conn, chain_secret=service.chain_secret, actor={"role": "system", "id": None}, chain_branch=branch)
+        append_economy_event(
+            conn,
+            chain_secret=service.chain_secret,
+            event_type="mint",
+            transaction_type="qa_exhaust_releasable_without_drain",
+            source_fund_key="mint",
+            destination_fund_key="official_treasury",
+            amount=int(report["supply"]["releasable_remaining"]),
+            idempotency_key="qa:supply-expansion:exhaust-without-drain",
+            metadata={"fixture": True},
+            actor={"role": "system", "id": None},
+            chain_branch=branch,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(ValueError, match="official treasury below minimum"):
+        service.create_supply_expansion_request_proposal(
+            actor=manager,
+            requested_delta=1_000,
+            destination_fund_key="promo_fund",
+            reason="should require official treasury below minimum reserve",
+            reference="supply-expansion-treasury-still-funded",
+        )
+
+
+def test_supply_expansion_is_constitutional_policy_change_not_mint(tmp_path):
+    service = _service(tmp_path, user_count=10)
+    manager = _actor(2, "user2", "manager")
+    _force_supply_expansion_eligibility(service)
+
+    with pytest.raises(ValueError, match="single proposal cap"):
+        service.create_supply_expansion_request_proposal(
+            actor=manager,
+            requested_delta=1_000_001,
+            destination_fund_key="promo_fund",
+            reason="single expansion cap should block oversized monetary amendment",
+            reference="supply-expansion-over-single-cap",
+        )
+
+    created = service.create_supply_expansion_request_proposal(
+        actor=manager,
+        requested_delta=1_000_000,
+        destination_fund_key="promo_fund",
+        reason="constitutional expansion after exhausted supply and critical official funds",
+        reference="supply-expansion-valid-001",
+        financial_report="mint exhausted; official, promo, and exchange funds are below critical operating watermarks",
+        risk_disclosure="dilutes all holders by one percent of original max supply",
+    )
+    proposal = created["proposal"]
+    proposal_uuid = proposal["proposal_uuid"]
+    assert proposal["governance_domain"] == "PROTOCOL_PARAMETER"
+    assert proposal["action_type"] == "PARAMETER_CHANGE"
+    assert proposal["proposal_severity"] == "CRITICAL"
+    assert proposal["root_veto_allowed"] is False
+    assert proposal["payload"]["proposal_type"] == "SUPPLY_EXPANSION_REQUEST"
+    assert proposal["payload"]["execution_class"] == "MONETARY_POLICY_AMENDMENT"
+    assert proposal["payload"]["requested_new_max_supply"] == 101_000_000
+    assert proposal["quorum_count"] == 5
+    assert proposal["pass_threshold_bps"] == 8000
+    assert proposal["vote_differential_required_bps"] == 5000
+
+    _pass_public_constitutional_proposal(service, proposal_uuid)
+    with pytest.raises(ValueError, match="timelock active"):
+        service.execute_governance_proposal(actor=manager, proposal_uuid=proposal_uuid)
+    _set_governance_timelock_ready(service, proposal_uuid)
+    executed = service.execute_governance_proposal(actor=manager, proposal_uuid=proposal_uuid)
+    assert executed["result"]["action"] == "max_supply_expanded"
+    assert executed["result"]["minted"] is False
+    assert executed["result"]["old_max_supply"] == 100_000_000
+    assert executed["result"]["new_max_supply"] == 101_000_000
+
+    conn = service.get_db()
+    try:
+        report = economy_layer_report(conn, chain_secret=service.chain_secret)
+    finally:
+        conn.close()
+    assert report["supply"]["max_supply"] == 101_000_000
+    assert report["supply"]["minted_total"] == 60_000_000
+    assert report["supply"]["releasable_remaining"] == 1_000_000
+
+    with pytest.raises(ValueError, match="destination violates supply expansion restriction"):
+        service.create_mint_request_proposal(
+            actor=manager,
+            destination_fund_key="official_treasury",
+            amount=1,
+            reason="expanded supply cannot be minted to the wrong fund",
+            reference="mint-expanded-wrong-destination",
+        )
+    _official_hot_wallet(service, 1)
+    _official_hot_wallet(service, 2)
+    mint = service.create_mint_request_proposal(
+        actor=manager,
+        destination_fund_key="promo_fund",
+        amount=1,
+        reason="expanded supply follows the approved destination fund restriction",
+        reference="mint-expanded-promo-destination",
+    )
+    assert mint["proposal"]["action_type"] == "MINT_REQUEST"
+    assert mint["proposal"]["payload"]["destination_fund_key"] == "promo_fund"
+
+
+def test_generic_parameter_change_cannot_directly_change_max_supply(tmp_path):
+    service = _service(tmp_path, user_count=10)
+    manager = _actor(2, "user2", "manager")
+    created = service.create_policy_governance_proposal(
+        actor=manager,
+        action_type="PARAMETER_CHANGE",
+        title="Attempt direct max supply edit",
+        reason="generic parameter changes must not mutate constitutional supply",
+        payload={"parameter_key": "max_supply", "parameter_value": "999999999"},
+        reference="generic-max-supply-change",
+    )
+    proposal_uuid = created["proposal"]["proposal_uuid"]
+    _pass_public_constitutional_proposal(service, proposal_uuid)
+    executed = service.execute_governance_proposal(actor=manager, proposal_uuid=proposal_uuid)
+    assert executed["result"]["action"] == "protocol_policy_approved"
+
+    conn = service.get_db()
+    try:
+        report = economy_layer_report(conn, chain_secret=service.chain_secret)
+    finally:
+        conn.close()
+    assert report["supply"]["max_supply"] == 100_000_000
 
 
 def test_revoked_treasury_signer_signature_stops_counting(tmp_path):

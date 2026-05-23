@@ -92,6 +92,40 @@ def _is_burn_address(address, *, wallets=None):
     return address in burn_addresses
 
 
+def _policy_original_max_supply(policy):
+    metadata = policy if isinstance(policy, dict) else {}
+    return int(
+        metadata.get("constitutional_original_max_supply")
+        or metadata.get("original_max_supply")
+        or DEFAULT_ECONOMY_POLICY["max_supply"]
+        or metadata.get("max_supply")
+        or 0
+    )
+
+
+def _policy_supply_expansion_restriction(policy):
+    metadata = policy if isinstance(policy, dict) else {}
+    latest = metadata.get("latest_supply_expansion")
+    if isinstance(latest, dict):
+        return latest
+    restrictions = metadata.get("supply_expansion_restrictions")
+    if isinstance(restrictions, list) and restrictions:
+        latest = restrictions[-1]
+        return latest if isinstance(latest, dict) else {}
+    return {}
+
+
+def _expanded_supply_mint_portion(policy, replay, amount):
+    original_max = _policy_original_max_supply(policy)
+    if original_max <= 0:
+        return 0
+    original_releasable = original_max - int(policy.get("reserved_locked") or 0)
+    minted_total = int((replay or {}).get("minted_total") or 0)
+    before = max(0, minted_total - original_releasable)
+    after = max(0, minted_total + int(amount or 0) - original_releasable)
+    return max(0, after - before)
+
+
 def economy_event_hash_payload(row):
     return {
         "event_uuid": row["event_uuid"],
@@ -458,7 +492,17 @@ def append_economy_event(
     if source_fund_key == "mint" and not allow_mint_override:
         releasable = int(policy["max_supply"]) - int(policy["reserved_locked"])
         if int(replay["minted_total"]) + amount > releasable:
+            if int(replay["minted_total"]) >= releasable:
+                raise ValueError("mint_supply_exhausted")
             raise ValueError("mint would exceed releasable supply")
+        expanded_portion = _expanded_supply_mint_portion(policy, replay, amount)
+        if expanded_portion > 0:
+            restriction = _policy_supply_expansion_restriction(policy)
+            restricted_destination = str(restriction.get("destination_fund_key") or "").strip().lower()
+            if not restricted_destination:
+                raise ValueError("supply_expansion_authorization_required")
+            if destination_fund_key != restricted_destination:
+                raise ValueError("mint destination violates supply expansion restriction")
     elif source_fund_key is not None and source_fund_key != "mint":
         source_balance = int((replay.get("balances") or {}).get(source_fund_key, {}).get("balance") or 0)
         if source_balance < amount:

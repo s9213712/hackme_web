@@ -10,6 +10,7 @@ from .economy_layer import (
     economy_fund_address,
     ensure_economy_layer_schema,
     economy_layer_report,
+    load_economy_policy,
     replay_economy_events,
 )
 from .wallet_identity import (
@@ -1002,6 +1003,30 @@ class PointsLedgerService:
             }
         raise ValueError("unsupported governance proposal type")
 
+    def _governance_policy_for_payload(self, policy, *, action_type, payload):
+        action_type = str(action_type or "").strip().upper()
+        execution_class = str((payload or {}).get("execution_class") or "").strip().upper()
+        proposal_kind = str((payload or {}).get("proposal_type") or "").strip().upper()
+        if action_type == "PARAMETER_CHANGE" and (
+            execution_class == "MONETARY_POLICY_AMENDMENT"
+            or proposal_kind == "SUPPLY_EXPANSION_REQUEST"
+        ):
+            # The CRITICAL severity delta is applied later, bringing quorum to
+            # 50% while preserving an 80% yes threshold and 50% vote differential.
+            return {
+                **policy,
+                "voter_scope": "active_users",
+                "root_veto_allowed": False,
+                GOV_QUORUM_RATE_FIELD: 3000,
+                "minimum_quorum": 5,
+                GOV_PASS_THRESHOLD_RATE_FIELD: 8000,
+                GOV_VOTE_DIFFERENTIAL_REQUIRED_RATE_FIELD: 5000,
+                "timelock_seconds": 7 * 24 * 60 * 60,
+                "expires_seconds": 14 * 24 * 60 * 60,
+                "monetary_policy_amendment": True,
+            }
+        return policy
+
     def _governance_severity_policy(self, severity):
         severity = str(severity or "NORMAL").strip().upper()
         if severity not in {"LOW", "NORMAL", "HIGH", "CRITICAL"}:
@@ -1366,6 +1391,7 @@ class PointsLedgerService:
             payload=payload,
         )
         policy = self._governance_policy(proposal_type, governance_domain=governance_domain, action_type=action_type)
+        policy = self._governance_policy_for_payload(policy, action_type=action_type, payload=payload)
         policy = {
             **policy,
             GOV_QUORUM_RATE_FIELD: max(1, int(policy[GOV_QUORUM_RATE_FIELD]) + int(severity_policy[GOV_QUORUM_DELTA_RATE_FIELD])),
@@ -1756,6 +1782,7 @@ class PointsLedgerService:
                 reference=reference,
                 policy=policy,
                 chain_branch=active_branch,
+                destination_fund_key=destination_fund_key,
             )
             destination = economy_fund_address(self.chain_secret, destination_fund_key)
             multisig_policy = self._governance_multisig_policy_locked(conn, fund_key=destination_fund_key)
@@ -1789,7 +1816,318 @@ class PointsLedgerService:
         finally:
             conn.close()
 
-    def _mint_request_precheck_locked(self, conn, *, amount, reference, policy=None, chain_branch=None, exclude_proposal_uuid=""):
+    def _supply_expansion_original_max_supply(self, policy):
+        return int(
+            (policy or {}).get("constitutional_original_max_supply")
+            or (policy or {}).get("original_max_supply")
+            or 100_000_000
+        )
+
+    def _supply_expansion_restriction(self, policy):
+        latest = (policy or {}).get("latest_supply_expansion")
+        if isinstance(latest, dict):
+            return latest
+        restrictions = (policy or {}).get("supply_expansion_restrictions")
+        if isinstance(restrictions, list) and restrictions:
+            latest = restrictions[-1]
+            return latest if isinstance(latest, dict) else {}
+        return {}
+
+    def _supply_expansion_mint_portion(self, *, policy, replay, amount):
+        original_max = self._supply_expansion_original_max_supply(policy)
+        original_releasable = original_max - int((policy or {}).get("reserved_locked") or 0)
+        minted_total = int((replay or {}).get("minted_total") or 0)
+        before = max(0, minted_total - original_releasable)
+        after = max(0, minted_total + int(amount or 0) - original_releasable)
+        return max(0, after - before)
+
+    def _supply_expansion_executed_delta_this_year_locked(self, conn, *, year):
+        prefix = str(year or utc_now()[:4])[:4]
+        total = 0
+        rows = conn.execute(
+            """
+            SELECT payload_json, execution_result_json
+            FROM points_chain_governance_proposals
+            WHERE action_type='PARAMETER_CHANGE'
+              AND status='executed'
+              AND executed_at LIKE ?
+            """,
+            (f"{prefix}%",),
+        ).fetchall()
+        for row in rows:
+            payload = _json_loads(row["payload_json"], {})
+            result = _json_loads(row["execution_result_json"], {})
+            if str(payload.get("execution_class") or "").strip().upper() != "MONETARY_POLICY_AMENDMENT":
+                continue
+            if str(payload.get("proposal_type") or "").strip().upper() != "SUPPLY_EXPANSION_REQUEST":
+                continue
+            total += int(result.get("requested_delta") or payload.get("requested_delta") or 0)
+        return total
+
+    def _supply_expansion_eligibility_locked(self, conn, *, requested_delta, destination_fund_key, policy=None, chain_branch=None):
+        requested_delta = int(requested_delta or 0)
+        if requested_delta <= 0:
+            raise ValueError("requested supply expansion delta must be positive")
+        destination_fund_key = str(destination_fund_key or "").strip().lower()
+        if destination_fund_key not in {"official_treasury", "promo_fund", "exchange_fund"}:
+            raise ValueError("supply expansion destination fund is unsupported")
+        branch = str(chain_branch or self._canonical_branch_uuid(conn) or self._main_branch_uuid())
+        policy = policy or bootstrap_economy_layer(
+            conn,
+            chain_secret=self.chain_secret,
+            actor={"role": "system", "id": None},
+            chain_branch=branch,
+        )["policy"]
+        replay = replay_economy_events(
+            conn,
+            policy=policy,
+            chain_secret=self.chain_secret,
+            persist_cache=False,
+            chain_branch=branch,
+        )
+        original_max_supply = self._supply_expansion_original_max_supply(policy)
+        max_supply = int(policy["max_supply"])
+        single_cap = max(1, original_max_supply // 100)
+        annual_cap = max(1, (original_max_supply * 3) // 100)
+        if requested_delta > single_cap:
+            raise ValueError("supply expansion exceeds single proposal cap")
+        used_this_year = self._supply_expansion_executed_delta_this_year_locked(conn, year=utc_now()[:4])
+        if used_this_year + requested_delta > annual_cap:
+            raise ValueError("supply expansion exceeds annual cap")
+        treasury_minimum = int(policy.get("official_treasury_minimum_operating_reserve") or 1_000_000)
+        official_balance = int(replay["balances"].get("official_treasury", {}).get("balance") or 0)
+        promo_balance = int(replay["balances"].get("promo_fund", {}).get("balance") or 0)
+        exchange_assets = int(replay.get("exchange_total_assets") or 0)
+        mint_exhausted = int(replay.get("mint_remaining") or 0) <= 0 or int(replay.get("releasable_remaining") or 0) <= 0
+        funds_critical = (
+            official_balance < treasury_minimum
+            and promo_balance < int(policy.get("promo_critical_watermark") or 0)
+            and exchange_assets < int(policy.get("exchange_critical_watermark") or 0)
+        )
+        if not mint_exhausted:
+            raise ValueError("supply expansion requires exhausted mint or releasable supply")
+        if official_balance >= treasury_minimum:
+            raise ValueError("supply expansion requires official treasury below minimum operating reserve")
+        if not funds_critical:
+            raise ValueError("supply expansion requires treasury, promo, and exchange funds below critical operating watermarks")
+        return {
+            "eligible": True,
+            "chain_branch": branch,
+            "old_max_supply": max_supply,
+            "requested_new_max_supply": max_supply + requested_delta,
+            "requested_delta": requested_delta,
+            "dilution_bps": (requested_delta * 10000) // max(1, max_supply),
+            "destination_fund_key": destination_fund_key,
+            "single_expansion_cap": single_cap,
+            "annual_expansion_cap": annual_cap,
+            "annual_expansion_used": used_this_year,
+            "trigger_condition_snapshot": {
+                "mint_remaining": int(replay.get("mint_remaining") or 0),
+                "releasable_remaining": int(replay.get("releasable_remaining") or 0),
+                "mint_exhausted": mint_exhausted,
+            },
+            "fund_balance_snapshot": {
+                "official_treasury": official_balance,
+                "official_treasury_minimum_operating_reserve": treasury_minimum,
+                "promo_fund": promo_balance,
+                "promo_critical_watermark": int(policy.get("promo_critical_watermark") or 0),
+                "exchange_total_assets": exchange_assets,
+                "exchange_critical_watermark": int(policy.get("exchange_critical_watermark") or 0),
+            },
+            "alternative_actions_considered": [
+                "treasury_reallocation",
+                "expense_reduction",
+                "subsidy_pause",
+                "fee_parameter_adjustment",
+                "compensation_installments",
+                "non-expansion treasury governance",
+            ],
+            "policy": policy,
+            "replay": replay,
+        }
+
+    def create_supply_expansion_request_proposal(
+        self,
+        *,
+        actor,
+        requested_delta,
+        reason,
+        destination_fund_key="official_treasury",
+        reference="",
+        financial_report="",
+        risk_disclosure="",
+    ):
+        requested_delta = int(requested_delta or 0)
+        reference = str(reference or "").strip()[:240]
+        if len(reference) < 8:
+            raise ValueError("supply expansion reference/idempotency key required")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            self._governance_begin_immediate(conn)
+            active_branch = self._canonical_branch_uuid(conn)
+            policy = bootstrap_economy_layer(
+                conn,
+                chain_secret=self.chain_secret,
+                actor={"role": "system", "id": None},
+                chain_branch=active_branch,
+            )["policy"]
+            eligibility = self._supply_expansion_eligibility_locked(
+                conn,
+                requested_delta=requested_delta,
+                destination_fund_key=destination_fund_key,
+                policy=policy,
+                chain_branch=active_branch,
+            )
+            duplicate = conn.execute(
+                """
+                SELECT proposal_uuid
+                FROM points_chain_governance_proposals
+                WHERE action_type='PARAMETER_CHANGE'
+                  AND reference=?
+                  AND lifecycle_status NOT IN ('FAILED', 'CANCELLED', 'VETOED', 'EXPIRED')
+                LIMIT 1
+                """,
+                (reference,),
+            ).fetchone()
+            if duplicate:
+                raise ValueError("supply expansion idempotency key already used")
+            payload = {
+                "proposal_type": "SUPPLY_EXPANSION_REQUEST",
+                "execution_class": "MONETARY_POLICY_AMENDMENT",
+                "parameter_key": "max_supply",
+                "old_max_supply": eligibility["old_max_supply"],
+                "requested_new_max_supply": eligibility["requested_new_max_supply"],
+                "requested_delta": eligibility["requested_delta"],
+                "dilution_bps": eligibility["dilution_bps"],
+                "destination_fund_key": eligibility["destination_fund_key"],
+                "spending_restrictions": {
+                    "mint_and_spend_are_separate_steps": True,
+                    "allowed_mint_destination_fund_key": eligibility["destination_fund_key"],
+                    "direct_user_mint": "forbidden",
+                    "requires_followup_mint_request": True,
+                },
+                "trigger_condition_snapshot": eligibility["trigger_condition_snapshot"],
+                "fund_balance_snapshot": eligibility["fund_balance_snapshot"],
+                "revenue_snapshot": {},
+                "alternative_actions_considered": eligibility["alternative_actions_considered"],
+                "financial_report": str(financial_report or "").strip()[:4000],
+                "risk_disclosure": str(risk_disclosure or "").strip()[:2000],
+                "chain_branch": active_branch,
+                "single_expansion_cap": eligibility["single_expansion_cap"],
+                "annual_expansion_cap": eligibility["annual_expansion_cap"],
+                "annual_expansion_used": eligibility["annual_expansion_used"],
+                "root_veto_allowed": False,
+            }
+            proposal = self._create_governance_proposal_locked(
+                conn,
+                actor=actor,
+                proposal_type="protocol_parameter_change",
+                governance_domain="PROTOCOL_PARAMETER",
+                action_type="PARAMETER_CHANGE",
+                title="憲法級增發條款提案",
+                description="SUPPLY_EXPANSION_REQUEST / MONETARY_POLICY_AMENDMENT: 只授權提高 max_supply，不自動 mint 或撥款。",
+                reason=reason,
+                reference=reference,
+                requested_amount=requested_delta,
+                requested_asset="points",
+                payload=payload,
+                impact_scope="max_supply monetary policy amendment; all holders are diluted by the requested delta",
+                risk_summary=str(risk_disclosure or "Supply expansion dilutes every holder and requires follow-up mint governance into the restricted official fund.")[:1000],
+                proposal_severity="CRITICAL",
+            )
+            conn.commit()
+            return {"ok": True, "proposal": proposal, "eligibility": {key: value for key, value in eligibility.items() if key not in {"policy", "replay"}}}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _execute_supply_expansion_request_locked(self, conn, *, row, payload, proposal_uuid, actor, now):
+        if str(payload.get("execution_class") or "").strip().upper() != "MONETARY_POLICY_AMENDMENT":
+            raise ValueError("supply expansion execution class required")
+        if str(payload.get("proposal_type") or "").strip().upper() != "SUPPLY_EXPANSION_REQUEST":
+            raise ValueError("supply expansion proposal type required")
+        requested_delta = int(payload.get("requested_delta") or row["requested_amount"] or 0)
+        destination_fund_key = str(payload.get("destination_fund_key") or "").strip().lower()
+        eligibility = self._supply_expansion_eligibility_locked(
+            conn,
+            requested_delta=requested_delta,
+            destination_fund_key=destination_fund_key,
+            chain_branch=payload.get("chain_branch") or self._canonical_branch_uuid(conn),
+        )
+        if int(payload.get("old_max_supply") or 0) != int(eligibility["old_max_supply"]):
+            raise ValueError("supply expansion old max supply snapshot mismatch")
+        if int(payload.get("requested_new_max_supply") or 0) != int(eligibility["requested_new_max_supply"]):
+            raise ValueError("supply expansion requested max supply mismatch")
+        policy_row = conn.execute("SELECT * FROM points_economy_policy WHERE id=1").fetchone()
+        if not policy_row:
+            load_economy_policy(conn)
+            policy_row = conn.execute("SELECT * FROM points_economy_policy WHERE id=1").fetchone()
+        policy_payload = _json_loads(policy_row["policy_json"], {}) if policy_row else {}
+        original_max = int(
+            policy_payload.get("constitutional_original_max_supply")
+            or policy_payload.get("original_max_supply")
+            or eligibility["old_max_supply"]
+        )
+        existing_restrictions = policy_payload.get("supply_expansion_restrictions")
+        if not isinstance(existing_restrictions, list):
+            existing_restrictions = []
+        authorization = {
+            "proposal_uuid": proposal_uuid,
+            "execution_class": "MONETARY_POLICY_AMENDMENT",
+            "old_max_supply": eligibility["old_max_supply"],
+            "new_max_supply": eligibility["requested_new_max_supply"],
+            "requested_delta": requested_delta,
+            "destination_fund_key": destination_fund_key,
+            "spending_restrictions": payload.get("spending_restrictions") if isinstance(payload.get("spending_restrictions"), dict) else {},
+            "executed_at": now,
+        }
+        policy_payload.update({
+            "constitutional_original_max_supply": original_max,
+            "max_supply": eligibility["requested_new_max_supply"],
+            "releasable_supply": eligibility["requested_new_max_supply"] - int(policy_row["reserved_locked"] or 0),
+            "latest_supply_expansion": authorization,
+            "supply_expansion_restrictions": [*existing_restrictions, authorization],
+        })
+        conn.execute(
+            """
+            UPDATE points_economy_policy
+            SET max_supply=?, policy_json=?, updated_at=?
+            WHERE id=1
+            """,
+            (
+                eligibility["requested_new_max_supply"],
+                _json_dumps(policy_payload),
+                now,
+            ),
+        )
+        replay = replay_economy_events(
+            conn,
+            chain_secret=self.chain_secret,
+            persist_cache=True,
+            chain_branch=eligibility["chain_branch"],
+        )
+        return {
+            "action": "max_supply_expanded",
+            "execution_class": "MONETARY_POLICY_AMENDMENT",
+            "proposal_type": "SUPPLY_EXPANSION_REQUEST",
+            "old_max_supply": eligibility["old_max_supply"],
+            "new_max_supply": eligibility["requested_new_max_supply"],
+            "requested_delta": requested_delta,
+            "dilution_bps": eligibility["dilution_bps"],
+            "destination_fund_key": destination_fund_key,
+            "minted": False,
+            "mint_and_spend_are_separate_steps": True,
+            "replay": {
+                "mint_remaining": replay["mint_remaining"],
+                "releasable_remaining": replay["releasable_remaining"],
+                "wallet_root_hash": replay["wallet_root_hash"],
+            },
+        }
+
+    def _mint_request_precheck_locked(self, conn, *, amount, reference, policy=None, chain_branch=None, exclude_proposal_uuid="", destination_fund_key=""):
         amount = int(amount or 0)
         if amount <= 0:
             raise ValueError("amount must be positive")
@@ -1833,7 +2171,17 @@ class PointsLedgerService:
         )
         releasable = int(policy["max_supply"]) - int(policy["reserved_locked"])
         if int(replay["minted_total"]) + amount > releasable:
+            if int(replay["minted_total"]) >= releasable:
+                raise ValueError("mint_supply_exhausted")
             raise ValueError("mint would exceed releasable supply")
+        expanded_portion = self._supply_expansion_mint_portion(policy=policy, replay=replay, amount=amount)
+        if expanded_portion > 0:
+            restriction = self._supply_expansion_restriction(policy)
+            restricted_destination = str(restriction.get("destination_fund_key") or "").strip().lower()
+            if not restricted_destination:
+                raise ValueError("supply_expansion_authorization_required")
+            if str(destination_fund_key or "").strip().lower() != restricted_destination:
+                raise ValueError("mint destination violates supply expansion restriction")
         daily_cap = int(policy.get("mint_replenish_daily_cap") or max_once or 0)
         if daily_cap > 0:
             today = utc_now()[:10]
@@ -4878,6 +5226,7 @@ class PointsLedgerService:
                         policy=policy,
                         chain_branch=event_branch,
                         exclude_proposal_uuid=proposal_uuid,
+                        destination_fund_key=destination_fund_key,
                     )
                     event, created = append_economy_event(
                         conn,
@@ -4923,6 +5272,15 @@ class PointsLedgerService:
                         "signer_policy_payload": payload,
                         "note": "RC1 records governance approval and multisig consent; signer identity rotation is applied through wallet identity lifecycle controls.",
                     }
+                elif action_type == "PARAMETER_CHANGE" and str(payload.get("execution_class") or "").strip().upper() == "MONETARY_POLICY_AMENDMENT":
+                    result = self._execute_supply_expansion_request_locked(
+                        conn,
+                        row=row,
+                        payload=payload,
+                        proposal_uuid=proposal_uuid,
+                        actor=actor,
+                        now=now,
+                    )
                 elif action_type in {"PARAMETER_CHANGE", "FEATURE_ACTIVATION"}:
                     result = {
                         "action": "protocol_policy_approved",

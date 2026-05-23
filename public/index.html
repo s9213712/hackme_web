@@ -2695,7 +2695,7 @@
           <div class="drive-card-heading">
             <div>
               <div class="drive-card-title">公共投票與疑義事件總看板</div>
-              <div class="drive-card-sub">集中顯示你有投票權的公共提案、官方治理案與疑義事件；疑義交易的投票會折疊在案件下方。</div>
+              <div class="drive-card-sub">全站多人投票總看板，集中顯示你有投票權的公共提案、官方治理案與疑義事件；疑義交易的投票會折疊在案件下方。</div>
             </div>
             <div class="drive-file-actions">
               <select id="economy-governance-category-select" style="min-width:12rem;padding:.48rem .6rem;border-radius:8px;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.12);color:inherit;">
@@ -2801,9 +2801,9 @@
           <details class="economy-collapse" id="economy-governance-policy-create-details" style="display:none;margin-top:.75rem;">
             <summary>參數 / 功能 / 銷毀政策</summary>
             <div class="settings-option-grid" style="margin-top:.65rem;">
-              <div class="field"><label>動作</label><select id="economy-governance-policy-action"><option value="PARAMETER_CHANGE">參數變更</option><option value="FEATURE_ACTIVATION">功能啟用</option><option value="AUTO_BURN_POLICY">自動銷毀政策</option><option value="TREASURY_SIGNER_CHANGE">官方簽署者變更</option></select></div>
-              <div class="field"><label>Key / Feature</label><input type="text" id="economy-governance-policy-key" maxlength="160" placeholder="fee_model / lending / auto_burn" /></div>
-              <div class="field"><label>Value / Policy</label><input type="text" id="economy-governance-policy-value" maxlength="500" placeholder="new value / activation scope / burn rule" /></div>
+              <div class="field"><label>動作</label><select id="economy-governance-policy-action"><option value="PARAMETER_CHANGE">參數變更</option><option value="SUPPLY_EXPANSION_REQUEST">憲法級增發條款</option><option value="FEATURE_ACTIVATION">功能啟用</option><option value="AUTO_BURN_POLICY">自動銷毀政策</option><option value="TREASURY_SIGNER_CHANGE">官方簽署者變更</option></select></div>
+              <div class="field"><label>Key / Feature</label><input type="text" id="economy-governance-policy-key" maxlength="160" placeholder="fee_model / official_treasury / promo_fund / exchange_fund" /></div>
+              <div class="field"><label>Value / Policy</label><input type="text" id="economy-governance-policy-value" maxlength="500" placeholder="new value / activation scope / burn rule / supply delta" /></div>
               <div class="field"><label>Reason</label><input type="text" id="economy-governance-policy-reason" maxlength="500" placeholder="why this governance change is needed" /></div>
               <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-governance-policy-create-btn" type="button">提出政策提案</button></div>
             </div>

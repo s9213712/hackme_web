@@ -1173,6 +1173,41 @@ def register_economy_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    @app.route("/api/admin/points/governance/supply-expansion", methods=["POST"])
+    @require_csrf
+    def admin_points_governance_supply_expansion():
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.create_supply_expansion_request_proposal(
+                actor=actor,
+                requested_delta=data.get("requested_delta") or data.get("amount") or data.get("amount_points") or 0,
+                reason=data.get("reason") or "",
+                destination_fund_key=data.get("destination_fund_key") or "official_treasury",
+                reference=data.get("reference") or "",
+                financial_report=data.get("financial_report") or "",
+                risk_disclosure=data.get("risk_disclosure") or "",
+            )
+            audit(
+                "POINTS_CHAIN_SUPPLY_EXPANSION_REQUEST_PROPOSAL",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"proposal_uuid={result.get('proposal', {}).get('proposal_uuid')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/admin/points/governance/policy", methods=["POST"])
     @require_csrf
     def admin_points_governance_policy():
