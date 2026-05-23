@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import pytest
+from pathlib import Path
 from types import SimpleNamespace
 
 from flask import Flask, jsonify, make_response
@@ -16,6 +17,9 @@ from services.server.request_guards import (
 from services.users.member_levels import ensure_member_level_rules_schema
 from services.security.upload_security import ensure_upload_security_schema
 from server import feature_gate_for_path
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _json_resp(payload, status=200):
@@ -78,6 +82,18 @@ def test_feature_gate_maps_existing_modules():
     assert feature_gate_for_path("/api/files/quota") == "feature_privacy_uploads_enabled"
     assert feature_gate_for_path("/api/crypto/init") == "feature_privacy_uploads_enabled"
     assert feature_gate_for_path("/api/comfyui/generate") == "feature_comfyui_enabled"
+
+
+def test_external_chain_features_remain_disabled_by_rc1_scope():
+    scope = (ROOT / "docs" / "RELEASE" / "RC1_SCOPE.md").read_text(encoding="utf-8")
+    backlog = (ROOT / "docs" / "BLOCKCHAIN" / "POST_RC1_BACKLOG.md").read_text(encoding="utf-8")
+    matrix = (ROOT / "docs" / "BLOCKCHAIN" / "POINTSCHAIN_REAL_INCIDENT_GAP_MATRIX.md").read_text(encoding="utf-8")
+    combined = f"{scope}\n{backlog}\n{matrix}".lower()
+
+    assert "not an external-chain bridge" in scope.lower()
+    assert "external chain bridge" in combined
+    assert "depeg" in combined
+    assert "no bridge in rc1" in combined or "keep disabled" in combined
     assert feature_gate_for_path("/api/points/wallet") == "feature_economy_enabled"
     assert feature_gate_for_path("/api/admin/points/ledger") == "feature_economy_enabled"
     assert feature_gate_for_path("/api/root/points/chain/verify") == "feature_economy_enabled"

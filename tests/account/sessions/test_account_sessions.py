@@ -673,6 +673,87 @@ def test_admin_users_list_hides_deleted_accounts_by_default(tmp_path):
     assert "deleted_user" not in usernames
 
 
+def test_admin_users_list_paginates_and_sorts_by_id(tmp_path):
+    db_path = tmp_path / "admin-users-pagination.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT,
+            base_level TEXT,
+            effective_level TEXT,
+            trust_score INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            reputation INTEGER DEFAULT 0,
+            violation_score INTEGER DEFAULT 0,
+            sanction_status TEXT,
+            sanction_until TEXT,
+            level_updated_at TEXT,
+            level_updated_by TEXT,
+            level_update_reason TEXT,
+            password_strength_score INTEGER DEFAULT 0,
+            avatar_file_id INTEGER,
+            avatar_crop_json TEXT,
+            blocked_until TEXT,
+            violation_count INTEGER DEFAULT 0
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    rows = [
+        (1, "root", "active", "super_admin"),
+        (2, "zed_user", "active", "user"),
+        (3, "alpha_user", "active", "user"),
+        (4, "manager_user", "active", "manager"),
+        (5, "beta_user", "active", "user"),
+    ]
+    conn.executemany(
+        "INSERT INTO users (id, username, status, role, member_level, base_level, effective_level) VALUES (?, ?, ?, ?, 'normal', 'normal', 'normal')",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "status": "active"}}
+    client = _build_app(str(db_path), actor_box, enable_foreign_keys=True).test_client()
+
+    res = client.get("/api/admin/users?page=2&page_size=2")
+    body = res.get_json()
+
+    assert res.status_code == 200
+    assert body["ok"] is True
+    assert [row["id"] for row in body["users"]] == [3, 4]
+    assert body["pagination"] == {
+        "page": 2,
+        "page_size": 2,
+        "total": 5,
+        "total_pages": 3,
+        "sort": "id",
+        "order": "asc",
+        "q": "",
+    }
+    assert body["role_counts"]["manager"] == 1
+    assert body["role_counts"]["super_admin"] == 1
+
+
 def test_soft_delete_releases_original_username_for_reuse(tmp_path):
     db_path = tmp_path / "soft-delete-release-username.db"
     conn = sqlite3.connect(db_path)

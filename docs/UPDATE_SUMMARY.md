@@ -1,6 +1,30 @@
 # Update Summary
 
-Release ID: `2026.05.23-002`
+Release ID: `2026.05.23-004`
+
+## 2026.05.23-004
+
+- Fixed the PointsChain root report so expired provisional address freezes are
+  marked expired and filtered out instead of returning `null` entries that break
+  the private-chain dashboard.
+- Hardened the private-chain frontend list rendering against null governance
+  rows, preventing one stale dispute/freeze row from turning the whole page into
+  a read failure.
+
+## 2026.05.23-003
+
+- Changed account management to server-side pagination with stable `id ASC`
+  ordering so manager/root review lists no longer reorder by relationship or
+  username.
+- Changed the violation center to a per-account selector before loading
+  violation reasons, keeping the admin page from rendering every violation
+  record by default.
+- Redesigned feature packages as a select-preview-apply workflow and kept job
+  center background polling from refreshing the visible status message on every
+  quiet poll.
+- Moved DB stress audit writes out of the production `secure_audit` hash-chain
+  into an isolated `db_stress_audit_events` table, preventing stress probes from
+  breaking audit-chain integrity.
 
 ## 2026.05.23-002
 

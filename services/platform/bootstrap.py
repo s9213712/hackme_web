@@ -4,7 +4,7 @@ from datetime import datetime
 
 from services.core.sqlite_safe import table_columns as safe_table_columns
 
-CURRENT_SCHEMA_VERSION = 30
+CURRENT_SCHEMA_VERSION = 31
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
@@ -36,6 +36,7 @@ SCHEMA_MIGRATIONS = (
     (28, "game zone chess schema"),
     (29, "trading engine schema"),
     (30, "trading market registry seed metadata"),
+    (31, "violation fines and feature restrictions schema"),
 )
 
 _STATE = {
@@ -646,6 +647,10 @@ def apply_schema_migrations(
             from services.trading.trading_engine import ensure_trading_schema
 
             ensure_trading_schema(conn)
+        elif version == 31:
+            from services.governance.violation_fines import ensure_violation_fine_schema
+
+            ensure_violation_fine_schema(conn)
 
         conn.execute(
             "INSERT OR REPLACE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
@@ -684,6 +689,9 @@ def init_db(
     ensure_appeal_columns(conn)
     ensure_session_columns(conn)
     ensure_security_support_schema(conn)
+    from services.governance.violation_fines import ensure_violation_fine_schema
+
+    ensure_violation_fine_schema(conn)
     if ensure_points_economy_schema is None:
         from services.points_chain import ensure_points_economy_schema
     ensure_points_economy_schema(conn)

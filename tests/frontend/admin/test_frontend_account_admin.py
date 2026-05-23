@@ -10,7 +10,18 @@ def test_admin_user_delete_shows_visible_account_page_feedback():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
 
     assert 'id="admin-users-msg"' in index_html
+    assert 'id="admin-users-page-size"' in index_html
+    assert 'id="admin-users-pagination"' in index_html
+    assert 'id="admin-users-page-info"' in index_html
+    assert 'id="admin-users-prev"' in index_html
+    assert 'id="admin-users-next"' in index_html
     assert "function adminUsersMsgEl()" in users_js
+    assert "function renderAdminUsersPagination()" in users_js
+    assert 'sort: "id"' in users_js
+    assert 'order: "asc"' in users_js
+    assert 'ID 由小到大' in users_js
+    assert 'json.pagination' in users_js
+    assert 'json.role_counts' in users_js
     assert '$("admin-users-msg") || $("li-msg")' in users_js
     assert 'flash(adminUsersMsgEl(), json.msg || "會員清單讀取失敗", false);' in users_js
     assert 'flash(adminUsersMsgEl(), err.message || "會員清單讀取失敗", false);' in users_js

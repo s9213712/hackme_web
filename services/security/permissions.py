@@ -1,4 +1,5 @@
 from services.security.identity import is_admin_role, role_rank
+from services.governance.violation_fines import assert_user_feature_allowed
 from services.users.member_levels import get_member_level_rule, refresh_user_effective_level
 
 ACTIVE_STATUS = "active"
@@ -17,6 +18,13 @@ ACTION_RATE_LIMIT_FIELDS = {
     "chat_send": "comment_rate_limit_per_hour",
     "chat_dm_create": "dm_rate_limit_per_day",
     "upload_attachment": "upload_rate_limit_per_day",
+}
+ACTION_RESTRICTION_FEATURES = {
+    "chat_dm_create": "chat_dm",
+    "chat_send": "chat_send",
+    "community_thread_create": "community_post",
+    "community_reply": "community_comment",
+    "upload_attachment": "cloud_upload",
 }
 
 
@@ -142,6 +150,16 @@ def require_member_action(actor, action, rule=None, conn=None, target=None):
     ok, msg, status = require_active_actor(actor)
     if not ok:
         return ok, msg, status
+    feature_key = ACTION_RESTRICTION_FEATURES.get(action)
+    actor_data = _actor_dict(actor)
+    if conn is not None and actor_data.get("id") and actor_data.get("username") != "root" and feature_key:
+        allowed, restriction_msg, _restrictions = assert_user_feature_allowed(
+            conn,
+            user_id=actor_data["id"],
+            feature_key=feature_key,
+        )
+        if not allowed:
+            return False, restriction_msg, 423
     if actor_is_admin(actor):
         return True, "", 200
     effective_level = actor_effective_level(actor)

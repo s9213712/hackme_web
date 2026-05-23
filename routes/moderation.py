@@ -9,6 +9,14 @@ from services.governance.records import (
     ensure_governance_records_schema,
     record_moderation_action,
 )
+from services.governance.violation_fines import (
+    create_violation_fine,
+    list_violation_fine_appeals,
+    list_violation_fines,
+    normalize_restriction_features,
+    review_violation_fine_appeal,
+    waive_violation_fine,
+)
 from services.users.member_levels import apply_member_level_change
 from services.governance.moderation import (
     VOTES,
@@ -591,6 +599,7 @@ def register_moderation_routes(app, deps):
             return json_resp({"ok":False,"msg":"limit 參數格式錯誤"}), 400
         offset = page * limit
         username_filter = request.args.get("username", "").strip() or None
+        summary_only = str(request.args.get("summary_only") or "").strip().lower() in {"1", "true", "yes"}
 
         conn = get_db()
         try:
@@ -602,15 +611,19 @@ def register_moderation_routes(app, deps):
             if username_filter:
                 where += " AND username=?"
                 params.append(username_filter)
-            total = conn.execute(
-                f"SELECT COUNT(*) as c FROM secure_violations {where}",
-                tuple(params)
-            ).fetchone()["c"]
-            rows = conn.execute(
-                "SELECT id, user_id, username, points, reason, triggered_by, actor_username, created_at, entry_hash "
-                f"FROM secure_violations {where} ORDER BY id DESC LIMIT ? OFFSET ?",
-                tuple(params + [limit, offset])
-            ).fetchall()
+            if summary_only and not username_filter:
+                total = 0
+                rows = []
+            else:
+                total = conn.execute(
+                    f"SELECT COUNT(*) as c FROM secure_violations {where}",
+                    tuple(params)
+                ).fetchone()["c"]
+                rows = conn.execute(
+                    "SELECT id, user_id, username, points, reason, triggered_by, actor_username, created_at, entry_hash "
+                    f"FROM secure_violations {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+                    tuple(params + [limit, offset])
+                ).fetchall()
             result = [{
                 "id": r["id"],
                 "user_id": r["user_id"],
@@ -624,6 +637,16 @@ def register_moderation_routes(app, deps):
                 "chain_hash": r["entry_hash"][:32] + "...",
                 "_chain_hash": r["entry_hash"],
             } for r in rows]
+            fines, fine_total = list_violation_fines(
+                conn,
+                username=username_filter,
+                limit=20,
+            )
+            fine_appeals, _fine_appeal_total = list_violation_fine_appeals(
+                conn,
+                status="pending",
+                limit=20,
+            )
 
             integrity_ok = True
             integrity_broken = None
@@ -669,12 +692,149 @@ def register_moderation_routes(app, deps):
                 "page":    page,
                 "limit":   limit,
                 "users":   [{"username": u["username"], "violation_count": u["violation_count"]} for u in users_all],
+                "fines":   fines,
+                "fine_total": fine_total,
+                "fine_appeals": fine_appeals,
                 "integrity": {
                     "ok":        integrity_ok,
                     "broken_at": integrity_broken,
                     "details":   integrity_details,
                 }
             })
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/violation-fines", methods=["GET"])
+    @require_csrf_safe
+    def admin_violation_fines():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+        if role_rank(actor_role) < role_rank("manager"):
+            return json_resp({"ok":False,"msg":"權限不足"}), 403
+        username = request.args.get("username", "").strip() or None
+        status = request.args.get("status", "").strip() or None
+        page = parse_positive_int(request.args.get("page", 0), min_value=0)
+        if page is None:
+            return json_resp({"ok":False,"msg":"page 參數格式錯誤"}), 400
+        limit = parse_positive_int(request.args.get("limit", 50), max_value=200)
+        if limit is None:
+            return json_resp({"ok":False,"msg":"limit 參數格式錯誤"}), 400
+        conn = get_db()
+        try:
+            fines, total = list_violation_fines(conn, username=username, status=status, limit=limit, offset=page * limit)
+            appeals, appeal_total = list_violation_fine_appeals(conn, status="pending", limit=50)
+            conn.commit()
+            return json_resp({"ok":True,"fines":fines,"total":total,"page":page,"limit":limit,"pending_appeals":appeals,"pending_appeal_total":appeal_total})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/users/<int:user_id>/violation-fines", methods=["POST"])
+    @require_csrf
+    def admin_create_violation_fine(user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+        if role_rank(actor_role) < role_rank("manager"):
+            return json_resp({"ok":False,"msg":"權限不足"}), 403
+        try:
+            data = request.get_json(force=True) or {}
+        except Exception:
+            return json_resp({"ok":False,"msg":"請求 JSON 格式錯誤"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"請求內容格式錯誤"}), 400
+        amount = parse_positive_int(data.get("amount_points") or data.get("amount"), min_value=1, max_value=100000)
+        if amount is None:
+            return json_resp({"ok":False,"msg":"罰款金額需介於 1 到 100000"}), 400
+        due_hours = parse_positive_int(data.get("due_hours", 72), min_value=1, max_value=24 * 30)
+        if due_hours is None:
+            return json_resp({"ok":False,"msg":"due_hours 格式錯誤"}), 400
+        reason = normalize_text(data.get("reason"))[:500] or "違規罰款"
+        features = normalize_restriction_features(data.get("restriction_features"))
+        violation_id = data.get("violation_id")
+        conn = get_db()
+        try:
+            target = conn.execute("SELECT id, username, role FROM users WHERE id=?", (user_id,)).fetchone()
+            if not target:
+                return json_resp({"ok":False,"msg":"找不到帳號"}), 404
+            if target["username"] == "root":
+                return json_resp({"ok":False,"msg":"不可對 root 建立罰款"}), 403
+            if actor_role == "manager" and target["role"] != "user":
+                return json_resp({"ok":False,"msg":"無權對此角色建立罰款"}), 403
+            fine, created = create_violation_fine(
+                conn,
+                user_id=target["id"],
+                username=target["username"],
+                amount_points=amount,
+                reason=reason,
+                created_by=actor["username"],
+                violation_id=violation_id,
+                due_hours=due_hours,
+                restriction_features=features,
+                policy_key="manual_admin_fine",
+                metadata={"source": "admin_manual"},
+            )
+            conn.commit()
+            audit("VIOLATION_FINE_MANUAL_CREATED", get_client_ip(), user=actor["username"], detail=f"user_id={user_id} fine_uuid={fine['fine_uuid']} amount={amount}")
+            return json_resp({"ok":True,"msg":"罰款單已建立","fine":fine,"created":created})
+        except ValueError as exc:
+            conn.rollback()
+            return json_resp({"ok":False,"msg":str(exc)}), 400
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/violation-fines/<path:fine_uuid>/waive", methods=["POST"])
+    @require_csrf
+    def admin_waive_violation_fine(fine_uuid):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+        if role_rank(actor_role) < role_rank("manager"):
+            return json_resp({"ok":False,"msg":"權限不足"}), 403
+        data = request.get_json(silent=True) or {}
+        reason = normalize_text(data.get("reason"))[:500] or "管理員豁免"
+        conn = get_db()
+        try:
+            fine = waive_violation_fine(conn, fine_uuid=fine_uuid, actor_username=actor["username"], reason=reason)
+            conn.commit()
+            audit("VIOLATION_FINE_WAIVED", get_client_ip(), user=actor["username"], detail=f"fine_uuid={fine_uuid}")
+            return json_resp({"ok":True,"msg":"罰款已豁免，限制已解除","fine":fine})
+        except ValueError as exc:
+            conn.rollback()
+            return json_resp({"ok":False,"msg":str(exc)}), 400
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/violation-fine-appeals/<int:appeal_id>/review", methods=["POST"])
+    @require_csrf
+    def admin_review_violation_fine_appeal(appeal_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+        if role_rank(actor_role) < role_rank("manager"):
+            return json_resp({"ok":False,"msg":"權限不足"}), 403
+        data = request.get_json(silent=True) or {}
+        action = normalize_text(data.get("action"))
+        note = normalize_text(data.get("note"))[:500]
+        conn = get_db()
+        try:
+            appeal, fine = review_violation_fine_appeal(
+                conn,
+                appeal_id=appeal_id,
+                actor_username=actor["username"],
+                action=action,
+                note=note,
+            )
+            conn.commit()
+            audit("VIOLATION_FINE_APPEAL_REVIEWED", get_client_ip(), user=actor["username"], detail=f"appeal_id={appeal_id} action={action}")
+            return json_resp({"ok":True,"msg":"罰單申覆已審核","appeal":appeal,"fine":fine})
+        except ValueError as exc:
+            conn.rollback()
+            return json_resp({"ok":False,"msg":str(exc)}), 400
         finally:
             conn.close()
 

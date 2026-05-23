@@ -216,6 +216,10 @@ FEATURE_DEPENDENCY_RULES = {
         "required": ("feature_economy_enabled", "feature_points_chain_enabled"),
         "description": "積分交易所必須依附在基本積分與 PointsChain 私有鏈上。",
     },
+    "feature_points_chain_enabled": {
+        "recommended": ("feature_economy_enabled",),
+        "description": "PointsChain 私有鏈通常以基本積分系統作為站內財務入口。",
+    },
     "feature_videos_enabled": {
         "recommended": ("feature_privacy_uploads_enabled", "feature_economy_enabled", "feature_points_chain_enabled"),
         "description": "影音若搭配雲端硬碟、基本積分與 PointsChain，才有上傳、保存與打賞等完整服務。",
@@ -233,8 +237,8 @@ FEATURE_DEPENDENCY_RULES = {
         "description": "討論區完整體驗通常會搭配附件、檢舉與通知。",
     },
     "feature_appeals_enabled": {
-        "recommended": ("feature_accounts_enabled", "feature_reports_notifications_enabled"),
-        "description": "申覆流程通常會搭配帳號管理與通知。",
+        "recommended": ("feature_accounts_enabled", "feature_violation_center_enabled", "feature_reports_notifications_enabled"),
+        "description": "申覆流程通常會搭配帳號管理、違規中心與通知。",
     },
     "feature_violation_center_enabled": {
         "recommended": ("feature_accounts_enabled",),

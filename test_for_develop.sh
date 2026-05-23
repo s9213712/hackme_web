@@ -74,7 +74,7 @@ Options:
   --port PORT              Default: 5000; prompts if occupied in interactive mode
   --feature-mode MODE      all, defaults, bundles, or custom. Default: all
   --feature-bundles LIST   Comma-separated feature package names such as
-                           core-admin,social,storage,media,trading,ai.
+                           ops-minimum,safe-community,creator-media,exchange-ops,ai.
   --features LIST          Comma-separated feature_* keys or package names for
                            custom mode. Required/recommended dependencies are
                            expanded automatically.
@@ -491,28 +491,67 @@ except Exception:
 
 feature_keys = set(FEATURE_FLAG_KEYS)
 bundles = [
-    ("core-admin", "核心管理 / 健康 / audit", (
+    ("ops-minimum", "維運骨架 / 帳號 / 健康 / audit", (
         "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
         "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
         "feature_reports_notifications_enabled",
     )),
-    ("social", "聊天、討論區、附件、檢舉通知", (
+    ("minimum-ops", "最低維運 / ops-minimum alias", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled",
+    )),
+    ("core-admin", "舊名：核心管理 / 健康 / audit", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled",
+    )),
+    ("safe-community", "安全社群 / 聊天 / 討論 / 申覆 / 檢舉", (
+        "feature_accounts_enabled", "feature_chat_enabled", "feature_community_enabled",
+        "feature_attachments_enabled", "feature_reports_enabled", "feature_reports_notifications_enabled",
+        "feature_appeals_enabled", "feature_violation_center_enabled", "feature_account_security_enabled",
+        "feature_social_search_enabled",
+    )),
+    ("social", "舊名：聊天、討論區、附件、檢舉通知", (
         "feature_chat_enabled", "feature_community_enabled", "feature_attachments_enabled",
         "feature_reports_enabled", "feature_reports_notifications_enabled", "feature_social_search_enabled",
     )),
     ("storage", "雲端硬碟 / E2EE / 相簿", (
         "feature_privacy_uploads_enabled", "feature_storage_albums_enabled", "feature_attachments_enabled",
     )),
-    ("media", "影音分享 / 上傳保存 / 打賞經濟", (
+    ("creator-media", "創作者影音 / 上傳保存 / 打賞經濟", (
+        "feature_accounts_enabled", "feature_videos_enabled", "feature_privacy_uploads_enabled",
+        "feature_storage_albums_enabled", "feature_attachments_enabled", "feature_reports_enabled",
+        "feature_reports_notifications_enabled", "feature_economy_enabled", "feature_points_chain_enabled",
+    )),
+    ("media", "舊名：影音分享 / 上傳保存 / 打賞經濟", (
         "feature_videos_enabled", "feature_privacy_uploads_enabled", "feature_economy_enabled",
+        "feature_points_chain_enabled",
     )),
     ("games", "遊戲區 / 西洋棋", ("feature_games_enabled",)),
+    ("experiments", "實驗區", ("feature_experiments_enabled",)),
     ("ai", "ComfyUI AI 產圖 + 儲存分享", (
         "feature_comfyui_enabled", "feature_privacy_uploads_enabled",
     )),
-    ("economy", "PointsChain 積分系統", ("feature_economy_enabled",)),
+    ("economy", "基本積分 + PointsChain", ("feature_economy_enabled", "feature_points_chain_enabled")),
+    ("points-chain-rc1", "PointsChain RC1 營運組合", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled", "feature_economy_enabled", "feature_points_chain_enabled",
+        "feature_violation_center_enabled", "feature_appeals_enabled", "feature_reports_enabled",
+        "feature_identity_governance_enabled", "feature_member_governance_enabled",
+        "feature_account_security_enabled", "feature_advanced_security_enabled",
+    )),
+    ("exchange-ops", "交易所營運 / PointsChain + trading", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled", "feature_economy_enabled", "feature_points_chain_enabled",
+        "feature_trading_enabled", "feature_violation_center_enabled", "feature_appeals_enabled",
+        "feature_reports_enabled", "feature_identity_governance_enabled", "feature_member_governance_enabled",
+        "feature_account_security_enabled", "feature_advanced_security_enabled",
+    )),
     ("trading", "積分交易所 + PointsChain", (
-        "feature_trading_enabled", "feature_economy_enabled",
+        "feature_trading_enabled", "feature_economy_enabled", "feature_points_chain_enabled",
     )),
     ("moderation", "申訴、檢舉、違規治理", (
         "feature_accounts_enabled", "feature_appeals_enabled", "feature_reports_enabled",
@@ -522,11 +561,31 @@ bundles = [
     ("personalization", "個人外觀與介面客製化", (
         "feature_personalization_enabled", "feature_ui_rebuild_enabled",
     )),
+    ("low-resource", "低資源完整前台 / 關閉重型與私有鏈", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled", "feature_chat_enabled", "feature_community_enabled",
+        "feature_appeals_enabled", "feature_violation_center_enabled", "feature_reports_enabled",
+        "feature_attachments_enabled", "feature_privacy_uploads_enabled", "feature_storage_albums_enabled",
+        "feature_economy_enabled", "feature_games_enabled", "feature_social_search_enabled",
+        "feature_account_security_enabled", "feature_advanced_security_enabled",
+    )),
+    ("raspberry-lite", "Raspberry / low-resource alias", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled", "feature_chat_enabled", "feature_community_enabled",
+        "feature_appeals_enabled", "feature_violation_center_enabled", "feature_reports_enabled",
+        "feature_attachments_enabled", "feature_privacy_uploads_enabled", "feature_storage_albums_enabled",
+        "feature_economy_enabled", "feature_games_enabled", "feature_social_search_enabled",
+        "feature_account_security_enabled", "feature_advanced_security_enabled",
+    )),
     ("full-user", "一般使用者完整體驗", (
-        "feature_chat_enabled", "feature_community_enabled", "feature_privacy_uploads_enabled",
-        "feature_storage_albums_enabled", "feature_videos_enabled", "feature_games_enabled",
-        "feature_comfyui_enabled", "feature_economy_enabled", "feature_trading_enabled",
-        "feature_personalization_enabled", "feature_social_search_enabled",
+        "feature_chat_enabled", "feature_community_enabled", "feature_attachments_enabled",
+        "feature_reports_enabled", "feature_reports_notifications_enabled", "feature_appeals_enabled",
+        "feature_violation_center_enabled", "feature_privacy_uploads_enabled", "feature_storage_albums_enabled",
+        "feature_videos_enabled", "feature_games_enabled", "feature_comfyui_enabled",
+        "feature_economy_enabled", "feature_points_chain_enabled", "feature_trading_enabled",
+        "feature_personalization_enabled", "feature_social_search_enabled", "feature_account_security_enabled",
     )),
     ("qa-all", "QA / 找碴測試：所有 feature flags", tuple(FEATURE_FLAG_KEYS)),
 ]
@@ -573,10 +632,26 @@ except Exception as exc:
 feature_keys = list(FEATURE_FLAG_KEYS)
 feature_key_set = set(feature_keys)
 bundles = [
+    ("ops-minimum", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled",
+    )),
+    ("minimum-ops", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled",
+    )),
     ("core-admin", (
         "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
         "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
         "feature_reports_notifications_enabled",
+    )),
+    ("safe-community", (
+        "feature_accounts_enabled", "feature_chat_enabled", "feature_community_enabled",
+        "feature_attachments_enabled", "feature_reports_enabled", "feature_reports_notifications_enabled",
+        "feature_appeals_enabled", "feature_violation_center_enabled", "feature_account_security_enabled",
+        "feature_social_search_enabled",
     )),
     ("social", (
         "feature_chat_enabled", "feature_community_enabled", "feature_attachments_enabled",
@@ -585,24 +660,67 @@ bundles = [
     ("storage", (
         "feature_privacy_uploads_enabled", "feature_storage_albums_enabled", "feature_attachments_enabled",
     )),
+    ("creator-media", (
+        "feature_accounts_enabled", "feature_videos_enabled", "feature_privacy_uploads_enabled",
+        "feature_storage_albums_enabled", "feature_attachments_enabled", "feature_reports_enabled",
+        "feature_reports_notifications_enabled", "feature_economy_enabled", "feature_points_chain_enabled",
+    )),
     ("media", (
         "feature_videos_enabled", "feature_privacy_uploads_enabled", "feature_economy_enabled",
+        "feature_points_chain_enabled",
     )),
     ("games", ("feature_games_enabled",)),
+    ("experiments", ("feature_experiments_enabled",)),
     ("ai", ("feature_comfyui_enabled", "feature_privacy_uploads_enabled")),
-    ("economy", ("feature_economy_enabled",)),
-    ("trading", ("feature_trading_enabled", "feature_economy_enabled")),
+    ("economy", ("feature_economy_enabled", "feature_points_chain_enabled")),
+    ("points-chain-rc1", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled", "feature_economy_enabled", "feature_points_chain_enabled",
+        "feature_violation_center_enabled", "feature_appeals_enabled", "feature_reports_enabled",
+        "feature_identity_governance_enabled", "feature_member_governance_enabled",
+        "feature_account_security_enabled", "feature_advanced_security_enabled",
+    )),
+    ("exchange-ops", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled", "feature_economy_enabled", "feature_points_chain_enabled",
+        "feature_trading_enabled", "feature_violation_center_enabled", "feature_appeals_enabled",
+        "feature_reports_enabled", "feature_identity_governance_enabled", "feature_member_governance_enabled",
+        "feature_account_security_enabled", "feature_advanced_security_enabled",
+    )),
+    ("trading", ("feature_trading_enabled", "feature_economy_enabled", "feature_points_chain_enabled")),
     ("moderation", (
         "feature_accounts_enabled", "feature_appeals_enabled", "feature_reports_enabled",
         "feature_violation_center_enabled", "feature_reports_notifications_enabled",
         "feature_member_governance_enabled", "feature_identity_governance_enabled",
     )),
     ("personalization", ("feature_personalization_enabled", "feature_ui_rebuild_enabled")),
+    ("low-resource", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled", "feature_chat_enabled", "feature_community_enabled",
+        "feature_appeals_enabled", "feature_violation_center_enabled", "feature_reports_enabled",
+        "feature_attachments_enabled", "feature_privacy_uploads_enabled", "feature_storage_albums_enabled",
+        "feature_economy_enabled", "feature_games_enabled", "feature_social_search_enabled",
+        "feature_account_security_enabled", "feature_advanced_security_enabled",
+    )),
+    ("raspberry-lite", (
+        "feature_accounts_enabled", "feature_audit_log_enabled", "feature_system_health_enabled",
+        "feature_server_modes_enabled", "feature_snapshot_restore_enabled", "feature_health_center_enabled",
+        "feature_reports_notifications_enabled", "feature_chat_enabled", "feature_community_enabled",
+        "feature_appeals_enabled", "feature_violation_center_enabled", "feature_reports_enabled",
+        "feature_attachments_enabled", "feature_privacy_uploads_enabled", "feature_storage_albums_enabled",
+        "feature_economy_enabled", "feature_games_enabled", "feature_social_search_enabled",
+        "feature_account_security_enabled", "feature_advanced_security_enabled",
+    )),
     ("full-user", (
-        "feature_chat_enabled", "feature_community_enabled", "feature_privacy_uploads_enabled",
-        "feature_storage_albums_enabled", "feature_videos_enabled", "feature_games_enabled",
-        "feature_comfyui_enabled", "feature_economy_enabled", "feature_trading_enabled",
-        "feature_personalization_enabled", "feature_social_search_enabled",
+        "feature_chat_enabled", "feature_community_enabled", "feature_attachments_enabled",
+        "feature_reports_enabled", "feature_reports_notifications_enabled", "feature_appeals_enabled",
+        "feature_violation_center_enabled", "feature_privacy_uploads_enabled", "feature_storage_albums_enabled",
+        "feature_videos_enabled", "feature_games_enabled", "feature_comfyui_enabled",
+        "feature_economy_enabled", "feature_points_chain_enabled", "feature_trading_enabled",
+        "feature_personalization_enabled", "feature_social_search_enabled", "feature_account_security_enabled",
     )),
     ("qa-all", tuple(feature_keys)),
 ]
@@ -705,7 +823,7 @@ prompt_feature_bundle_scope() {
   local answer
   say "Feature packages:"
   print_known_feature_bundles
-  say "Enter comma-separated package numbers or names. Examples: 2,3,trading or social,storage,media."
+  say "Enter comma-separated package numbers or names. Examples: ops-minimum,safe-community,exchange-ops or social,storage,creator-media."
   prompt_value "Feature packages" "${FEATURE_BUNDLES:-full-user}" answer
   FEATURE_BUNDLES="$answer"
   normalize_feature_or_bundle_selection "$FEATURE_BUNDLES" "bundle" || die "invalid feature bundle selection: $FEATURE_BUNDLES"
@@ -719,7 +837,7 @@ prompt_token_feature_scope() {
   say "   0) unrestricted token scope (default; no token-level feature restriction)"
   print_known_feature_bundles
   print_known_feature_keys
-  say "Enter comma-separated package names, b-numbers, f-numbers, or feature keys. Examples: social,storage,trading or b8,feature_videos_enabled,f20."
+  say "Enter comma-separated package names, b-numbers, f-numbers, or feature keys. Examples: safe-community,storage,exchange-ops or b8,feature_videos_enabled,f20."
   while true; do
     prompt_value "Generated dev token allowed feature packages / keys" "$DEV_TOKEN_FEATURES" answer
     if normalize_token_feature_selection "$answer"; then
@@ -960,11 +1078,11 @@ prompt_runtime_config() {
 
 copy_repo() {
   mkdir -p "$COPY_ROOT"
-  # The tmp runtime only needs files required to run, develop, and smoke-test
-  # the app. Copy from an allowlist so docs/reference repos/deploy examples/git
-  # metadata and future large non-runtime artifacts never inflate isolated
-  # workspaces. Keep workflow/vendor README files because some shipped bundles
-  # and asset packs treat them as part of their completeness checks.
+  # The tmp runtime only needs files required to run, develop, smoke-test, and
+  # validate release gates. Copy from an allowlist so reference repos/deploy
+  # examples/git metadata and future large non-runtime artifacts never inflate
+  # isolated workspaces. Keep docs because RC/operational gates assert release
+  # scope and runbook files from the copied runtime.
   local copy_items=(
     "server.py"
     "bootstrap.schema.sql"
@@ -974,6 +1092,7 @@ copy_repo() {
     "requirements-features.txt"
     "requirements-minimal.txt"
     "test_for_develop.sh"
+    "docs"
     "public"
     "routes"
     "scripts"

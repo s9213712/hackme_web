@@ -31,6 +31,8 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'mShares.classList.toggle("active", normTab === "shares")' in admin_js
     assert 'function loadJobCenter' in platform_js
     assert 'function startJobCenterPolling' in platform_js
+    assert 'if (!quiet) {\n      platformCenterSetMsg("job-center-msg", `已同步' in platform_js
+    assert 'if (!quiet) platformCenterSetMsg("job-center-msg", "任務中心讀取失敗，請稍後再試。", false);' in platform_js
     assert 'JOB_CENTER_POLL_INTERVAL_MS = 3000' in platform_js
     assert 'hydrateJobCenterLiveProgress' in platform_js
     assert 'document.addEventListener("hackme:module-changed"' in platform_js

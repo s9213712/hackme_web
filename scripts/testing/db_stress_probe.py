@@ -363,6 +363,18 @@ def init_schemas(paths: dict[str, Path], *, user_count: int = 150) -> None:
     audit = get_audit_db(str(paths["audit"]))
     try:
         ensure_audit_db_schema(audit)
+        audit.execute(
+            """
+            CREATE TABLE IF NOT EXISTS db_stress_audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                worker TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                ts TEXT NOT NULL,
+                payload TEXT
+            )
+            """
+        )
+        audit.execute("CREATE INDEX IF NOT EXISTS idx_db_stress_audit_events_ts ON db_stress_audit_events(ts)")
         audit.commit()
     finally:
         audit.close()
@@ -673,27 +685,26 @@ def audit_writer(paths: dict[str, Path], recorder: Recorder, deadline: float, wo
         while time.monotonic() < deadline:
             seq += 1
             now = now_iso()
+            payload = json.dumps(
+                {
+                    "action": "DB_STRESS",
+                    "worker_id": worker_id,
+                    "seq": seq,
+                    "ip": "127.0.0.1",
+                    "ua": "db-stress",
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
             recorder.time_call(
                 "audit_write",
                 lambda: (
                     conn.execute(
                         """
-                        INSERT INTO secure_audit
-                        (ts, action, ip, user, success, ua, detail, prev_hash, entry_hash, chain_hash)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO db_stress_audit_events (worker, seq, ts, payload)
+                        VALUES (?, ?, ?, ?)
                         """,
-                        (
-                            now,
-                            "DB_STRESS",
-                            "127.0.0.1",
-                            f"audit-{worker_id}",
-                            1,
-                            "db-stress",
-                            f"seq={seq}",
-                            f"prev-{worker_id}-{seq}",
-                            f"entry-{worker_id}-{seq}",
-                            f"chain-{worker_id}-{seq}",
-                        ),
+                        (f"audit-{worker_id}", seq, now, payload),
                     ),
                     conn.commit(),
                 ),
@@ -733,7 +744,7 @@ def mixed_reader(paths: dict[str, Path], recorder: Recorder, deadline: float, wo
         while time.monotonic() < deadline:
             recorder.time_call("mixed_read", lambda: conns["main"].execute("SELECT COUNT(*) AS c FROM db_stress_main").fetchone()["c"])
             recorder.time_call("mixed_read", lambda: conns["auth"].execute("SELECT COUNT(*) AS c FROM db_stress_auth").fetchone()["c"])
-            recorder.time_call("mixed_read", lambda: conns["audit"].execute("SELECT COUNT(*) AS c FROM secure_audit").fetchone()["c"])
+            recorder.time_call("mixed_read", lambda: conns["audit"].execute("SELECT COUNT(*) AS c FROM db_stress_audit_events").fetchone()["c"])
             recorder.time_call("mixed_read", lambda: conns["control"].execute("SELECT COUNT(*) AS c FROM db_stress_control").fetchone()["c"])
             if worker_id % 2 == 0:
                 recorder.time_call("job_list", lambda: list_jobs(conns["main"], user_id=1, limit=10))
@@ -792,7 +803,8 @@ def final_counts(paths: dict[str, Path]) -> dict[str, int]:
             "job_events": int(main.execute("SELECT COUNT(*) AS c FROM job_center_events").fetchone()["c"]),
             "auth_rows": int(auth.execute("SELECT COUNT(*) AS c FROM db_stress_auth").fetchone()["c"]),
             "session_rows": int(auth.execute("SELECT COUNT(*) AS c FROM db_stress_sessions").fetchone()["c"]),
-            "audit_rows": int(audit.execute("SELECT COUNT(*) AS c FROM secure_audit").fetchone()["c"]),
+            "audit_stress_rows": int(audit.execute("SELECT COUNT(*) AS c FROM db_stress_audit_events").fetchone()["c"]),
+            "secure_audit_rows": int(audit.execute("SELECT COUNT(*) AS c FROM secure_audit").fetchone()["c"]),
             "control_rows": int(control.execute("SELECT COUNT(*) AS c FROM db_stress_control").fetchone()["c"]),
         }
     finally:

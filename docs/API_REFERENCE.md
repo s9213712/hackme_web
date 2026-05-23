@@ -415,7 +415,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET | `/api/points/catalog` | logged-in | 點數商品目錄 |
 | GET/PUT | `/api/root/economy/catalog` | root | root 調整商品目錄 |
 | GET | `/api/points/rules` | logged-in | 點數規則 |
-| POST | `/api/points/spend` | logged-in | 站內服務費支付；可帶 `source_wallet_address` 指定付款錢包，必須屬於登入用戶。先建立 `service_fee_reserve:*` 凍結可用額，累積達門檻後批次 `service_fee_batch_debit` 鏈上扣款；自管冷錢包需帶 `request_uuid` 與本機私鑰簽出的 `signature` |
+| POST | `/api/points/spend` | logged-in | 站內服務費支付；可帶 `source_wallet_address` 指定付款錢包，必須屬於登入用戶。先建立 `service_fee_reserve:*` 凍結可用額，累積達門檻後批次 `service_fee_batch_debit` 鏈上扣款並進官方 Treasury；鏈上轉帳 fee / 加速 fee 仍進 BURN。自管冷錢包需帶 `request_uuid` 與本機私鑰簽出的 `signature` |
 | GET | `/api/points/ledger/<ledger_uuid>/proof` | logged-in | ledger proof |
 | GET | `/api/admin/points/wallets/<user_id>` | manager | 已停用，回 410；不得用 user_id 查用戶錢包 |
 | POST | `/api/root/points/wallets/<user_id>/sanction` | root | 已停用，回 410；不得由 root 直接處分用戶錢包 |

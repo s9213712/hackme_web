@@ -555,12 +555,29 @@ let violationsPage = 0;
 const VIOLATIONS_PAGE_SIZE = 20;
 let violationTargetUser = null;
 
+function renderViolationUserSelect(list = [], selectedUsername = "") {
+  const select = $("violation-user-select");
+  if (!select) return;
+  const previous = String(selectedUsername || select.value || "");
+  const rows = Array.isArray(list) ? list : [];
+  const options = rows
+    .filter((u) => Number(u.violation_count || 0) > 0 || String(u.username || "") === previous)
+    .map((u) => {
+      const username = String(u.username || "");
+      const count = Number(u.violation_count || 0);
+      return `<option value="${sanitize(username)}">${sanitize(username)} · ${count} 點</option>`;
+    }).join("");
+  select.innerHTML = `<option value="">選擇帳號查看違規原因</option>${options}`;
+  if (previous && rows.some((u) => String(u.username || "") === previous)) select.value = previous;
+}
+
 async function loadViolations(page, username) {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const url = username
-    ? API + "/admin/violations?page=" + page + "&username=" + encodeURIComponent(username)
-    : API + "/admin/violations?page=" + page;
+  const selectedUsername = String(username || "").trim();
+  const url = selectedUsername
+    ? API + "/admin/violations?page=" + page + "&username=" + encodeURIComponent(selectedUsername)
+    : API + "/admin/violations?page=0&summary_only=1";
   const res = await fetch(url, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -586,44 +603,34 @@ async function loadViolations(page, username) {
 
   // User pills
   const usersEl = $("violation-users");
+  renderViolationUserSelect(json.users || [], selectedUsername);
   if (usersEl) {
-    const selUser = username || violationTargetUser;
-    const pillsWrap = document.createElement("div");
-    pillsWrap.style.display = "flex";
-    pillsWrap.style.flexWrap = "wrap";
-    pillsWrap.style.gap = ".25rem";
-    pillsWrap.style.alignItems = "center";
-
-    const allBtn = document.createElement("button");
-    allBtn.className = "btn";
-    allBtn.style.fontSize = ".72rem";
-    allBtn.style.padding = ".2rem .5rem";
-    allBtn.style.margin = ".1rem";
-    allBtn.textContent = "全部";
-    allBtn.addEventListener("click", () => loadViolations(0, null));
-    pillsWrap.appendChild(allBtn);
-
-    (json.users || []).forEach(u => {
-      const btn = document.createElement("button");
-      btn.className = "btn";
-      if (u.username === selUser) btn.classList.add("btn-primary");
-      btn.style.fontSize = ".72rem";
-      btn.style.padding = ".2rem .5rem";
-      btn.style.margin = ".1rem";
-      btn.textContent = `${sanitize(u.username)} (${u.violation_count})`;
-      btn.addEventListener("click", () => loadViolations(0, u.username));
-      pillsWrap.appendChild(btn);
-    });
-
-    usersEl.innerHTML = "";
-    usersEl.appendChild(pillsWrap);
-    violationTargetUser = username || null;
+    if (selectedUsername) {
+      const found = (json.users || []).find((u) => String(u.username || "") === selectedUsername);
+      const count = Number(found?.violation_count || 0);
+      usersEl.textContent = `目前查看：${selectedUsername} · 違規計點 ${count}`;
+    } else {
+      const candidateCount = (json.users || []).filter((u) => Number(u.violation_count || 0) > 0).length;
+      usersEl.textContent = candidateCount
+        ? `共有 ${candidateCount} 個帳號有違規點數，請從下拉選單選擇帳號查看原因。`
+        : "目前沒有帳號累積違規點數。";
+    }
+    violationTargetUser = selectedUsername || null;
   }
+  renderAdminViolationFines(json.fines || [], json.fine_total || 0, json.fine_appeals || []);
 
   const container = $("violation-entries");
   if (!container) return;
+  if (!selectedUsername) {
+    container.innerHTML = "<p style='color:var(--muted);text-align:center;padding:1rem;'>請先選擇帳號，才會載入個別違規原因。</p>";
+    $("violations-prev").disabled = true;
+    $("violations-next").disabled = true;
+    return;
+  }
   if (!json.entries || json.entries.length === 0) {
     container.innerHTML = "<p style='color:var(--muted);text-align:center;padding:1rem;'>暫無違規記錄</p>";
+    $("violations-prev").disabled = page === 0;
+    $("violations-next").disabled = true;
     return;
   }
   container.innerHTML = json.entries.map(e => {
@@ -634,14 +641,24 @@ async function loadViolations(page, username) {
     const actor = isObj ? e.actor || "" : "";
     const points = isObj ? e.points || 0 : 0;
     const chain = isObj && e._chain_hash ? `<span style="color:#4caf50;">█</span>` : "·";
+    const fineBtn = isObj && e.user_id && e.id
+      ? `<button class="btn" type="button" data-create-violation-fine="${e.id}" data-fine-user-id="${e.user_id}" style="margin-left:.45rem;padding:.25rem .5rem;">建立罰單</button>`
+      : "";
     return `<div style="border-bottom:1px solid #222;padding:.35rem .25rem;word-break:break-all;">
       <span style="color:#888;">${ts}</span> ${chain}
       ${username ? `<span style="color:#e0e0e0;">${sanitize(username)}</span>` : ""}
       <span style="color:#ff8a80;">${sanitize(reason)}</span>
       ${points ? `<span style="color:#bbb;"> +${points}</span>` : ""}
       ${actor ? `<span style="color:#82b1ff;"> by ${sanitize(actor)}</span>` : ""}
+      ${fineBtn}
     </div>`;
   }).join("");
+  container.querySelectorAll("button[data-create-violation-fine]").forEach((btn) => {
+    btn.addEventListener("click", () => createManualViolationFine(
+      parseInt(btn.getAttribute("data-fine-user-id"), 10),
+      parseInt(btn.getAttribute("data-create-violation-fine"), 10)
+    ));
+  });
   $("violations-prev").disabled = page === 0;
   $("violations-next").disabled = (page + 1) * VIOLATIONS_PAGE_SIZE >= (json.total || 0);
 }
@@ -682,6 +699,162 @@ async function resetViolations(userId) {
   } else {
     alert(json.msg || "歸零失敗");
   }
+}
+
+function renderAdminViolationFines(fines, total, fineAppeals) {
+  const totalEl = $("violation-fines-total");
+  if (totalEl) totalEl.textContent = Number(total || 0).toLocaleString();
+  const list = $("violation-fine-list");
+  if (list) {
+    const rows = Array.isArray(fines) ? fines : [];
+    if (!rows.length) {
+      list.innerHTML = "<p style='color:var(--muted);text-align:center;padding:.75rem;'>目前沒有符合條件的罰單</p>";
+    } else {
+      list.innerHTML = rows.map((fine) => {
+        const status = String(fine.status || "");
+        const color = typeof violationFineStatusColor === "function" ? violationFineStatusColor(status) : "var(--muted)";
+        const label = typeof violationFineStatusLabel === "function" ? violationFineStatusLabel(status) : status;
+        const featureLabels = Array.isArray(fine.restriction_feature_labels) ? fine.restriction_feature_labels.join("、") : "";
+        const baseAmount = Number(fine.amount_points || 0);
+        const interest = Number(fine.overdue_interest_points || 0);
+        const dueAmount = Number(fine.amount_due_points || baseAmount + interest);
+        const closable = status === "pending" || status === "overdue";
+        return `
+          <div style="border-bottom:1px solid #222;padding:.45rem .25rem;word-break:break-all;">
+            <div><strong>${sanitize(fine.username || "")}</strong> · <span style="color:${color};">${sanitize(label)}</span> · ${dueAmount.toLocaleString()} 點</div>
+            ${interest > 0 ? `<div style="color:#ff8a80;font-size:.7rem;">本金 ${baseAmount.toLocaleString()} · 逾期附加費 ${interest.toLocaleString()}</div>` : ""}
+            <div style="color:#ffcc80;">${sanitize(fine.reason || "")}</div>
+            <div style="color:var(--muted);font-size:.7rem;">${sanitize(fine.fine_uuid || "")} · due ${sanitize(fine.due_at || "-")} · 限制 ${sanitize(featureLabels || "-")}</div>
+            ${fine.payment_ledger_uuid ? `<div style="color:#4caf50;font-size:.7rem;">ledger ${sanitize(fine.payment_ledger_uuid || "")}</div>` : ""}
+            ${closable ? `<button class="btn" type="button" data-waive-fine="${sanitize(fine.fine_uuid)}" style="margin-top:.35rem;">豁免 / 解除限制</button>` : ""}
+          </div>
+        `;
+      }).join("");
+      list.querySelectorAll("button[data-waive-fine]").forEach((btn) => {
+        btn.addEventListener("click", () => waiveViolationFine(btn.getAttribute("data-waive-fine")));
+      });
+    }
+  }
+  const appealsList = $("violation-fine-appeal-list");
+  if (!appealsList) return;
+  const appeals = Array.isArray(fineAppeals) ? fineAppeals : [];
+  if (!appeals.length) {
+    appealsList.innerHTML = "<p style='color:var(--muted);'>目前沒有待審罰單申覆</p>";
+    return;
+  }
+  appealsList.innerHTML = `
+    <div style="color:var(--muted);font-size:.74rem;margin-bottom:.3rem;">待審罰單申覆</div>
+    ${appeals.map((appeal) => `
+      <div style="border-bottom:1px solid #222;padding:.45rem .25rem;word-break:break-all;">
+        <div><strong>${sanitize(appeal.username || "")}</strong> · ${Number(appeal.amount_points || 0).toLocaleString()} 點 · 罰單 ${sanitize(String(appeal.fine_uuid || "").slice(0, 24))}</div>
+        <div>申覆理由：${sanitize(appeal.reason || "")}</div>
+        <div style="color:var(--muted);font-size:.7rem;">罰單原因：${sanitize(appeal.fine_reason || "")}</div>
+        <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.35rem;">
+          <button class="btn" type="button" data-fine-appeal-review="approve" data-fine-appeal-id="${appeal.id}" style="background:#1f9d57;color:#fff;border-color:#1f9d57;">核准豁免</button>
+          <button class="btn" type="button" data-fine-appeal-review="reject" data-fine-appeal-id="${appeal.id}" style="background:#ff5252;color:#fff;border-color:#ff5252;">駁回</button>
+        </div>
+      </div>
+    `).join("")}
+  `;
+  appealsList.querySelectorAll("button[data-fine-appeal-review]").forEach((btn) => {
+    btn.addEventListener("click", () => reviewViolationFineAppeal(
+      parseInt(btn.getAttribute("data-fine-appeal-id"), 10),
+      btn.getAttribute("data-fine-appeal-review")
+    ));
+  });
+}
+
+async function loadAdminViolationFines() {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const status = $("violation-fine-status")?.value || "";
+  const username = violationTargetUser || "";
+  const qs = new URLSearchParams();
+  if (status) qs.set("status", status);
+  if (username) qs.set("username", username);
+  qs.set("limit", "50");
+  const res = await apiFetch(API + "/admin/violation-fines?" + qs.toString(), {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" },
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    renderAdminViolationFines([], 0, []);
+    alert(json.msg || "罰單清單讀取失敗");
+    return;
+  }
+  renderAdminViolationFines(json.fines || [], json.total || 0, json.pending_appeals || []);
+}
+
+async function createManualViolationFine(userId, violationId = null) {
+  const amountRaw = prompt("罰款點數", "300");
+  if (amountRaw === null) return;
+  const amount = Math.max(1, parseInt(amountRaw, 10) || 0);
+  if (!amount) {
+    alert("罰款點數格式錯誤");
+    return;
+  }
+  const reason = prompt("罰單原因", violationId ? `針對違規 #${violationId} 建立罰單` : "違規累計罰單");
+  if (reason === null) return;
+  const cleanReason = String(reason || "").trim();
+  if (cleanReason.length < 6) {
+    alert("罰單原因至少 6 字");
+    return;
+  }
+  const featuresRaw = prompt("逾期限制功能（逗號分隔，可留空使用預設）", "community_post,community_comment,chat_dm,cloud_upload,video_publish,trading_order,service_spend");
+  if (featuresRaw === null) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/admin/users/" + parseInt(userId, 10) + "/violation-fines", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({
+      amount_points: amount,
+      reason: cleanReason,
+      violation_id: violationId || null,
+      restriction_features: String(featuresRaw || "").split(",").map((item) => item.trim()).filter(Boolean),
+    }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    alert("罰單已建立");
+    await loadAdminViolationFines();
+  } else {
+    alert(json.msg || "建立罰單失敗");
+  }
+}
+
+async function waiveViolationFine(fineUuid) {
+  const reason = prompt("豁免原因 / 審核備註", "");
+  if (reason === null) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/admin/violation-fines/" + encodeURIComponent(fineUuid) + "/waive", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ reason: String(reason || "").trim() }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) await loadAdminViolationFines();
+  else alert(json.msg || "豁免罰單失敗");
+}
+
+async function reviewViolationFineAppeal(appealId, action) {
+  const note = prompt("審核備註（非必填）", "");
+  if (note === null) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/admin/violation-fine-appeals/" + parseInt(appealId, 10) + "/review", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ action, note: String(note || "").trim() }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) await loadAdminViolationFines();
+  else alert(json.msg || "審核罰單申覆失敗");
 }
 
 // ── Governance UI ───────────────────────────────────────────
@@ -1327,6 +1500,19 @@ let rootTradingMarketRegistryAuditCache = [];
 let rootTradingMarketProviderCache = [];
 let rootTradingMarketRegistrySelectedId = null;
 let rootTradingMarketProviderSelectedId = null;
+const ROOT_SERVICE_FEE_PRICING_PRESETS = [
+  { item_key: "post_cost_standard", item_name: "一般發文成本", category: "forum", base_price: 1, min_price: 1, max_price: 10, rationale: "低額防洗版，低於每日登入 5 點。" },
+  { item_key: "post_pin_24h", item_name: "文章置頂 24 小時", category: "forum", base_price: 100, min_price: 50, max_price: 300, rationale: "曝光型功能，價格約等於 20 天每日登入。" },
+  { item_key: "cloud_storage_1gb_30d", item_name: "雲端容量 1GB / 30 天", category: "cloud_drive", base_price: 100, min_price: 50, max_price: 500, metadata: { storage_bytes: 1024 * 1024 * 1024, duration_days: 30, label: "雲端容量 1GB / 30 天" }, rationale: "容量是持續成本，保留較高 sink。" },
+  { item_key: "comfyui_txt2img_basic", item_name: "基礎生圖一次", category: "comfyui", base_price: 5, min_price: 1, max_price: 25, dynamic_pricing: true, rationale: "等同每日登入一次，適合低門檻試用。" },
+  { item_key: "comfyui_txt2img_highres", item_name: "高解析生圖一次", category: "comfyui", base_price: 12, min_price: 5, max_price: 60, dynamic_pricing: true, rationale: "高資源消耗，約基礎生圖 2-3 倍。" },
+  { item_key: "video_publish_basic", item_name: "影音發布處理費", category: "video", base_price: 2, min_price: 1, max_price: 20, rationale: "發布低價，收入重心在投幣抽成與流量分潤。" },
+  { item_key: "video_boost_24h", item_name: "影音曝光加成 24 小時", category: "video", base_price: 80, min_price: 30, max_price: 300, rationale: "曝光型功能需高於一般發布，避免洗推薦。" },
+  { item_key: "game_entry_standard", item_name: "遊戲一般入場", category: "game", base_price: 1, min_price: 1, max_price: 10, rationale: "高頻低額，走服務費小帳本避免每次鏈上等待。" },
+  { item_key: "marketplace_listing_fee", item_name: "市集上架費", category: "marketplace", base_price: 3, min_price: 1, max_price: 30, rationale: "低額抑制垃圾上架，成交抽成另列平台收入。" },
+  { item_key: "ai_agent_task_basic", item_name: "AI Agent 基礎任務", category: "ai_task", base_price: 10, min_price: 5, max_price: 100, dynamic_pricing: true, rationale: "預留外部 API / 任務排程成本。" },
+  { item_key: "username_change", item_name: "改名", category: "account", base_price: 200, min_price: 100, max_price: 1000, rationale: "低頻身分操作，維持較高價格降低濫用。" }
+];
 
 function rootCatalogMsg(text, ok = true) {
   const msg = $("root-catalog-msg");
@@ -1371,6 +1557,96 @@ function fillRootCatalogForm(itemKey) {
   rootCatalogMsg(`正在編輯 ${item.item_key}`);
 }
 
+function fillRootCatalogFormFromPreset(item) {
+  if (!item) return;
+  const metadata = item.metadata || {};
+  if ($("root-catalog-item-key")) $("root-catalog-item-key").value = item.item_key || "";
+  if ($("root-catalog-item-name")) $("root-catalog-item-name").value = item.item_name || "";
+  if ($("root-catalog-category")) $("root-catalog-category").value = item.category || "custom";
+  if ($("root-catalog-base-price")) $("root-catalog-base-price").value = item.base_price ?? 1;
+  if ($("root-catalog-min-price")) $("root-catalog-min-price").value = item.min_price ?? "";
+  if ($("root-catalog-max-price")) $("root-catalog-max-price").value = item.max_price ?? "";
+  if ($("root-catalog-dynamic-pricing")) $("root-catalog-dynamic-pricing").checked = !!item.dynamic_pricing;
+  if ($("root-catalog-enabled")) $("root-catalog-enabled").checked = item.enabled !== false;
+  if ($("root-catalog-storage-gb")) $("root-catalog-storage-gb").value = metadata.storage_bytes ? rootCatalogStorageGbFromBytes(metadata.storage_bytes) : "";
+  if ($("root-catalog-duration-days")) $("root-catalog-duration-days").value = metadata.duration_days || "";
+  rootCatalogMsg(`已套入建議：${item.item_key}`);
+}
+
+function rootPricingPresetPayload(item) {
+  return {
+    item_key: item.item_key,
+    item_name: item.item_name,
+    category: item.category,
+    base_price: item.base_price,
+    min_price: item.min_price || "",
+    max_price: item.max_price || "",
+    dynamic_pricing: !!item.dynamic_pricing,
+    enabled: item.enabled !== false,
+    metadata: item.metadata || {},
+  };
+}
+
+async function saveRootServiceFeePricingPreset(itemKey) {
+  if (currentUser !== "root") return;
+  const preset = ROOT_SERVICE_FEE_PRICING_PRESETS.find((item) => item.item_key === itemKey);
+  if (!preset) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/root/economy/catalog", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(rootPricingPresetPayload(preset))
+  });
+  const json = await res.json().catch(() => ({}));
+  rootCatalogMsg(json.ok ? `已套用 ${preset.item_key}` : (json.msg || "套用建議定價失敗"), !!json.ok);
+  if (json.ok) {
+    rootEconomyCatalogCache = Array.isArray(json.catalog) ? json.catalog : [];
+    renderRootEconomyCatalog(rootEconomyCatalogCache);
+    renderRootServiceFeeQuickPricing();
+    if (typeof loadEconomy === "function") loadEconomy();
+  }
+}
+
+function renderRootServiceFeeQuickPricing() {
+  const list = $("root-service-fee-quick-pricing-list");
+  if (!list) return;
+  const catalog = new Map(rootEconomyCatalogCache.map((item) => [item.item_key, item]));
+  list.innerHTML = `
+    <div class="drive-file-row billing-catalog-row">
+      <div>
+        <strong>服務費快速定價</strong>
+        <div class="drive-card-sub">建議以低額高頻、曝光較高、資源消耗更高的模型定價；收入列入官方 Treasury，鏈上交易 fee 仍進 BURN。</div>
+      </div>
+    </div>
+    ${ROOT_SERVICE_FEE_PRICING_PRESETS.map((preset) => {
+      const current = catalog.get(preset.item_key);
+      const currentText = current ? `${Number(current.base_price || 0)} 點${current.enabled ? "" : " · 停用"}` : "尚未建立";
+      return `<div class="drive-file-row billing-catalog-row">
+        <div>
+          <strong>${sanitize(preset.item_name)} · 建議 ${Number(preset.base_price || 0)} 點</strong>
+          <div class="drive-card-sub">${sanitize(preset.item_key)} · ${sanitize(preset.category)} · 目前 ${sanitize(currentText)}</div>
+          <div class="drive-card-sub">${sanitize(preset.rationale || "")}</div>
+        </div>
+        <div class="drive-file-actions">
+          <button class="btn btn-sm" type="button" data-root-pricing-fill="${sanitize(preset.item_key)}">套入編輯</button>
+          <button class="btn btn-sm btn-primary" type="button" data-root-pricing-save="${sanitize(preset.item_key)}">套用建議</button>
+        </div>
+      </div>`;
+    }).join("")}
+  `;
+  list.querySelectorAll("[data-root-pricing-fill]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const preset = ROOT_SERVICE_FEE_PRICING_PRESETS.find((item) => item.item_key === btn.dataset.rootPricingFill);
+      fillRootCatalogFormFromPreset(preset);
+    });
+  });
+  list.querySelectorAll("[data-root-pricing-save]").forEach((btn) => {
+    btn.addEventListener("click", () => saveRootServiceFeePricingPreset(btn.dataset.rootPricingSave || ""));
+  });
+}
+
 function renderRootEconomyCatalog(items) {
   const list = $("root-catalog-list");
   if (!list) return;
@@ -1413,6 +1689,7 @@ async function loadRootEconomyCatalog() {
   }
   rootEconomyCatalogCache = Array.isArray(json.catalog) ? json.catalog : [];
   renderRootEconomyCatalog(rootEconomyCatalogCache);
+  renderRootServiceFeeQuickPricing();
 }
 
 async function saveRootEconomyCatalogItem() {
@@ -1458,6 +1735,7 @@ async function saveRootEconomyCatalogItem() {
   if (json.ok) {
     rootEconomyCatalogCache = Array.isArray(json.catalog) ? json.catalog : [];
     renderRootEconomyCatalog(rootEconomyCatalogCache);
+    renderRootServiceFeeQuickPricing();
     if (typeof loadEconomy === "function") loadEconomy();
   }
 }
@@ -4552,11 +4830,12 @@ async function loadSettings() {
   if ($("s-site-background-style")) $("s-site-background-style").value = s.site_background_style || "flat";
   if ($("s-site-panel-style")) $("s-site-panel-style").value = s.site_panel_style || "glass";
   if ($("s-site-sidebar-width")) $("s-site-sidebar-width").value = s.site_sidebar_width || "standard";
+  applySiteConfig(s);
+  renderFeatureSwitchGroups();
   FEATURE_SETTING_KEYS.forEach((key) => {
     const el = $(featureSettingInputId(key));
     if (el) el.checked = !!s[key];
   });
-  applySiteConfig(s);
   renderFeatureBundleToolbar();
   renderFeatureAdvisories();
   switchSettingsSection(currentSettingsSection || "security");
@@ -4586,6 +4865,7 @@ const FEATURE_SETTING_KEYS = [
   "feature_social_search_enabled",
   "feature_advanced_security_enabled",
   "feature_privacy_uploads_enabled",
+  "feature_experiments_enabled",
   "feature_comfyui_enabled",
   "feature_economy_enabled",
   "feature_points_chain_enabled",
@@ -4624,6 +4904,7 @@ const FEATURE_SETTING_LABELS = {
   feature_social_search_enabled: "社交 / 搜尋",
   feature_advanced_security_enabled: "進階安全",
   feature_privacy_uploads_enabled: "隱私分級上傳 / E2EE",
+  feature_experiments_enabled: "實驗區",
 };
 
 const FEATURE_DEPENDENCY_RULES = {
@@ -4634,6 +4915,10 @@ const FEATURE_DEPENDENCY_RULES = {
   feature_trading_enabled: {
     required: ["feature_economy_enabled", "feature_points_chain_enabled"],
     description: "積分交易所必須依附在基本積分與 PointsChain 私有鏈上。",
+  },
+  feature_points_chain_enabled: {
+    recommended: ["feature_economy_enabled"],
+    description: "PointsChain 私有鏈通常以基本積分系統作為站內財務入口。",
   },
   feature_videos_enabled: {
     recommended: ["feature_privacy_uploads_enabled", "feature_economy_enabled", "feature_points_chain_enabled"],
@@ -4652,8 +4937,8 @@ const FEATURE_DEPENDENCY_RULES = {
     description: "討論區完整體驗通常會搭配附件、檢舉與通知。",
   },
   feature_appeals_enabled: {
-    recommended: ["feature_accounts_enabled", "feature_reports_notifications_enabled"],
-    description: "申覆流程通常會搭配帳號管理與通知。",
+    recommended: ["feature_accounts_enabled", "feature_violation_center_enabled", "feature_reports_notifications_enabled"],
+    description: "申覆流程通常會搭配帳號管理、違規中心與通知。",
   },
   feature_violation_center_enabled: {
     recommended: ["feature_accounts_enabled"],
@@ -4685,28 +4970,136 @@ const FEATURE_MINIMUM_BUNDLE_FEATURES = [
   "feature_accounts_enabled",
   "feature_audit_log_enabled",
   "feature_system_health_enabled",
+  "feature_health_center_enabled",
   "feature_server_modes_enabled",
   "feature_snapshot_restore_enabled",
+  "feature_reports_notifications_enabled",
+];
+
+const FEATURE_SETTING_GROUPS = [
+  {
+    key: "ops",
+    title: "維運與安全",
+    subtitle: "帳號、稽核、健康、伺服器模式、snapshot 與安全護欄。",
+    defaultOpen: true,
+    features: [
+      "feature_accounts_enabled",
+      "feature_audit_log_enabled",
+      "feature_system_health_enabled",
+      "feature_health_center_enabled",
+      "feature_server_modes_enabled",
+      "feature_snapshot_restore_enabled",
+      "feature_account_security_enabled",
+      "feature_advanced_security_enabled",
+    ],
+  },
+  {
+    key: "governance",
+    title: "治理、申覆與通知",
+    subtitle: "違規、罰單、申覆、檢舉、會員治理與站內通知。",
+    defaultOpen: true,
+    features: [
+      "feature_violation_center_enabled",
+      "feature_appeals_enabled",
+      "feature_reports_enabled",
+      "feature_reports_notifications_enabled",
+      "feature_identity_governance_enabled",
+      "feature_member_governance_enabled",
+    ],
+  },
+  {
+    key: "social",
+    title: "社交與內容互動",
+    subtitle: "聊天、討論區、附件、搜尋與使用者互動。",
+    features: [
+      "feature_chat_enabled",
+      "feature_community_enabled",
+      "feature_social_search_enabled",
+      "feature_attachments_enabled",
+    ],
+  },
+  {
+    key: "storage",
+    title: "儲存與媒體",
+    subtitle: "隱私分級上傳、Storage / 相簿與影音分享。",
+    features: [
+      "feature_privacy_uploads_enabled",
+      "feature_storage_albums_enabled",
+      "feature_videos_enabled",
+    ],
+  },
+  {
+    key: "economy",
+    title: "積分、PointsChain 與交易",
+    subtitle: "基本積分、私有鏈與積分交易所。",
+    features: [
+      "feature_economy_enabled",
+      "feature_points_chain_enabled",
+      "feature_trading_enabled",
+    ],
+  },
+  {
+    key: "heavy",
+    title: "重型與實驗模組",
+    subtitle: "遊戲、ComfyUI、實驗區與大型 UI / 個人化模組。",
+    features: [
+      "feature_games_enabled",
+      "feature_experiments_enabled",
+      "feature_comfyui_enabled",
+      "feature_forum_core_enabled",
+      "feature_ui_rebuild_enabled",
+      "feature_personalization_enabled",
+    ],
+  },
 ];
 
 const FEATURE_SERVICE_BUNDLES = [
   {
     key: "all-enabled",
     label: "全開",
+    category: "完整前台",
     description: "所有功能開關全部打開。",
     features: FEATURE_SETTING_KEYS,
     replace: true,
   },
   {
+    key: "ops-minimum",
+    label: "維運骨架",
+    category: "維運",
+    description: "新版維運骨架：帳號、Audit、健康監控、Server Mode、Snapshot 與通知。",
+    features: FEATURE_MINIMUM_BUNDLE_FEATURES,
+    replace: true,
+  },
+  {
     key: "minimum-ops",
     label: "最低維運",
-    description: "只保留帳號、Audit、健康燈、Server Mode 與 Snapshot 等最小維運骨架。",
+    category: "維運",
+    description: "只保留帳號、Audit、健康燈、Server Mode、Snapshot 與通知等最小維運骨架。",
     features: FEATURE_MINIMUM_BUNDLE_FEATURES,
+    replace: true,
+  },
+  {
+    key: "safe-community",
+    label: "安全社群",
+    category: "社群",
+    description: "社群互動加上檢舉、申覆、違規與帳號安全，適合正式對外開放留言與貼文。",
+    features: [
+      ...FEATURE_MINIMUM_BUNDLE_FEATURES,
+      "feature_chat_enabled",
+      "feature_community_enabled",
+      "feature_attachments_enabled",
+      "feature_reports_enabled",
+      "feature_appeals_enabled",
+      "feature_violation_center_enabled",
+      "feature_account_security_enabled",
+      "feature_social_search_enabled",
+    ],
     replace: true,
   },
   {
     key: "raspberry-lite",
     label: "Raspberry 套餐",
+    category: "低資源",
     description: "輕量主機預設：保留帳號、社群、附件、雲端硬碟、遊戲與基本積分；關閉 ComfyUI、影音、PointsChain 私有鏈與交易等較吃 CPU / I/O / 長連線的模組。",
     features: [
       ...FEATURE_MINIMUM_BUNDLE_FEATURES,
@@ -4729,8 +5122,32 @@ const FEATURE_SERVICE_BUNDLES = [
     replace: true,
   },
   {
+    key: "low-resource",
+    label: "低資源完整前台",
+    category: "低資源",
+    description: "低端設備可用的前台組合：關閉 ComfyUI、影音、交易所與 PointsChain，保留社群、儲存、遊戲、基本積分與治理安全。",
+    features: [
+      ...FEATURE_MINIMUM_BUNDLE_FEATURES,
+      "feature_chat_enabled",
+      "feature_community_enabled",
+      "feature_appeals_enabled",
+      "feature_violation_center_enabled",
+      "feature_reports_enabled",
+      "feature_attachments_enabled",
+      "feature_privacy_uploads_enabled",
+      "feature_storage_albums_enabled",
+      "feature_economy_enabled",
+      "feature_games_enabled",
+      "feature_social_search_enabled",
+      "feature_account_security_enabled",
+      "feature_advanced_security_enabled",
+    ],
+    replace: true,
+  },
+  {
     key: "accounts-suite",
     label: "帳號治理整套",
+    category: "治理",
     description: "帳號、違規、治理、通知、申覆一起開。",
     features: [
       "feature_accounts_enabled",
@@ -4744,8 +5161,26 @@ const FEATURE_SERVICE_BUNDLES = [
     ],
   },
   {
+    key: "creator-media",
+    label: "創作者影音",
+    category: "內容",
+    description: "創作者前台：儲存、影音、附件、檢舉通知、基本積分與 PointsChain 打賞結算。",
+    features: [
+      "feature_accounts_enabled",
+      "feature_reports_notifications_enabled",
+      "feature_reports_enabled",
+      "feature_attachments_enabled",
+      "feature_privacy_uploads_enabled",
+      "feature_storage_albums_enabled",
+      "feature_videos_enabled",
+      "feature_economy_enabled",
+      "feature_points_chain_enabled",
+    ],
+  },
+  {
     key: "community-suite",
     label: "社群互動整套",
+    category: "社群",
     description: "聊天、討論區、附件、檢舉與通知一起開。",
     features: [
       "feature_chat_enabled",
@@ -4758,6 +5193,7 @@ const FEATURE_SERVICE_BUNDLES = [
   {
     key: "drive-suite",
     label: "雲端硬碟整套",
+    category: "內容",
     description: "隱私分級上傳加 Storage / 相簿一起開。",
     features: [
       "feature_privacy_uploads_enabled",
@@ -4767,6 +5203,7 @@ const FEATURE_SERVICE_BUNDLES = [
   {
     key: "video-suite",
     label: "影音分享整套",
+    category: "內容",
     description: "影音、雲端硬碟、基本積分與 PointsChain 一起開。",
     features: [
       "feature_videos_enabled",
@@ -4776,8 +5213,48 @@ const FEATURE_SERVICE_BUNDLES = [
     ],
   },
   {
+    key: "points-chain-rc1",
+    label: "PointsChain RC1",
+    category: "積分鏈",
+    description: "RC1 私有鏈營運組合：帳號、稽核、健康、治理、申覆、通知、基本積分與 PointsChain，不開交易所。",
+    features: [
+      ...FEATURE_MINIMUM_BUNDLE_FEATURES,
+      "feature_economy_enabled",
+      "feature_points_chain_enabled",
+      "feature_violation_center_enabled",
+      "feature_appeals_enabled",
+      "feature_reports_enabled",
+      "feature_identity_governance_enabled",
+      "feature_member_governance_enabled",
+      "feature_account_security_enabled",
+      "feature_advanced_security_enabled",
+    ],
+    replace: true,
+  },
+  {
+    key: "exchange-ops",
+    label: "交易所營運",
+    category: "積分鏈",
+    description: "在 PointsChain RC1 上加開積分交易所，適合交易所相關 QA 或營運測試。",
+    features: [
+      ...FEATURE_MINIMUM_BUNDLE_FEATURES,
+      "feature_economy_enabled",
+      "feature_points_chain_enabled",
+      "feature_trading_enabled",
+      "feature_violation_center_enabled",
+      "feature_appeals_enabled",
+      "feature_reports_enabled",
+      "feature_identity_governance_enabled",
+      "feature_member_governance_enabled",
+      "feature_account_security_enabled",
+      "feature_advanced_security_enabled",
+    ],
+    replace: true,
+  },
+  {
     key: "ai-suite",
     label: "AI 產圖整套",
+    category: "重型運算",
     description: "ComfyUI 加雲端硬碟保存流程一起開。",
     features: [
       "feature_comfyui_enabled",
@@ -4787,12 +5264,40 @@ const FEATURE_SERVICE_BUNDLES = [
   {
     key: "economy-suite",
     label: "積分交易整套",
+    category: "積分鏈",
     description: "基本積分、PointsChain 私有鏈與積分交易所一起開。",
     features: [
       "feature_economy_enabled",
       "feature_points_chain_enabled",
       "feature_trading_enabled",
     ],
+  },
+  {
+    key: "full-user",
+    label: "一般前台完整體驗",
+    category: "完整前台",
+    description: "一般使用者完整體驗：社群、儲存、影音、遊戲、AI、個人化、積分鏈與交易所。",
+    features: [
+      "feature_chat_enabled",
+      "feature_community_enabled",
+      "feature_attachments_enabled",
+      "feature_reports_enabled",
+      "feature_reports_notifications_enabled",
+      "feature_appeals_enabled",
+      "feature_violation_center_enabled",
+      "feature_privacy_uploads_enabled",
+      "feature_storage_albums_enabled",
+      "feature_videos_enabled",
+      "feature_games_enabled",
+      "feature_comfyui_enabled",
+      "feature_economy_enabled",
+      "feature_points_chain_enabled",
+      "feature_trading_enabled",
+      "feature_personalization_enabled",
+      "feature_social_search_enabled",
+      "feature_account_security_enabled",
+    ],
+    replace: true,
   },
 ];
 
@@ -4802,6 +5307,74 @@ function featureSettingInputId(key) {
 
 function featureSettingLabel(key) {
   return FEATURE_SETTING_LABELS[key] || key;
+}
+
+function featureDependencyHint(key) {
+  const rule = FEATURE_DEPENDENCY_RULES[key] || {};
+  const parts = [];
+  if (Array.isArray(rule.required) && rule.required.length) {
+    parts.push(`必須先開：${rule.required.map(featureSettingLabel).join("、")}`);
+  }
+  if (Array.isArray(rule.recommended) && rule.recommended.length) {
+    parts.push(`建議搭配：${rule.recommended.map(featureSettingLabel).join("、")}`);
+  }
+  return parts.join("；");
+}
+
+function renderFeatureSwitchGroups() {
+  const host = $("feature-switch-groups");
+  if (!host) return;
+  host.innerHTML = FEATURE_SETTING_GROUPS.map((group) => {
+    const rows = (group.features || []).filter((key) => FEATURE_SETTING_KEYS.includes(key)).map((key) => {
+      const hint = featureDependencyHint(key);
+      return `
+        <label class="settings-feature-row" for="${sanitize(featureSettingInputId(key))}">
+          <input type="checkbox" id="${sanitize(featureSettingInputId(key))}" data-feature-key="${sanitize(key)}" />
+          <span class="settings-feature-row-main">
+            <span class="settings-feature-row-title">${sanitize(featureSettingLabel(key))}</span>
+            ${hint ? `<span class="settings-feature-row-hint">${sanitize(hint)}</span>` : ""}
+          </span>
+        </label>`;
+    }).join("");
+    return `
+      <details class="drive-collapsible-panel settings-feature-group" ${group.defaultOpen ? "open" : ""}>
+        <summary>
+          <div>
+            <div class="drive-card-title">${sanitize(group.title)}</div>
+            <div class="drive-card-sub">${sanitize(group.subtitle || "")}</div>
+          </div>
+        </summary>
+        <div class="drive-collapsible-body settings-feature-group-body">
+          <div class="settings-feature-group-grid">${rows}</div>
+          <div class="settings-feature-group-actions">
+            <button class="btn btn-sm" type="button" data-feature-group-action="on" data-feature-group-key="${sanitize(group.key)}">全開此群組</button>
+            <button class="btn btn-sm" type="button" data-feature-group-action="off" data-feature-group-key="${sanitize(group.key)}">全關此群組</button>
+          </div>
+        </div>
+      </details>`;
+  }).join("");
+  host.querySelectorAll("input[data-feature-key]").forEach((input) => {
+    input.addEventListener("change", () => {
+      clearSettingsStatus();
+      renderFeatureAdvisories();
+    });
+  });
+  host.querySelectorAll("[data-feature-group-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      setFeatureGroupState(button.dataset.featureGroupKey || "", button.dataset.featureGroupAction === "on");
+    });
+  });
+}
+
+function setFeatureGroupState(groupKey, enabled) {
+  const group = FEATURE_SETTING_GROUPS.find((item) => item.key === groupKey);
+  if (!group) return;
+  (group.features || []).forEach((key) => {
+    const el = $(featureSettingInputId(key));
+    if (el) el.checked = !!enabled;
+  });
+  renderFeatureAdvisories();
+  setSettingsStatus(`${enabled ? "已全開" : "已全關"}「${group.title}」群組，記得再按「儲存設定」才會真正寫入。`, null);
 }
 
 function setSettingsStatus(text = "", ok = null, options = {}) {
@@ -4875,7 +5448,7 @@ function renderFeatureAdvisories() {
   if (!wrap) return;
   const advisories = buildFeatureAdvisories();
   if (!advisories.length) {
-    wrap.innerHTML = `<div class="settings-feature-advisory ok">目前已勾選的功能沒有缺少父功能；若要一次打開整套服務，可用上方快捷開關。</div>`;
+    wrap.innerHTML = `<div class="settings-feature-advisory ok">目前已勾選的功能沒有缺少父功能；若要一次打開整套服務，可用上方功能套餐。</div>`;
     return;
   }
   wrap.innerHTML = advisories.map((item) => {
@@ -4900,38 +5473,72 @@ function renderFeatureAdvisories() {
 function renderFeatureBundleToolbar() {
   const toolbar = $("feature-bundle-toolbar");
   if (!toolbar) return;
-  toolbar.innerHTML = FEATURE_SERVICE_BUNDLES.map((bundle) => `
-    <button class="btn btn-sm" type="button" data-feature-bundle="${sanitize(bundle.key)}" title="${sanitize(bundle.description)}">
-      ${sanitize(bundle.label)}
-    </button>
-  `).join("");
-  toolbar.querySelectorAll("[data-feature-bundle]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const bundle = FEATURE_SERVICE_BUNDLES.find((item) => item.key === btn.dataset.featureBundle);
-      if (!bundle) return;
-      const enabledFeatures = new Set(bundle.features || []);
-      if (bundle.replace === true) {
-        FEATURE_SETTING_KEYS.forEach((key) => {
-          const el = $(featureSettingInputId(key));
-          if (el) el.checked = enabledFeatures.has(key);
-        });
-      } else {
-        enabledFeatures.forEach((key) => {
-          const el = $(featureSettingInputId(key));
-          if (el) el.checked = true;
-        });
-      }
-      renderFeatureAdvisories();
-      const actionVerb = bundle.replace === true ? "已切換為" : "已套用";
-      setSettingsStatus(`${actionVerb}「${bundle.label}」組合，記得再按「儲存設定」才會真正寫入。`, null);
-    });
+  const select = $("feature-bundle-select");
+  const apply = $("feature-bundle-apply");
+  if (!select || !apply) return;
+  const previous = select.value || "";
+  const grouped = new Map();
+  FEATURE_SERVICE_BUNDLES.forEach((bundle) => {
+    const category = bundle.category || "其他";
+    if (!grouped.has(category)) grouped.set(category, []);
+    grouped.get(category).push(bundle);
   });
+  select.innerHTML = `<option value="">選擇功能套餐</option>` + Array.from(grouped.entries()).map(([category, bundles]) => `
+    <optgroup label="${sanitize(category)}">
+      ${bundles.map((bundle) => `<option value="${sanitize(bundle.key)}">${sanitize(bundle.label)}</option>`).join("")}
+    </optgroup>
+  `).join("");
+  if (previous && FEATURE_SERVICE_BUNDLES.some((bundle) => bundle.key === previous)) select.value = previous;
+
+  const renderPreview = () => {
+    const preview = $("feature-bundle-preview");
+    if (!preview) return;
+    const bundle = FEATURE_SERVICE_BUNDLES.find((item) => item.key === select.value);
+    if (!bundle) {
+      preview.innerHTML = `<div class="settings-feature-advisory info">請先選擇功能套餐。替換型套餐會重設整組功能；加開型套餐只會打開相關功能，不會關閉其他模組。</div>`;
+      apply.disabled = true;
+      return;
+    }
+    const mode = bundle.replace === true ? "替換目前整組功能開關" : "在目前設定上加開這些功能";
+    const features = Array.from(new Set(bundle.features || [])).map(featureSettingLabel).join("、");
+    preview.innerHTML = `
+      <div class="settings-feature-advisory info">
+        <div><strong>${sanitize(bundle.label)}</strong> · ${sanitize(bundle.category || "其他")} · ${sanitize(mode)}</div>
+        <div>${sanitize(bundle.description || "")}</div>
+        <div style="margin-top:.35rem;color:var(--muted);">${sanitize(features || "無功能項目")}</div>
+      </div>`;
+    apply.disabled = false;
+  };
+
+  select.onchange = renderPreview;
+  apply.onclick = () => {
+    const bundle = FEATURE_SERVICE_BUNDLES.find((item) => item.key === select.value);
+    if (!bundle) return;
+    const enabledFeatures = new Set(bundle.features || []);
+    if (bundle.replace === true) {
+      FEATURE_SETTING_KEYS.forEach((key) => {
+        const el = $(featureSettingInputId(key));
+        if (el) el.checked = enabledFeatures.has(key);
+      });
+    } else {
+      enabledFeatures.forEach((key) => {
+        const el = $(featureSettingInputId(key));
+        if (el) el.checked = true;
+      });
+    }
+    renderFeatureAdvisories();
+    renderPreview();
+    const actionVerb = bundle.replace === true ? "已切換為" : "已套用";
+    setSettingsStatus(`${actionVerb}「${bundle.label}」套餐，記得再按「儲存設定」才會真正寫入。`, null);
+  };
+  renderPreview();
 }
 
 function bindSettingsAssistants() {
   const serverModule = $("module-server");
   if (!serverModule || serverModule.dataset.settingsAssistantsBound === "1") return;
   serverModule.dataset.settingsAssistantsBound = "1";
+  renderFeatureSwitchGroups();
   renderFeatureBundleToolbar();
   renderFeatureAdvisories();
   document.querySelectorAll("[id^='s-']").forEach((el) => {

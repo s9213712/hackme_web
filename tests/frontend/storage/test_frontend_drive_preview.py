@@ -409,18 +409,35 @@ def test_album_viewer_has_dedicated_module():
     assert 'const usage = $("tester-token-usage-wrap");' in admin_js
     assert '"feature_audit_log_enabled"' in admin_js
     assert '"feature_economy_enabled"' in admin_js
+    assert '"feature_experiments_enabled"' in admin_js
+    assert "FEATURE_SETTING_GROUPS" in admin_js
     assert "FEATURE_SERVICE_BUNDLES" in admin_js
     assert '"all-enabled"' in admin_js
+    assert '"ops-minimum"' in admin_js
     assert '"minimum-ops"' in admin_js
     assert '"raspberry-lite"' in admin_js
+    assert '"safe-community"' in admin_js
+    assert '"creator-media"' in admin_js
+    assert '"points-chain-rc1"' in admin_js
+    assert '"exchange-ops"' in admin_js
+    assert '"low-resource"' in admin_js
     assert "全開" in admin_js
+    assert "維運骨架" in admin_js
     assert "最低維運" in admin_js
     assert "Raspberry 套餐" in admin_js
     assert "輕量主機預設" in admin_js
+    assert "renderFeatureSwitchGroups" in admin_js
+    assert "setFeatureGroupState" in admin_js
     assert "bundle.replace === true" in admin_js
     assert "feature-bundle-toolbar" in index_html
+    assert "feature-bundle-select" in index_html
+    assert "feature-bundle-apply" in index_html
+    assert "feature-bundle-preview" in index_html
+    assert "feature-switch-groups" in index_html
     assert "feature-advisory-list" in index_html
-    assert "全開 / 最低維運 / Raspberry 套餐" in index_html
+    assert "先選功能套餐看摘要" in index_html
+    assert "請先選擇功能套餐" in admin_js
+    assert "category: \"低資源\"" in admin_js
     assert 'id="sc-feature-audit-log-enabled"' in index_html
     assert 'id="sc-feature-economy-enabled"' in index_html
     assert 'previewSecurityProfileSelection("security-mode-select", "security-mode-profile-preview", "sc")' in bootstrap_js
