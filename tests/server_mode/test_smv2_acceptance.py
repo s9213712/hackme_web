@@ -341,3 +341,4 @@ def test_dev_ready_trading_is_enabled_for_prelive_verification():
     assert settings.get("feature_trading_enabled") is True, settings
     assert routing.resolve_table("wallets", _ctx("dev_ready")) == "wallets"
     assert routing.resolve_table("orders", _ctx("dev_ready")) == "trading_orders"
+    assert routing.resolve_table("points_chain_blocks", _ctx("dev_ready")) == "points_chain_blocks"

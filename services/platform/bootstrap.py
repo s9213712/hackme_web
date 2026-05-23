@@ -97,8 +97,11 @@ def _insert_password_record(conn, user_id, password, hash_password, now):
 
 
 def _default_password_policy_disabled():
-    value = os.environ.get("HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_POLICY", "")
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    values = (
+        os.environ.get("HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_POLICY", ""),
+        os.environ.get("HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_CHANGE", ""),
+    )
+    return any(str(value).strip().lower() in {"1", "true", "yes", "on"} for value in values)
 
 
 def _relax_default_password_gate_for_dev_defaults():

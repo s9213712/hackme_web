@@ -27,8 +27,8 @@ same physical tables as `production` inside that runtime.
 Important contracts:
 1. The function accepts an `SmV2Context` (or anything with a `.mode`
    attribute) and refuses None — never silently default to production.
-2. `points_chain_blocks` always raises `ChainModeViolation` outside
-   production (mirrors the Phase 7 service-layer guard).
+2. `points_chain_blocks` raises `ChainModeViolation` outside production
+   and dev_ready (mirrors the Phase 7 service-layer guard).
 3. Strict equality on mode names — typos / case mismatches raise.
 """
 
@@ -105,7 +105,7 @@ def resolve_table(logical: str, ctx: Optional[SmV2Context]) -> str:
     Raises:
         ValueError if logical is empty / not a string.
         UnknownLogicalName if logical is not in the routing tables.
-        ChainModeViolation if logical=='points_chain_blocks' and mode != 'production'.
+        ChainModeViolation if logical=='points_chain_blocks' and mode is not production/dev_ready.
         RoutingNotAllowed for any other (logical, mode) combo without a mapping.
     """
     if not isinstance(logical, str) or not logical.strip():
@@ -117,7 +117,7 @@ def resolve_table(logical: str, ctx: Optional[SmV2Context]) -> str:
 
     # PointsChain has its own dedicated guard — there is NO shadow chain.
     if logical == "points_chain_blocks":
-        if mode != "production":
+        if mode not in {"production", "dev_ready"}:
             raise ChainModeViolation(mode, action=f"resolve_table:{logical}")
         return LOGICAL_TO_PROD[logical]
 

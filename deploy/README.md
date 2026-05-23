@@ -31,6 +31,13 @@ entrypoints are enabled for production.
    sudo install -m 0640 -o root -g hackme deploy/systemd/hackme-web.env.example /etc/hackme_web/hackme-web.env
    ```
 
+   At minimum, set `HTML_LEARNING_TRUSTED_HOSTS` to the public domain list,
+   for example `hackme.example.com,www.hackme.example.com`. Keep
+   `HTML_LEARNING_MAX_FORM_MEMORY_KB` and `HTML_LEARNING_MAX_FORM_PARTS`
+   configured unless you have a measured production reason to tune them.
+   Your reverse proxy must forward the original host, for example
+   `proxy_set_header Host $host;`, so Flask can reject untrusted Host headers.
+
 4. Install tmpfiles and create runtime directories:
 
    ```bash
@@ -66,6 +73,9 @@ entrypoints are enabled for production.
 
 - Do not expose Gunicorn directly to the public internet.
 - Do not set `TRUSTED_PROXY_IPS` to a broad public range.
+- Do not leave `HTML_LEARNING_TRUSTED_HOSTS` unset for a public hostname.
+- Do not pass maintenance bypass tokens in query strings. Use
+  `X-Maintenance-Bypass-Token`.
 - Do not store production secrets in the git checkout.
 - Do not raise Gunicorn worker/thread counts to compensate for HLS, BT, direct
   link, trading background jobs, or local AI generation. Move those into worker

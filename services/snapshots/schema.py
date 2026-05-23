@@ -269,6 +269,7 @@ BUILTIN_SECURITY_PROFILES = {
             "feature_snapshot_restore_enabled": True,
             "feature_audit_log_enabled": True,
             "feature_economy_enabled": True,
+            "feature_points_chain_enabled": True,
             "feature_violation_center_enabled": True,
             "feature_health_center_enabled": True,
             "captcha_mode": "math",
@@ -298,6 +299,7 @@ BUILTIN_SECURITY_PROFILES = {
             "integrity_guard_strict_mode": False,
             "feature_audit_log_enabled": True,
             "feature_economy_enabled": True,
+            "feature_points_chain_enabled": True,
             "feature_trading_enabled": True,
         },
         "thresholds": {
@@ -329,6 +331,7 @@ BUILTIN_SECURITY_PROFILES = {
             "feature_server_modes_enabled": True,
             "feature_audit_log_enabled": True,
             "feature_economy_enabled": True,
+            "feature_points_chain_enabled": True,
             # SERVER_MODE_V2_PROFILE_MATRIX.md §Mode Behavior Matrix footnote 2:
             # internal_test: trading shadow only / no production wallet write.
             # Tester actions are routed through test_shadow_* tables.
@@ -372,6 +375,7 @@ BUILTIN_SECURITY_PROFILES = {
             # If you need trading-flow QA, run it in `internal_test` mode and
             # let writes land in test_shadow_* tables.
             "feature_economy_enabled": True,
+            "feature_points_chain_enabled": True,
             "feature_trading_enabled": False,
         },
         "thresholds": {
@@ -400,6 +404,7 @@ BUILTIN_SECURITY_PROFILES = {
             "integrity_guard_strict_mode": False,
             "feature_audit_log_enabled": False,
             "feature_economy_enabled": False,
+            "feature_points_chain_enabled": False,
             "feature_trading_enabled": False,
             "captcha_mode": "none",
         },
@@ -433,6 +438,7 @@ BUILTIN_SECURITY_PROFILES = {
             "browser_only_mode_enabled": True,
             "feature_audit_log_enabled": True,
             "feature_economy_enabled": True,
+            "feature_points_chain_enabled": True,
             "feature_trading_enabled": False,
             "feature_comfyui_enabled": False,
             "feature_games_enabled": False,
@@ -467,6 +473,7 @@ BUILTIN_SECURITY_PROFILES = {
             "browser_only_mode_enabled": True,
             "feature_audit_log_enabled": True,
             "feature_economy_enabled": True,
+            "feature_points_chain_enabled": True,
             "feature_trading_enabled": False,
             "feature_comfyui_enabled": False,
             "feature_games_enabled": False,
@@ -945,6 +952,7 @@ def ensure_snapshot_schema(conn):
             side                TEXT NOT NULL,
             order_type          TEXT NOT NULL,
             funding_mode        TEXT NOT NULL DEFAULT 'points_chain',
+            source_wallet_address TEXT NOT NULL DEFAULT '',
             execution_mode      TEXT NOT NULL DEFAULT 'house_counterparty',
             quantity_units      INTEGER NOT NULL CHECK (quantity_units > 0),
             limit_price_points  INTEGER,
@@ -971,6 +979,7 @@ def ensure_snapshot_schema(conn):
     for col, ddl in (
         ("user_id", "ALTER TABLE test_shadow_orders ADD COLUMN user_id INTEGER"),
         ("funding_mode", "ALTER TABLE test_shadow_orders ADD COLUMN funding_mode TEXT NOT NULL DEFAULT 'points_chain'"),
+        ("source_wallet_address", "ALTER TABLE test_shadow_orders ADD COLUMN source_wallet_address TEXT NOT NULL DEFAULT ''"),
         ("execution_mode", "ALTER TABLE test_shadow_orders ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'house_counterparty'"),
         ("trial_frozen_points", "ALTER TABLE test_shadow_orders ADD COLUMN trial_frozen_points INTEGER NOT NULL DEFAULT 0"),
         ("chain_frozen_points", "ALTER TABLE test_shadow_orders ADD COLUMN chain_frozen_points INTEGER NOT NULL DEFAULT 0"),

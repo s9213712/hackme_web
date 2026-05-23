@@ -26,6 +26,7 @@ class SnapshotService:
         file_roots=None,
         config_files=None,
         runtime_secret_files=None,
+        additional_db_paths=None,
         reset_points_chain=None,
         reset_audit_chain=None,
         post_restore_validators=None,
@@ -44,6 +45,7 @@ class SnapshotService:
         self.file_roots = [Path(p) for p in (file_roots or []) if p]
         self.config_files = [Path(p) for p in (config_files or []) if p]
         self.runtime_secret_files = [Path(p) for p in (runtime_secret_files or []) if p]
+        self.additional_db_paths = self._normalize_additional_db_paths(additional_db_paths)
 
     def set_post_restore_validators(self, validators):
         self.post_restore_validators = list(validators or [])
@@ -188,8 +190,70 @@ class SnapshotService:
     def _actor_name(self, actor):
         return dict(actor or {}).get("username") or "system"
 
-    def _write_db_backup(self, dest):
-        src = sqlite3.connect(str(self.db_path))
+    def _sanitize_database_label(self, label):
+        clean = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(label or "").strip()).strip("._-")
+        if not clean:
+            raise ValueError("additional database label is empty")
+        return clean[:80]
+
+    def _normalize_additional_db_paths(self, db_paths):
+        if not db_paths:
+            return {}
+        if isinstance(db_paths, dict):
+            items = db_paths.items()
+        else:
+            items = []
+            for item in db_paths:
+                if isinstance(item, dict):
+                    items.append((item.get("label") or item.get("name"), item.get("path")))
+                else:
+                    items.append(item)
+        normalized = {}
+        primary = self.db_path.resolve(strict=False)
+        for raw_label, raw_path in items:
+            if not raw_path:
+                continue
+            label = self._sanitize_database_label(raw_label)
+            path = Path(raw_path)
+            if path.resolve(strict=False) == primary:
+                continue
+            if label in normalized:
+                raise ValueError(f"duplicate additional database label: {label}")
+            normalized[label] = path
+        return normalized
+
+    def _database_backup_specs(self):
+        specs = [
+            {
+                "label": "primary",
+                "path": self.db_path,
+                "archive_path": Path("db.sqlite3.backup"),
+                "primary": True,
+            }
+        ]
+        seen = {self.db_path.resolve(strict=False)}
+        for label, path in self.additional_db_paths.items():
+            resolved = path.resolve(strict=False)
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            specs.append(
+                {
+                    "label": label,
+                    "path": path,
+                    "archive_path": Path("databases") / f"{label}.sqlite3.backup",
+                    "primary": False,
+                }
+            )
+        return specs
+
+    def _write_db_file_backup(self, source, dest):
+        source = Path(source)
+        dest = Path(dest)
+        if not source.exists() or not source.is_file():
+            raise FileNotFoundError(str(source))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        src = sqlite3.connect(str(source))
         dst = sqlite3.connect(str(dest))
         try:
             src.backup(dst)
@@ -197,15 +261,66 @@ class SnapshotService:
             dst.close()
             src.close()
 
+    def _write_db_backup(self, dest):
+        self._write_db_file_backup(self.db_path, dest)
+
+    def _write_database_backups(self, snapshot_dir):
+        databases = []
+        for spec in self._database_backup_specs():
+            rel_path = spec["archive_path"].as_posix()
+            item = {
+                "label": spec["label"],
+                "primary": bool(spec["primary"]),
+                "source_path": self._rel_to_base_text(spec["path"]),
+                "archive_path": rel_path,
+                "exists": False,
+            }
+            source = Path(spec["path"])
+            if not source.exists():
+                if spec["primary"]:
+                    raise FileNotFoundError(str(source))
+                databases.append(item)
+                continue
+            if not source.is_file() or source.is_symlink():
+                if spec["primary"]:
+                    raise RuntimeError(f"primary database path is not a regular file: {source}")
+                item["skipped_reason"] = "not_regular_file"
+                databases.append(item)
+                continue
+            backup_path = snapshot_dir / spec["archive_path"]
+            self._write_db_file_backup(source, backup_path)
+            item.update(
+                {
+                    "exists": True,
+                    "size": backup_path.stat().st_size,
+                    "sha256": _sha256_file(backup_path),
+                }
+            )
+            databases.append(item)
+        return databases
+
+    def _path_is_snapshot_internal(self, path):
+        resolved = Path(path).resolve(strict=False)
+        snapshot_root = self.snapshots_root.resolve(strict=False)
+        imports_root = self.imports_root.resolve(strict=False)
+        return (
+            resolved == snapshot_root
+            or snapshot_root in resolved.parents
+            or resolved == imports_root
+            or imports_root in resolved.parents
+        )
+
     def _iter_files(self):
-        snapshot_root = self.snapshots_root.resolve()
+        snapshot_root = self.snapshots_root.resolve(strict=False)
         for root in self.file_roots:
             if not root.exists() or not root.is_dir():
                 continue
-            root_resolved = root.resolve()
+            root_resolved = root.resolve(strict=False)
             if snapshot_root == root_resolved or snapshot_root in root_resolved.parents:
                 continue
             for path in root_resolved.rglob("*"):
+                if self._path_is_snapshot_internal(path):
+                    continue
                 if path.is_file() and not path.is_symlink() and "__pycache__" not in path.parts:
                     rel = path.relative_to(self.base_dir.resolve()) if self.base_dir.resolve() in path.resolve().parents else Path(root.name) / path.relative_to(root_resolved)
                     yield path, rel
@@ -370,7 +485,13 @@ class SnapshotService:
         snapshot_id = self._snapshot_id()
         snapshot_dir = self._snapshot_dir(snapshot_id)
         created_at = datetime.now().isoformat()
-        includes = {"database": True, "uploads": True, "config": True, "audit_checkpoint": True}
+        includes = {
+            "database": True,
+            "databases": True,
+            "file_roots": True,
+            "config": True,
+            "audit_checkpoint": True,
+        }
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -403,14 +524,24 @@ class SnapshotService:
             checksums_path = snapshot_dir / "checksums.sha256"
             metadata_path = snapshot_dir / "metadata.json"
 
-            self._write_db_backup(db_dump)
+            database_manifest = self._write_database_backups(snapshot_dir)
             file_manifest = self._write_files_archive(files_archive)
             config_manifest = self._write_config_archive(config_archive)
-            manifest = {"files": file_manifest.get("files", []), "config": config_manifest}
+            manifest = {
+                "databases": database_manifest,
+                "files": file_manifest.get("files", []),
+                "config": config_manifest,
+            }
             manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
             checksums = {}
-            for path in (db_dump, files_archive, config_archive, manifest_path):
+            for item in database_manifest:
+                if not item.get("exists"):
+                    continue
+                rel_path = str(item.get("archive_path") or "").strip()
+                if rel_path:
+                    checksums[rel_path] = _sha256_file(snapshot_dir / rel_path)
+            for path in (files_archive, config_archive, manifest_path):
                 checksums[path.name] = _sha256_file(path)
             checksums_text = "".join(f"{digest}  {name}\n" for name, digest in sorted(checksums.items()))
             checksums_path.write_text(checksums_text, encoding="utf-8")
@@ -424,6 +555,8 @@ class SnapshotService:
                 "schema_version": str(CURRENT_SCHEMA_VERSION),
                 "source_mode": source_mode,
                 "includes": includes,
+                "database_files": database_manifest,
+                "file_roots": [self._rel_to_base_text(root) for root in self.file_roots],
                 "secrets_excluded": False,
                 "env_redacted": True,
                 "runtime_secret_files": config_manifest.get("runtime_secret_files", []),
@@ -497,17 +630,37 @@ class SnapshotService:
             digest, name = line.split(None, 1)
             checksums[name.strip()] = digest
         for name, digest in checksums.items():
+            rel = Path(name)
+            if rel.is_absolute() or ".." in rel.parts:
+                return {"ok": False, "msg": "checksum path 不安全", "file": name}
             target = path / name
             if not target.exists() or _sha256_file(target) != digest:
                 return {"ok": False, "msg": "checksum 不一致", "file": name}
         overall = hashlib.sha256(checksums_path.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
         if metadata.get("checksum") != overall:
             return {"ok": False, "msg": "metadata checksum 不一致"}
-        conn = sqlite3.connect(str(path / "db.sqlite3.backup"))
-        try:
-            conn.execute("PRAGMA integrity_check").fetchone()
-        finally:
-            conn.close()
+        database_files = metadata.get("database_files")
+        if not isinstance(database_files, list) or not database_files:
+            database_files = [{"label": "primary", "archive_path": "db.sqlite3.backup", "exists": True}]
+        for item in database_files:
+            if not (item or {}).get("exists", True):
+                continue
+            archive_name = str((item or {}).get("archive_path") or "").strip()
+            if not archive_name:
+                continue
+            archive_rel = Path(archive_name)
+            if archive_rel.is_absolute() or ".." in archive_rel.parts:
+                return {"ok": False, "msg": "database backup path 不安全", "file": archive_name}
+            db_backup = path / archive_rel
+            if not db_backup.exists():
+                return {"ok": False, "msg": "database backup 缺失", "file": archive_name}
+            conn = sqlite3.connect(str(db_backup))
+            try:
+                row = conn.execute("PRAGMA integrity_check").fetchone()
+                if not row or str(row[0]).lower() != "ok":
+                    return {"ok": False, "msg": "database integrity_check 失敗", "file": archive_name, "result": row[0] if row else None}
+            finally:
+                conn.close()
         for archive in (path / "uploads.tar.gz", path / "config.tar.gz"):
             with tarfile.open(archive, "r:gz") as tar:
                 for member in tar.getmembers():
@@ -517,6 +670,25 @@ class SnapshotService:
 
     def verify_snapshot(self, *, snapshot_id):
         return self._verify_snapshot_dir(self._snapshot_dir(snapshot_id))
+
+    def _portable_export_names(self, snapshot_dir):
+        names = list(PORTABLE_SNAPSHOT_FILES)
+        checksums_path = Path(snapshot_dir) / "checksums.sha256"
+        if checksums_path.exists():
+            for line in checksums_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    _digest, name = line.split(None, 1)
+                except ValueError:
+                    continue
+                name = name.strip()
+                rel = Path(name)
+                if rel.is_absolute() or ".." in rel.parts:
+                    raise ValueError(f"unsafe snapshot export member: {name}")
+                if name not in names:
+                    names.append(name)
+        return names
 
     def export_snapshot_archive(self, *, snapshot_id, actor=None):
         actor_name = self._actor_name(actor)
@@ -534,7 +706,7 @@ class SnapshotService:
         archive_path = self._portable_archive_path(snapshot_id)
         tmp_path = archive_path.with_suffix(archive_path.suffix + ".tmp")
         with tarfile.open(tmp_path, "w:gz") as tar:
-            for name in PORTABLE_SNAPSHOT_FILES:
+            for name in self._portable_export_names(snapshot_dir):
                 tar.add(snapshot_dir / name, arcname=f"{snapshot_id}/{name}")
         os.replace(tmp_path, archive_path)
         size_bytes = archive_path.stat().st_size
@@ -634,13 +806,48 @@ class SnapshotService:
         return {**result, "imported_snapshot_id": imported["snapshot_id"], "import": imported}
 
     def _restore_db(self, snapshot_dir):
-        src = sqlite3.connect(str(snapshot_dir / "db.sqlite3.backup"))
-        dst = sqlite3.connect(str(self.db_path))
+        self._restore_db_file(snapshot_dir / "db.sqlite3.backup", self.db_path)
+
+    def _restore_db_file(self, backup_path, target_path):
+        target_path = Path(target_path)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        src = sqlite3.connect(str(backup_path))
+        dst = sqlite3.connect(str(target_path))
         try:
             src.backup(dst)
         finally:
             dst.close()
             src.close()
+
+    def _restore_additional_dbs(self, snapshot_dir):
+        try:
+            metadata = self._load_snapshot_metadata(snapshot_dir)
+        except Exception:
+            metadata = {}
+        database_files = metadata.get("database_files") or []
+        restored = []
+        skipped = []
+        for item in database_files:
+            if not isinstance(item, dict) or item.get("primary"):
+                continue
+            label = self._sanitize_database_label(item.get("label"))
+            archive_name = str(item.get("archive_path") or "").strip()
+            if not item.get("exists"):
+                skipped.append({"label": label, "reason": "snapshot_missing_source"})
+                continue
+            target = self.additional_db_paths.get(label)
+            if not target:
+                skipped.append({"label": label, "reason": "not_configured"})
+                continue
+            rel = Path(archive_name)
+            if not archive_name or rel.is_absolute() or ".." in rel.parts:
+                raise RuntimeError(f"unsafe additional database backup path: {archive_name}")
+            backup_path = Path(snapshot_dir) / rel
+            if not backup_path.exists():
+                raise FileNotFoundError(str(backup_path))
+            self._restore_db_file(backup_path, target)
+            restored.append({"label": label, "target_path": self._rel_to_base_text(target), "archive_path": archive_name})
+        return {"restored": restored, "skipped": skipped}
 
     def _export_mode_switch_logs(self):
         conn = self.get_db()
@@ -717,6 +924,8 @@ class SnapshotService:
         for root in self.file_roots:
             if root.exists() and root.is_dir():
                 for child in root.iterdir():
+                    if self._path_is_snapshot_internal(child):
+                        continue
                     if child.is_symlink():
                         child.unlink()
                     elif child.is_dir():
@@ -1098,6 +1307,7 @@ class SnapshotService:
             restore_source, staged_snapshot_parent = self._stage_snapshot_dir_for_restore(snapshot_dir)
             self.audit("SNAPSHOT_RESTORE_STARTED", "-", user=actor_name, success=True, detail=f"snapshot_id={snapshot_id},pre_restore={pre.snapshot_id},reason={reason}")
             self._restore_db(restore_source)
+            database_restore = self._restore_additional_dbs(restore_source)
             self._clear_file_roots()
             _safe_extract_tar(restore_source / "uploads.tar.gz", self.base_dir)
             config_restore_stage = restore_source / ".restore_config_stage"
@@ -1197,6 +1407,7 @@ class SnapshotService:
                     "pre_restore_snapshot_id": pre.snapshot_id,
                     "post_restore_validation": post_restore_validation,
                     "runtime_secret_validation": runtime_secret_validation,
+                    "database_restore": database_restore,
                     "requires_restart": True,
                 }
             self.audit("SNAPSHOT_RESTORE_COMPLETED", "-", user=actor_name, success=True, detail=f"snapshot_id={snapshot_id},pre_restore={pre.snapshot_id},reason={reason}")
@@ -1207,6 +1418,7 @@ class SnapshotService:
                 "pre_restore_snapshot_id": pre.snapshot_id,
                 "post_restore_validation": post_restore_validation,
                 "runtime_secret_validation": runtime_secret_validation,
+                "database_restore": database_restore,
                 "requires_restart": True,
             }
         except Exception as exc:

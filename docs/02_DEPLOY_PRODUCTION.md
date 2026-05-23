@@ -172,6 +172,7 @@ sudo systemd-tmpfiles --create /etc/tmpfiles.d/hackme-web.conf
 - `ROOT_INTEGRITY_SIGNING_KEY`
 - `HTML_LEARNING_ROOT_PASSWORD`
 - `TRUSTED_PROXY_IPS`
+- `HTML_LEARNING_TRUSTED_HOSTS`
 
 4. 安裝並啟動 service：
 
@@ -206,6 +207,48 @@ HTML_LEARNING_PORT=8000
 
 如果你的 Nginx 不在同一台主機，`TRUSTED_PROXY_IPS` 與
 `GUNICORN_FORWARDED_ALLOW_IPS` 必須改成實際 proxy IP，不能填任意網段。
+
+#### Host header 與 request size guard
+
+正式對外 Host 必須白名單化：
+
+```env
+HTML_LEARNING_TRUSTED_HOSTS=hackme.example.com,www.hackme.example.com
+```
+
+Nginx proxy 應保留使用者原始 Host，讓 Flask `TRUSTED_HOSTS` 能阻擋 Host
+header injection：
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Host $host;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+若 staging 使用內網 domain，也要把 staging domain 另外列入
+`HTML_LEARNING_TRUSTED_HOSTS`。不要把 `*`、空白或不受控 public domain 放進白名單。
+
+multipart request guard 預設：
+
+```env
+HTML_LEARNING_MAX_FORM_MEMORY_KB=512
+HTML_LEARNING_MAX_FORM_PARTS=1000
+```
+
+這兩個值限制非檔案表單記憶體與 multipart parts 數量，用來降低 multipart DoS
+風險。大型檔案上傳上限仍由 `HTML_LEARNING_MAX_CONTENT_MB` 與 Nginx
+`client_max_body_size` 控制；不要為了檔案上傳而無限制放大 form memory 或 parts。
+
+#### Maintenance bypass token
+
+維護旁路 token 只接受 HTTP header：
+
+```bash
+curl -H "X-Maintenance-Bypass-Token: <token>" https://<host>/api/admin/health
+```
+
+不要把 token 放在 query string。`?maintenance_bypass_token=...` 必須視為無效，
+因為 query string 可能出現在 proxy access log、browser history、referer 或錯誤報告。
 
 #### Worker 邊界
 

@@ -31,13 +31,30 @@
 
 看 server mode checkpoint / superweak rollback。
 
-## 原理
+## RC1 備份範圍
 
-- server snapshot：保護整站 DB + runtime file roots + config archive
+- server snapshot：保護主要站台 DB、split runtime DB、runtime file roots、config archive。
+- 主要 DB：`runtime/database/database.db`，仍保留 legacy `db.sqlite3.backup` 檔名，讓舊 snapshot 匯入/驗證可相容。
+- split runtime DB：`auth.db`、`audit.db`、`control.db`、`chess_experiment.db` 會備份到 `databases/*.sqlite3.backup`，restore 時依本機設定的 label 還原。
+- runtime file roots：`runtime/chats`、`runtime/storage`、`runtime/database/points_chain_backups`。
+- `runtime/storage/snapshots` 與 `.imports` 是 snapshot repository 本身，不會被打包進 `uploads.tar.gz`，restore 清檔時也會保留，避免 snapshot 自我遞迴或被還原流程刪掉。
 - server snapshot 也會帶入目前設定的 runtime secret files，例如 `runtime/.chain_seed`、`runtime/.csrfkey`、`runtime/.filekey`、`runtime/.fkey`、`runtime/.integrity_key`、`runtime/integrity_manifest.json`、`runtime/cert.pem`、`runtime/key.pem`
 - PointsChain backup：只保護經濟 ledger / chain
 - runtime reset：清掉可重建 runtime 與 live data，並要求重啟
 - server mode checkpoint：保護 mode switch / rollback 場景
+
+## 不納入預設備份
+
+- `runtime/logs`：屬操作觀測資料，會快速膨脹；需要長期保存時應走 log archive。
+- `runtime/reports`：QA/稽核輸出可由 artifact 管理，不當作站台恢復真相。
+- Python cache、臨時 import staging、snapshot export tarball 本身。
+
+## 還原原則
+
+- snapshot 先驗證 checksum、SQLite `integrity_check`、tar path safety，再還原。
+- split DB portable restore 以 label 對應本機 DB path；本機未設定的 label 會被略過，不會寫到未知路徑。
+- restore 成功後會重新寫入 snapshot record、restore event，並跑 PointsChain / trading post-restore validators。
+- runtime secret files 還原後會做 hash 驗證；失敗不能靜默成功。
 
 ## 失敗情境與提示
 

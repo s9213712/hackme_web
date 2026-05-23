@@ -78,7 +78,7 @@ def test_points_spend_route_does_not_trust_client_ledger_provenance():
     assert 'f"spend:{user_id}:{item_key}:{quantity}"' not in stable_key
 
 
-def test_economy_admin_user_id_validation_does_not_leak_type_errors():
+def test_economy_admin_pending_rewards_are_disabled_in_blockchain_model():
     economy = (ROOT / "routes" / "economy.py").read_text(encoding="utf-8")
     pending_route = economy.split('def admin_points_pending_rewards():', 1)[1].split(
         '@app.route("/api/admin/points/pending-rewards/<int:pending_reward_id>/review"',
@@ -86,7 +86,9 @@ def test_economy_admin_user_id_validation_does_not_leak_type_errors():
     )[0]
 
     assert "def parse_required_user_id" in economy
-    assert 'return json_resp({"ok": False, "msg": "user_id required"}), 400' in pending_route
+    assert '"code": "blockchain_permission_model"' in pending_route
+    assert "官方撥款需改走治理提案與官方多簽" in pending_route
+    assert "points_service.create_pending_reward" not in pending_route
     assert 'user_id=int(data.get("user_id"))' not in pending_route
 
 
@@ -178,15 +180,36 @@ def test_user_promote_button_is_rendered_and_frontend_sends_json():
     assert promote_route.index("conn.commit()") < promote_route.index("delete_csrf_tokens_for_username")
 
 
-def test_manual_points_adjustment_reports_insufficient_balance():
+def test_manual_points_adjustment_flow_is_disabled_in_blockchain_model():
     economy_route = (ROOT / "routes" / "economy.py").read_text(encoding="utf-8")
     economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
-    adjust_frontend = economy_js.split("async function submitEconomyAdjustment", 1)[1].split("async function reviewEconomyPendingReward", 1)[0]
+    adjust_route = economy_route.split("def admin_points_adjust():", 1)[1].split(
+        '@app.route("/api/admin/points/pending-rewards"',
+        1,
+    )[0]
 
-    assert "點數不足，無法扣除；本次調整未寫入帳本" in economy_route
-    assert '"code": "insufficient_balance"' in economy_route
-    assert "economyRequestId(\"admin-adjust\")" in adjust_frontend
-    assert "alert(message)" in adjust_frontend
+    assert '"code": "blockchain_permission_model"' in adjust_route
+    assert "私有鏈模式已停用手動加減積分" in adjust_route
+    assert "points_service.record_transaction" not in adjust_route
+    assert "async function submitEconomyAdjustment" not in economy_js
+    assert "economyRequestId(\"admin-adjust\")" not in economy_js
+
+
+def test_address_dispute_serializer_redacts_account_identity_fields():
+    service = (ROOT / "services" / "points_chain" / "service.py").read_text(encoding="utf-8")
+    serializer = service.split("def _serialize_transaction_dispute", 1)[1].split("def list_transaction_disputes", 1)[0]
+
+    for forbidden in (
+        "reporter_user_id",
+        "reporter_username",
+        '"username"',
+        '"email"',
+        '"ip"',
+        '"ip_address"',
+        '"client_ip"',
+    ):
+        assert forbidden not in serializer
+    assert '"reviewed_by": "governance_operator"' in serializer
 
 
 def test_member_rights_changes_send_notice_and_appeal_path():
@@ -208,7 +231,7 @@ def test_member_rights_changes_send_notice_and_appeal_path():
     assert "私有鏈模式已停用手動加減積分" in economy
     assert "私有鏈模式不允許 root 直接處分用戶錢包" in economy
     assert "points_ledger_uuid" in notices
-    assert "points_service.rollback_ledger" in appeals
+    assert "points_service.compensate_ledger" in appeals
     assert 'link="/appeals"' in notices
     assert "你可以到「申覆」分頁提出申覆" in notices
     assert "if not appealable:" in notices
@@ -229,8 +252,8 @@ def test_pending_reward_review_enforces_maker_checker():
     points_chain = (ROOT / "services" / "points_chain" / "service.py").read_text(encoding="utf-8")
     review = points_chain.split("def review_pending_reward", 1)[1].split("def rollback_ledger", 1)[0]
 
-    assert 'row["submitted_by"] is not None' in review
-    assert "cannot review your own pending reward" in review
+    assert "blockchain_permission_model" in review
+    assert "pending reward review is disabled" in review
 
 
 def test_comfyui_image_refs_are_owner_bound():
@@ -250,8 +273,8 @@ def test_pending_reward_review_enforces_maker_checker():
     points_chain = (ROOT / "services" / "points_chain" / "service.py").read_text(encoding="utf-8")
     review = points_chain.split("def review_pending_reward", 1)[1].split("def rollback_ledger", 1)[0]
 
-    assert 'row["submitted_by"] is not None' in review
-    assert "cannot review your own pending reward" in review
+    assert "blockchain_permission_model" in review
+    assert "pending reward review is disabled" in review
 
 
 def test_comfyui_image_refs_are_owner_bound():
@@ -271,9 +294,9 @@ def test_appeal_approval_rolls_back_points_before_committing_review():
     appeals = (ROOT / "routes" / "appeals.py").read_text(encoding="utf-8")
     review = appeals.split("def admin_violation_appeal_review", 1)[1].split("def ", 1)[0]
 
-    assert "申覆點數帳本 rollback 失敗，申覆狀態尚未變更，請修復後重試" in review
-    assert review.index("points_service.rollback_ledger") < review.index("UPDATE violation_appeals SET status=?")
-    assert review.index("points_service.rollback_ledger") < review.index("conn.commit()")
+    assert "申覆點數補償交易失敗，申覆狀態尚未變更，請修復後重試" in review
+    assert review.index("points_service.compensate_ledger") < review.index("UPDATE violation_appeals SET status=?")
+    assert review.index("points_service.compensate_ledger") < review.index("conn.commit()")
 
 
 def test_album_share_links_revoked_and_deleted_albums_not_resolved():
@@ -293,12 +316,12 @@ def test_album_share_links_revoked_and_deleted_albums_not_resolved():
 def test_manual_points_adjustment_is_root_only():
     economy = (ROOT / "routes" / "economy.py").read_text(encoding="utf-8")
     adjust_route = economy.split("def admin_points_adjust():", 1)[1].split(
-        '@app.route("/api/admin/points/pending-rewards"',
+        '@app.route("/api/root/points/official-wallet/grant"',
         1,
     )[0]
 
     assert '"code": "blockchain_permission_model"' in adjust_route
-    assert "官方發點需改走官方錢包送單" in adjust_route
+    assert "官方撥款需改走治理提案與官方多簽" in adjust_route
     assert "points_service.record_transaction" not in adjust_route
     assert "actor, err = manager_or_403()" not in adjust_route
 
@@ -329,6 +352,36 @@ def test_secure_cookie_defaults_are_secure():
 
     assert 'FORCE_HTTPS = _env_bool("FORCE_HTTPS", default=True)' in server
     assert 'SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=True)' in server
+
+
+def test_flask_base_security_guardrails_are_configured():
+    server = (ROOT / "server.py").read_text(encoding="utf-8")
+    request_guards = (ROOT / "services" / "server" / "request_guards.py").read_text(encoding="utf-8")
+
+    assert 'MAX_FORM_MEMORY_KB = _env_int("HTML_LEARNING_MAX_FORM_MEMORY_KB", 512, minimum=64)' in server
+    assert 'MAX_FORM_PARTS = _env_int("HTML_LEARNING_MAX_FORM_PARTS", 1000, minimum=100)' in server
+    assert 'app.config["MAX_FORM_MEMORY_SIZE"] = MAX_FORM_MEMORY_KB * 1024' in server
+    assert 'app.config["MAX_FORM_PARTS"] = MAX_FORM_PARTS' in server
+    assert 'app.config["TRUSTED_HOSTS"] = TRUSTED_HOSTS' in server
+    assert "SecurityError" in server
+    assert 'request_obj.headers.get("X-Maintenance-Bypass-Token", "")' in request_guards
+    assert 'request_obj.args.get("maintenance_bypass_token"' not in request_guards
+
+
+def test_rc1_multisig_scope_is_official_only_for_spending():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
+    service = (ROOT / "services" / "points_chain" / "service.py").read_text(encoding="utf-8")
+    wallet_identity = (ROOT / "services" / "points_chain" / "wallet_identity.py").read_text(encoding="utf-8")
+    routes = (ROOT / "routes" / "economy.py").read_text(encoding="utf-8")
+
+    assert "economy-wallet-create-multisig-btn" not in index_html
+    assert "createMultisigWallet" not in economy_js
+    assert "official_treasury_signer_center" in service
+    assert "/api/admin/points/governance/treasury-signer-center" in routes
+    assert "一般用戶多簽目前僅支援收款/觀察，不支援轉出" in service
+    assert '"user_multisig_preview"' in wallet_identity
+    assert '"rc1_user_multisig": "receive_only"' in wallet_identity
 
 
 def test_root_notifications_skip_normal_session_revocation_noise():

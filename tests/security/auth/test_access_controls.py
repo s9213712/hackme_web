@@ -21,7 +21,10 @@ from services.server.bind import (
     validate_listen_host,
     validate_listen_port,
 )
-from services.server.request_guards import protect_sensitive_static_page
+from services.server.request_guards import (
+    get_request_maintenance_bypass_token,
+    protect_sensitive_static_page,
+)
 
 
 def _json_resp(payload, status=200):
@@ -146,6 +149,17 @@ def test_maintenance_bypass_required_payload_names_token_header_not_hash():
     assert payload["requires"] == "maintenance_bypass_token"
     assert payload["header"] == "X-Maintenance-Bypass-Token"
     assert "hash" not in str(payload).lower()
+
+
+def test_maintenance_bypass_token_only_uses_header_not_query_string():
+    app = Flask(__name__)
+    with app.test_request_context("/api/admin/health?maintenance_bypass_token=query-token"):
+        assert get_request_maintenance_bypass_token(request) == ""
+    with app.test_request_context(
+        "/api/admin/health?maintenance_bypass_token=query-token",
+        headers={"X-Maintenance-Bypass-Token": "header-token"},
+    ):
+        assert get_request_maintenance_bypass_token(request) == "header-token"
 
 
 def test_comfyui_workflow_editor_static_page_requires_login():

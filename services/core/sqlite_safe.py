@@ -13,4 +13,11 @@ def quote_sqlite_identifier(identifier):
 
 def table_columns(conn, table_name):
     quoted = quote_sqlite_identifier(table_name)
-    return {row["name"] for row in conn.execute(f"PRAGMA table_info({quoted})").fetchall()}
+    columns = set()
+    for row in conn.execute(f"PRAGMA table_info({quoted})").fetchall():
+        try:
+            name = row["name"]
+        except (TypeError, IndexError, KeyError):
+            name = row[1]
+        columns.add(name)
+    return columns

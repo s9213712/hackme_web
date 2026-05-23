@@ -126,6 +126,7 @@ def bootstrap_points_initial_grants_if_due(
         os.environ.get("HTML_LEARNING_BOOTSTRAP_POINTS_CHAIN", "") if env_value is None else env_value
     ).strip().lower() in {"1", "true", "yes", "on"}
     economy_enabled = _setting_bool(settings, "feature_economy_enabled", default=False)
+    points_chain_enabled = _setting_bool(settings, "feature_points_chain_enabled", default=True)
     if not (env_enabled or (economy_enabled and _mode_allows_points_initial_grants(mode))):
         return {
             "ok": True,
@@ -136,7 +137,11 @@ def bootstrap_points_initial_grants_if_due(
     system_actor = {"username": "system", "role": "system"}
     seal_genesis = str(mode or "").strip() == "production"
     try:
-        genesis = points_service.bootstrap_admin_initial_grants(actor=system_actor, seal_genesis=seal_genesis)
+        genesis = points_service.bootstrap_admin_initial_grants(
+            actor=system_actor,
+            seal_genesis=seal_genesis and points_chain_enabled,
+            require_wallet=points_chain_enabled,
+        )
         salary_week = _scheduled_admin_salary_week(settings)
         if salary_week:
             salary = points_service.award_admin_weekly_salaries(salary_week=salary_week, actor=system_actor)
@@ -268,15 +273,6 @@ def start_points_chain_block_worker(
                         break
                     continue
                 settings = (get_system_settings() or {}) if callable(get_system_settings) else {}
-                backup_result = points_service.create_scheduled_backup_if_due()
-                if backup_result.get("created"):
-                    audit(
-                        "POINTS_SCHEDULED_BACKUP_CREATED",
-                        "0.0.0.0",
-                        user="system",
-                        success=bool(backup_result.get("ok")),
-                        detail=backup_result.get("backup_id"),
-                    )
                 salary_week = _scheduled_admin_salary_week(settings)
                 if salary_week:
                     salary_result = points_service.award_admin_weekly_salaries(
@@ -291,6 +287,19 @@ def start_points_chain_block_worker(
                             success=True,
                             detail=f"week={salary_result.get('salary_week')},created={salary_result.get('created_count')}",
                         )
+                if not _feature_flag_enabled(get_system_settings, "feature_points_chain_enabled", default=True):
+                    if _wait_or_stop(shutdown_event, check_interval):
+                        break
+                    continue
+                backup_result = points_service.create_scheduled_backup_if_due()
+                if backup_result.get("created"):
+                    audit(
+                        "POINTS_SCHEDULED_BACKUP_CREATED",
+                        "0.0.0.0",
+                        user="system",
+                        success=bool(backup_result.get("ok")),
+                        detail=backup_result.get("backup_id"),
+                    )
                 result = points_service.seal_due_block(
                     actor=actor,
                     ledger_threshold=ledger_threshold,

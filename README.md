@@ -71,6 +71,17 @@ python3 server.py
 [docs/02_DEPLOY_PRODUCTION.md](docs/02_DEPLOY_PRODUCTION.md)，再套用
 [deploy/README.md](deploy/README.md) 的 Nginx/systemd 範本。
 
+對外部署時務必設定基底層 request guard：
+
+- `HTML_LEARNING_TRUSTED_HOSTS=example.com,www.example.com`
+  必須列出實際 public Host；反向代理要保留原始 `Host` header。
+- 維護旁路 token 只接受 `X-Maintenance-Bypass-Token` header，不接受
+  `?maintenance_bypass_token=...` query string，避免 token 被 access log、
+  browser history 或 referrer 洩漏。
+- multipart 表單限制預設為
+  `HTML_LEARNING_MAX_FORM_MEMORY_KB=512`、
+  `HTML_LEARNING_MAX_FORM_PARTS=1000`。正式站可依上傳需求調整，但不要移除。
+
 啟動後請以 server console 或腳本印出的實際 URL 為準。一般情況：
 
 - `./test_for_develop.sh`：通常會是 `https://127.0.0.1:<port>/`
