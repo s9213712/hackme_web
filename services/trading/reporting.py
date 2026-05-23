@@ -11,15 +11,17 @@ from services.trading.accounting.core import (
 from services.trading.constants import POINT_MICRO_SCALE
 from services.trading.funding import funding_payload as funding_payload_helper
 from services.trading.validators import _apr_percent_from_daily, _billable_interest_hours_from_elapsed_seconds, _to_decimal
+from services.points_chain.wallet_identity import wallet_onboarding_status
 
 
-def funding_payload(service, conn, user_id):
+def funding_payload(service, conn, user_id, *, source_wallet_address=None):
     return funding_payload_helper(
         service,
         conn,
         user_id,
         root_simulated_initial_points=service.ROOT_SIMULATED_INITIAL_POINTS,
         trial_credit_days=service.TRIAL_CREDIT_DAYS,
+        source_wallet_address=source_wallet_address,
     )
 
 
@@ -144,7 +146,7 @@ def margin_trade_records(service, conn, user_id, *, limit=50):
     return sorted(records, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:int(limit)]
 
 
-def user_dashboard(service, *, user_id):
+def user_dashboard(service, *, user_id, source_wallet_address=None):
     conn = service.get_db()
     try:
         service.ensure_schema(conn)
@@ -196,6 +198,11 @@ def user_dashboard(service, *, user_id):
             for row in conn.execute("SELECT * FROM trading_margin_positions WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
         ]
         conn.commit()
+        try:
+            wallet_status = wallet_onboarding_status(conn, points_service=service.points_service, user_id=user_id)
+            wallets = wallet_status.get("wallets") or []
+        except Exception:
+            wallets = []
         bot_order_map = {
             row["order_uuid"]: row["bot_name"]
             for row in conn.execute(
@@ -281,11 +288,24 @@ def user_dashboard(service, *, user_id):
             service._bot_run_payload(row)
             for row in conn.execute("SELECT * FROM trading_bot_runs WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
         ]
+        funding = None
+        wallet_selection_warning = ""
+        try:
+            funding = service._funding_payload(conn, user_id, source_wallet_address=source_wallet_address)
+        except ValueError as exc:
+            if source_wallet_address:
+                wallet_selection_warning = str(exc)
+                funding = service._funding_payload(conn, user_id, source_wallet_address=None)
+            else:
+                raise
+        if wallet_selection_warning and isinstance(funding, dict):
+            funding["wallet_selection_warning"] = wallet_selection_warning
         return {
             "state": state,
             "settings": service._settings_payload(conn),
             "funding_pool": service._funding_pool_payload(conn),
-            "funding": service._funding_payload(conn, user_id),
+            "funding": funding,
+            "wallets": wallets,
             "volume_stats": dict(service._user_volume_stats(conn, user_id)),
             "markets": markets,
             "positions": positions,

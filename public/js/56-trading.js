@@ -15,6 +15,7 @@ let tradingState = {
   btcSignal: null,
   workflowTemplates: [],
   botCompetition: null,
+  wallets: [],
 };
 let tradingEventsBound = false;
 let tradingReferencePriceAbort = null;
@@ -250,6 +251,84 @@ function tradingUserStorageScope() {
 function tradingUserStorageKey(key) {
   if (typeof accountScopedStorageKey === "function") return accountScopedStorageKey(key, tradingUserStorageScope());
   return `hackme_web:${tradingUserStorageScope()}:${String(key || "state")}`;
+}
+
+function tradingDefaultSpendWalletAddress() {
+  const tradingSelect = $("trading-payment-wallet");
+  if (tradingSelect && String(tradingSelect.value || "").trim()) {
+    return String(tradingSelect.value || "").trim().toLowerCase();
+  }
+  if (typeof readEconomyDefaultSpendWalletAddress === "function") {
+    return String(readEconomyDefaultSpendWalletAddress() || "").trim().toLowerCase();
+  }
+  return "";
+}
+
+function tradingSourceWalletQuery() {
+  const address = tradingDefaultSpendWalletAddress();
+  return address ? `?source_wallet_address=${encodeURIComponent(address)}` : "";
+}
+
+function tradingShortWalletAddress(address) {
+  const value = String(address || "");
+  if (typeof shortEconomyWalletAddress === "function") return shortEconomyWalletAddress(value);
+  return value.length > 16 ? `${value.slice(0, 8)}...${value.slice(-6)}` : value;
+}
+
+function tradingWalletOptionLabel(wallet) {
+  if (typeof economyWalletOptionLabel === "function") return economyWalletOptionLabel(wallet);
+  const label = String(wallet?.label || wallet?.wallet_type || "wallet");
+  return `${label} · ${tradingShortWalletAddress(wallet?.address || "")}`;
+}
+
+function tradingSpendableWallets(wallets = []) {
+  return (Array.isArray(wallets) ? wallets : []).filter((wallet) => {
+    const status = String(wallet?.status || "");
+    const mode = String(wallet?.custody_mode || "");
+    const type = String(wallet?.wallet_type || "");
+    return status === "active" && mode !== "system" && !["mint", "burn"].includes(type) && wallet?.address;
+  });
+}
+
+function renderTradingPaymentWalletOptions(wallets = [], selectedAddress = "") {
+  const select = $("trading-payment-wallet");
+  const note = $("trading-payment-wallet-note");
+  if (!select) return;
+  const spendable = tradingSpendableWallets(wallets);
+  if (!spendable.length) {
+    select.innerHTML = `<option value="">尚無可用付款錢包</option>`;
+    select.disabled = true;
+    if (note) note.textContent = "請先到積分錢包管理建立或綁定錢包。";
+    return;
+  }
+  const previous = select.value;
+  const saved = typeof readEconomyDefaultSpendWalletAddress === "function"
+    ? String(readEconomyDefaultSpendWalletAddress() || "").trim().toLowerCase()
+    : "";
+  const normalizedSelected = String(selectedAddress || "").trim().toLowerCase();
+  select.disabled = false;
+  select.innerHTML = spendable.map((wallet) => {
+    return `<option value="${sanitize(wallet.address)}">${sanitize(tradingWalletOptionLabel(wallet))}</option>`;
+  }).join("");
+  const candidates = [previous, saved, normalizedSelected].filter(Boolean);
+  const matched = candidates.find((address) => spendable.some((wallet) => String(wallet.address || "").toLowerCase() === address));
+  if (matched) select.value = matched;
+  else if (spendable.some((wallet) => wallet.is_primary)) select.value = spendable.find((wallet) => wallet.is_primary).address;
+  else select.value = spendable[0].address;
+  if (typeof writeEconomyDefaultSpendWalletAddress === "function") {
+    writeEconomyDefaultSpendWalletAddress(select.value || "");
+  }
+  const wallet = spendable.find((item) => String(item.address || "").toLowerCase() === String(select.value || "").toLowerCase());
+  if (note) {
+    const warning = String(tradingState.funding?.wallet_selection_warning || "").trim();
+    if (warning) {
+      note.textContent = `原付款錢包不可用：${warning}；已切回可用錢包 ${tradingShortWalletAddress(select.value)}。`;
+      return;
+    }
+    const balance = Number(wallet?.points_balance || 0);
+    const frozen = Number(wallet?.points_frozen || 0);
+    note.textContent = `${tradingShortWalletAddress(select.value)} · 可用 ${formatTradingPointsValue(balance)} · 凍結 ${formatTradingPointsValue(frozen)}。此設定只影響交易所下單。`;
+  }
 }
 
 function tradingSetPersonalField(field, value) {
@@ -2244,9 +2323,11 @@ function renderTradingSummary() {
   const totalAvailable = Number(funding.available_points ?? (walletAvailable + trialAvailable));
   if ($("trading-funding-available")) $("trading-funding-available").textContent = funding.available_points != null ? formatTradingPointsValue(totalAvailable) : "-";
   if ($("trading-funding-mode")) {
+    const selectedWallet = funding.selected_wallet_address || funding.active_wallet_address || "";
+    const walletText = selectedWallet ? `付款錢包 ${tradingShortWalletAddress(selectedWallet)} · ` : "";
     $("trading-funding-mode").textContent = funding.mode === "root_simulated"
       ? `root 模擬資金 · 鎖定 ${formatTradingPointsValue(funding.locked_points)}`
-      : `體驗金優先 · 總可用 ${formatTradingPointsValue(totalAvailable)} = 體驗金 ${formatTradingPointsValue(trialAvailable)} + 真實積分 ${formatTradingPointsValue(walletAvailable)} · 鎖定 ${formatTradingPointsValue(funding.locked_points)}`;
+      : `${walletText}體驗金優先 · 總可用 ${formatTradingPointsValue(totalAvailable)} = 體驗金 ${formatTradingPointsValue(trialAvailable)} + 真實積分 ${formatTradingPointsValue(walletAvailable)} · 鎖定 ${formatTradingPointsValue(funding.locked_points)}`;
   }
   if ($("trading-trial-credit-available")) {
     $("trading-trial-credit-available").textContent = trial ? `${formatTradingPointsValue(trialAvailable)} / ${formatTradingPointsValue(trialInitial)}` : "-";
@@ -5011,10 +5092,11 @@ async function loadTradingDashboard() {
   if (card) card.style.display = "";
   try {
     await loadTradingWorkflowTemplates();
-    const json = await fetchTradingJson("/trading/dashboard");
+    const json = await fetchTradingJson(`/trading/dashboard${tradingSourceWalletQuery()}`);
     const payload = json.trading || {};
     tradingState.funding = payload.funding || null;
     tradingState.fundingPool = payload.funding_pool || null;
+    tradingState.wallets = payload.wallets || [];
     tradingState.marginSummary = payload.margin_summary || null;
     tradingState.markets = payload.markets || [];
     tradingState.settings = payload.settings || {};
@@ -5031,6 +5113,7 @@ async function loadTradingDashboard() {
       status.textContent = state.safe_mode ? `交易 safe mode：${state.reason || "已啟用"}` : "交易引擎正常";
       status.style.color = state.safe_mode ? "#ffb74d" : "var(--muted)";
     }
+    renderTradingPaymentWalletOptions(tradingState.wallets, tradingState.funding?.selected_wallet_address || tradingState.funding?.active_wallet_address || "");
     renderTradingMarketOptions();
     loadTradingPersonalFormState();
     renderTradingSummary();
@@ -5203,6 +5286,7 @@ async function submitTradingOrder() {
     side: $("trading-side")?.value || "buy",
     order_type: orderType,
     quantity: tradingQuantityForSubmit(estimate.quantity),
+    source_wallet_address: tradingDefaultSpendWalletAddress(),
     stop_loss_percent: tradingOptionalPercentValue("trading-stop-loss-percent"),
     take_profit_percent: tradingOptionalPercentValue("trading-take-profit-percent"),
   };
@@ -6149,6 +6233,20 @@ function bindTradingEvents() {
   document.addEventListener("hackme:account-context-changed", () => {
     ensureTradingAccountScope({ force: true });
   });
+  window.addEventListener("economy:default-spend-wallet-changed", () => {
+    if (!shouldRunTradingPolling()) return;
+    loadTradingDashboard().catch((err) => tradingSetMsg(tradingFriendlyErrorText(err.message || "交易錢包餘額更新失敗"), false));
+  });
+  const paymentWallet = $("trading-payment-wallet");
+  if (paymentWallet && paymentWallet.dataset.tradingPaymentWalletBound !== "1") {
+    paymentWallet.dataset.tradingPaymentWalletBound = "1";
+    paymentWallet.addEventListener("change", () => {
+      if (typeof writeEconomyDefaultSpendWalletAddress === "function") {
+        writeEconomyDefaultSpendWalletAddress(paymentWallet.value || "");
+      }
+      loadTradingDashboard().catch((err) => tradingSetMsg(tradingFriendlyErrorText(err.message || "交易錢包餘額更新失敗"), false));
+    });
+  }
   const bindings = [
     ["trading-refresh-btn", loadTradingDashboard, "正在重新整理交易資料...", "交易資料重新整理失敗"],
     ["trading-submit-order-btn", submitTradingOrder, "正在送出訂單...", "下單失敗"],

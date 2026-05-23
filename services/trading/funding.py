@@ -231,6 +231,7 @@ def funding_payload(
     *,
     root_simulated_initial_points,
     trial_credit_days,
+    source_wallet_address=None,
 ):
     user = conn.execute("SELECT username FROM users WHERE id=?", (int(user_id),)).fetchone()
     if user and user["username"] == "root":
@@ -248,9 +249,10 @@ def funding_payload(
             "note": "root 模擬交易資金不寫入 PointsChain，也不影響帳戶積分",
         }
     trial = service._ensure_trial_credit(conn, user_id)
-    payload = service._wallet_payload(conn, user_id)
+    payload = service._wallet_payload_for_source(conn, user_id, source_wallet_address=source_wallet_address)
     wallet_available = int(payload.get("points_balance") or 0)
     wallet_locked = int(payload.get("points_frozen") or 0)
+    selected_wallet_address = str(payload.get("selected_wallet_address") or payload.get("active_wallet_address") or "")
     trial_payload = None
     if trial:
         trial_payload = trial_credit_payload(trial, days_valid=trial_credit_days)
@@ -260,6 +262,9 @@ def funding_payload(
         "locked_points": wallet_locked + int(trial["locked_points"] or 0) if trial else wallet_locked,
         "wallet_available_points": wallet_available,
         "wallet_locked_points": wallet_locked,
+        "selected_wallet_address": selected_wallet_address,
+        "active_wallet_address": selected_wallet_address,
+        "wallet_identity_source": payload.get("wallet_identity_source") or "",
         "trial_credit": trial_payload,
         "note": "一般用戶交易會優先使用交易所體驗金，體驗金到期或賠光後停止使用；已實現獲利保留給用戶",
     }

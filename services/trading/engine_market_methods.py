@@ -1096,8 +1096,8 @@ def _release_trial_margin_collateral(self, conn, user_id, *, collateral_trial, a
     )
 def _reclaim_trial_credit(self, conn, user_id, *, actor=None, reason="TRIAL_CREDIT_RECLAIM", ctx=None):
     return reclaim_trial_credit_helper(self, conn, user_id, actor=actor, reason=reason, ctx=ctx)
-def _funding_payload(self, conn, user_id):
-    return funding_payload_runtime_helper(self, conn, user_id)
+def _funding_payload(self, conn, user_id, *, source_wallet_address=None):
+    return funding_payload_runtime_helper(self, conn, user_id, source_wallet_address=source_wallet_address)
 def _position_payload(self, row):
     return position_payload(row, units_to_quantity=units_to_quantity)
 
@@ -1383,10 +1383,10 @@ def list_markets(self, *, include_disabled=False):
     finally:
         conn.close()
 
-def user_dashboard(self, *, user_id):
+def user_dashboard(self, *, user_id, source_wallet_address=None):
     # source-contract breadcrumb:
     # "margin_summary": self._margin_summary_payload(conn, user_id, margin_positions)
-    return user_dashboard_helper(self, user_id=user_id)
+    return user_dashboard_helper(self, user_id=user_id, source_wallet_address=source_wallet_address)
 def _is_executable(self, market, *, side, order_type, limit_price, current_price):
     current_price = float(_to_decimal(current_price, name="current_price", minimum=0))
     if order_type == "market":

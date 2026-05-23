@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_DOWN, ROUND_
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from services.core.sqlite_safe import table_columns
 from services.system.notifications import create_notification_if_enabled, create_root_notification_if_enabled
 from services.points_chain import (
     DISPLAY_CURRENCY,
@@ -22,7 +23,7 @@ from services.points_chain import (
     utc_now,
     _metadata_json_checked,
 )
-from services.points_chain.economy_layer import DEFAULT_ECONOMY_POLICY
+from services.points_chain.economy_layer import DEFAULT_ECONOMY_POLICY, economy_layer_report
 from services.server_mode.context import SmV2Context, current_ctx
 from services.server_mode.routing import resolve_table
 from services.trading.accounting.core import (
@@ -1072,6 +1073,8 @@ def ensure_trading_schema(conn):
         if "funding_mode" not in cols:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN funding_mode TEXT NOT NULL DEFAULT 'points_chain'")
     order_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_orders)").fetchall()}
+    if "source_wallet_address" not in order_cols:
+        conn.execute("ALTER TABLE trading_orders ADD COLUMN source_wallet_address TEXT NOT NULL DEFAULT ''")
     if "trial_frozen_points" not in order_cols:
         conn.execute("ALTER TABLE trading_orders ADD COLUMN trial_frozen_points INTEGER NOT NULL DEFAULT 0")
     if "chain_frozen_points" not in order_cols:
@@ -1089,6 +1092,14 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_spot_positions ADD COLUMN stop_loss_percent REAL")
     if "take_profit_percent" not in position_cols:
         conn.execute("ALTER TABLE trading_spot_positions ADD COLUMN take_profit_percent REAL")
+    if "source_wallet_address" not in position_cols:
+        conn.execute("ALTER TABLE trading_spot_positions ADD COLUMN source_wallet_address TEXT NOT NULL DEFAULT ''")
+    if "funding_sources_json" not in position_cols:
+        conn.execute("ALTER TABLE trading_spot_positions ADD COLUMN funding_sources_json TEXT NOT NULL DEFAULT '[]'")
+    if "taint_status" not in position_cols:
+        conn.execute("ALTER TABLE trading_spot_positions ADD COLUMN taint_status TEXT NOT NULL DEFAULT 'normal'")
+    if "taint_source_tx_hash" not in position_cols:
+        conn.execute("ALTER TABLE trading_spot_positions ADD COLUMN taint_source_tx_hash TEXT NOT NULL DEFAULT ''")
     fill_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_fills)").fetchall()}
     if "fee_micropoints" not in fill_cols:
         conn.execute("ALTER TABLE trading_fills ADD COLUMN fee_micropoints INTEGER NOT NULL DEFAULT 0")
@@ -1255,6 +1266,7 @@ class TradingEngineService:
                 return
             self.points_service.ensure_schema(conn)
             ensure_trading_schema(conn)
+            self._align_reserve_pool_to_exchange_fund(conn)
             if db_path:
                 self._schema_ready_paths.add(db_path)
 
@@ -1263,6 +1275,93 @@ class TradingEngineService:
             return int(actor.get("id") if hasattr(actor, "get") else actor["id"])
         except Exception:
             return None
+
+    def _exchange_fund_chain_snapshot(self, conn):
+        report_conn = conn
+        close_report_conn = False
+        points_get_db = getattr(self.points_service, "get_db", None)
+        if points_get_db and points_get_db is not self.get_db:
+            candidate = None
+            try:
+                candidate = points_get_db()
+                if _connection_path(candidate) != _connection_path(conn):
+                    self.points_service.ensure_schema(candidate)
+                    report_conn = candidate
+                    close_report_conn = True
+                else:
+                    candidate.close()
+            except Exception:
+                if candidate is not None:
+                    try:
+                        candidate.close()
+                    except Exception:
+                        pass
+                report_conn = conn
+                close_report_conn = False
+        try:
+            report = economy_layer_report(
+                report_conn,
+                chain_secret=self.points_service.chain_secret,
+                actor={"role": "system", "id": None},
+            )
+            supply = report.get("supply") or {}
+            fund = (report.get("funds") or {}).get("exchange_fund") or {}
+            return {
+                "balance_points": int(fund.get("balance") or 0),
+                "address": fund.get("address") or "",
+                "exchange_total_assets_points": int(supply.get("exchange_total_assets") or fund.get("balance") or 0),
+                "exchange_receivable_principal_points": int(supply.get("exchange_receivable_principal") or 0),
+                "replay_height": int((report.get("replay") or {}).get("height") or 0),
+                "wallet_root_hash": (report.get("replay") or {}).get("wallet_root_hash") or "",
+                "source_db_path": _connection_path(report_conn),
+            }
+        finally:
+            if close_report_conn:
+                report_conn.close()
+
+    def _align_reserve_pool_to_exchange_fund(self, conn):
+        if not table_columns(conn, "trading_reserve_pool") or not table_columns(conn, "trading_reserve_pool_events"):
+            return None
+        snapshot = self._exchange_fund_chain_snapshot(conn)
+        exchange_balance = int(snapshot.get("balance_points") or 0)
+        row = conn.execute("SELECT * FROM trading_reserve_pool WHERE id=1").fetchone()
+        reserve_balance = int(row["balance_points"] or 0) if row else 0
+        delta = exchange_balance - reserve_balance
+        if delta == 0:
+            return snapshot
+        event_uuid = f"pointschain_exchange_fund_alignment:{snapshot.get('wallet_root_hash') or exchange_balance}"
+        existing = conn.execute(
+            "SELECT * FROM trading_reserve_pool_events WHERE event_uuid=?",
+            (event_uuid,),
+        ).fetchone()
+        if existing:
+            event_uuid = f"{event_uuid}:repair:{reserve_balance}:{exchange_balance}"
+            if conn.execute(
+                "SELECT * FROM trading_reserve_pool_events WHERE event_uuid=?",
+                (event_uuid,),
+            ).fetchone():
+                return snapshot
+        now = _now()
+        if row:
+            conn.execute(
+                "UPDATE trading_reserve_pool SET balance_points=?, updated_at=?, updated_by=NULL WHERE id=1",
+                (exchange_balance, now),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO trading_reserve_pool (id, balance_points, updated_at, updated_by) VALUES (1, ?, ?, NULL)",
+                (exchange_balance, now),
+            )
+        conn.execute(
+            """
+            INSERT INTO trading_reserve_pool_events (
+                event_uuid, delta_points, balance_after, event_type, reason,
+                actor_user_id, source_user_id, order_id, fill_id, points_ledger_uuid, created_at
+            ) VALUES (?, ?, ?, 'pointschain_exchange_fund_alignment', 'POINTSCHAIN_EXCHANGE_FUND_ALIGNMENT', NULL, NULL, NULL, NULL, NULL, ?)
+            """,
+            (event_uuid, delta, exchange_balance, now),
+        )
+        return snapshot
 
     def _actor_username(self, actor):
         try:
@@ -1545,6 +1644,67 @@ class TradingEngineService:
 
     def _wallet_payload(self, conn, user_id, ctx=None):
         return wallet_payload_helper(self, conn, user_id, ctx=ctx)
+
+    def _wallet_payload_for_source(
+        self,
+        conn,
+        user_id,
+        source_wallet_address=None,
+        ctx=None,
+        require_spend=False,
+        spend_context="trading spend",
+    ):
+        source_address = str(source_wallet_address or "").strip().lower()
+        if not source_address:
+            payload = self._wallet_payload(conn, user_id, ctx=ctx)
+            if require_spend:
+                active_address = str(payload.get("active_wallet_address") or "").strip().lower()
+                if active_address:
+                    row = self.points_service._wallet_identity_row_for_user_address(
+                        conn,
+                        int(user_id),
+                        active_address,
+                        active_only=True,
+                    )
+                    if row:
+                        self.points_service._assert_wallet_identity_can_spend(row, context=spend_context)
+            return payload
+        wallet_table, route_ctx = self._resolve_table("wallets", ctx, action="wallet-read")
+        if wallet_table != "wallets":
+            return self._wallet_payload(conn, user_id, ctx=route_ctx)
+        row = self.points_service._wallet_identity_row_for_user_address(
+            conn,
+            int(user_id),
+            source_address,
+            active_only=True,
+        )
+        if not row:
+            raise ValueError("指定交易付款錢包不存在或已停用")
+        if require_spend:
+            self.points_service._assert_wallet_identity_can_spend(row, context=spend_context)
+        state = self.points_service._wallet_identity_balances_for_user(conn, int(user_id))
+        balances = state.get("balances") or {}
+        selected = balances.get(source_address)
+        if selected is None:
+            raise ValueError("指定交易付款錢包沒有可用餘額資料")
+        payload = self.points_service.wallet_payload_for_read(conn, int(user_id))
+        balance = int(selected.get("balance") or 0)
+        frozen = int(selected.get("frozen") or 0)
+        payload.update(
+            {
+                "points_balance": balance,
+                "points_frozen": frozen,
+                "soft_balance": balance,
+                "soft_frozen": frozen,
+                "hard_balance": 0,
+                "hard_frozen": 0,
+                "active_wallet_address": source_address,
+                "selected_wallet_address": source_address,
+                "selected_wallet_label": row["label"] if "label" in row.keys() else "",
+                "wallet_identity_source": "selected_wallet",
+            }
+        )
+        return payload
 
     def _shadow_existing_ledger_row(self, conn, idempotency_key):
         return shadow_existing_ledger_row_helper(self, conn, idempotency_key)
@@ -1954,7 +2114,7 @@ class TradingEngineService:
         ledger_table, route_ctx = self._resolve_table("points_ledger", ctx, action="ledger-write")
         if ledger_table == "test_shadow_ledger":
             return self._shadow_record_transaction(conn, ctx=route_ctx, **kwargs)
-        return self.points_service._record_transaction(conn, **kwargs)[0]
+        return self.points_service.rc1_facade().append_product_ledger_locked(conn, **kwargs)[0]
 
     def _user_volume_stats(self, conn, user_id):
         user_id = int(user_id)
@@ -2157,7 +2317,7 @@ class TradingEngineService:
             execution_state=execution_state,
         )
 
-    def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, stop_loss_percent=None, take_profit_percent=None, emergency_close=False, is_grid_order=False, use_locked_inventory=False, ctx=None):
+    def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, stop_loss_percent=None, take_profit_percent=None, emergency_close=False, is_grid_order=False, use_locked_inventory=False, source_wallet_address=None, ctx=None):
         return place_order_helper(
             self,
             actor=actor,
@@ -2171,6 +2331,7 @@ class TradingEngineService:
             emergency_close=emergency_close,
             is_grid_order=is_grid_order,
             use_locked_inventory=use_locked_inventory,
+            source_wallet_address=source_wallet_address,
             ctx=ctx,
         )
 

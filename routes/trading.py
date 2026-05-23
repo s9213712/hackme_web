@@ -769,7 +769,13 @@ def register_trading_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
-        return json_resp({"ok": True, "trading": trading_service.user_dashboard(user_id=actor["id"])})
+        return json_resp({
+            "ok": True,
+            "trading": trading_service.user_dashboard(
+                user_id=actor["id"],
+                source_wallet_address=request.args.get("source_wallet_address") or "",
+            ),
+        })
 
     def build_asset_overview(payload):
         funding = payload.get("funding") if isinstance(payload, dict) else {}
@@ -1363,6 +1369,7 @@ def register_trading_routes(app, deps):
                 stop_loss_percent=data.get("stop_loss_percent"),
                 take_profit_percent=data.get("take_profit_percent"),
                 emergency_close=bool(data.get("emergency_close")),
+                source_wallet_address=data.get("source_wallet_address") or "",
             )
             audit(
                 "TRADING_ORDER_SUBMITTED",

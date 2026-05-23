@@ -24,6 +24,96 @@ def _json_dumps(value):
     return json.dumps(value or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _json_dumps_array(value):
+    return json.dumps(value if isinstance(value, list) else [], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _json_loads(value, default):
+    try:
+        parsed = json.loads(value or "")
+    except Exception:
+        return default
+    return parsed if isinstance(parsed, type(default)) else default
+
+
+def _position_funding_sources(position):
+    sources = []
+    seen = set()
+    has_structured_sources = bool(position and "funding_sources_json" in position.keys())
+    if position and "funding_sources_json" in position.keys():
+        for raw in _json_loads(position["funding_sources_json"], []):
+            if not isinstance(raw, dict):
+                continue
+            address = str(raw.get("wallet_address") or "").strip().lower()
+            if not address or address in seen:
+                continue
+            item = dict(raw)
+            item["wallet_address"] = address
+            sources.append(item)
+            seen.add(address)
+    if position and "source_wallet_address" in position.keys():
+        address = str(position["source_wallet_address"] or "").strip().lower()
+        taint_status = str(position["taint_status"] if "taint_status" in position.keys() else "").strip().lower()
+        should_use_legacy_source = not has_structured_sources or taint_status in {"source_traced", "under_review", "tainted"}
+        if address and address not in seen and should_use_legacy_source:
+            sources.append({"wallet_address": address, "legacy_position_source": True})
+    return sources
+
+
+def _merge_position_funding_source(position, *, source_wallet_address, order_uuid, quantity_units, notional_points_value, chain_spend_points):
+    address = str(source_wallet_address or "").strip().lower()
+    if not address or int(chain_spend_points or 0) <= 0:
+        return _position_funding_sources(position)
+    sources = _position_funding_sources(position)
+    for item in sources:
+        if str(item.get("wallet_address") or "").strip().lower() == address:
+            item["chain_spend_points"] = int(item.get("chain_spend_points") or 0) + int(chain_spend_points or 0)
+            item["quantity_units"] = int(item.get("quantity_units") or 0) + int(quantity_units or 0)
+            item["notional_points"] = int(item.get("notional_points") or 0) + int(notional_points_value or 0)
+            refs = item.get("order_refs") if isinstance(item.get("order_refs"), list) else []
+            if str(order_uuid or "") and str(order_uuid or "") not in refs:
+                refs.append(str(order_uuid or ""))
+            item["order_refs"] = refs[-20:]
+            return sources
+    sources.append({
+        "wallet_address": address,
+        "chain_spend_points": int(chain_spend_points or 0),
+        "quantity_units": int(quantity_units or 0),
+        "notional_points": int(notional_points_value or 0),
+        "order_refs": [str(order_uuid or "")] if str(order_uuid or "") else [],
+        "lineage_model": "spot_position_funding_source_v1",
+    })
+    return sources[-50:]
+
+
+def _position_frozen_source_exposure(service, conn, position):
+    exposures = []
+    for source in _position_funding_sources(position):
+        address = str(source.get("wallet_address") or "").strip().lower()
+        if not address:
+            continue
+        freeze = service.points_service._address_freeze_locked(conn, address)
+        provisional = service.points_service._address_provisional_freeze_locked(conn, address)
+        active_freeze = freeze or provisional
+        if active_freeze:
+            exposures.append({
+                "wallet_address": address,
+                "freeze": active_freeze,
+                "funding_source": source,
+            })
+    return exposures
+
+
+def _assert_position_sources_not_frozen(service, conn, position, *, usage):
+    exposures = _position_frozen_source_exposure(service, conn, position)
+    if exposures:
+        first = exposures[0]
+        freeze_type = (first.get("freeze") or {}).get("freeze_type") or "freeze"
+        raise PermissionError(
+            f"{usage}: spot position is linked to a {freeze_type} frozen funding wallet address pending governance review"
+        )
+
+
 def _normalize_optional_risk_percent(value, *, name):
     if value in (None, ""):
         return None
@@ -96,6 +186,7 @@ def place_order(
     emergency_close=False,
     is_grid_order=False,
     use_locked_inventory=False,
+    source_wallet_address=None,
     ctx=None,
 ):
     ctx = service._resolve_trading_ctx(ctx, action="place_order")
@@ -113,6 +204,9 @@ def place_order(
     emergency_close = bool(emergency_close)
     is_grid_order = bool(is_grid_order)
     use_locked_inventory = bool(use_locked_inventory)
+    source_wallet_address = str(source_wallet_address or "").strip().lower()
+    if service._is_root_actor(actor):
+        source_wallet_address = ""
     if emergency_close and (side != "sell" or order_type != "market"):
         raise ValueError("emergency close only supports market sell")
     if use_locked_inventory and (side != "sell" or not is_grid_order):
@@ -124,6 +218,20 @@ def place_order(
         conn.commit()
         conn.execute("BEGIN IMMEDIATE")
         service._assert_writable(conn)
+        if source_wallet_address:
+            selected_wallet = service._wallet_payload_for_source(
+                conn,
+                user_id,
+                source_wallet_address=source_wallet_address,
+                require_spend=True,
+                spend_context="exchange collateral",
+                ctx=ctx,
+            )
+            source_wallet_address = str(
+                selected_wallet.get("selected_wallet_address")
+                or selected_wallet.get("active_wallet_address")
+                or source_wallet_address
+            )
         market = service._market(conn, market_symbol)
         service._assert_market_boot_ready(market, usage="spot order", conn=conn)
         service._validate_market_quantity_constraints(market, quantity_units)
@@ -207,8 +315,16 @@ def place_order(
                 if trial and trial["status"] == "active"
                 else 0
             )
-            wallet_payload = service._wallet_payload(conn, user_id, ctx=ctx)
+            wallet_payload = service._wallet_payload_for_source(
+                conn,
+                user_id,
+                source_wallet_address=source_wallet_address,
+                require_spend=True,
+                spend_context="exchange buy funding",
+                ctx=ctx,
+            )
             wallet_available = int(wallet_payload.get("points_balance") or 0)
+            source_wallet_address = str(wallet_payload.get("selected_wallet_address") or wallet_payload.get("active_wallet_address") or source_wallet_address or "")
             total_available = trial_available + wallet_available
             if total_points > total_available:
                 raise ValueError(
@@ -231,8 +347,16 @@ def place_order(
                         f"root 網格賣單手續費預留不足：需要 {fee_reserve_points} 點，目前可用 {root_available} 點"
                     )
             elif fee_reserve_points > 0:
-                wallet_payload = service._wallet_payload(conn, user_id, ctx=ctx)
+                wallet_payload = service._wallet_payload_for_source(
+                    conn,
+                    user_id,
+                    source_wallet_address=source_wallet_address,
+                    require_spend=True,
+                    spend_context="exchange fee reserve",
+                    ctx=ctx,
+                )
                 wallet_available = int(wallet_payload.get("points_balance") or 0)
+                source_wallet_address = str(wallet_payload.get("selected_wallet_address") or wallet_payload.get("active_wallet_address") or source_wallet_address or "")
                 if fee_reserve_points > wallet_available:
                     raise ValueError(
                         f"網格賣單手續費預留不足：需要 {fee_reserve_points} 點，目前可用 {wallet_available} 點"
@@ -251,11 +375,11 @@ def place_order(
             cur = conn.execute(
                 f"""
                 INSERT INTO {orders_table} (
-                    order_uuid, tester_user_id, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
+                    order_uuid, tester_user_id, user_id, market_symbol, side, order_type, funding_mode, source_wallet_address, execution_mode,
                     quantity_units, limit_price_points, execution_price_points, status,
                     frozen_points, trial_frozen_points, chain_frozen_points, fee_points, fee_micropoints,
                     filled_quantity_units, stop_loss_percent, take_profit_percent, reason, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     order_uuid,
@@ -265,6 +389,7 @@ def place_order(
                     side,
                     order_type,
                     funding_mode,
+                    source_wallet_address,
                     quantity_units,
                     limit_price,
                     execution_price,
@@ -284,11 +409,11 @@ def place_order(
             cur = conn.execute(
                 f"""
                 INSERT INTO {orders_table} (
-                    order_uuid, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
+                    order_uuid, user_id, market_symbol, side, order_type, funding_mode, source_wallet_address, execution_mode,
                     quantity_units, limit_price_points, execution_price_points, status,
                     frozen_points, trial_frozen_points, chain_frozen_points, fee_points, fee_micropoints,
                     filled_quantity_units, stop_loss_percent, take_profit_percent, reason, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     order_uuid,
@@ -297,6 +422,7 @@ def place_order(
                     side,
                     order_type,
                     funding_mode,
+                    source_wallet_address,
                     quantity_units,
                     limit_price,
                     execution_price,
@@ -337,6 +463,7 @@ def place_order(
                         "fee_rate_percent": effective_fee_rate_percent,
                         "trial_frozen_points": trial_frozen,
                         "chain_frozen_points": chain_frozen,
+                        "source_wallet_address": source_wallet_address,
                     },
                     actor=actor,
                     ctx=ctx,
@@ -364,12 +491,14 @@ def place_order(
                         "price_source": price_source,
                         "fee_rate_percent": effective_fee_rate_percent,
                         "fee_reserve_points": fee_reserve_points,
+                        "source_wallet_address": source_wallet_address,
                     },
                     actor=actor,
                     ctx=ctx,
                 )
         if side == "sell":
             position = service._position(conn, user_id, market["symbol"], ctx=ctx)
+            _assert_position_sources_not_frozen(service, conn, position, usage="spot sell")
             if use_locked_inventory:
                 if int(position["locked_quantity_units"]) < quantity_units:
                     raise ValueError("insufficient locked grid spot position")
@@ -569,6 +698,9 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
     side = order["side"]
     user_id = int(order["user_id"])
     quantity_units = int(order["quantity_units"])
+    source_wallet_address = str(
+        order["source_wallet_address"] if "source_wallet_address" in order.keys() else ""
+    ).strip().lower()
     price = float(
         _to_decimal(
             order["execution_price_points"] or market["manual_price_points"],
@@ -645,6 +777,7 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                             "market": market["symbol"],
                             "side": side,
                             "chain_refund_points": chain_refund,
+                            "source_wallet_address": source_wallet_address,
                         },
                         actor=actor,
                         ctx=route_ctx,
@@ -672,6 +805,7 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                             "fee": fee,
                             "trial_used_points": trial_used,
                             "chain_spend_points": chain_spend,
+                            "source_wallet_address": source_wallet_address,
                             "statement_spent_points": 0,
                             "statement_note": "spot buy principal is an asset swap, not cumulative spending",
                         },
@@ -731,6 +865,35 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                 """,
                 (quantity_units, next_avg, fee_micro, next_stop_loss_percent, next_take_profit_percent, _now_text(), user_id, market["symbol"]),
             )
+        if "funding_sources_json" in position.keys():
+            funding_sources = _merge_position_funding_source(
+                position,
+                source_wallet_address=source_wallet_address,
+                order_uuid=order["order_uuid"],
+                quantity_units=quantity_units,
+                notional_points_value=notional,
+                chain_spend_points=chain_spend,
+            )
+            primary_source = str(source_wallet_address or "").strip().lower() if chain_spend > 0 else ""
+            conn.execute(
+                f"""
+                UPDATE {positions_table}
+                SET source_wallet_address=CASE WHEN ?<>'' THEN ? ELSE source_wallet_address END,
+                    funding_sources_json=?,
+                    taint_status=CASE WHEN ?<>'' THEN 'source_traced' ELSE taint_status END,
+                    updated_at=?
+                WHERE user_id=? AND market_symbol=?
+                """,
+                (
+                    primary_source,
+                    primary_source,
+                    _json_dumps_array(funding_sources),
+                    primary_source if chain_spend > 0 else "",
+                    _now_text(),
+                    user_id,
+                    market["symbol"],
+                ),
+            )
         reserve_delta = (
             0
             if funding_mode == "root_simulated"
@@ -756,6 +919,7 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
             else (0 if funding_mode == "root_simulated" else frozen_amount)
         )
         position = service._position(conn, user_id, market["symbol"], ctx=route_ctx)
+        _assert_position_sources_not_frozen(service, conn, position, usage="spot sell")
         if int(position["locked_quantity_units"]) < quantity_units:
             raise ValueError("insufficient locked spot position")
         total_position_units = int(position["quantity_units"] or 0) + int(position["locked_quantity_units"] or 0)
@@ -807,6 +971,7 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                             "market": market["symbol"],
                             "side": side,
                             "fee_reserve_points": chain_frozen,
+                            "source_wallet_address": source_wallet_address,
                         },
                         actor=actor,
                         ctx=route_ctx,
@@ -845,6 +1010,7 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                             "trial_repaid_points": trial_repaid,
                             "trial_profit_points": trial_profit,
                             "realized_pnl_points": net_pnl,
+                            "destination_wallet_address": source_wallet_address,
                             "statement_earned_points": max(0, net_pnl),
                             "statement_spent_points": max(0, -net_pnl),
                             "statement_note": "spot sell principal is an asset swap; cumulative income/expense uses realized net PnL",
@@ -1025,6 +1191,7 @@ def cancel_order(service, *, actor, order_uuid, ctx=None):
                         "order_id": order["id"],
                         "market": order["market_symbol"],
                         "side": order["side"],
+                        "source_wallet_address": str(order["source_wallet_address"] if "source_wallet_address" in order.keys() else ""),
                     },
                     actor=actor,
                     ctx=ctx,

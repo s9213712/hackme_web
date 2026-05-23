@@ -8,7 +8,15 @@ import pytest
 
 from services.trading import margin as trading_margin_module
 import services.trading.trading_engine as trading_engine_module
-from services.points_chain import PointsLedgerService, ensure_points_economy_schema
+from services.points_chain import (
+    PointsLedgerService,
+    create_multisig_wallet,
+    create_official_hot_wallet,
+    ensure_points_economy_schema,
+)
+from services.points_chain.economy_layer import append_economy_event, economy_layer_report
+from services.points_chain.schema import canonical_json, sha256_text, utc_now
+from services.points_chain.wallet_identity import address_from_hash
 from services.snapshots import ensure_snapshot_schema
 from services.server_mode.context import SmV2Context
 from services.trading.trading_engine import TradingEngineService, ensure_trading_schema, fee_points, notional_points
@@ -78,6 +86,70 @@ def _services(tmp_path):
     return points, trading
 
 
+def test_exchange_fund_snapshot_uses_points_service_db_when_databases_are_split(tmp_path):
+    def db_factory(path):
+        def get_db():
+            conn = sqlite3.connect(path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys=ON")
+            return conn
+
+        conn = get_db()
+        conn.execute(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, role TEXT NOT NULL DEFAULT 'user', status TEXT NOT NULL DEFAULT 'active')"
+        )
+        conn.execute(
+            "INSERT INTO users (username, role, status) VALUES "
+            "('alice', 'user', 'active'), "
+            "('bob', 'manager', 'active'), "
+            "('root', 'super_admin', 'active')"
+        )
+        conn.commit()
+        conn.close()
+        return get_db
+
+    points_get_db = db_factory(tmp_path / "points.db")
+    trading_get_db = db_factory(tmp_path / "trading.db")
+    points = PointsLedgerService(get_db=points_get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    points_conn = points.get_db()
+    try:
+        points.ensure_schema(points_conn)
+        economy_layer_report(points_conn, chain_secret=points.chain_secret, actor={"id": 3, "role": "root"})
+        append_economy_event(
+            points_conn,
+            chain_secret=points.chain_secret,
+            event_type="trading_reserve_pool_flow",
+            transaction_type="margin_principal_lent",
+            source_fund_key="exchange_fund",
+            destination_fund_key=None,
+            destination_address="pc1borrower",
+            amount=4_900_001,
+            idempotency_key="split-db-exchange-drain",
+            actor={"id": 3, "role": "root"},
+        )
+        points_conn.commit()
+    finally:
+        points_conn.close()
+
+    trading = TradingEngineService(
+        get_db=trading_get_db,
+        points_service=points,
+        live_price_provider=lambda symbol: {"BTC/POINTS": 77059, "ETH/POINTS": 5000}[symbol],
+    )
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        snapshot = trading._exchange_fund_chain_snapshot(conn)
+        reserve = trading._reserve(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert snapshot["balance_points"] == 99_999
+    assert snapshot["source_db_path"].endswith("points.db")
+    assert int(reserve["balance_points"]) == 99_999
+
+
 def _services_with_history(tmp_path, *, prices=None, candles=None):
     get_db = _db(tmp_path)
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
@@ -112,6 +184,167 @@ def _set_live_price(trading, *, symbol, price_points, max_price_jump_percent=Non
 
 def _actor(user_id=1, username="alice", role="user"):
     return {"id": user_id, "username": username, "role": role}
+
+
+def _official_hot_wallet(points, user_id):
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        wallet = create_official_hot_wallet(conn, user_id=user_id, chain_secret=points.chain_secret)
+        conn.commit()
+        return wallet
+    finally:
+        conn.close()
+
+
+def _set_governance_timelock_ready(points, proposal_uuid):
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        conn.execute(
+            "UPDATE points_chain_governance_proposals SET timelock_until='2026-01-01T00:00:00Z', timelock_ends_at='2026-01-01T00:00:00Z' WHERE proposal_uuid=?",
+            (proposal_uuid,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _official_treasury_grant_via_governance(points, *, destination_wallet_address, amount, request_uuid, action_type="TREASURY_TRANSFER"):
+    root = _actor(3, "root", "super_admin")
+    manager = _actor(2, "bob", "manager")
+    root_wallet = _official_hot_wallet(points, 3)
+    manager_wallet = _official_hot_wallet(points, 2)
+    created = points.create_treasury_transfer_proposal(
+        actor=manager,
+        destination_wallet_address=destination_wallet_address,
+        amount=amount,
+        reason="governance official transfer",
+        reference=request_uuid,
+        action_type=action_type,
+    )
+    proposal_uuid = created["proposal"]["proposal_uuid"]
+    points.cast_governance_vote(actor=root, proposal_uuid=proposal_uuid, vote="yes")
+    points.cast_governance_vote(actor=manager, proposal_uuid=proposal_uuid, vote="yes")
+    _set_governance_timelock_ready(points, proposal_uuid)
+    points.sign_governance_multisig(actor=root, proposal_uuid=proposal_uuid, signer_wallet_address=root_wallet["address"])
+    signed = points.sign_governance_multisig(actor=manager, proposal_uuid=proposal_uuid, signer_wallet_address=manager_wallet["address"])
+    assert signed["multisig"]["ready"] is True
+    executed = points.execute_governance_proposal(actor=manager, proposal_uuid=proposal_uuid)
+    return executed["result"]["transfer"], proposal_uuid
+
+
+def test_trading_dashboard_uses_selected_payment_wallet_balance(tmp_path):
+    points, trading = _services(tmp_path)
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        primary = create_official_hot_wallet(conn, user_id=1, chain_secret=points.chain_secret)
+        now = utc_now()
+        secondary_address = address_from_hash("test-trading-secondary-wallet")
+        conn.execute(
+            """
+            INSERT INTO points_wallet_identities (
+                user_id, address, wallet_type, custody_mode, key_algorithm,
+                public_key_jwk_json, public_key_hash, server_private_key_stored,
+                is_primary, status, label, backup_confirmed_at, metadata_json,
+                created_at, updated_at
+            ) VALUES (1, ?, 'multisig', 'multisig', 'MULTISIG_POLICY_V1', '{}', ?, 0, 0, 'active', 'Trading wallet B', ?, ?, ?, ?)
+            """,
+            (
+                secondary_address,
+                sha256_text(secondary_address),
+                now,
+                canonical_json({"test_wallet": True}),
+                now,
+                now,
+            ),
+        )
+        secondary = conn.execute("SELECT * FROM points_wallet_identities WHERE address=?", (secondary_address,)).fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+
+    points.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=100,
+        action_type="test_seed_primary_wallet",
+        idempotency_key="test-trading-primary-wallet",
+        public_metadata={"destination_wallet_address": primary["address"]},
+        actor=_actor(3, "root", "super_admin"),
+    )
+    points.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=900,
+        action_type="test_seed_secondary_wallet",
+        idempotency_key="test-trading-secondary-wallet",
+        public_metadata={"destination_wallet_address": secondary["address"]},
+        actor=_actor(3, "root", "super_admin"),
+    )
+
+    default_dashboard = trading.user_dashboard(user_id=1)
+    selected_dashboard = trading.user_dashboard(user_id=1, source_wallet_address=secondary["address"])
+
+    assert default_dashboard["funding"]["wallet_available_points"] == 100
+    assert default_dashboard["funding"]["selected_wallet_address"] == primary["address"]
+    assert selected_dashboard["funding"]["wallet_available_points"] == 900
+    assert selected_dashboard["funding"]["selected_wallet_address"] == secondary["address"]
+
+
+def test_trading_dashboard_rejects_inactive_selected_payment_wallet(tmp_path):
+    _points, trading = _services(tmp_path)
+
+    dashboard = trading.user_dashboard(user_id=1, source_wallet_address="pc1deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+
+    assert dashboard["funding"]["wallet_selection_warning"] == "指定交易付款錢包不存在或已停用"
+    assert dashboard["funding"]["selected_wallet_address"] == dashboard["funding"]["active_wallet_address"]
+
+
+def test_exchange_order_rejects_user_multisig_receive_only_wallet_source(tmp_path):
+    points, trading = _services(tmp_path)
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        primary = create_official_hot_wallet(conn, user_id=1, chain_secret=points.chain_secret)
+        multisig = create_multisig_wallet(
+            conn,
+            user_id=1,
+            threshold=2,
+            signer_addresses=[primary["address"], "pc1" + "a" * 48, "pc1" + "b" * 48],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    points.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=10_000,
+        action_type="test_seed_multisig_wallet",
+        idempotency_key="test-trading-multisig-receive-only-wallet",
+        public_metadata={"destination_wallet_address": multisig["address"]},
+        actor=_actor(3, "root", "super_admin"),
+    )
+    _deplete_trial_credit(trading, user_id=1)
+
+    dashboard = trading.user_dashboard(user_id=1, source_wallet_address=multisig["address"])
+    assert dashboard["funding"]["selected_wallet_address"] == multisig["address"]
+    assert dashboard["funding"]["wallet_available_points"] == 10_000
+
+    with pytest.raises(PermissionError, match="user_multisig_receive_only_rc1"):
+        trading.place_order(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            side="buy",
+            order_type="market",
+            quantity="1",
+            source_wallet_address=multisig["address"],
+        )
 
 
 def _sm_ctx(mode="production", *, tester_id=None):
@@ -718,6 +951,13 @@ def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp
     assert dashboard["positions"][0]["market_symbol"] == "ETH/POINTS"
     assert dashboard["positions"][0]["quantity"] == "0.1"
     assert dashboard["futures_positions"] == []
+    with points.get_db() as conn:
+        position = conn.execute(
+            "SELECT source_wallet_address, funding_sources_json, taint_status FROM trading_spot_positions WHERE user_id=1 AND market_symbol='ETH/POINTS'"
+        ).fetchone()
+    assert position["source_wallet_address"] == ""
+    assert json.loads(position["funding_sources_json"]) == []
+    assert position["taint_status"] == "normal"
     ledger_actions = [row["action_type"] for row in points.list_ledger(user_id=1, include_user_id=True)]
     assert "trading_spot_buy" not in ledger_actions
     report = trading.root_report()
@@ -765,6 +1005,16 @@ def test_mixed_trial_and_real_points_buy_only_records_real_points_on_chain(tmp_p
         "trading_unfreeze": 250,
         "trading_spot_buy": 250,
     }
+    with points.get_db() as conn:
+        position = conn.execute(
+            "SELECT source_wallet_address, funding_sources_json, taint_status FROM trading_spot_positions WHERE user_id=1 AND market_symbol='ETH/POINTS'"
+        ).fetchone()
+    if position["source_wallet_address"]:
+        assert json.loads(position["funding_sources_json"])[0]["chain_spend_points"] == 250
+        assert position["taint_status"] == "source_traced"
+    else:
+        assert json.loads(position["funding_sources_json"]) == []
+        assert position["taint_status"] == "normal"
     assert points.get_wallet(1)["points_balance"] == 1750
 
 
@@ -5045,6 +5295,42 @@ def test_root_reserve_allocation_debits_source_wallet_and_audits(tmp_path):
         conn.close()
     assert events == [{"transaction_type": "root_reserve_allocation", "amount": 250}]
     assert int(double_counted_ledger["count"] or 0) == 0
+
+
+def test_official_exchange_fund_transfer_syncs_trading_reserve_pool(tmp_path):
+    points, trading = _services(tmp_path)
+    exchange_address = points.economy_stats()["economy_layer"]["funds"]["exchange_fund"]["address"]
+    before_exchange = points.economy_stats()["economy_layer"]["funds"]["exchange_fund"]["balance"]
+    before_reserve = trading.root_report()["reserve_pool"]["balance_points"]
+
+    result, _proposal_uuid = _official_treasury_grant_via_governance(
+        points,
+        destination_wallet_address=exchange_address,
+        amount=250,
+        request_uuid="official-exchange-sync-reserve",
+        action_type="EXCHANGE_FUND_REPLENISH",
+    )
+    assert trading.root_report()["reserve_pool"]["balance_points"] == before_reserve
+
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        conn.execute(
+            "UPDATE points_chain_transfer_requests SET created_at='2026-01-01T00:00:00Z' WHERE tx_group_hash=?",
+            (result["transaction_hash"],),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    proved = points.explorer_transaction(result["transaction_hash"])["transaction"]
+    trading.refresh_root_trading_snapshots(source_job_key="unit-test")
+    pools = trading.get_root_trading_snapshot(snapshot_key="sitewide_pools")["payload"]["pools"]
+
+    assert proved["status"] == "confirmed"
+    assert points.economy_stats()["economy_layer"]["funds"]["exchange_fund"]["balance"] == before_exchange + 250
+    assert trading.root_report()["reserve_pool"]["balance_points"] == before_reserve + 250
+    assert pools["pointschain_exchange_fund"]["balance_points"] == before_exchange + 250
+    assert pools["reserve_pool"]["balance_points"] == pools["pointschain_exchange_fund"]["balance_points"]
 
 
 def test_price_jump_requires_explicit_confirmation(tmp_path):

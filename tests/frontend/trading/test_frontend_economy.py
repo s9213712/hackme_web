@@ -37,6 +37,7 @@ def test_root_points_page_is_chain_operations_console():
         + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
     )
     economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
+    trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
@@ -74,11 +75,19 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-root-wallet-promo-address"' in economy_balance_page
     assert 'id="economy-root-wallet-exchange-address"' in economy_balance_page
     assert 'id="economy-root-wallet-burn-address"' in economy_balance_page
+    assert 'id="economy-root-official-grant-details"' in economy_balance_page
+    assert 'id="economy-root-official-grant-destination"' in economy_balance_page
+    assert 'id="economy-root-official-grant-btn"' in economy_balance_page
     assert 'id="economy-explorer-query"' in economy_explorer_page
     assert 'id="economy-explorer-search-btn"' in economy_explorer_page
     assert 'id="economy-explorer-result"' in economy_explorer_page
+    assert 'id="economy-governance-card"' in economy_explorer_page
+    assert 'id="economy-governance-scam-create-btn"' in economy_explorer_page
+    assert 'id="economy-governance-freeze-create-btn"' in economy_explorer_page
+    assert 'id="economy-governance-branch-create-btn"' in economy_explorer_page
+    assert "全站多人投票" in economy_explorer_page
     assert "20 Proved" in economy_explorer_page
-    assert "2-3 分鐘" in economy_explorer_page
+    assert "受鏈上忙碌度影響" in economy_explorer_page
     assert 'id="economy-root-virtual-card"' in economy_positions_page
     assert 'id="economy-trading-summary-card"' in economy_positions_page
     assert 'id="economy-asset-overview-card"' in economy_positions_page
@@ -89,25 +98,63 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-root-position-wallet-total"' not in index_html
     assert 'id="economy-root-wallet-position-list"' not in index_html
     assert "會員錢包摘要" not in index_html
+    assert 'id="tab-economy-transactions"' in index_html
+    assert 'id="economy-transactions-page"' in index_html
+    assert 'id="economy-transactions-list"' in index_html
+    assert 'id="economy-transactions-refresh-btn"' in index_html
+    assert 'id="economy-transfer-last-result"' in index_html
+    assert 'id="economy-wallet-onboarding-card"' in index_html
+    assert 'id="economy-wallet-create-card"' in index_html
+    assert '<details class="drive-card" id="economy-wallet-create-card"' in index_html
+    assert '<details class="drive-card" id="economy-wallet-create-card" style="display:none;margin-top:.75rem;">' in index_html
+    assert "錢包管理" in index_html
+    assert "創建錢包" in index_html
+    assert 'id="economy-wallet-initial-grant"' in index_html
+    assert 'id="economy-wallet-initial-grant-note"' in index_html
     assert 'id="economy-wallet-bound-actions"' in index_html
-    assert 'id="economy-wallet-delete-cold-btn"' in index_html
-    assert "刪除後必須提供私鑰才能恢復同一地址" in index_html
+    assert 'id="economy-wallet-delete-cold-address"' not in index_html
+    assert 'id="economy-wallet-delete-cold-btn"' not in index_html
+    assert 'id="economy-wallet-generated-panel"' in index_html
+    assert 'id="economy-wallet-generated-address"' in index_html
+    assert 'id="economy-wallet-generated-private-key"' in index_html
+    assert 'id="economy-wallet-use-generated-cold-btn"' in index_html
+    assert "建立冷錢包不會自動填入此欄" in index_html
+    assert 'id="economy-spend-source-wallet"' not in index_html
+    assert "預設付款錢包" not in index_html
+    assert 'id="economy-wallet-count"' in index_html
+    assert 'id="economy-wallet-creation-fee-source"' in index_html
+    assert "收入進官方 Treasury" in index_html
+    assert 'id="trading-payment-wallet"' in index_html
+    assert 'id="trading-payment-wallet-note"' in index_html
+    assert 'window.dispatchEvent(new CustomEvent("economy:default-spend-wallet-changed"' in economy_js
+    assert 'fetchTradingJson(`/trading/dashboard${tradingSourceWalletQuery()}`)' in trading_js
+    assert 'source_wallet_address: tradingDefaultSpendWalletAddress()' in trading_js
+    assert 'window.addEventListener("economy:default-spend-wallet-changed"' in trading_js
+    assert 'id="economy-wallet-identity-list"' in index_html
+    assert "刪除後不再列入帳戶總額" in index_html
+    assert 'data-wallet-delete-cold' in economy_js
+    assert 'data-wallet-secret-check' in economy_js
+    assert 'data-wallet-transfer-to' in economy_js
+    assert 'data-wallet-default' in economy_js
+    assert "手續費進 BURN 銷毀錢包" in index_html
     assert 'id="economy-wallet-transfer-card"' in index_html
     assert 'id="economy-transfer-source-wallet"' in index_html
     assert 'id="economy-transfer-destination-wallet"' in index_html
+    assert 'id="economy-transfer-fee-estimate"' in index_html
     assert 'id="economy-transfer-submit-btn"' in index_html
     assert 'id="economy-root-spot-position-list"' in index_html
     assert 'id="economy-root-margin-position-list"' in index_html
     assert 'id="economy-root-bot-position-list"' in index_html
     assert 'id="economy-root-position-bots"' in index_html
     assert 'id="economy-root-card"' in economy_chain_page
-    assert 'id="economy-admin-card"' in economy_chain_page
+    assert 'id="economy-admin-card"' not in economy_chain_page
     assert "PointsChain 私有鏈管理" in index_html
     assert 'id="economy-root-report-btn"' in index_html
-    assert 'id="economy-rollback-ledger-uuid"' in index_html
-    assert 'id="economy-rollback-btn"' in index_html
+    assert 'id="economy-rollback-ledger-uuid"' not in index_html
+    assert 'id="economy-rollback-btn"' not in index_html
     assert 'id="economy-audit-list"' in index_html
     assert 'id="economy-risk-ledger-list"' in index_html
+    assert 'id="economy-unsealed-transaction-list"' in index_html
     assert 'id="economy-chain-countdown"' in index_html
     assert 'id="economy-chain-loaded-at"' in index_html
     assert 'id="economy-chain-status"' in index_html
@@ -133,33 +180,36 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-root-virtual-margin-value"' in index_html
     assert "剩餘積分 + 現貨估值 + 借貸權益" in index_html
     assert "剩餘積分 + 現貨估值" in index_html
-    assert 'id="economy-manual-adjust-details"' in index_html
-    assert 'id="economy-chain-backup-details"' in index_html
-    assert 'id="economy-chain-account-details"' in index_html
-    assert 'id="economy-chain-detail-lists"' in index_html
-    assert 'id="economy-account-query-card"' in index_html
-    assert 'id="economy-query-user-id"' in index_html
-    assert 'id="economy-account-query-btn"' in index_html
-    assert 'id="economy-query-points-balance"' in index_html
-    assert 'id="economy-wallet-sanction-card"' in index_html
-    assert 'id="economy-wallet-sanction-status"' in index_html
-    assert 'id="economy-wallet-sanction-risk"' in index_html
-    assert 'id="economy-wallet-freeze-amount"' in index_html
-    assert 'id="economy-wallet-unfreeze-amount"' in index_html
-    assert 'id="economy-wallet-sanction-btn"' in index_html
-    assert 'id="economy-query-ledger-list"' in index_html
-    assert "最近帳本明細" in index_html
-    assert "收入、支出、凍結與系統獎勵都會列在這裡" in index_html
-    assert 'id="economy-adjustment-list"' in index_html
-    assert 'id="economy-admin-card-title"' in index_html
-    assert 'id="economy-admin-card-sub"' in index_html
-    assert 'id="economy-adjust-panel"' in index_html
-    assert '<select id="economy-adjust-user-id">' in index_html
+    assert 'id="economy-manual-adjust-details"' not in index_html
+    assert 'id="economy-chain-seal-details"' in index_html
+    assert 'id="economy-chain-audit-details"' in index_html
+    assert 'id="economy-chain-incident-details"' in index_html
+    assert 'id="economy-chain-unsealed-details"' in index_html
+    assert 'id="economy-chain-account-details"' not in index_html
+    assert 'id="economy-chain-detail-lists"' not in index_html
+    assert 'id="economy-account-query-card"' not in index_html
+    assert 'id="economy-query-user-id"' not in index_html
+    assert 'id="economy-account-query-btn"' not in index_html
+    assert 'id="economy-query-points-balance"' not in index_html
+    assert 'id="economy-wallet-sanction-card"' not in index_html
+    assert 'id="economy-wallet-sanction-status"' not in index_html
+    assert 'id="economy-wallet-sanction-risk"' not in index_html
+    assert 'id="economy-wallet-freeze-amount"' not in index_html
+    assert 'id="economy-wallet-unfreeze-amount"' not in index_html
+    assert 'id="economy-wallet-sanction-btn"' not in index_html
+    assert 'id="economy-query-ledger-list"' not in index_html
+    assert "最近帳本明細" not in index_html
+    assert "收入、支出、凍結與系統獎勵都會列在這裡" not in index_html
+    assert 'id="economy-adjustment-list"' not in index_html
+    assert 'id="economy-admin-card-title"' not in index_html
+    assert 'id="economy-admin-card-sub"' not in index_html
+    assert 'id="economy-adjust-panel"' not in index_html
+    assert '<select id="economy-adjust-user-id">' not in index_html
     assert '<input type="number" id="economy-adjust-user-id"' not in index_html
     assert 'id="economy-adjust-currency"' not in index_html
     assert "全站積分" in index_html
-    assert "加減分明細" in index_html
-    assert "手動加減分與待審核" in index_html
+    assert "近期未封交易 hash" in index_html
+    assert "手動加減分與待審核" not in index_html
     assert "積分錢包" in index_html
     assert "積分交易所" in index_html
     assert "/js/55-economy.js?v=" in index_html
@@ -179,14 +229,14 @@ def test_root_points_page_is_chain_operations_console():
     assert '["economy-recovery-auto-handle-btn", autoHandlePointsChainRecovery]' in economy_js
     assert "/js/90-bootstrap.js?v=" in index_html
     assert 'const rootMode = currentUser === "root";' in economy_js
-    assert 'const canManagePoints = canManageEconomyPoints();' in economy_js
-    assert 'adminCard.style.display = "none"' in economy_js
-    assert 'if ($("economy-admin-ledger-list")) $("economy-admin-ledger-list").innerHTML = "";' in economy_js
-    assert 'if ($("economy-pending-list")) $("economy-pending-list").innerHTML = "";' in economy_js
+    assert 'const canManagePoints = canManageEconomyPoints();' not in economy_js
+    assert 'adminCard.style.display = "none"' not in economy_js
+    assert 'economy-admin-ledger-list' not in economy_js
+    assert 'economy-pending-list' not in economy_js
     assert "function setEconomyActivePage(page" in economy_js
     assert "function economyPositionsAvailable()" in economy_js
-    assert 'const positionsAvailable = economyPositionsAvailable();' in economy_js
-    assert 'positionsTab.style.display = positionsAvailable ? "" : "none";' in economy_js
+    assert 'const positionsAvailable = false;' in economy_js
+    assert 'positionsTab.style.display = "none";' in economy_js
     assert 'chainTab.textContent = rootMode ? "積分私有鏈" : "積分管理";' in economy_js
     assert 'if (nextPage === "positions") title.textContent = "倉位管理";' in economy_js
     assert 'else if (nextPage === "explorer") title.textContent = "鏈上瀏覽器";' in economy_js
@@ -197,7 +247,9 @@ def test_root_points_page_is_chain_operations_console():
     assert 'fetchEconomyJson("/root/trading/sitewide/refresh"' in economy_js
     assert 'fetchEconomyJson("/root/trading/sitewide/pools", { allowMissingSnapshot: true })' in economy_js
     assert 'fetchEconomyJson("/root/trading/sitewide/user-positions", { allowMissingSnapshot: true })' in economy_js
-    assert 'const shouldLoadRootTrading = rootMode && ["funding-pools", "all-positions"].includes(economyActivePage);' in economy_js
+    assert 'const shouldLoadRootTrading = rootMode && chainFeatureOn && ["funding-pools", "all-positions"].includes(economyActivePage);' in economy_js
+    assert "PointsChain EXCHANGE" in economy_js
+    assert "未綁定地址" in economy_js
     assert "function refreshEconomyRootTradingSnapshots" in economy_js
     assert 'loadEconomyRootTradingReadOnly({ refreshSnapshot: true' in economy_js
     assert 'balanceTab.textContent = rootMode ? "錢包管理" : "積分餘額";' in economy_js
@@ -214,6 +266,77 @@ def test_root_points_page_is_chain_operations_console():
     assert 'setEconomyText("economy-root-wallet-official-balance"' in economy_js
     assert 'setEconomyText("economy-root-wallet-promo-status"' in economy_js
     assert '["economy-root-wallet-refresh-btn", loadEconomyRootReport]' in economy_js
+    assert '["economy-root-official-grant-btn", sendEconomyRootOfficialGrant]' in economy_js
+    assert 'fetchEconomyJson("/root/points/official-wallet/grant"' in economy_js
+    assert 'fetchEconomyJson("/points/governance/proposals?limit=50")' in economy_js
+    assert 'fetchEconomyJson("/points/governance/address-risk"' in economy_js
+    assert 'fetchEconomyJson("/points/governance/wallet-freeze"' in economy_js
+    assert 'fetchEconomyJson("/admin/points/governance/recovery-branch"' in economy_js
+    assert 'fetchEconomyJson(`/points/governance/proposals/${encodeURIComponent(proposalUuid)}/vote`' in economy_js
+    assert 'fetchEconomyJson(`/admin/points/governance/proposals/${encodeURIComponent(proposalUuid)}/execute`' in economy_js
+    assert "economy-governance-emergency-create-details" in index_html
+    assert "不會刪改舊 ledger" in economy_js
+    assert 'if (value === "official_fund_transfer") return "官方基金調撥";' in economy_js
+    assert 'json.msg || json.message || json.error || `HTTP ${res.status}`' in economy_js
+    assert '官方 Treasury 撥款提案送出失敗' in economy_js
+    assert "function renderEconomySpendWalletOptions" not in economy_js
+    assert "function renderEconomyWalletCreationFeeOptions" in economy_js
+    assert "function economyWalletCreationFeePayload" in economy_js
+    assert "wallet_creation_fee" in economy_js
+    assert "function renderTradingPaymentWalletOptions" in trading_js
+    assert "trading-payment-wallet" in trading_js
+    assert 'const ECONOMY_SPEND_WALLET_STORAGE_KEY = "hackme_web:economy:default_spend_wallet";' in economy_js
+    assert "function readEconomyDefaultSpendWalletAddress" in economy_js
+    assert "source_wallet_address: sourceWallet" in economy_js
+    assert 'window.prompt("請確認本次付款錢包地址；可改用其他錢包。"' in economy_js
+    assert "economy-wallet-create-card" in economy_js
+    assert "economy-wallet-initial-grant" in economy_js
+    assert "初始配點已入帳" in economy_js
+    assert "綁定錢包後由官方基金匯入" in economy_js
+    assert "let economyColdWalletDraft = null;" in economy_js
+    assert "let economyColdWalletBindCandidate = null;" in economy_js
+    assert "let economyDocumentEventsBound = false;" in economy_js
+    assert "冷錢包只建立草稿，尚未匯入或綁定" in economy_js
+    assert "function destroyEconomyColdWalletSecrets" in economy_js
+    assert '["economy-wallet-generated-address", "economy-wallet-generated-private-key", "economy-wallet-private-key"]' in economy_js
+    assert "function economyLoadColdWalletBackup" in economy_js
+    assert "function economyNotifyFailure" in economy_js
+    assert "function selectGeneratedColdWalletForImport" in economy_js
+    assert 'id="economy-wallet-generated-selection-status"' in index_html
+    assert '["economy-wallet-use-generated-cold-btn", selectGeneratedColdWalletForImport]' in economy_js
+    assert 'const ECONOMY_COLD_BACKUP_PREFIX = "pcw1.p256";' in economy_js
+    assert "function economyCompactColdWalletBackup" in economy_js
+    assert "function economyParseColdWalletBackup" in economy_js
+    assert "function economyBuildTransferSignature" in economy_js
+    assert "function economyBuildGovernanceMultisigSignature" in economy_js
+    assert "economyWalletSignTransfer" not in economy_js
+    assert "points_wallet_transfer" in economy_js
+    assert "function economyBuildServiceFeeSignature" in economy_js
+    assert "points_service_fee_reserve" in economy_js
+    assert "服務費已凍結" in economy_js
+    assert "批次鏈上扣款" in economy_js
+    assert "付款錢包私鑰備份碼以本機簽署交易" in economy_js
+    assert "付款錢包私鑰備份碼以本機簽署服務費" in economy_js
+    assert "只在可信裝置使用，不會送到伺服器" in economy_js
+    assert "showAppToast(`${label}：${message}`" in economy_js
+    assert "false,\n    [\"sign\"]" in economy_js
+    assert "privateJwk.d = \"\";" in economy_js
+    assert "等待冷錢包本機簽署" in economy_js
+    assert "私鑰備份碼地址與付款錢包不一致" in economy_js
+    assert "signature," in economy_js
+    assert "const backupCode = economyCompactColdWalletBackup(privateJwk);" in economy_js
+    assert 'if ($("economy-wallet-generated-private-key")) $("economy-wallet-generated-private-key").value = backupCode;' in economy_js
+    assert "貼上 pcw1 私鑰備份碼；也相容舊 JWK JSON" in index_html
+    assert "我已離線保存私鑰備份碼" in index_html
+    assert "持有備份碼者可恢復該地址" in index_html
+    assert "伺服器未保存用戶冷錢包備份碼" in economy_js
+    assert 'if ($("economy-wallet-private-key")) $("economy-wallet-private-key").value = JSON.stringify(privateJwk, null, 2);' not in economy_js
+    assert "economyColdWalletDraft = { privateKey" not in economy_js
+    assert "economyColdWalletDraft.privateJwk" not in economy_js
+    assert "economyColdWalletDraft.backupCode" not in economy_js
+    assert "Legacy 帳本身份" in economy_js
+    assert "Legacy 帳本 ID" in economy_js
+    assert "舊帳本公開識別碼" in economy_js
     assert '"economy-layer-supply-formula"' in economy_js
     assert "閉環公式" in economy_js
     assert "economy-root-balance-refresh-btn" not in economy_js
@@ -227,14 +350,43 @@ def test_root_points_page_is_chain_operations_console():
     assert "startEconomyBlockCountdown" in economy_js
     assert "function canManageEconomyPoints()" in economy_js
     assert "function setEconomyRootLayout(rootMode)" in economy_js
-    assert 'currentUser === "root" || currentRole === "manager" || currentRole === "super_admin"' in economy_js
+    assert "function economyChainEnabled()" in economy_js
+    assert 'siteConfig.feature_points_chain_enabled !== false' in economy_js
+    assert 'return currentUser === "root" && economyChainEnabled();' in economy_js
     assert "最後更新" in economy_js
     assert "bindEconomyInlineEvents" in economy_js
     assert "function renderEconomyExplorerResult" in economy_js
+    assert "function renderEconomyGovernance" in economy_js
+    assert "function createGovernanceAddressRiskProposal" in economy_js
+    assert "function createGovernanceWalletFreezeProposal" in economy_js
+    assert "function createGovernanceRecoveryBranchProposal" in economy_js
     assert 'fetchEconomyJson(`/points/explorer/search?q=${encodeURIComponent(value)}&limit=25`)' in economy_js
+    assert 'fetchEconomyJson(`/points/explorer/fee-estimate?fee_points=${encodeURIComponent(String(fee))}`)' in economy_js
     assert 'fetchEconomyJson("/points/explorer/accelerate"' in economy_js
+    assert "priority_fee_diminishing_ratio_v2" in economy_js or "feeReferencePoints" in economy_js
+    assert "economy-explorer-accelerate-estimate" in economy_js
+    assert "提高費用並加速" in economy_js
+    assert "已送出鏈上加速費用，Proved" in economy_js
+    assert "加速費" in economy_js
     assert 'fetchEconomyJson("/points/transactions/submit"' in economy_js
+    assert 'fetchEconomyJson("/points/transactions?limit=50")' in economy_js
+    assert "function renderEconomyTransactions" in economy_js
+    assert "function loadEconomyTransactions" in economy_js
+    assert '["economy-transactions-refresh-btn", loadEconomyTransactions]' in economy_js
+    assert '["economy-governance-refresh-btn", () => loadEconomyGovernance()]' in economy_js
+    assert '["economy-governance-scam-create-btn", createGovernanceAddressRiskProposal]' in economy_js
+    assert '["economy-governance-freeze-create-btn", createGovernanceWalletFreezeProposal]' in economy_js
+    assert '["economy-governance-branch-create-btn", createGovernanceRecoveryBranchProposal]' in economy_js
+    assert 'requestedPage === "transactions" && !rootMode' not in economy_js
+    assert 'transactionsTab.style.display = rootMode ? "none" : ""' not in economy_js
+    assert 'if (!currentUser || currentUser === "root")' not in economy_js
+    assert 'if (value === "official_outgoing") return "官方撥款";' in economy_js
+    assert "Pending 不會讓收款錢包入帳" in economy_js
+    assert "transaction_hash" in economy_js
+    assert 'setEconomyActivePage("transactions")' in economy_js
     assert "function submitEconomyWalletTransfer()" in economy_js
+    assert "const successMessage = txHash" in economy_js
+    assert "economySetMsg(visibleMessage, !warningSuffix);" in economy_js
     assert "成交前收款方不會入帳" in economy_js
     assert "設定自動發放交易免鏈上費用" in economy_js
     assert "BURN 銷毀錢包" in economy_js
@@ -249,24 +401,26 @@ def test_root_points_page_is_chain_operations_console():
     assert 'currentModuleTab !== "economy"' in economy_js
     assert "function economyDashboardRefreshMs()" in economy_js
     assert "}, economyDashboardRefreshMs())" in economy_js
-    assert "economy-adjustment-list" in economy_js
-    assert 'adminLedgerList.style.display = rootMode ? "none" : ""' in economy_js
-    assert 'if (adjustPanel) adjustPanel.style.display = rootMode ? "" : "none";' in economy_js
-    assert 'adminTitle.textContent = "手動加減分";' in economy_js
-    assert "加減分歷史統一在下方明細查看" in economy_js
+    assert "economy-unsealed-transaction-list" in economy_js
+    assert "safeReport.unsealed_transactions" in economy_js
+    assert "economy-adjustment-list" not in economy_js
+    assert 'adminLedgerList.style.display = rootMode ? "none" : ""' not in economy_js
+    assert 'if (adjustPanel) adjustPanel.style.display = rootMode ? "" : "none";' not in economy_js
+    assert 'adminTitle.textContent = "手動加減分";' not in economy_js
+    assert "加減分歷史統一在下方明細查看" not in economy_js
     assert "function formatEconomyLedgerAction" in economy_js
     assert "function formatEconomyLedgerAmount" in economy_js
     assert "遊戲每日任務獎勵" in economy_js
     assert "formatEconomyLedgerSource" in economy_js
-    assert "只有 root 可以手動調整積分" in economy_js
-    assert 'fetchEconomyJson("/admin/users")' in economy_js
-    assert "function renderEconomyAdjustUserOptions" in economy_js
-    assert "async function loadEconomyAccountLookup()" in economy_js
+    assert "只有 root 可以手動調整積分" not in economy_js
+    assert 'fetchEconomyJson("/admin/users")' not in economy_js
+    assert "function renderEconomyAdjustUserOptions" not in economy_js
+    assert "async function loadEconomyAccountLookup()" not in economy_js
     assert "async function downloadCsvEndpoint" in economy_js
     assert "apiFetch(API + path" in economy_js
     assert "window.location.href = API + path" not in economy_js
-    assert "async function sanctionEconomyWallet()" in economy_js
-    assert "renderEconomyAccountLookup" in economy_js
+    assert "async function sanctionEconomyWallet()" not in economy_js
+    assert "renderEconomyAccountLookup" not in economy_js
     assert "formatEconomyVerificationSummary" in economy_js
     assert "formatEconomyRecoveryResult" in economy_js
     assert "PointsChain 已恢復並完成驗證" in economy_js
@@ -275,22 +429,39 @@ def test_root_points_page_is_chain_operations_console():
     assert "setEconomyChainStatus" in economy_js
     assert "JSON.stringify(json.report?.verification" not in economy_js
     assert "JSON.stringify(json.verification" not in economy_js
-    assert '/admin/points/wallets/${encodeURIComponent(userId)}' in economy_js
-    assert '/root/points/wallets/${encodeURIComponent(userId)}/sanction' in economy_js
-    assert '["economy-wallet-sanction-btn", sanctionEconomyWallet]' in economy_js
+    assert '/admin/points/wallets/${encodeURIComponent(userId)}' not in economy_js
+    assert '/root/points/wallets/${encodeURIComponent(userId)}/sanction' not in economy_js
+    assert '["economy-wallet-sanction-btn", sanctionEconomyWallet]' not in economy_js
     assert "function deleteEconomyColdWallet" in economy_js
+    assert "const address = String(addressOverride || \"\").trim();" in economy_js
+    assert "請先選擇要刪除的冷錢包" in economy_js
+    assert "JSON.stringify({ address, reason: \"user_deleted_cold_wallet\" })" in economy_js
     assert 'fetchEconomyJson("/points/wallet/onboarding", {\n      method: "DELETE"' in economy_js
-    assert '["economy-wallet-delete-cold-btn", deleteEconomyColdWallet]' in economy_js
-    assert 'wallet?.wallet_type === "official_hot"' in economy_js
-    assert "官方熱錢包由系統託管，不能刪除" in economy_js
-    assert "economy-account-query-btn" in economy_js
-    assert "會員讀取失敗" in economy_js
-    assert "請先選擇要查詢的會員" in economy_js
-    assert "請先選擇要調整的會員" in economy_js
+    assert '["economy-wallet-delete-cold-btn", deleteEconomyColdWallet]' not in economy_js
+    assert "function startColdWalletImport" in economy_js
+    assert '["economy-wallet-import-cold-btn", startColdWalletImport]' in economy_js
+    assert "請貼上要匯入或恢復的冷錢包備份碼" in economy_js
+    assert "function economyVisibleWallets" in economy_js
+    assert "addWallet(onboarding.wallet);" in economy_js
+    assert "const visibleWallets = economyVisibleWallets(onboarding);" in economy_js
+    assert "deleteColdBtn.disabled = !coldWallets.length;" not in economy_js
+    assert "目前沒有可刪冷錢包" not in economy_js
+    assert "function economyInlineMsg" in economy_js
+    assert "showAppToast(`${fallbackLabel}：${message}`" in economy_js
+    assert "function economyWarningSuffix" in economy_js
+    assert "notification_delivery_failed" in economy_js
+    assert "錢包資料部分讀取失敗" in economy_js
+    assert "/js/55-economy.js?v=" in index_html
+    assert 'wallet?.wallet_type === "official_hot"' not in economy_js
+    assert "官方熱錢包由系統託管，不能刪除" not in economy_js
+    assert "economy-account-query-btn" not in economy_js
+    assert "會員讀取失敗" not in economy_js
+    assert "請先選擇要查詢的會員" not in economy_js
+    assert "請先選擇要調整的會員" not in economy_js
     assert "economy-adjust-currency" not in economy_js
     assert 'return "點";' in economy_js
-    assert 'async function rollbackEconomyLedger()' in economy_js
-    assert "/rollback" in economy_js
+    assert 'async function rollbackEconomyLedger()' not in economy_js
+    assert "/rollback" not in economy_js
     assert "bindEconomyInlineEvents" in bootstrap_js
     assert 'id="tab-settings-billing"' in index_html
     assert 'id="sec-settings-billing"' in index_html

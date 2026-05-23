@@ -17,6 +17,10 @@ def build_sitewide_pools_payload(service):
         service.ensure_schema(conn)
         reserve = dict(service._reserve(conn))
         funding_pool = service._funding_pool_payload(conn)
+        try:
+            pointschain_exchange_fund = service._exchange_fund_chain_snapshot(conn)
+        except Exception as exc:
+            pointschain_exchange_fund = {"error": str(exc)[:240]}
         fee_summary = dict(conn.execute(
             """
             SELECT
@@ -76,6 +80,7 @@ def build_sitewide_pools_payload(service):
             "pools": {
                 "reserve_pool": reserve,
                 "funding_pool": funding_pool,
+                "pointschain_exchange_fund": pointschain_exchange_fund,
                 "fee_summary": fee_summary,
                 "lending_summary": lending_summary,
                 "open_margin_summary": open_margin,
