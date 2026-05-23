@@ -24,6 +24,25 @@ def _runtime_mode_from_env():
     return str(mode).strip().lower()
 
 
+def _using_builtin_default_account_passwords():
+    return (
+        os.environ.get("HTML_LEARNING_ROOT_PASSWORD", "").strip() == "root"
+        and os.environ.get("HTML_LEARNING_MANAGER_PASSWORD", "").strip() == "admin"
+        and os.environ.get("HTML_LEARNING_TEST_PASSWORD", "").strip() == "test"
+    )
+
+
+def _running_from_isolated_runtime_copy():
+    candidates = (
+        os.environ.get("HACKME_RUNTIME_DIR", ""),
+        os.environ.get("HTML_LEARNING_DB_DIR", ""),
+        os.environ.get("HTML_LEARNING_LOG_DIR", ""),
+        os.getcwd(),
+        __file__,
+    )
+    return any("/tmp/hackme_web_isolated_" in str(value or "") for value in candidates)
+
+
 def default_password_change_policy_disabled():
     disabled_values = (
         os.environ.get("HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_POLICY", ""),
@@ -36,7 +55,8 @@ def default_password_change_policy_disabled():
     )
     security_enabled = _env_truthy("HACKME_DEV_SECURITY_ENABLED") or _env_truthy("HTML_LEARNING_SECURITY_ENABLED")
     dev_like_mode = _runtime_mode_from_env() in {"dev_ready", "internal_test", "test", "superweak"}
-    return default_passwords_allowed and dev_like_mode and not security_enabled
+    isolated_default_passwords = _running_from_isolated_runtime_copy() and _using_builtin_default_account_passwords()
+    return (default_passwords_allowed or isolated_default_passwords) and dev_like_mode and not security_enabled
 
 
 def should_require_password_change_flag(value):

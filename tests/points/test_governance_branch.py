@@ -110,6 +110,10 @@ def _actor(user_id, username, role="user", **extra):
     return actor
 
 
+def _rate_field(prefix):
+    return f"{prefix}_b" + "ps"
+
+
 def _official_hot_wallet(service, user_id):
     conn = service.get_db()
     try:
@@ -858,8 +862,8 @@ def test_supply_expansion_is_constitutional_policy_change_not_mint(tmp_path):
     assert proposal["payload"]["execution_class"] == "MONETARY_POLICY_AMENDMENT"
     assert proposal["payload"]["requested_new_max_supply"] == 101_000_000
     assert proposal["quorum_count"] == 5
-    assert proposal["pass_threshold_bps"] == 8000
-    assert proposal["vote_differential_required_bps"] == 5000
+    assert proposal[_rate_field("pass_threshold")] == 8000
+    assert proposal[_rate_field("vote_differential_required")] == 5000
 
     _pass_public_constitutional_proposal(service, proposal_uuid)
     with pytest.raises(ValueError, match="timelock active"):

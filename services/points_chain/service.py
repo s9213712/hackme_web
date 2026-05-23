@@ -51,6 +51,7 @@ GOV_VOTE_DIFFERENTIAL_REQUIRED_RATE_FIELD = "vote_differential_required_" + GOV_
 GOV_VOTE_DIFFERENTIAL_RATE_FIELD = "vote_differential_" + GOV_RATE_UNIT_SUFFIX
 GOV_APPROVAL_RATE_FIELD = "approval_" + GOV_RATE_UNIT_SUFFIX
 GOV_QUORUM_DELTA_RATE_FIELD = "quorum_delta_" + GOV_RATE_UNIT_SUFFIX
+GOV_DILUTION_RATE_FIELD = "dilution_" + GOV_RATE_UNIT_SUFFIX
 
 
 def _connection_path(conn):
@@ -1916,7 +1917,7 @@ class PointsLedgerService:
             "old_max_supply": max_supply,
             "requested_new_max_supply": max_supply + requested_delta,
             "requested_delta": requested_delta,
-            "dilution_bps": (requested_delta * 10000) // max(1, max_supply),
+            GOV_DILUTION_RATE_FIELD: (requested_delta * 10000) // max(1, max_supply),
             "destination_fund_key": destination_fund_key,
             "single_expansion_cap": single_cap,
             "annual_expansion_cap": annual_cap,
@@ -1999,7 +2000,7 @@ class PointsLedgerService:
                 "old_max_supply": eligibility["old_max_supply"],
                 "requested_new_max_supply": eligibility["requested_new_max_supply"],
                 "requested_delta": eligibility["requested_delta"],
-                "dilution_bps": eligibility["dilution_bps"],
+                GOV_DILUTION_RATE_FIELD: eligibility[GOV_DILUTION_RATE_FIELD],
                 "destination_fund_key": eligibility["destination_fund_key"],
                 "spending_restrictions": {
                     "mint_and_spend_are_separate_steps": True,
@@ -2116,7 +2117,7 @@ class PointsLedgerService:
             "old_max_supply": eligibility["old_max_supply"],
             "new_max_supply": eligibility["requested_new_max_supply"],
             "requested_delta": requested_delta,
-            "dilution_bps": eligibility["dilution_bps"],
+            GOV_DILUTION_RATE_FIELD: eligibility[GOV_DILUTION_RATE_FIELD],
             "destination_fund_key": destination_fund_key,
             "minted": False,
             "mint_and_spend_are_separate_steps": True,

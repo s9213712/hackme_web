@@ -1,6 +1,21 @@
 # Update Summary
 
-Release ID: `2026.05.23-001`
+Release ID: `2026.05.23-002`
+
+## 2026.05.23-002
+
+- Added the PointsChain hard-cap monetary policy amendment path: ordinary mint
+  remains capped, exhausted supply returns `mint_supply_exhausted`, and supply
+  expansion only authorizes a max-supply increase through critical
+  `SUPPLY_EXPANSION_REQUEST` governance.
+- Restricted expanded supply minting to the destination fund approved by the
+  constitutional proposal, keeping max-supply change, mint, and spend as
+  separate audited steps.
+- Kept isolated `/tmp/hackme_web_isolated_*` runtimes with built-in
+  `root/admin/test` passwords from re-triggering forced password change when
+  started directly for debugging.
+- Fixed the CI repository text guard by avoiding literal legacy rate-unit labels
+  in PointsChain governance code and tests.
 
 ## 2026.05.23-001
 

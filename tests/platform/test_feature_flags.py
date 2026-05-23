@@ -196,6 +196,50 @@ def test_default_password_change_guard_can_be_disabled_for_isolated_runtime(monk
     assert production_alias_blocked[1] == 403
 
 
+def test_isolated_runtime_builtin_default_passwords_disable_forced_change(monkeypatch):
+    request_obj = SimpleNamespace(method="GET", path="/api/points/wallet")
+    monkeypatch.setenv("HTML_LEARNING_ROOT_PASSWORD", "root")
+    monkeypatch.setenv("HTML_LEARNING_MANAGER_PASSWORD", "admin")
+    monkeypatch.setenv("HTML_LEARNING_TEST_PASSWORD", "test")
+    monkeypatch.setenv("HTML_LEARNING_SERVER_MODE", "dev_ready")
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", "/tmp/hackme_web_isolated_54344/hackme_web/runtime")
+    monkeypatch.delenv("HTML_LEARNING_ALLOW_DEFAULT_PASSWORDS", raising=False)
+    monkeypatch.delenv("HACKME_DEV_DEFAULT_ACCOUNT_PASSWORDS", raising=False)
+    monkeypatch.delenv("HACKME_DEV_SECURITY_ENABLED", raising=False)
+    monkeypatch.delenv("HTML_LEARNING_SECURITY_ENABLED", raising=False)
+
+    allowed = enforce_required_password_change(
+        request_obj,
+        get_current_user_ctx=lambda: {"id": 1, "must_change_password": 1},
+        json_resp=lambda payload, status=200: (payload, status),
+    )
+
+    assert allowed is None
+    assert should_require_password_change_flag(1) is False
+
+
+def test_non_isolated_builtin_default_passwords_still_require_explicit_dev_allow(monkeypatch):
+    request_obj = SimpleNamespace(method="GET", path="/api/points/wallet")
+    monkeypatch.setenv("HTML_LEARNING_ROOT_PASSWORD", "root")
+    monkeypatch.setenv("HTML_LEARNING_MANAGER_PASSWORD", "admin")
+    monkeypatch.setenv("HTML_LEARNING_TEST_PASSWORD", "test")
+    monkeypatch.setenv("HTML_LEARNING_SERVER_MODE", "dev_ready")
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", "/tmp/not_isolated_hackme/runtime")
+    monkeypatch.delenv("HTML_LEARNING_ALLOW_DEFAULT_PASSWORDS", raising=False)
+    monkeypatch.delenv("HACKME_DEV_DEFAULT_ACCOUNT_PASSWORDS", raising=False)
+    monkeypatch.delenv("HACKME_DEV_SECURITY_ENABLED", raising=False)
+    monkeypatch.delenv("HTML_LEARNING_SECURITY_ENABLED", raising=False)
+
+    blocked = enforce_required_password_change(
+        request_obj,
+        get_current_user_ctx=lambda: {"id": 1, "must_change_password": 1},
+        json_resp=lambda payload, status=200: (payload, status),
+    )
+
+    assert blocked is not None
+    assert blocked[1] == 403
+
+
 def test_notifications_remain_enabled_after_management_only_reset():
     assert settings.DEFAULT_SETTINGS["feature_reports_notifications_enabled"] is True
     assert settings.MANAGEMENT_ONLY_RESET_SETTINGS["feature_reports_notifications_enabled"] is True
