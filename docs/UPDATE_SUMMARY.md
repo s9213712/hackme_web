@@ -1,6 +1,15 @@
 # Update Summary
 
-Release ID: `2026.05.21-171`
+Release ID: `2026.05.21-172`
+
+## 2026.05.21-172
+
+- Added append-only ledger compensation support for approved appeal reviews on
+  the 03.Points branch, matching the private-chain no-direct-rollback policy.
+- Updated appeal regression coverage so review approval must create a
+  compensation ledger entry before committing the appeal status change.
+- Isolated ComfyUI billing helper state per route registration so overlapping
+  async jobs cannot charge a later app/user wallet through stale module globals.
 
 ## 2026.05.21-171
 

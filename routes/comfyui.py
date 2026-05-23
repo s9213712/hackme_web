@@ -2080,7 +2080,7 @@ def register_comfyui_routes(app, deps):
     def _diffusers_error_progress(job_id, exc):
         previous = _generation_job_progress_snapshot(job_id)
         previous_step = str(previous.get("step") or "").strip()
-        return {
+        progress = {
             "phase": "error",
             "percent": 100,
             "detail": str(exc),
@@ -2089,6 +2089,10 @@ def register_comfyui_routes(app, deps):
             "backend_kind": "diffusers",
             "step": previous_step if previous.get("phase") == "error" and previous_step else "Diffusers 產圖失敗",
         }
+        python_log_tail = previous.get("python_log_tail")
+        if isinstance(python_log_tail, list):
+            progress["python_log_tail"] = python_log_tail[-200:]
+        return progress
 
     def _get_generation_job(job_id):
         job_id = str(job_id or "")
@@ -2127,6 +2131,11 @@ def register_comfyui_routes(app, deps):
             "error": job.get("error") or "",
             "result": _strip_comfyui_inline_data_urls(job.get("result")),
         }
+        if payload["status"] == "completed":
+            progress = payload["progress"]
+            progress["phase"] = "completed"
+            progress["percent"] = 100
+            progress["completed"] = True
         if payload["status"] in {"queued", "running"}:
             progress = payload["progress"]
             updated_at = float(progress.get("updated_at") or job.get("updated_at") or job.get("created_at") or 0)

@@ -1346,6 +1346,79 @@ class PointsLedgerService:
         finally:
             conn.close()
 
+    def compensate_ledger(self, *, actor, ledger_uuid, reason):
+        reason = str(reason or "").strip()
+        if not reason:
+            raise ValueError("reason is required")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            self._assert_chain_writable(conn, "ledger compensation")
+            original = conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (str(ledger_uuid or ""),)).fetchone()
+            if not original:
+                raise ValueError("ledger not found")
+            if original["ledger_hash"] != compute_ledger_hash(original):
+                raise ValueError("ledger is tampered; repair or restore it before compensation")
+            if str(original["action_type"] or "").startswith(("compensation:", "rollback:")):
+                raise ValueError("compensation ledger cannot be compensated again")
+            reverse_map = {
+                "credit": "reverse",
+                "transfer_in": "transfer_out",
+                "debit": "credit",
+                "transfer_out": "transfer_in",
+                "freeze": "unfreeze",
+                "unfreeze": "freeze",
+            }
+            reverse_direction = reverse_map.get(original["direction"])
+            if not reverse_direction:
+                raise ValueError("unsupported compensation direction")
+            compensation_row, created = self._record_transaction(
+                conn,
+                user_id=original["user_id"],
+                currency_type=original["currency_type"],
+                direction=reverse_direction,
+                amount=original["amount"],
+                action_type=f"compensation:{original['action_type']}",
+                reference_type="ledger_compensation",
+                reference_id=original["ledger_uuid"],
+                idempotency_key=f"compensation:{original['ledger_uuid']}",
+                reason=reason,
+                public_metadata={
+                    "compensation_of": original["ledger_uuid"],
+                    "original_direction": original["direction"],
+                    "original_action_type": original["action_type"],
+                },
+                private_metadata={"actor_username": actor_value(actor, "username", "")},
+                actor=actor,
+                risk_flag="compensation",
+                risk_score=20,
+            )
+            self._audit_log(
+                conn,
+                "LEDGER_COMPENSATION",
+                "warning",
+                f"compensate ledger {original['ledger_uuid']}",
+                actor=actor,
+                target_user_id=original["user_id"],
+                ledger_id=compensation_row["id"],
+                metadata={"original_ledger_uuid": original["ledger_uuid"], "reason": reason, "created": created},
+            )
+            conn.commit()
+            return {
+                "ok": True,
+                "created": created,
+                "original_ledger": self.serialize_ledger(original, include_user_id=True),
+                "compensation_ledger": self.serialize_ledger(compensation_row, include_user_id=True),
+                "wallet": self.get_wallet(original["user_id"]),
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def rollback_ledger(self, *, actor, ledger_uuid, reason):
         reason = str(reason or "").strip()
         if not reason:

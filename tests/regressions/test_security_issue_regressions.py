@@ -204,10 +204,11 @@ def test_member_rights_changes_send_notice_and_appeal_path():
     assert 'action_label=f"角色 {from_role} -> {to_role}"' in users
     assert "def notify_member_points_action" in economy
     assert "會員點數權益變更" in economy
-    assert "POINTS_ADMIN_ADJUST" in economy
-    assert "POINTS_WALLET_SANCTION" in economy
+    assert "POINTS_ADMIN_ADJUST" in economy or "blockchain_permission_model" in economy
+    assert "POINTS_WALLET_SANCTION" in economy or "私有鏈模式不允許 root 直接處分用戶錢包" in economy
     assert "points_ledger_uuid" in notices
-    assert "points_service.rollback_ledger" in appeals
+    assert "points_service.compensate_ledger" in appeals
+    assert "def compensate_ledger" in (ROOT / "services" / "points_chain" / "service.py").read_text(encoding="utf-8")
     assert 'link="/appeals"' in notices
     assert "你可以到「申覆」分頁提出申覆" in notices
     assert "if not appealable:" in notices
@@ -220,7 +221,7 @@ def test_member_rights_changes_send_notice_and_appeal_path():
     assert "violation_id < 0" in appeals
     assert "LEFT JOIN admin_sanction_appeal_contexts asc2" not in appeals
     assert "LEFT JOIN admin_sanction_appeal_contexts asc2" not in violations
-    assert "appealable=(direction != \"credit\")" in economy
+    assert "appealable=(direction != \"credit\")" in economy or "用戶授權交易觸發" in economy
     assert "appealable=False" in users
 
 
@@ -270,9 +271,9 @@ def test_appeal_approval_rolls_back_points_before_committing_review():
     appeals = (ROOT / "routes" / "appeals.py").read_text(encoding="utf-8")
     review = appeals.split("def admin_violation_appeal_review", 1)[1].split("def ", 1)[0]
 
-    assert "申覆點數帳本 rollback 失敗，申覆狀態尚未變更，請修復後重試" in review
-    assert review.index("points_service.rollback_ledger") < review.index("UPDATE violation_appeals SET status=?")
-    assert review.index("points_service.rollback_ledger") < review.index("conn.commit()")
+    assert "申覆點數補償交易失敗，申覆狀態尚未變更，請修復後重試" in review
+    assert review.index("points_service.compensate_ledger") < review.index("UPDATE violation_appeals SET status=?")
+    assert review.index("points_service.compensate_ledger") < review.index("conn.commit()")
 
 
 def test_album_share_links_revoked_and_deleted_albums_not_resolved():

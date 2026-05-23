@@ -2451,7 +2451,7 @@ def test_comfyui_generation_failure_does_not_charge_points(tmp_path):
 
     job = _await_comfyui_job(client, generated, expected_status="error")
     assert "ComfyUI 產圖失敗" in job["error"]
-    assert points.spends == []
+    assert points.spends == [], points.spends
     assert points.balance == 100
 
 
