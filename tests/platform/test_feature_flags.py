@@ -8,7 +8,11 @@ from flask import Flask, jsonify, make_response
 from routes.files import register_file_routes
 from routes.system_admin import register_system_admin_routes
 from services.platform import settings
-from services.server.request_guards import enforce_feature_flags
+from services.server.request_guards import (
+    enforce_feature_flags,
+    enforce_required_password_change,
+    should_require_password_change_flag,
+)
 from services.users.member_levels import ensure_member_level_rules_schema
 from services.security.upload_security import ensure_upload_security_schema
 from server import feature_gate_for_path
@@ -129,6 +133,69 @@ def test_internal_test_token_scope_allows_enabled_feature_inside_scope():
     assert response is None
 
 
+def test_default_password_change_guard_can_be_disabled_for_isolated_runtime(monkeypatch):
+    request_obj = SimpleNamespace(method="GET", path="/api/points/wallet")
+
+    blocked = enforce_required_password_change(
+        request_obj,
+        get_current_user_ctx=lambda: {"id": 1, "must_change_password": 1},
+        json_resp=lambda payload, status=200: (payload, status),
+    )
+    assert blocked is not None
+    assert blocked[1] == 403
+
+    monkeypatch.setenv("HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_POLICY", "1")
+    allowed = enforce_required_password_change(
+        request_obj,
+        get_current_user_ctx=lambda: {"id": 1, "must_change_password": 1},
+        json_resp=lambda payload, status=200: (payload, status),
+    )
+    assert allowed is None
+    assert should_require_password_change_flag(1) is False
+
+    monkeypatch.delenv("HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_POLICY", raising=False)
+    monkeypatch.setenv("HACKME_DEV_DEFAULT_ACCOUNT_PASSWORDS", "1")
+    monkeypatch.setenv("HACKME_DEV_SECURITY_ENABLED", "0")
+    dev_allowed = enforce_required_password_change(
+        request_obj,
+        get_current_user_ctx=lambda: {"id": 1, "must_change_password": 1},
+        json_resp=lambda payload, status=200: (payload, status),
+    )
+    assert dev_allowed is None
+    assert should_require_password_change_flag(1) is False
+
+    monkeypatch.setenv("HACKME_DEV_SECURITY_ENABLED", "1")
+    dev_security_blocked = enforce_required_password_change(
+        request_obj,
+        get_current_user_ctx=lambda: {"id": 1, "must_change_password": 1},
+        json_resp=lambda payload, status=200: (payload, status),
+    )
+    assert dev_security_blocked is not None
+    assert dev_security_blocked[1] == 403
+    assert should_require_password_change_flag(1) is True
+
+    monkeypatch.delenv("HACKME_DEV_DEFAULT_ACCOUNT_PASSWORDS", raising=False)
+    monkeypatch.delenv("HACKME_DEV_SECURITY_ENABLED", raising=False)
+    monkeypatch.setenv("HTML_LEARNING_ALLOW_DEFAULT_PASSWORDS", "1")
+    monkeypatch.setenv("HTML_LEARNING_SERVER_MODE", "dev_ready")
+    html_alias_allowed = enforce_required_password_change(
+        request_obj,
+        get_current_user_ctx=lambda: {"id": 1, "must_change_password": 1},
+        json_resp=lambda payload, status=200: (payload, status),
+    )
+    assert html_alias_allowed is None
+    assert should_require_password_change_flag(1) is False
+
+    monkeypatch.setenv("HTML_LEARNING_SERVER_MODE", "production")
+    production_alias_blocked = enforce_required_password_change(
+        request_obj,
+        get_current_user_ctx=lambda: {"id": 1, "must_change_password": 1},
+        json_resp=lambda payload, status=200: (payload, status),
+    )
+    assert production_alias_blocked is not None
+    assert production_alias_blocked[1] == 403
+
+
 def test_notifications_remain_enabled_after_management_only_reset():
     assert settings.DEFAULT_SETTINGS["feature_reports_notifications_enabled"] is True
     assert settings.MANAGEMENT_ONLY_RESET_SETTINGS["feature_reports_notifications_enabled"] is True
@@ -155,7 +222,7 @@ def test_feature_disabled_payload_names_missing_parent_feature():
         assert payload["feature"] == "feature_trading_enabled"
         assert payload["feature_label"] == "積分交易所"
         assert payload["missing_required"] == ["feature_economy_enabled"]
-        assert "PointsChain 積分系統" in payload["msg"]
+        assert "基本積分系統" in payload["msg"]
     finally:
         settings._STATE.clear()
         settings._STATE.update(original_state)

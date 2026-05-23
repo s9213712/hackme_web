@@ -92,11 +92,15 @@ def test_dev_ready_routes_points_ledger_to_prod():
 
 
 def test_internal_test_chain_blocks_raises():
-    """No shadow chain — chain is production-only, period."""
+    """No shadow chain in internal_test."""
     with pytest.raises(ChainModeViolation) as exc:
         routing.resolve_table("points_chain_blocks", _ctx("internal_test"))
     assert exc.value.mode == "internal_test"
     assert "resolve_table:points_chain_blocks" in exc.value.action
+
+
+def test_dev_ready_routes_chain_blocks_to_prod_runtime_table():
+    assert routing.resolve_table("points_chain_blocks", _ctx("dev_ready")) == "points_chain_blocks"
 
 
 # ── unsupported modes raise RoutingNotAllowed ─────────────────────────
@@ -111,7 +115,7 @@ def test_unsupported_modes_raise_routing_not_allowed(mode, logical):
     assert exc.value.logical == logical
 
 
-@pytest.mark.parametrize("mode", ["dev_ready", "test", "maintenance", "incident_lockdown", "superweak"])
+@pytest.mark.parametrize("mode", ["test", "maintenance", "incident_lockdown", "superweak"])
 def test_unsupported_modes_chain_raise_chain_mode_violation(mode):
     """Chain-blocks check fires before mode-routability check."""
     with pytest.raises(ChainModeViolation):

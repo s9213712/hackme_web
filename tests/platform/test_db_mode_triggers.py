@@ -1,10 +1,10 @@
 """Phase 3 of SERVER_MODE_V2_IMPLEMENTATION_PLAN.md — DB-level mode triggers.
 
 Locks the contract that ANY direct SQL INSERT into points_chain_blocks
-in a non-production mode is aborted by the trigger, even if the
-service-layer guard (Phase 7) is bypassed. This is the final defense
-line; Phases 7 and 2 catch most bugs first, but if some path opens its
-own connection and writes raw SQL, the trigger still refuses.
+outside production/dev_ready/bootstrap is aborted by the trigger, even
+if the service-layer guard (Phase 7) is bypassed. This is the final
+defense line; Phases 7 and 2 catch most bugs first, but if some path
+opens its own connection and writes raw SQL, the trigger still refuses.
 
 The trigger is connection-aware via the `app_mode()` user function
 registered on every new connection. Bootstrap window (no `server_modes`
@@ -58,22 +58,52 @@ def _insert_chain_block(conn, *, block_number=1):
     )
 
 
-# ── trigger fires in every non-production runtime mode ───────────────
+# ── trigger fires in disallowed runtime modes ────────────────────────
 
 
-@pytest.mark.parametrize("mode", ["internal_test", "test", "dev_ready", "maintenance", "incident_lockdown", "superweak"])
-def test_trigger_blocks_chain_block_insert_in_non_production(mode):
+@pytest.mark.parametrize("mode", ["internal_test", "test", "maintenance", "incident_lockdown", "superweak"])
+def test_trigger_blocks_chain_block_insert_in_disallowed_modes(mode):
     conn = _connection_in_mode(mode)
     with pytest.raises(sqlite3.IntegrityError) as exc:
         _insert_chain_block(conn)
-    assert "phase3" in str(exc.value).lower() or "non-production" in str(exc.value).lower()
+    assert "phase3" in str(exc.value).lower() or "production/dev_ready" in str(exc.value).lower()
 
 
-# ── production + bootstrap allowed ────────────────────────────────────
+# ── production + dev_ready + bootstrap allowed ───────────────────────
 
 
 def test_trigger_allows_chain_block_insert_in_production():
     conn = _connection_in_mode("production")
+    _insert_chain_block(conn)
+    conn.commit()
+    row = conn.execute("SELECT block_number FROM points_chain_blocks").fetchone()
+    assert row["block_number"] == 1
+
+
+def test_trigger_allows_chain_block_insert_in_dev_ready():
+    conn = _connection_in_mode("dev_ready")
+    _insert_chain_block(conn)
+    conn.commit()
+    row = conn.execute("SELECT block_number FROM points_chain_blocks").fetchone()
+    assert row["block_number"] == 1
+
+
+def test_trigger_schema_upgrade_replaces_existing_trigger():
+    conn = _connection_in_mode("dev_ready")
+    conn.execute("DROP TRIGGER IF EXISTS phase3_forbid_nonprod_chain_block_insert")
+    conn.execute(
+        """
+        CREATE TRIGGER phase3_forbid_nonprod_chain_block_insert
+        BEFORE INSERT ON points_chain_blocks
+        WHEN app_mode() NOT IN ('production', 'bootstrap')
+        BEGIN
+            SELECT RAISE(ABORT, 'phase3: chain block write forbidden in non-production mode');
+        END;
+        """
+    )
+
+    install_mode_triggers_schema(conn)
+
     _insert_chain_block(conn)
     conn.commit()
     row = conn.execute("SELECT block_number FROM points_chain_blocks").fetchone()
@@ -137,7 +167,7 @@ def test_unregistered_app_mode_raises_on_chain_insert(tmp_path):
 
 @pytest.mark.parametrize("spoof", ["Production", "PROD", "production ", " production", ""])
 def test_trigger_strict_mode_equality(spoof):
-    """Anything that's not exactly 'production' or 'bootstrap' is
+    """Anything that's not exactly 'production', 'dev_ready', or 'bootstrap' is
     treated as non-production by the trigger."""
     conn = _connection_in_mode(spoof)
     with pytest.raises(sqlite3.IntegrityError):

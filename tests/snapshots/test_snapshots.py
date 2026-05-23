@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import hashlib
+import tarfile
 from datetime import datetime
 from pathlib import Path
 
@@ -64,7 +65,24 @@ def _init_db(path):
     conn.close()
 
 
-def _service(tmp_path, audit_log, *, runtime_secret_files=None, runtime_base_dir=None):
+def _init_kv_db(path, key, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO kv (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+    conn.close()
+
+
+def _service(
+    tmp_path,
+    audit_log,
+    *,
+    runtime_secret_files=None,
+    runtime_base_dir=None,
+    additional_db_paths=None,
+    file_roots=None,
+):
     base = tmp_path / "app"
     base.mkdir()
     db_path = base / "database.db"
@@ -84,9 +102,10 @@ def _service(tmp_path, audit_log, *, runtime_secret_files=None, runtime_base_dir
         runtime_base_dir=runtime_base_dir,
         storage_root=storage,
         audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
-        file_roots=[uploads],
+        file_roots=file_roots if file_roots is not None else [uploads],
         config_files=[],
         runtime_secret_files=runtime_secret_files,
+        additional_db_paths=additional_db_paths,
     )
     return service, db_path, uploads
 
@@ -113,6 +132,137 @@ def test_root_service_creates_manual_snapshot_with_metadata(tmp_path):
     assert (snapshot_dir / "config.tar.gz").exists()
     assert (snapshot_dir / "checksums.sha256").exists()
     assert any(call[0][0] == "SNAPSHOT_CREATE_READY" for call in audit_log)
+
+
+def test_snapshot_covers_split_runtime_databases_and_portable_export(tmp_path):
+    audit_log = []
+    base = tmp_path / "app"
+    auth_db = base / "runtime" / "database" / "auth.db"
+    audit_db = base / "runtime" / "database" / "audit.db"
+    service, _db_path, _uploads = _service(
+        tmp_path,
+        audit_log,
+        additional_db_paths={"auth": auth_db, "audit": audit_db},
+    )
+    _init_kv_db(auth_db, "auth_state", "auth-v1")
+    _init_kv_db(audit_db, "audit_state", "audit-v1")
+
+    snap = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="split db")
+
+    assert snap.ok is True
+    snapshot = service.get_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"})
+    snapshot_dir = Path(snapshot["storage_path"])
+    database_files = {item["label"]: item for item in snapshot["metadata"]["database_files"]}
+    assert database_files["primary"]["archive_path"] == "db.sqlite3.backup"
+    assert database_files["auth"]["archive_path"] == "databases/auth.sqlite3.backup"
+    assert database_files["audit"]["archive_path"] == "databases/audit.sqlite3.backup"
+    assert (snapshot_dir / "databases" / "auth.sqlite3.backup").exists()
+    assert (snapshot_dir / "databases" / "audit.sqlite3.backup").exists()
+
+    exported = service.export_snapshot_archive(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"})
+    assert exported["ok"] is True
+    with tarfile.open(exported["path"], "r:gz") as tar:
+        names = set(tar.getnames())
+    assert f"{snap.snapshot_id}/databases/auth.sqlite3.backup" in names
+    assert f"{snap.snapshot_id}/databases/audit.sqlite3.backup" in names
+
+    conn = sqlite3.connect(auth_db)
+    conn.execute("UPDATE kv SET value='auth-dirty' WHERE key='auth_state'")
+    conn.commit()
+    conn.close()
+    conn = sqlite3.connect(audit_db)
+    conn.execute("UPDATE kv SET value='audit-dirty' WHERE key='audit_state'")
+    conn.commit()
+    conn.close()
+
+    restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="restore split db")
+
+    assert restored["ok"] is True
+    assert {item["label"] for item in restored["database_restore"]["restored"]} == {"auth", "audit"}
+    conn = sqlite3.connect(auth_db)
+    assert conn.execute("SELECT value FROM kv WHERE key='auth_state'").fetchone()[0] == "auth-v1"
+    conn.close()
+    conn = sqlite3.connect(audit_db)
+    assert conn.execute("SELECT value FROM kv WHERE key='audit_state'").fetchone()[0] == "audit-v1"
+    conn.close()
+
+
+def test_snapshot_file_roots_exclude_and_preserve_snapshot_repository(tmp_path):
+    audit_log = []
+    base = tmp_path / "app"
+    base.mkdir()
+    runtime_root = base / "runtime"
+    storage_root = runtime_root / "storage"
+    storage_root.mkdir(parents=True)
+    db_path = base / "database.db"
+    _init_db(db_path)
+
+    def get_db():
+        return _db(db_path)
+
+    service = SnapshotService(
+        get_db=get_db,
+        db_path=db_path,
+        base_dir=base,
+        runtime_base_dir=runtime_root,
+        storage_root=storage_root,
+        audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+        file_roots=[storage_root],
+        config_files=[],
+    )
+    preserved_snapshot_file = storage_root / "snapshots" / "keep" / "internal.txt"
+    preserved_snapshot_file.parent.mkdir(parents=True)
+    preserved_snapshot_file.write_text("local snapshot repository", encoding="utf-8")
+    (storage_root / "asset.txt").write_text("asset-v1", encoding="utf-8")
+
+    snap = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="exclude snapshots")
+    snapshot_dir = service._snapshot_dir(snap.snapshot_id)
+    with tarfile.open(snapshot_dir / "uploads.tar.gz", "r:gz") as tar:
+        names = set(tar.getnames())
+    assert "runtime/storage/asset.txt" in names
+    assert all("/snapshots/" not in name and not name.endswith("/snapshots") for name in names)
+
+    (storage_root / "dirty.txt").write_text("dirty", encoding="utf-8")
+    restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="preserve snapshots")
+
+    assert restored["ok"] is True
+    assert (storage_root / "asset.txt").read_text(encoding="utf-8") == "asset-v1"
+    assert not (storage_root / "dirty.txt").exists()
+    assert preserved_snapshot_file.read_text(encoding="utf-8") == "local snapshot repository"
+
+
+def test_snapshot_covers_points_chain_backup_file_root(tmp_path):
+    audit_log = []
+    base = tmp_path / "app"
+    base.mkdir()
+    points_backup_root = base / "runtime" / "database" / "points_chain_backups"
+    points_backup_root.mkdir(parents=True)
+    db_path = base / "database.db"
+    _init_db(db_path)
+
+    def get_db():
+        return _db(db_path)
+
+    service = SnapshotService(
+        get_db=get_db,
+        db_path=db_path,
+        base_dir=base,
+        runtime_base_dir=base / "runtime",
+        storage_root=base / "runtime" / "storage",
+        audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+        file_roots=[points_backup_root],
+        config_files=[],
+    )
+    (points_backup_root / "chain-backup.json").write_text('{"height": 7}', encoding="utf-8")
+
+    snap = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="points chain backups")
+    (points_backup_root / "chain-backup.json").write_text("dirty", encoding="utf-8")
+    (points_backup_root / "dirty.json").write_text("dirty", encoding="utf-8")
+    restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="restore points backups")
+
+    assert restored["ok"] is True
+    assert (points_backup_root / "chain-backup.json").read_text(encoding="utf-8") == '{"height": 7}'
+    assert not (points_backup_root / "dirty.json").exists()
 
 
 def test_snapshot_runtime_secret_paths_use_runtime_prefix_for_external_runtime_dir(tmp_path):
@@ -454,6 +604,19 @@ def test_checksum_mismatch_blocks_restore(tmp_path):
 
     assert restored["ok"] is False
     assert "checksum" in restored["msg"]
+
+
+def test_unsafe_checksum_paths_are_rejected(tmp_path):
+    audit_log = []
+    service, _, _uploads = _service(tmp_path, audit_log)
+    snap = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="baseline")
+    snapshot_dir = service._snapshot_dir(snap.snapshot_id)
+    (snapshot_dir / "checksums.sha256").write_text(f"{'0' * 64}  ../outside.db\n", encoding="utf-8")
+
+    verification = service.verify_snapshot(snapshot_id=snap.snapshot_id)
+
+    assert verification["ok"] is False
+    assert verification["msg"] == "checksum path 不安全"
 
 
 def test_superweak_enter_and_exit_restore_rolls_back_dirty_state(tmp_path):

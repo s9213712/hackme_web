@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, make_response
-from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
+from werkzeug.exceptions import HTTPException, RequestEntityTooLarge, SecurityError
 from cryptography import x509
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
@@ -380,7 +380,7 @@ def run_doctor():
 def _ensure_runtime_dir(path, label):
     if os.path.isdir(path):
         return True
-    if ENTRYPOINT_START_MODE or ENTRYPOINT_DOCTOR_MODE:
+    if ENTRYPOINT_DOCTOR_MODE:
         return False
     os.makedirs(path, exist_ok=True)
     return True
@@ -467,6 +467,32 @@ FORCE_HTTPS = _env_bool("FORCE_HTTPS", default=True)
 SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=True)
 SESSION_COOKIE_HTTPONLY = _env_bool("SESSION_COOKIE_HTTPONLY", default=True)
 SESSION_COOKIE_SAMESITE = _env_session_samesite()
+
+
+def _env_csv_values(name, default=""):
+    raw = os.environ.get(name)
+    if raw is None:
+        raw = default
+    values = []
+    seen = set()
+    for token in str(raw).replace("\n", ",").split(","):
+        value = token.strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        values.append(value)
+    return values
+
+
+def _trusted_hosts_from_env():
+    hosts = _env_csv_values(
+        "HTML_LEARNING_TRUSTED_HOSTS",
+        "127.0.0.1,localhost,[::1]",
+    )
+    bind_host = os.environ.get("HTML_LEARNING_HOST", "").strip()
+    if bind_host and bind_host not in {"0.0.0.0", "::"} and bind_host not in hosts:
+        hosts.append(bind_host)
+    return hosts or None
 
 # ── CSRF double-submit secret ─────────────────────────────────────────────────
 if RUNTIME_BOOTSTRAP_SUPPRESSED:
@@ -982,7 +1008,14 @@ _runtime_services = build_runtime_services(
         "file_roots": [
             CHAT_DIR,
             STORAGE_DIR,
+            POINTS_CHAIN_BACKUP_DIR,
         ],
+        "additional_db_paths": {
+            "auth": AUTH_DB_PATH,
+            "audit": AUDIT_DB_PATH,
+            "control": CONTROL_DB_PATH,
+            "chess_engine": CHESS_ENGINE_DB_PATH,
+        },
         "config_files": [
             os.path.join(BASE_DIR, "system_settings.json"),
             os.path.join(BASE_DIR, "settings.json"),
@@ -1047,6 +1080,12 @@ app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
 app.config["SECRET_KEY"] = SECRET_KEY
 MAX_UPLOAD_REQUEST_MB = _env_int("HTML_LEARNING_MAX_CONTENT_MB", 1024, minimum=128)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_MB * 1024 * 1024
+MAX_FORM_MEMORY_KB = _env_int("HTML_LEARNING_MAX_FORM_MEMORY_KB", 512, minimum=64)
+MAX_FORM_PARTS = _env_int("HTML_LEARNING_MAX_FORM_PARTS", 1000, minimum=100)
+TRUSTED_HOSTS = _trusted_hosts_from_env()
+app.config["MAX_FORM_MEMORY_SIZE"] = MAX_FORM_MEMORY_KB * 1024
+app.config["MAX_FORM_PARTS"] = MAX_FORM_PARTS
+app.config["TRUSTED_HOSTS"] = TRUSTED_HOSTS
 STATIC_ASSET_CACHE_SECONDS = _env_int(
     "HTML_LEARNING_STATIC_ASSET_CACHE_SECONDS",
     365 * 24 * 60 * 60,
@@ -1120,6 +1159,17 @@ def api_request_too_large(error):
             "error": "request_too_large",
             "max_request_mb": limit_mb,
         }), 413
+    return error
+
+
+@app.errorhandler(SecurityError)
+def api_security_error(error):
+    if request.path.startswith("/api"):
+        return json_resp({
+            "ok": False,
+            "msg": "Invalid request host",
+            "error": "untrusted_host",
+        }), 400
     return error
 
 

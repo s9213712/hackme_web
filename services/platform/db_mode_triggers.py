@@ -24,8 +24,9 @@ Two pieces, called from different sites:
 Bootstrap window: when a fresh DB has no `server_modes` row yet (or
 the row hasn't been chosen), the mode reader returns "bootstrap" and
 the trigger lets the write through. This is necessary so the
-chain's genesis path doesn't fight itself on first run. Once a row
-exists, the trigger is fully active.
+chain's genesis path doesn't fight itself on first run. `dev_ready`
+is also allowed so isolated pre-live stress tests can package blocks
+before the runtime is cleared for launch.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ import sqlite3
 
 
 # Mode names that the chain-block trigger allows.
-_CHAIN_INSERT_ALLOWED_MODES = ("production", "bootstrap")
+_CHAIN_INSERT_ALLOWED_MODES = ("production", "dev_ready", "bootstrap")
 
 
 def register_app_mode_function(
@@ -98,17 +99,22 @@ def register_app_mode_function(
 def install_mode_triggers_schema(conn: sqlite3.Connection) -> None:
     """Create the BEFORE INSERT trigger on points_chain_blocks.
 
-    Idempotent — uses CREATE TRIGGER IF NOT EXISTS. Safe to call
-    every time a connection is opened, but typically called from the
-    schema-init path (ensure_points_economy_schema).
+    Idempotent. Safe to call every time a connection is opened, but
+    typically called from the schema-init path
+    (ensure_points_economy_schema).
+
+    The trigger body is part of the runtime contract, so we rebuild it
+    instead of using CREATE TRIGGER IF NOT EXISTS. That lets existing
+    databases pick up allow-set changes such as dev_ready block sealing.
     """
+    conn.execute("DROP TRIGGER IF EXISTS phase3_forbid_nonprod_chain_block_insert")
     conn.execute(
         """
-        CREATE TRIGGER IF NOT EXISTS phase3_forbid_nonprod_chain_block_insert
+        CREATE TRIGGER phase3_forbid_nonprod_chain_block_insert
         BEFORE INSERT ON points_chain_blocks
-        WHEN app_mode() NOT IN ('production', 'bootstrap')
+        WHEN app_mode() NOT IN ('production', 'dev_ready', 'bootstrap')
         BEGIN
-            SELECT RAISE(ABORT, 'phase3: chain block write forbidden in non-production mode');
+            SELECT RAISE(ABORT, 'phase3: chain block write forbidden outside production/dev_ready/bootstrap mode');
         END;
         """
     )

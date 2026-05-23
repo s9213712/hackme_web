@@ -38,6 +38,12 @@ python3 server.py
 - `/etc/hackme_web/hackme-web.env` 保存 production secrets，不進 git。
 - mutable runtime 放 `/var/lib/hackme_web/runtime` 與 `/var/log/hackme_web`。
 - web service 只跑 HTTP request；重型背景工作需獨立 worker service。
+- `HTML_LEARNING_TRUSTED_HOSTS` 必須列出正式 domain；Nginx 需轉送原始
+  `Host`，讓 app 能拒絕不受信任 Host。
+- 維護旁路 token 只用 `X-Maintenance-Bypass-Token` header；query string
+  token 不被接受。
+- multipart guard 預設為 `HTML_LEARNING_MAX_FORM_MEMORY_KB=512` 與
+  `HTML_LEARNING_MAX_FORM_PARTS=1000`，用來限制小表單記憶體與 parts 數量。
 
 Generated runtime files remain local and must not be committed:
 

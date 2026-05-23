@@ -1157,6 +1157,7 @@ def register_system_admin_routes(app, deps):
         "integrity_guard_enabled",
         "integrity_guard_strict_mode",
         "feature_economy_enabled",
+        "feature_points_chain_enabled",
     )
     SECURITY_THRESHOLD_KEYS = (
         "max_login_failures",

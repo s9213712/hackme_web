@@ -108,6 +108,7 @@ def build_runtime_services(*, config, deps):
         file_roots=config["file_roots"],
         config_files=config["config_files"],
         runtime_secret_files=config["runtime_secret_files"],
+        additional_db_paths=config.get("additional_db_paths"),
         reset_points_chain=lambda **kwargs: points_service.reset_runtime_chain(**kwargs),
         reset_audit_chain=reset_audit_chain_with_event,
     )

@@ -6,6 +6,8 @@ import json
 import re
 from datetime import datetime
 
+from services.server.request_guards import should_require_password_change_flag
+
 
 def normalize_text(value):
     return (value or "").strip() if isinstance(value, str) else ""
@@ -109,7 +111,7 @@ def user_public_payload(row, *, decrypt_field, role_label, include_sensitive=Fal
         "level_updated_by": data.get("level_updated_by"),
         "level_update_reason": data.get("level_update_reason"),
         "password_strength_score": data.get("password_strength_score") or 0,
-        "must_change_password": bool(data.get("must_change_password") or 0),
+        "must_change_password": should_require_password_change_flag(data.get("must_change_password")),
         "is_default_password": bool(data.get("is_default_password") or 0),
         "avatar_file_id": data.get("avatar_file_id"),
         "avatar_crop": avatar_crop if isinstance(avatar_crop, dict) else {},

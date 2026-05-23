@@ -4,7 +4,43 @@ The Flask decorators remain in ``server.py`` so hook order stays explicit.
 This module owns the underlying guard logic and routing decisions.
 """
 
+import os
 import re
+
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_truthy(name):
+    return str(os.environ.get(name, "")).strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _runtime_mode_from_env():
+    mode = (
+        os.environ.get("HACKME_DEV_SERVER_MODE")
+        or os.environ.get("HTML_LEARNING_SERVER_MODE")
+        or os.environ.get("SERVER_MODE")
+        or "dev_ready"
+    )
+    return str(mode).strip().lower()
+
+
+def default_password_change_policy_disabled():
+    disabled_values = (
+        os.environ.get("HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_POLICY", ""),
+        os.environ.get("HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_CHANGE", ""),
+    )
+    if any(str(value).strip().lower() in _TRUTHY_ENV_VALUES for value in disabled_values):
+        return True
+    default_passwords_allowed = _env_truthy("HACKME_DEV_DEFAULT_ACCOUNT_PASSWORDS") or _env_truthy(
+        "HTML_LEARNING_ALLOW_DEFAULT_PASSWORDS"
+    )
+    security_enabled = _env_truthy("HACKME_DEV_SECURITY_ENABLED") or _env_truthy("HTML_LEARNING_SECURITY_ENABLED")
+    dev_like_mode = _runtime_mode_from_env() in {"dev_ready", "internal_test", "test", "superweak"}
+    return default_passwords_allowed and dev_like_mode and not security_enabled
+
+
+def should_require_password_change_flag(value):
+    return bool(value or 0) and not default_password_change_policy_disabled()
 
 
 FEATURE_ROUTE_GATES = (
@@ -28,11 +64,7 @@ FEATURE_ROUTE_GATES = (
 
 
 def get_request_maintenance_bypass_token(request_obj):
-    return (
-        request_obj.headers.get("X-Maintenance-Bypass-Token", "")
-        or request_obj.args.get("maintenance_bypass_token", "")
-        or ""
-    )
+    return request_obj.headers.get("X-Maintenance-Bypass-Token", "") or ""
 
 
 def has_valid_maintenance_bypass(
@@ -409,6 +441,8 @@ def enforce_feature_flags(
 
 
 def enforce_required_password_change(request_obj, *, get_current_user_ctx, json_resp):
+    if default_password_change_policy_disabled():
+        return None
     if request_obj.method == "OPTIONS" or not request_obj.path.startswith("/api"):
         return None
     allowed = {
