@@ -33,6 +33,7 @@ def main() -> int:
         )
         context = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 1000})
         page = context.new_page()
+        page.set_default_timeout(10000)
         page.goto(args.base_url, wait_until="domcontentloaded")
         page.fill("#li-user", args.username)
         page.fill("#li-pw", args.password)
@@ -51,6 +52,16 @@ def main() -> int:
         check("governance_page_split_from_explorer", page.locator("#economy-governance-page.active").count() == 1)
         check("dispute_card_present", page.locator("#economy-dispute-card").count() == 1)
         check("governance_category_select_present", page.locator("#economy-governance-category-select").count() == 1)
+        check("governance_status_tabs_present", page.locator("[data-governance-status-filter]").count() == 3)
+        page.click('#economy-governance-status-tabs [data-governance-status-filter="voting"]')
+        page.wait_for_timeout(150)
+        check("governance_voting_tab_active", "active" in (page.locator('#economy-governance-status-tabs [data-governance-status-filter="voting"]').get_attribute("class") or ""))
+        page.click('#economy-governance-status-tabs [data-governance-status-filter="closed"]')
+        page.wait_for_timeout(150)
+        check("governance_closed_tab_active", "active" in (page.locator('#economy-governance-status-tabs [data-governance-status-filter="closed"]').get_attribute("class") or ""))
+        page.click('#economy-governance-status-tabs [data-governance-status-filter="review"]')
+        page.wait_for_timeout(150)
+        check("governance_review_tab_active", "active" in (page.locator('#economy-governance-status-tabs [data-governance-status-filter="review"]').get_attribute("class") or ""))
         check("mint_ui_present", page.locator("#economy-governance-mint-create-details").count() == 1)
         check("policy_ui_present", page.locator("#economy-governance-policy-create-details").count() == 1)
         check("emergency_lockdown_ui_present", page.locator("#economy-governance-lockdown-create-btn").count() == 1)
@@ -93,14 +104,18 @@ def main() -> int:
         page.click("#tab-economy-transactions")
         page.wait_for_selector("#economy-transactions-page.active", timeout=10000)
         page.wait_for_timeout(800)
-        dispute_buttons = page.locator("[data-dispute-tx]").count()
+        dispute_buttons = page.locator("#economy-transactions-list [data-dispute-tx]").count()
         check("transaction_dispute_button_rendered", dispute_buttons >= 1, f"count={dispute_buttons}")
         if dispute_buttons:
             page.on("dialog", lambda dialog: dialog.dismiss())
-            page.locator("[data-dispute-tx]").first.click()
+            page.locator("#economy-transactions-list [data-dispute-tx]").first.click()
             page.wait_for_timeout(250)
             transaction_msg = page.locator("#economy-transactions-msg").inner_text()
-            check("transaction_dispute_click_has_feedback", "疑義交易" in transaction_msg, transaction_msg)
+            check(
+                "transaction_dispute_click_has_feedback",
+                "疑義交易" in transaction_msg or "root 不能代替" in transaction_msg,
+                transaction_msg,
+            )
 
         result["ok"] = all(item["ok"] for item in result["checks"])
         browser.close()

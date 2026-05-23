@@ -2720,6 +2720,11 @@
               <button class="btn" id="economy-governance-refresh-btn" type="button">更新治理</button>
             </div>
           </div>
+          <div class="drive-file-actions" id="economy-governance-status-tabs" style="margin-top:.65rem;justify-content:flex-start;gap:.45rem;flex-wrap:wrap;">
+            <button class="btn btn-sm active" type="button" data-governance-status-filter="review">審核中</button>
+            <button class="btn btn-sm" type="button" data-governance-status-filter="voting">投票中</button>
+            <button class="btn btn-sm" type="button" data-governance-status-filter="closed">已結案</button>
+          </div>
           <div class="drive-card-sub" id="economy-governance-selected-case" style="margin-top:.5rem;">未選取疑義交易案件。</div>
           <div class="economy-collapse" id="economy-treasury-signer-center-card" style="display:none;margin-top:.75rem;">
             <div class="drive-card-heading">
@@ -6940,7 +6945,7 @@
 <script src="/js/40-auth-users.js?v=20260517-avatar-cropper" defer></script>
 <script src="/js/50-admin.js?v=20260521-comfyui-local-main-args" defer></script>
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>
-<script src="/js/55-economy.js?v=20260523-chain-branch-tree" defer></script>
+<script src="/js/55-economy.js?v=20260523-governance-dispute-tabs" defer></script>
 <script src="/js/56-trading.js?v=20260517-trading-snapshot-warmup" defer></script>
 <script src="/js/57-platform-centers.js?v=20260520-diffusers-csrf-audit" defer></script>
 <script src="/js/58-profile-friends.js?v=20260517-profile-avatar-upload" defer></script>

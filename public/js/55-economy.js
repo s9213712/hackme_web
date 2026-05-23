@@ -17,8 +17,11 @@ let economyFundAddressCache = {};
 let economyGovernanceProposalCache = new Map();
 let economyTreasurySignerCenterCache = null;
 let economyGovernanceCategory = "all";
+let economyGovernanceStatusFilter = "review";
 let economySelectedDisputeUuid = "";
 let economySelectedDisputeProposalUuids = new Set();
+let economyTransactionDisputeCache = [];
+let economyExpandedGovernanceProposalUuids = new Set();
 const ECONOMY_PAGE_STORAGE_KEY = "hackme_web:economy:active_page";
 const ECONOMY_SPEND_WALLET_STORAGE_KEY = "hackme_web:economy:default_spend_wallet";
 const ECONOMY_COLD_BACKUP_PREFIX = "pcw1.p256";
@@ -480,6 +483,11 @@ function economyWalletRequiresSignature(wallet) {
   const type = String(wallet?.wallet_type || "");
   const mode = String(wallet?.custody_mode || "");
   return mode === "self_custody" || ["self_custody_cold", "imported_cold"].includes(type);
+}
+
+function economyWalletSupportsAccountBoundDisputeProof(wallet) {
+  return String(wallet?.wallet_type || "") === "official_hot"
+    && String(wallet?.custody_mode || "") === "server_hot";
 }
 
 async function economyBuildTransferSignature({ source, destination, amount, fee, memo, requestUuid }) {
@@ -1169,7 +1177,13 @@ function renderEconomyWalletIdentityList(onboarding = {}) {
   list.querySelectorAll("[data-dispute-tx]").forEach((btn) => {
     if (btn.dataset.disputeBound === "1") return;
     btn.dataset.disputeBound = "1";
-    btn.addEventListener("click", () => createEconomyTransactionDispute(btn.dataset.disputeTx || ""));
+    btn.addEventListener("click", () => createEconomyTransactionDispute({
+      txHash: btn.dataset.disputeTx || "",
+      from: btn.dataset.disputeFrom || "",
+      to: btn.dataset.disputeTo || "",
+      amount: btn.dataset.disputeAmount || "0",
+      chainBranch: btn.dataset.disputeBranch || "",
+    }));
   });
   list.querySelectorAll("[data-wallet-transfer-to]").forEach((btn) => {
     if (btn.dataset.walletActionBound === "1") return;
@@ -1329,12 +1343,12 @@ async function loadEconomyTransactions() {
 async function createEconomyTransactionDispute(input = {}) {
   const data = typeof input === "string" ? { txHash: input } : (input || {});
   const hash = String(data.txHash || "").trim();
-  economyTransactionMsg(hash ? `開始申報疑義交易 ${shortEconomyWalletAddress(hash)}；下一步會要求地址簽名。` : "開始申報疑義交易。");
+  economyTransactionMsg(hash ? `開始申報疑義交易 ${shortEconomyWalletAddress(hash)}；下一步會檢查 From 地址持有證明。` : "開始申報疑義交易。");
   if (!hash) {
     economyTransactionMsg("找不到交易 hash，無法申報疑義。", false);
     return;
   }
-  const fromAddress = String(data.from || prompt("From 地址（需用此地址備份碼本機簽署）", "") || "").trim().toLowerCase();
+  const fromAddress = String(data.from || prompt("From 地址（冷錢包需用此地址備份碼本機簽署；官方熱錢包使用登入帳號綁定證明）", "") || "").trim().toLowerCase();
   const toAddress = String(data.to || prompt("To 地址（系統會先短期限制此地址轉出）", "") || "").trim().toLowerCase();
   const amount = Math.max(0, Math.floor(Number(data.amount || prompt("交易點數", "0") || 0)));
   const chainBranch = String(data.chainBranch || economyCurrentChainBranch || "main").trim() || "main";
@@ -1350,19 +1364,47 @@ async function createEconomyTransactionDispute(input = {}) {
   const lossCause = prompt("損失原因：private_key_leak / user_phishing / protocol_fault / exchange_bug / unknown", "private_key_leak") || "unknown";
   const evidence = prompt("證據 refs，每行一個 tx hash、截圖編號或案件號（可留空）", "") || "";
   try {
-    economyTransactionMsg("等待 From 地址本機簽署疑義交易；私鑰不會送到伺服器。");
-    const proof = await economyBuildAddressDisputeProof({
-      purpose: "address_dispute_open",
-      signerAddress: fromAddress,
-      txHash: hash,
-      from: fromAddress,
-      to: toAddress,
-      amount,
-      statement,
-      evidence,
-      chainBranch,
-      runtimeMode: economyAddressDisputeRuntimeMode(),
-    });
+    const fromWallet = economyWalletByAddress(fromAddress);
+    const accountBoundProof = economyWalletSupportsAccountBoundDisputeProof(fromWallet);
+    const hasLocalSignaturePath = economyWalletRequiresSignature(fromWallet);
+    if (!accountBoundProof && !hasLocalSignaturePath && currentUser === "root") {
+      economyNotifyFailure(new Error("root 不能代替 From 地址持有人提出匿名疑義；請由 From 地址持有人本機簽署申報，或由 root 改走治理提案的標記/凍結/緊急處置流程。"), {
+        msgFn: economyTransactionMsg,
+        label: "交易管理",
+        fallback: "疑義交易申報失敗",
+      });
+      return;
+    }
+    if (!accountBoundProof && fromWallet && !hasLocalSignaturePath) {
+      economyNotifyFailure(new Error("此 From 錢包沒有可用的本機簽章能力，不能用地址證明疑義流程申報。"), {
+        msgFn: economyTransactionMsg,
+        label: "交易管理",
+        fallback: "疑義交易申報失敗",
+      });
+      return;
+    }
+    let proof = {
+      account_bound_proof: accountBoundProof,
+      signature_nonce: economyRequestId("address_dispute_account_bound"),
+      signature_runtime_mode: economyAddressDisputeRuntimeMode(),
+    };
+    if (accountBoundProof) {
+      economyTransactionMsg("From 是目前登入帳號綁定的官方熱錢包，使用帳號持有狀態建立疑義，不要求私鑰。");
+    } else {
+      economyTransactionMsg("等待 From 地址本機簽署疑義交易；私鑰不會送到伺服器。若此地址是他人的官方熱錢包，只有該帳號可直接申報。");
+      proof = await economyBuildAddressDisputeProof({
+        purpose: "address_dispute_open",
+        signerAddress: fromAddress,
+        txHash: hash,
+        from: fromAddress,
+        to: toAddress,
+        amount,
+        statement,
+        evidence,
+        chainBranch,
+        runtimeMode: economyAddressDisputeRuntimeMode(),
+      });
+    }
     const json = await fetchEconomyJson("/points/transactions/disputes", {
       method: "POST",
       body: JSON.stringify({
@@ -1379,6 +1421,7 @@ async function createEconomyTransactionDispute(input = {}) {
         signature: proof.signature,
         signature_nonce: proof.signature_nonce,
         signature_runtime_mode: proof.signature_runtime_mode,
+        account_bound_proof: !!proof.account_bound_proof,
       }),
     });
     economyNotifySuccess(`疑義交易已送出：${json.dispute?.dispute_uuid || ""}；To 地址已短期限制轉出，此申報只建立 case，不代表一定補償或 rollback。`, {
@@ -1397,6 +1440,7 @@ async function createEconomyTransactionDispute(input = {}) {
 
 function renderEconomyTransactionDisputes(payload = {}) {
   const rows = Array.isArray(payload.disputes) ? payload.disputes : [];
+  economyTransactionDisputeCache = rows;
   const list = $("economy-disputes-list");
   if (!list) return;
   if (!rows.length) {
@@ -1411,6 +1455,21 @@ function renderEconomyTransactionDisputes(payload = {}) {
   list.innerHTML = rows.map((row) => {
     const proposalUuids = economyProposalUuidsForDispute(row);
     const selected = String(row.dispute_uuid || "") === economySelectedDisputeUuid;
+    const proposalRows = proposalUuids.map((uuid) => economyGovernanceProposalCache.get(String(uuid || ""))).filter(Boolean);
+    const inlineGovernance = selected
+      ? `
+        <div class="economy-dispute-governance-panel" data-dispute-governance-panel="${sanitize(row.dispute_uuid || "")}" style="margin:.35rem 0 .9rem 1rem;padding:.75rem;border-left:3px solid rgba(80,180,255,.55);background:rgba(80,180,255,.06);">
+          <div class="drive-card-sub" style="margin-bottom:.45rem;">此案件的治理提案 / 投票</div>
+          <div class="drive-file-list">
+            ${proposalRows.length
+              ? proposalRows.map((proposal) => economyRenderGovernanceProposalCard(proposal, { nested: true })).join("")
+              : proposalUuids.length
+                ? `<div class="drive-empty">治理提案資料載入中，請按更新治理。</div>`
+                : `<div class="drive-empty">此案件尚未建立治理提案。manager+ 核准並提案後，投票會顯示在這裡。</div>`}
+          </div>
+        </div>
+      `
+      : "";
     const managerActions = economyGovernanceCanManage() && ["pending_review", "approved"].includes(String(row.status || ""))
       ? `
         <button class="btn btn-sm" type="button" data-dispute-review="approved" data-dispute-uuid="${sanitize(row.dispute_uuid || "")}">核准</button>
@@ -1443,10 +1502,11 @@ function renderEconomyTransactionDisputes(payload = {}) {
         <div class="drive-file-actions">
           <button class="btn btn-sm" type="button"
             data-dispute-select="${sanitize(row.dispute_uuid || "")}"
-            data-dispute-proposals="${sanitize(proposalUuids.join(","))}">${proposalUuids.length ? "查看提案/投票" : "選取案件"}</button>
+            data-dispute-proposals="${sanitize(proposalUuids.join(","))}">${selected ? "收合提案" : (proposalUuids.length ? "展開提案/投票" : "選取案件")}</button>
           ${replyAction}${managerActions}
         </div>
       </div>
+      ${inlineGovernance}
     `;
   }).join("");
   bindEconomyDisputeEvents();
@@ -1471,19 +1531,30 @@ async function replyEconomyTransactionDispute(input = {}) {
   }
   const evidence = prompt("To 地址證據 refs，每行一個 tx hash、截圖編號或案件號（可留空）", "") || "";
   try {
-    economyGovernanceMsg("等待 To 地址本機簽署回覆；私鑰不會送到伺服器。");
-    const proof = await economyBuildAddressDisputeProof({
-      purpose: "address_dispute_reply",
-      signerAddress: toAddress,
-      txHash,
-      from: fromAddress,
-      to: toAddress,
-      amount,
-      statement,
-      evidence,
-      chainBranch,
-      runtimeMode,
-    });
+    const toWallet = economyWalletByAddress(toAddress);
+    const accountBoundProof = economyWalletSupportsAccountBoundDisputeProof(toWallet);
+    let proof = {
+      account_bound_proof: accountBoundProof,
+      signature_nonce: economyRequestId("address_dispute_reply_account_bound"),
+      signature_runtime_mode: runtimeMode,
+    };
+    if (accountBoundProof) {
+      economyGovernanceMsg("To 是目前登入帳號綁定的官方熱錢包，使用帳號持有狀態回覆，不要求私鑰。");
+    } else {
+      economyGovernanceMsg("等待 To 地址本機簽署回覆；私鑰不會送到伺服器。若此地址是他人的官方熱錢包，只有該帳號可直接回覆。");
+      proof = await economyBuildAddressDisputeProof({
+        purpose: "address_dispute_reply",
+        signerAddress: toAddress,
+        txHash,
+        from: fromAddress,
+        to: toAddress,
+        amount,
+        statement,
+        evidence,
+        chainBranch,
+        runtimeMode,
+      });
+    }
     await fetchEconomyJson(`/points/transactions/disputes/${encodeURIComponent(disputeUuid)}/reply`, {
       method: "POST",
       body: JSON.stringify({
@@ -1493,6 +1564,7 @@ async function replyEconomyTransactionDispute(input = {}) {
         signature: proof.signature,
         signature_nonce: proof.signature_nonce,
         signature_runtime_mode: proof.signature_runtime_mode,
+        account_bound_proof: !!proof.account_bound_proof,
       }),
     });
     economyNotifySuccess("To 地址回覆已送出。", { msgFn: economyGovernanceMsg, label: "疑義交易" });
@@ -1546,7 +1618,6 @@ async function reviewEconomyTransactionDispute(disputeUuid, status, createPropos
       ].map((item) => String(item || "").trim()).filter(Boolean);
       economySelectedDisputeUuid = String(disputeUuid || "").trim();
       economySelectedDisputeProposalUuids = new Set(proposalUuids);
-      setEconomyGovernanceCategory("dispute");
     }
     economyNotifySuccess(`疑義交易已更新${linked ? `，已建立治理案：${linked}` : ""}`, {
       msgFn: economyGovernanceMsg,
@@ -1565,14 +1636,19 @@ function bindEconomyDisputeEvents() {
     if (btn.dataset.disputeBound === "1") return;
     btn.dataset.disputeBound = "1";
     btn.addEventListener("click", async () => {
-      economySelectedDisputeUuid = String(btn.dataset.disputeSelect || "").trim();
-      economySelectedDisputeProposalUuids = new Set(String(btn.dataset.disputeProposals || "").split(",").map((item) => item.trim()).filter(Boolean));
-      setEconomyGovernanceCategory("dispute");
-      economyGovernanceMsg(economySelectedDisputeProposalUuids.size
-        ? `已選取疑義案件 ${shortEconomyWalletAddress(economySelectedDisputeUuid)}，只顯示此案件的治理提案。`
-        : `已選取疑義案件 ${shortEconomyWalletAddress(economySelectedDisputeUuid)}；此案件尚未建立治理提案。`);
+      const nextUuid = String(btn.dataset.disputeSelect || "").trim();
+      const sameSelection = nextUuid && nextUuid === economySelectedDisputeUuid;
+      economySelectedDisputeUuid = sameSelection ? "" : nextUuid;
+      economySelectedDisputeProposalUuids = sameSelection
+        ? new Set()
+        : new Set(String(btn.dataset.disputeProposals || "").split(",").map((item) => item.trim()).filter(Boolean));
+      economyGovernanceMsg(!economySelectedDisputeUuid
+        ? "已收合疑義案件提案。"
+        : economySelectedDisputeProposalUuids.size
+          ? `已展開疑義案件 ${shortEconomyWalletAddress(economySelectedDisputeUuid)} 的治理提案 / 投票。`
+          : `已選取疑義案件 ${shortEconomyWalletAddress(economySelectedDisputeUuid)}；此案件尚未建立治理提案。`);
       await loadEconomyGovernance({ silent: true });
-      $("economy-governance-list")?.scrollIntoView({ block: "start", behavior: "smooth" });
+      renderEconomyTransactionDisputes({ disputes: economyTransactionDisputeCache });
     });
   });
   list.querySelectorAll("[data-explorer-query]").forEach((btn) => {
@@ -1608,6 +1684,7 @@ function bindEconomyDisputeEvents() {
       runtimeMode: btn.dataset.disputeRuntimeMode || "",
     }));
   });
+  bindEconomyGovernanceEvents(list);
 }
 
 async function submitEconomyWalletTransfer() {
@@ -2635,7 +2712,11 @@ async function loadEconomyDashboard() {
         updateSidebarIdentity();
       }
       if (chainFeatureOn) {
-        const transactions = await fetchEconomyJson("/points/transactions?limit=50");
+        const [transactions, onboarding] = await Promise.all([
+          fetchEconomyJson("/points/transactions?limit=50"),
+          fetchEconomyJson("/points/wallet/onboarding"),
+        ]);
+        renderEconomyWalletOnboarding(onboarding.onboarding || {});
         renderEconomyTransactions(transactions || {});
       } else {
         stopEconomyBlockCountdown();
@@ -2913,6 +2994,37 @@ function setEconomyGovernanceCategory(category) {
   if (select && select.value !== next) select.value = next;
 }
 
+function setEconomyGovernanceStatusFilter(status) {
+  const next = ["review", "voting", "closed"].includes(String(status || ""))
+    ? String(status || "")
+    : "review";
+  economyGovernanceStatusFilter = next;
+  document.querySelectorAll("[data-governance-status-filter]").forEach((btn) => {
+    const active = String(btn.dataset.governanceStatusFilter || "") === next;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+function economyGovernanceStatusBucket(proposal = {}) {
+  const rawStatus = String(proposal.status || "").trim().toLowerCase();
+  const lifecycle = String(proposal.lifecycle_status || "").trim().toUpperCase();
+  if (rawStatus === "voting" || lifecycle === "VOTING") return "voting";
+  if (
+    ["executed", "failed", "rejected", "vetoed", "expired", "cancelled", "canceled"].includes(rawStatus)
+    || ["EXECUTED", "FAILED", "REJECTED", "VETOED", "EXPIRED", "CANCELLED", "CANCELED"].includes(lifecycle)
+  ) {
+    return "closed";
+  }
+  return "review";
+}
+
+function economyGovernanceStatusFilterLabel(status) {
+  if (status === "voting") return "投票中";
+  if (status === "closed") return "已結案";
+  return "審核中";
+}
+
 function economyGovernanceSignerAddress(proposal = {}) {
   const policy = proposal.multisig?.policy || {};
   if (policy.current_signer_wallet_address) return String(policy.current_signer_wallet_address || "").trim().toLowerCase();
@@ -2948,6 +3060,97 @@ function economyGovernanceReadiness(proposal = {}) {
     ["multisig", readiness.multisig_ready],
   ];
   return marks.map(([label, ok]) => `${ok ? "OK" : "WAIT"} ${label}`).join(" · ");
+}
+
+function renderEconomyGovernanceFromCache() {
+  renderEconomyGovernance({ proposals: Array.from(economyGovernanceProposalCache.values()) });
+}
+
+function toggleEconomyGovernanceProposal(proposalUuid) {
+  const uuid = String(proposalUuid || "").trim();
+  if (!uuid) return;
+  if (economyExpandedGovernanceProposalUuids.has(uuid)) {
+    economyExpandedGovernanceProposalUuids.delete(uuid);
+  } else {
+    economyExpandedGovernanceProposalUuids.add(uuid);
+  }
+  renderEconomyGovernanceFromCache();
+}
+
+function economyRenderGovernanceProposalCard(proposal = {}, { nested = false } = {}) {
+  const proposalUuid = String(proposal.proposal_uuid || "").trim();
+  const status = String(proposal.status || "");
+  const target = proposal.target_wallet_address || proposal.incident_tx_hash || "";
+  const vote = proposal.user_vote?.vote ? `你已投 ${proposal.user_vote.vote}` : "尚未投票";
+  const expanded = proposalUuid && economyExpandedGovernanceProposalUuids.has(proposalUuid);
+  const multisig = proposal.multisig && typeof proposal.multisig === "object" ? proposal.multisig : {};
+  const multisigText = multisig.required
+    ? `multisig ${Number(multisig.signature_count || 0)}/${Number(multisig.threshold || 0)} · weight ${Number(multisig.signature_weight || 0)}/${Number(multisig.threshold_weight || 0)}${multisig.ready ? " ready" : ""}`
+    : "multisig not required";
+  const signerAddress = economyGovernanceSignerAddress(proposal);
+  const signerMeta = Array.isArray(multisig.policy?.signers)
+    ? multisig.policy.signers.find((item) => String(item.wallet_address || "").trim().toLowerCase() === signerAddress)
+    : null;
+  const rootVeto = currentUser === "root" && proposal.root_veto_allowed && !proposal.root_veto_used && !["executed", "cancelled", "expired"].includes(status)
+    ? `<button class="btn btn-danger btn-sm" type="button" data-governance-veto="${sanitize(proposal.proposal_uuid || "")}">VETO</button>`
+    : "";
+  const sponsor = economyGovernanceCanManage() && proposal.lifecycle_status === "REVIEW"
+    ? `<button class="btn btn-sm" type="button" data-governance-sponsor="${sanitize(proposal.proposal_uuid || "")}">Sponsor</button>`
+    : "";
+  const cancel = economyGovernanceCanManage() && !["executed", "cancelled", "expired"].includes(status)
+    ? `<button class="btn btn-sm" type="button" data-governance-cancel="${sanitize(proposal.proposal_uuid || "")}">取消</button>`
+    : "";
+  const multisigSign = economyGovernanceCanManage() && multisig.required && !multisig.ready && signerAddress && status === "passed"
+    ? `<button class="btn btn-sm" type="button" data-governance-multisig-sign="${sanitize(proposal.proposal_uuid || "")}" data-signer-wallet="${sanitize(signerAddress)}" data-target-wallet="${sanitize(proposal.target_wallet_address || signerAddress)}" data-requested-amount="${Number(proposal.requested_amount || 1)}" data-payload-hash="${sanitize(proposal.execution_payload_hash || "")}" data-custody-mode="${sanitize(signerMeta?.custody_mode || "")}" data-wallet-type="${sanitize(signerMeta?.wallet_type || "")}">簽署多簽</button>`
+    : "";
+  const rootExecute = economyGovernanceCanManage() && proposal.executable
+    ? `<button class="btn btn-danger btn-sm" type="button" data-governance-execute="${sanitize(proposal.proposal_uuid || "")}">執行</button>`
+    : "";
+  const votingButtons = status === "voting" && proposal.lifecycle_status === "VOTING"
+    ? `
+      <button class="btn btn-sm" type="button" data-governance-vote="yes" data-proposal-uuid="${sanitize(proposal.proposal_uuid || "")}">YES</button>
+      <button class="btn btn-sm" type="button" data-governance-vote="no" data-proposal-uuid="${sanitize(proposal.proposal_uuid || "")}">NO</button>
+      <button class="btn btn-sm" type="button" data-governance-vote="abstain" data-proposal-uuid="${sanitize(proposal.proposal_uuid || "")}">ABSTAIN</button>
+    `
+    : "";
+  const proposalPayload = proposal.payload && typeof proposal.payload === "object" ? proposal.payload : {};
+  const recoveryOptions = proposalPayload.recovery_options && typeof proposalPayload.recovery_options === "object"
+    ? Object.keys(proposalPayload.recovery_options).join(" / ")
+    : "";
+  const claims = Array.isArray(proposalPayload.victim_claims) ? proposalPayload.victim_claims : [];
+  const recoveryDetail = String(proposal.action_type || "").toUpperCase() === "ROLLBACK_BRANCH"
+    ? `<div class="drive-card-sub">recovery ${sanitize(proposalPayload.recovery_strategy || proposalPayload.selected_recovery_strategy || "-")} · options ${sanitize(recoveryOptions || "-")} · claims ${claims.length}</div>`
+    : "";
+  const actionPanel = [votingButtons, sponsor, multisigSign, rootVeto, cancel, rootExecute].filter(Boolean).join("");
+  return `
+    <div class="economy-governance-proposal-card${nested ? " economy-governance-inline-proposal" : ""}">
+      <div class="drive-file-row economy-governance-proposal-toggle" role="button" tabindex="0" aria-expanded="${expanded ? "true" : "false"}" data-governance-toggle-proposal="${sanitize(proposalUuid)}">
+        <div>
+          <strong>${sanitize(economyGovernanceActionLabel(proposal.action_type || proposal.proposal_type))} · ${sanitize(proposal.governance_domain || "-")} · ${sanitize(proposal.lifecycle_status || economyGovernanceStatusLabel(status))}</strong>
+          <div class="drive-card-sub">${sanitize(proposal.reason || "")}</div>
+          <div class="drive-card-sub">${sanitize(economyGovernanceProgress(proposal))}</div>
+          <div class="drive-card-sub">timeline ${sanitize(economyGovernanceTimeline(proposal))}</div>
+          <div class="drive-card-sub">readiness ${sanitize(economyGovernanceReadiness(proposal))}</div>
+          ${recoveryDetail}
+          <div class="drive-card-sub">severity ${sanitize(proposal.proposal_severity || "NORMAL")} · ${sanitize(multisigText)} · veto ${proposal.root_veto_allowed ? "root allowed" : "not allowed"}</div>
+          <div class="drive-card-sub">${sanitize(proposal.impact_scope || "")}${proposal.risk_summary ? " · " + sanitize(proposal.risk_summary) : ""}</div>
+          <div class="economy-ledger-hash">${sanitize(target || proposal.proposal_uuid || "")}</div>
+          <div class="drive-card-sub">timelock ${sanitize(proposal.timelock_until || "-")} · expires ${sanitize(proposal.expires_at || "-")} · ${sanitize(vote)}</div>
+        </div>
+        <div class="drive-file-actions">
+          <span class="btn btn-sm" aria-hidden="true">${expanded ? "收合操作" : "展開投票/操作"}</span>
+        </div>
+      </div>
+      ${expanded ? `
+        <div class="economy-governance-proposal-action-panel" style="margin:.35rem 0 .85rem 1rem;padding:.65rem;border-left:3px solid rgba(255,255,255,.18);background:rgba(255,255,255,.04);">
+          <div class="drive-card-sub" style="margin-bottom:.45rem;">提案投票 / 執行操作</div>
+          <div class="drive-file-actions" style="justify-content:flex-start;gap:.45rem;flex-wrap:wrap;">
+            ${actionPanel || `<span class="drive-card-sub">目前沒有可執行操作。</span>`}
+          </div>
+        </div>
+      ` : ""}
+    </div>
+  `;
 }
 
 function parseEconomyGovernanceLines(value) {
@@ -3072,11 +3275,12 @@ function renderEconomyGovernance(payload = {}) {
   const proposals = Array.isArray(payload.proposals) ? payload.proposals : [];
   economyGovernanceProposalCache = new Map(proposals.map((proposal) => [String(proposal.proposal_uuid || ""), proposal]));
   setEconomyGovernanceCategory(economyGovernanceCategory);
+  setEconomyGovernanceStatusFilter(economyGovernanceStatusFilter);
   const selectedCase = $("economy-governance-selected-case");
   if (selectedCase) {
     selectedCase.textContent = economySelectedDisputeUuid
-      ? `已選取疑義案件 ${shortEconomyWalletAddress(economySelectedDisputeUuid)}；只顯示該案件已建立的治理提案 / 投票。`
-      : "未選取疑義交易案件；切到「選取案件」分類前，請先在上方案件列表點選案件。";
+      ? `已選取疑義案件 ${shortEconomyWalletAddress(economySelectedDisputeUuid)}；提案/投票會直接折疊顯示在該案件下方。`
+      : "未選取疑義交易案件；點選上方案件後，該案件的治理提案會直接展開在案件下方。";
   }
   const showCreateGroup = (category) => economyGovernanceCategory === "all" || economyGovernanceCategory === category;
   const publicTools = $("economy-public-governance-create-details");
@@ -3097,10 +3301,16 @@ function renderEconomyGovernance(payload = {}) {
   if (emergencyTools) emergencyTools.style.display = economyGovernanceCanManage() && showCreateGroup("emergency") ? "" : "none";
   syncGovernanceTreasuryDestination();
   setEconomyText("economy-governance-proposal-count", String(proposals.length));
-  setEconomyText("economy-governance-open-count", String(proposals.filter((item) => ["voting", "passed"].includes(String(item.status || ""))).length));
+  const reviewCount = proposals.filter((item) => economyGovernanceStatusBucket(item) === "review").length;
+  const votingCount = proposals.filter((item) => economyGovernanceStatusBucket(item) === "voting").length;
+  const closedCount = proposals.filter((item) => economyGovernanceStatusBucket(item) === "closed").length;
+  setEconomyText("economy-governance-open-count", String({ review: reviewCount, voting: votingCount, closed: closedCount }[economyGovernanceStatusFilter] || 0));
+  const statusSmall = $("economy-governance-open-count")?.nextElementSibling;
+  if (statusSmall) statusSmall.textContent = `${economyGovernanceStatusFilterLabel(economyGovernanceStatusFilter)} · 審核 ${reviewCount} / 投票 ${votingCount} / 結案 ${closedCount}`;
   const list = $("economy-governance-list");
   if (!list) return;
   const filteredProposals = proposals.filter((proposal) => {
+    if (economyGovernanceStatusBucket(proposal) !== economyGovernanceStatusFilter) return false;
     if (economyGovernanceCategory === "all") return true;
     if (economyGovernanceCategory === "dispute") {
       return economySelectedDisputeProposalUuids.has(String(proposal.proposal_uuid || ""));
@@ -3110,81 +3320,17 @@ function renderEconomyGovernance(payload = {}) {
   if (!filteredProposals.length) {
     if (economyGovernanceCategory === "dispute") {
       list.innerHTML = economySelectedDisputeUuid
-        ? `<div class="drive-empty">此疑義案件目前尚未建立治理提案。manager+ 核准並提案後，這裡才會出現投票與執行狀態。</div>`
+        ? `<div class="drive-empty">此疑義案件在「${economyGovernanceStatusFilterLabel(economyGovernanceStatusFilter)}」沒有治理提案；案件卡片下方會顯示該案件全部提案。</div>`
         : `<div class="drive-empty">請先在疑義交易案件列表點選案件，再查看該案件的治理提案 / 投票。</div>`;
     } else {
-      list.innerHTML = `<div class="drive-empty">目前沒有此分類的 PointsChain governance proposal</div>`;
+      list.innerHTML = `<div class="drive-empty">目前「${economyGovernanceStatusFilterLabel(economyGovernanceStatusFilter)}」沒有此分類的 PointsChain governance proposal</div>`;
     }
+    if (economyTransactionDisputeCache.length) renderEconomyTransactionDisputes({ disputes: economyTransactionDisputeCache });
     return;
   }
-  list.innerHTML = filteredProposals.map((proposal) => {
-    const status = String(proposal.status || "");
-    const target = proposal.target_wallet_address || proposal.incident_tx_hash || "";
-    const vote = proposal.user_vote?.vote ? `你已投 ${proposal.user_vote.vote}` : "尚未投票";
-    const multisig = proposal.multisig && typeof proposal.multisig === "object" ? proposal.multisig : {};
-    const multisigText = multisig.required
-      ? `multisig ${Number(multisig.signature_count || 0)}/${Number(multisig.threshold || 0)} · weight ${Number(multisig.signature_weight || 0)}/${Number(multisig.threshold_weight || 0)}${multisig.ready ? " ready" : ""}`
-      : "multisig not required";
-    const signerAddress = economyGovernanceSignerAddress(proposal);
-    const signerMeta = Array.isArray(multisig.policy?.signers)
-      ? multisig.policy.signers.find((item) => String(item.wallet_address || "").trim().toLowerCase() === signerAddress)
-      : null;
-    const rootVeto = currentUser === "root" && proposal.root_veto_allowed && !proposal.root_veto_used && !["executed", "cancelled", "expired"].includes(status)
-      ? `<button class="btn btn-danger btn-sm" type="button" data-governance-veto="${sanitize(proposal.proposal_uuid || "")}">VETO</button>`
-      : "";
-    const sponsor = economyGovernanceCanManage() && proposal.lifecycle_status === "REVIEW"
-      ? `<button class="btn btn-sm" type="button" data-governance-sponsor="${sanitize(proposal.proposal_uuid || "")}">Sponsor</button>`
-      : "";
-    const cancel = economyGovernanceCanManage() && !["executed", "cancelled", "expired"].includes(status)
-      ? `<button class="btn btn-sm" type="button" data-governance-cancel="${sanitize(proposal.proposal_uuid || "")}">取消</button>`
-      : "";
-    const multisigSign = economyGovernanceCanManage() && multisig.required && !multisig.ready && signerAddress && status === "passed"
-      ? `<button class="btn btn-sm" type="button" data-governance-multisig-sign="${sanitize(proposal.proposal_uuid || "")}" data-signer-wallet="${sanitize(signerAddress)}" data-target-wallet="${sanitize(proposal.target_wallet_address || signerAddress)}" data-requested-amount="${Number(proposal.requested_amount || 1)}" data-payload-hash="${sanitize(proposal.execution_payload_hash || "")}" data-custody-mode="${sanitize(signerMeta?.custody_mode || "")}" data-wallet-type="${sanitize(signerMeta?.wallet_type || "")}">簽署多簽</button>`
-      : "";
-    const rootExecute = economyGovernanceCanManage() && proposal.executable
-      ? `<button class="btn btn-danger btn-sm" type="button" data-governance-execute="${sanitize(proposal.proposal_uuid || "")}">執行</button>`
-      : "";
-    const votingButtons = status === "voting" && proposal.lifecycle_status === "VOTING"
-      ? `
-        <button class="btn btn-sm" type="button" data-governance-vote="yes" data-proposal-uuid="${sanitize(proposal.proposal_uuid || "")}">YES</button>
-        <button class="btn btn-sm" type="button" data-governance-vote="no" data-proposal-uuid="${sanitize(proposal.proposal_uuid || "")}">NO</button>
-        <button class="btn btn-sm" type="button" data-governance-vote="abstain" data-proposal-uuid="${sanitize(proposal.proposal_uuid || "")}">ABSTAIN</button>
-      `
-      : "";
-    const proposalPayload = proposal.payload && typeof proposal.payload === "object" ? proposal.payload : {};
-    const recoveryOptions = proposalPayload.recovery_options && typeof proposalPayload.recovery_options === "object"
-      ? Object.keys(proposalPayload.recovery_options).join(" / ")
-      : "";
-    const claims = Array.isArray(proposalPayload.victim_claims) ? proposalPayload.victim_claims : [];
-    const recoveryDetail = String(proposal.action_type || "").toUpperCase() === "ROLLBACK_BRANCH"
-      ? `<div class="drive-card-sub">recovery ${sanitize(proposalPayload.recovery_strategy || proposalPayload.selected_recovery_strategy || "-")} · options ${sanitize(recoveryOptions || "-")} · claims ${claims.length}</div>`
-      : "";
-    return `
-      <div class="drive-file-row">
-        <div>
-          <strong>${sanitize(economyGovernanceActionLabel(proposal.action_type || proposal.proposal_type))} · ${sanitize(proposal.governance_domain || "-")} · ${sanitize(proposal.lifecycle_status || economyGovernanceStatusLabel(status))}</strong>
-          <div class="drive-card-sub">${sanitize(proposal.reason || "")}</div>
-          <div class="drive-card-sub">${sanitize(economyGovernanceProgress(proposal))}</div>
-          <div class="drive-card-sub">timeline ${sanitize(economyGovernanceTimeline(proposal))}</div>
-          <div class="drive-card-sub">readiness ${sanitize(economyGovernanceReadiness(proposal))}</div>
-          ${recoveryDetail}
-          <div class="drive-card-sub">severity ${sanitize(proposal.proposal_severity || "NORMAL")} · ${sanitize(multisigText)} · veto ${proposal.root_veto_allowed ? "root allowed" : "not allowed"}</div>
-          <div class="drive-card-sub">${sanitize(proposal.impact_scope || "")}${proposal.risk_summary ? " · " + sanitize(proposal.risk_summary) : ""}</div>
-          <div class="economy-ledger-hash">${sanitize(target || proposal.proposal_uuid || "")}</div>
-          <div class="drive-card-sub">timelock ${sanitize(proposal.timelock_until || "-")} · expires ${sanitize(proposal.expires_at || "-")} · ${sanitize(vote)}</div>
-        </div>
-        <div class="drive-file-actions">
-          ${votingButtons}
-          ${sponsor}
-          ${multisigSign}
-          ${rootVeto}
-          ${cancel}
-          ${rootExecute}
-        </div>
-      </div>
-    `;
-  }).join("");
-  bindEconomyGovernanceEvents();
+  list.innerHTML = filteredProposals.map((proposal) => economyRenderGovernanceProposalCard(proposal)).join("");
+  bindEconomyGovernanceEvents(list);
+  if (economyTransactionDisputeCache.length) renderEconomyTransactionDisputes({ disputes: economyTransactionDisputeCache });
 }
 
 async function loadEconomyGovernance({ silent = false } = {}) {
@@ -3508,9 +3654,20 @@ async function signEconomyGovernanceMultisig(proposalUuid, signerWalletAddress, 
   }
 }
 
-function bindEconomyGovernanceEvents() {
-  const list = $("economy-governance-list");
+function bindEconomyGovernanceEvents(root = null) {
+  const list = root || $("economy-governance-list");
   if (!list) return;
+  list.querySelectorAll("[data-governance-toggle-proposal]").forEach((row) => {
+    if (row.dataset.governanceToggleBound === "1") return;
+    row.dataset.governanceToggleBound = "1";
+    const toggle = () => toggleEconomyGovernanceProposal(row.dataset.governanceToggleProposal || "");
+    row.addEventListener("click", toggle);
+    row.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      toggle();
+    });
+  });
   list.querySelectorAll("[data-governance-vote]").forEach((btn) => {
     if (btn.dataset.governanceBound === "1") return;
     btn.dataset.governanceBound = "1";
@@ -4238,6 +4395,15 @@ function bindEconomyInlineEvents() {
       renderEconomyGovernance({ proposals: Array.from(economyGovernanceProposalCache.values()) });
     });
   }
+  document.querySelectorAll("[data-governance-status-filter]").forEach((btn) => {
+    if (btn.dataset.economyGovernanceStatusBound === "1") return;
+    btn.dataset.economyGovernanceStatusBound = "1";
+    btn.addEventListener("click", () => {
+      setEconomyGovernanceStatusFilter(btn.dataset.governanceStatusFilter || "review");
+      renderEconomyGovernance({ proposals: Array.from(economyGovernanceProposalCache.values()) });
+    });
+  });
+  setEconomyGovernanceStatusFilter(economyGovernanceStatusFilter);
   if (economyDocumentEventsBound) {
     syncEconomySubpages(currentUser === "root");
     syncEconomyAutoRefreshLifecycle();
