@@ -202,6 +202,17 @@ function renderUsers() {
     if (u.is_friend) relationBadges.push('<span class="profile-official-badge">好友</span>');
     if (u.is_official) relationBadges.push('<span class="profile-official-badge">官方/管理者</span>');
     if (relationBadges.length) usernameCell.insertAdjacentHTML("beforeend", `<div class="user-target-badges">${relationBadges.join("")}</div>`);
+    if ((currentRole === "manager" || currentRole === "super_admin") && u.official_hot_wallet_address) {
+      const walletLine = document.createElement("div");
+      walletLine.className = "user-official-hot-wallet-line";
+      walletLine.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      walletLine.style.fontSize = ".72rem";
+      walletLine.style.color = "var(--muted)";
+      walletLine.style.marginTop = ".2rem";
+      walletLine.style.wordBreak = "break-all";
+      walletLine.textContent = `官方熱錢包：${u.official_hot_wallet_address}`;
+      usernameCell.appendChild(walletLine);
+    }
     tr.appendChild(usernameCell);
     appendTextCell(u.nickname || "");
     appendTextCell(u.real_name || "");

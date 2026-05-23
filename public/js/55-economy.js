@@ -22,6 +22,7 @@ let economySelectedDisputeUuid = "";
 let economySelectedDisputeProposalUuids = new Set();
 let economyTransactionDisputeCache = [];
 let economyExpandedGovernanceProposalUuids = new Set();
+let economyOfficialHotWalletLabels = {};
 const ECONOMY_PAGE_STORAGE_KEY = "hackme_web:economy:active_page";
 const ECONOMY_SPEND_WALLET_STORAGE_KEY = "hackme_web:economy:default_spend_wallet";
 const ECONOMY_COLD_BACKUP_PREFIX = "pcw1.p256";
@@ -686,13 +687,39 @@ function shortEconomyWalletAddress(value) {
   return `${text.slice(0, 12)}…${text.slice(-8)}`;
 }
 
+function economyCanSeeOfficialHotWalletLabels() {
+  return currentUser === "root" || currentRole === "manager" || currentRole === "super_admin";
+}
+
+function updateEconomyOfficialHotWalletLabels(labels = {}) {
+  if (!economyCanSeeOfficialHotWalletLabels()) {
+    economyOfficialHotWalletLabels = {};
+    return;
+  }
+  if (!labels || typeof labels !== "object") return;
+  Object.entries(labels).forEach(([address, label]) => {
+    const key = String(address || "").trim().toLowerCase();
+    const value = String(label || "").trim();
+    if (key && value) economyOfficialHotWalletLabels[key] = value;
+  });
+}
+
+function formatEconomyWalletAddressWithManagerLabel(address, { short = true } = {}) {
+  const raw = String(address || "").trim();
+  if (!raw || raw === "-") return "-";
+  const base = short ? shortEconomyWalletAddress(raw) : raw;
+  if (!economyCanSeeOfficialHotWalletLabels()) return base;
+  const label = economyOfficialHotWalletLabels[String(raw).trim().toLowerCase()] || "";
+  return label ? `${base}（${label}）` : base;
+}
+
 function formatEconomyLedgerWalletFlow(row) {
   const flow = row?.wallet_flow && typeof row.wallet_flow === "object" ? row.wallet_flow : null;
   if (!flow?.source_wallet_address && !flow?.destination_wallet_address) return "";
   const sourceLabel = flow.source_label || "來源地址";
   const destLabel = flow.destination_label || "目的地址";
-  const source = shortEconomyWalletAddress(flow.source_wallet_address);
-  const dest = shortEconomyWalletAddress(flow.destination_wallet_address);
+  const source = formatEconomyWalletAddressWithManagerLabel(flow.source_wallet_address);
+  const dest = formatEconomyWalletAddressWithManagerLabel(flow.destination_wallet_address);
   if (flow.internal_movement) return `地址流：${sourceLabel} ${source} 內部異動`;
   return `地址流：${sourceLabel} ${source} → ${destLabel} ${dest}`;
 }
@@ -1303,6 +1330,7 @@ function bindEconomyTransactionListEvents() {
 }
 
 function renderEconomyTransactions(payload = {}) {
+  updateEconomyOfficialHotWalletLabels(payload.official_hot_wallet_labels);
   const summary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
   const rows = Array.isArray(payload.transactions) ? payload.transactions : [];
   setEconomyText("economy-transactions-pending-count", String(Number(summary.pending_count || 0)));
@@ -1332,7 +1360,7 @@ function renderEconomyTransactions(payload = {}) {
         <div>
           <strong>${sanitize(direction)} · ${sanitize(status)} · ${sanitize(proved)} · ${sanitize(amountText)} 點</strong>
           <div class="drive-card-sub">${sanitize(tx.created_at || "")}${pendingNote}${unownedNote}</div>
-          <div class="drive-card-sub">From ${sanitize(shortEconomyWalletAddress(tx.source_wallet_address || ""))} → To ${sanitize(shortEconomyWalletAddress(tx.destination_wallet_address || ""))} · Fee ${formatEconomyPointsValue(tx.fee_points || 0)} 點</div>
+          <div class="drive-card-sub">From ${sanitize(formatEconomyWalletAddressWithManagerLabel(tx.source_wallet_address || ""))} → To ${sanitize(formatEconomyWalletAddressWithManagerLabel(tx.destination_wallet_address || ""))} · Fee ${formatEconomyPointsValue(tx.fee_points || 0)} 點</div>
           <button class="economy-ledger-hash economy-explorer-address" type="button" data-explorer-query="${sanitize(tx.transaction_hash || tx.tx_group_hash || "")}">${sanitize(tx.transaction_hash || tx.tx_group_hash || "-")}</button>
         </div>
         <div class="drive-file-actions">
@@ -1467,6 +1495,7 @@ async function createEconomyTransactionDispute(input = {}) {
 }
 
 function renderEconomyTransactionDisputes(payload = {}) {
+  updateEconomyOfficialHotWalletLabels(payload.official_hot_wallet_labels);
   const rows = Array.isArray(payload.disputes) ? payload.disputes : [];
   economyTransactionDisputeCache = rows;
   const list = $("economy-disputes-list");
@@ -1505,7 +1534,7 @@ function renderEconomyTransactionDisputes(payload = {}) {
         <button class="btn btn-danger btn-sm" type="button" data-dispute-review-proposal="${sanitize(row.dispute_uuid || "")}">核准並提案</button>
       `
       : "";
-    const replyAction = ["pending_review", "approved"].includes(String(row.status || ""))
+    const replyAction = ["pending_review", "approved", "proposal_created"].includes(String(row.status || ""))
       ? `<button class="btn btn-sm" type="button"
           data-dispute-reply="${sanitize(row.dispute_uuid || "")}"
           data-dispute-tx="${sanitize(row.tx_hash || "")}"
@@ -1522,7 +1551,7 @@ function renderEconomyTransactionDisputes(payload = {}) {
           <div class="drive-card-sub">address-proven anonymous · ${sanitize(row.created_at || "")}</div>
           <div class="drive-card-sub">${sanitize(row.statement || "")}</div>
           <button class="economy-ledger-hash economy-explorer-address" type="button" data-explorer-query="${sanitize(row.tx_hash || "")}">${sanitize(row.tx_hash || "")}</button>
-          <div class="drive-card-sub">From ${sanitize(shortEconomyWalletAddress(row.from_wallet_address || row.victim_wallet_address || ""))} → To ${sanitize(shortEconomyWalletAddress(row.to_wallet_address || row.suspect_wallet_address || ""))} · from proof ${row.from_signature_verified ? "ok" : "missing"} · to reply ${row.reply_signature_verified ? "ok" : "none"}</div>
+          <div class="drive-card-sub">From ${sanitize(formatEconomyWalletAddressWithManagerLabel(row.from_wallet_address || row.victim_wallet_address || ""))} → To ${sanitize(formatEconomyWalletAddressWithManagerLabel(row.to_wallet_address || row.suspect_wallet_address || ""))} · from proof ${row.from_signature_verified ? "ok" : "missing"} · to reply ${row.reply_signature_verified ? "ok" : "none"}</div>
           ${row.initial_freeze_expires_at ? `<div class="drive-card-sub">初始短期凍結至 ${sanitize(row.initial_freeze_expires_at)}${row.escalated_freeze_expires_at ? ` · 治理延長至 ${sanitize(row.escalated_freeze_expires_at)}` : ""}</div>` : ""}
           ${row.reply_statement ? `<div class="drive-card-sub">To 回覆：${sanitize(row.reply_statement || "")}</div>` : ""}
           <div class="drive-card-sub">proposal ${sanitize(row.governance_proposal_uuid || "-")}</div>
@@ -2998,6 +3027,7 @@ function economyGovernanceCanProposePublic() {
 }
 
 function economyGovernanceCategoryForProposal(proposal = {}) {
+  if (String(proposal.reference || "").startsWith("transaction_dispute:")) return "dispute";
   const domain = String(proposal.governance_domain || "").toUpperCase();
   const action = String(proposal.action_type || proposal.proposal_type || "").toUpperCase();
   if (action === "MINT_REQUEST") return "mint";
@@ -3092,6 +3122,41 @@ function economyGovernanceReadiness(proposal = {}) {
   return marks.map(([label, ok]) => `${ok ? "OK" : "WAIT"} ${label}`).join(" · ");
 }
 
+function economyRenderEvidenceRefs(refs = []) {
+  const list = Array.isArray(refs) ? refs : [];
+  if (!list.length) return "<span class=\"drive-card-sub\">未提供佐證 refs。</span>";
+  return `<ul class="drive-card-sub" style="margin:.25rem 0 .35rem 1.1rem;">${list.map((item) => `<li>${sanitize(item)}</li>`).join("")}</ul>`;
+}
+
+function economyRenderDisputeGovernanceMaterials(payload = {}) {
+  const victimStatement = String(payload.victim_statement || "").trim();
+  const victimEvidence = Array.isArray(payload.victim_evidence_refs) ? payload.victim_evidence_refs : [];
+  const claims = Array.isArray(payload.victim_claims) ? payload.victim_claims : [];
+  const reply = payload.counterparty_reply && typeof payload.counterparty_reply === "object" ? payload.counterparty_reply : {};
+  const hasReply = Boolean(String(reply.statement || "").trim());
+  if (!victimStatement && !victimEvidence.length && !claims.length && !hasReply) return "";
+  const claimRows = claims.map((claim) => `
+    <div class="drive-card-sub">
+      From claim ${sanitize(formatEconomyWalletAddressWithManagerLabel(claim.wallet_address || ""))} · ${formatEconomyPointsValue(claim.claim_amount_points || 0)} 點 · proof ${claim.address_signature_verified ? "ok" : "missing"}
+    </div>
+  `).join("");
+  return `
+    <div class="economy-dispute-governance-materials" style="margin:.45rem 0;padding:.55rem;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(0,0,0,.12);">
+      <div class="drive-card-sub" style="font-weight:700;color:var(--text);">疑義交易雙方材料</div>
+      ${victimStatement ? `<div class="drive-card-sub">From 主張：${sanitize(victimStatement)}</div>` : ""}
+      ${claimRows}
+      <div class="drive-card-sub">From 佐證：</div>
+      ${economyRenderEvidenceRefs(victimEvidence)}
+      ${hasReply ? `
+        <div class="drive-card-sub">To 回覆：${sanitize(reply.statement || "")}</div>
+        <div class="drive-card-sub">To 地址 ${sanitize(formatEconomyWalletAddressWithManagerLabel(reply.wallet_address || ""))} · proof ${reply.address_signature_verified ? "ok" : "missing"} · ${sanitize(reply.reply_created_at || "")}</div>
+        <div class="drive-card-sub">To 佐證：</div>
+        ${economyRenderEvidenceRefs(reply.evidence_refs || [])}
+      ` : `<div class="drive-card-sub">To 尚未回覆；投票者應將未回覆狀態納入判斷。</div>`}
+    </div>
+  `;
+}
+
 function renderEconomyGovernanceFromCache() {
   renderEconomyGovernance({ proposals: Array.from(economyGovernanceProposalCache.values()) });
 }
@@ -3111,6 +3176,9 @@ function economyRenderGovernanceProposalCard(proposal = {}, { nested = false } =
   const proposalUuid = String(proposal.proposal_uuid || "").trim();
   const status = String(proposal.status || "");
   const target = proposal.target_wallet_address || proposal.incident_tx_hash || "";
+  const targetDisplay = String(target || "").startsWith("pc1")
+    ? formatEconomyWalletAddressWithManagerLabel(target, { short: false })
+    : target;
   const vote = proposal.user_vote?.vote ? `你已投 ${proposal.user_vote.vote}` : "尚未投票";
   const expanded = proposalUuid && economyExpandedGovernanceProposalUuids.has(proposalUuid);
   const multisig = proposal.multisig && typeof proposal.multisig === "object" ? proposal.multisig : {};
@@ -3148,6 +3216,7 @@ function economyRenderGovernanceProposalCard(proposal = {}, { nested = false } =
     ? Object.keys(proposalPayload.recovery_options).join(" / ")
     : "";
   const claims = Array.isArray(proposalPayload.victim_claims) ? proposalPayload.victim_claims : [];
+  const disputeMaterials = economyRenderDisputeGovernanceMaterials(proposalPayload);
   const recoveryDetail = String(proposal.action_type || "").toUpperCase() === "ROLLBACK_BRANCH"
     ? `<div class="drive-card-sub">recovery ${sanitize(proposalPayload.recovery_strategy || proposalPayload.selected_recovery_strategy || "-")} · options ${sanitize(recoveryOptions || "-")} · claims ${claims.length}</div>`
     : "";
@@ -3164,7 +3233,7 @@ function economyRenderGovernanceProposalCard(proposal = {}, { nested = false } =
           ${recoveryDetail}
           <div class="drive-card-sub">severity ${sanitize(proposal.proposal_severity || "NORMAL")} · ${sanitize(multisigText)} · veto ${proposal.root_veto_allowed ? "root allowed" : "not allowed"}</div>
           <div class="drive-card-sub">${sanitize(proposal.impact_scope || "")}${proposal.risk_summary ? " · " + sanitize(proposal.risk_summary) : ""}</div>
-          <div class="economy-ledger-hash">${sanitize(target || proposal.proposal_uuid || "")}</div>
+          <div class="economy-ledger-hash">${sanitize(targetDisplay || proposal.proposal_uuid || "")}</div>
           <div class="drive-card-sub">timelock ${sanitize(proposal.timelock_until || "-")} · expires ${sanitize(proposal.expires_at || "-")} · ${sanitize(vote)}</div>
         </div>
         <div class="drive-file-actions">
@@ -3174,6 +3243,7 @@ function economyRenderGovernanceProposalCard(proposal = {}, { nested = false } =
       ${expanded ? `
         <div class="economy-governance-proposal-action-panel" style="margin:.35rem 0 .85rem 1rem;padding:.65rem;border-left:3px solid rgba(255,255,255,.18);background:rgba(255,255,255,.04);">
           <div class="drive-card-sub" style="margin-bottom:.45rem;">提案投票 / 執行操作</div>
+          ${disputeMaterials}
           <div class="drive-file-actions" style="justify-content:flex-start;gap:.45rem;flex-wrap:wrap;">
             ${actionPanel || `<span class="drive-card-sub">目前沒有可執行操作。</span>`}
           </div>
@@ -3302,6 +3372,7 @@ async function loadEconomyTreasurySignerCenter({ silent = false } = {}) {
 }
 
 function renderEconomyGovernance(payload = {}) {
+  updateEconomyOfficialHotWalletLabels(payload.official_hot_wallet_labels);
   const proposals = Array.isArray(payload.proposals) ? payload.proposals : [];
   economyGovernanceProposalCache = new Map(proposals.map((proposal) => [String(proposal.proposal_uuid || ""), proposal]));
   setEconomyGovernanceCategory(economyGovernanceCategory);
@@ -3341,6 +3412,7 @@ function renderEconomyGovernance(payload = {}) {
   if (!list) return;
   const filteredProposals = proposals.filter((proposal) => {
     if (economyGovernanceStatusBucket(proposal) !== economyGovernanceStatusFilter) return false;
+    if (String(proposal.reference || "").startsWith("transaction_dispute:") && economyGovernanceCategory !== "dispute") return false;
     if (economyGovernanceCategory === "all") return true;
     if (economyGovernanceCategory === "dispute") {
       return economySelectedDisputeProposalUuids.has(String(proposal.proposal_uuid || ""));

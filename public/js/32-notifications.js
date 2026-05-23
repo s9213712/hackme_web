@@ -39,6 +39,29 @@ function setNotificationInlineError(message) {
   if (typeof showAppToast === "function") showAppToast(clean, false);
 }
 
+function notificationMetadata(item = {}) {
+  return item && item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+}
+
+function notificationDisputeReplyAction(item = {}) {
+  const metadata = notificationMetadata(item);
+  if (currentUser === "root") return "";
+  if (String(metadata.action || "") !== "points_chain_dispute_reply") return "";
+  const disputeUuid = String(metadata.dispute_uuid || "").trim();
+  if (!disputeUuid) return "";
+  return `
+    <div class="notification-actions-row">
+      <button class="btn btn-primary" type="button"
+        data-notification-dispute-reply="${sanitize(disputeUuid)}"
+        data-notification-dispute-tx="${sanitize(metadata.tx_hash || "")}"
+        data-notification-dispute-from="${sanitize(metadata.from_wallet_address || "")}"
+        data-notification-dispute-to="${sanitize(metadata.to_wallet_address || "")}"
+        data-notification-dispute-amount="${sanitize(String(metadata.claimed_amount_points || 0))}"
+        data-notification-dispute-branch="${sanitize(metadata.chain_branch || "main")}">To 回覆</button>
+    </div>
+  `;
+}
+
 function renderNotifications(items, unreadCount) {
   setNotificationBadge(unreadCount);
   const list = $("notification-list");
@@ -57,6 +80,7 @@ function renderNotifications(items, unreadCount) {
     const link = item.link
       ? `<div class="notification-meta">連結：${sanitize(item.link)}</div>`
       : "";
+    const disputeReplyAction = notificationDisputeReplyAction(item);
     const severity = item.severity && item.severity !== "info" ? ` · ${sanitize(item.severity)}` : "";
     return `
       <div class="${cls}">
@@ -67,6 +91,7 @@ function renderNotifications(items, unreadCount) {
         <div class="notification-body">${sanitize(item.body || "")}</div>
         <div class="notification-meta">${sanitize(formatChatTime(item.created_at || ""))} · ${sanitize(item.type || "system")}${severity}</div>
         ${link}
+        ${disputeReplyAction}
       </div>
     `;
   }).join("");
@@ -76,6 +101,42 @@ function renderNotifications(items, unreadCount) {
   list.querySelectorAll("button[data-notification-dismiss]").forEach((btn) => {
     btn.addEventListener("click", () => dismissNotification(parseInt(btn.getAttribute("data-notification-dismiss"), 10)));
   });
+  list.querySelectorAll("button[data-notification-dispute-reply]").forEach((btn) => {
+    btn.addEventListener("click", () => openNotificationDisputeReply(btn));
+  });
+}
+
+async function openNotificationDisputeReply(btn) {
+  if (!btn) return;
+  if (currentUser === "root") {
+    setNotificationInlineError("root 帳號不使用匿名地址疑義回覆流程；官方錢包事故請改走官方治理。");
+    return;
+  }
+  const disputeUuid = btn.getAttribute("data-notification-dispute-reply") || "";
+  if (!disputeUuid) {
+    setNotificationInlineError("通知缺少疑義交易案件編號。");
+    return;
+  }
+  try {
+    if (typeof switchModuleTab === "function") switchModuleTab("economy");
+    if (typeof setEconomyActivePage === "function") setEconomyActivePage("transactions");
+    if (typeof loadEconomyDashboard === "function") await loadEconomyDashboard();
+    if (typeof loadEconomyTransactions === "function") await loadEconomyTransactions();
+    if (typeof loadEconomyTransactionDisputes === "function") await loadEconomyTransactionDisputes({ silent: true });
+    if (typeof replyEconomyTransactionDispute !== "function") {
+      throw new Error("疑義交易回覆模組尚未載入，請重新整理頁面後再試。");
+    }
+    await replyEconomyTransactionDispute({
+      disputeUuid,
+      txHash: btn.getAttribute("data-notification-dispute-tx") || "",
+      from: btn.getAttribute("data-notification-dispute-from") || "",
+      to: btn.getAttribute("data-notification-dispute-to") || "",
+      amount: btn.getAttribute("data-notification-dispute-amount") || "0",
+      chainBranch: btn.getAttribute("data-notification-dispute-branch") || "main",
+    });
+  } catch (err) {
+    setNotificationInlineError(err?.message || "疑義交易回覆開啟失敗。");
+  }
 }
 
 function shouldRunNotificationPoll({ force = false } = {}) {

@@ -22,6 +22,12 @@ def test_transaction_dispute_frontend_uses_account_bound_official_hot_proof():
     assert "至少 ${ECONOMY_ADDRESS_DISPUTE_MIN_STATEMENT_CHARS} 字" in economy_js
     assert "等待 From 地址本機簽署疑義交易" in economy_js
     assert "createEconomyTransactionDispute(btn.dataset.disputeTx || \"\")" not in economy_js
+    notifications_js = (ROOT / "public" / "js" / "32-notifications.js").read_text(encoding="utf-8")
+    notifications_service = (ROOT / "services" / "system" / "notifications.py").read_text(encoding="utf-8")
+    assert "points_chain_dispute_reply" in notifications_js
+    assert "data-notification-dispute-reply" in notifications_js
+    assert "replyEconomyTransactionDispute" in notifications_js
+    assert '"metadata": metadata' in notifications_service
 
 
 def test_governance_frontend_has_status_tabs_and_inline_dispute_voting():
@@ -41,5 +47,24 @@ def test_governance_frontend_has_status_tabs_and_inline_dispute_voting():
     assert "economy-governance-proposal-action-panel" in economy_js
     assert "提案投票 / 執行操作" in economy_js
     assert "economy-dispute-governance-panel" in economy_js
+    assert "economy-dispute-governance-materials" in economy_js
+    assert "疑義交易雙方材料" in economy_js
+    assert "To 尚未回覆" in economy_js
+    assert 'String(proposal.reference || "").startsWith("transaction_dispute:")' in economy_js
+    assert 'economyGovernanceCategory !== "dispute"' in economy_js
+    assert "economySelectedDisputeProposalUuids.has" in economy_js
     assert "bindEconomyGovernanceEvents(list)" in economy_js
     assert "scrollIntoView" not in economy_js[economy_js.index("function bindEconomyDisputeEvents"):economy_js.index("async function submitEconomyWalletTransfer")]
+
+
+def test_admin_user_list_shows_official_hot_wallet_for_manager_only():
+    users_route = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
+    users_js = (ROOT / "public" / "js" / "10-users.js").read_text(encoding="utf-8")
+
+    assert "official_hot_wallet_address" in users_route
+    assert "points_wallet_identities" in users_route
+    assert "wallet_type='official_hot'" in users_route
+    assert "custody_mode='server_hot'" in users_route
+    assert "官方熱錢包：" in users_js
+    assert "u.official_hot_wallet_address" in users_js
+    assert "currentRole === \"manager\" || currentRole === \"super_admin\"" in users_js
