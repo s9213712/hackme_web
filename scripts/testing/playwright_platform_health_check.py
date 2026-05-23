@@ -843,6 +843,7 @@ def main() -> int:
                 if (
                     "/api/comfyui/generate" in compact
                     or "/api/trading/asset-overview" in compact
+                    or "/api/points/explorer/fee-estimate" in compact
                     or "phase15 forced failure" in compact
                     or "Failed to load resource: the server responded with a status of 503" in compact
                     or "Failed to load resource: the server responded with a status of 404" in compact
