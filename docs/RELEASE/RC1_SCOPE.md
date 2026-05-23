@@ -15,8 +15,10 @@ auditable, governable, and releasable under a clear gate.
   and recovery layer for site points.
 - An official treasury multisig release: treasury execution requires proposal,
   governance pass, timelock, payload-hash verification, and signer threshold.
-- An anonymous address-proven dispute release: disputes and replies are signed
-  by wallet address, not bound to visible user identity.
+- An anonymous address-proven dispute release: self-custody disputes and
+  replies are signed by wallet address, while account-bound official hot wallets
+  use server-verified `account_bound_official_hot_v1` proof. Public/root/admin
+  views remain address-only and must not expose reporter account identity.
 - A provisional-freeze and governance-escalation release for disputed
   transactions.
 - A local chain-integrity release with block tamper detection under normal host

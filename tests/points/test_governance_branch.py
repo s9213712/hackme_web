@@ -1439,6 +1439,93 @@ def test_address_signed_dispute_hides_reporter_identity_and_freezes_to_for_one_h
     _assert_address_dispute_payload_is_deidentified(manager_list)
 
 
+def test_account_bound_official_hot_wallet_can_open_and_reply_to_dispute_without_private_key(tmp_path):
+    service = _service(tmp_path, user_count=10)
+    victim = _actor(3, "user3", "user", effective_level="trusted")
+    attacker = _actor(4, "user4", "user", effective_level="trusted")
+    unrelated = _actor(5, "user5", "user", effective_level="trusted")
+    victim_wallet = _official_hot_wallet(service, 3)
+    attacker_wallet = _official_hot_wallet(service, 4)
+    grant = _official_treasury_grant_via_governance(
+        service,
+        destination_wallet_address=victim_wallet["address"],
+        amount=100,
+        request_uuid="official-hot-dispute-victim-grant",
+    )
+    _force_request_proved(service, grant["transaction_hash"])
+    service.explorer_transaction(grant["transaction_hash"])
+    transfer = service.submit_wallet_transaction(
+        actor=victim,
+        source_wallet_address=victim_wallet["address"],
+        destination_wallet_address=attacker_wallet["address"],
+        amount_points=25,
+        fee_points=1,
+        request_uuid="official-hot-dispute-transfer",
+    )
+    _force_request_proved(service, transfer["transaction_hash"])
+    tx = service.explorer_transaction(transfer["transaction_hash"])["transaction"]
+
+    with pytest.raises(ValueError, match="account-bound official hot wallet"):
+        service.create_transaction_dispute(
+            actor=unrelated,
+            tx_hash=transfer["transaction_hash"],
+            statement="Unrelated account cannot claim this source address by account binding.",
+            victim_wallet_address=victim_wallet["address"],
+            claimed_amount_points=25,
+            loss_cause="unknown",
+            evidence=["official-hot-unrelated"],
+            signature_nonce="official-hot-unrelated-open",
+            from_wallet_address=victim_wallet["address"],
+            to_wallet_address=attacker_wallet["address"],
+            chain_branch=tx["chain_branch"],
+            account_bound_proof=True,
+        )
+
+    result = service.create_transaction_dispute(
+        actor=victim,
+        tx_hash=transfer["transaction_hash"],
+        statement="Official hot source uses account bound address proof without private key.",
+        victim_wallet_address=victim_wallet["address"],
+        claimed_amount_points=25,
+        loss_cause="unknown",
+        evidence=["official-hot-account-bound"],
+        signature_nonce="official-hot-account-bound-open",
+        from_wallet_address=victim_wallet["address"],
+        to_wallet_address=attacker_wallet["address"],
+        chain_branch=tx["chain_branch"],
+        account_bound_proof=True,
+    )
+    dispute = result["dispute"]
+    assert dispute["from_signature_verified"] is True
+    assert dispute["signature_purpose"] == "account_bound_dispute_open"
+    assert dispute["identity_redaction_model"] == "account_bound_official_hot_v1"
+    assert result["initial_provisional_freeze"]["wallet_address"] == attacker_wallet["address"]
+    assert service.explorer_wallet(attacker_wallet["address"])["wallet"]["points_frozen"] == 0
+    _assert_address_dispute_payload_is_deidentified(dispute)
+
+    with pytest.raises(ValueError, match="account-bound official hot wallet"):
+        service.reply_transaction_dispute(
+            actor=unrelated,
+            dispute_uuid=dispute["dispute_uuid"],
+            statement="Unrelated account cannot reply for this destination address.",
+            evidence=["official-hot-unrelated-reply"],
+            signature_nonce="official-hot-unrelated-reply",
+            account_bound_proof=True,
+        )
+
+    replied = service.reply_transaction_dispute(
+        actor=attacker,
+        dispute_uuid=dispute["dispute_uuid"],
+        statement="Official hot destination uses account bound reply proof without private key.",
+        evidence=["official-hot-account-bound-reply"],
+        signature_nonce="official-hot-account-bound-reply",
+        account_bound_proof=True,
+    )["dispute"]
+    assert replied["reply_signature_verified"] is True
+    assert replied["reply_statement_hash"]
+    _assert_address_dispute_payload_is_deidentified(replied)
+
+
 def test_address_dispute_reply_requires_to_signature_and_hides_identity_terms(tmp_path):
     service = _service(tmp_path, user_count=10)
     victim = _actor(3, "user3", "user", effective_level="trusted")

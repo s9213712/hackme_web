@@ -15,6 +15,18 @@ path.
 | system_reserve | service/system | yes | admin/system only | only through approved system flow | no | no | system controlled |
 | exchange_fund | service/system | yes | admin/system only | only through approved exchange/fund flow | no unless explicitly official_treasury | no | system controlled |
 
+## Address-Proven Disputes
+
+Self-custody and imported cold wallets must prove address control with a local
+signature. Private keys never leave the client.
+
+`official_hot` wallets use `custodial/server_hot` custody and are bound to the
+current account by `points_wallet_identities.user_id`. They do not have a
+client private key. For transaction disputes, the holder account may open or
+reply with `account_bound_official_hot_v1` proof. Root/admin APIs must still
+serialize the case as address-only and must not expose reporter account
+identity fields.
+
 ## Hard Rule
 
 If `custody_mode == "multisig"` and `wallet_scope != "official_treasury"`, any

@@ -813,6 +813,7 @@ def register_economy_routes(app, deps):
                 from_wallet_address=data.get("from_wallet_address") or data.get("from") or "",
                 to_wallet_address=data.get("to_wallet_address") or data.get("to") or "",
                 chain_branch=data.get("chain_branch") or "",
+                account_bound_proof=bool(data.get("account_bound_proof")),
             )
             audit(
                 "POINTS_CHAIN_TX_DISPUTE_CREATED",
@@ -851,6 +852,7 @@ def register_economy_routes(app, deps):
                 public_key_jwk=data.get("public_key_jwk"),
                 signature=data.get("signature") or "",
                 signature_nonce=data.get("signature_nonce") or data.get("nonce") or "",
+                account_bound_proof=bool(data.get("account_bound_proof")),
             )
             audit(
                 "POINTS_CHAIN_TX_DISPUTE_REPLY",

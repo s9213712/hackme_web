@@ -2168,6 +2168,24 @@ class PointsLedgerService:
         ).fetchone()
         return int(row["c"] or 0) if row else 0
 
+    def _account_bound_official_hot_wallet_for_actor_locked(self, conn, *, actor_id, wallet_address):
+        actor_id = int(actor_id or 0)
+        wallet_address = str(wallet_address or "").strip().lower()
+        if actor_id <= 0 or not WALLET_ADDRESS_RE.fullmatch(wallet_address):
+            return None
+        return conn.execute(
+            """
+            SELECT * FROM points_wallet_identities
+            WHERE user_id=?
+              AND address=?
+              AND wallet_type='official_hot'
+              AND custody_mode='server_hot'
+              AND status IN ('pending_backup', 'active')
+            LIMIT 1
+            """,
+            (actor_id, wallet_address),
+        ).fetchone()
+
     def create_transaction_dispute(
         self,
         *,
@@ -2184,6 +2202,7 @@ class PointsLedgerService:
         from_wallet_address="",
         to_wallet_address="",
         chain_branch="",
+        account_bound_proof=False,
     ):
         user_id = int(actor_value(actor, "id") or 0)
         if user_id <= 0:
@@ -2214,42 +2233,75 @@ class PointsLedgerService:
         statement_hash = self._address_dispute_statement_hash(statement)
         evidence_hash = self._address_dispute_evidence_hash(evidence_list)
         signature_nonce = str(signature_nonce or "").strip()
-        if not public_key_jwk or not signature or not signature_nonce:
-            raise ValueError("address-signed dispute proof is required")
         runtime_mode = self._address_dispute_runtime_mode()
-        verify_wallet_address_dispute_signature(
-            tx_hash=tx_hash,
-            from_wallet_address=from_address,
-            to_wallet_address=to_address,
-            amount_points=amount,
-            statement_hash=statement_hash,
-            evidence_hash=evidence_hash,
-            nonce=signature_nonce,
-            chain_branch=branch,
-            purpose="address_dispute_open",
-            signer_wallet_address=from_address,
-            public_key_jwk=public_key_jwk,
-            signature=signature,
-            runtime_mode=runtime_mode,
-        )
-        open_signed_payload_hash = self._address_dispute_payload_hash(
-            tx_hash=tx_hash,
-            from_wallet_address=from_address,
-            to_wallet_address=to_address,
-            amount_points=amount,
-            statement_hash=statement_hash,
-            evidence_hash=evidence_hash,
-            nonce=signature_nonce,
-            chain_branch=branch,
-            purpose="address_dispute_open",
-            runtime_mode=runtime_mode,
-        )
-        open_signature_hash = sha256_text(str(signature or "").strip())
-        canonical_jwk = canonical_public_jwk(public_key_jwk)
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
             self._ensure_transaction_dispute_schema(conn)
+            proof_model = "address_proven_anonymous_v1"
+            signature_purpose = "address_dispute_open"
+            signature_value = str(signature or "")
+            canonical_jwk = {}
+            signed_proof = bool(public_key_jwk and signature and signature_nonce)
+            if signed_proof:
+                verify_wallet_address_dispute_signature(
+                    tx_hash=tx_hash,
+                    from_wallet_address=from_address,
+                    to_wallet_address=to_address,
+                    amount_points=amount,
+                    statement_hash=statement_hash,
+                    evidence_hash=evidence_hash,
+                    nonce=signature_nonce,
+                    chain_branch=branch,
+                    purpose="address_dispute_open",
+                    signer_wallet_address=from_address,
+                    public_key_jwk=public_key_jwk,
+                    signature=signature,
+                    runtime_mode=runtime_mode,
+                )
+                open_signed_payload_hash = self._address_dispute_payload_hash(
+                    tx_hash=tx_hash,
+                    from_wallet_address=from_address,
+                    to_wallet_address=to_address,
+                    amount_points=amount,
+                    statement_hash=statement_hash,
+                    evidence_hash=evidence_hash,
+                    nonce=signature_nonce,
+                    chain_branch=branch,
+                    purpose="address_dispute_open",
+                    runtime_mode=runtime_mode,
+                )
+                open_signature_hash = sha256_text(str(signature or "").strip())
+                canonical_jwk = canonical_public_jwk(public_key_jwk)
+            else:
+                official_hot_wallet = self._account_bound_official_hot_wallet_for_actor_locked(
+                    conn,
+                    actor_id=user_id,
+                    wallet_address=from_address,
+                )
+                if not official_hot_wallet:
+                    raise ValueError("address-signed dispute proof is required unless From is your account-bound official hot wallet")
+                if not signature_nonce:
+                    signature_nonce = f"account-bound:{uuid.uuid4()}"
+                signature_purpose = "account_bound_dispute_open"
+                proof_model = "account_bound_official_hot_v1"
+                account_bound_payload = {
+                    "amount_points": amount,
+                    "chain_branch": branch,
+                    "custody_mode": "server_hot",
+                    "evidence_hash": evidence_hash,
+                    "from_wallet_address": from_address,
+                    "nonce": signature_nonce,
+                    "purpose": signature_purpose,
+                    "runtime_mode": runtime_mode,
+                    "statement_hash": statement_hash,
+                    "to_wallet_address": to_address,
+                    "tx_hash": tx_hash,
+                    "wallet_type": "official_hot",
+                }
+                open_signed_payload_hash = sha256_text(canonical_json(account_bound_payload))
+                open_signature_hash = sha256_text(f"account_bound_official_hot_v1:{from_address}:{open_signed_payload_hash}")
+                signature_value = "account_bound_official_hot_v1"
             self._assert_address_dispute_signature_not_replayed_locked(
                 conn,
                 signed_payload_hash=open_signed_payload_hash,
@@ -2290,7 +2342,7 @@ class PointsLedgerService:
                     from_public_key_jwk_json, from_signature_verified,
                     initial_freeze_expires_at, identity_redaction_model,
                     created_at, updated_at
-                ) VALUES (?, ?, 0, '', ?, ?, ?, ?, ?, 'pending_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'address_proven_anonymous_v1', ?, ?)
+                ) VALUES (?, ?, 0, '', ?, ?, ?, ?, ?, 'pending_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
                 """,
                 (
                     dispute_uuid,
@@ -2305,15 +2357,16 @@ class PointsLedgerService:
                     to_address,
                     branch,
                     runtime_mode,
-                    "address_dispute_open",
+                    signature_purpose,
                     statement_hash,
                     evidence_hash,
                     signature_nonce[:120],
-                    str(signature or ""),
+                    signature_value,
                     open_signed_payload_hash,
                     open_signature_hash,
                     canonical_json(canonical_jwk),
                     initial_freeze.get("expires_at") if initial_freeze else None,
+                    proof_model,
                     now,
                     now,
                 ),
@@ -2330,7 +2383,8 @@ class PointsLedgerService:
                     "from_wallet_address": from_address,
                     "to_wallet_address": to_address,
                     "chain_branch": branch,
-                    "identity_redaction_model": "address_proven_anonymous_v1",
+                    "identity_redaction_model": proof_model,
+                    "signature_purpose": signature_purpose,
                     "initial_freeze_expires_at": initial_freeze.get("expires_at") if initial_freeze else None,
                 },
             )
@@ -2424,8 +2478,9 @@ class PointsLedgerService:
         finally:
             conn.close()
 
-    def reply_transaction_dispute(self, *, actor, dispute_uuid, statement, evidence=None, public_key_jwk=None, signature="", signature_nonce=""):
-        if int(actor_value(actor, "id") or 0) <= 0:
+    def reply_transaction_dispute(self, *, actor, dispute_uuid, statement, evidence=None, public_key_jwk=None, signature="", signature_nonce="", account_bound_proof=False):
+        actor_id = int(actor_value(actor, "id") or 0)
+        if actor_id <= 0:
             raise PermissionError("login required")
         dispute_uuid = str(dispute_uuid or "").strip()
         if not dispute_uuid:
@@ -2437,8 +2492,6 @@ class PointsLedgerService:
         evidence_list = self._governance_evidence(evidence or [])
         for item in evidence_list:
             self._assert_dispute_reply_has_no_identity_leak(str(item or ""))
-        if not public_key_jwk or not signature or not str(signature_nonce or "").strip():
-            raise ValueError("address-signed reply proof is required")
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -2457,41 +2510,77 @@ class PointsLedgerService:
             statement_hash = self._address_dispute_statement_hash(statement)
             evidence_hash = self._address_dispute_evidence_hash(evidence_list)
             runtime_mode = str(row["signature_runtime_mode"] or self._address_dispute_runtime_mode()).strip() or self._address_dispute_runtime_mode()
-            verify_wallet_address_dispute_signature(
-                tx_hash=row["tx_hash"],
-                from_wallet_address=from_address,
-                to_wallet_address=to_address,
-                amount_points=int(row["claimed_amount_points"] or 0),
-                statement_hash=statement_hash,
-                evidence_hash=evidence_hash,
-                nonce=str(signature_nonce or "").strip(),
-                chain_branch=row["chain_branch"] or "main",
-                purpose="address_dispute_reply",
-                signer_wallet_address=to_address,
-                public_key_jwk=public_key_jwk,
-                signature=signature,
-                runtime_mode=runtime_mode,
-            )
-            reply_signed_payload_hash = self._address_dispute_payload_hash(
-                tx_hash=row["tx_hash"],
-                from_wallet_address=from_address,
-                to_wallet_address=to_address,
-                amount_points=int(row["claimed_amount_points"] or 0),
-                statement_hash=statement_hash,
-                evidence_hash=evidence_hash,
-                nonce=str(signature_nonce or "").strip(),
-                chain_branch=row["chain_branch"] or "main",
-                purpose="address_dispute_reply",
-                runtime_mode=runtime_mode,
-            )
-            reply_signature_hash = sha256_text(str(signature or "").strip())
+            signature_nonce = str(signature_nonce or "").strip()
+            signature_value = str(signature or "")
+            canonical_jwk = {}
+            reply_identity_model = "address_proven_anonymous_v1"
+            reply_purpose = "address_dispute_reply"
+            signed_proof = bool(public_key_jwk and signature and signature_nonce)
+            if signed_proof:
+                verify_wallet_address_dispute_signature(
+                    tx_hash=row["tx_hash"],
+                    from_wallet_address=from_address,
+                    to_wallet_address=to_address,
+                    amount_points=int(row["claimed_amount_points"] or 0),
+                    statement_hash=statement_hash,
+                    evidence_hash=evidence_hash,
+                    nonce=signature_nonce,
+                    chain_branch=row["chain_branch"] or "main",
+                    purpose="address_dispute_reply",
+                    signer_wallet_address=to_address,
+                    public_key_jwk=public_key_jwk,
+                    signature=signature,
+                    runtime_mode=runtime_mode,
+                )
+                reply_signed_payload_hash = self._address_dispute_payload_hash(
+                    tx_hash=row["tx_hash"],
+                    from_wallet_address=from_address,
+                    to_wallet_address=to_address,
+                    amount_points=int(row["claimed_amount_points"] or 0),
+                    statement_hash=statement_hash,
+                    evidence_hash=evidence_hash,
+                    nonce=signature_nonce,
+                    chain_branch=row["chain_branch"] or "main",
+                    purpose="address_dispute_reply",
+                    runtime_mode=runtime_mode,
+                )
+                reply_signature_hash = sha256_text(str(signature or "").strip())
+                canonical_jwk = canonical_public_jwk(public_key_jwk)
+            else:
+                official_hot_wallet = self._account_bound_official_hot_wallet_for_actor_locked(
+                    conn,
+                    actor_id=actor_id,
+                    wallet_address=to_address,
+                )
+                if not official_hot_wallet:
+                    raise ValueError("address-signed reply proof is required unless To is your account-bound official hot wallet")
+                if not signature_nonce:
+                    signature_nonce = f"account-bound:{uuid.uuid4()}"
+                reply_identity_model = "account_bound_official_hot_v1"
+                reply_purpose = "account_bound_dispute_reply"
+                account_bound_payload = {
+                    "amount_points": int(row["claimed_amount_points"] or 0),
+                    "chain_branch": row["chain_branch"] or "main",
+                    "custody_mode": "server_hot",
+                    "evidence_hash": evidence_hash,
+                    "from_wallet_address": from_address,
+                    "nonce": signature_nonce,
+                    "purpose": reply_purpose,
+                    "runtime_mode": runtime_mode,
+                    "statement_hash": statement_hash,
+                    "to_wallet_address": to_address,
+                    "tx_hash": row["tx_hash"],
+                    "wallet_type": "official_hot",
+                }
+                reply_signed_payload_hash = sha256_text(canonical_json(account_bound_payload))
+                reply_signature_hash = sha256_text(f"account_bound_official_hot_v1:{to_address}:{reply_signed_payload_hash}")
+                signature_value = "account_bound_official_hot_v1"
             self._assert_address_dispute_signature_not_replayed_locked(
                 conn,
                 signed_payload_hash=reply_signed_payload_hash,
                 signature_hash=reply_signature_hash,
                 exclude_dispute_uuid=dispute_uuid,
             )
-            canonical_jwk = canonical_public_jwk(public_key_jwk)
             now = utc_now()
             conn.execute(
                 """
@@ -2508,8 +2597,8 @@ class PointsLedgerService:
                     _json_dumps(evidence_list),
                     statement_hash,
                     evidence_hash,
-                    str(signature_nonce or "").strip()[:120],
-                    str(signature or ""),
+                    signature_nonce[:120],
+                    signature_value,
                     reply_signed_payload_hash,
                     reply_signature_hash,
                     canonical_json(canonical_jwk),
@@ -2529,7 +2618,8 @@ class PointsLedgerService:
                     "tx_hash": row["tx_hash"],
                     "from_wallet_address": from_address,
                     "to_wallet_address": to_address,
-                    "identity_redaction_model": "address_proven_anonymous_v1",
+                    "identity_redaction_model": reply_identity_model,
+                    "signature_purpose": reply_purpose,
                 },
             )
             conn.commit()
