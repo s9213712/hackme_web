@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, utils
 
 from services.points_chain import (
+    BURN_WALLET_ADDRESS,
     BIRTHDAY_GIFT_POINTS,
     DEFAULT_BACKUP_KEEP_DAILY,
     DEFAULT_BACKUP_KEEP_RECENT,
@@ -377,6 +378,55 @@ def test_wallet_transfer_to_unowned_address_confirms_and_balance_follows_address
     assert destination_wallet["points_balance"] == 12
     assert destination_wallet["received_tx_count"] == 1
     assert destination_wallet["recent_transactions"][0]["transaction_hash"] == result["transaction_hash"]
+    assert service.verify_chain()["ok"] is True
+
+
+def test_wallet_transfer_to_burn_address_burns_amount_and_fee(tmp_path):
+    service = _service(tmp_path)
+    actor = {"id": 1, "username": "alice", "role": "user"}
+    source = _official_hot_wallet(service, 1)
+    service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=50,
+        action_type="admin_adjust_credit",
+        reference_type="test",
+        reference_id="fund-burn-transfer",
+        idempotency_key="fund-burn-transfer",
+        actor={"id": 3, "username": "root", "role": "super_admin"},
+    )
+    before = service.economy_stats()["economy_layer"]
+
+    result = service.submit_wallet_transaction(
+        actor=actor,
+        source_wallet_address=source["address"],
+        destination_wallet_address=BURN_WALLET_ADDRESS,
+        amount_points=12,
+        fee_points=2,
+        request_uuid="transfer-to-burn-address-1",
+        memo="burn points",
+    )
+
+    assert result["created"] is True
+    assert result["transaction"]["status"] == "pending"
+    assert result["warnings"] == []
+
+    _force_request_proved(service, result["transaction_hash"])
+    proved = service.explorer_transaction(result["transaction_hash"])["transaction"]
+    final_sender = service.get_wallet(1)
+    burn_wallet = service.explorer_wallet(BURN_WALLET_ADDRESS)["wallet"]
+    after = service.economy_stats()["economy_layer"]
+
+    assert proved["status"] == "confirmed"
+    assert proved["transfer_ledgers"]["transfer_in_ledger_uuid"] == ""
+    assert final_sender["wallet_identity_balances"][source["address"]]["points_balance"] == 36
+    assert final_sender["wallet_identity_balances"][source["address"]]["points_frozen"] == 0
+    assert after["supply"]["burned_total"] == before["supply"]["burned_total"] + 14
+    assert after["supply"]["active_supply"] == before["supply"]["active_supply"] - 14
+    assert after["funds"]["burn"]["balance"] == before["funds"]["burn"]["balance"] + 14
+    assert burn_wallet["points_balance"] == after["funds"]["burn"]["balance"]
+    assert after["supply_equation"]["actual_supply_equation_gap_points"] == 0
     assert service.verify_chain()["ok"] is True
 
 

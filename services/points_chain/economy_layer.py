@@ -11,7 +11,7 @@ import json
 import uuid
 
 from .schema import canonical_json, sha256_text, utc_now
-from .wallet_identity import address_from_hash, system_wallet_address
+from .wallet_identity import BURN_WALLET_ADDRESS, address_from_hash, system_wallet_address
 
 
 ECONOMY_POLICY_VERSION = "phase1_sim_economy_v1"
@@ -80,6 +80,16 @@ def economy_fund_address(chain_secret, fund_key):
     if fund_key not in ECONOMY_FUND_KEYS:
         raise ValueError("unsupported economy fund key")
     return address_from_hash(f"economy_fund:{fund_key}:{chain_secret or ''}")
+
+
+def _is_burn_address(address, *, wallets=None):
+    address = str(address or "").strip()
+    if not address:
+        return False
+    burn_addresses = {BURN_WALLET_ADDRESS}
+    if wallets and "burn" in wallets:
+        burn_addresses.add(str(wallets["burn"]["address"] or "").strip())
+    return address in burn_addresses
 
 
 def economy_event_hash_payload(row):
@@ -390,12 +400,17 @@ def append_economy_event(
     chain_branch = str(chain_branch or "main").strip() or "main"
     source_fund_key = str(source_fund_key or "").strip().lower() or None
     destination_fund_key = str(destination_fund_key or "").strip().lower() or None
+    legacy_destination_fund_key = destination_fund_key
     if source_fund_key is not None and source_fund_key not in ECONOMY_FUND_KEYS:
         raise ValueError("source fund is unsupported")
     if destination_fund_key is not None and destination_fund_key not in ECONOMY_FUND_KEYS:
         raise ValueError("destination fund is unsupported")
     source_address = str(source_address or "").strip()
     destination_address = str(destination_address or "").strip()
+    if source_fund_key == "burn" or _is_burn_address(source_address, wallets=wallets):
+        raise ValueError("burn address is unspendable")
+    if destination_fund_key is None and _is_burn_address(destination_address, wallets=wallets):
+        destination_fund_key = "burn"
     if source_fund_key is None and not source_address:
         raise ValueError("source address is required when source fund is omitted")
     if destination_fund_key is None and not destination_address:
@@ -419,6 +434,11 @@ def append_economy_event(
         if chain_branch == "main"
         else None
     )
+    legacy_burn_address_request_hash = None
+    if legacy_destination_fund_key is None and destination_fund_key == "burn":
+        legacy_payload = dict(request_payload)
+        legacy_payload["destination_fund_key"] = None
+        legacy_burn_address_request_hash = _event_request_hash(legacy_payload)
     existing = conn.execute("SELECT * FROM points_economy_events WHERE idempotency_key=?", (str(idempotency_key),)).fetchone()
     if existing:
         if str(existing["chain_branch"] if "chain_branch" in existing.keys() else "main") != chain_branch:
@@ -426,6 +446,10 @@ def append_economy_event(
         accepted_hashes = {request_hash}
         if legacy_branchless_request_hash:
             accepted_hashes.add(legacy_branchless_request_hash)
+        if legacy_burn_address_request_hash:
+            accepted_hashes.add(legacy_burn_address_request_hash)
+            if chain_branch == "main":
+                accepted_hashes.add(_legacy_branchless_event_request_hash(legacy_payload))
         if existing["request_hash"] not in accepted_hashes:
             raise ValueError("economy idempotency key conflict")
         return existing, False
@@ -566,6 +590,8 @@ def replay_economy_events(conn, *, policy=None, chain_secret, persist_cache=Fals
         source_address = str(row["source_address"] or "")
         dest_address = str(row["destination_address"] or "")
         transaction_type = str(row["transaction_type"] or "")
+        if source == "burn" or _is_burn_address(source_address, wallets=wallets):
+            raise ValueError("economy replay found unspendable burn address as source")
         if source == "mint":
             minted_total += amount
         elif source:
@@ -576,7 +602,7 @@ def replay_economy_events(conn, *, policy=None, chain_secret, persist_cache=Fals
             external_balances[source_address] = int(external_balances.get(source_address, 0)) - amount
             if external_balances[source_address] < 0:
                 raise ValueError(f"economy replay would create negative external balance for {source_address}")
-        if dest == "burn":
+        if dest == "burn" or (not dest and _is_burn_address(dest_address, wallets=wallets)):
             burned_total += amount
             balances["burn"]["balance"] += amount
         elif dest:

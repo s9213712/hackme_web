@@ -40,6 +40,7 @@ approved fund.
 - Bootstrap rerun is idempotent and does not duplicate MINT events.
 - MINT is capped by `max_supply - reserved_locked`.
 - BURN only increases `burned_total`; active supply cannot become negative.
+- The BURN address is unspendable. Any event or wallet transfer that targets the BURN address is normalized as `destination_fund_key=burn`, and any event that attempts to use BURN as a source is rejected by append and replay.
 - Dashboard supply / fund balances are derived from replay and verified cache, not manual fields.
 - Dashboard must disclose legacy member outstanding points separately until product reward flows are formally bridged into PROMO append-only events.
 - Economic incidents are append-only and do not mutate balances.

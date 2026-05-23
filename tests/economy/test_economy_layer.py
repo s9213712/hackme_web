@@ -213,6 +213,83 @@ def test_burn_only_appends_burned_total_and_never_goes_negative(tmp_path):
     assert replay["balances"]["burn"]["address"] == BURN_WALLET_ADDRESS
 
 
+def test_transfer_to_burn_address_is_normalized_as_supply_burn(tmp_path):
+    points, conn = _open_economy(tmp_path)
+    user_address = "pc1" + ("1" * 48)
+    try:
+        economy_layer_report(conn, chain_secret=points.chain_secret, actor={"id": 1, "role": "root"})
+        append_economy_event(
+            conn,
+            chain_secret=points.chain_secret,
+            event_type="grant",
+            transaction_type="promo_grant",
+            source_fund_key="promo_fund",
+            destination_fund_key=None,
+            destination_address=user_address,
+            amount=100,
+            idempotency_key="promo:user-address:100",
+            actor={"id": 1, "role": "root"},
+        )
+        burn_row, created = append_economy_event(
+            conn,
+            chain_secret=points.chain_secret,
+            event_type="burn",
+            transaction_type="user_sent_to_burn_address",
+            source_fund_key=None,
+            source_address=user_address,
+            destination_fund_key=None,
+            destination_address=BURN_WALLET_ADDRESS,
+            amount=40,
+            idempotency_key="burn:user-address:40",
+            actor={"id": 1, "role": "root"},
+        )
+        replay = replay_economy_events(conn, chain_secret=points.chain_secret)
+    finally:
+        conn.close()
+
+    assert created is True
+    assert burn_row["destination_fund_key"] == "burn"
+    assert burn_row["destination_address"] == BURN_WALLET_ADDRESS
+    assert replay["burned_total"] == 40
+    assert replay["active_supply"] == 19_999_960
+    assert replay["balances"]["burn"]["balance"] == 40
+    assert replay["external_balances"][user_address] == 60
+    assert BURN_WALLET_ADDRESS not in replay["external_balances"]
+
+
+def test_burn_address_is_unspendable_as_fund_or_source_address(tmp_path):
+    points, conn = _open_economy(tmp_path)
+    try:
+        economy_layer_report(conn, chain_secret=points.chain_secret, actor={"id": 1, "role": "root"})
+        with pytest.raises(ValueError, match="burn address is unspendable"):
+            append_economy_event(
+                conn,
+                chain_secret=points.chain_secret,
+                event_type="transfer",
+                transaction_type="invalid_burn_source_fund",
+                source_fund_key="burn",
+                destination_fund_key="official_treasury",
+                amount=1,
+                idempotency_key="invalid:burn-source-fund",
+                actor={"id": 1, "role": "root"},
+            )
+        with pytest.raises(ValueError, match="burn address is unspendable"):
+            append_economy_event(
+                conn,
+                chain_secret=points.chain_secret,
+                event_type="transfer",
+                transaction_type="invalid_burn_source_address",
+                source_fund_key=None,
+                source_address=BURN_WALLET_ADDRESS,
+                destination_fund_key="official_treasury",
+                amount=1,
+                idempotency_key="invalid:burn-source-address",
+                actor={"id": 1, "role": "root"},
+            )
+    finally:
+        conn.close()
+
+
 def test_replay_rejects_corrupt_burn_that_would_make_active_supply_negative(tmp_path):
     points, conn = _open_economy(tmp_path)
     try:
@@ -265,6 +342,119 @@ def test_replay_rejects_corrupt_burn_that_would_make_active_supply_negative(tmp_
             replay_economy_events(conn, chain_secret=points.chain_secret)
     finally:
         conn.close()
+
+
+def test_replay_rejects_corrupt_burn_source_events(tmp_path):
+    points, conn = _open_economy(tmp_path)
+    try:
+        now = utc_now()
+        row_payload = {
+            "event_uuid": "corrupt-burn-source",
+            "event_type": "transfer",
+            "transaction_type": "corrupt_burn_source",
+            "source_fund_key": "burn",
+            "source_address": BURN_WALLET_ADDRESS,
+            "destination_fund_key": "official_treasury",
+            "destination_address": "pc1corrupttreasury",
+            "amount": 1,
+            "idempotency_key": "corrupt:burn:source",
+            "request_hash": sha256_text("corrupt:burn:source"),
+            "policy_version": "phase1_sim_economy_v1",
+            "metadata_json": "{}",
+            "previous_event_hash": None,
+            "created_at": now,
+        }
+        conn.execute(
+            """
+            INSERT INTO points_economy_events (
+                event_uuid, event_type, transaction_type, source_fund_key, source_address,
+                destination_fund_key, destination_address, amount, idempotency_key,
+                request_hash, policy_version, status, metadata_json, previous_event_hash,
+                event_hash, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?)
+            """,
+            (
+                row_payload["event_uuid"],
+                row_payload["event_type"],
+                row_payload["transaction_type"],
+                row_payload["source_fund_key"],
+                row_payload["source_address"],
+                row_payload["destination_fund_key"],
+                row_payload["destination_address"],
+                row_payload["amount"],
+                row_payload["idempotency_key"],
+                row_payload["request_hash"],
+                row_payload["policy_version"],
+                row_payload["metadata_json"],
+                row_payload["previous_event_hash"],
+                compute_economy_event_hash(row_payload),
+                now,
+            ),
+        )
+
+        with pytest.raises(ValueError, match="unspendable burn address as source"):
+            replay_economy_events(conn, chain_secret=points.chain_secret)
+    finally:
+        conn.close()
+
+
+def test_replay_treats_legacy_destination_burn_address_as_supply_burn(tmp_path):
+    points, conn = _open_economy(tmp_path)
+    try:
+        economy_layer_report(conn, chain_secret=points.chain_secret, actor={"id": 1, "role": "root"})
+        now = utc_now()
+        row_payload = {
+            "event_uuid": "legacy-destination-burn-address",
+            "event_type": "burn",
+            "transaction_type": "legacy_user_sent_to_burn_address",
+            "source_fund_key": "official_treasury",
+            "source_address": "pc1legacytreasury",
+            "destination_fund_key": None,
+            "destination_address": BURN_WALLET_ADDRESS,
+            "amount": 250,
+            "idempotency_key": "legacy:destination-burn-address",
+            "request_hash": sha256_text("legacy:destination-burn-address"),
+            "policy_version": "phase1_sim_economy_v1",
+            "metadata_json": "{}",
+            "previous_event_hash": None,
+            "created_at": now,
+        }
+        conn.execute(
+            """
+            INSERT INTO points_economy_events (
+                event_uuid, event_type, transaction_type, source_fund_key, source_address,
+                destination_fund_key, destination_address, amount, idempotency_key,
+                request_hash, policy_version, status, metadata_json, previous_event_hash,
+                event_hash, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?)
+            """,
+            (
+                row_payload["event_uuid"],
+                row_payload["event_type"],
+                row_payload["transaction_type"],
+                row_payload["source_fund_key"],
+                row_payload["source_address"],
+                row_payload["destination_fund_key"],
+                row_payload["destination_address"],
+                row_payload["amount"],
+                row_payload["idempotency_key"],
+                row_payload["request_hash"],
+                row_payload["policy_version"],
+                row_payload["metadata_json"],
+                row_payload["previous_event_hash"],
+                compute_economy_event_hash(row_payload),
+                now,
+            ),
+        )
+
+        replay = replay_economy_events(conn, chain_secret=points.chain_secret)
+    finally:
+        conn.close()
+
+    assert replay["burned_total"] == 250
+    assert replay["balances"]["burn"]["balance"] == 250
+    assert replay["balances"]["official_treasury"]["balance"] == 9_999_750
+    assert BURN_WALLET_ADDRESS not in replay["external_balances"]
 
 
 def test_derived_balance_cache_must_verify_against_replay(tmp_path):

@@ -24,7 +24,7 @@ fee facade instead of adding new direct balance writes.
 | `user_multisig_preview` | `multisig` | RC1 hidden/preview user multisig. It can receive and be observed, but cannot transfer out or pay service fees. Existing legacy `multisig` identities are exposed this way and downgraded to `spend_capability=receive_only`. |
 | `official_treasury_multisig` | `multisig` | Official treasury control model. Governance approval grants execution eligibility only; manager+/root signer threshold is still required before treasury execution. |
 | `mint` | `system` | System identity for simulated issuance bookkeeping. |
-| `burn` | `system` | Fixed null-style address `pc1000...0000` for simulated burn bookkeeping. |
+| `burn` | `system` | Fixed null-style address `pc1000...0000`. It is receive-only and unspendable: any transfer to this address is normalized as supply burn and no flow may use it as a source. |
 
 ## RC1 Multisig Rule
 
