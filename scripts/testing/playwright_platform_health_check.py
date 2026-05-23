@@ -659,6 +659,13 @@ def hand_calc_asset_overview(trading_payload: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def page_text_by_id(page, element_id: str) -> str:
+    return page.evaluate(
+        """id => (document.getElementById(id)?.textContent || '').trim()""",
+        element_id,
+    )
+
+
 def check_trading_asset_overview(rec: Recorder, page, trading_seed: dict[str, Any]) -> dict[str, Any]:
     result = fetch_json(page, "GET", "/api/trading/asset-overview")
     admin = fetch_json(page, "GET", "/api/admin/trading/asset-overview")
@@ -667,10 +674,15 @@ def check_trading_asset_overview(rec: Recorder, page, trading_seed: dict[str, An
     trading = body.get("trading") or {}
     calc = hand_calc_asset_overview(trading)
 
-    switch_module(page, "economy")
-    page.wait_for_selector("#tab-economy-positions", state="visible", timeout=8000)
-    page.click("#tab-economy-positions")
-    page.wait_for_selector("#economy-positions-page.active #economy-asset-overview-card", timeout=8000)
+    switch_module(page, "trading")
+    page.wait_for_selector("#module-trading.active #trading-card", state="visible", timeout=8000)
+    page.evaluate(
+        """() => {
+            if (typeof loadTradingDashboard === 'function') return loadTradingDashboard();
+            return Promise.resolve();
+        }"""
+    )
+    page.wait_for_selector("#trading-funding-available", state="visible", timeout=8000)
     page.evaluate(
         """() => {
             if (typeof loadTradingAssetOverview === 'function') return loadTradingAssetOverview();
@@ -679,19 +691,28 @@ def check_trading_asset_overview(rec: Recorder, page, trading_seed: dict[str, An
     )
     check_ui_quality(rec, page, "trading_asset_overview_desktop")
     ui_values = {
-        "total": page.locator("#economy-asset-total-equity").inner_text(timeout=3000),
-        "available": page.locator("#economy-asset-available").inner_text(timeout=3000),
-        "spot": page.locator("#economy-asset-spot").inner_text(timeout=3000),
-        "margin": page.locator("#economy-asset-margin").inner_text(timeout=3000),
-        "interest": page.locator("#economy-asset-interest").inner_text(timeout=3000),
-        "confidence": page.locator("#economy-asset-confidence").inner_text(timeout=3000),
-        "admin": page.locator("#economy-asset-admin-risk").inner_text(timeout=3000),
+        "trading_available": page.locator("#trading-funding-available").inner_text(timeout=3000),
+        "trading_mode": page.locator("#trading-funding-mode").inner_text(timeout=3000),
+        "trading_position": page.locator("#trading-position-quantity").inner_text(timeout=3000),
+        "asset_total": page_text_by_id(page, "economy-asset-total-equity"),
+        "asset_available": page_text_by_id(page, "economy-asset-available"),
+        "asset_spot": page_text_by_id(page, "economy-asset-spot"),
+        "asset_margin": page_text_by_id(page, "economy-asset-margin"),
+        "asset_interest": page_text_by_id(page, "economy-asset-interest"),
+        "confidence": page_text_by_id(page, "economy-asset-confidence"),
+        "admin": page_text_by_id(page, "economy-asset-admin-risk"),
     }
     failure_ctx = page.context
     failure_ctx.route("**/api/trading/asset-overview", lambda route: route.fulfill(status=503, content_type="application/json", body='{"ok":false,"msg":"phase15 forced failure"}'))
     page.evaluate("() => loadTradingAssetOverview()")
     page.wait_for_timeout(900)
-    error_text = page.locator("#economy-msg").inner_text(timeout=3000)
+    error_text = page.evaluate(
+        """() => [
+            document.getElementById('economy-msg')?.textContent || '',
+            document.getElementById('trading-inline-msg')?.textContent || '',
+            document.getElementById('trading-msg')?.textContent || ''
+        ].join('\\n').trim()"""
+    )
     failure_ctx.unroute("**/api/trading/asset-overview")
 
     compare = {key: {"api": overview.get(key), "hand": calc[key]} for key in calc}
@@ -707,9 +728,10 @@ def check_trading_asset_overview(rec: Recorder, page, trading_seed: dict[str, An
         and admin["status"] == 200
         and numeric_ok
         and seeded_ok
-        and "價格可信度" in ui_values["confidence"]
+        and ("價格可信度" in ui_values["confidence"] or "低信心" in ui_values["confidence"])
         and "管理摘要" in ui_values["admin"]
         and "phase15 forced failure" in error_text
+        and bool(ui_values["trading_available"])
     )
     rec.add(
         "phase15_trading_asset_overview",
