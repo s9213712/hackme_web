@@ -1032,11 +1032,38 @@ def register_user_routes(app, deps):
                 finally:
                     auth_conn.close()
                 friend_ids = accepted_friend_ids(conn, actor["id"])
+                official_hot_by_user = {}
+                if points_service is not None:
+                    try:
+                        points_service.ensure_schema(conn)
+                        wallet_rows = conn.execute(
+                            """
+                            SELECT user_id, address, status
+                            FROM points_wallet_identities
+                            WHERE wallet_type='official_hot'
+                              AND custody_mode='server_hot'
+                              AND status IN ('pending_backup', 'active')
+                            ORDER BY user_id ASC, is_primary DESC, id ASC
+                            """
+                        ).fetchall()
+                        for wallet_row in wallet_rows:
+                            uid = int(wallet_row["user_id"] or 0)
+                            if uid <= 0:
+                                continue
+                            official_hot_by_user.setdefault(uid, []).append({
+                                "address": wallet_row["address"],
+                                "status": wallet_row["status"],
+                            })
+                    except sqlite3.Error:
+                        official_hot_by_user = {}
                 data = []
                 for r in rows:
                     item = user_public_payload(r, include_sensitive=False)
                     item["is_friend"] = bool(int(r["id"]) in friend_ids)
                     item["is_official"] = bool(item.get("username") == "root" or item.get("role") in {"manager", "super_admin"})
+                    official_hot_wallets = official_hot_by_user.get(int(r["id"]), [])
+                    item["official_hot_wallets"] = official_hot_wallets
+                    item["official_hot_wallet_address"] = official_hot_wallets[0]["address"] if official_hot_wallets else ""
                     session_info = sessions_by_user.get(int(r["id"]), {})
                     item["is_online"] = bool(session_info.get("is_online"))
                     item["online_status"] = "online" if item["is_online"] else "offline"

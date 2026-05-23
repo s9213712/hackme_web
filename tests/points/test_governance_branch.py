@@ -549,6 +549,45 @@ def test_official_treasury_governance_root_can_veto_and_direct_grant_is_blocked(
         service.execute_governance_proposal(actor=manager, proposal_uuid=proposal_uuid)
 
 
+def test_governance_list_hides_proposals_actor_cannot_vote_on(tmp_path):
+    service = _service(tmp_path, user_count=10)
+    manager = _actor(2, "user2", "manager")
+    trusted_user = _actor(3, "user3", "user", effective_level="trusted")
+    _official_hot_wallet(service, 1)
+    _official_hot_wallet(service, 2)
+    destination = _official_hot_wallet(service, 4)
+
+    treasury = service.create_treasury_transfer_proposal(
+        actor=manager,
+        destination_wallet_address=destination["address"],
+        amount=11,
+        reason="manager-only voter visibility test",
+        action_type="CONTEST_REWARD_PAYOUT",
+    )["proposal"]
+    public = service.create_public_governance_proposal(
+        actor=trusted_user,
+        action_type="MARK_SCAM",
+        title="public voter visibility test",
+        target_address="pc1" + ("8" * 48),
+        reason="trusted users can vote on public governance",
+        evidence=["visibility-public-evidence"],
+    )["proposal"]
+
+    manager_uuids = {
+        item["proposal_uuid"]
+        for item in service.list_governance_proposals(actor=manager, limit=20)["proposals"]
+    }
+    user_uuids = {
+        item["proposal_uuid"]
+        for item in service.list_governance_proposals(actor=trusted_user, limit=20)["proposals"]
+    }
+
+    assert treasury["proposal_uuid"] in manager_uuids
+    assert public["proposal_uuid"] in manager_uuids
+    assert public["proposal_uuid"] in user_uuids
+    assert treasury["proposal_uuid"] not in user_uuids
+
+
 def test_official_treasury_requires_multisig_after_governance_passes(tmp_path):
     service = _service(tmp_path, user_count=10)
     root = _actor(1, "root", "super_admin")
@@ -1502,6 +1541,30 @@ def test_account_bound_official_hot_wallet_can_open_and_reply_to_dispute_without
     assert result["initial_provisional_freeze"]["wallet_address"] == attacker_wallet["address"]
     assert service.explorer_wallet(attacker_wallet["address"])["wallet"]["points_frozen"] == 0
     _assert_address_dispute_payload_is_deidentified(dispute)
+    assert result["notifications"]["direct_official_hot_owner"] is True
+    assert result["notifications"]["created_count"] == 1
+    conn = service.get_db()
+    try:
+        note = conn.execute(
+            "SELECT * FROM notifications WHERE type='points_chain_address_dispute_reply_required' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert note is not None
+        assert int(note["user_id"]) == attacker["id"]
+        assert "被懷疑有詐騙行為" in note["body"]
+        assert "請 To 地址擁有者進行回覆" in note["body"]
+        assert "若無則逕付治理投票" in note["body"]
+        metadata = json.loads(note["metadata_json"])
+        assert metadata["action"] == "points_chain_dispute_reply"
+        assert metadata["dispute_uuid"] == dispute["dispute_uuid"]
+        assert metadata["tx_hash"] == transfer["transaction_hash"]
+        assert metadata["to_wallet_address"] == attacker_wallet["address"]
+        assert metadata["direct_official_hot_owner"] is True
+    finally:
+        conn.close()
+    manager_disputes = service.list_transaction_disputes(actor=_actor(2, "user2", "manager"))
+    assert manager_disputes["official_hot_wallet_labels"][attacker_wallet["address"]] == "user4"
+    user_disputes = service.list_transaction_disputes(actor=victim)
+    assert "official_hot_wallet_labels" not in user_disputes
 
     with pytest.raises(ValueError, match="account-bound official hot wallet"):
         service.reply_transaction_dispute(
@@ -1524,6 +1587,146 @@ def test_account_bound_official_hot_wallet_can_open_and_reply_to_dispute_without
     assert replied["reply_signature_verified"] is True
     assert replied["reply_statement_hash"]
     _assert_address_dispute_payload_is_deidentified(replied)
+    reviewed = service.review_transaction_dispute(
+        actor=_actor(2, "user2", "manager"),
+        dispute_uuid=dispute["dispute_uuid"],
+        status="approved",
+        review_note="Escalate with both sides attached to governance materials.",
+        recommended_strategy="tainted_remainder_return",
+        create_proposal=True,
+    )
+    payload = reviewed["proposal"]["payload"]
+    assert payload["victim_statement"] == dispute["statement"]
+    assert payload["victim_evidence_refs"] == ["official-hot-account-bound"]
+    assert payload["counterparty_reply"]["statement"] == replied["reply_statement"]
+    assert payload["counterparty_reply"]["evidence_refs"] == ["official-hot-account-bound-reply"]
+    assert payload["counterparty_reply"]["address_signature_verified"] is True
+
+
+def test_dispute_to_non_official_hot_address_sends_sitewide_reply_notice(tmp_path):
+    service = _service(tmp_path, user_count=5)
+    victim = _actor(3, "user3", "user", effective_level="trusted")
+    victim_wallet = _official_hot_wallet(service, 3)
+    attacker_wallet, _attacker_key = _self_custody_wallet(service, 4)
+    grant = _official_treasury_grant_via_governance(
+        service,
+        destination_wallet_address=victim_wallet["address"],
+        amount=100,
+        request_uuid="sitewide-dispute-notice-grant",
+    )
+    _force_request_proved(service, grant["transaction_hash"])
+    service.explorer_transaction(grant["transaction_hash"])
+    transfer = service.submit_wallet_transaction(
+        actor=victim,
+        source_wallet_address=victim_wallet["address"],
+        destination_wallet_address=attacker_wallet["address"],
+        amount_points=25,
+        fee_points=1,
+        request_uuid="sitewide-dispute-notice-transfer",
+    )
+    _force_request_proved(service, transfer["transaction_hash"])
+    tx = service.explorer_transaction(transfer["transaction_hash"])["transaction"]
+
+    result = service.create_transaction_dispute(
+        actor=victim,
+        tx_hash=transfer["transaction_hash"],
+        statement="Official hot source asks sitewide notice for unknown To holder.",
+        victim_wallet_address=victim_wallet["address"],
+        claimed_amount_points=25,
+        loss_cause="unknown",
+        evidence=["sitewide-evidence-ref"],
+        signature_nonce="sitewide-dispute-notice-open",
+        from_wallet_address=victim_wallet["address"],
+        to_wallet_address=attacker_wallet["address"],
+        chain_branch=tx["chain_branch"],
+        account_bound_proof=True,
+    )
+
+    assert result["notifications"]["direct_official_hot_owner"] is False
+    assert result["notifications"]["created_count"] == 5
+    conn = service.get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM notifications WHERE source_ref=? ORDER BY user_id ASC",
+            (result["dispute"]["dispute_uuid"],),
+        ).fetchall()
+        assert [int(row["user_id"]) for row in rows] == [1, 2, 3, 4, 5]
+        assert all("sitewide-evidence-ref" in row["body"] for row in rows)
+        assert all("若無則逕付治理投票" in row["body"] for row in rows)
+        metadata = json.loads(rows[0]["metadata_json"])
+        assert metadata["action"] == "points_chain_dispute_reply"
+        assert metadata["direct_official_hot_owner"] is False
+    finally:
+        conn.close()
+
+
+def test_to_can_reply_after_dispute_has_entered_governance_voting(tmp_path):
+    service = _service(tmp_path, user_count=10)
+    victim = _actor(3, "user3", "user", effective_level="trusted")
+    attacker = _actor(4, "user4", "user", effective_level="trusted")
+    manager = _actor(2, "user2", "manager")
+    victim_wallet = _official_hot_wallet(service, 3)
+    attacker_wallet = _official_hot_wallet(service, 4)
+    grant = _official_treasury_grant_via_governance(
+        service,
+        destination_wallet_address=victim_wallet["address"],
+        amount=100,
+        request_uuid="late-reply-dispute-grant",
+    )
+    _force_request_proved(service, grant["transaction_hash"])
+    service.explorer_transaction(grant["transaction_hash"])
+    transfer = service.submit_wallet_transaction(
+        actor=victim,
+        source_wallet_address=victim_wallet["address"],
+        destination_wallet_address=attacker_wallet["address"],
+        amount_points=25,
+        fee_points=1,
+        request_uuid="late-reply-dispute-transfer",
+    )
+    _force_request_proved(service, transfer["transaction_hash"])
+    tx = service.explorer_transaction(transfer["transaction_hash"])["transaction"]
+    dispute = service.create_transaction_dispute(
+        actor=victim,
+        tx_hash=transfer["transaction_hash"],
+        statement="Victim opens dispute before To has time to reply.",
+        victim_wallet_address=victim_wallet["address"],
+        claimed_amount_points=25,
+        loss_cause="unknown",
+        evidence=["late-reply-open-evidence"],
+        signature_nonce="late-reply-open",
+        from_wallet_address=victim_wallet["address"],
+        to_wallet_address=attacker_wallet["address"],
+        chain_branch=tx["chain_branch"],
+        account_bound_proof=True,
+    )["dispute"]
+    reviewed = service.review_transaction_dispute(
+        actor=manager,
+        dispute_uuid=dispute["dispute_uuid"],
+        status="approved",
+        review_note="Move to voting before To reply arrives.",
+        recommended_strategy="tainted_remainder_return",
+        create_proposal=True,
+    )
+    proposal_uuid = reviewed["proposal"]["proposal_uuid"]
+    assert reviewed["dispute"]["status"] == "proposal_created"
+    assert not reviewed["proposal"]["payload"].get("counterparty_reply")
+
+    replied = service.reply_transaction_dispute(
+        actor=attacker,
+        dispute_uuid=dispute["dispute_uuid"],
+        statement="Late To reply after governance voting started.",
+        evidence=["late-reply-counter-evidence"],
+        signature_nonce="late-reply-account-bound",
+        account_bound_proof=True,
+    )["dispute"]
+    assert replied["reply_signature_verified"] is True
+
+    proposals = service.list_governance_proposals(actor=manager, limit=20)["proposals"]
+    proposal = next(item for item in proposals if item["proposal_uuid"] == proposal_uuid)
+    assert proposal["execution_readiness"]["payload_verified"] is True
+    assert proposal["payload"]["counterparty_reply_source"] == "latest_dispute_reply_overlay_v1"
+    assert proposal["payload"]["counterparty_reply"]["statement"] == replied["reply_statement"]
+    assert proposal["payload"]["counterparty_reply"]["evidence_refs"] == ["late-reply-counter-evidence"]
 
 
 def test_root_uses_governance_not_anonymous_address_disputes(tmp_path):

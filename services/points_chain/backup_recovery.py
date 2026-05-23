@@ -20,6 +20,7 @@ def _backup_payload(self, conn):
         "points_chain_audit_logs": rows("SELECT * FROM points_chain_audit_logs ORDER BY id ASC"),
         "points_wallets_snapshot": rows("SELECT * FROM points_wallets ORDER BY user_id ASC"),
         "points_wallet_identities": table_rows("points_wallet_identities"),
+        "points_wallet_identity_bindings": table_rows("points_wallet_identity_bindings"),
         "points_chain_transfer_requests": table_rows("points_chain_transfer_requests"),
         "points_service_fee_charges": table_rows("points_service_fee_charges"),
         "points_economy_fund_wallets": table_rows("points_economy_fund_wallets", "fund_key ASC"),

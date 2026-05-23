@@ -15,6 +15,7 @@ from services.points_chain import (
     delete_cold_wallet,
     delete_primary_cold_wallet,
     ensure_system_wallets,
+    list_wallet_identities,
     wallet_onboarding_status,
 )
 from services.governance.sanction_notices import record_admin_sanction_notice
@@ -93,15 +94,7 @@ def register_economy_routes(app, deps):
         return user_id if user_id > 0 else None
 
     def active_user_wallet_rows(conn, user_id):
-        return conn.execute(
-            """
-            SELECT id, address
-            FROM points_wallet_identities
-            WHERE user_id=? AND status IN ('pending_backup', 'active')
-            ORDER BY id ASC
-            """,
-            (int(user_id),),
-        ).fetchall()
+        return list_wallet_identities(conn, int(user_id))
 
     def _stable_spend_key(*, user_id, item_key, quantity):
         payload = json.dumps(

@@ -15,6 +15,7 @@ from .wallet_identity import (
     delete_primary_cold_wallet,
     ensure_system_wallets,
     ensure_wallet_identity_schema,
+    list_wallet_identities,
     serialize_wallet_identity,
     wallet_binding_payload,
     wallet_service_fee_payload,

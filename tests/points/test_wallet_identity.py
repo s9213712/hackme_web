@@ -682,32 +682,58 @@ def test_lost_cold_wallet_can_be_claimed_by_private_key_and_balance_follows_addr
         )
         status_user1 = wallet_onboarding_status(conn, points_service=points, user_id=1)
         status_user2 = wallet_onboarding_status(conn, points_service=points, user_id=2)
-        with pytest.raises(ValueError, match="already bound to another active user"):
-            bind_self_custody_wallet(
-                conn,
+        restored_again = bind_self_custody_wallet(
+            conn,
+            user_id=1,
+            wallet_type="imported_cold",
+            public_key_jwk=public_jwk,
+            address=address,
+            signature=_signature(private_key, wallet_binding_payload(
                 user_id=1,
                 wallet_type="imported_cold",
-                public_key_jwk=public_jwk,
                 address=address,
-                signature=_signature(private_key, wallet_binding_payload(
-                    user_id=1,
-                    wallet_type="imported_cold",
-                    address=address,
-                    public_key_jwk=public_jwk,
-                )),
-                backup_confirmed=True,
-            )
+                public_key_jwk=public_jwk,
+            )),
+            backup_confirmed=True,
+        )
+        status_user1_after_restore = wallet_onboarding_status(conn, points_service=points, user_id=1)
         conn.commit()
     finally:
         conn.close()
 
     assert restored["user_id"] == 2
     assert restored["address"] == address
-    assert restored["metadata"]["claimed_lost_wallet"] is True
+    assert restored["metadata"]["shared_private_key_control"] is True
     assert status_user1["wallet"] is None
     assert status_user2["wallet"]["address"] == address
-    assert points.get_wallet(1)["points_balance"] == 0
+    assert restored_again["user_id"] == 1
+    assert restored_again["address"] == address
+    assert restored_again["metadata"]["claimed_lost_wallet"] is True
+    assert status_user1_after_restore["wallet"]["address"] == address
+    assert points.get_wallet(1)["points_balance"] == 77
     assert points.get_wallet(2)["points_balance"] == 77
+    tx_payload = wallet_transaction_payload(
+        user_id=2,
+        source_wallet_address=address,
+        destination_wallet_address=BURN_WALLET_ADDRESS,
+        amount_points=5,
+        fee_points=1,
+        request_uuid="shared-key-holder-first-spend-wins",
+        memo="shared key holder spends first",
+        chain_branch="main",
+        signer_key_id=restored["public_key_hash"],
+    )
+    spend = points.submit_wallet_transaction(
+        actor={"id": 2, "username": "bob", "role": "user"},
+        source_wallet_address=address,
+        destination_wallet_address=BURN_WALLET_ADDRESS,
+        amount_points=5,
+        fee_points=1,
+        request_uuid="shared-key-holder-first-spend-wins",
+        memo="shared key holder spends first",
+        signature=_signature(private_key, tx_payload),
+    )
+    assert spend["created"] is True
     assert points.verify_chain()["ok"] is True
     conn = points.get_db()
     try:
@@ -715,7 +741,7 @@ def test_lost_cold_wallet_can_be_claimed_by_private_key_and_balance_follows_addr
         row2 = conn.execute("SELECT soft_balance FROM points_wallets WHERE user_id=2").fetchone()
     finally:
         conn.close()
-    assert int(row1["soft_balance"]) == 0
+    assert int(row1["soft_balance"]) == 77
     assert int(row2["soft_balance"]) == 77
 
 

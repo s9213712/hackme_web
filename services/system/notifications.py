@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 
 
@@ -170,6 +171,13 @@ def create_root_notification_if_enabled(conn, *, type, title, body, link=None, o
 
 
 def serialize_notification(row):
+    metadata = {}
+    if "metadata_json" in row.keys() and row["metadata_json"]:
+        try:
+            parsed = json.loads(row["metadata_json"])
+            metadata = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            metadata = {}
     return {
         "id": row["id"],
         "user_id": row["user_id"],
@@ -183,6 +191,7 @@ def serialize_notification(row):
         "dismissed_at": row["dismissed_at"] if "dismissed_at" in row.keys() else None,
         "source_module": row["source_module"] if "source_module" in row.keys() else None,
         "source_ref": row["source_ref"] if "source_ref" in row.keys() else None,
+        "metadata": metadata,
         "created_at": row["created_at"],
         "read_at": row["read_at"],
     }

@@ -130,6 +130,37 @@ def ensure_wallet_identity_schema(conn):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_wallet_identity_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            wallet_identity_id INTEGER NOT NULL REFERENCES points_wallet_identities(id) ON DELETE CASCADE,
+            address TEXT NOT NULL,
+            wallet_type TEXT NOT NULL,
+            is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+            status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'lost', 'revoked', 'disabled')),
+            label TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, address)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_points_wallet_binding_one_primary
+        ON points_wallet_identity_bindings(user_id)
+        WHERE is_primary=1 AND status='active'
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_points_wallet_binding_user
+        ON points_wallet_identity_bindings(user_id, status, created_at)
+        """
+    )
 
 
 def _json_loads(raw, fallback=None):
@@ -585,6 +616,66 @@ def serialize_wallet_identity(row):
     }
 
 
+def _wallet_identity_binding_view(row, binding):
+    data = dict(row)
+    binding_metadata = _json_loads(binding["metadata_json"], {})
+    metadata = _json_loads(row["metadata_json"], {})
+    metadata.update(binding_metadata)
+    metadata.update({
+        "address_control_model": "self_custody_private_key_controls_address_v1",
+        "binding_record": True,
+        "binding_id": int(binding["id"]),
+    })
+    data.update({
+        "user_id": int(binding["user_id"]),
+        "wallet_type": binding["wallet_type"] or row["wallet_type"],
+        "is_primary": int(binding["is_primary"] or 0),
+        "status": binding["status"],
+        "label": binding["label"] or row["label"],
+        "metadata_json": canonical_json(metadata),
+        "created_at": binding["created_at"],
+        "updated_at": binding["updated_at"],
+    })
+    return data
+
+
+def _bound_wallet_identity_for_user_address(conn, user_id, address, *, active_only=True):
+    status_filter = "AND b.status='active'" if active_only else ""
+    return conn.execute(
+        f"""
+        SELECT w.*, b.id AS binding_id, b.user_id AS binding_user_id,
+               b.wallet_type AS binding_wallet_type, b.is_primary AS binding_is_primary,
+               b.status AS binding_status, b.label AS binding_label,
+               b.metadata_json AS binding_metadata_json,
+               b.created_at AS binding_created_at, b.updated_at AS binding_updated_at
+        FROM points_wallet_identity_bindings b
+        JOIN points_wallet_identities w ON w.id=b.wallet_identity_id
+        WHERE b.user_id=? AND b.address=?
+          {status_filter}
+        LIMIT 1
+        """,
+        (int(user_id), str(address or "").strip().lower()),
+    ).fetchone()
+
+
+def _binding_view_from_joined_row(row):
+    if not row:
+        return None
+    wallet = {key: row[key] for key in row.keys() if not str(key).startswith("binding_")}
+    binding = {
+        "id": row["binding_id"],
+        "user_id": row["binding_user_id"],
+        "wallet_type": row["binding_wallet_type"],
+        "is_primary": row["binding_is_primary"],
+        "status": row["binding_status"],
+        "label": row["binding_label"],
+        "metadata_json": row["binding_metadata_json"],
+        "created_at": row["binding_created_at"],
+        "updated_at": row["binding_updated_at"],
+    }
+    return _wallet_identity_binding_view(wallet, binding)
+
+
 def _record_onboarding_event(conn, *, user_id, wallet_identity_id=None, event_type, detail=None):
     conn.execute(
         """
@@ -604,7 +695,7 @@ def _record_onboarding_event(conn, *, user_id, wallet_identity_id=None, event_ty
 
 def get_primary_wallet_identity(conn, user_id):
     ensure_wallet_identity_schema(conn)
-    return conn.execute(
+    row = conn.execute(
         """
         SELECT * FROM points_wallet_identities
         WHERE user_id=? AND is_primary=1 AND status IN ('pending_backup', 'active')
@@ -613,23 +704,63 @@ def get_primary_wallet_identity(conn, user_id):
         """,
         (int(user_id),),
     ).fetchone()
+    if row:
+        return row
+    binding = conn.execute(
+        """
+        SELECT w.*, b.id AS binding_id, b.user_id AS binding_user_id,
+               b.wallet_type AS binding_wallet_type, b.is_primary AS binding_is_primary,
+               b.status AS binding_status, b.label AS binding_label,
+               b.metadata_json AS binding_metadata_json,
+               b.created_at AS binding_created_at, b.updated_at AS binding_updated_at
+        FROM points_wallet_identity_bindings b
+        JOIN points_wallet_identities w ON w.id=b.wallet_identity_id
+        WHERE b.user_id=? AND b.is_primary=1 AND b.status='active'
+        ORDER BY b.id DESC
+        LIMIT 1
+        """,
+        (int(user_id),),
+    ).fetchone()
+    return _binding_view_from_joined_row(binding)
 
 
 def list_wallet_identities(conn, user_id, *, include_inactive=False):
     ensure_wallet_identity_schema(conn)
     status_filter = "" if include_inactive else "AND status IN ('pending_backup', 'active')"
-    return [
-        serialize_wallet_identity(row)
-        for row in conn.execute(
-            f"""
-            SELECT * FROM points_wallet_identities
-            WHERE user_id=?
-            {status_filter}
-            ORDER BY is_primary DESC, created_at DESC, id DESC
-            """,
-            (int(user_id),),
-        ).fetchall()
-    ]
+    direct_rows = conn.execute(
+        f"""
+        SELECT * FROM points_wallet_identities
+        WHERE user_id=?
+        {status_filter}
+        ORDER BY is_primary DESC, created_at DESC, id DESC
+        """,
+        (int(user_id),),
+    ).fetchall()
+    binding_status_filter = "" if include_inactive else "AND b.status='active'"
+    binding_rows = conn.execute(
+        f"""
+        SELECT w.*, b.id AS binding_id, b.user_id AS binding_user_id,
+               b.wallet_type AS binding_wallet_type, b.is_primary AS binding_is_primary,
+               b.status AS binding_status, b.label AS binding_label,
+               b.metadata_json AS binding_metadata_json,
+               b.created_at AS binding_created_at, b.updated_at AS binding_updated_at
+        FROM points_wallet_identity_bindings b
+        JOIN points_wallet_identities w ON w.id=b.wallet_identity_id
+        WHERE b.user_id=?
+          {binding_status_filter}
+        ORDER BY b.is_primary DESC, b.created_at DESC, b.id DESC
+        """,
+        (int(user_id),),
+    ).fetchall()
+    direct_addresses = {str(row["address"] or "").strip().lower() for row in direct_rows}
+    wallets = [serialize_wallet_identity(row) for row in direct_rows]
+    for row in binding_rows:
+        address = str(row["address"] or "").strip().lower()
+        if address in direct_addresses:
+            continue
+        wallets.append(serialize_wallet_identity(_binding_view_from_joined_row(row)))
+    wallets.sort(key=lambda item: (0 if item.get("is_primary") else 1, str(item.get("created_at") or ""), int(item.get("id") or 0)), reverse=False)
+    return wallets
 
 
 def signup_bonus_granted(conn, user_id):
@@ -783,12 +914,15 @@ def bind_self_custody_wallet(
         signature=signature,
     )
     primary = get_primary_wallet_identity(conn, user_id)
-    row = conn.execute("SELECT * FROM points_wallet_identities WHERE address=?", (address,)).fetchone()
-    row_user_id = int(row["user_id"] or 0) if row else 0
-    row_status = str(row["status"] or "") if row else ""
-    cross_account_lost_restore = bool(row and row_user_id != int(user_id) and row_status == "lost")
-    if row and row_user_id != int(user_id) and not cross_account_lost_restore:
-        raise ValueError("wallet address is already bound to another active user")
+    row = conn.execute(
+        """
+        SELECT * FROM points_wallet_identities
+        WHERE user_id=? AND address=?
+        ORDER BY CASE WHEN status IN ('pending_backup', 'active') THEN 0 ELSE 1 END, id DESC
+        LIMIT 1
+        """,
+        (int(user_id), address),
+    ).fetchone()
     now = utc_now()
     if row:
         metadata = _json_loads(row["metadata_json"], {})
@@ -798,10 +932,8 @@ def bind_self_custody_wallet(
             "restored_requires_private_key": True,
             "restored_at": now,
             "previous_status": row["status"],
-            "claimed_lost_wallet": cross_account_lost_restore,
+            "claimed_lost_wallet": str(row["status"] or "") == "lost",
         })
-        if cross_account_lost_restore:
-            metadata["previous_user_id"] = row_user_id
         conn.execute(
             """
             UPDATE points_wallet_identities
@@ -834,10 +966,87 @@ def bind_self_custody_wallet(
             detail={
                 "address": address,
                 "restore_requires_private_key": True,
-                "claimed_lost_wallet": cross_account_lost_restore,
+                "claimed_lost_wallet": str(row["status"] or "") == "lost",
             },
         )
         return serialize_wallet_identity(conn.execute("SELECT * FROM points_wallet_identities WHERE id=?", (row["id"],)).fetchone())
+    canonical_row = conn.execute(
+        """
+        SELECT * FROM points_wallet_identities
+        WHERE address=?
+        ORDER BY CASE WHEN status IN ('pending_backup', 'active') THEN 0 ELSE 1 END, id ASC
+        LIMIT 1
+        """,
+        (address,),
+    ).fetchone()
+    if canonical_row:
+        existing_binding = conn.execute(
+            """
+            SELECT * FROM points_wallet_identity_bindings
+            WHERE user_id=? AND address=?
+            LIMIT 1
+            """,
+            (int(user_id), address),
+        ).fetchone()
+        metadata = {
+            "private_key_server_received": False,
+            "backup_confirmed": True,
+            "shared_private_key_control": True,
+            "address_control_model": "self_custody_private_key_controls_address_v1",
+            "bound_without_disclosing_other_account": True,
+        }
+        if existing_binding:
+            conn.execute(
+                """
+                UPDATE points_wallet_identity_bindings
+                SET wallet_type=?, is_primary=?, status='active', label=?, metadata_json=?, updated_at=?
+                WHERE id=?
+                """,
+                (
+                    wallet_type,
+                    1 if (not primary or primary["address"] == address) else 0,
+                    str(label or ("冷錢包" if wallet_type == "self_custody_cold" else "匯入冷錢包"))[:120],
+                    canonical_json({**_json_loads(existing_binding["metadata_json"], {}), **metadata, "restored_at": now}),
+                    now,
+                    existing_binding["id"],
+                ),
+            )
+            binding = conn.execute("SELECT * FROM points_wallet_identity_bindings WHERE id=?", (existing_binding["id"],)).fetchone()
+            event_type = f"{wallet_type}_binding_restored"
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO points_wallet_identity_bindings (
+                    user_id, wallet_identity_id, address, wallet_type, is_primary,
+                    status, label, metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                """,
+                (
+                    int(user_id),
+                    int(canonical_row["id"]),
+                    address,
+                    wallet_type,
+                    0 if primary else 1,
+                    str(label or ("冷錢包" if wallet_type == "self_custody_cold" else "匯入冷錢包"))[:120],
+                    canonical_json(metadata),
+                    now,
+                    now,
+                ),
+            )
+            binding = conn.execute("SELECT * FROM points_wallet_identity_bindings WHERE id=?", (cur.lastrowid,)).fetchone()
+            event_type = f"{wallet_type}_binding_created"
+        _record_onboarding_event(
+            conn,
+            user_id=user_id,
+            wallet_identity_id=canonical_row["id"],
+            event_type=event_type,
+            detail={
+                "address": address,
+                "private_key_proof": True,
+                "address_control_model": "self_custody_private_key_controls_address_v1",
+            },
+        )
+        return serialize_wallet_identity(_wallet_identity_binding_view(canonical_row, binding))
     cur = conn.execute(
         """
         INSERT INTO points_wallet_identities (
@@ -869,6 +1078,7 @@ def bind_self_custody_wallet(
 def delete_cold_wallet(conn, *, user_id, address="", reason=""):
     ensure_wallet_identity_schema(conn)
     address = str(address or "").strip().lower()
+    binding = None
     if address:
         primary = conn.execute(
             """
@@ -878,13 +1088,49 @@ def delete_cold_wallet(conn, *, user_id, address="", reason=""):
             """,
             (int(user_id), normalize_wallet_address(address)),
         ).fetchone()
+        if not primary:
+            binding = _bound_wallet_identity_for_user_address(conn, user_id, normalize_wallet_address(address), active_only=True)
+            primary = _binding_view_from_joined_row(binding)
     else:
         primary = get_primary_wallet_identity(conn, user_id)
+        if primary and _json_loads(primary["metadata_json"], {}).get("binding_record"):
+            binding = _bound_wallet_identity_for_user_address(conn, user_id, primary["address"], active_only=True)
     if not primary:
         raise ValueError("no active wallet is bound")
     if primary["wallet_type"] not in {"self_custody_cold", "imported_cold"} or primary["custody_mode"] != "self_custody":
         raise ValueError("only self-custody cold wallets can be deleted; official hot wallets cannot be deleted")
     now = utc_now()
+    if binding:
+        metadata = _json_loads(binding["binding_metadata_json"], {})
+        metadata.update({
+            "deleted_at": now,
+            "delete_reason": str(reason or "")[:240],
+            "restore_requires_private_key": True,
+            "financial_source_of_truth": "points_ledger",
+            "address_control_model": "self_custody_private_key_controls_address_v1",
+        })
+        conn.execute(
+            """
+            UPDATE points_wallet_identity_bindings
+            SET is_primary=0, status='lost', metadata_json=?, updated_at=?
+            WHERE id=?
+            """,
+            (canonical_json(metadata), now, binding["binding_id"]),
+        )
+        _record_onboarding_event(
+            conn,
+            user_id=user_id,
+            wallet_identity_id=primary["id"],
+            event_type="cold_wallet_deleted",
+            detail={
+                "address": primary["address"],
+                "wallet_type": primary["wallet_type"],
+                "restore_requires_private_key": True,
+                "binding_record": True,
+            },
+        )
+        refreshed = _bound_wallet_identity_for_user_address(conn, user_id, primary["address"], active_only=False)
+        return serialize_wallet_identity(_binding_view_from_joined_row(refreshed))
     metadata = _json_loads(primary["metadata_json"], {})
     metadata.update({
         "deleted_at": now,

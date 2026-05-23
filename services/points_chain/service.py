@@ -17,6 +17,8 @@ from .wallet_identity import (
     address_dispute_payload,
     canonical_public_jwk,
     ensure_wallet_identity_schema,
+    get_primary_wallet_identity,
+    list_wallet_identities,
     verify_wallet_address_dispute_signature,
     verify_wallet_service_fee_signature,
     verify_wallet_transaction_signature,
@@ -260,7 +262,7 @@ class PointsLedgerService:
             raise PermissionError("chain branch is read-only and cannot accept new transactions")
         return branch
 
-    def _wallet_totals_from_ledger(self, rows, *, branch_uuid=None):
+    def _wallet_totals_from_ledger(self, rows, *, branch_uuid=None, strict=True):
         totals = {}
         branch_filter = str(branch_uuid or "").strip()
         for row in rows:
@@ -294,7 +296,7 @@ class PointsLedgerService:
                 item["frozen"] -= amount
             item["earned"] += earned_delta
             item["spent"] += spent_delta
-            if item["balance"] < 0 or item["frozen"] < 0:
+            if strict and (item["balance"] < 0 or item["frozen"] < 0):
                 raise ValueError(f"ledger replay would create negative wallet for user {user_id}")
         return totals
 
@@ -308,7 +310,8 @@ class PointsLedgerService:
             """,
             (int(user_id), branch),
         ).fetchall()
-        return self._wallet_totals_from_ledger(rows, branch_uuid=branch).get(int(user_id), {
+        strict_replay = not self._wallet_identity_has_history(conn, user_id)
+        return self._wallet_totals_from_ledger(rows, branch_uuid=branch, strict=strict_replay).get(int(user_id), {
             "balance": 0,
             "frozen": 0,
             "earned": 0,
@@ -342,7 +345,7 @@ class PointsLedgerService:
         try:
             branch = self._canonical_branch_uuid(conn)
             rows = conn.execute("SELECT * FROM points_ledger WHERE chain_branch=? ORDER BY id ASC", (branch,)).fetchall()
-            totals = self._wallet_totals_from_ledger(rows, branch_uuid=branch)
+            totals = self._wallet_totals_from_ledger(rows, branch_uuid=branch, strict=False)
             now = utc_now()
             existing = {
                 int(row["user_id"]): dict(row)
@@ -354,7 +357,10 @@ class PointsLedgerService:
             for user_id in sorted(user_ids):
                 old = existing.get(user_id, {})
                 total = totals.get(user_id, {"balance": 0, "frozen": 0, "earned": 0, "spent": 0})
+                has_identity = self._wallet_identity_has_history(conn, user_id)
                 total = self._wallet_identity_adjusted_totals(conn, user_id, total)
+                if not has_identity and (int(total.get("balance") or 0) < 0 or int(total.get("frozen") or 0) < 0):
+                    raise ValueError(f"ledger replay would create negative wallet for user {user_id}")
                 conn.execute(
                     """
                     INSERT INTO points_wallets (
@@ -2186,6 +2192,159 @@ class PointsLedgerService:
             (actor_id, wallet_address),
         ).fetchone()
 
+    def _official_hot_wallet_owner_for_address_locked(self, conn, wallet_address):
+        wallet_address = str(wallet_address or "").strip().lower()
+        if not WALLET_ADDRESS_RE.fullmatch(wallet_address):
+            return None
+        return conn.execute(
+            """
+            SELECT w.user_id, u.username, w.address
+            FROM points_wallet_identities w
+            JOIN users u ON u.id=w.user_id
+            WHERE w.address=?
+              AND w.wallet_type='official_hot'
+              AND w.custody_mode='server_hot'
+              AND w.status IN ('pending_backup', 'active')
+              AND COALESCE(u.status, 'active')='active'
+            LIMIT 1
+            """,
+            (wallet_address,),
+        ).fetchone()
+
+    def _active_notification_user_ids_locked(self, conn):
+        rows = conn.execute(
+            """
+            SELECT id FROM users
+            WHERE COALESCE(status, 'active')='active'
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        return [int(row["id"]) for row in rows if int(row["id"] or 0) > 0]
+
+    def _transaction_dispute_notification_clues(self, *, tx_hash, statement="", evidence_list=None):
+        clues = [str(tx_hash or "").strip()]
+        if str(statement or "").strip():
+            clues.append(f"申訴說明：{str(statement or '').strip()}")
+        clues.extend(str(item or "").strip() for item in (evidence_list or []) if str(item or "").strip())
+        text = "；".join(item for item in clues if item)
+        if len(text) > 280:
+            text = text[:277] + "..."
+        return text or "未提供額外線索"
+
+    def _notify_transaction_dispute_opened_locked(
+        self,
+        conn,
+        *,
+        dispute_uuid,
+        tx_hash,
+        from_address,
+        to_address,
+        amount,
+        branch,
+        evidence_list,
+        reply_deadline=None,
+        statement="",
+    ):
+        from services.system.notifications import create_notification
+
+        direct_owner = self._official_hot_wallet_owner_for_address_locked(conn, to_address)
+        if direct_owner:
+            recipient_ids = [int(direct_owner["user_id"])]
+            audience = "user"
+            direct_official_hot_owner = True
+        else:
+            recipient_ids = self._active_notification_user_ids_locked(conn)
+            audience = "system"
+            direct_official_hot_owner = False
+        clues = self._transaction_dispute_notification_clues(tx_hash=tx_hash, statement=statement, evidence_list=evidence_list)
+        deadline = str(reply_deadline or "").strip() or "初始短期凍結期限"
+        body = (
+            f"To 的地址 {to_address} 被懷疑有詐騙行為，相關線索：{clues}。"
+            f"請 To 地址擁有者進行回覆，請於 {deadline} 前回覆；若無則逕付治理投票。"
+        )
+        metadata = {
+            "action": "points_chain_dispute_reply",
+            "dispute_uuid": str(dispute_uuid or ""),
+            "tx_hash": str(tx_hash or ""),
+            "from_wallet_address": str(from_address or ""),
+            "to_wallet_address": str(to_address or ""),
+            "claimed_amount_points": int(amount or 0),
+            "chain_branch": str(branch or "main"),
+            "reply_deadline": deadline,
+            "direct_official_hot_owner": direct_official_hot_owner,
+        }
+        created_count = 0
+        for recipient_id in sorted(set(recipient_ids)):
+            if create_notification(
+                conn,
+                user_id=recipient_id,
+                type="points_chain_address_dispute_reply_required",
+                title="To 地址疑義回覆請求",
+                body=body,
+                link="#economy-transactions",
+                severity="warning",
+                audience=audience,
+                source_module="points_chain_dispute",
+                source_ref=str(dispute_uuid or ""),
+                metadata_json=_json_dumps(metadata),
+                expires_at=reply_deadline,
+            ):
+                created_count += 1
+        return {
+            "created_count": created_count,
+            "direct_official_hot_owner": direct_official_hot_owner,
+            "recipient_count": len(set(recipient_ids)),
+        }
+
+    def _official_hot_wallet_labels_locked(self, conn, *, actor=None, addresses=None):
+        if not self._governance_is_manager_actor(actor):
+            return {}
+        normalized = sorted({
+            str(item or "").strip().lower()
+            for item in (addresses or [])
+            if WALLET_ADDRESS_RE.fullmatch(str(item or "").strip().lower())
+        })
+        if not normalized:
+            return {}
+        placeholders = ", ".join("?" for _ in normalized)
+        rows = conn.execute(
+            f"""
+            SELECT w.address, u.username
+            FROM points_wallet_identities w
+            JOIN users u ON u.id=w.user_id
+            WHERE w.address IN ({placeholders})
+              AND w.wallet_type='official_hot'
+              AND w.custody_mode='server_hot'
+              AND w.status IN ('pending_backup', 'active')
+              AND COALESCE(u.status, 'active')='active'
+            """,
+            tuple(normalized),
+        ).fetchall()
+        return {
+            str(row["address"] or "").strip().lower(): str(row["username"] or "").strip()
+            for row in rows
+            if str(row["address"] or "").strip()
+        }
+
+    def _collect_wallet_addresses_from_value(self, value):
+        found = set()
+        if isinstance(value, dict):
+            for key, item in value.items():
+                lowered = str(key or "").lower()
+                if lowered.endswith("address") or lowered.endswith("wallet_address"):
+                    text = str(item or "").strip().lower()
+                    if WALLET_ADDRESS_RE.fullmatch(text):
+                        found.add(text)
+                found.update(self._collect_wallet_addresses_from_value(item))
+        elif isinstance(value, list):
+            for item in value:
+                found.update(self._collect_wallet_addresses_from_value(item))
+        elif isinstance(value, str):
+            text = value.strip().lower()
+            if WALLET_ADDRESS_RE.fullmatch(text):
+                found.add(text)
+        return found
+
     def create_transaction_dispute(
         self,
         *,
@@ -2390,8 +2549,25 @@ class PointsLedgerService:
                     "initial_freeze_expires_at": initial_freeze.get("expires_at") if initial_freeze else None,
                 },
             )
+            notification_status = self._notify_transaction_dispute_opened_locked(
+                conn,
+                dispute_uuid=dispute_uuid,
+                tx_hash=tx_hash,
+                from_address=from_address,
+                to_address=to_address,
+                amount=amount,
+                branch=branch,
+                evidence_list=evidence_list,
+                statement=statement,
+                reply_deadline=initial_freeze.get("expires_at") if initial_freeze else None,
+            )
             conn.commit()
-            return {"ok": True, "dispute": self._serialize_transaction_dispute(conn, dispute_uuid), "initial_provisional_freeze": initial_freeze}
+            return {
+                "ok": True,
+                "dispute": self._serialize_transaction_dispute(conn, dispute_uuid),
+                "initial_provisional_freeze": initial_freeze,
+                "notifications": notification_status,
+            }
         except Exception:
             conn.rollback()
             raise
@@ -2444,6 +2620,49 @@ class PointsLedgerService:
             "updated_at": row["updated_at"],
         }
 
+    def _dispute_reply_payload_from_row(self, row, *, wallet_address=""):
+        keys = set(row.keys())
+        if "reply_statement" not in keys or not str(row["reply_statement"] or "").strip():
+            return {}
+        return {
+            "wallet_address": str(wallet_address or row["to_wallet_address"] or row["suspect_wallet_address"] or "").strip().lower(),
+            "statement": row["reply_statement"] or "",
+            "evidence_refs": _json_loads(row["reply_evidence_json"], []) if "reply_evidence_json" in keys else [],
+            "address_signature_verified": bool(row["reply_signature_verified"]) if "reply_signature_verified" in keys else False,
+            "statement_hash": row["reply_statement_hash"] if "reply_statement_hash" in keys else "",
+            "evidence_hash": row["reply_evidence_hash"] if "reply_evidence_hash" in keys else "",
+            "reply_created_at": row["reply_created_at"] if "reply_created_at" in keys else None,
+        }
+
+    def _governance_payload_with_latest_dispute_reply_locked(self, conn, row, payload):
+        if not isinstance(payload, dict):
+            return payload
+        dispute_uuid = ""
+        reference = str(row["reference"] if "reference" in row.keys() else "").strip()
+        prefix = "transaction_dispute:"
+        if reference.startswith(prefix):
+            dispute_uuid = reference[len(prefix):].strip()
+        if not dispute_uuid:
+            for claim in payload.get("victim_claims") or []:
+                if isinstance(claim, dict) and str(claim.get("claim_id") or "").startswith("pcdispute:"):
+                    dispute_uuid = str(claim.get("claim_id") or "").strip()
+                    break
+        if not dispute_uuid:
+            return payload
+        dispute_row = conn.execute(
+            "SELECT * FROM points_chain_transaction_disputes WHERE dispute_uuid=?",
+            (dispute_uuid,),
+        ).fetchone()
+        if not dispute_row:
+            return payload
+        reply = self._dispute_reply_payload_from_row(
+            dispute_row,
+            wallet_address=str(dispute_row["to_wallet_address"] or dispute_row["suspect_wallet_address"] or "").strip().lower(),
+        )
+        if not reply:
+            return payload
+        return {**payload, "counterparty_reply": reply, "counterparty_reply_source": "latest_dispute_reply_overlay_v1"}
+
     def list_transaction_disputes(self, *, actor, limit=50):
         conn = self.get_db()
         try:
@@ -2476,7 +2695,16 @@ class PointsLedgerService:
                     """,
                     tuple(params),
                 ).fetchall()
-            return {"ok": True, "disputes": [self._serialize_transaction_dispute(conn, row["dispute_uuid"]) for row in rows]}
+            disputes = [self._serialize_transaction_dispute(conn, row["dispute_uuid"]) for row in rows]
+            addresses = set()
+            for item in disputes:
+                addresses.add(str((item or {}).get("from_wallet_address") or (item or {}).get("victim_wallet_address") or "").strip().lower())
+                addresses.add(str((item or {}).get("to_wallet_address") or (item or {}).get("suspect_wallet_address") or "").strip().lower())
+            payload = {"ok": True, "disputes": disputes}
+            labels = self._official_hot_wallet_labels_locked(conn, actor=actor, addresses=addresses)
+            if labels:
+                payload["official_hot_wallet_labels"] = labels
+            return payload
         finally:
             conn.close()
 
@@ -2503,8 +2731,18 @@ class PointsLedgerService:
             row = conn.execute("SELECT * FROM points_chain_transaction_disputes WHERE dispute_uuid=?", (dispute_uuid,)).fetchone()
             if not row:
                 raise ValueError("dispute not found")
-            if str(row["status"] or "") not in {"pending_review", "approved"}:
+            dispute_status = str(row["status"] or "")
+            if dispute_status not in {"pending_review", "approved", "proposal_created"}:
                 raise ValueError("dispute no longer accepts address replies")
+            if dispute_status == "proposal_created":
+                proposal_uuid = str(row["governance_proposal_uuid"] or "").strip()
+                if proposal_uuid:
+                    proposal = conn.execute(
+                        "SELECT status, lifecycle_status FROM points_chain_governance_proposals WHERE proposal_uuid=?",
+                        (proposal_uuid,),
+                    ).fetchone()
+                    if proposal and str(proposal["status"] or "") in {"executed", "cancelled", "expired", "vetoed", "failed"}:
+                        raise ValueError("governance proposal is closed and no longer accepts address replies")
             if int(row["reply_signature_verified"] or 0):
                 raise ValueError("address dispute reply already exists")
             to_address = str(row["to_wallet_address"] or row["suspect_wallet_address"] or "").strip().lower()
@@ -2685,15 +2923,10 @@ class PointsLedgerService:
                     "statement_hash": row.get("statement_hash") or "",
                     "evidence_hash": row.get("evidence_hash") or "",
                 }
-                counterparty_reply = {
-                    "wallet_address": suspect_address,
-                    "statement": row.get("reply_statement") or "",
-                    "evidence_refs": row.get("reply_evidence") or [],
-                    "address_signature_verified": bool(row.get("reply_signature_verified")),
-                    "statement_hash": row.get("reply_statement_hash") or "",
-                    "evidence_hash": row.get("reply_evidence_hash") or "",
-                    "reply_created_at": row.get("reply_created_at"),
-                } if row.get("reply_statement") else {}
+                counterparty_reply = self._dispute_reply_payload_from_row(
+                    conn.execute("SELECT * FROM points_chain_transaction_disputes WHERE dispute_uuid=?", (dispute_uuid,)).fetchone(),
+                    wallet_address=suspect_address,
+                ) if row.get("reply_statement") else {}
                 proposal = self.create_emergency_recovery_branch_proposal(
                     actor=actor,
                     incident_tx_hash=row["tx_hash"],
@@ -4767,6 +5000,7 @@ class PointsLedgerService:
         multisig_status = self._governance_multisig_status_locked(conn, row, actor=actor) if row["governance_domain"] == "OFFICIAL_TREASURY" else {"required": False, "ready": True}
         payload = _json_loads(row["payload_json"], {})
         payload_verified = self._governance_execution_payload_hash_for_row(row) == row["execution_payload_hash"]
+        payload = self._governance_payload_with_latest_dispute_reply_locked(conn, row, payload)
         votes_cast = int(row["yes_count"] or 0) + int(row["no_count"] or 0) + int(row["abstain_count"] or 0)
         if isinstance(payload.get("official_multisig_policy"), dict):
             payload = {**payload, "official_multisig_policy": multisig_status.get("policy", {})}
@@ -4871,20 +5105,39 @@ class PointsLedgerService:
         try:
             self.ensure_schema(conn)
             self._governance_begin_immediate(conn)
+            requested_limit = min(100, max(1, int(limit or 50)))
             rows = conn.execute(
                 """
                 SELECT proposal_uuid
                 FROM points_chain_governance_proposals
                 ORDER BY id DESC LIMIT ?
                 """,
-                (min(100, max(1, int(limit or 50))),),
+                (max(requested_limit * 5, requested_limit),),
             ).fetchall()
             proposals = []
+            actor_id = int(actor_value(actor, "id") or 0)
             for row in rows:
+                if actor_id <= 0:
+                    continue
                 refreshed = self._refresh_governance_proposal_locked(conn, row["proposal_uuid"])
+                eligible = set(int(item) for item in _json_loads(refreshed["eligible_voters_json"], [])) if refreshed else set()
+                if actor_id not in eligible:
+                    continue
                 proposals.append(self._serialize_governance_proposal(conn, refreshed, actor=actor))
+                if len(proposals) >= requested_limit:
+                    break
             conn.commit()
-            return {"ok": True, "proposals": proposals}
+            payload = {"ok": True, "proposals": proposals}
+            if self._governance_is_manager_actor(actor):
+                addresses = set()
+                for proposal in proposals:
+                    for key in ("target_wallet_address", "target_address"):
+                        addresses.add(str(proposal.get(key) or "").strip().lower())
+                    addresses.update(self._collect_wallet_addresses_from_value(proposal.get("payload") or {}))
+                labels = self._official_hot_wallet_labels_locked(conn, actor=actor, addresses=addresses)
+                if labels:
+                    payload["official_hot_wallet_labels"] = labels
+            return payload
         except Exception:
             conn.rollback()
             raise
@@ -5497,30 +5750,17 @@ class PointsLedgerService:
 
     def _primary_wallet_address_for_read(self, conn, user_id):
         try:
-            row = conn.execute(
-                """
-                SELECT address FROM points_wallet_identities
-                WHERE user_id=? AND is_primary=1 AND status IN ('pending_backup', 'active')
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (int(user_id),),
-            ).fetchone()
+            row = get_primary_wallet_identity(conn, user_id)
             return row["address"] if row else ""
         except Exception:
             return ""
 
     def _active_wallet_identity_for_user(self, conn, user_id):
         try:
-            return conn.execute(
-                """
-                SELECT * FROM points_wallet_identities
-                WHERE user_id=? AND is_primary=1 AND status='active'
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (int(user_id),),
-            ).fetchone()
+            row = get_primary_wallet_identity(conn, user_id)
+            if row and str(row["status"] if not isinstance(row, dict) else row.get("status") or "") == "active":
+                return row
+            return None
         except Exception:
             return None
 
@@ -5636,7 +5876,7 @@ class PointsLedgerService:
             return None
         status_filter = "AND status IN ('pending_backup', 'active')" if active_only else ""
         try:
-            return conn.execute(
+            row = conn.execute(
                 f"""
                 SELECT * FROM points_wallet_identities
                 WHERE user_id=? AND address=?
@@ -5645,6 +5885,45 @@ class PointsLedgerService:
                 """,
                 (int(user_id), address),
             ).fetchone()
+            if row:
+                return row
+            binding_status_filter = "AND b.status='active'" if active_only else ""
+            binding = conn.execute(
+                f"""
+                SELECT w.*, b.id AS binding_id, b.user_id AS binding_user_id,
+                       b.wallet_type AS binding_wallet_type, b.is_primary AS binding_is_primary,
+                       b.status AS binding_status, b.label AS binding_label,
+                       b.metadata_json AS binding_metadata_json,
+                       b.created_at AS binding_created_at, b.updated_at AS binding_updated_at
+                FROM points_wallet_identity_bindings b
+                JOIN points_wallet_identities w ON w.id=b.wallet_identity_id
+                WHERE b.user_id=? AND b.address=?
+                  {binding_status_filter}
+                LIMIT 1
+                """,
+                (int(user_id), address),
+            ).fetchone()
+            if not binding:
+                return None
+            data = {key: binding[key] for key in binding.keys() if not str(key).startswith("binding_")}
+            metadata = _json_loads(data.get("metadata_json"), {})
+            metadata.update(_json_loads(binding["binding_metadata_json"], {}))
+            metadata.update({
+                "address_control_model": "self_custody_private_key_controls_address_v1",
+                "binding_record": True,
+                "binding_id": int(binding["binding_id"]),
+            })
+            data.update({
+                "user_id": int(binding["binding_user_id"]),
+                "wallet_type": binding["binding_wallet_type"] or data.get("wallet_type"),
+                "is_primary": int(binding["binding_is_primary"] or 0),
+                "status": binding["binding_status"],
+                "label": binding["binding_label"] or data.get("label") or "",
+                "metadata_json": _json_dumps(metadata),
+                "created_at": binding["binding_created_at"],
+                "updated_at": binding["binding_updated_at"],
+            })
+            return data
         except Exception:
             return None
 
@@ -5658,14 +5937,7 @@ class PointsLedgerService:
 
     def _wallet_identity_state_for_user(self, conn, user_id):
         try:
-            rows = conn.execute(
-                """
-                SELECT * FROM points_wallet_identities
-                WHERE user_id=?
-                ORDER BY id ASC
-                """,
-                (int(user_id),),
-            ).fetchall()
+            rows = list_wallet_identities(conn, int(user_id), include_inactive=True)
         except Exception:
             return {"has_identity": False, "primary": None, "addresses": set()}
         has_identity_history = bool(rows)
@@ -5684,11 +5956,12 @@ class PointsLedgerService:
         primary = None
         addresses = set()
         for row in rows:
-            status = str(row["status"] or "")
-            address = str(row["address"] or "")
+            status = str(row.get("status") if isinstance(row, dict) else row["status"] or "")
+            address = str(row.get("address") if isinstance(row, dict) else row["address"] or "")
             if address and status in {"pending_backup", "active"}:
                 addresses.add(address)
-            if int(row["is_primary"] or 0) and status in {"pending_backup", "active"}:
+            is_primary = bool(row.get("is_primary")) if isinstance(row, dict) else bool(int(row["is_primary"] or 0))
+            if is_primary and status in {"pending_backup", "active"}:
                 primary = row
         return {"has_identity": has_identity_history, "primary": primary, "addresses": addresses}
 
@@ -6195,6 +6468,7 @@ class PointsLedgerService:
             """
             SELECT * FROM points_wallet_identities
             WHERE address=? AND status IN ('pending_backup', 'active')
+              AND (wallet_type='official_hot' OR custody_mode IN ('server_hot', 'system', 'multisig'))
             LIMIT 1
             """,
             (address,),
@@ -7200,7 +7474,7 @@ class PointsLedgerService:
                     "transaction": self._transfer_request_public_payload(conn, existing),
                     **self._transfer_request_ledgers(conn, request_uuid),
                 }
-            source_wallet = self._wallet_identity_owner_for_address(conn, source)
+            source_wallet = self._wallet_identity_row_for_user_address(conn, actor_id, source, active_only=True)
             destination_wallet = self._wallet_identity_owner_for_address(conn, destination)
             if not source_wallet or int(source_wallet["user_id"] or 0) != actor_id:
                 raise PermissionError("source wallet does not belong to current user")
@@ -7407,6 +7681,17 @@ class PointsLedgerService:
             if finalization_paused:
                 payload["warnings"] = [*list(payload.get("warnings") or []), "chain_safe_mode_active_finalization_paused"]
                 payload["recovery"] = safe_mode
+            if self._governance_is_manager_actor(actor):
+                addresses = set()
+                for item in transactions:
+                    addresses.add(str(item.get("source_wallet_address") or "").strip().lower())
+                    addresses.add(str(item.get("destination_wallet_address") or "").strip().lower())
+                    flow = item.get("wallet_flow") if isinstance(item.get("wallet_flow"), dict) else {}
+                    addresses.add(str(flow.get("source_wallet_address") or "").strip().lower())
+                    addresses.add(str(flow.get("destination_wallet_address") or "").strip().lower())
+                labels = self._official_hot_wallet_labels_locked(conn, actor=actor, addresses=addresses)
+                if labels:
+                    payload["official_hot_wallet_labels"] = labels
             return payload
         except Exception:
             conn.rollback()
