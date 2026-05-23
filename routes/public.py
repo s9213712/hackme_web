@@ -14,6 +14,7 @@ from flask import make_response, request, send_from_directory
 
 from services.points_chain import BIRTHDAY_GIFT_POINTS
 from services.security.access_controls import verify_internal_test_token
+from services.server.request_guards import should_require_password_change_flag
 from services.users.recovery import (
     create_password_reset_review_request,
     create_recovery_token,
@@ -908,7 +909,7 @@ def register_public_routes(app, deps):
                     "ok": True,
                     "msg": login_msg,
                     "birthday_gift": birthday_gift,
-                    "must_change_password": bool(user_row["must_change_password"] or 0),
+                    "must_change_password": should_require_password_change_flag(user_row["must_change_password"]),
                     "is_default_password": bool(user_row["is_default_password"] or 0),
                 })
                 resp.set_cookie("session_token", token, max_age=SESSION_TTL,
@@ -1244,7 +1245,7 @@ def register_public_routes(app, deps):
             "violation_score": dict(ctx).get("violation_score") or dict(ctx).get("violation_count") or 0,
             "sanction_status": dict(ctx).get("sanction_status") or "none",
             "sanction_until": dict(ctx).get("sanction_until"),
-            "must_change_password": bool(dict(ctx).get("must_change_password") or 0),
+            "must_change_password": should_require_password_change_flag(dict(ctx).get("must_change_password")),
             "is_default_password": bool(dict(ctx).get("is_default_password") or 0),
             "nickname": decrypt_field(ctx["nickname"]),
             "birthdate": decrypt_field(ctx["birthdate"]),

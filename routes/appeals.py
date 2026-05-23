@@ -431,7 +431,7 @@ def register_appeal_routes(app, deps):
                 points_ledger_uuid = context["points_ledger_uuid"] if context and context["points_ledger_uuid"] else None
                 if points_ledger_uuid and points_service:
                     try:
-                        points_rollback = points_service.rollback_ledger(
+                        points_rollback = points_service.compensate_ledger(
                             actor=actor,
                             ledger_uuid=points_ledger_uuid,
                             reason=f"appeal approved #{appeal_id}: {note or 'root approved'}",
@@ -441,7 +441,7 @@ def register_appeal_routes(app, deps):
                               detail=f"appeal_id={appeal_id} ledger_uuid={points_ledger_uuid} error={exc}")
                         return json_resp({
                             "ok": False,
-                            "msg": "申覆點數帳本 rollback 失敗，申覆狀態尚未變更，請修復後重試",
+                            "msg": "申覆點數補償交易失敗，申覆狀態尚未變更，請修復後重試",
                             "points_ledger_uuid": points_ledger_uuid,
                         }), 500
                 penalty_points = appeal["penalty_points"] or 0

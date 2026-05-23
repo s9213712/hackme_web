@@ -192,6 +192,30 @@ def test_friend_request_accept_and_friend_code_direct_add(tmp_path):
     assert added_by_code.get_json()["request"]["status"] == "accepted"
 
 
+def test_profile_follow_counts_and_follow_unfollow_api(tmp_path):
+    db_path = tmp_path / "profile-follow.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    follow = client.post("/api/users/4/follow")
+    bob_profile = client.get("/api/users/4/profile")
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    own_profile = client.get("/api/users/me/profile")
+    unfollow_actor = {"id": 3, "username": "alice", "role": "user"}
+    actor_box["actor"] = unfollow_actor
+    unfollow = client.delete("/api/users/4/follow")
+    bob_after = client.get("/api/users/4/profile")
+
+    assert follow.status_code == 200
+    assert bob_profile.get_json()["profile"]["follow_status"] == "following"
+    assert bob_profile.get_json()["profile"]["follower_count"] == 1
+    assert own_profile.get_json()["profile"]["follower_count"] == 1
+    assert unfollow.status_code == 200
+    assert bob_after.get_json()["profile"]["follow_status"] == "not_following"
+    assert bob_after.get_json()["profile"]["follower_count"] == 0
+
+
 def test_target_options_are_friends_only_for_personal_context_and_all_users_for_official_context(tmp_path):
     db_path = tmp_path / "target-options.db"
     _seed_db(db_path)

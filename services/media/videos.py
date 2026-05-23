@@ -299,6 +299,7 @@ def ensure_video_schema(conn):
         "boost_points_total": "INTEGER NOT NULL DEFAULT 0",
         "boost_expires_at": "TEXT",
         "boost_last_at": "TEXT",
+        "share_count": "INTEGER NOT NULL DEFAULT 0",
     })
     _ensure_columns(conn, "video_tips", {
         "net_points": "INTEGER NOT NULL DEFAULT 0",
@@ -329,6 +330,8 @@ def ensure_video_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_tips_video_created ON video_tips(video_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_share_links_video_created ON video_share_links(video_id, created_at)")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_video_tips_idempotency ON video_tips(idempotency_key) WHERE idempotency_key IS NOT NULL")
+    if "users" in {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}:
+        _ensure_columns(conn, "users", {"avatar_file_id": "TEXT"})
 
 
 def serialize_video(row, *, actor=None, liked=False):
@@ -344,8 +347,16 @@ def serialize_video(row, *, actor=None, liked=False):
         "coin_total",
         "comment_count",
         "boost_points_total",
+        "share_count",
     ):
         data[key] = _safe_int(data.get(key), 0)
+    data["interaction_score"] = (
+        data.get("view_count", 0)
+        + data.get("like_count", 0) * 4
+        + data.get("comment_count", 0) * 3
+        + data.get("coin_total", 0) * 2
+        + data.get("share_count", 0) * 5
+    )
     data["liked_by_me"] = bool(liked)
     data["can_edit"] = _actor_owns(actor, data["owner_user_id"])
     data["deleted"] = bool(str(data.get("deleted_at") or "").strip())
@@ -588,6 +599,7 @@ def _video_share_link_payload(row):
         "expires_at": _share_row_value(row, "expires_at", "") or "",
         "max_views": max_views,
         "remaining_views": remaining_views,
+        "token": token,
         "url": _video_share_url(token),
         "password_required": _video_share_password_required(row),
         "requires_fragment_key": bool(str(_share_row_value(row, "wrapped_file_key_envelope", "") or "").strip()),
@@ -604,16 +616,21 @@ def _video_share_link_payload(row):
     }
 
 
-def _active_video_share_link(conn, video_id):
+def _active_video_share_link(conn, video_id, *, created_by=None):
     ensure_video_schema(conn)
+    where = ["video_id=?", "revoked_at IS NULL"]
+    params = [int(video_id)]
+    if created_by is not None:
+        where.append("created_by=?")
+        params.append(int(created_by))
     return conn.execute(
-        """
+        f"""
         SELECT * FROM video_share_links
-        WHERE video_id=? AND revoked_at IS NULL
+        WHERE {' AND '.join(where)}
         ORDER BY created_at DESC
         LIMIT 1
         """,
-        (int(video_id),),
+        tuple(params),
     ).fetchone()
 
 
@@ -673,7 +690,8 @@ def ensure_video_share_link(
     is_e2ee_share = is_e2ee_file(_cloud_file_row(conn, video["cloud_file_id"])) and video["visibility"] == "unlisted"
     if is_e2ee_share and normalized_envelope == "":
         return None, "E2EE 持連結可看影音必須建立瀏覽器端分享授權"
-    existing = _active_video_share_link(conn, video_id)
+    actor_id = int(_actor_value(actor, "id"))
+    existing = _active_video_share_link(conn, video_id, created_by=actor_id)
     if existing and not regenerate and normalized_envelope is None:
         msg = _apply_video_share_password(conn, existing["id"], password=password)
         if msg:
@@ -762,9 +780,50 @@ def ensure_video_share_link(
             effective_envelope or None,
             effective_expires_at or None,
             effective_max_views,
-            int(_actor_value(actor, "id")),
+            actor_id,
             now,
         ),
+    )
+    row = conn.execute("SELECT * FROM video_share_links WHERE id=?", (link_id,)).fetchone()
+    return _video_share_link_payload(row), None
+
+
+def create_video_social_share(conn, *, actor, video_id):
+    ensure_video_schema(conn)
+    if not actor:
+        return None, "請先登入"
+    actor_id = int(_actor_value(actor, "id"))
+    video = conn.execute("SELECT * FROM videos WHERE id=?", (int(video_id),)).fetchone()
+    if not video:
+        return None, "找不到影音"
+    get_video(conn, video_id, actor=actor)
+    file_row = _cloud_file_row(conn, video["cloud_file_id"])
+    if video["visibility"] != "public" or is_e2ee_file(file_row):
+        return None, "目前只有公開且非 E2EE 的影音可由觀看者產生站內分享連結"
+    token = secrets.token_urlsafe(32)
+    now = utc_now()
+    link_id = uuid.uuid4().hex
+    conn.execute(
+        """
+        INSERT INTO video_share_links (
+            id, video_id, owner_user_id, token, token_hash, password_required,
+            password_hash, wrapped_file_key_envelope, expires_at, max_views,
+            created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, NULL, 0, ?, ?)
+        """,
+        (
+            link_id,
+            int(video_id),
+            int(video["owner_user_id"]),
+            token,
+            _hash_share_token(token),
+            actor_id,
+            now,
+        ),
+    )
+    conn.execute(
+        "UPDATE videos SET share_count=share_count+1, updated_at=? WHERE id=?",
+        (now, int(video_id)),
     )
     row = conn.execute("SELECT * FROM video_share_links WHERE id=?", (link_id,)).fetchone()
     return _video_share_link_payload(row), None
@@ -793,6 +852,7 @@ def _video_base_select():
         SELECT v.*,
                u.username AS owner_username,
                u.nickname AS owner_nickname,
+               u.avatar_file_id AS owner_avatar_file_id,
                f.privacy_mode AS cloud_privacy_mode,
                f.original_filename_plain_for_public AS cloud_filename,
                f.mime_type_plain_for_public AS cloud_mime_type,
@@ -1051,7 +1111,7 @@ def get_video(conn, video_id, *, actor=None, for_stream=False):
         raise PermissionError("video is private or blocked")
     data = serialize_video(row, actor=actor, liked=_liked_by_actor(conn, video_id, actor))
     if data and data.get("can_edit") and row["visibility"] == "unlisted":
-        share = _active_video_share_link(conn, video_id)
+        share = _active_video_share_link(conn, video_id, created_by=int(row["owner_user_id"]))
         if share:
             payload = _video_share_link_payload(share)
             data["share_link"] = payload
@@ -1078,9 +1138,9 @@ def list_videos(conn, *, actor=None, sort="new", page=1, page_size=24, query="")
     )
     order = f"{boost_expr} DESC, v.created_at DESC, v.id DESC"
     if sort == "hot":
-        order = f"({boost_expr} * 4 + v.view_count + v.like_count * 4 + v.coin_total * 2 + v.comment_count * 3) DESC, v.created_at DESC"
+        order = f"({boost_expr} * 4 + v.view_count + v.like_count * 4 + v.coin_total * 2 + v.comment_count * 3 + v.share_count * 5) DESC, v.created_at DESC"
     elif sort == "trending":
-        order = f"({boost_expr} * 5 + v.like_count * 3 + v.comment_count * 2 + v.coin_total * 4) DESC, v.updated_at DESC"
+        order = f"({boost_expr} * 5 + v.like_count * 3 + v.comment_count * 2 + v.coin_total * 4 + v.share_count * 6) DESC, v.updated_at DESC"
     params = []
     order_params = []
     where = ["v.status='ready'", "v.deleted_at IS NULL", "f.deleted_at IS NULL"]
@@ -1112,7 +1172,7 @@ def list_videos(conn, *, actor=None, sort="new", page=1, page_size=24, query="")
             "CASE WHEN v.title LIKE ? ESCAPE '\\' THEN 220 ELSE 0 END + "
             "CASE WHEN v.description LIKE ? ESCAPE '\\' THEN 90 ELSE 0 END + "
             "CASE WHEN u.username LIKE ? ESCAPE '\\' OR u.nickname LIKE ? ESCAPE '\\' THEN 110 ELSE 0 END + "
-            f"{boost_expr} * 3 + v.view_count + v.like_count * 4 + v.coin_total * 2 + v.comment_count * 3"
+            f"{boost_expr} * 3 + v.view_count + v.like_count * 4 + v.coin_total * 2 + v.comment_count * 3 + v.share_count * 5"
             ") DESC, v.created_at DESC, v.id DESC"
         )
         order_params.extend([exact_query, prefix_query, contains_query, contains_query, contains_query, contains_query])
@@ -1509,7 +1569,7 @@ def add_video_comment(conn, *, actor, video_id, content, parent_id=None):
 def get_comment(conn, comment_id):
     row = conn.execute(
         """
-        SELECT c.*, u.username, u.nickname
+        SELECT c.*, u.username, u.nickname, u.avatar_file_id
         FROM video_comments c
         LEFT JOIN users u ON u.id=c.user_id
         WHERE c.id=?
@@ -1534,7 +1594,7 @@ def list_video_comments(conn, *, actor=None, video_id, limit=100):
     get_video(conn, video_id, actor=actor)
     rows = conn.execute(
         """
-        SELECT c.*, u.username, u.nickname
+        SELECT c.*, u.username, u.nickname, u.avatar_file_id
         FROM video_comments c
         LEFT JOIN users u ON u.id=c.user_id
         WHERE c.video_id=?

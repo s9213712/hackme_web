@@ -867,8 +867,12 @@ function userAvatarMarkup(userId, username, extraClass = "", avatarFileId = "") 
 }
 
 function userIdentityMarkup(userId, username, meta = "", extraClass = "", avatarFileId = "") {
+  const canOpenProfile = userId && username && !["系統", "匿名", "anonymous"].includes(String(username || "").toLowerCase());
+  const profileAttrs = canOpenProfile
+    ? ` role="button" tabindex="0" data-open-user-profile="${sanitize(String(userId))}" title="查看 ${sanitize(username)} 的個人主頁"`
+    : "";
   return `
-    <span class="identity-with-avatar ${sanitize(extraClass)}">
+    <span class="identity-with-avatar ${sanitize(extraClass)}${canOpenProfile ? " identity-profile-link" : ""}"${profileAttrs}>
       ${userAvatarMarkup(userId, username, "", avatarFileId)}
       <span class="identity-text">
         <strong>${sanitize(username || "系統")}</strong>

@@ -14,7 +14,7 @@ def _points_service(conn):
         currency_type=DISPLAY_CURRENCY,
         direction="credit",
         amount=200,
-        action_type="test_seed",
+        action_type="user_initial_grant",
         reference_type="test",
         reference_id="seed",
         idempotency_key="seed:viewer",

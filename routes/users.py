@@ -19,12 +19,14 @@ from services.users.friends import (
     accepted_friend_ids,
     block_user,
     create_friend_request,
+    follow_user,
     get_profile_payload,
     list_targetable_users,
     list_friend_state,
     remove_friend,
     review_friend_request,
     unblock_user,
+    unfollow_user,
 )
 from services.users.profiles import (
     ensure_user_profile_schema,
@@ -845,6 +847,45 @@ def register_user_routes(app, deps):
                 audit("FRIEND_UNBLOCKED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                       detail=f"target_user_id={target_user_id}")
                 return json_resp({"ok":True,"msg":msg})
+            return json_resp({"ok":False,"msg":msg}), status
+        finally:
+            conn.close()
+
+    @app.route("/api/users/<int:target_user_id>/follow", methods=["POST"], strict_slashes=False)
+    @require_csrf
+    def api_user_follow(target_user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            result, msg, status = follow_user(conn, actor, target_user_id=target_user_id)
+            if status < 400:
+                conn.commit()
+                target = (result or {}).get("target") or {}
+                audit("USER_FOLLOWED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                      detail=f"target_user_id={target.get('id')}")
+                profile = get_profile_payload(conn, target_user_id=target_user_id, viewer=actor)
+                return json_resp({"ok":True,"msg":msg,"follow":result,"profile":profile})
+            return json_resp({"ok":False,"msg":msg}), status
+        finally:
+            conn.close()
+
+    @app.route("/api/users/<int:target_user_id>/follow", methods=["DELETE"], strict_slashes=False)
+    @require_csrf
+    def api_user_unfollow(target_user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            ok, msg, status = unfollow_user(conn, actor, target_user_id=target_user_id)
+            if ok:
+                conn.commit()
+                audit("USER_UNFOLLOWED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                      detail=f"target_user_id={target_user_id}")
+                profile = get_profile_payload(conn, target_user_id=target_user_id, viewer=actor)
+                return json_resp({"ok":True,"msg":msg,"profile":profile})
             return json_resp({"ok":False,"msg":msg}), status
         finally:
             conn.close()

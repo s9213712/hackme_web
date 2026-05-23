@@ -57,6 +57,7 @@ from services.media.videos import (
     add_video_comment,
     add_video_danmaku,
     boost_owner_video,
+    create_video_social_share,
     delete_video_danmaku,
     delete_owner_video,
     ensure_video_schema,
@@ -76,6 +77,8 @@ from services.media.videos import (
     tip_video,
     update_owner_video,
 )
+from services.system.notifications import create_notification
+from services.users.friends import follower_user_ids
 
 
 def register_video_routes(app, deps):
@@ -256,6 +259,54 @@ def register_video_routes(app, deps):
             return int(actor["id"])
         except Exception:
             return None
+
+    def _notify_followers_of_video_activity(conn, actor, *, video_id, activity, share_link=None):
+        actor_id = _actor_user_id(actor)
+        if not actor_id:
+            return 0
+        try:
+            followers = follower_user_ids(conn, actor_id)
+        except Exception:
+            return 0
+        if not followers:
+            return 0
+        actor_name = str(actor.get("username") or "使用者")
+        try:
+            video = get_video(conn, video_id, actor=actor)
+        except Exception:
+            video = {"id": int(video_id), "title": "影音"}
+        title_text = str((video or {}).get("title") or "影音")
+        if activity == "share":
+            note_title = f"{actor_name} 分享了影音"
+            body = f"{actor_name} 分享「{title_text}」。"
+            link = (share_link or {}).get("url") or f"/videos#videos/{int(video_id)}"
+            note_type = "following_video_share"
+            source_ref = f"video:{int(video_id)}:share"
+        else:
+            note_title = f"{actor_name} 留言了"
+            body = f"{actor_name} 在「{title_text}」留下新留言。"
+            link = f"/videos#videos/{int(video_id)}"
+            note_type = "following_video_comment"
+            source_ref = f"video:{int(video_id)}:comment"
+        created = 0
+        for follower_id in followers:
+            if int(follower_id) == actor_id:
+                continue
+            try:
+                if create_notification(
+                    conn,
+                    user_id=follower_id,
+                    type=note_type,
+                    title=note_title,
+                    body=body,
+                    link=link,
+                    source_module="videos",
+                    source_ref=source_ref,
+                ):
+                    created += 1
+            except Exception:
+                continue
+        return created
 
     def _video_upload_source_ref(upload_id):
         return f"video_upload:{str(upload_id or '').strip()}"
@@ -2107,6 +2158,51 @@ def register_video_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/videos/<int:video_id>/social-share", methods=["POST"])
+    @require_csrf
+    def video_social_share(video_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            share_link, msg = create_video_social_share(conn, actor=actor, video_id=video_id)
+            if msg:
+                return json_resp({"ok": False, "msg": msg, "error": "social_share_failed"}), 400
+            video = get_video(conn, video_id, actor=actor)
+            token = str((share_link or {}).get("token") or "")
+            safe_embed_title = re.sub(r"[\[\]\|\r\n]+", " ", str(video.get("title") or "影音分享")).strip()[:80] or "影音分享"
+            embed_text = f"[[video-share:{token}|{safe_embed_title}]]" if token else ""
+            notified = _notify_followers_of_video_activity(
+                conn,
+                actor,
+                video_id=video_id,
+                activity="share",
+                share_link=share_link,
+            )
+            conn.commit()
+            audit(
+                "VIDEO_SOCIAL_SHARE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"video_id={video_id},share_id={(share_link or {}).get('id')},followers_notified={notified}",
+            )
+            return json_resp({
+                "ok": True,
+                "msg": "分享連結已建立",
+                "share_link": share_link,
+                "video": video,
+                "embed_text": embed_text,
+                "followers_notified": notified,
+            })
+        except Exception as exc:
+            conn.rollback()
+            return _error_response(exc)
+        finally:
+            conn.close()
+
     @app.route("/api/videos/manage", methods=["GET"])
     @require_csrf
     def video_manage_list():
@@ -2956,6 +3052,7 @@ def register_video_routes(app, deps):
                 content=data.get("content"),
                 parent_id=data.get("parent_id"),
             )
+            notified = _notify_followers_of_video_activity(conn, actor, video_id=video_id, activity="comment")
             conn.commit()
             audit(
                 "VIDEO_COMMENT",
@@ -2963,9 +3060,9 @@ def register_video_routes(app, deps):
                 user=actor["username"],
                 success=True,
                 ua=get_ua(),
-                detail=f"video_id={video_id},comment_id={comment['id']}",
+                detail=f"video_id={video_id},comment_id={comment['id']},followers_notified={notified}",
             )
-            return json_resp({"ok": True, "comment": comment})
+            return json_resp({"ok": True, "comment": comment, "followers_notified": notified})
         except Exception as exc:
             conn.rollback()
             return _error_response(exc)
