@@ -5,6 +5,7 @@ owns recurring worker loops plus the ``__main__`` startup sequence so the
 entrypoint can converge toward a thinner façade.
 """
 
+import inspect
 import json
 import os
 import threading
@@ -137,11 +138,14 @@ def bootstrap_points_initial_grants_if_due(
     system_actor = {"username": "system", "role": "system"}
     seal_genesis = str(mode or "").strip() == "production"
     try:
-        genesis = points_service.bootstrap_admin_initial_grants(
-            actor=system_actor,
-            seal_genesis=seal_genesis and points_chain_enabled,
-            require_wallet=points_chain_enabled,
-        )
+        bootstrap_kwargs = {"actor": system_actor, "seal_genesis": seal_genesis and points_chain_enabled}
+        try:
+            bootstrap_params = inspect.signature(points_service.bootstrap_admin_initial_grants).parameters
+        except (TypeError, ValueError):
+            bootstrap_params = {}
+        if "require_wallet" in bootstrap_params:
+            bootstrap_kwargs["require_wallet"] = points_chain_enabled
+        genesis = points_service.bootstrap_admin_initial_grants(**bootstrap_kwargs)
         salary_week = _scheduled_admin_salary_week(settings)
         if salary_week:
             salary = points_service.award_admin_weekly_salaries(salary_week=salary_week, actor=system_actor)
