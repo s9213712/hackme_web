@@ -7,7 +7,8 @@ Generated at: 2026-05-23T02:56:13Z
 - Release name: RC1 Controlled Permissioned PointsChain Release
 - Release type: controlled / permissioned / single-node internal ledger
 - Final status: PASS / CLOSED
-- Commit SHA at closure decision: `1791120`
+- Commit reference: branch head `04.BLOCKCHAIN_RC1` after the closure commit
+  series. Use `git log -1` on the pushed branch for the exact release SHA.
 - Working tree note: this signoff covers the current RC1 hardening workspace
   state and the live artifact below.
 
