@@ -1565,7 +1565,7 @@ class PointsLedgerService:
         excluded_tx_hashes=None,
         recovery_strategy="treasury_compensation",
         loss_cause="protocol_fault",
-        compensation_rate_bps=None,
+        compensation_rate_per_10000=None,
         victim_statement="",
         victim_evidence_refs=None,
         victim_claims=None,
@@ -1585,7 +1585,7 @@ class PointsLedgerService:
                 raise ValueError("unsupported recovery strategy")
             compensation_policy = self._recovery_compensation_policy(
                 loss_cause=loss_cause,
-                requested_rate_bps=compensation_rate_bps,
+                requested_rate_per_10000=compensation_rate_per_10000,
             )
             reviewed_claims = self._normalize_recovery_claims(
                 victim_claims=victim_claims,
@@ -1633,7 +1633,7 @@ class PointsLedgerService:
                         },
                     },
                     "loss_cause": compensation_policy["loss_cause"],
-                    "compensation_rate_bps": compensation_policy["compensation_rate_bps"],
+                    "compensation_rate_per_10000": compensation_policy["compensation_rate_per_10000"],
                     "compensation_policy": compensation_policy,
                     "victim_statement": str(victim_statement or "").strip()[:4000],
                     "victim_evidence_refs": self._governance_evidence(victim_evidence_refs or []),
@@ -4089,35 +4089,35 @@ class PointsLedgerService:
             "exclusion_iterations": iterations,
         }
 
-    def _recovery_compensation_policy(self, *, loss_cause, requested_rate_bps=None):
+    def _recovery_compensation_policy(self, *, loss_cause, requested_rate_per_10000=None):
         cause = str(loss_cause or "protocol_fault").strip().lower()
         policies = {
-            "protocol_fault": {"default_bps": 10000, "max_bps": 10000, "label": "protocol fault"},
-            "chain_bug": {"default_bps": 10000, "max_bps": 10000, "label": "chain bug"},
-            "exchange_bug": {"default_bps": 10000, "max_bps": 10000, "label": "exchange bug"},
-            "treasury_hot_wallet_compromise": {"default_bps": 10000, "max_bps": 10000, "label": "treasury hot wallet compromise"},
-            "admin_negligence": {"default_bps": 5000, "max_bps": 10000, "label": "admin negligence"},
-            "user_phishing": {"default_bps": 0, "max_bps": 5000, "label": "user phishing"},
-            "private_key_leak": {"default_bps": 0, "max_bps": 5000, "label": "private key leak"},
-            "user_negligence": {"default_bps": 0, "max_bps": 5000, "label": "user negligence"},
-            "unknown": {"default_bps": 0, "max_bps": 5000, "label": "unknown cause"},
+            "protocol_fault": {"default_rate_per_10000": 10000, "max_rate_per_10000": 10000, "label": "protocol fault"},
+            "chain_bug": {"default_rate_per_10000": 10000, "max_rate_per_10000": 10000, "label": "chain bug"},
+            "exchange_bug": {"default_rate_per_10000": 10000, "max_rate_per_10000": 10000, "label": "exchange bug"},
+            "treasury_hot_wallet_compromise": {"default_rate_per_10000": 10000, "max_rate_per_10000": 10000, "label": "treasury hot wallet compromise"},
+            "admin_negligence": {"default_rate_per_10000": 5000, "max_rate_per_10000": 10000, "label": "admin negligence"},
+            "user_phishing": {"default_rate_per_10000": 0, "max_rate_per_10000": 5000, "label": "user phishing"},
+            "private_key_leak": {"default_rate_per_10000": 0, "max_rate_per_10000": 5000, "label": "private key leak"},
+            "user_negligence": {"default_rate_per_10000": 0, "max_rate_per_10000": 5000, "label": "user negligence"},
+            "unknown": {"default_rate_per_10000": 0, "max_rate_per_10000": 5000, "label": "unknown cause"},
         }
         if cause not in policies:
             raise ValueError("unsupported loss cause")
         policy = policies[cause]
-        if requested_rate_bps is None or requested_rate_bps == "":
-            rate = int(policy["default_bps"])
+        if requested_rate_per_10000 is None or requested_rate_per_10000 == "":
+            rate = int(policy["default_rate_per_10000"])
             override = False
         else:
-            rate = max(0, min(10000, int(requested_rate_bps)))
+            rate = max(0, min(10000, int(requested_rate_per_10000)))
             override = True
-        if rate > int(policy["max_bps"]):
+        if rate > int(policy["max_rate_per_10000"]):
             raise ValueError("compensation rate exceeds loss-cause policy cap")
         return {
             "loss_cause": cause,
             "label": policy["label"],
-            "compensation_rate_bps": rate,
-            "max_compensation_rate_bps": int(policy["max_bps"]),
+            "compensation_rate_per_10000": rate,
+            "max_compensation_rate_per_10000": int(policy["max_rate_per_10000"]),
             "requested_override": override,
             "moral_hazard_control": "user-caused losses default to no compensation and are capped at partial compensation",
         }
@@ -4155,11 +4155,11 @@ class PointsLedgerService:
             parent_branch_uuid=parent_branch_uuid,
             excluded_refs=excluded_refs,
             replay_balances=replay_balances,
-            compensation_rate_bps=10000,
+            compensation_rate_per_10000=10000,
         )
 
-    def _recovery_branch_compensation_plan_locked_with_rate(self, conn, *, parent_branch_uuid, excluded_refs, replay_balances, compensation_rate_bps):
-        rate_bps = max(0, min(10000, int(compensation_rate_bps or 0)))
+    def _recovery_branch_compensation_plan_locked_with_rate(self, conn, *, parent_branch_uuid, excluded_refs, replay_balances, compensation_rate_per_10000):
+        rate_per_10000 = max(0, min(10000, int(compensation_rate_per_10000 or 0)))
         items = []
         gross_total = 0
         for address, balance in sorted((replay_balances or {}).items()):
@@ -4170,14 +4170,14 @@ class PointsLedgerService:
             if not owner or not owner["user_id"]:
                 continue
             gross = abs(balance)
-            amount = (gross * rate_bps + 9999) // 10000 if rate_bps else 0
+            amount = (gross * rate_per_10000 + 9999) // 10000 if rate_per_10000 else 0
             gross_total += gross
             items.append({
                 "wallet_address": address,
                 "user_id": int(owner["user_id"]),
                 "gross_shortfall_points": gross,
                 "shortfall_points": amount,
-                "compensation_rate_bps": rate_bps,
+                "compensation_rate_per_10000": rate_per_10000,
                 "post_replay_balance_before_compensation": balance,
                 "reason": "successor_transactions_preserved_after_incident_exclusion",
             })
@@ -4567,14 +4567,14 @@ class PointsLedgerService:
                     replay_balances[destination] = int(replay_balances.get(destination, 0) or 0) - amount
         compensation_policy = self._recovery_compensation_policy(
             loss_cause=payload.get("loss_cause") or "protocol_fault",
-            requested_rate_bps=payload.get("compensation_rate_bps"),
+            requested_rate_per_10000=payload.get("compensation_rate_per_10000"),
         )
         compensation = self._recovery_branch_compensation_plan_locked_with_rate(
             conn,
             parent_branch_uuid=parent_branch_uuid or self._main_branch_uuid(),
             excluded_refs=excluded,
             replay_balances=replay_balances,
-            compensation_rate_bps=compensation_policy["compensation_rate_bps"],
+            compensation_rate_per_10000=compensation_policy["compensation_rate_per_10000"],
         ) if recovery_strategy == "treasury_compensation" else {
             "required_total": 0,
             "gross_shortfall_total": 0,

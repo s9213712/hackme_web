@@ -655,7 +655,7 @@ def test_legacy_rate_unit_label_removed_from_repository_text():
     ignored_dirs = {
         ".git", ".venv", "venv", "env", ".tox", ".eggs",
         "__pycache__", ".pytest_cache", "node_modules",
-        "runtime", "storage", "reports", "secure_backups", "build", "dist",
+        "runtime", "storage", "reports", "secure_backups", "build", "dist", "artifacts",
     }
     ignored_prefixes = {
         Path("public/js/vendor"),

@@ -1320,7 +1320,7 @@ def test_transaction_dispute_review_can_create_recovery_governance_proposal(tmp_
     assert reviewed["dispute"]["status"] == "proposal_created"
     assert reviewed["proposal"]["action_type"] == "ROLLBACK_BRANCH"
     assert reviewed["proposal"]["payload"]["victim_claims"][0]["review_status"] == "approved"
-    assert reviewed["proposal"]["payload"]["compensation_policy"]["compensation_rate_bps"] == 0
+    assert reviewed["proposal"]["payload"]["compensation_policy"]["compensation_rate_per_10000"] == 0
     assert reviewed["dispute"]["suspect_wallet_address"] == attacker_wallet["address"]
     assert reviewed["address_risk_proposal"]["action_type"] == "MARK_SCAM"
     assert reviewed["address_risk_proposal"]["target_wallet_address"] == attacker_wallet["address"]

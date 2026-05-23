@@ -1,6 +1,18 @@
 # Update Summary
 
-Release ID: `2026.05.21-192`
+Release ID: `2026.05.23-001`
+
+## 2026.05.23-001
+
+- Restored CI coverage for the renamed `04.BLOCKCHAIN_RC1` branch across the
+  core, Playwright, and secrets-scan workflows.
+- Registered the PointsChain stress, recovery, dispute, and governance QA
+  probes in `scripts/INDEX.md` so the pre-push gate can verify their operator
+  contract.
+- Fixed root simulated spot buys so trading funding-source tracking does not
+  reference chain spend data that only exists for PointsChain-backed orders.
+- Renamed recovery compensation rate fields away from legacy trading-rate unit
+  wording and kept generated artifacts out of the repository text scan.
 
 ## 2026.05.21-192
 

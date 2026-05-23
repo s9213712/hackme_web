@@ -728,6 +728,7 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
     sell_pnl_data = None
     trial_repaid = 0
     trial_profit = 0
+    chain_spend = 0
     if side == "buy":
         frozen_amount = int(order["frozen_points"] or total)
         trial_frozen = (
