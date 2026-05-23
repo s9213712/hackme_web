@@ -1010,22 +1010,51 @@ def register_user_routes(app, deps):
             if role_rank(actor_role) < role_rank("manager"):
                 return json_resp({"ok":False,"msg":"權限不足"}), 403
             include_deleted = str(request.args.get("include_deleted") or "").strip().lower() in {"1", "true", "yes"}
+            page = parse_positive_int(request.args.get("page", 1), default=1, min_value=1)
+            if page is None:
+                return json_resp({"ok":False,"msg":"page 參數格式錯誤"}), 400
+            page_size = parse_positive_int(request.args.get("page_size", 25), default=25, min_value=1, max_value=100)
+            if page_size is None:
+                return json_resp({"ok":False,"msg":"page_size 參數格式錯誤"}), 400
+            search_query = normalize_text(request.args.get("q"))[:80]
             conn = get_db()
             try:
                 ensure_member_level_user_columns(conn)
                 ensure_avatar_user_columns(conn)
-                where = ""
-                params = ()
+                where_parts = []
+                params = []
                 if not include_deleted:
-                    where = " WHERE COALESCE(status, 'active') <> 'deleted'"
+                    where_parts.append("COALESCE(status, 'active') <> 'deleted'")
+                if search_query:
+                    where_parts.append(
+                        "(LOWER(username) LIKE ? OR LOWER(COALESCE(email, '')) LIKE ? "
+                        "OR LOWER(COALESCE(nickname, '')) LIKE ? OR LOWER(COALESCE(real_name, '')) LIKE ?)"
+                    )
+                    pattern = f"%{search_query.lower()}%"
+                    params.extend([pattern, pattern, pattern, pattern])
+                where = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+                total_row = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM users{where}",
+                    tuple(params),
+                ).fetchone()
+                total = int(total_row["c"] if total_row else 0)
+                total_pages = max(1, (total + int(page_size) - 1) // int(page_size))
+                if int(page) > total_pages:
+                    page = total_pages
+                offset = (int(page) - 1) * int(page_size)
                 rows = conn.execute(
                     "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, "
                     "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
                     "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
                     "password_strength_score, avatar_file_id, avatar_crop_json, blocked_until, violation_count "
-                    f"FROM users{where} ORDER BY id ASC",
-                    params,
+                    f"FROM users{where} ORDER BY id ASC LIMIT ? OFFSET ?",
+                    tuple(params + [int(page_size), offset]),
                 ).fetchall()
+                role_rows = conn.execute(
+                    "SELECT role, COUNT(*) AS c FROM users "
+                    "WHERE COALESCE(status, 'active') <> 'deleted' GROUP BY role"
+                ).fetchall()
+                role_counts = {str(row["role"] or "user"): int(row["c"] or 0) for row in role_rows}
                 auth_conn = get_readonly_auth_db()
                 try:
                     sessions_by_user = active_session_map(auth_conn)
@@ -1043,18 +1072,22 @@ def register_user_routes(app, deps):
                     item["online_last_seen"] = session_info.get("last_seen") or ""
                     item["active_session_count"] = int(session_info.get("session_count") or 0)
                     data.append(item)
-                data.sort(key=lambda item: (
-                    0 if item.get("is_friend") else 1,
-                    0 if item.get("is_official") else 1,
-                    str(item.get("username") or "").lower(),
-                    int(item.get("id") or 0),
-                ))
                 conn.commit()
             finally:
                 conn.close()
             return json_resp({
                 "ok": True,
                 "users": data,
+                "pagination": {
+                    "page": int(page),
+                    "page_size": int(page_size),
+                    "total": total,
+                    "total_pages": total_pages,
+                    "sort": "id",
+                    "order": "asc",
+                    "q": search_query,
+                },
+                "role_counts": role_counts,
                 "can_manage": role_rank(actor_role) >= role_rank("super_admin"),
                 "can_review": role_rank(actor_role) >= role_rank("manager")
             })

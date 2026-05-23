@@ -251,11 +251,13 @@ function renderUsers() {
   bindAvatarFallbacks(tbody);
   selectedPendingUserIds = new Set([...selectedPendingUserIds].filter((id) => allowedPendingIds.has(id)));
   updatePendingSelectionUi();
+  renderAdminUsersPagination();
   // Role quota info
-  const managerCount = users.filter(u => u.role === "manager").length;
+  const managerCount = Number(adminUsersRoleCounts.manager ?? users.filter(u => u.role === "manager").length);
+  const superAdminCount = Number(adminUsersRoleCounts.super_admin ?? users.filter(u => u.role === "super_admin").length);
   const infoEl = $("role-limit-info");
   if (infoEl) {
-    infoEl.textContent = `管理者 ${managerCount}/5 · 超級管理者 1/1`;
+    infoEl.textContent = `管理者 ${managerCount}/5 · 超級管理者 ${superAdminCount}/1`;
     infoEl.style.color = managerCount >= 5 ? "#ff4f6d" : "#888";
   }
 }
@@ -274,12 +276,43 @@ function updatePendingSelectionUi() {
   if (rejectBtn) rejectBtn.disabled = count === 0;
 }
 
-async function loadUsers() {
+function renderAdminUsersPagination() {
+  const info = $("admin-users-page-info");
+  const prev = $("admin-users-prev");
+  const next = $("admin-users-next");
+  const size = $("admin-users-page-size");
+  const page = Number(adminUsersPagination?.page || adminUsersPage || 1);
+  const totalPages = Math.max(1, Number(adminUsersPagination?.total_pages || 1));
+  const total = Number(adminUsersPagination?.total || users.length || 0);
+  const pageSize = Number(adminUsersPagination?.page_size || adminUsersPageSize || 25);
+  if (info) {
+    const query = String(adminUsersPagination?.q || "").trim();
+    info.textContent = `第 ${page} / ${totalPages} 頁 · ${total} 筆 · 每頁 ${pageSize} · ID 由小到大${query ? ` · 搜尋：${query}` : ""}`;
+  }
+  if (prev) prev.disabled = page <= 1;
+  if (next) next.disabled = page >= totalPages;
+  if (size && String(size.value || "") !== String(pageSize)) size.value = String(pageSize);
+}
+
+async function loadUsers(page = adminUsersPage) {
   if (!currentUser) return;
   if (!["manager","super_admin"].includes(currentRole)) return;
   const csrf = await fetchCsrfToken();
   try {
-    const res = await apiFetch(API + "/admin/users", {
+    const requestedPage = Math.max(1, Number(page || 1));
+    const sizeEl = $("admin-users-page-size");
+    const requestedSize = Math.max(1, Math.min(100, Number(sizeEl?.value || adminUsersPageSize || 25)));
+    adminUsersPage = requestedPage;
+    adminUsersPageSize = requestedSize;
+    const query = String($("admin-user-search")?.value || "").trim();
+    const params = new URLSearchParams({
+      page: String(requestedPage),
+      page_size: String(requestedSize),
+      sort: "id",
+      order: "asc",
+    });
+    if (query) params.set("q", query);
+    const res = await apiFetch(API + "/admin/users?" + params.toString(), {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
@@ -289,6 +322,18 @@ async function loadUsers() {
       return;
     }
     users = Array.isArray(json.users) ? json.users : [];
+    adminUsersPagination = json.pagination || {
+      page: requestedPage,
+      page_size: requestedSize,
+      total: users.length,
+      total_pages: 1,
+      sort: "id",
+      order: "asc",
+      q: query,
+    };
+    adminUsersPage = Number(adminUsersPagination.page || requestedPage);
+    adminUsersPageSize = Number(adminUsersPagination.page_size || requestedSize);
+    adminUsersRoleCounts = json.role_counts || {};
     canManageUsers = !!json.can_manage;
     renderUsers();
     if (typeof renderAdminNoticeTargetOptions === "function") renderAdminNoticeTargetOptions();

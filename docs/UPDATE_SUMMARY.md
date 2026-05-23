@@ -1,6 +1,21 @@
 # Update Summary
 
-Release ID: `2026.05.21-172`
+Release ID: `2026.05.23-004`
+
+## 2026.05.23-004
+
+- Changed account management to server-side pagination with stable `id ASC`
+  ordering so manager/root review lists no longer reorder by relationship or
+  username.
+- Changed the violation center to a per-account selector before loading
+  violation reasons, keeping the admin page from rendering every violation
+  record by default.
+- Redesigned feature packages as a select-preview-apply workflow and kept job
+  center background polling from refreshing the visible status message on every
+  quiet poll.
+- Moved DB stress audit writes out of the production `secure_audit` hash-chain
+  into an isolated `db_stress_audit_events` table, preventing stress probes from
+  breaking audit-chain integrity.
 
 ## 2026.05.21-172
 

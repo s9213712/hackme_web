@@ -433,13 +433,15 @@ async function loadJobCenter(options = {}) {
     renderJobCenterJobs(summary.visible, { hiddenCount: summary.hiddenCount });
     const time = new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     const hiddenText = summary.hiddenCount ? `，已隱藏 ${summary.hiddenCount} 筆即時完成雜訊` : "";
-    platformCenterSetMsg("job-center-msg", `已同步 ${summary.visible.length} 筆任務，進行中 ${summary.activeCount} 筆${hiddenText} · ${time}`, true);
+    if (!quiet) {
+      platformCenterSetMsg("job-center-msg", `已同步 ${summary.visible.length} 筆任務，進行中 ${summary.activeCount} 筆${hiddenText} · ${time}`, true);
+    }
     return summary;
   })();
   try {
     return await jobCenterLoadPromise;
   } catch (_) {
-    platformCenterSetMsg("job-center-msg", "任務中心讀取失敗，請稍後再試。", false);
+    if (!quiet) platformCenterSetMsg("job-center-msg", "任務中心讀取失敗，請稍後再試。", false);
     return null;
   } finally {
     jobCenterLoadPromise = null;

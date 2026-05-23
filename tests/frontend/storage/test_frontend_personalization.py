@@ -42,7 +42,8 @@ def test_personal_appearance_editor_and_routes_are_wired():
     assert 'id="s-site-background-style"' in index_html
     assert 'id="s-site-panel-style"' in index_html
     assert 'id="s-site-sidebar-width"' in index_html
-    assert 'id="s-feature-personalization-enabled"' in index_html
+    assert "允許使用者覆寫個人外觀" in index_html
+    assert "feature_personalization_enabled" in admin_js
     assert "let globalSiteConfig = {};" in core_js
     assert "let userSiteAppearanceConfig = {};" in core_js
     assert '"site_theme_mode",' in core_js

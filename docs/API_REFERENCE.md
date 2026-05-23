@@ -402,7 +402,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET | `/api/points/catalog` | logged-in | 點數商品目錄 |
 | GET/PUT | `/api/root/economy/catalog` | root | root 調整商品目錄 |
 | GET | `/api/points/rules` | logged-in | 點數規則 |
-| POST | `/api/points/spend` | logged-in | 消費點數 |
+| POST | `/api/points/spend` | logged-in | 消費點數；逾期違規罰單限制站內服務時會回 `423 feature_restricted_by_violation_fine` |
 | GET | `/api/points/ledger/<ledger_uuid>/proof` | logged-in | ledger proof |
 | GET | `/api/admin/points/wallets/<user_id>` | manager | 單一使用者錢包 |
 | POST | `/api/root/points/wallets/<user_id>/sanction` | root | 錢包處分 |

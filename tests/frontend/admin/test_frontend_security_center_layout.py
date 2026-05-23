@@ -99,6 +99,8 @@ def test_audit_chain_repair_and_points_chain_recovery_buttons_live_in_correct_ar
     assert "一鍵處理 PointsChain 異常" in economy_recovery_section
     assert 'id="economy-recovery-action-status"' in economy_recovery_section
     assert "economyRecoveryActionMsg" in economy_js
+    assert "rows.filter((row) => row !== null && row !== undefined)" in economy_js
+    assert "safe.active_provisional_freezes.filter((item) => item && typeof item === \"object\")" in economy_js
     assert 'auditChainRepair.addEventListener("click", repairIntegrityChains)' in bootstrap_js
     assert 'integrityBulkApprove.addEventListener("click", () => reviewSelectedIntegrityFindings("approve"))' in bootstrap_js
     assert 'igBulkApprove.addEventListener("click", () => reviewSelectedIntegrityFindings("approve"))' not in admin_js
@@ -244,7 +246,12 @@ def test_launch_check_surfaces_failing_backend_endpoint_names():
 
 def test_admin_audit_and_violations_load_failures_surface_visible_errors():
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
 
+    assert 'id="violation-user-select"' in index_html
+    assert "renderViolationUserSelect" in admin_js
+    assert "summary_only=1" in admin_js
+    assert "請先選擇帳號，才會載入個別違規原因。" in admin_js
     assert 'statusEl.textContent = json.msg || "審計記錄讀取失敗"' in admin_js
     assert 'container.innerHTML = `<p style=\'color:var(--red);text-align:center;padding:1rem;\'>${sanitize(json.msg || "審計記錄讀取失敗")}</p>`' in admin_js
     assert 'const message = json.msg || "違規記錄讀取失敗";' in admin_js

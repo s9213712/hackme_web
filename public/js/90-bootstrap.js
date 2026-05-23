@@ -61,6 +61,8 @@ function bindUiEvents() {
   const adminRefresh = $("admin-refresh");
   const adminBulkApproveBtn = $("admin-bulk-approve");
   const adminBulkRejectBtn = $("admin-bulk-reject");
+  const adminUsersSearch = $("admin-user-search");
+  const adminUsersPageSize = $("admin-users-page-size");
   const adminOpenAddBtn  = $("admin-open-add-user");
   const adminAddBtn  = $("admin-add-btn");
   const adminAddCancelBtn = $("admin-add-cancel");
@@ -304,7 +306,17 @@ function bindUiEvents() {
     if (typeof openMyProfilePanel === "function") openMyProfilePanel("edit");
     else if (currentUserId) editUser(currentUserId);
   });
-  if (adminRefresh) adminRefresh.addEventListener("click", loadUsers);
+  if (adminRefresh) adminRefresh.addEventListener("click", () => loadUsers(adminUsersPage));
+  if ($("admin-users-prev")) $("admin-users-prev").addEventListener("click", () => loadUsers(Math.max(1, adminUsersPage - 1)));
+  if ($("admin-users-next")) $("admin-users-next").addEventListener("click", () => loadUsers(adminUsersPage + 1));
+  if (adminUsersPageSize) adminUsersPageSize.addEventListener("change", () => loadUsers(1));
+  if (adminUsersSearch) {
+    let adminUsersSearchTimer = null;
+    adminUsersSearch.addEventListener("input", () => {
+      if (adminUsersSearchTimer) clearTimeout(adminUsersSearchTimer);
+      adminUsersSearchTimer = setTimeout(() => loadUsers(1), 250);
+    });
+  }
   if (adminBulkApproveBtn) adminBulkApproveBtn.addEventListener("click", () => bulkReviewRegistrations("approve"));
   if (adminBulkRejectBtn) adminBulkRejectBtn.addEventListener("click", () => bulkReviewRegistrations("reject"));
   if (passwordResetReviewRefresh) passwordResetReviewRefresh.addEventListener("click", loadPasswordResetReviews);
@@ -511,6 +523,9 @@ function bindUiEvents() {
   if (violRefresh) violRefresh.addEventListener("click", () => loadViolations(violationsPage, violationTargetUser));
   if ($("violations-prev")) $("violations-prev").addEventListener("click", () => loadViolations(Math.max(0, violationsPage - 1), violationTargetUser));
   if ($("violations-next")) $("violations-next").addEventListener("click", () => loadViolations(violationsPage + 1, violationTargetUser));
+  if ($("violation-user-select")) $("violation-user-select").addEventListener("change", (event) => loadViolations(0, event.target?.value || ""));
+  if ($("violation-fine-status")) $("violation-fine-status").addEventListener("change", loadAdminViolationFines);
+  if ($("violation-fines-refresh")) $("violation-fines-refresh").addEventListener("click", loadAdminViolationFines);
   if (governanceRefresh) governanceRefresh.addEventListener("click", loadGovernanceDashboard);
   if (governanceCreate) governanceCreate.addEventListener("click", createGovernanceProposal);
   if (adminNoticeTemplate) adminNoticeTemplate.addEventListener("change", applyAdminNoticeTemplate);

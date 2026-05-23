@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260519-upscale-breakpoint" />
+  <link rel="stylesheet" href="/styles.css?v=20260523-account-pagination-bundles" />
   <link rel="stylesheet" href="/experiments.css?v=20260517-plane-view-angle" />
   <link rel="stylesheet" href="/i18n-language-switcher.css?v=20260520-deep-audit" />
 </head>
@@ -857,6 +857,8 @@
     <div id="user-appeal-wrap" class="admin-tools" style="margin-top: .95rem; text-align: left;">
       <div class="mini-title">⚖️ 違規申覆</div>
       <div id="appeal-summary" style="font-size:.82rem;color:var(--muted);margin-bottom:.55rem;"></div>
+      <div id="appeal-restrictions" class="field-hint" style="margin-bottom:.55rem;"></div>
+      <div id="appeal-fines" style="margin-bottom:.8rem;"></div>
       <div id="appeal-entries" style="max-height:360px;overflow:auto;margin-bottom:.65rem;"></div>
       <div class="admin-toolbar" style="margin-bottom:0;">
         <button class="btn" type="button" id="appeal-refresh-btn">刷新申覆</button>
@@ -3329,9 +3331,20 @@
           <button class="btn" id="admin-select-page-pending" type="button">全選本頁</button>
           <button class="btn" id="admin-clear-page-pending" type="button">清除選取</button>
           <input type="search" id="admin-user-search" placeholder="搜尋帳號、暱稱、姓名" style="max-width:240px;" />
+          <select id="admin-users-page-size" aria-label="帳號每頁筆數" style="max-width:120px;">
+            <option value="10">10 / 頁</option>
+            <option value="25" selected>25 / 頁</option>
+            <option value="50">50 / 頁</option>
+            <option value="100">100 / 頁</option>
+          </select>
           <span id="pending-selection-info" style="font-size:.75rem;color:var(--muted);">已選 0 筆待審核</span>
           <span id="role-limit-info" style="font-size:.75rem;color:var(--muted);margin-left:auto;"></span>
         </div>
+          <div class="admin-toolbar" id="admin-users-pagination" style="margin:.35rem 0 .55rem;">
+            <button class="btn" id="admin-users-prev" type="button">上一頁</button>
+            <span id="admin-users-page-info" style="font-size:.75rem;color:var(--muted);">第 1 / 1 頁 · 0 筆 · ID 由小到大</span>
+            <button class="btn" id="admin-users-next" type="button">下一頁</button>
+          </div>
           <div id="admin-users-msg" class="msg"></div>
           <div class="table-scroll-wrap">
             <table class="user-table" id="user-table">
@@ -3376,13 +3389,34 @@
       <div class="form-section" id="sec-violations">
         <div class="admin-toolbar" style="margin-bottom:.5rem;">
           <button class="btn btn-primary" id="violations-refresh">🔄 重新整理</button>
-          <span style="font-size:.75rem;color:var(--muted);">共 <span id="violations-total">0</span> 筆</span>
+          <select id="violation-user-select" style="max-width:260px;">
+            <option value="">選擇帳號查看違規原因</option>
+          </select>
+          <span style="font-size:.75rem;color:var(--muted);">目前顯示 <span id="violations-total">0</span> 筆</span>
           <span id="violations-integrity" style="margin-left:.5rem;font-size:.72rem;"></span>
           <button class="btn" id="violations-prev" style="margin-left:auto;">← 上一頁</button>
           <button class="btn" id="violations-next">下一頁 →</button>
         </div>
-        <div id="violation-users" style="max-height:180px;overflow-y:auto;margin-bottom:.6rem;"></div>
+        <div id="violation-users" class="field-hint" style="margin-bottom:.6rem;">請先從下拉選單選擇帳號，再查看該帳號的違規計點原因。</div>
         <div id="violation-entries" style="max-height:320px;overflow-y:auto;font-size:.72rem;font-family:monospace;"></div>
+        <div class="admin-tools" style="margin-top:.85rem;">
+          <div class="mini-title">罰單與功能限制</div>
+          <div class="field-hint">三次違規後自動建立罰單；逾期未繳只限制指定功能，不直接扣款。罰款付款會走鏈上扣款並預設銷毀。</div>
+          <div class="admin-toolbar" style="margin:.55rem 0;">
+            <select id="violation-fine-status" style="max-width:160px;">
+              <option value="">全部罰單</option>
+              <option value="pending">待繳</option>
+              <option value="overdue">逾期</option>
+              <option value="paid">已繳</option>
+              <option value="waived">已豁免</option>
+              <option value="cancelled">已取消</option>
+            </select>
+            <button class="btn" type="button" id="violation-fines-refresh">刷新罰單</button>
+            <span style="font-size:.72rem;color:var(--muted);">共 <span id="violation-fines-total">0</span> 筆</span>
+          </div>
+          <div id="violation-fine-list" style="max-height:260px;overflow:auto;font-size:.72rem;"></div>
+          <div id="violation-fine-appeal-list" style="max-height:180px;overflow:auto;font-size:.72rem;margin-top:.65rem;"></div>
+        </div>
       </div>
 
       <!-- ── 會員治理 ── -->
@@ -4301,57 +4335,23 @@
             <details class="drive-collapsible-panel settings-collapse" open>
               <summary>
                 <div>
-                  <div class="drive-card-title">既有功能開關</div>
-                  <div class="drive-card-sub">主要功能區是否開放。</div>
+                  <div class="drive-card-title">前台功能開關與套餐</div>
+                  <div class="drive-card-sub">依服務類型分組管理，先套套餐再微調個別功能。</div>
                 </div>
               </summary>
               <div class="drive-collapsible-body">
-            <div class="settings-feature-bundle-panel">
-              <div class="drive-card-sub">功能互相依賴屬正常。可先用下列整套開關快速勾選；`全開 / 最低維運 / Raspberry 套餐` 會直接改整組勾選狀態，其餘套餐則是加開相關模組。套用後再按下方「儲存設定」才會真正寫入。</div>
-              <div id="feature-bundle-toolbar" class="admin-toolbar settings-feature-bundle-toolbar"></div>
-              <div id="feature-advisory-list" class="settings-feature-advisory-list"></div>
-            </div>
-            <div class="settings-option-grid">
-            <div class="field"><label><input type="checkbox" id="s-feature-chat-enabled" /> 聊天室</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-community-enabled" /> 討論區 / 公告 / 留言</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-accounts-enabled" /> 帳號管理</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-appeals-enabled" /> 用戶申覆</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-audit-log-enabled" /> Audit log 查詢</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-violation-center-enabled" /> 違規中心</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-reports-enabled" /> 檢舉審核</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-system-health-enabled" /> 系統健康燈</label></div>
-            </div>
-              </div>
-            </details>
-            <details class="drive-collapsible-panel settings-collapse">
-              <summary>
-                <div>
-                  <div class="drive-card-title">新工程功能開關</div>
-                  <div class="drive-card-sub">實驗或大型模組，平常可收合。</div>
+                <div class="settings-feature-bundle-panel">
+                  <div class="drive-card-sub">先選功能套餐看摘要，再按「套用套餐」改勾選狀態；套用後仍需按下方「儲存設定」才會寫入伺服器。</div>
+                  <div id="feature-bundle-toolbar" class="admin-toolbar settings-feature-bundle-toolbar">
+                    <select id="feature-bundle-select" style="max-width:340px;" aria-label="選擇功能套餐">
+                      <option value="">選擇功能套餐</option>
+                    </select>
+                    <button class="btn btn-primary" type="button" id="feature-bundle-apply">套用套餐</button>
+                  </div>
+                  <div id="feature-bundle-preview" class="settings-feature-bundle-preview"></div>
+                  <div id="feature-advisory-list" class="settings-feature-advisory-list"></div>
                 </div>
-              </summary>
-              <div class="drive-collapsible-body">
-            <div class="settings-option-grid">
-            <div class="field"><label><input type="checkbox" id="s-feature-identity-governance-enabled" /> 身份治理欄位 / 會員等級</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-account-security-enabled" /> 帳號安全強化</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-member-governance-enabled" /> 會員治理與投票</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-server-modes-enabled" /> 伺服器模式</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-snapshot-restore-enabled" /> Snapshot / Restore / Reset</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-health-center-enabled" /> 健康監控中心新版</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-forum-core-enabled" /> 論壇核心新版</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-ui-rebuild-enabled" /> UI 架構重構</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-reports-notifications-enabled" /> 檢舉 / 申訴 / 通知新版</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-attachments-enabled" /> 附件 / 頭像 / CAPTCHA</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-storage-albums-enabled" /> Storage / 相簿</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-videos-enabled" /> 影音分享</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-games-enabled" /> 遊戲區 / 西洋棋</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-comfyui-enabled" /> ComfyUI AI 產圖</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-economy-enabled" /> PointsChain 積分系統</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-trading-enabled" /> 積分交易所</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-social-search-enabled" /> 社交 / 搜尋</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-advanced-security-enabled" /> 進階安全</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-privacy-uploads-enabled" /> 隱私分級上傳 / E2EE</label></div>
-            </div>
+                <div id="feature-switch-groups" class="settings-feature-switch-groups"></div>
               </div>
             </details>
           </div>
@@ -4364,10 +4364,7 @@
                 </div>
               </summary>
               <div class="drive-collapsible-body">
-            <div class="field">
-              <label><input type="checkbox" id="s-feature-personalization-enabled" /> 允許使用者覆寫個人外觀</label>
-              <div class="drive-card-sub">開啟後，所有已登入用戶都能在「修改資料 -> 個人外觀」只改自己的畫面；全站預設外觀仍只有 root 能修改。</div>
-            </div>
+            <div class="drive-card-sub">「允許使用者覆寫個人外觀」已移至上方「前台功能開關與套餐」的「重型與實驗模組」群組，避免同一功能在不同區塊重複設定。</div>
             <div class="settings-option-grid settings-appearance-grid">
               <div class="field">
                 <label for="settings-language-select" data-i18n="language.label">語言</label>
@@ -5120,6 +5117,7 @@
               </summary>
               <div class="drive-collapsible-body">
             <div style="font-size:.75rem;color:var(--muted);margin-bottom:.75rem;">ComfyUI、雲端容量、發文、遊戲等服務都從後端 catalog 讀取價格。</div>
+            <div class="drive-file-list billing-catalog-list" id="root-service-fee-quick-pricing-list" style="margin-bottom:.85rem;"></div>
             <div class="settings-option-grid billing-editor-grid" style="margin-bottom:.85rem;">
               <div class="field">
                 <label>影音投幣平台抽成（%）</label>
@@ -5159,8 +5157,11 @@
                 <select id="root-catalog-category">
                   <option value="comfyui">ComfyUI</option>
                   <option value="cloud_drive">雲端硬碟容量</option>
+                  <option value="video">影音</option>
                   <option value="forum">討論區</option>
                   <option value="game">遊戲</option>
+                  <option value="marketplace">市集</option>
+                  <option value="ai_task">AI / Agent 任務</option>
                   <option value="account">帳號服務</option>
                   <option value="server_rental">伺服器租用</option>
                   <option value="custom">自定義</option>
@@ -6693,10 +6694,10 @@
   <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
-<script src="/js/00-core.js?v=20260517-trading-snapshot-warmup" defer></script>
+<script src="/js/00-core.js?v=20260523-account-pagination-bundles" defer></script>
 <script src="/js/05-i18n.js?v=20260519-vae-builtin" defer></script>
 <script src="/js/01-root-quick-settings.js?v=20260521-comfyui-local-main-args" defer></script>
-<script src="/js/10-users.js?v=20260503-account-delete-feedback" defer></script>
+<script src="/js/10-users.js?v=20260523-account-pagination-bundles" defer></script>
 <script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
 <script src="/js/25-community.js?v=20260518-inline-media" defer></script>
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
@@ -6715,12 +6716,12 @@
 <script src="/js/42-experiments.js?v=20260518-two-experiments" defer></script>
 <script src="/js/39-videos.js?v=20260518-video-overview" defer></script>
 <script src="/js/40-auth-users.js?v=20260517-avatar-cropper" defer></script>
-<script src="/js/50-admin.js?v=20260521-comfyui-local-main-args" defer></script>
+<script src="/js/50-admin.js?v=20260523-account-pagination-bundles" defer></script>
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>
 <script src="/js/55-economy.js?v=20260517-trading-snapshot-warmup" defer></script>
 <script src="/js/56-trading.js?v=20260517-trading-snapshot-warmup" defer></script>
-<script src="/js/57-platform-centers.js?v=20260520-diffusers-csrf-audit" defer></script>
+<script src="/js/57-platform-centers.js?v=20260523-account-pagination-bundles" defer></script>
 <script src="/js/58-profile-friends.js?v=20260517-profile-avatar-upload" defer></script>
-<script src="/js/90-bootstrap.js?v=20260518-video-overview" defer></script>
+<script src="/js/90-bootstrap.js?v=20260523-account-pagination-bundles" defer></script>
 </body>
 </html>
