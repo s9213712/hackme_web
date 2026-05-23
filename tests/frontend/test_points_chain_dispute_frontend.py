@@ -38,7 +38,15 @@ def test_governance_frontend_has_status_tabs_and_inline_dispute_voting():
     assert 'data-governance-status-filter="review"' in index_html
     assert 'data-governance-status-filter="voting"' in index_html
     assert 'data-governance-status-filter="closed"' in index_html
+    assert "公共投票與疑義事件總看板" in index_html
+    assert 'id="economy-governance-public-count"' in index_html
+    assert 'id="economy-governance-dispute-count"' in index_html
+    assert index_html.index('id="economy-governance-card"') < index_html.index('id="economy-dispute-card"')
+    assert index_html.index('id="economy-governance-list"') < index_html.index('id="economy-public-governance-create-details"')
     assert "let economyGovernanceStatusFilter" in economy_js
+    assert "function updateEconomyGovernanceOverviewCounts" in economy_js
+    assert "economy-governance-public-status" in economy_js
+    assert "economy-governance-dispute-status" in economy_js
     assert "function economyGovernanceStatusBucket" in economy_js
     assert "function economyRenderGovernanceProposalCard" in economy_js
     assert "let economyExpandedGovernanceProposalUuids" in economy_js

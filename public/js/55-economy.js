@@ -849,7 +849,7 @@ function setEconomyActivePage(page, options = {}) {
     if (nextPage === "positions") title.textContent = "倉位管理";
     else if (nextPage === "transactions") title.textContent = "交易管理";
     else if (nextPage === "explorer") title.textContent = "鏈上瀏覽器";
-    else if (nextPage === "governance") title.textContent = "治理提案";
+    else if (nextPage === "governance") title.textContent = "公共投票與疑義事件";
     else if (nextPage === "funding-pools") title.textContent = "資金池管理";
     else if (nextPage === "all-positions") title.textContent = "全用戶倉位管理";
     else if (!rootMode) title.textContent = nextPage === "chain" ? "積分管理" : "積分錢包";
@@ -1494,10 +1494,27 @@ async function createEconomyTransactionDispute(input = {}) {
   }
 }
 
+function updateEconomyGovernanceOverviewCounts(proposals = null) {
+  const rows = Array.isArray(proposals) ? proposals : Array.from(economyGovernanceProposalCache.values());
+  const publicRows = rows.filter((item) => economyGovernanceCategoryForProposal(item) === "public");
+  const publicVoting = publicRows.filter((item) => economyGovernanceStatusBucket(item) === "voting").length;
+  const disputeRows = Array.isArray(economyTransactionDisputeCache) ? economyTransactionDisputeCache : [];
+  const activeDisputes = disputeRows.filter((item) => {
+    const status = String(item.status || "").trim().toLowerCase();
+    return !["rejected", "cancelled", "expired", "closed", "resolved"].includes(status);
+  }).length;
+  const disputeWithProposal = disputeRows.filter((item) => economyProposalUuidsForDispute(item).length > 0).length;
+  setEconomyText("economy-governance-public-count", String(publicRows.length));
+  setEconomyText("economy-governance-public-status", `目前可投 ${publicVoting}`);
+  setEconomyText("economy-governance-dispute-count", String(disputeRows.length));
+  setEconomyText("economy-governance-dispute-status", `待處理 ${activeDisputes} · 已提案 ${disputeWithProposal}`);
+}
+
 function renderEconomyTransactionDisputes(payload = {}) {
   updateEconomyOfficialHotWalletLabels(payload.official_hot_wallet_labels);
   const rows = Array.isArray(payload.disputes) ? payload.disputes : [];
   economyTransactionDisputeCache = rows;
+  updateEconomyGovernanceOverviewCounts();
   const list = $("economy-disputes-list");
   if (!list) return;
   if (!rows.length) {
@@ -3408,6 +3425,7 @@ function renderEconomyGovernance(payload = {}) {
   setEconomyText("economy-governance-open-count", String({ review: reviewCount, voting: votingCount, closed: closedCount }[economyGovernanceStatusFilter] || 0));
   const statusSmall = $("economy-governance-open-count")?.nextElementSibling;
   if (statusSmall) statusSmall.textContent = `${economyGovernanceStatusFilterLabel(economyGovernanceStatusFilter)} · 審核 ${reviewCount} / 投票 ${votingCount} / 結案 ${closedCount}`;
+  updateEconomyGovernanceOverviewCounts(proposals);
   const list = $("economy-governance-list");
   if (!list) return;
   const filteredProposals = proposals.filter((proposal) => {

@@ -2501,7 +2501,7 @@
         <button class="tab active" id="tab-economy-balance" type="button" data-economy-page="balance">積分餘額</button>
         <button class="tab" id="tab-economy-transactions" type="button" data-economy-page="transactions">交易管理</button>
         <button class="tab" id="tab-economy-explorer" type="button" data-economy-page="explorer">鏈上瀏覽器</button>
-        <button class="tab" id="tab-economy-governance" type="button" data-economy-page="governance">治理提案</button>
+        <button class="tab" id="tab-economy-governance" type="button" data-economy-page="governance">治理看板</button>
         <button class="tab" id="tab-economy-funding-pools" type="button" data-economy-page="funding-pools" style="display:none;">資金池管理</button>
         <button class="tab" id="tab-economy-all-positions" type="button" data-economy-page="all-positions" style="display:none;">全用戶倉位管理</button>
         <button class="tab" id="tab-economy-positions" type="button" data-economy-page="positions" style="display:none;">倉位管理</button>
@@ -2691,21 +2691,11 @@
         </div>
       </div>
       <div class="economy-subpage" id="economy-governance-page">
-        <div class="drive-card" id="economy-dispute-card" style="margin-top:.75rem;">
-          <div class="drive-card-heading">
-            <div>
-              <div class="drive-card-title">疑義交易案件</div>
-              <div class="drive-card-sub">用戶申報不會自動追回或 rollback；manager+ 審核後才可轉成治理提案。</div>
-            </div>
-            <button class="btn" id="economy-disputes-refresh-btn" type="button">更新案件</button>
-          </div>
-          <div id="economy-disputes-list" class="drive-file-list" style="margin-top:.75rem;"></div>
-        </div>
         <div class="drive-card" id="economy-governance-card" style="margin-top:.75rem;">
           <div class="drive-card-heading">
             <div>
-              <div class="drive-card-title">PointsChain 治理提案</div>
-              <div class="drive-card-sub">公共案全站多人投票且 root 無 veto；官方財庫案需 manager+ 通過、root 可 veto，執行前仍需官方多簽簽合。</div>
+              <div class="drive-card-title">公共投票與疑義事件總看板</div>
+              <div class="drive-card-sub">集中顯示你有投票權的公共提案、官方治理案與疑義事件；疑義交易的投票會折疊在案件下方。</div>
             </div>
             <div class="drive-file-actions">
               <select id="economy-governance-category-select" style="min-width:12rem;padding:.48rem .6rem;border-radius:8px;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.12);color:inherit;">
@@ -2720,12 +2710,20 @@
               <button class="btn" id="economy-governance-refresh-btn" type="button">更新治理</button>
             </div>
           </div>
+          <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+            <div><span class="drive-card-sub">提案</span><strong id="economy-governance-proposal-count">0</strong><small id="economy-governance-policy">multi-vote required</small></div>
+            <div><span class="drive-card-sub">狀態</span><strong id="economy-governance-open-count">0</strong><small>voting / passed / executed</small></div>
+            <div><span class="drive-card-sub">公共投票</span><strong id="economy-governance-public-count">0</strong><small id="economy-governance-public-status">目前可投 0</small></div>
+            <div><span class="drive-card-sub">疑義事件</span><strong id="economy-governance-dispute-count">0</strong><small id="economy-governance-dispute-status">待處理 0</small></div>
+          </div>
           <div class="drive-file-actions" id="economy-governance-status-tabs" style="margin-top:.65rem;justify-content:flex-start;gap:.45rem;flex-wrap:wrap;">
             <button class="btn btn-sm active" type="button" data-governance-status-filter="review">審核中</button>
             <button class="btn btn-sm" type="button" data-governance-status-filter="voting">投票中</button>
             <button class="btn btn-sm" type="button" data-governance-status-filter="closed">已結案</button>
           </div>
           <div class="drive-card-sub" id="economy-governance-selected-case" style="margin-top:.5rem;">未選取疑義交易案件。</div>
+          <div id="economy-governance-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+          <div class="msg" id="economy-governance-msg"></div>
           <div class="economy-collapse" id="economy-treasury-signer-center-card" style="display:none;margin-top:.75rem;">
             <div class="drive-card-heading">
               <div>
@@ -2810,12 +2808,16 @@
               <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-governance-policy-create-btn" type="button">提出政策提案</button></div>
             </div>
           </details>
-          <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
-            <div><span class="drive-card-sub">提案</span><strong id="economy-governance-proposal-count">0</strong><small id="economy-governance-policy">multi-vote required</small></div>
-            <div><span class="drive-card-sub">狀態</span><strong id="economy-governance-open-count">0</strong><small>voting / passed / executed</small></div>
+        </div>
+        <div class="drive-card" id="economy-dispute-card" style="margin-top:.75rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">疑義交易案件</div>
+              <div class="drive-card-sub">用戶申報不會自動追回或 rollback；manager+ 審核後才可轉成治理提案。</div>
+            </div>
+            <button class="btn" id="economy-disputes-refresh-btn" type="button">更新案件</button>
           </div>
-          <div id="economy-governance-list" class="drive-file-list" style="margin-top:.75rem;"></div>
-          <div class="msg" id="economy-governance-msg"></div>
+          <div id="economy-disputes-list" class="drive-file-list" style="margin-top:.75rem;"></div>
         </div>
       </div>
       <div class="economy-subpage" id="economy-positions-page">
@@ -6945,7 +6947,7 @@
 <script src="/js/40-auth-users.js?v=20260517-avatar-cropper" defer></script>
 <script src="/js/50-admin.js?v=20260521-comfyui-local-main-args" defer></script>
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>
-<script src="/js/55-economy.js?v=20260523-dispute-notice-governance-materials" defer></script>
+<script src="/js/55-economy.js?v=20260523-governance-dashboard-top" defer></script>
 <script src="/js/56-trading.js?v=20260523-trading-visible-debug" defer></script>
 <script src="/js/57-platform-centers.js?v=20260523-hls-retry-worker" defer></script>
 <script src="/js/58-profile-friends.js?v=20260517-profile-avatar-upload" defer></script>
