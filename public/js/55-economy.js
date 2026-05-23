@@ -1367,14 +1367,6 @@ async function createEconomyTransactionDispute(input = {}) {
     const fromWallet = economyWalletByAddress(fromAddress);
     const accountBoundProof = economyWalletSupportsAccountBoundDisputeProof(fromWallet);
     const hasLocalSignaturePath = economyWalletRequiresSignature(fromWallet);
-    if (!accountBoundProof && !hasLocalSignaturePath && currentUser === "root") {
-      economyNotifyFailure(new Error("root 不能代替 From 地址持有人提出匿名疑義；請由 From 地址持有人本機簽署申報，或由 root 改走治理提案的標記/凍結/緊急處置流程。"), {
-        msgFn: economyTransactionMsg,
-        label: "交易管理",
-        fallback: "疑義交易申報失敗",
-      });
-      return;
-    }
     if (!accountBoundProof && fromWallet && !hasLocalSignaturePath) {
       economyNotifyFailure(new Error("此 From 錢包沒有可用的本機簽章能力，不能用地址證明疑義流程申報。"), {
         msgFn: economyTransactionMsg,
