@@ -95,6 +95,8 @@ def register_video_routes(app, deps):
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
     audit = deps.get("audit", lambda *args, **kwargs: None)
+    add_violation = deps.get("add_violation")
+    detect_chat_violation = deps.get("detect_chat_violation")
     points_service = deps.get("points_service")
     storage_root = deps["STORAGE_DIR"]
     server_file_fernet = deps.get("server_file_fernet")
@@ -309,6 +311,14 @@ def register_video_routes(app, deps):
         except Exception:
             return None
 
+    def _actor_value(actor, key, default=None):
+        if not actor:
+            return default
+        try:
+            return actor[key]
+        except Exception:
+            return actor.get(key, default) if hasattr(actor, "get") else default
+
     def _actor_is_root(actor):
         if not actor:
             return False
@@ -319,6 +329,50 @@ def register_video_routes(app, deps):
             username = ""
             role = ""
         return username == "root" or role == "super_admin"
+
+    def _reject_sensitive_video_content(actor, text, *, content_type, reference=""):
+        if not callable(detect_chat_violation):
+            return None
+        is_bad, reason = detect_chat_violation(text or "")
+        if not is_bad:
+            return None
+        username = _actor_value(actor, "username", "system")
+        if username != "root" and callable(add_violation):
+            try:
+                role = "super_admin" if username == "root" else _actor_value(actor, "role", "user")
+                add_violation(
+                    _actor_value(actor, "id"),
+                    username,
+                    role,
+                    points=1,
+                    reason=f"影音敏感詞：{reason}",
+                    triggered_by=content_type,
+                    actor_username=username,
+                )
+            except Exception as exc:
+                audit(
+                    "VIDEO_SENSITIVE_VIOLATION_FAILED",
+                    get_client_ip(),
+                    user=username,
+                    success=False,
+                    ua=get_ua(),
+                    detail=f"type={content_type},reference={reference},reason={reason},error={exc}",
+                )
+        audit(
+            "VIDEO_SENSITIVE_BLOCKED",
+            get_client_ip(),
+            user=username,
+            success=False,
+            ua=get_ua(),
+            detail=f"type={content_type},reference={reference},reason={reason}",
+        )
+        return json_resp({
+            "ok": False,
+            "warned": True,
+            "reason": reason,
+            "error": "sensitive_content",
+            "msg": f"內容含敏感詞，請修改後再送出（{reason}）",
+        }), 403
 
     def _notify_followers_of_video_activity(conn, actor, *, video_id, activity, share_link=None):
         actor_id = _actor_user_id(actor)
@@ -3332,6 +3386,14 @@ def register_video_routes(app, deps):
             data, err, status = _parse_json_body()
             if err:
                 return err, status
+            sensitive = _reject_sensitive_video_content(
+                actor,
+                data.get("content"),
+                content_type="video_comment",
+                reference=f"video_id={video_id}",
+            )
+            if sensitive:
+                return sensitive
         conn = get_db()
         try:
             if request.method == "GET":
@@ -3377,6 +3439,14 @@ def register_video_routes(app, deps):
             data, err, status = _parse_json_body()
             if err:
                 return err, status
+            sensitive = _reject_sensitive_video_content(
+                actor,
+                data.get("content"),
+                content_type="video_danmaku",
+                reference=f"video_id={video_id}",
+            )
+            if sensitive:
+                return sensitive
         conn = get_db()
         try:
             if request.method == "GET":

@@ -1166,6 +1166,71 @@ def test_video_playback_and_hls_routes_use_ready_stream_asset(tmp_path, monkeypa
     assert segment.mimetype == "video/mp4"
 
 
+def test_video_comment_and_danmaku_reject_sensitive_content_before_insert(tmp_path):
+    db_path = tmp_path / "video-sensitive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    actor = {"id": 2, "username": "viewer", "role": "user", "member_level": "trusted", "effective_level": "trusted"}
+    violations = []
+
+    def detect_chat_violation(text):
+        return ("badword" in str(text or "").lower(), "測試敏感詞")
+
+    def add_violation(*args, **kwargs):
+        violations.append({"args": args, "kwargs": kwargs})
+        return "counted", "違規計點 +1", len(violations)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(conn, storage_root, file_id="sensitive-video", owner_user_id=1, filename="movie.mp4", mime="video/mp4")
+        video = publish_video(conn, actor={"id": 1, "username": "alice", "role": "user"}, cloud_file_id="sensitive-video", title="Movie")
+        video_id = video["id"]
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _build_app(
+        db_path,
+        storage_root,
+        fernet,
+        current_user=actor,
+        extra_deps={
+            "detect_chat_violation": detect_chat_violation,
+            "add_violation": add_violation,
+        },
+    ).test_client()
+
+    comment_response = client.post(f"/api/videos/{video_id}/comments", json={"content": "badword comment"})
+    assert comment_response.status_code == 403
+    comment_payload = comment_response.get_json()
+    assert comment_payload["ok"] is False
+    assert comment_payload["error"] == "sensitive_content"
+    assert comment_payload["reason"] == "測試敏感詞"
+
+    danmaku_response = client.post(
+        f"/api/videos/{video_id}/danmaku",
+        json={"content": "badword danmaku", "time_ms": 100, "effect": "rainbow"},
+    )
+    assert danmaku_response.status_code == 403
+    danmaku_payload = danmaku_response.get_json()
+    assert danmaku_payload["ok"] is False
+    assert danmaku_payload["error"] == "sensitive_content"
+    assert danmaku_payload["reason"] == "測試敏感詞"
+
+    assert [item["kwargs"]["triggered_by"] for item in violations] == ["video_comment", "video_danmaku"]
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM video_comments").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM video_danmaku").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 def test_shared_standard_video_playback_uses_shared_hls_and_stream_urls(tmp_path, monkeypatch):
     db_path = tmp_path / "shared-video-stream.db"
     storage_root = tmp_path / "storage"
