@@ -641,6 +641,8 @@ class PointsLedgerService:
             "points_disputes",
             "points_ledger",
             "points_wallets",
+            "points_wallet_identity_balances",
+            "points_wallet_identity_balance_state",
             "points_pending_rewards",
             "points_economy_daily_stats",
             "points_chain_recovery_state",
@@ -8046,6 +8048,464 @@ class PointsLedgerService:
             return {}
         return {str(row["source_wallet_address"] or ""): int(row["pending_total"] or 0) for row in rows}
 
+    def _wallet_identity_balance_hash(self, *, branch, wallet_address, user_id, wallet_identity_id, available, frozen, pending, last_ledger_id, last_transfer_request_id, last_bridge_event_id):
+        return sha256_text(canonical_json({
+            "version": "points_wallet_identity_balance_v1",
+            "chain_branch": str(branch or ""),
+            "wallet_address": str(wallet_address or "").strip().lower(),
+            "user_id": int(user_id or 0),
+            "wallet_identity_id": int(wallet_identity_id or 0) if wallet_identity_id is not None else None,
+            "available_points": int(available or 0),
+            "frozen_points": int(frozen or 0),
+            "pending_outgoing_points": int(pending or 0),
+            "last_ledger_id": int(last_ledger_id or 0),
+            "last_transfer_request_id": int(last_transfer_request_id or 0),
+            "last_bridge_event_id": int(last_bridge_event_id or 0),
+        }))
+
+    def _wallet_identity_materialized_registry_locked(self, conn, *, branch=None):
+        if not table_columns(conn, "points_wallet_identities"):
+            return {}
+        branch = str(branch or self._canonical_branch_uuid(conn) or self._main_branch_uuid())
+        registry = {}
+        rows = conn.execute(
+            """
+            SELECT id AS wallet_identity_id, user_id, LOWER(address) AS wallet_address,
+                   wallet_type, custody_mode, is_primary, status
+            FROM points_wallet_identities
+            WHERE user_id IS NOT NULL
+              AND status IN ('pending_backup', 'active')
+            """
+        ).fetchall()
+        for row in rows:
+            address = str(row["wallet_address"] or "").strip().lower()
+            if not address:
+                continue
+            registry.setdefault(address, {
+                "chain_branch": branch,
+                "wallet_address": address,
+                "user_id": int(row["user_id"] or 0),
+                "wallet_identity_id": int(row["wallet_identity_id"] or 0),
+                "wallet_type": str(row["wallet_type"] or ""),
+                "custody_mode": str(row["custody_mode"] or ""),
+                "available_points": 0,
+                "frozen_points": 0,
+                "pending_outgoing_points": 0,
+                "last_ledger_id": 0,
+                "last_transfer_request_id": 0,
+                "last_bridge_event_id": 0,
+            })
+        if table_columns(conn, "points_wallet_identity_bindings"):
+            binding_rows = conn.execute(
+                """
+                SELECT w.id AS wallet_identity_id,
+                       b.user_id AS binding_user_id,
+                       LOWER(COALESCE(NULLIF(b.address, ''), w.address)) AS wallet_address,
+                       COALESCE(NULLIF(b.wallet_type, ''), w.wallet_type) AS wallet_type,
+                       w.custody_mode
+                FROM points_wallet_identity_bindings b
+                JOIN points_wallet_identities w ON w.id=b.wallet_identity_id
+                WHERE b.status='active'
+                  AND w.status IN ('pending_backup', 'active')
+                """
+            ).fetchall()
+            for row in binding_rows:
+                address = str(row["wallet_address"] or "").strip().lower()
+                if not address or address in registry:
+                    continue
+                registry[address] = {
+                    "chain_branch": branch,
+                    "wallet_address": address,
+                    "user_id": int(row["binding_user_id"] or 0),
+                    "wallet_identity_id": int(row["wallet_identity_id"] or 0),
+                    "wallet_type": str(row["wallet_type"] or ""),
+                    "custody_mode": str(row["custody_mode"] or ""),
+                    "available_points": 0,
+                    "frozen_points": 0,
+                    "pending_outgoing_points": 0,
+                    "last_ledger_id": 0,
+                    "last_transfer_request_id": 0,
+                    "last_bridge_event_id": 0,
+                }
+        return registry
+
+    def rebuild_wallet_identity_balances(self, conn, chain_branch=None):
+        branch = str(chain_branch or self._canonical_branch_uuid(conn) or self._main_branch_uuid())
+        balances = self._wallet_identity_materialized_registry_locked(conn, branch=branch)
+        last_ledger_id = 0
+        last_ledger_hash = ""
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM points_ledger
+            WHERE status='confirmed' AND chain_branch=?
+            ORDER BY id ASC
+            """,
+            (branch,),
+        ).fetchall()
+        for row in rows:
+            last_ledger_id = max(last_ledger_id, int(row["id"] or 0))
+            last_ledger_hash = str(row["ledger_hash"] or last_ledger_hash)
+            flow = self._ledger_wallet_flow_for_read(conn, row)
+            amount = int(row["amount"] or 0)
+            direction = str(row["direction"] or "")
+            if direction in {"credit", "transfer_in"}:
+                address = str(flow.get("destination_wallet_address") or "").strip().lower()
+                if address in balances:
+                    balances[address]["available_points"] += amount
+                    balances[address]["last_ledger_id"] = last_ledger_id
+            elif direction in {"debit", "transfer_out", "reverse"}:
+                address = str(flow.get("source_wallet_address") or "").strip().lower()
+                if address in balances:
+                    balances[address]["available_points"] -= amount
+                    balances[address]["last_ledger_id"] = last_ledger_id
+            elif direction == "freeze":
+                address = str(flow.get("source_wallet_address") or "").strip().lower()
+                if address in balances:
+                    balances[address]["available_points"] -= amount
+                    balances[address]["frozen_points"] += amount
+                    balances[address]["last_ledger_id"] = last_ledger_id
+            elif direction == "unfreeze":
+                address = str(flow.get("source_wallet_address") or flow.get("destination_wallet_address") or "").strip().lower()
+                if address in balances:
+                    balances[address]["available_points"] += amount
+                    balances[address]["frozen_points"] -= amount
+                    balances[address]["last_ledger_id"] = last_ledger_id
+        if balances:
+            placeholders = ", ".join("?" for _ in balances)
+            transfer_rows = conn.execute(
+                f"""
+                SELECT destination_wallet_address, COALESCE(SUM(amount_points), 0) AS received
+                FROM points_chain_transfer_requests
+                WHERE status='confirmed'
+                  AND chain_branch=?
+                  AND destination_wallet_address IN ({placeholders})
+                  AND (transfer_in_ledger_uuid IS NULL OR transfer_in_ledger_uuid='')
+                GROUP BY destination_wallet_address
+                """,
+                (branch, *tuple(balances.keys())),
+            ).fetchall()
+            for row in transfer_rows:
+                address = str(row["destination_wallet_address"] or "").strip().lower()
+                if address in balances:
+                    balances[address]["available_points"] += int(row["received"] or 0)
+        last_transfer_row = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) AS id FROM points_chain_transfer_requests WHERE chain_branch=?",
+            (branch,),
+        ).fetchone()
+        last_transfer_id = int((last_transfer_row["id"] if last_transfer_row else 0) or 0)
+        pending_by_address = self._pending_transfer_outgoing_by_address(conn, balances.keys(), branch_uuid=branch)
+        for address, pending in pending_by_address.items():
+            if address in balances:
+                balances[address]["pending_outgoing_points"] = int(pending or 0)
+                balances[address]["last_transfer_request_id"] = last_transfer_id
+        bridge_row = conn.execute("SELECT COALESCE(MAX(id), 0) AS id FROM points_chain_bridge_events").fetchone()
+        last_bridge_id = int((bridge_row["id"] if bridge_row else 0) or 0)
+        now = utc_now()
+        for item in balances.values():
+            if int(item["available_points"] or 0) < 0 or int(item["frozen_points"] or 0) < 0 or int(item["pending_outgoing_points"] or 0) < 0:
+                raise ValueError(f"wallet identity replay would create negative balance for {item['wallet_address']}")
+            item["last_ledger_id"] = max(int(item.get("last_ledger_id") or 0), last_ledger_id)
+            item["last_transfer_request_id"] = max(int(item.get("last_transfer_request_id") or 0), last_transfer_id)
+            item["last_bridge_event_id"] = last_bridge_id
+            item["balance_hash"] = self._wallet_identity_balance_hash(
+                branch=branch,
+                wallet_address=item["wallet_address"],
+                user_id=item["user_id"],
+                wallet_identity_id=item["wallet_identity_id"],
+                available=item["available_points"],
+                frozen=item["frozen_points"],
+                pending=item["pending_outgoing_points"],
+                last_ledger_id=item["last_ledger_id"],
+                last_transfer_request_id=item["last_transfer_request_id"],
+                last_bridge_event_id=item["last_bridge_event_id"],
+            )
+        conn.execute("DELETE FROM points_wallet_identity_balances WHERE chain_branch=?", (branch,))
+        for item in balances.values():
+            conn.execute(
+                """
+                INSERT INTO points_wallet_identity_balances (
+                    chain_branch, wallet_address, user_id, wallet_identity_id, wallet_type, custody_mode,
+                    available_points, frozen_points, pending_outgoing_points,
+                    last_ledger_id, last_transfer_request_id, last_bridge_event_id,
+                    balance_hash, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    branch,
+                    item["wallet_address"],
+                    int(item["user_id"] or 0),
+                    item.get("wallet_identity_id"),
+                    item.get("wallet_type") or "",
+                    item.get("custody_mode") or "",
+                    int(item["available_points"] or 0),
+                    int(item["frozen_points"] or 0),
+                    int(item["pending_outgoing_points"] or 0),
+                    int(item["last_ledger_id"] or 0),
+                    int(item["last_transfer_request_id"] or 0),
+                    int(item["last_bridge_event_id"] or 0),
+                    item["balance_hash"],
+                    now,
+                ),
+            )
+        root_hash = merkle_root([item["balance_hash"] for item in sorted(balances.values(), key=lambda value: value["wallet_address"])])
+        conn.execute(
+            """
+            INSERT INTO points_wallet_identity_balance_state (
+                chain_branch, replay_height, last_ledger_hash, last_transfer_request_id,
+                last_bridge_event_id, wallet_root_hash, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chain_branch) DO UPDATE SET
+                replay_height=excluded.replay_height,
+                last_ledger_hash=excluded.last_ledger_hash,
+                last_transfer_request_id=excluded.last_transfer_request_id,
+                last_bridge_event_id=excluded.last_bridge_event_id,
+                wallet_root_hash=excluded.wallet_root_hash,
+                updated_at=excluded.updated_at
+            """,
+            (branch, last_ledger_id, last_ledger_hash, last_transfer_id, last_bridge_id, root_hash, now),
+        )
+        return {
+            "ok": True,
+            "chain_branch": branch,
+            "wallet_count": len(balances),
+            "replay_height": last_ledger_id,
+            "last_transfer_request_id": last_transfer_id,
+            "last_bridge_event_id": last_bridge_id,
+            "wallet_root_hash": root_hash,
+        }
+
+    def verify_wallet_identity_balances(self, conn, chain_branch=None, *, mode="full"):
+        branch = str(chain_branch or self._canonical_branch_uuid(conn) or self._main_branch_uuid())
+        snapshot = {}
+        for row in conn.execute(
+            "SELECT * FROM points_wallet_identity_balances WHERE chain_branch=?",
+            (branch,),
+        ).fetchall():
+            snapshot[str(row["wallet_address"] or "").strip().lower()] = dict(row)
+        savepoint = f"sp_verify_wallet_identity_balances_{uuid.uuid4().hex}"
+        conn.execute(f"SAVEPOINT {savepoint}")
+        try:
+            rebuilt = self.rebuild_wallet_identity_balances(conn, branch)
+            expected = {
+                str(row["wallet_address"] or "").strip().lower(): dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM points_wallet_identity_balances WHERE chain_branch=?",
+                    (branch,),
+                ).fetchall()
+            }
+            conn.execute(f"ROLLBACK TO {savepoint}")
+        finally:
+            conn.execute(f"RELEASE {savepoint}")
+        errors = []
+        all_addresses = sorted(set(snapshot) | set(expected))
+        for address in all_addresses:
+            actual = snapshot.get(address)
+            want = expected.get(address)
+            if not actual:
+                errors.append({"type": "wallet_identity_balance_missing", "wallet_address": address})
+                continue
+            if not want:
+                errors.append({"type": "wallet_identity_balance_orphan", "wallet_address": address})
+                continue
+            mismatches = []
+            for column in ("available_points", "frozen_points", "pending_outgoing_points"):
+                if int(actual.get(column) or 0) != int(want.get(column) or 0):
+                    mismatches.append({
+                        "field": column,
+                        "expected": int(want.get(column) or 0),
+                        "actual": int(actual.get(column) or 0),
+                    })
+            if str(actual.get("balance_hash") or "") != str(want.get("balance_hash") or ""):
+                mismatches.append({
+                    "field": "balance_hash",
+                    "expected": str(want.get("balance_hash") or ""),
+                    "actual": str(actual.get("balance_hash") or ""),
+                })
+            if mismatches:
+                errors.append({
+                    "type": "wallet_identity_balance_mismatch",
+                    "wallet_address": address,
+                    "mismatches": mismatches,
+                })
+        state = conn.execute(
+            "SELECT * FROM points_wallet_identity_balance_state WHERE chain_branch=?",
+            (branch,),
+        ).fetchone()
+        if not state:
+            errors.append({"type": "wallet_identity_balance_state_missing", "chain_branch": branch})
+        return {
+            "ok": not errors,
+            "chain_branch": branch,
+            "mode": str(mode or "full"),
+            "errors": errors[:100],
+            "error_count": len(errors),
+            "expected": rebuilt,
+            "wallet_count": len(snapshot),
+        }
+
+    def _wallet_identity_materialized_state_valid_locked(self, conn, *, branch):
+        state = conn.execute(
+            "SELECT * FROM points_wallet_identity_balance_state WHERE chain_branch=?",
+            (branch,),
+        ).fetchone()
+        if not state:
+            return False
+        ledger_row = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) AS id FROM points_ledger WHERE status='confirmed' AND chain_branch=?",
+            (branch,),
+        ).fetchone()
+        latest_ledger_id = int((ledger_row["id"] if ledger_row else 0) or 0)
+        return int(state["replay_height"] or 0) >= latest_ledger_id
+
+    def _wallet_identity_materialized_rows_for_user_locked(self, conn, *, user_id, branch, addresses):
+        normalized = sorted({str(address or "").strip().lower() for address in addresses or [] if address})
+        if not normalized:
+            return {}
+        started_transaction = not conn.in_transaction
+        if not self._wallet_identity_materialized_state_valid_locked(conn, branch=branch):
+            self.rebuild_wallet_identity_balances(conn, branch)
+            if started_transaction:
+                conn.commit()
+        placeholders = ", ".join("?" for _ in normalized)
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM points_wallet_identity_balances
+            WHERE chain_branch=? AND wallet_address IN ({placeholders})
+            """,
+            (branch, *normalized),
+        ).fetchall()
+        by_address = {str(row["wallet_address"] or "").strip().lower(): row for row in rows}
+        if set(by_address) != set(normalized):
+            self.rebuild_wallet_identity_balances(conn, branch)
+            if started_transaction:
+                conn.commit()
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM points_wallet_identity_balances
+                WHERE chain_branch=? AND wallet_address IN ({placeholders})
+                """,
+                (branch, *normalized),
+            ).fetchall()
+            by_address = {str(row["wallet_address"] or "").strip().lower(): row for row in rows}
+        return by_address
+
+    def _refresh_wallet_identity_pending_for_address_locked(self, conn, address, *, branch=None):
+        address = str(address or "").strip().lower()
+        if not address:
+            return
+        branch = str(branch or self._canonical_branch_uuid(conn) or self._main_branch_uuid())
+        row = conn.execute(
+            "SELECT * FROM points_wallet_identity_balances WHERE chain_branch=? AND wallet_address=?",
+            (branch, address),
+        ).fetchone()
+        if not row:
+            return
+        pending = self._pending_transfer_outgoing_for_address(conn, address, branch_uuid=branch)
+        transfer_row = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) AS id FROM points_chain_transfer_requests WHERE chain_branch=?",
+            (branch,),
+        ).fetchone()
+        last_transfer_id = int((transfer_row["id"] if transfer_row else 0) or 0)
+        balance_hash = self._wallet_identity_balance_hash(
+            branch=branch,
+            wallet_address=address,
+            user_id=int(row["user_id"] or 0),
+            wallet_identity_id=row["wallet_identity_id"],
+            available=int(row["available_points"] or 0),
+            frozen=int(row["frozen_points"] or 0),
+            pending=pending,
+            last_ledger_id=int(row["last_ledger_id"] or 0),
+            last_transfer_request_id=last_transfer_id,
+            last_bridge_event_id=int(row["last_bridge_event_id"] or 0),
+        )
+        conn.execute(
+            """
+            UPDATE points_wallet_identity_balances
+            SET pending_outgoing_points=?, last_transfer_request_id=?, balance_hash=?, updated_at=?
+            WHERE chain_branch=? AND wallet_address=?
+            """,
+            (pending, last_transfer_id, balance_hash, utc_now(), branch, address),
+        )
+
+    def _apply_wallet_identity_materialized_ledger_delta_locked(self, conn, *, ledger_row, wallet_flow_snapshot):
+        if not table_columns(conn, "points_wallet_identity_balances"):
+            return
+        branch = str(ledger_row["chain_branch"] or self._canonical_branch_uuid(conn) or self._main_branch_uuid())
+        amount = int(ledger_row["amount"] or 0)
+        direction = str(ledger_row["direction"] or "")
+        if direction in {"credit", "transfer_in"}:
+            address = str(wallet_flow_snapshot.get("destination_wallet_address") or "").strip().lower()
+            available_delta, frozen_delta = amount, 0
+        elif direction in {"debit", "transfer_out", "reverse"}:
+            address = str(wallet_flow_snapshot.get("source_wallet_address") or "").strip().lower()
+            available_delta, frozen_delta = -amount, 0
+        elif direction == "freeze":
+            address = str(wallet_flow_snapshot.get("source_wallet_address") or "").strip().lower()
+            available_delta, frozen_delta = -amount, amount
+        elif direction == "unfreeze":
+            address = str(wallet_flow_snapshot.get("source_wallet_address") or wallet_flow_snapshot.get("destination_wallet_address") or "").strip().lower()
+            available_delta, frozen_delta = amount, -amount
+        else:
+            return
+        if not address:
+            return
+        row = conn.execute(
+            "SELECT * FROM points_wallet_identity_balances WHERE chain_branch=? AND wallet_address=?",
+            (branch, address),
+        ).fetchone()
+        if not row:
+            self.rebuild_wallet_identity_balances(conn, branch)
+            row = conn.execute(
+                "SELECT * FROM points_wallet_identity_balances WHERE chain_branch=? AND wallet_address=?",
+                (branch, address),
+            ).fetchone()
+            if not row:
+                return
+        available = int(row["available_points"] or 0) + int(available_delta or 0)
+        frozen = int(row["frozen_points"] or 0) + int(frozen_delta or 0)
+        if available < 0 or frozen < 0:
+            raise ValueError(f"wallet identity materialized balance would become negative for {address}")
+        pending = self._pending_transfer_outgoing_for_address(conn, address, branch_uuid=branch)
+        last_ledger_id = int(ledger_row["id"] or 0)
+        balance_hash = self._wallet_identity_balance_hash(
+            branch=branch,
+            wallet_address=address,
+            user_id=int(row["user_id"] or 0),
+            wallet_identity_id=row["wallet_identity_id"],
+            available=available,
+            frozen=frozen,
+            pending=pending,
+            last_ledger_id=last_ledger_id,
+            last_transfer_request_id=int(row["last_transfer_request_id"] or 0),
+            last_bridge_event_id=int(row["last_bridge_event_id"] or 0),
+        )
+        now = utc_now()
+        conn.execute(
+            """
+            UPDATE points_wallet_identity_balances
+            SET available_points=?, frozen_points=?, pending_outgoing_points=?,
+                last_ledger_id=?, balance_hash=?, updated_at=?
+            WHERE chain_branch=? AND wallet_address=?
+            """,
+            (available, frozen, pending, last_ledger_id, balance_hash, now, branch, address),
+        )
+        state = conn.execute(
+            "SELECT * FROM points_wallet_identity_balance_state WHERE chain_branch=?",
+            (branch,),
+        ).fetchone()
+        if state:
+            conn.execute(
+                """
+                UPDATE points_wallet_identity_balance_state
+                SET replay_height=MAX(replay_height, ?), last_ledger_hash=?, updated_at=?
+                WHERE chain_branch=?
+                """,
+                (last_ledger_id, ledger_row["ledger_hash"], now, branch),
+            )
+
     def _wallet_identity_balances_for_user(
         self,
         conn,
@@ -8063,6 +8523,51 @@ class PointsLedgerService:
             return {"has_identity": False, "primary_address": "", "balances": balances}
         for address in state["addresses"]:
             balances[address] = {"balance": 0, "frozen": 0, "pending_outgoing": 0}
+        try:
+            materialized_rows = self._wallet_identity_materialized_rows_for_user_locked(
+                conn,
+                user_id=int(user_id),
+                branch=branch,
+                addresses=balances.keys(),
+            )
+        except Exception:
+            materialized_rows = {}
+        if materialized_rows and set(materialized_rows) == set(balances):
+            materialized_balances = {}
+            for address, row in materialized_rows.items():
+                materialized_balances[address] = {
+                    "balance": int(row["available_points"] or 0),
+                    "frozen": int(row["frozen_points"] or 0),
+                    "pending_outgoing": 0,
+                }
+            materialized_matches = True
+            if account_statement is not None:
+                materialized_matches = (
+                    sum(int(item.get("balance") or 0) for item in materialized_balances.values()) == int(account_statement.get("balance") or 0)
+                    and sum(int(item.get("frozen") or 0) for item in materialized_balances.values()) == int(account_statement.get("frozen") or 0)
+                )
+            if materialized_matches:
+                balances = materialized_balances
+                if include_pending:
+                    pending_by_address = self._pending_transfer_outgoing_by_address(
+                        conn,
+                        balances.keys(),
+                        exclude_request_uuid=exclude_request_uuid,
+                        branch_uuid=branch,
+                    )
+                    for address, pending in pending_by_address.items():
+                        if address in balances and int(pending or 0) > 0:
+                            pending = int(pending or 0)
+                            balances[address]["balance"] -= pending
+                            balances[address]["frozen"] += pending
+                            balances[address]["pending_outgoing"] = pending
+                primary = state["primary"]
+                return {
+                    "has_identity": True,
+                    "primary_address": primary["address"] if primary else "",
+                    "balances": balances,
+                    "source": "materialized_wallet_identity_balances",
+                }
         can_use_single_wallet_aggregate = (
             len(balances) == 1
             and int(state.get("identity_row_count") or 0) == 1
@@ -9665,12 +10170,18 @@ class PointsLedgerService:
         return {"event": "failed", "sender": sender_sent, "recipient": recipient_sent, "all_sent": bool(sender_sent and recipient_sent)}
 
     def _fail_transfer_request_locked(self, conn, req, *, status, reason):
+        req = dict(req)
         status_text = str(status or "failed").strip() or "failed"
         if not status_text.startswith("failed"):
             status_text = f"failed_{status_text}"
         conn.execute(
             "UPDATE points_chain_transfer_requests SET status=? WHERE request_uuid=? AND status='pending'",
             (status_text[:80], req["request_uuid"]),
+        )
+        self._refresh_wallet_identity_pending_for_address_locked(
+            conn,
+            req.get("source_wallet_address"),
+            branch=req.get("chain_branch") or self._canonical_branch_uuid(conn),
         )
         failed = conn.execute(
             "SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?",
@@ -9750,6 +10261,11 @@ class PointsLedgerService:
                     WHERE request_uuid=? AND status='pending'
                     """,
                     (req["request_uuid"],),
+                )
+                self._refresh_wallet_identity_pending_for_address_locked(
+                    conn,
+                    req.get("source_wallet_address"),
+                    branch=req_branch,
                 )
                 finalized = conn.execute(
                     "SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?",
@@ -9857,6 +10373,11 @@ class PointsLedgerService:
                 WHERE request_uuid=? AND status='pending'
                 """,
                 (in_row["ledger_uuid"] if in_row else None, req["request_uuid"]),
+            )
+            self._refresh_wallet_identity_pending_for_address_locked(
+                conn,
+                req.get("source_wallet_address"),
+                branch=req_branch,
             )
             finalized = conn.execute(
                 "SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?",
@@ -10045,6 +10566,11 @@ class PointsLedgerService:
                 fee_row["ledger_uuid"] if fee_row else None,
                 req["request_uuid"],
             ),
+        )
+        self._refresh_wallet_identity_pending_for_address_locked(
+            conn,
+            req.get("source_wallet_address"),
+            branch=req_branch,
         )
         finalized = conn.execute(
             "SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?",
@@ -10421,6 +10947,7 @@ class PointsLedgerService:
                     utc_now(),
                 ),
             )
+            self._refresh_wallet_identity_pending_for_address_locked(conn, source, branch=active_branch)
             req = conn.execute(
                 "SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?",
                 (request_uuid,),
@@ -11344,6 +11871,11 @@ class PointsLedgerService:
             (account_balance_after, account_frozen_after, earned_delta, spent_delta, now, int(user_id)),
         )
         row = conn.execute("SELECT * FROM points_ledger WHERE id=?", (cur.lastrowid,)).fetchone()
+        self._apply_wallet_identity_materialized_ledger_delta_locked(
+            conn,
+            ledger_row=row,
+            wallet_flow_snapshot=wallet_flow_snapshot,
+        )
         economy_event, economy_created = self._append_walletized_economy_event(
             conn,
             ledger_row=row,
@@ -12859,6 +13391,18 @@ class PointsLedgerService:
                     )
             else:
                 errors.extend(wallet_errors)
+        if not errors:
+            identity_balance_verify = self.verify_wallet_identity_balances(conn, chain_branch=self._canonical_branch_uuid(conn), mode="full")
+            if not identity_balance_verify.get("ok"):
+                rebuild = self.rebuild_wallet_identity_balances(conn, self._canonical_branch_uuid(conn))
+                identity_balance_verify = self.verify_wallet_identity_balances(conn, chain_branch=self._canonical_branch_uuid(conn), mode="full")
+                if identity_balance_verify.get("ok"):
+                    repairs.append({
+                        "type": "wallet_identity_balances_rebuilt",
+                        "wallet_balance_rebuild": rebuild,
+                    })
+                else:
+                    errors.extend(identity_balance_verify.get("errors") or [])
         branch = self._canonical_branch_uuid(conn)
         pc1_counts = self._pc1_chain_ledger_count_snapshot_locked(conn, branch=branch)
         counts = {

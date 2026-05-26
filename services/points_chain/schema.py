@@ -370,6 +370,40 @@ def ensure_points_economy_schema(conn):
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS points_wallet_identity_balances (
+            chain_branch TEXT NOT NULL,
+            wallet_address TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            wallet_identity_id INTEGER,
+            wallet_type TEXT NOT NULL DEFAULT '',
+            custody_mode TEXT NOT NULL DEFAULT '',
+            available_points INTEGER NOT NULL DEFAULT 0 CHECK (available_points >= 0),
+            frozen_points INTEGER NOT NULL DEFAULT 0 CHECK (frozen_points >= 0),
+            pending_outgoing_points INTEGER NOT NULL DEFAULT 0 CHECK (pending_outgoing_points >= 0),
+            last_ledger_id INTEGER NOT NULL DEFAULT 0,
+            last_transfer_request_id INTEGER NOT NULL DEFAULT 0,
+            last_bridge_event_id INTEGER NOT NULL DEFAULT 0,
+            balance_hash TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (chain_branch, wallet_address)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_wallet_identity_balance_state (
+            chain_branch TEXT PRIMARY KEY,
+            replay_height INTEGER NOT NULL DEFAULT 0,
+            last_ledger_hash TEXT NOT NULL DEFAULT '',
+            last_transfer_request_id INTEGER NOT NULL DEFAULT 0,
+            last_bridge_event_id INTEGER NOT NULL DEFAULT 0,
+            wallet_root_hash TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS points_ledger (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ledger_uuid TEXT NOT NULL UNIQUE,
@@ -1106,6 +1140,7 @@ def ensure_points_economy_schema(conn):
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_user_time ON points_ledger(user_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_wallet_identity_balances_user ON points_wallet_identity_balances(chain_branch, user_id, wallet_type, wallet_address)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_branch_user_time ON points_ledger(chain_branch, user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_branch_id ON points_ledger(chain_branch, id DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_branch_user_id_desc ON points_ledger(chain_branch, user_id, id DESC)")

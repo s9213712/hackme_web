@@ -92,6 +92,46 @@ def test_points_schema_adds_finance_hot_path_indexes(tmp_path):
         conn.close()
 
 
+def test_wallet_identity_materialized_balances_update_and_verify(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=125,
+        action_type="materialized_seed",
+        public_metadata={"source_fund_key": "mint"},
+    )
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        hot = create_official_hot_wallet(conn, user_id=1, chain_secret=service.chain_secret)
+        row = conn.execute(
+            """
+            SELECT *
+            FROM points_wallet_identity_balances
+            WHERE chain_branch='main' AND wallet_address=?
+            """,
+            (hot["address"],),
+        ).fetchone()
+        assert row is not None
+        assert row["available_points"] == 125
+        assert row["frozen_points"] == 0
+        assert row["pending_outgoing_points"] == 0
+        verify = service.verify_wallet_identity_balances(conn, "main", mode="full")
+        assert verify["ok"], verify
+
+        def fail_replay(*_args, **_kwargs):
+            raise AssertionError("materialized balance read should not replay points_ledger")
+
+        monkeypatch.setattr(service, "_ledger_wallet_flow_for_read", fail_replay)
+        state = service._wallet_identity_balances_for_user(conn, 1, include_pending=False)
+        assert state["source"] == "materialized_wallet_identity_balances"
+        assert state["balances"][hot["address"]]["balance"] == 125
+    finally:
+        conn.close()
+
+
 def _official_hot_wallet(service, user_id):
     conn = service.get_db()
     try:
