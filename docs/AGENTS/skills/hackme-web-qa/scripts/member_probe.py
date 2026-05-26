@@ -226,7 +226,7 @@ def main():
         unsupported = test.request("POST", "/api/videos/upload", files={"video": ("qa-video.mp4", fh, "video/mp4")}, data={"privacy_mode": "e2ee", "title": "bad e2ee"})
     add_check(out, "video upload rejects unsupported E2EE mode explicitly", unsupported.get("status") == 400 and "unsupported_privacy_mode" in json.dumps(unsupported.get("json") or {}), unsupported, "medium")
 
-    grid_payload = {"market_symbol": "ETH/POINTS", "lower_price_points": 100000, "upper_price_points": 100200, "grid_count": 2, "order_amount_points": 10000, "order_mode": "maker"}
+    grid_payload = {"market_symbol": "ETH/USDT", "lower_price_points": 100000, "upper_price_points": 100200, "grid_count": 2, "order_amount_points": 10000, "order_mode": "maker"}
     grid = test.request("POST", "/api/trading/grid/preview", json=grid_payload)
     gp = ((grid.get("json") or {}).get("grid_profit") or {})
     fm = ((grid.get("json") or {}).get("fee_model") or {})

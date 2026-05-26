@@ -8,7 +8,7 @@ REQUIRED_MARKERS = (
     "verify_chain",
     "rebuild_wallet",
     "safe_mode",
-    "ledger backup",
+    "backup restore is disabled",
 )
 
 
@@ -21,6 +21,6 @@ def run(ctx: PrepushContext) -> CheckResult:
             "PointsChain gate",
             "some PointsChain safety markers were not found by static scan",
             details=missing,
-            remediation="Confirm ledger verification, wallet replay, safe mode, and backup restore remain wired.",
+            remediation="Confirm ledger verification, wallet replay, safe mode, and disabled backup-restore policy remain wired.",
         )
     return CheckResult.pass_("PointsChain gate", "ledger verification/rebuild/safe-mode markers are present")

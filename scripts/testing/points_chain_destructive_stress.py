@@ -726,9 +726,9 @@ def main() -> int:
     market_list = markets.get("markets") or markets.get("data") or []
     if isinstance(market_list, list) and market_list:
         market = market_list[0]
-        symbol = market.get("symbol") or "BTC/POINTS"
+        symbol = market.get("display_symbol") or market.get("symbol") or "BTC/USDT"
     else:
-        symbol = "BTC/POINTS"
+        symbol = "BTC/USDT"
     for idx in range(max(0, int(args.trading_ops))):
         client = clients[idx % len(clients)]["client"]
         res = client.request(

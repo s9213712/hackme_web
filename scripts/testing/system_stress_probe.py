@@ -606,7 +606,7 @@ def run_operation(name: str, client: Client, seed: dict[str, Any], budget: Opera
             name,
             "POST",
             "/api/trading/grid/preview",
-            json={"market_symbol": "BTC/POINTS", "lower_price_points": 70000, "upper_price_points": 80000, "grid_count": 3, "order_amount_points": 100},
+            json={"market_symbol": "BTC/USDT", "lower_price_points": 70000, "upper_price_points": 80000, "grid_count": 3, "order_amount_points": 100},
             expected={200, 400, 403, 409, 503},
         )
     if name == "games_catalog":

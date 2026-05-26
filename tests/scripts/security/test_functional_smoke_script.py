@@ -60,12 +60,14 @@ def test_functional_smoke_covers_latest_trading_and_announcement_paths():
 
     assert 'request "points chain seal blocked outside production" "POST" "/api/root/points/chain/seal" "400"' in script
     assert '"points chain seal guidance"' in script
+    assert 'request "points chain backup manual disabled" "POST" "/api/root/points/chain/backups" "410" \'{}\'' in script
+    assert '"points chain backup disabled policy"' in script
     assert 'request "trading market buy blocked in custom profile" "POST" "/api/trading/orders" "400"' in script
     assert '"trading custom profile block guidance"' in script
     assert 'request "security center switch to test mode" "POST" "/api/admin/server-mode" "200" \'{"mode":"test","confirm":"SWITCH_TO_TEST","notes":"functional smoke trading diagnostics"}\'' in script
     assert 'enable_smoke_feature_flags_after_mode_switch "admin after test mode"' in script
-    assert 'request "trading live price" "GET" "/api/trading/live-price?market=ETH/POINTS" "200"' in script
-    assert 'request "trading reference prices" "GET" "/api/trading/reference-prices?market=ETH/POINTS&interval=15m&limit=24" "200"' in script
+    assert 'request "trading live price" "GET" "/api/trading/live-price?market=ETH/USDT" "200"' in script
+    assert 'request "trading reference prices" "GET" "/api/trading/reference-prices?market=ETH/USDT&interval=15m&limit=24" "200"' in script
     assert 'request "trading grid preview" "POST" "/api/trading/grid/preview" "200"' in script
     assert 'request "admin rotate maintenance bypass token" "POST" "/api/admin/access-controls/maintenance-bypass-token" "200" \'{"confirm":"ROTATE","ttl_minutes":30}\'' in script
     assert 'MAINTENANCE_BYPASS_TOKEN="$(json_expr \'data["token"]\'' in script
@@ -78,7 +80,7 @@ def test_functional_smoke_covers_latest_trading_and_announcement_paths():
     assert '"尚未收到任何即時價格更新" in str(data["msg"])' in script
     assert '"trading tester internal_test warmup gate guidance"' in script
     assert 'request "security center switch back to test mode after internal_test" "POST" "/api/admin/server-mode" "200"' in script
-    assert 'request "trading root price fusion status" "GET" "/api/root/trading/price-fusion-status?market_symbol=ETH/POINTS" "200"' in script
+    assert 'request "trading root price fusion status" "GET" "/api/root/trading/price-fusion-status?market_symbol=ETH/USDT" "200"' in script
     assert 'request "trading root bot audit dashboard" "GET" "/api/root/trading/bot-audit/dashboard?limit=10" "200"' in script
     assert 'request "trading root bot audit manual run" "POST" "/api/root/trading/bot-audit/run" "200"' in script
     assert '"community create announcement guidance"' in script

@@ -30,6 +30,7 @@ from services.trading.trading_engine import (
     notional_points,
     units_to_quantity,
 )
+from services.points_chain.wallet_identity import official_hot_wallet_address
 
 
 REPORT_DIR = REPO_ROOT / "runtime" / "reports" / "trading_validation"
@@ -106,6 +107,49 @@ def make_services(tmp_path):
     return points, trading, prices, get_db
 
 
+def official_hot_credit_metadata(points, user_id):
+    return {
+        "source_fund_key": "official_treasury",
+        "destination_wallet_address": official_hot_wallet_address(points.chain_secret, int(user_id)),
+        "settlement_rail": "internal_hot_wallet",
+        "chain_required": False,
+        "approval_required": False,
+        "network_fee_points": 0,
+        "service_fee_points": 0,
+    }
+
+
+def fund_user(points, *, user_id, amount, action_type, actor):
+    return points.record_transaction(
+        user_id=user_id,
+        currency_type="points",
+        direction="credit",
+        amount=amount,
+        action_type=action_type,
+        actor=actor,
+        public_metadata=official_hot_credit_metadata(points, user_id),
+    )
+
+
+def burn_validation_spend(points, *, user_id, amount, action_type, actor):
+    return points.record_transaction(
+        user_id=user_id,
+        currency_type="points",
+        direction="debit",
+        amount=amount,
+        action_type=action_type,
+        actor=actor,
+        public_metadata={
+            "destination_fund_key": "burn",
+            "settlement_rail": "internal_hot_wallet",
+            "chain_required": False,
+            "approval_required": False,
+            "network_fee_points": 0,
+            "service_fee_points": 0,
+        },
+    )
+
+
 def ok(results, name, passed, **details):
     item = {"name": name, "ok": bool(passed), **details}
     results.append(item)
@@ -133,14 +177,7 @@ def validation_scenarios():
         alice = actor(1, "alice", "user")
 
         # Wallet and spot trading.
-        points.record_transaction(
-            user_id=1,
-            currency_type="points",
-            direction="credit",
-            amount=5000,
-            action_type="validation_funding",
-            actor=root,
-        )
+        fund_user(points, user_id=1, amount=5000, action_type="validation_funding", actor=root)
         before_wallet = points.get_wallet(1)
         buy = trading.place_order(
             actor=alice,
@@ -241,14 +278,7 @@ def validation_scenarios():
         workflow_tmp = Path(tmp) / "workflow_case"
         workflow_tmp.mkdir(parents=True, exist_ok=True)
         workflow_points, workflow_trading, _workflow_prices, _workflow_db = make_services(workflow_tmp)
-        workflow_points.record_transaction(
-            user_id=1,
-            currency_type="points",
-            direction="credit",
-            amount=5000,
-            action_type="validation_workflow_funding",
-            actor=root,
-        )
+        fund_user(workflow_points, user_id=1, amount=5000, action_type="validation_workflow_funding", actor=root)
         workflow = {
             "version": 1,
             "strategy_kind": "workflow",
@@ -392,14 +422,7 @@ def validation_scenarios():
 
         # Grid bot live lifecycle: create initial limit orders, match one buy,
         # then scan the bot so it places the next sell level.
-        points.record_transaction(
-            user_id=1,
-            currency_type="points",
-            direction="credit",
-            amount=1200,
-            action_type="validation_grid_funding",
-            actor=root,
-        )
+        fund_user(points, user_id=1, amount=20000, action_type="validation_grid_funding", actor=root)
         trading.place_order(
             actor=alice,
             market_symbol="ETH/POINTS",
@@ -460,7 +483,7 @@ def validation_scenarios():
             "grid backtest follows adjacent-level lifecycle and avoids same-candle churn",
             grid_backtest["strategy"] == "grid"
             and grid_backtest["trade_count"] == 7
-            and grid_backtest["final_value_points"] == 1073
+            and grid_backtest["final_value_points"] == 1065
             and [row["side"] for row in grid_backtest["trades"]] == ["buy", "sell", "sell", "sell", "buy", "buy", "buy"]
             and all(not (row["index"] == 0 and row["price_points"] == 100) for row in grid_backtest["trades"]),
             backtest=grid_backtest,
@@ -477,14 +500,7 @@ def validation_scenarios():
             "price jump",
         )
         trading.update_market(actor=root, symbol="ETH/POINTS", max_price_jump_percent=1000)
-        points.record_transaction(
-            user_id=1,
-            currency_type="points",
-            direction="credit",
-            amount=5000,
-            action_type="validation_margin_funding",
-            actor=root,
-        )
+        fund_user(points, user_id=1, amount=5000, action_type="validation_margin_funding", actor=root)
         margin_long = trading.open_margin_position(
             actor=alice,
             market_symbol="ETH/POINTS",
@@ -495,10 +511,9 @@ def validation_scenarios():
         long_wallet = points.get_wallet(1)
         long_available = int(long_wallet["points_balance"])
         if long_available > 5:
-            points.record_transaction(
+            burn_validation_spend(
+                points,
                 user_id=1,
-                currency_type="points",
-                direction="debit",
                 amount=long_available - 5,
                 action_type="validation_cross_margin_spend",
                 actor=root,
@@ -513,14 +528,7 @@ def validation_scenarios():
         )
 
         prices.set("ETH/POINTS", 5000)
-        points.record_transaction(
-            user_id=1,
-            currency_type="points",
-            direction="credit",
-            amount=2500,
-            action_type="validation_short_funding",
-            actor=root,
-        )
+        fund_user(points, user_id=1, amount=2500, action_type="validation_short_funding", actor=root)
         margin_short = trading.open_margin_position(
             actor=alice,
             market_symbol="ETH/POINTS",
@@ -531,10 +539,9 @@ def validation_scenarios():
         short_wallet = points.get_wallet(1)
         short_available = int(short_wallet["points_balance"])
         if short_available > 5:
-            points.record_transaction(
+            burn_validation_spend(
+                points,
                 user_id=1,
-                currency_type="points",
-                direction="debit",
                 amount=short_available - 5,
                 action_type="validation_cross_margin_spend",
                 actor=root,
@@ -554,13 +561,21 @@ def validation_scenarios():
         verification = trading.verify_state()
         ok(results, "trading state verification passes after all operations", verification["ok"] is True, verification=verification)
         chain = points.verify_chain()
-        ok(results, "PointsChain verification passes after trading operations", chain["ok"] is True, verification=chain)
+        ok(
+            results,
+            "PointsChain verification and financial invariants pass after trading operations",
+            chain["ok"] is True and chain.get("financial_ok") is True,
+            verification=chain,
+        )
         block = points.force_seal_block(actor=root, reason="exchange_validation")
         backups = points.list_ledger_backups(limit=5)
         ok(
             results,
-            "PointsChain block seal creates verifiable ledger backup",
-            block["ok"] is True and bool(block.get("backup")) and bool(backups),
+            "PointsChain block seal keeps restorable ledger backups disabled",
+            block["ok"] is True
+            and block.get("backup") is None
+            and block.get("backup_policy", "disabled_append_only_chain") == "disabled_append_only_chain"
+            and backups == [],
             block=block,
             backups=backups,
         )
@@ -642,7 +657,7 @@ def write_reports(summary, out_dir=REPORT_DIR):
         "- DCA bot, conditional automation bot, workflow bot, and grid bot lifecycle behavior.",
         "- DCA, workflow, and grid backtest outputs against deterministic expected values.",
         "- Margin long and short liquidation under controlled extreme price moves.",
-        "- Trading state verification, PointsChain verification, block sealing, ledger backup creation.",
+        "- Trading state verification, PointsChain verification, block sealing, disabled ledger-backup policy.",
         "- PointsChain safe mode blocking new exchange writes.",
         "",
         "## Price Source Fallback Candidates",

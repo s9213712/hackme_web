@@ -1310,7 +1310,7 @@ def _trading_member_flow(client: Client, samples: list[dict[str, Any]], index: i
     for path, label in (
         ("/api/trading/markets", "trading markets"),
         ("/api/trading/asset-overview", "trading asset overview"),
-        ("/api/trading/live-price?market=XRP/POINTS", "trading live price"),
+        ("/api/trading/live-price?market=XRP/USDT", "trading live price"),
         ("/api/trading/bot-competition", "trading bot competition"),
     ):
         samples.append(client.request("GET", path, expected={200}, label=label))
@@ -1318,7 +1318,7 @@ def _trading_member_flow(client: Client, samples: list[dict[str, Any]], index: i
         "POST",
         "/api/trading/orders",
         json_body={
-            "market_symbol": "XRP/POINTS",
+            "market_symbol": "XRP/USDT",
             "side": "buy",
             "order_type": "market",
             "quantity": "1",
@@ -1332,7 +1332,7 @@ def _trading_member_flow(client: Client, samples: list[dict[str, Any]], index: i
         "POST",
         "/api/trading/orders",
         json_body={
-            "market_symbol": "XRP/POINTS",
+            "market_symbol": "XRP/USDT",
             "side": "buy",
             "order_type": "limit",
             "quantity": "1",
@@ -1348,7 +1348,7 @@ def _trading_member_flow(client: Client, samples: list[dict[str, Any]], index: i
         json_body={
             "bot_type": "dca",
             "name": f"Capacity DCA {run_id} {index}",
-            "market_symbol": "XRP/POINTS",
+            "market_symbol": "XRP/USDT",
             "budget_points": 10,
             "interval_hours": 1,
             "enabled": True,
@@ -1365,7 +1365,7 @@ def _trading_member_flow(client: Client, samples: list[dict[str, Any]], index: i
         json_body={
             "bot_type": "conditional",
             "name": f"Capacity Workflow {run_id} {index}",
-            "market_symbol": "XRP/POINTS",
+            "market_symbol": "XRP/USDT",
             "side": "buy",
             "order_type": "market",
             "quantity": "1",
@@ -1389,7 +1389,7 @@ def _trading_member_flow(client: Client, samples: list[dict[str, Any]], index: i
         "POST",
         "/api/trading/grid/preview",
         json_body={
-            "market_symbol": "XRP/POINTS",
+            "market_symbol": "XRP/USDT",
             "lower_price_points": 1,
             "upper_price_points": 2,
             "grid_count": 2,
@@ -1404,7 +1404,7 @@ def _trading_member_flow(client: Client, samples: list[dict[str, Any]], index: i
         "/api/trading/grid-bots",
         json_body={
             "name": f"Capacity Grid {run_id} {index}",
-            "market_symbol": "XRP/POINTS",
+            "market_symbol": "XRP/USDT",
             "lower_price_points": 1,
             "upper_price_points": 2,
             "grid_count": 2,
@@ -1430,7 +1430,7 @@ def _trading_member_flow(client: Client, samples: list[dict[str, Any]], index: i
             "POST",
             "/api/trading/margin/open",
             json_body={
-                "market_symbol": "XRP/POINTS",
+                "market_symbol": "XRP/USDT",
                 "position_type": position_type,
                 "quantity": "10",
                 "collateral_points": 20,
@@ -1477,7 +1477,7 @@ def _malicious_flow(client: Client, samples: list[dict[str, Any]]) -> None:
     samples.append(client.request(
         "POST",
         "/api/trading/bots",
-        json_body={"bot_type": "evil", "market_symbol": "XRP/POINTS", "side": "hack", "order_type": "boom"},
+        json_body={"bot_type": "evil", "market_symbol": "XRP/USDT", "side": "hack", "order_type": "boom"},
         expected={400, 403, 422},
         label="trading malformed bot rejected",
     ))
@@ -1485,7 +1485,7 @@ def _malicious_flow(client: Client, samples: list[dict[str, Any]]) -> None:
         "POST",
         "/api/trading/margin/open",
         json_body={
-            "market_symbol": "XRP/POINTS",
+            "market_symbol": "XRP/USDT",
             "position_type": "short",
             "quantity": "-999",
             "collateral_points": -1,
@@ -1621,7 +1621,7 @@ def _heavy_flow(
         "/api/trading/bots/backtest",
         json_body={
             "strategy": "dca",
-            "market_symbol": "XRP/POINTS",
+            "market_symbol": "XRP/USDT",
             "candles": candles,
             "initial_cash_points": 5000,
             "order_points": 50,
@@ -1637,7 +1637,7 @@ def _heavy_flow(
         "/api/trading/bots/backtest",
         json_body={
             "strategy": "workflow",
-            "market_symbol": "XRP/POINTS",
+            "market_symbol": "XRP/USDT",
             "candles": candles,
             "initial_cash_points": 5000,
             "workflow": {
