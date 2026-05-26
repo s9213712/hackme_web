@@ -329,6 +329,66 @@ def test_trading_dashboard_rejects_inactive_selected_payment_wallet(tmp_path):
     assert dashboard["funding"]["selected_wallet_address"] == dashboard["funding"]["active_wallet_address"]
 
 
+def test_trading_asset_overview_uses_lightweight_read_model(tmp_path):
+    points, trading = _services(tmp_path)
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        primary = create_official_hot_wallet(conn, user_id=1, chain_secret=points.chain_secret)
+        conn.execute("UPDATE trading_markets SET manual_price_points=77059 WHERE symbol='BTC/POINTS'")
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO trading_spot_positions (
+                user_id, market_symbol, quantity_units, locked_quantity_units,
+                avg_cost_points, fee_carry_micropoints, updated_at
+            ) VALUES (1, 'BTC/POINTS', ?, 0, 70000, 0, ?)
+            """,
+            (trading_engine_module.ASSET_SCALE, utc_now()),
+        )
+        conn.execute(
+            """
+            INSERT INTO trading_margin_positions (
+                position_uuid, user_id, market_symbol, position_type, quantity_units,
+                entry_price_points, principal_points, collateral_points, status,
+                opened_at, updated_at
+            ) VALUES ('asset-overview-margin', 1, 'BTC/POINTS', 'margin_long', ?, 70000, 1000, 5000, 'open', ?, ?)
+            """,
+            (trading_engine_module.ASSET_SCALE, utc_now(), utc_now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    points.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=1000,
+        action_type="test_asset_overview_wallet",
+        idempotency_key="test-asset-overview-wallet",
+        public_metadata={"destination_wallet_address": primary["address"]},
+        actor=_actor(3, "root", "super_admin"),
+    )
+    trading.user_dashboard = lambda **_kwargs: (_ for _ in ()).throw(AssertionError("asset overview must not load full dashboard"))
+
+    overview = trading.user_asset_overview(user_id=1)
+
+    assert overview["available_points"] == 1000
+    assert overview["spot_market_value_points"] == 77059
+    assert overview["margin_position_equity_points"] == 12059
+    assert overview["open_spot_positions"] == 1
+    assert overview["open_margin_positions"] == 1
+    assert overview["read_model_source"] == "trading_asset_overview_v1"
+
+
+def test_trading_asset_overview_route_does_not_call_full_dashboard():
+    trading_routes = (ROOT / "routes" / "trading.py").read_text(encoding="utf-8")
+    route_body = trading_routes.split("def trading_asset_overview", 1)[1].split('@app.route("/api/admin/trading/asset-overview"', 1)[0]
+
+    assert "user_asset_overview" in route_body
+    assert "user_dashboard" not in route_body
+
+
 def test_exchange_order_rejects_user_multisig_receive_only_wallet_source(tmp_path):
     points, trading = _services(tmp_path)
     conn = points.get_db()

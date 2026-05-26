@@ -811,83 +811,14 @@ def register_trading_routes(app, deps):
             ),
         })
 
-    def build_asset_overview(payload):
-        funding = payload.get("funding") if isinstance(payload, dict) else {}
-        positions = payload.get("positions") if isinstance(payload, dict) else []
-        margin_positions = payload.get("margin_positions") if isinstance(payload, dict) else []
-        margin_summary = payload.get("margin_summary") if isinstance(payload, dict) else {}
-        spot_summary = payload.get("spot_summary") if isinstance(payload, dict) else {}
-        markets = payload.get("markets") if isinstance(payload, dict) else []
-        market_count = len(markets) if isinstance(markets, list) else 0
-        confidence_low = 0
-        if isinstance(markets, list):
-            for market in markets:
-                context = market.get("price_context") if isinstance(market, dict) else {}
-                confidence = str((context or {}).get("confidence") or market.get("price_confidence") or "").lower()
-                if confidence in {"low", "very_low", "untrusted", "unknown"}:
-                    confidence_low += 1
-        available = int(float((funding or {}).get("available_points") or 0))
-        locked = int(float((funding or {}).get("locked_points") or 0))
-        spot_value = int(float(
-            (spot_summary or {}).get("market_value_points")
-            or (spot_summary or {}).get("current_value_points")
-            or (spot_summary or {}).get("reference_current_value_points")
-            or 0
-        ))
-        margin_value = (margin_summary or {}).get("total_position_equity_points")
-        if margin_value is None:
-            margin_value = 0
-            for row in margin_positions if isinstance(margin_positions, list) else []:
-                if not isinstance(row, dict) or row.get("status") != "open":
-                    continue
-                risk = row.get("risk") if isinstance(row.get("risk"), dict) else {}
-                try:
-                    margin_value += int(float(risk.get("equity_after_points", row.get("equity_after_points", 0)) or 0))
-                except Exception:
-                    pass
-        margin_value = int(float(margin_value or 0))
-        unrealized_pnl = int(float((margin_summary or {}).get("total_unrealized_pnl_points") or 0))
-        accrued_interest = (margin_summary or {}).get("total_interest_due_points")
-        if accrued_interest is None:
-            accrued_interest = (margin_summary or {}).get("total_interest_points")
-        if accrued_interest is None:
-            accrued_interest = 0
-            for row in margin_positions if isinstance(margin_positions, list) else []:
-                if not isinstance(row, dict) or row.get("status") != "open":
-                    continue
-                risk = row.get("risk") if isinstance(row.get("risk"), dict) else {}
-                try:
-                    accrued_interest += int(float(risk.get("interest_points", row.get("interest_points", 0)) or 0))
-                except Exception:
-                    pass
-        accrued_interest = int(float(accrued_interest or 0))
-        # margin_position_equity_points is already post-risk equity for open
-        # borrow positions, so do not add unrealized PnL / interest again.
-        total_equity = available + locked + spot_value + margin_value
-        open_margin_count = len([row for row in margin_positions if isinstance(row, dict) and row.get("status") == "open"]) if isinstance(margin_positions, list) else 0
-        return {
-            "available_points": available,
-            "locked_points": locked,
-            "spot_market_value_points": spot_value,
-            "margin_position_equity_points": margin_value,
-            "unrealized_pnl_points": unrealized_pnl,
-            "accrued_interest_points": accrued_interest,
-            "total_equity_points": total_equity,
-            "open_spot_positions": int((spot_summary or {}).get("position_count") or len(positions or [])),
-            "open_margin_positions": open_margin_count,
-            "market_count": market_count,
-            "low_confidence_price_count": confidence_low,
-            "confidence_note": "價格可信度只作風險提示，不阻擋積分交易。",
-        }
-
     @app.route("/api/trading/asset-overview", methods=["GET"])
     @require_csrf_safe
     def trading_asset_overview():
         actor, err = actor_or_401()
         if err:
             return err
-        payload = trading_service.user_dashboard(user_id=actor["id"])
-        return json_resp({"ok": True, "overview": build_asset_overview(payload), "trading": payload})
+        overview = trading_service.user_asset_overview(user_id=actor["id"])
+        return json_resp({"ok": True, "overview": overview, "trading": {"overview": overview}})
 
     @app.route("/api/admin/trading/asset-overview", methods=["GET"])
     @require_csrf_safe

@@ -25,6 +25,183 @@ def funding_payload(service, conn, user_id, *, source_wallet_address=None):
     )
 
 
+def _asset_overview_price(market, snapshot):
+    if snapshot:
+        price = (
+            snapshot.get("risk_grade_price_points")
+            if hasattr(snapshot, "get")
+            else snapshot["risk_grade_price_points"]
+        )
+        if price is None:
+            price = snapshot.get("reference_price_points") if hasattr(snapshot, "get") else snapshot["reference_price_points"]
+        if price is not None:
+            return float(_to_decimal(price, name="snapshot_price_points", minimum=0))
+    return float(_to_decimal((market or {}).get("manual_price_points") or 0, name="manual_price_points", minimum=0))
+
+
+def _asset_overview_user_funding(service, conn, user_id):
+    user_id = int(user_id)
+    user = conn.execute("SELECT username FROM users WHERE id=?", (user_id,)).fetchone()
+    if user and str(user["username"] or "") == "root":
+        account = conn.execute("SELECT * FROM trading_sim_accounts WHERE user_id=?", (user_id,)).fetchone()
+        return {
+            "available_points": int(account["balance_points"] or 0) if account else int(service.ROOT_SIMULATED_INITIAL_POINTS or 0),
+            "locked_points": int(account["locked_points"] or 0) if account else 0,
+            "source": "root_simulated_read_model",
+        }
+
+    wallet_available = 0
+    wallet_locked = 0
+    try:
+        points_service = service.points_service
+        branch = points_service._canonical_branch_uuid(conn)
+        balance_rows = conn.execute(
+            """
+            SELECT COALESCE(SUM(available_points), 0) AS available_points,
+                   COALESCE(SUM(frozen_points), 0) AS frozen_points
+            FROM points_wallet_identity_balances
+            WHERE chain_branch=? AND user_id=?
+            """,
+            (branch, user_id),
+        ).fetchone()
+        wallet_available = int(balance_rows["available_points"] or 0) if balance_rows else 0
+        wallet_locked = int(balance_rows["frozen_points"] or 0) if balance_rows else 0
+        if wallet_available == 0 and wallet_locked == 0:
+            legacy = conn.execute("SELECT points_balance, points_frozen FROM points_wallets WHERE user_id=?", (user_id,)).fetchone()
+            if legacy:
+                wallet_available = int(legacy["points_balance"] or 0)
+                wallet_locked = int(legacy["points_frozen"] or 0)
+    except Exception:
+        legacy = conn.execute("SELECT points_balance, points_frozen FROM points_wallets WHERE user_id=?", (user_id,)).fetchone()
+        if legacy:
+            wallet_available = int(legacy["points_balance"] or 0)
+            wallet_locked = int(legacy["points_frozen"] or 0)
+
+    trial_available = 0
+    trial_locked = 0
+    trial = service._trial_credit_row(conn, user_id)
+    if trial and str(trial["status"] or "") == "active":
+        trial_available = int(trial["available_points"] or 0)
+        trial_locked = int(trial["locked_points"] or 0)
+    return {
+        "available_points": wallet_available + trial_available,
+        "locked_points": wallet_locked + trial_locked,
+        "source": "durable_wallet_identity_balances",
+    }
+
+
+def user_asset_overview(service, *, user_id):
+    """Return the platform-center trading asset overview without loading the full dashboard.
+
+    This read model intentionally avoids recent orders/fills, bot runs, wallet
+    onboarding, and live price providers. It uses durable wallet balance state
+    plus stored market price snapshots so the route stays off the finance hot
+    write path.
+    """
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        tables, _route_ctx = service._sql_tables()
+        positions_table = tables["positions"]
+        funding = _asset_overview_user_funding(service, conn, user_id)
+        markets = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM trading_markets WHERE enabled=1 AND spot_enabled=1 ORDER BY sort_order ASC, symbol ASC"
+            ).fetchall()
+        ]
+        market_map = {str(row.get("symbol") or ""): row for row in markets}
+        snapshots = {}
+        if market_map:
+            placeholders = ",".join("?" for _ in market_map)
+            for row in conn.execute(
+                f"SELECT * FROM trading_market_price_snapshots WHERE market_symbol IN ({placeholders})",
+                tuple(market_map.keys()),
+            ).fetchall():
+                snapshots[str(row["market_symbol"] or "")] = dict(row)
+
+        confidence_low = 0
+        for symbol in market_map:
+            snapshot = snapshots.get(symbol)
+            confidence = str((snapshot or {}).get("confidence") or "").strip().lower()
+            if confidence in {"low", "very_low", "untrusted", "unknown"}:
+                confidence_low += 1
+
+        spot_value = 0
+        open_spot_positions = 0
+        for row in conn.execute(
+            f"""
+            SELECT market_symbol, quantity_units, locked_quantity_units
+            FROM {positions_table}
+            WHERE user_id=?
+            """,
+            (int(user_id),),
+        ).fetchall():
+            symbol = str(row["market_symbol"] or "")
+            quantity_units = int(row["quantity_units"] or 0) + int(row["locked_quantity_units"] or 0)
+            if quantity_units <= 0:
+                continue
+            open_spot_positions += 1
+            spot_value += notional_points(
+                quantity_units,
+                _asset_overview_price(market_map.get(symbol), snapshots.get(symbol)),
+            )
+
+        margin_value = 0
+        unrealized_pnl = 0
+        accrued_interest = 0
+        open_margin_count = 0
+        for row in conn.execute(
+            """
+            SELECT market_symbol, position_type, quantity_units, entry_price_points,
+                   collateral_points, principal_points, interest_points, interest_carry_micropoints,
+                   status
+            FROM trading_margin_positions
+            WHERE user_id=? AND status='open'
+            """,
+            (int(user_id),),
+        ).fetchall():
+            symbol = str(row["market_symbol"] or "")
+            quantity_units = int(row["quantity_units"] or 0)
+            entry_price = float(_to_decimal(row["entry_price_points"] or 0, name="entry_price_points", minimum=0))
+            current_price = _asset_overview_price(market_map.get(symbol), snapshots.get(symbol)) or entry_price
+            entry_value = notional_points(quantity_units, entry_price)
+            current_value = notional_points(quantity_units, current_price)
+            if str(row["position_type"] or "") == "short":
+                pnl = entry_value - current_value
+            else:
+                pnl = current_value - entry_value
+            interest_due = int(row["interest_points"] or 0) + points_from_micropoints_ceil(int(row["interest_carry_micropoints"] or 0))
+            equity = int(row["collateral_points"] or 0) + pnl - interest_due
+            open_margin_count += 1
+            unrealized_pnl += pnl
+            accrued_interest += interest_due
+            margin_value += equity
+
+        available = int(funding.get("available_points") or 0)
+        locked = int(funding.get("locked_points") or 0)
+        overview = {
+            "available_points": available,
+            "locked_points": locked,
+            "spot_market_value_points": int(spot_value),
+            "margin_position_equity_points": int(margin_value),
+            "unrealized_pnl_points": int(unrealized_pnl),
+            "accrued_interest_points": int(accrued_interest),
+            "total_equity_points": int(available + locked + spot_value + margin_value),
+            "open_spot_positions": int(open_spot_positions),
+            "open_margin_positions": int(open_margin_count),
+            "market_count": int(len(markets)),
+            "low_confidence_price_count": int(confidence_low),
+            "confidence_note": "價格可信度只作風險提示，不阻擋積分交易。",
+            "read_model_source": "trading_asset_overview_v1",
+            "funding_source": funding.get("source") or "",
+        }
+        conn.commit()
+        return overview
+    finally:
+        conn.close()
+
+
 def position_payload_with_metrics(service, row, *, market=None, realized_points=0, total_fees=0):
     item = service._position_payload(row)
     quantity_units = int(item["quantity_units"] or 0) + int(item["locked_quantity_units"] or 0)

@@ -1404,6 +1404,10 @@ def user_dashboard(self, *, user_id, source_wallet_address=None):
     # source-contract breadcrumb:
     # "margin_summary": self._margin_summary_payload(conn, user_id, margin_positions)
     return user_dashboard_helper(self, user_id=user_id, source_wallet_address=source_wallet_address)
+
+def user_asset_overview(self, *, user_id):
+    return user_asset_overview_helper(self, user_id=user_id)
+
 def _is_executable(self, market, *, side, order_type, limit_price, current_price):
     current_price = float(_to_decimal(current_price, name="current_price", minimum=0))
     if order_type == "market":
