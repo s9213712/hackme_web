@@ -30,8 +30,10 @@ block may include canonical chain rails such as `cold_chain` and future
 withdrawal broadcast/confirm rows, but it must exclude `internal_hot_wallet`,
 `internal_system_burn`, `deposit_bridge_credit`, `withdrawal_bridge_lock`, and
 `withdrawal_bridge_refund`. Those rows remain append-only internal audit records
-and are covered by replay, hash, backup, and snapshot checks rather than by PC1
-block finality.
+and are covered by replay, row-hash, snapshot-boundary, and invariant checks
+rather than by PC1 block finality. Restorable ledger backups are disabled by
+policy because replaying a backup would overwrite append-only financial
+history.
 
 ## Wallet Roles
 

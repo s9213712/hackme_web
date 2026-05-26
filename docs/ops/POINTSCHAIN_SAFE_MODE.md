@@ -18,7 +18,7 @@ Allowed while safe:
 | Operation | Policy |
 |---|---|
 | read explorer | allowed, with warning. |
-| backup/export | allowed. |
+| forensic export | allowed; restorable ledger backup/restore remains disabled. |
 | governance voting | allowed unless governance audit is invalid. |
 | transfer/trading spend | blocked for affected branch/address. |
 

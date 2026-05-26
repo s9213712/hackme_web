@@ -248,13 +248,13 @@ curl -k -sS -b "$JAR" -H "Content-Type: application/json" -H "X-CSRF-Token: $TOK
 即時價格：
 
 ```bash
-curl -k -sS -b "$JAR" "$BASE/api/trading/live-price?market_symbol=BTC/POINTS"
+curl -k -sS -b "$JAR" "$BASE/api/trading/live-price?market_symbol=BTC/USDT"
 ```
 
 root 融合價格診斷：
 
 ```bash
-curl -k -sS -b "$JAR" "$BASE/api/root/trading/price-fusion-status?market_symbol=BTC/POINTS"
+curl -k -sS -b "$JAR" "$BASE/api/root/trading/price-fusion-status?market_symbol=BTC/USDT"
 ```
 
 bot audit dashboard：
@@ -277,7 +277,7 @@ Grid preview：
 ```bash
 curl -k -sS -b "$JAR" -H "Content-Type: application/json" -H "X-CSRF-Token: $TOKEN" \
   -d '{
-    "market_symbol":"BTC/POINTS",
+    "market_symbol":"BTC/USDT",
     "lower_price":"80000",
     "upper_price":"100000",
     "grid_count":20,

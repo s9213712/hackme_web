@@ -95,7 +95,8 @@ python3 scripts/testing/predeploy_capacity_probe.py
 - `malicious`：在 normal 上增加 SQL/XSS/錯誤 CSRF/越權讀取/錯誤治理與交易 payload 等攻擊與
   例外請求，用來測防禦與錯誤處理，不會同步部署預設值。
 - `heavy`：在 normal 上增加重複預覽/下載、分段上傳、線上文字更新、交易回測、snapshot 與
-  PointsChain backup，用來測 I/O、CPU 與背景任務壓力，不會同步部署預設值。
+  PointsChain backup-disabled/recovery-boundary 探針，用來測 I/O、CPU、背景任務與帳本不可覆寫規則，
+  不會同步部署預設值。
 - `full`：同時啟用 malicious 與 heavy。也可用 `--load-kinds normal,malicious,heavy` 自訂組合。
 
 成功完成探勘時，腳本會同步更新 repo root 的 `.hackme_capacity_defaults.env`。之後

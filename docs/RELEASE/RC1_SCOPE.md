@@ -11,8 +11,9 @@ auditable, governable, and releasable under a clear gate.
 - A site-internal permissioned PointsChain ledger.
 - A single-node controlled deployment profile.
 - An accounting and governance validation release.
-- A wallet, transfer, pending/proved, fee-burn, seal, verify, replay, backup,
-  and recovery layer for site points.
+- A wallet, transfer, pending/proved, fee-burn, seal, verify, replay,
+  backup-disabled recovery-boundary, and forensic/governance recovery layer for
+  site points.
 - An official treasury multisig release: treasury execution requires proposal,
   governance pass, timelock, payload-hash verification, and signer threshold.
 - An anonymous address-proven dispute release: self-custody disputes and
