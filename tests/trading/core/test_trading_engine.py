@@ -4330,6 +4330,20 @@ def test_root_trading_settings_default_to_binance_with_fused_fallback_controls(t
     assert markets[4]["display_symbol"] == "PAXG/USDT"
 
 
+def test_root_update_market_accepts_display_usdt_symbol(tmp_path):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+
+    updated = trading.update_market(actor=root, symbol="ETH/USDT", max_price_jump_percent=123.0)
+
+    assert updated["ok"] is True
+    assert updated["market"]["symbol"] == "ETH/POINTS"
+    assert updated["market"]["display_symbol"] == "ETH/USDT"
+    assert updated["market"]["max_price_jump_percent"] == pytest.approx(123.0)
+
+
 def test_price_fusion_auto_depth_status_uses_depth_scores_and_sums_to_hundred(tmp_path, monkeypatch):
     get_db = _db(tmp_path)
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")

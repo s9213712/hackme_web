@@ -1340,7 +1340,7 @@ def test_root_trading_routes_reject_manual_price_cheat_controls():
     client = app.test_client()
 
     source_response = client.post("/api/root/trading/settings", json={"settings": {"price_source": "manual_root"}})
-    price_response = client.post("/api/root/trading/markets/BTC%2FPOINTS", json={"manual_price_points": 1})
+    price_response = client.post("/api/root/trading/markets/BTC%2FUSDT", json={"manual_price_points": 1})
 
     assert source_response.status_code == 400
     assert source_response.get_json()["ok"] is False

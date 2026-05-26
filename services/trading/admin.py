@@ -802,7 +802,8 @@ def update_market(service, *, actor, symbol, manual_price_points=None, max_price
         service.ensure_schema(conn)
         conn.commit()
         conn.execute("BEGIN IMMEDIATE")
-        market = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (str(symbol or "").strip().upper(),)).fetchone()
+        normalized_symbol = service._normalize_market_symbol_on_conn(conn, symbol)
+        market = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (normalized_symbol,)).fetchone()
         if not market:
             raise ValueError("market not found")
         updates = {}
