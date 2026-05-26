@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -583,8 +584,55 @@ def test_wallet_transfer_pending_does_not_credit_chain_address_until_proved(tmp_
     assert proved["finality"]["proved_count"] == 20
     sender_confirmed_transactions = client.get("/api/points/transactions?limit=10").get_json()
     assert sender_confirmed_transactions["summary"]["confirmed_count"] == 1
-    assert sender_confirmed_transactions["transactions"][0]["status"] == "confirmed"
-    assert sender_confirmed_transactions["transactions"][0]["balance_effect"] == "confirmed"
+    confirmed_tx = sender_confirmed_transactions["transactions"][0]
+    assert confirmed_tx["status"] == "confirmed"
+    assert confirmed_tx["balance_effect"] == "confirmed"
+    assert confirmed_tx["settlement_rail"] == "withdrawal_bridge_lock"
+    out_ledger_uuid = confirmed_tx["transfer_ledgers"]["transfer_out_ledger_uuid"]
+    fee_ledger_uuid = confirmed_tx["transfer_ledgers"]["fee_ledger_uuid"]
+    assert out_ledger_uuid
+    assert fee_ledger_uuid
+
+    out_ledger_res = client.get(f"/api/points/explorer/search?q={out_ledger_uuid}")
+    assert out_ledger_res.status_code == 200, out_ledger_res.get_json()
+    out_ledger = out_ledger_res.get_json()["result"]["transaction"]
+    assert out_ledger["settlement_rail"] == "withdrawal_bridge_lock"
+    assert out_ledger["wallet_flow"]["settlement_rail"] == "withdrawal_bridge_lock"
+    assert out_ledger["input_data"]["chain_required"] is True
+    assert out_ledger["input_data"]["network_fee_points"] == 1
+
+    fee_ledger_res = client.get(f"/api/points/explorer/search?q={fee_ledger_uuid}")
+    assert fee_ledger_res.status_code == 200, fee_ledger_res.get_json()
+    fee_ledger = fee_ledger_res.get_json()["result"]["transaction"]
+    assert fee_ledger["settlement_rail"] == "withdrawal_bridge_lock"
+    assert fee_ledger["wallet_flow"]["network_fee_points"] == 1
+
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        metadata_rows = conn.execute(
+            "SELECT ledger_uuid, public_metadata_json FROM points_ledger WHERE ledger_uuid IN (?, ?)",
+            (out_ledger_uuid, fee_ledger_uuid),
+        ).fetchall()
+        metadata_by_uuid = {row["ledger_uuid"]: json.loads(row["public_metadata_json"]) for row in metadata_rows}
+        legacy_metadata = {
+            key: value
+            for key, value in metadata_by_uuid[out_ledger_uuid].items()
+            if key not in {"pending_request_uuid", "request_uuid", "tx_group_hash", "settlement_rail", "chain_required", "approval_required", "network_fee_points", "service_fee_points"}
+        }
+        legacy_row = dict(conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (out_ledger_uuid,)).fetchone())
+        legacy_row["public_metadata_json"] = json.dumps(legacy_metadata, sort_keys=True)
+        legacy_payload = points._explorer_public_ledger(conn, legacy_row)
+    finally:
+        conn.close()
+    for public_metadata in metadata_by_uuid.values():
+        assert public_metadata["settlement_rail"] == "withdrawal_bridge_lock"
+        assert public_metadata["chain_required"] is True
+        assert public_metadata["approval_required"] is True
+        assert public_metadata["network_fee_points"] == 1
+        assert public_metadata["service_fee_points"] == 0
+
+    assert legacy_payload["settlement_rail"] == "withdrawal_bridge_lock"
 
     sender_final = points.explorer_wallet(sender_wallet["address"])["wallet"]
     recipient_final = points.explorer_wallet(destination_address)["wallet"]

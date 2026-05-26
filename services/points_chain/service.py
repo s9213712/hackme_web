@@ -7992,7 +7992,7 @@ class PointsLedgerService:
             flow["network_fee_points"] = int(metadata.get("network_fee_points") or 0)
             flow["service_fee_points"] = int(metadata.get("service_fee_points") or 0)
             if (
-                settlement_rail in {"internal_hot_wallet", "deposit_bridge_credit", "withdrawal_bridge_lock", "withdrawal_bridge_refund"}
+                settlement_rail in {"internal_hot_wallet", "deposit_bridge_credit", "withdrawal_bridge_refund"}
                 and not flow.get("source_fund_key")
                 and not flow.get("destination_fund_key")
             ):
@@ -9731,7 +9731,14 @@ class PointsLedgerService:
                 "source_wallet_address": req["source_wallet_address"],
                 "destination_wallet_address": req["destination_wallet_address"],
                 "request_uuid": req["request_uuid"],
+                "pending_request_uuid": req["request_uuid"],
                 "tx_group_hash": req["tx_group_hash"],
+                "destination_unowned": bool(self._transfer_request_destination_unowned(req)),
+                "settlement_rail": req["settlement_rail"] or "internal_hot_wallet",
+                "chain_required": bool(int(req["chain_required"] if req["chain_required"] is not None else 0)),
+                "approval_required": bool(int(req["approval_required"] if req["approval_required"] is not None else 0)),
+                "network_fee_points": int(req["network_fee_points"] if req["network_fee_points"] is not None else req["fee_points"] or 0),
+                "service_fee_points": int(req["service_fee_points"] or 0),
                 "memo": req["memo"] or "",
             }
             in_row = None
@@ -9895,9 +9902,16 @@ class PointsLedgerService:
             )
         common = {
             "pending_request_uuid": req["request_uuid"],
+            "request_uuid": req["request_uuid"],
             "tx_group_hash": req["tx_group_hash"],
             "source_wallet_address": req["source_wallet_address"],
             "destination_wallet_address": req["destination_wallet_address"],
+            "destination_unowned": bool(self._transfer_request_destination_unowned(req)),
+            "settlement_rail": req["settlement_rail"] or "cold_chain",
+            "chain_required": bool(int(req["chain_required"] if req["chain_required"] is not None else 1)),
+            "approval_required": bool(int(req["approval_required"] if req["approval_required"] is not None else 1)),
+            "network_fee_points": int(req["network_fee_points"] if req["network_fee_points"] is not None else req["fee_points"] or 0),
+            "service_fee_points": int(req["service_fee_points"] or 0),
             "memo": req["memo"] or "",
         }
         out_row, _ = self._record_transaction(
@@ -13579,7 +13593,12 @@ class PointsLedgerService:
             raw_public_metadata = ledger.get("public_metadata")
         public_metadata = raw_public_metadata if isinstance(raw_public_metadata, dict) else _json_loads(raw_public_metadata, {})
         flow = self._ledger_wallet_flow_for_read(conn, ledger)
-        settlement_rail = str(public_metadata.get("settlement_rail") or flow.get("settlement_rail") or "").strip()
+        settlement_rail = self._ledger_settlement_rail_for_read(
+            conn,
+            ledger,
+            flow=flow,
+            public_metadata=public_metadata,
+        )
         if settlement_rail in {"internal_hot_wallet", "internal_system_burn", "deposit_bridge_credit", "withdrawal_bridge_refund"}:
             return True
         chain_required = public_metadata.get("chain_required", flow.get("chain_required"))
@@ -13604,12 +13623,32 @@ class PointsLedgerService:
         if settlement_rail:
             return settlement_rail
         request_uuid = str(public_metadata.get("pending_request_uuid") or public_metadata.get("request_uuid") or "").strip()
-        if not request_uuid:
+        tx_group_hash = str(public_metadata.get("tx_group_hash") or "").strip()
+        try:
+            reference_type = str(ledger["reference_type"] or "")
+            reference_id = str(ledger["reference_id"] or "").strip()
+            ledger_uuid = str(ledger["ledger_uuid"] or "").strip()
+        except Exception:
+            reference_type = str(ledger.get("reference_type") or "") if hasattr(ledger, "get") else ""
+            reference_id = str(ledger.get("reference_id") or "").strip() if hasattr(ledger, "get") else ""
+            ledger_uuid = str(ledger.get("ledger_uuid") or "").strip() if hasattr(ledger, "get") else ""
+        if not tx_group_hash and reference_type == "wallet_transfer":
+            tx_group_hash = reference_id
+        if not any((request_uuid, tx_group_hash, ledger_uuid)):
             return ""
         try:
             req = conn.execute(
-                "SELECT settlement_rail FROM points_chain_transfer_requests WHERE request_uuid=? LIMIT 1",
-                (request_uuid,),
+                """
+                SELECT settlement_rail
+                FROM points_chain_transfer_requests
+                WHERE request_uuid=?
+                   OR tx_group_hash=?
+                   OR transfer_out_ledger_uuid=?
+                   OR transfer_in_ledger_uuid=?
+                   OR fee_ledger_uuid=?
+                LIMIT 1
+                """,
+                (request_uuid, tx_group_hash, ledger_uuid, ledger_uuid, ledger_uuid),
             ).fetchone()
         except Exception:
             req = None
