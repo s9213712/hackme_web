@@ -730,19 +730,34 @@ def main() -> int:
 
     def submit_transfer(task: tuple[dict[str, Any], str, int, int, str, str]) -> dict[str, Any]:
         sender, destination, amount, fee, request_uuid, memo = task
+        payload = {
+            "source_wallet_address": sender["address"],
+            "destination_wallet_address": destination,
+            "amount_points": amount,
+            "fee_points": fee,
+            "request_uuid": request_uuid,
+            "memo": memo,
+        }
         res = sender["client"].request(
             "POST",
             "/api/points/transactions/submit",
-            json={
-                "source_wallet_address": sender["address"],
-                "destination_wallet_address": destination,
-                "amount_points": amount,
-                "fee_points": fee,
-                "request_uuid": request_uuid,
-                "memo": memo,
-            },
+            json=payload,
             expected={200, 409},
         )
+        if int(res.get("status") or 0) == 0:
+            first_error = {
+                "status": res.get("status"),
+                "elapsed_ms": res.get("elapsed_ms"),
+                "error": res.get("error"),
+            }
+            res = sender["client"].request(
+                "POST",
+                "/api/points/transactions/submit",
+                json=payload,
+                expected={200, 409},
+            )
+            res["transport_retried"] = True
+            res["transport_first_error"] = first_error
         res.update({
             "op": "wallet_transfer",
             "request_uuid": request_uuid,
@@ -1078,6 +1093,8 @@ def main() -> int:
         "resource_monitor": resource_summary,
         "fee_market_samples": fee_market_samples,
         "status_by_operation": status_by_operation,
+        "transport_retry_count": len([s for s in samples if s.get("transport_retried")]),
+        "transport_retry_samples": [s for s in samples if s.get("transport_retried")][:20],
         "notification_checks": notification_checks,
         "db_counts": counts,
         "seal": seal,
