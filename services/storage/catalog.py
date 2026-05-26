@@ -144,6 +144,8 @@ def ensure_storage_album_schema(conn):
             token_hash TEXT NOT NULL UNIQUE,
             password_required INTEGER NOT NULL DEFAULT 0,
             password_hash TEXT,
+            max_views INTEGER NOT NULL DEFAULT 0,
+            expires_at TEXT,
             revoked_at TEXT,
             access_count INTEGER NOT NULL DEFAULT 0,
             last_accessed_at TEXT,
@@ -185,6 +187,10 @@ def ensure_storage_album_schema(conn):
         conn.execute("ALTER TABLE album_share_links ADD COLUMN password_required INTEGER NOT NULL DEFAULT 0")
     if "password_hash" not in album_share_cols:
         conn.execute("ALTER TABLE album_share_links ADD COLUMN password_hash TEXT")
+    if "max_views" not in album_share_cols:
+        conn.execute("ALTER TABLE album_share_links ADD COLUMN max_views INTEGER NOT NULL DEFAULT 0")
+    if "expires_at" not in album_share_cols:
+        conn.execute("ALTER TABLE album_share_links ADD COLUMN expires_at TEXT")
 
 
 def normalize_virtual_path(path, display_name=None):

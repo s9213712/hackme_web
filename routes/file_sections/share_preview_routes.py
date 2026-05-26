@@ -1,8 +1,10 @@
 import json
+import re
 
-from flask import request, send_file
+from flask import Response, request, send_file
 
 from services.media.previews import build_preview_metadata, preview_category
+from services.media.streaming import get_stream_status, parse_subtitle_shift_ms, shift_webvtt_text
 from services.storage.cloud_drive import (
     can_download_file,
     get_cloud_drive_security_policy,
@@ -159,7 +161,131 @@ def register_file_share_preview_routes(app, ctx):
             return json_resp({"ok": False, "msg": "E2EE 分享授權不完整，請重新產生分享連結。", "reason": reason}), 409
         return json_resp({"ok": False, "msg": "分享連結不存在或已失效", "reason": reason}), 404
 
-    def _storage_shared_file_payload(row, token):
+    def _storage_share_stream_status(conn, row, token=""):
+        file_id = str(row["file_id"] or "")
+        if not file_id:
+            return None
+        try:
+            asset = conn.execute(
+                """
+                SELECT id, status, media_type, master_manifest_path, error_message, updated_at
+                FROM media_stream_assets
+                WHERE uploaded_file_id=?
+                LIMIT 1
+                """,
+                (file_id,),
+            ).fetchone()
+        except Exception:
+            return None
+        if not asset:
+            return None
+        try:
+            subtitle_rows = conn.execute(
+                """
+                SELECT name, label, language, is_default
+                FROM media_stream_subtitles
+                WHERE asset_id=?
+                ORDER BY is_default DESC, id ASC
+                """,
+                (int(asset["id"]),),
+            ).fetchall()
+        except Exception:
+            subtitle_rows = []
+        job = None
+        try:
+            job = conn.execute(
+                """
+                SELECT status, progress_percent, stage, stage_detail, error_message, updated_at
+                FROM job_center_jobs
+                WHERE source_module='media_hls_prepare' AND source_ref=?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (f"media_stream:{file_id}",),
+            ).fetchone()
+        except Exception:
+            job = None
+        data = {
+            "status": asset["status"] or "",
+            "media_type": asset["media_type"] or "",
+            "master_manifest_ready": bool(asset["master_manifest_path"]),
+            "master_url": f"/api/storage/shared/{token}/hls/master.m3u8" if asset["master_manifest_path"] and token else "",
+            "error_message": asset["error_message"] or "",
+            "updated_at": asset["updated_at"] or "",
+            "subtitles": [
+                {
+                    "name": str(item["name"] or ""),
+                    "label": str(item["label"] or item["language"] or "字幕"),
+                    "language": str(item["language"] or "und"),
+                    "is_default": bool(item["is_default"]),
+                    "url": f"/api/storage/shared/{token}/hls/subtitles/{item['name']}.vtt" if token and item["name"] else "",
+                }
+                for item in (subtitle_rows or [])
+                if item["name"]
+            ],
+        }
+        if job:
+            data.update({
+                "job_status": job["status"] or "",
+                "progress_percent": int(job["progress_percent"] or 0),
+                "stage": job["stage"] or "",
+                "stage_detail": job["stage_detail"] or "",
+                "job_error_message": job["error_message"] or "",
+                "job_updated_at": job["updated_at"] or "",
+            })
+        return data
+
+    def _hls_url_with_request_query(url):
+        raw = str(url or "")
+        if not raw:
+            return raw
+        query = request.query_string.decode("utf-8", errors="ignore")
+        if not query or "password=" in raw:
+            return raw
+        separator = "&" if "?" in raw else "?"
+        return f"{raw}{separator}{query}"
+
+    def _append_request_query_to_hls_manifest(text):
+        output = []
+        for raw in str(text or "").splitlines():
+            line = raw
+            if line.startswith("#EXT-X-MAP:") and "URI=" in line:
+                def repl(match):
+                    quote = match.group(1)
+                    url = match.group(2)
+                    return f"URI={quote}{_hls_url_with_request_query(url)}{quote}"
+                line = re.sub(r'URI=(["\'])([^"\']+)\1', repl, line)
+            elif line and not line.startswith("#"):
+                line = _hls_url_with_request_query(line)
+            output.append(line)
+        return "\n".join(output) + "\n"
+
+    def _storage_share_hls_asset(conn, token, *, include_segments=False):
+        actor = get_current_user_ctx()
+        row, reason = resolve_share_token(
+            conn,
+            token,
+            actor=actor,
+            require_download=False,
+            password=_storage_share_password_from_request(),
+        )
+        if not row:
+            return None, None, _storage_share_error_response(reason)
+        denied = _storage_share_preview_denied(row)
+        if denied:
+            return row, None, denied
+        if is_e2ee_file(row):
+            return row, None, (json_resp({"ok": False, "msg": "E2EE 分享不支援伺服器端 HLS 預覽"}), 409)
+        policy = get_cloud_drive_security_policy(conn)
+        ok, msg = _preview_allowed_by_policy(policy, row)
+        if not ok:
+            return row, None, (json_resp({"ok": False, "msg": msg}), 403)
+        asset = get_stream_status(conn, file_row=_storage_share_preview_row(row), include_segments=include_segments)
+        if not asset or asset.get("status") != "ready" or not asset.get("master_manifest_path"):
+            return row, None, (json_resp({"ok": False, "msg": "HLS 串流尚未準備完成", "error": "stream_not_ready"}), 409)
+        return row, asset, None
+
+    def _storage_shared_file_payload(conn, row, token):
         e2ee = {}
         if is_e2ee_file(row):
             e2ee = {
@@ -173,6 +299,7 @@ def register_file_share_preview_routes(app, ctx):
             "file_id": row["file_id"],
             "display_name": row["display_name"] or row["original_filename_plain_for_public"] or "download.bin",
             "size_bytes": int(row["size_bytes"] or 0),
+            "mime_type": row["mime_type_plain_for_public"] or "",
             "privacy_mode": row["privacy_mode"],
             "access_scope": row["access_scope"] or "link",
             "required_user_id": int(row["required_user_id"] or 0),
@@ -185,6 +312,7 @@ def register_file_share_preview_routes(app, ctx):
             "download_url": f"/api/storage/shared/{token}/download",
             "preview_url": f"/api/storage/shared/{token}/preview",
             "preview_content_url": f"/api/storage/shared/{token}/preview/content",
+            "stream_asset": _storage_share_stream_status(conn, row, token),
             "e2ee": e2ee,
         }
 
@@ -254,6 +382,11 @@ def register_file_share_preview_routes(app, ctx):
     .preview img {{ height: auto; max-height: 70vh; object-fit: contain; background: #111827; }}
     .preview video, .preview iframe {{ min-height: 360px; background: #111827; }}
     .preview-list {{ margin: 0; padding: 12px 18px 12px 34px; max-height: 55vh; overflow: auto; }}
+    .shared-file-progress {{ display: grid; gap: 8px; padding: 14px; }}
+    .shared-file-progress progress {{ width: 100%; height: 12px; }}
+    .shared-file-progress span, .shared-file-progress small {{ color: #667085; }}
+    .shared-file-subtitle-shift-row {{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }}
+    .shared-file-subtitle-shift-row input[type=number] {{ width:96px; min-height:38px; padding:8px 10px; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box; }}
     .msg {{ margin-top: 14px; color: #667085; }}
     .err {{ color: #b42318; }}
   </style>
@@ -291,7 +424,7 @@ def register_file_share_preview_routes(app, ctx):
             )
             if not row:
                 return _storage_share_error_response(reason)
-            return json_resp({"ok": True, "file": _storage_shared_file_payload(row, token)})
+            return json_resp({"ok": True, "file": _storage_shared_file_payload(conn, row, token)})
         finally:
             conn.close()
 
@@ -325,7 +458,11 @@ def register_file_share_preview_routes(app, ctx):
             if not ok:
                 return json_resp({"ok": False, "msg": msg}), 403
             try:
-                readable_path, _ = _readable_file_path(row)
+                category, _mime_type = preview_category(preview_row)
+                if category in {"text", "archive"}:
+                    readable_path, _ = _readable_file_path(row)
+                else:
+                    readable_path = path
                 preview = build_preview_metadata(preview_row, readable_path)
             except ValueError as exc:
                 preview = _decryption_unavailable_preview(preview_row, str(exc))
@@ -390,6 +527,90 @@ def register_file_share_preview_routes(app, ctx):
             if response is None:
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             return response
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/shared/<token>/hls/master.m3u8", methods=["GET"])
+    def storage_share_hls_master(token):
+        conn = get_db()
+        try:
+            row, asset, err = _storage_share_hls_asset(conn, token, include_segments=False)
+            if err:
+                return err
+            mark_share_link_accessed(conn, row["id"])
+            log_share_access_event(conn, share_type="file", share_id=row["id"], ip=get_client_ip(), user_agent=get_ua())
+            log_file_access(conn, file_id=row["file_id"], actor_user_id=None, action="storage_share_hls_preview", result="allowed", reason="hls_master", ip=get_client_ip(), user_agent=get_ua())
+            path = resolve_file_storage_path(storage_root, {"storage_path": asset["master_manifest_path"]})
+            conn.commit()
+            text = _append_request_query_to_hls_manifest(path.read_text(encoding="utf-8"))
+            return Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/shared/<token>/hls/<variant>/playlist.m3u8", methods=["GET"])
+    def storage_share_hls_playlist(token, variant):
+        conn = get_db()
+        try:
+            _row, asset, err = _storage_share_hls_asset(conn, token, include_segments=False)
+            if err:
+                return err
+            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            if not match:
+                return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, {"storage_path": match["playlist_path"]})
+            text = _append_request_query_to_hls_manifest(path.read_text(encoding="utf-8"))
+            return Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/shared/<token>/hls/subtitles/<subtitle_name>.vtt", methods=["GET"])
+    def storage_share_hls_subtitle(token, subtitle_name):
+        conn = get_db()
+        try:
+            _row, asset, err = _storage_share_hls_asset(conn, token, include_segments=False)
+            if err:
+                return err
+            clean = str(subtitle_name or "").strip()
+            if not clean or "/" in clean or ".." in clean:
+                return json_resp({"ok": False, "msg": "找不到字幕", "error": "subtitle_not_found"}), 404
+            match = next((item for item in (asset.get("subtitles") or []) if item.get("name") == clean), None)
+            if not match:
+                return json_resp({"ok": False, "msg": "找不到字幕", "error": "subtitle_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, {"storage_path": match["path"]})
+            shift_ms = parse_subtitle_shift_ms(request.args.get("shift_ms"))
+            if shift_ms:
+                text = shift_webvtt_text(path.read_text(encoding="utf-8", errors="replace"), shift_ms)
+                return Response(
+                    text,
+                    status=200,
+                    mimetype="text/vtt; charset=utf-8",
+                    headers={"Cache-Control": "no-store"},
+                )
+            return send_file(path, as_attachment=False, download_name=f"{clean}.vtt", mimetype="text/vtt; charset=utf-8", conditional=True)
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/shared/<token>/hls/<variant>/<segment>", methods=["GET"])
+    def storage_share_hls_segment(token, variant, segment):
+        conn = get_db()
+        try:
+            _row, asset, err = _storage_share_hls_asset(conn, token, include_segments=True)
+            if err:
+                return err
+            if "/" in segment or ".." in segment:
+                return json_resp({"ok": False, "msg": "無效的串流片段", "error": "invalid_segment"}), 400
+            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            if not match:
+                return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
+            rel = next((item["path"] for item in (match.get("segments") or []) if item.get("filename") == segment), "")
+            if not rel:
+                if segment == "init.mp4" and match.get("init_segment_path"):
+                    rel = match["init_segment_path"]
+                else:
+                    return json_resp({"ok": False, "msg": "找不到串流片段", "error": "segment_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, {"storage_path": rel})
+            mimetype = "video/mp4" if segment.endswith((".mp4", ".m4s")) else "application/octet-stream"
+            return send_file(path, as_attachment=False, download_name=segment, mimetype=mimetype, conditional=True)
         finally:
             conn.close()
 
@@ -581,6 +802,10 @@ def register_file_share_preview_routes(app, ctx):
                 "reason": reason,
                 "password_required": True,
             }), 403
+        if reason == "expired":
+            return json_resp({"ok": False, "msg": "分享相簿已到期", "reason": reason}), 410
+        if reason == "view_limit_reached":
+            return json_resp({"ok": False, "msg": "分享相簿存取次數已用完", "reason": reason}), 410
         return json_resp({"ok": False, "msg": "分享相簿不存在或已失效", "reason": reason}), 404
 
     @app.route("/api/storage/shared/albums/<token>", methods=["GET"])
@@ -604,7 +829,7 @@ def register_file_share_preview_routes(app, ctx):
         try:
             resolved, reason = resolve_album_share_file(conn, token, file_id, _album_share_password_from_request())
             if not resolved:
-                if reason in {"password_required", "password_invalid"}:
+                if reason in {"password_required", "password_invalid", "expired", "view_limit_reached"}:
                     return _album_share_error_response(reason)
                 return json_resp({"ok": False, "msg": "分享檔案不存在或已失效", "reason": reason}), 404
             share = resolved["share"]

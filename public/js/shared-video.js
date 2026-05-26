@@ -139,6 +139,7 @@
   let sharedUserSeeking = false;
   let sharedLastSeekAt = 0;
   let sharedLastSeekTarget = 0;
+  let sharedSubtitleShiftMs = 0;
   let shareSessionId = "";
   let sharedE2eeFragmentKey = "";
   let sharedE2eeStreamCleanup = null;
@@ -155,6 +156,49 @@
       const separator = raw.includes("?") ? "&" : "?";
       return `${raw}${separator}share_session=${encodeURIComponent(shareSessionId)}`;
     }
+  }
+  function clampSubtitleShiftMs(value) {
+    const parsed = Number(value || 0);
+    if (!Number.isFinite(parsed)) return 0;
+    return Math.max(-3600000, Math.min(3600000, Math.round(parsed)));
+  }
+  function subtitleShiftSecondsValue(ms) {
+    const seconds = clampSubtitleShiftMs(ms) / 1000;
+    return Number.isInteger(seconds) ? String(seconds) : seconds.toFixed(1).replace(/\.0$/, "");
+  }
+  function subtitleUrlWithShift(url, shiftMs) {
+    const raw = String(url || "");
+    if (!raw) return raw;
+    const offset = clampSubtitleShiftMs(shiftMs);
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      if (offset) parsed.searchParams.set("shift_ms", String(offset));
+      else parsed.searchParams.delete("shift_ms");
+      return parsed.pathname + parsed.search + parsed.hash;
+    } catch (_err) {
+      if (!offset) return raw;
+      const separator = raw.includes("?") ? "&" : "?";
+      return `${raw}${separator}shift_ms=${encodeURIComponent(String(offset))}`;
+    }
+  }
+  function sharedSubtitleShiftStorageKey() {
+    return `hackme_web.shared_video_subtitle_shift_ms.${TOKEN || window.location.pathname}`;
+  }
+  function loadSharedSubtitleShiftMs() {
+    try {
+      return clampSubtitleShiftMs(localStorage.getItem(sharedSubtitleShiftStorageKey()) || 0);
+    } catch (_err) {
+      return 0;
+    }
+  }
+  function saveSharedSubtitleShiftMs(value) {
+    const offset = clampSubtitleShiftMs(value);
+    try {
+      const key = sharedSubtitleShiftStorageKey();
+      if (offset) localStorage.setItem(key, String(offset));
+      else localStorage.removeItem(key);
+    } catch (_err) {}
+    return offset;
   }
   function rememberShareSession(value) {
     shareSessionId = String(value || "").trim();
@@ -178,7 +222,36 @@
         if (variant[key]) variant[key] = withShareSession(variant[key]);
       });
     }
+    for (const subtitle of playback.subtitles || []) {
+      if (!subtitle || typeof subtitle !== "object") continue;
+      if (subtitle.url) subtitle.url = withShareSession(subtitle.url);
+    }
     return playback;
+  }
+  function sharedPlaybackSubtitles(playback={}) {
+    const tracks = Array.isArray(playback?.subtitles)
+      ? playback.subtitles
+      : (Array.isArray(playback?.status?.subtitles) ? playback.status.subtitles : []);
+    return tracks.filter((track) => track && track.name && track.url).map((track) => ({
+      label: String(track.label || track.language || "字幕"),
+      language: String(track.language || "und"),
+      url: String(track.url || ""),
+      isDefault: !!track.is_default,
+    }));
+  }
+  function syncSharedSubtitleTracks(player, playback={}) {
+    if (!player) return;
+    Array.from(player.querySelectorAll('track[data-shared-subtitle="1"]')).forEach((track) => track.remove());
+    sharedPlaybackSubtitles(playback).forEach((track, index) => {
+      const el = document.createElement("track");
+      el.kind = "subtitles";
+      el.label = track.label || track.language || "字幕";
+      el.srclang = track.language || "und";
+      el.src = subtitleUrlWithShift(track.url, sharedSubtitleShiftMs);
+      el.dataset.sharedSubtitle = "1";
+      if (track.isDefault || index === 0) el.default = true;
+      player.appendChild(el);
+    });
   }
   function destroySharedPlaybackArtifacts() {
     if (sharedE2eeStreamCleanup) {
@@ -194,19 +267,31 @@
     const host = $("quality-host");
     if (!host) return;
     const options = sharedQualityOptions(playback);
-    if (options.length < 2) {
+    const subtitles = sharedPlaybackSubtitles(playback);
+    if (options.length < 2 && !subtitles.length) {
       host.classList.add("hidden");
       host.innerHTML = "";
       return;
     }
     const preferred = preferredSharedQuality(playback);
-    host.innerHTML = `
+    const qualityMarkup = options.length >= 2 ? `
       <label for="quality-select">畫質</label>
       <select id="quality-select">
         <option value="auto"${preferred?.name ? "" : " selected"}>自動</option>
         ${options.map((option) => `<option value="${escapeHtml(option.name)}"${option.name === preferred?.name ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
       </select>
       <small>預設 720p；網路不穩時會嘗試退回 480p。串流衍生畫質不佔用分享者雲端硬碟容量。</small>
+    ` : "";
+    const shiftMarkup = subtitles.length ? `
+      <label for="subtitle-shift-seconds">字幕延遲</label>
+      <button class="secondary" type="button" data-subtitle-shift-step="-500">-0.5s</button>
+      <input id="subtitle-shift-seconds" type="number" min="-3600" max="3600" step="0.1" value="${escapeHtml(subtitleShiftSecondsValue(sharedSubtitleShiftMs))}" />
+      <button class="secondary" type="button" data-subtitle-shift-step="500">+0.5s</button>
+      <button class="secondary" type="button" data-subtitle-shift-reset="1">重置</button>
+    ` : "";
+    host.innerHTML = `
+      ${qualityMarkup}
+      ${shiftMarkup}
     `;
     host.classList.remove("hidden");
     const select = $("quality-select");
@@ -216,6 +301,21 @@
         applySharedQualitySelection(playback);
       });
     }
+    const shiftInput = $("subtitle-shift-seconds");
+    const applyShift = (nextMs) => {
+      sharedSubtitleShiftMs = saveSharedSubtitleShiftMs(nextMs);
+      if (shiftInput) shiftInput.value = subtitleShiftSecondsValue(sharedSubtitleShiftMs);
+      syncSharedSubtitleTracks($("shared-player"), playback);
+      setMsg(sharedSubtitleShiftMs ? `字幕時間校正：${subtitleShiftSecondsValue(sharedSubtitleShiftMs)} 秒。` : "字幕時間校正已重置。");
+    };
+    if (shiftInput) {
+      shiftInput.addEventListener("change", () => applyShift(Number(shiftInput.value || 0) * 1000));
+    }
+    host.querySelectorAll("[data-subtitle-shift-step]").forEach((button) => {
+      button.addEventListener("click", () => applyShift(sharedSubtitleShiftMs + Number(button.dataset.subtitleShiftStep || 0)));
+    });
+    const reset = host.querySelector("[data-subtitle-shift-reset]");
+    if (reset) reset.addEventListener("click", () => applyShift(0));
   }
   function applySharedQualitySelection(playback={}) {
     const player = $("shared-player");
@@ -754,8 +854,10 @@
     sharedUserSeeking = false;
     sharedLastSeekAt = 0;
     sharedLastSeekTarget = 0;
+    sharedSubtitleShiftMs = loadSharedSubtitleShiftMs();
     sharedE2eeFragmentKey = "";
     bindSharedSeekProtection(player);
+    syncSharedSubtitleTracks(player, playback || {});
     const qualityHost = $("quality-host");
     if (qualityHost) {
       qualityHost.classList.add("hidden");

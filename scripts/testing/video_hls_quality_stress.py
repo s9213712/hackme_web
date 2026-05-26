@@ -41,9 +41,11 @@ from pathlib import Path
 from typing import Any
 
 import requests
+import urllib3
 
 
 TERMINAL_JOB_STATUSES = {"succeeded", "failed", "cancelled", "expired"}
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def utc_ms() -> int:
@@ -93,6 +95,8 @@ def request_json(
 
 def login(base_url: str, username: str, password: str) -> dict[str, Any]:
     session = requests.Session()
+    if base_url.startswith("https://"):
+        session.verify = False
     csrf_status, csrf_payload, csrf_elapsed = request_json(
         session,
         "GET",
@@ -330,6 +334,8 @@ def monitor_loop(
     samples: list[dict[str, Any]],
 ) -> None:
     session = requests.Session()
+    if base_url.startswith("https://"):
+        session.verify = False
     while not stop_event.is_set():
         sample: dict[str, Any] = {"t_ms": utc_ms()}
         started = time.perf_counter()
@@ -533,6 +539,8 @@ def timed_get(session: requests.Session, url: str, token: str, timeout: int = 30
 
 def sample_version_latency(base_url: str, stop_time: float, samples: list[float], errors: list[str]) -> None:
     session = requests.Session()
+    if base_url.startswith("https://"):
+        session.verify = False
     while time.time() < stop_time:
         started = time.perf_counter()
         try:

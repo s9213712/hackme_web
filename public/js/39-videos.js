@@ -26,6 +26,7 @@ const videoState = {
   danmakuLoading: false,
   danmakuAnimationId: 0,
   danmakuLaneUntil: [],
+  subtitleShiftMs: 0,
 };
 let videoPublishDriveFiles = [];
 let videoPendingPublishSelection = null;
@@ -38,6 +39,12 @@ const VIDEO_E2EE_STREAM_V2_MAX_RETRIES = 2;
 const VIDEO_E2EE_STREAM_V2_CACHE_LIMIT = 16;
 const VIDEO_E2EE_LOCAL_TASK_STORAGE_KEY = "hackme_web.video_e2ee_local_task";
 const VIDEO_E2EE_DERIVATIVE_TARGET_HEIGHTS = [720, 480];
+const VIDEO_DANMAKU_SPECIAL_PRICES = {
+  none: 0,
+  outline: 10,
+  glow: 30,
+  rainbow: 50,
+};
 let activeVideoE2eeLocalTasks = 0;
 
 function videoUploadLiveJobId() {
@@ -877,6 +884,11 @@ function videoThumbMarkup(video) {
   const url = videoStreamUrl(video);
   if (video.media_type === "audio") {
     return `<div class="video-thumb video-thumb-audio"><span>♪</span></div>`;
+  }
+  const privacyMode = String(video?.cloud_privacy_mode || "").trim().toLowerCase();
+  const directPreviewAllowed = video?.direct_stream_allowed !== false && !["server_encrypted", "e2ee"].includes(privacyMode);
+  if (!directPreviewAllowed) {
+    return `<div class="video-thumb"><span>▶</span></div>`;
   }
   if (!url) {
     return `<div class="video-thumb"><span>▶</span></div>`;
@@ -1906,6 +1918,118 @@ function videoQualitySizeBytes(variant = {}, playback = {}) {
   return 0;
 }
 
+function videoPlaybackSubtitles(playback = {}) {
+  const tracks = Array.isArray(playback?.subtitles)
+    ? playback.subtitles
+    : (Array.isArray(playback?.status?.subtitles) ? playback.status.subtitles : []);
+  return tracks
+    .filter((track) => track && track.name && track.url)
+    .map((track) => ({
+      name: String(track.name || ""),
+      label: String(track.label || track.language || "字幕"),
+      language: String(track.language || "und"),
+      url: String(track.url || ""),
+      isDefault: !!track.is_default,
+    }));
+}
+
+function syncVideoSubtitleTracks(player, playback = {}) {
+  if (!player) return;
+  Array.from(player.querySelectorAll('track[data-video-subtitle="1"]')).forEach((track) => track.remove());
+  const tracks = videoPlaybackSubtitles(playback);
+  tracks.forEach((track, index) => {
+    const el = document.createElement("track");
+    el.kind = "subtitles";
+    el.label = track.label || track.language || "字幕";
+    el.srclang = track.language || "und";
+    el.src = videoSubtitleUrlWithShift(track.url, videoState.subtitleShiftMs);
+    el.dataset.videoSubtitle = "1";
+    if (track.isDefault || index === 0) el.default = true;
+    player.appendChild(el);
+  });
+}
+
+function clampSubtitleShiftMs(value) {
+  const parsed = Number(value || 0);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(-3600000, Math.min(3600000, Math.round(parsed)));
+}
+
+function subtitleShiftSecondsValue(ms) {
+  const seconds = clampSubtitleShiftMs(ms) / 1000;
+  return Number.isInteger(seconds) ? String(seconds) : seconds.toFixed(1).replace(/\.0$/, "");
+}
+
+function videoSubtitleUrlWithShift(url, shiftMs) {
+  const raw = String(url || "");
+  if (!raw) return raw;
+  const offset = clampSubtitleShiftMs(shiftMs);
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    if (offset) parsed.searchParams.set("shift_ms", String(offset));
+    else parsed.searchParams.delete("shift_ms");
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch (_) {
+    if (!offset) return raw;
+    const separator = raw.includes("?") ? "&" : "?";
+    return `${raw}${separator}shift_ms=${encodeURIComponent(String(offset))}`;
+  }
+}
+
+function videoSubtitleShiftStorageKey(videoId) {
+  return `hackme_web.video_subtitle_shift_ms.${String(videoId || "")}`;
+}
+
+function loadVideoSubtitleShiftMs(videoId) {
+  try {
+    return clampSubtitleShiftMs(localStorage.getItem(videoSubtitleShiftStorageKey(videoId)) || 0);
+  } catch (_) {
+    return 0;
+  }
+}
+
+function saveVideoSubtitleShiftMs(videoId, value) {
+  const offset = clampSubtitleShiftMs(value);
+  try {
+    const key = videoSubtitleShiftStorageKey(videoId);
+    if (offset) localStorage.setItem(key, String(offset));
+    else localStorage.removeItem(key);
+  } catch (_) {}
+  return offset;
+}
+
+function applyVideoSubtitleShift(video, playback, nextMs) {
+  videoState.subtitleShiftMs = saveVideoSubtitleShiftMs(video?.id, nextMs);
+  const input = $("video-subtitle-shift-seconds");
+  if (input) input.value = subtitleShiftSecondsValue(videoState.subtitleShiftMs);
+  const player = $("video-player");
+  if (player) syncVideoSubtitleTracks(player, playback || {});
+  setVideoPlaybackStatus(
+    videoState.subtitleShiftMs
+      ? `字幕時間校正：${subtitleShiftSecondsValue(videoState.subtitleShiftMs)} 秒。`
+      : "字幕時間校正已重置。",
+    false,
+  );
+}
+
+function bindVideoSubtitleShiftControls(video, playback = {}) {
+  const input = $("video-subtitle-shift-seconds");
+  if (!input) return;
+  input.addEventListener("change", () => {
+    applyVideoSubtitleShift(video, playback, Number(input.value || 0) * 1000);
+  });
+  document.querySelectorAll("[data-video-subtitle-shift-step]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const step = Number(button.dataset.videoSubtitleShiftStep || 0);
+      applyVideoSubtitleShift(video, playback, videoState.subtitleShiftMs + step);
+    });
+  });
+  const reset = document.querySelector("[data-video-subtitle-shift-reset]");
+  if (reset) {
+    reset.addEventListener("click", () => applyVideoSubtitleShift(video, playback, 0));
+  }
+}
+
 function preferredVideoQualityVariant(playback = {}) {
   const options = videoPlaybackQualityOptions(playback);
   if (!options.length) return null;
@@ -1966,6 +2090,63 @@ function renderVideoE2eeQualityControl(playback = {}) {
       </select>
       <span class="drive-card-sub">省流量畫質由發布者瀏覽器本機產生並加密上傳；伺服器沒有解密或轉檔。</span>
     </div>
+  `;
+}
+
+function renderVideoSubtitleControls(video, playback = {}) {
+  if (!video || video.media_type !== "video") return "";
+  const subtitles = videoPlaybackSubtitles(playback);
+  const canUpload = !!video.can_edit && playback?.mode !== "e2ee_stream_v2" && playback?.mode !== "e2ee_direct";
+  const list = subtitles.length
+    ? subtitles.map((item) => `
+      <div class="drive-card-sub">
+        ${sanitize(item.label || "字幕")} · ${sanitize(item.language || "und")}
+      </div>
+    `).join("")
+    : `<div class="drive-empty">尚無字幕軌</div>`;
+  const shiftControl = subtitles.length
+    ? `
+      <div class="video-quality-control video-subtitle-shift-control">
+        <label for="video-subtitle-shift-seconds">字幕延遲</label>
+        <button class="btn btn-sm" type="button" data-video-subtitle-shift-step="-500">-0.5s</button>
+        <input id="video-subtitle-shift-seconds" type="number" min="-3600" max="3600" step="0.1" value="${sanitize(subtitleShiftSecondsValue(videoState.subtitleShiftMs))}" />
+        <button class="btn btn-sm" type="button" data-video-subtitle-shift-step="500">+0.5s</button>
+        <button class="btn btn-sm" type="button" data-video-subtitle-shift-reset="1">重置</button>
+      </div>
+    `
+    : "";
+  return `
+    <details class="drive-collapsible-panel">
+      <summary>
+        <span>
+          <span class="drive-card-title">字幕</span>
+          <span class="drive-card-sub">${subtitles.length ? `${subtitles.length} 軌` : "尚未掛載"}</span>
+        </span>
+      </summary>
+      <div class="drive-collapsible-body">
+        <div id="video-subtitle-list">${list}</div>
+        ${shiftControl}
+        ${canUpload ? `
+          <div class="video-share-manage-grid" style="margin-top:.65rem;">
+            <label>
+              <span class="drive-card-sub">字幕檔</span>
+              <input id="video-subtitle-file" type="file" accept=".srt,.vtt,.ass,.ssa,text/vtt,application/x-subrip" />
+            </label>
+            <label>
+              <span class="drive-card-sub">標籤</span>
+              <input id="video-subtitle-label" type="text" maxlength="80" placeholder="例如：繁中、English" />
+            </label>
+            <label>
+              <span class="drive-card-sub">語言</span>
+              <input id="video-subtitle-language" type="text" maxlength="16" placeholder="zh-Hant" />
+            </label>
+          </div>
+          <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.55rem;">
+            <button class="btn btn-sm" type="button" data-video-subtitle-upload="${Number(video.id || 0)}">上傳字幕</button>
+          </div>
+        ` : (video.can_edit ? `<div class="field-help">strict E2EE 影音不支援伺服器端字幕掛載。</div>` : "")}
+      </div>
+    </details>
   `;
 }
 
@@ -2202,6 +2383,7 @@ async function activateVideoPlaybackMode(video, playback, playbackSource, sessio
   const player = $("video-player");
   if (!player) return;
   resetVideoPlaybackStatusState();
+  syncVideoSubtitleTracks(player, playback || {});
   if (playback?.mode === "e2ee_stream_v2") {
     clearVideoPlaybackAction();
     setVideoPlaybackStatus("此 strict E2EE 影音會在瀏覽器端解密。按下「開始 E2EE 播放」後才會讀取分享授權或要求密碼。", false);
@@ -2289,6 +2471,21 @@ function videoDanmakuLaneLimit(layer) {
   return Math.min(10, byHeight);
 }
 
+function videoDanmakuSpecialPrice(effect) {
+  return Number(VIDEO_DANMAKU_SPECIAL_PRICES[String(effect || "none")] || 0);
+}
+
+function updateVideoDanmakuSpecialHint() {
+  const select = $("video-danmaku-effect");
+  const hint = $("video-danmaku-special-hint");
+  if (!hint) return;
+  const price = videoDanmakuSpecialPrice(select?.value || "none");
+  const priceText = typeof formatPoints === "function" ? formatPoints(price) : `${price} 點`;
+  hint.textContent = price > 0
+    ? `特製彈幕會扣 ${priceText}，收入進官方財庫。`
+    : "普通彈幕不加收特製費。";
+}
+
 function mergeVideoDanmakuItems(items = []) {
   const map = new Map((videoState.danmakuItems || []).map((item) => [Number(item.id), item]));
   items.forEach((item) => {
@@ -2346,11 +2543,28 @@ function renderVideoDanmakuControls(video) {
           <input id="video-danmaku-opacity" type="range" min="35" max="100" step="5" value="${Math.round(Number(videoState.danmakuOpacity || 0.92) * 100)}" />
         </label>
         <label>
-          <span>模式</span>
+          <span>位置</span>
           <select id="video-danmaku-mode">
-            <option value="scroll">滾動</option>
-            <option value="top">頂部</option>
-            <option value="bottom">底部</option>
+            <option value="scroll">滾動（右到左）</option>
+            <option value="top">頂部固定</option>
+            <option value="bottom">底部固定</option>
+          </select>
+        </label>
+        <label>
+          <span>大小</span>
+          <select id="video-danmaku-size">
+            <option value="normal">標準</option>
+            <option value="small">小</option>
+            <option value="large">大</option>
+          </select>
+        </label>
+        <label>
+          <span>特製</span>
+          <select id="video-danmaku-effect">
+            <option value="none">無</option>
+            <option value="outline">描邊 +10</option>
+            <option value="glow">發光 +30</option>
+            <option value="rainbow">彩虹 +50</option>
           </select>
         </label>
         <label>
@@ -2362,6 +2576,7 @@ function renderVideoDanmakuControls(video) {
         <input id="video-danmaku-input" type="text" maxlength="80" placeholder="在目前時間點送出彈幕" autocomplete="off" />
         <button class="btn btn-primary btn-sm" type="button" data-video-danmaku-send="${Number(video.id || 0)}">送出彈幕</button>
       </div>
+      <div class="drive-card-sub" id="video-danmaku-special-hint">普通彈幕不加收特製費。</div>
       <div class="drive-card-sub" id="video-danmaku-status">彈幕會綁定目前播放時間，最多 80 字。</div>
     </div>
   `;
@@ -2377,11 +2592,14 @@ function clearVideoDanmakuLayer() {
 function spawnVideoDanmakuItem(item) {
   const layer = $("video-danmaku-layer");
   if (!layer || !videoState.danmakuEnabled) return;
+  const itemId = Number(item?.id || 0);
+  if (itemId > 0 && Array.from(layer.children).some((child) => Number(child.dataset.videoDanmakuId || 0) === itemId)) return;
   const maxActive = videoDanmakuDensityLimit();
   if (layer.children.length >= maxActive) return;
   const el = document.createElement("span");
   const mode = ["top", "bottom"].includes(String(item.mode || "")) ? String(item.mode) : "scroll";
   const size = ["small", "large"].includes(String(item.size || "")) ? String(item.size) : "normal";
+  const effect = ["outline", "glow", "rainbow"].includes(String(item.effect || "")) ? String(item.effect) : "none";
   const lanes = videoDanmakuLaneLimit(layer);
   const now = Date.now();
   let lane = 0;
@@ -2401,12 +2619,21 @@ function spawnVideoDanmakuItem(item) {
   const top = mode === "bottom"
     ? Math.max(4, (layer.clientHeight || 220) - ((lane + 1) * laneHeight))
     : Math.max(4, lane * laneHeight + 4);
-  el.className = `video-danmaku-item video-danmaku-${mode} video-danmaku-size-${size}`;
+  const classes = ["video-danmaku-item", `video-danmaku-size-${size}`];
+  classes.push(mode === "scroll" ? "video-danmaku-scroll" : `video-danmaku-${mode}`);
+  classes.push(`video-danmaku-effect-${effect}`);
+  if (Number(item.paid_points || 0) > 0) classes.push("video-danmaku-paid");
+  el.className = classes.join(" ");
+  if (itemId > 0) el.dataset.videoDanmakuId = String(itemId);
   el.textContent = String(item.content || "");
   el.style.color = /^#[0-9a-fA-F]{6}$/.test(String(item.color || "")) ? item.color : "#ffffff";
   el.style.opacity = String(Math.max(0.35, Math.min(1, Number(videoState.danmakuOpacity || 0.92))));
   el.style.top = `${top}px`;
   layer.appendChild(el);
+  if (mode === "scroll") {
+    const travel = Math.max(240, Math.ceil(Number(layer.clientWidth || 0) + Number(el.offsetWidth || 0) + 32));
+    el.style.setProperty("--video-danmaku-travel", `-${travel}px`);
+  }
   const ttl = mode === "scroll" ? 8500 : 4200;
   videoState.danmakuLaneUntil[lane] = now + Math.min(ttl, mode === "scroll" ? 1800 : 1100);
   window.setTimeout(() => el.remove(), ttl + 250);
@@ -2450,6 +2677,7 @@ function bindVideoDanmakuControls(videoId) {
   const density = $("video-danmaku-density");
   const opacity = $("video-danmaku-opacity");
   const input = $("video-danmaku-input");
+  const effect = $("video-danmaku-effect");
   const layer = $("video-danmaku-layer");
   if (layer) layer.style.opacity = String(videoState.danmakuOpacity || 0.92);
   if (density) {
@@ -2472,6 +2700,10 @@ function bindVideoDanmakuControls(videoId) {
       }
     });
   }
+  if (effect) {
+    effect.addEventListener("change", updateVideoDanmakuSpecialHint);
+    updateVideoDanmakuSpecialHint();
+  }
   loadVideoDanmakuWindow(videoId, 0, 60000, { replace: true });
   startVideoDanmakuLoop(videoId);
 }
@@ -2486,7 +2718,9 @@ async function sendVideoDanmaku(videoId) {
     content,
     mode: $("video-danmaku-mode")?.value || "scroll",
     color: $("video-danmaku-color")?.value || "#ffffff",
-    size: "normal",
+    size: $("video-danmaku-size")?.value || "normal",
+    effect: $("video-danmaku-effect")?.value || "none",
+    idempotency_key: `video_danmaku:${videoId}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
   };
   try {
     const res = await apiFetch(API + `/videos/${encodeURIComponent(videoId)}/danmaku`, {
@@ -2499,11 +2733,36 @@ async function sendVideoDanmaku(videoId) {
     if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
     if (input) input.value = "";
     mergeVideoDanmakuItems([json.danmaku]);
-    videoState.danmakuShown.delete(Number(json.danmaku?.id || 0));
+    videoState.danmakuShown.add(Number(json.danmaku?.id || 0));
     spawnVideoDanmakuItem(json.danmaku);
-    setVideoDanmakuStatus("彈幕已送出");
+    const paid = Number(json.danmaku?.paid_points || 0);
+    const paidText = typeof formatPoints === "function" ? formatPoints(paid) : `${paid} 點`;
+    setVideoDanmakuStatus(paid > 0 ? `特製彈幕已送出，已扣 ${paidText}` : "彈幕已送出");
   } catch (err) {
     setVideoDanmakuStatus(err.message || "彈幕送出失敗", true);
+  }
+}
+
+async function uploadVideoSubtitle(videoId) {
+  const input = $("video-subtitle-file");
+  const file = input?.files?.[0] || null;
+  if (!file) return videoMsg("請先選擇字幕檔", false);
+  const form = new FormData();
+  form.append("subtitle", file, file.name || "subtitle.srt");
+  form.append("label", $("video-subtitle-label")?.value || "");
+  form.append("language", $("video-subtitle-language")?.value || "");
+  const button = document.querySelector(`[data-video-subtitle-upload="${String(videoId)}"]`);
+  if (button) button.disabled = true;
+  try {
+    const upload = await videoUploadFormWithProgress(`/api/videos/${encodeURIComponent(videoId)}/subtitles`, form);
+    const json = upload.json || {};
+    if (!upload.ok || !json.ok) throw new Error(json.msg || `HTTP ${upload.status}`);
+    videoMsg("字幕已掛載到播放器。", true);
+    await openVideoDetail(videoId);
+  } catch (err) {
+    videoMsg(err.message || "字幕上傳失敗", false);
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -2520,6 +2779,7 @@ function renderVideoDetail(video, comments = [], playback = null) {
   videoState.playbackSessionId += 1;
   const playbackSessionId = videoState.playbackSessionId;
   videoState.current = video;
+  videoState.subtitleShiftMs = loadVideoSubtitleShiftMs(video.id);
   showVideoWatchView();
   const videoStatus = String(video.status || "ready");
   const videoPlayable = videoStatus === "ready";
@@ -2629,6 +2889,7 @@ function renderVideoDetail(video, comments = [], playback = null) {
         ${qualityControl}
         <div class="drive-file-actions" id="video-playback-action" style="justify-content:flex-start;margin-top:.45rem;"></div>
         ${streamActions}
+        ${renderVideoSubtitleControls(video, playback || {})}
         ${shareInfo}
         <div class="drive-card-heading">
           <div>
@@ -2690,6 +2951,7 @@ function renderVideoDetail(video, comments = [], playback = null) {
     bindVideoSeekProtection($("video-player"));
     bindVideoQualityControl(playback || {});
     bindVideoE2eeQualityControl(video, playback || {}, playbackSessionId);
+    bindVideoSubtitleShiftControls(video, playback || {});
     if (video.media_type === "video") bindVideoDanmakuControls(video.id);
     activateVideoPlaybackMode(video, playback || {}, playbackSource, playbackSessionId).catch((err) => {
       if (playbackSessionId !== videoState.playbackSessionId) return;
@@ -3017,6 +3279,11 @@ document.addEventListener("click", (event) => {
   const prepare = event.target.closest("[data-video-prepare-stream]");
   if (prepare) {
     prepareVideoStream(prepare.dataset.videoPrepareStream, videoState.current?.id || 0);
+    return;
+  }
+  const subtitleUpload = event.target.closest("[data-video-subtitle-upload]");
+  if (subtitleUpload) {
+    uploadVideoSubtitle(subtitleUpload.dataset.videoSubtitleUpload);
     return;
   }
   const regenerateShare = event.target.closest("[data-video-share-regenerate]");

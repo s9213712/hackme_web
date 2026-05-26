@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import secrets
 import uuid
@@ -28,6 +29,12 @@ VIDEO_VIEW_DEDUP_HOURS = 6
 VIDEO_VIEW_MIN_SECONDS = 5
 VIDEO_TIP_MIN_POINTS = 1
 VIDEO_TIP_MAX_POINTS = 1_000_000
+VIDEO_DANMAKU_SPECIAL_EFFECTS = {
+    "none": 0,
+    "outline": 10,
+    "glow": 30,
+    "rainbow": 50,
+}
 VIDEO_BOOST_MIN_POINTS = 10
 VIDEO_BOOST_MAX_POINTS = 1_000_000
 VIDEO_BOOST_DAYS = 7
@@ -51,7 +58,7 @@ MEDIA_FILENAME_EXTENSIONS = VIDEO_FILENAME_EXTENSIONS | AUDIO_FILENAME_EXTENSION
 
 
 def utc_now():
-    return datetime.utcnow().replace(microsecond=0).isoformat()
+    return datetime.now().replace(microsecond=0).isoformat()
 
 
 def _parse_iso_datetime(value):
@@ -241,11 +248,18 @@ def ensure_video_schema(conn):
             mode TEXT NOT NULL DEFAULT 'scroll',
             color TEXT NOT NULL DEFAULT '#ffffff',
             size TEXT NOT NULL DEFAULT 'normal',
+            effect TEXT NOT NULL DEFAULT 'none',
+            paid_points INTEGER NOT NULL DEFAULT 0,
+            ledger_debit_uuid TEXT,
+            ledger_credit_uuid TEXT,
+            idempotency_key TEXT,
             status TEXT NOT NULL DEFAULT 'visible',
             created_at TEXT NOT NULL,
             updated_at TEXT,
             CHECK (mode IN ('scroll', 'top', 'bottom')),
             CHECK (size IN ('small', 'normal', 'large')),
+            CHECK (effect IN ('none', 'outline', 'glow', 'rainbow')),
+            CHECK (paid_points >= 0),
             CHECK (status IN ('visible', 'hidden', 'deleted', 'pending'))
         )
         """
@@ -307,6 +321,13 @@ def ensure_video_schema(conn):
         "ledger_fee_uuid": "TEXT",
         "idempotency_key": "TEXT",
     })
+    _ensure_columns(conn, "video_danmaku", {
+        "effect": "TEXT NOT NULL DEFAULT 'none'",
+        "paid_points": "INTEGER NOT NULL DEFAULT 0",
+        "ledger_debit_uuid": "TEXT",
+        "ledger_credit_uuid": "TEXT",
+        "idempotency_key": "TEXT",
+    })
     _ensure_columns(conn, "video_share_links", {
         "password_required": "INTEGER NOT NULL DEFAULT 0",
         "password_hash": "TEXT",
@@ -327,6 +348,7 @@ def ensure_video_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_comments_video_created ON video_comments(video_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_danmaku_video_time ON video_danmaku(video_id, status, time_ms, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_danmaku_user_created ON video_danmaku(user_id, created_at)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_video_danmaku_idempotency ON video_danmaku(idempotency_key) WHERE idempotency_key IS NOT NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_tips_video_created ON video_tips(video_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_share_links_video_created ON video_share_links(video_id, created_at)")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_video_tips_idempotency ON video_tips(idempotency_key) WHERE idempotency_key IS NOT NULL")
@@ -367,6 +389,8 @@ def serialize_video(row, *, actor=None, liked=False):
     data["prepare_stream_url"] = f"/api/media/{data['cloud_file_id']}/prepare-stream" if data["can_edit"] else ""
     data["cover_url"] = f"/api/videos/{data['id']}/cover" if data.get("cover_file_id") else ""
     data["media_type"] = _cloud_file_media_type(data)
+    privacy_mode = str(data.get("cloud_privacy_mode") or "standard_plain").strip().lower()
+    data["direct_stream_allowed"] = privacy_mode in {"", "standard_plain"}
     return data
 
 
@@ -378,15 +402,23 @@ def _hash_share_token(token):
     return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
 
 
+def _env_int(name, default, *, minimum=1, maximum=1048576):
+    try:
+        value = int(str(os.environ.get(name, "")).strip())
+    except (TypeError, ValueError):
+        value = int(default)
+    return max(int(minimum), min(int(maximum), value))
+
+
 def _hash_video_share_password(password):
     password = str(password or "")
     if len(password) > MAX_VIDEO_SHARE_PASSWORD_LENGTH:
         raise ValueError("影音分享密碼太長")
     salt = secrets.token_urlsafe(16)
     if argon2_hash_secret_raw and Argon2Type is not None:
-        time_cost = 3
-        memory_cost = 65536
-        parallelism = 4
+        time_cost = _env_int("HTML_LEARNING_ARGON2_TIME_COST", 3, minimum=1, maximum=10)
+        memory_cost = _env_int("HTML_LEARNING_ARGON2_MEMORY_COST", 65536, minimum=1024, maximum=1048576)
+        parallelism = _env_int("HTML_LEARNING_ARGON2_PARALLELISM", min(4, os.cpu_count() or 1), minimum=1, maximum=16)
         digest = argon2_hash_secret_raw(
             password.encode("utf-8"),
             salt.encode("utf-8"),
@@ -483,7 +515,7 @@ def _normalize_video_share_expiry(value):
             expires_at = expires_at.astimezone().replace(tzinfo=None)
     except Exception as exc:
         raise ValueError("分享到期時間格式不正確") from exc
-    if expires_at <= datetime.utcnow():
+    if expires_at <= datetime.now():
         raise ValueError("分享到期時間必須晚於現在")
     return expires_at.replace(microsecond=0).isoformat()
 
@@ -514,7 +546,7 @@ def _record_video_share_password_failure(conn, row):
     attempts = int(_share_row_value(row, "failed_password_attempts", 0) or 0) + 1
     locked_until = _share_row_value(row, "password_locked_until")
     if attempts >= VIDEO_SHARE_PASSWORD_MAX_FAILURES:
-        locked_until = (datetime.utcnow() + timedelta(minutes=VIDEO_SHARE_PASSWORD_LOCK_MINUTES)).replace(microsecond=0).isoformat()
+        locked_until = (datetime.now() + timedelta(minutes=VIDEO_SHARE_PASSWORD_LOCK_MINUTES)).replace(microsecond=0).isoformat()
         attempts = 0
     conn.execute(
         """
@@ -930,6 +962,15 @@ def normalize_danmaku_mode(value):
 def normalize_danmaku_size(value):
     size = str(value or "normal").strip().lower()
     return size if size in VIDEO_DANMAKU_SIZES else "normal"
+
+
+def normalize_danmaku_effect(value):
+    effect = str(value or "none").strip().lower()
+    return effect if effect in VIDEO_DANMAKU_SPECIAL_EFFECTS else "none"
+
+
+def danmaku_special_price(effect):
+    return int(VIDEO_DANMAKU_SPECIAL_EFFECTS.get(normalize_danmaku_effect(effect), 0))
 
 
 def normalize_danmaku_color(value):
@@ -1383,7 +1424,7 @@ def boost_owner_video(conn, *, points_service, actor, video_id, amount, idempote
         actor=actor,
     )
     if created:
-        now_dt = datetime.utcnow().replace(microsecond=0)
+        now_dt = datetime.now().replace(microsecond=0)
         existing_expires = _parse_iso_datetime(video_row["boost_expires_at"])
         active = existing_expires and existing_expires > now_dt
         base = existing_expires if active else now_dt
@@ -1408,7 +1449,15 @@ def boost_owner_video(conn, *, points_service, actor, video_id, amount, idempote
     }
 
 
-def resolve_video_share_token(conn, token, *, password=None, password_verified=False, counted_in_session=False):
+def resolve_video_share_token(
+    conn,
+    token,
+    *,
+    password=None,
+    password_verified=False,
+    counted_in_session=False,
+    allow_processing=False,
+):
     ensure_video_schema(conn)
     base_select = _video_base_select().replace("SELECT", "", 1).lstrip()
     row = conn.execute(
@@ -1436,9 +1485,13 @@ def resolve_video_share_token(conn, token, *, password=None, password_verified=F
     ).fetchone()
     if not row:
         return None, "not_found"
-    if row["visibility"] != "unlisted":
+    visibility = str(row["visibility"] or "").strip().lower()
+    cloud_privacy_mode = str(_row_get(row, "cloud_privacy_mode", "") or "").strip().lower()
+    if visibility not in {"public", "unlisted"}:
         return None, "not_unlisted"
-    if row["status"] != "ready":
+    if visibility == "public" and cloud_privacy_mode == "e2ee":
+        return None, "not_unlisted"
+    if row["status"] != "ready" and not (allow_processing and row["status"] == "processing"):
         return None, "not_ready"
     if _video_share_is_expired(row):
         return None, "expired"
@@ -1468,13 +1521,22 @@ def mark_video_share_link_accessed(conn, link_id):
     )
 
 
-def shared_video_payload(conn, token, *, password=None, password_verified=False, counted_in_session=False):
+def shared_video_payload(
+    conn,
+    token,
+    *,
+    password=None,
+    password_verified=False,
+    counted_in_session=False,
+    allow_processing=False,
+):
     row, reason = resolve_video_share_token(
         conn,
         token,
         password=password,
         password_verified=password_verified,
         counted_in_session=counted_in_session,
+        allow_processing=allow_processing,
     )
     if not row:
         return None, reason
@@ -1489,7 +1551,7 @@ def record_video_view(conn, *, actor=None, video_id, ip="", watch_seconds=0, com
     watch_seconds = max(0, min(24 * 3600, _safe_int(watch_seconds, 0)))
     viewer_user_id = _actor_value(actor, "id") if actor else None
     ip_hash = _sha256_text(ip or "anonymous") if ip else ""
-    cutoff = (datetime.utcnow() - timedelta(hours=VIDEO_VIEW_DEDUP_HOURS)).replace(microsecond=0).isoformat()
+    cutoff = (datetime.now() - timedelta(hours=VIDEO_VIEW_DEDUP_HOURS)).replace(microsecond=0).isoformat()
     params = [int(video_id), cutoff]
     identity_where = []
     if viewer_user_id:
@@ -1611,9 +1673,11 @@ def serialize_danmaku(row, *, actor=None, video_owner_user_id=None):
     data = _as_dict(row)
     if not data:
         return None
-    for key in ("id", "video_id", "user_id", "time_ms"):
+    for key in ("id", "video_id", "user_id", "time_ms", "paid_points"):
         if key in data and data[key] is not None:
             data[key] = int(data[key])
+    data["effect"] = normalize_danmaku_effect(data.get("effect"))
+    data["special_price_points"] = danmaku_special_price(data["effect"])
     owner_id = video_owner_user_id if video_owner_user_id is not None else data.get("video_owner_user_id")
     data["can_delete"] = bool(
         _actor_owns(actor, data.get("user_id"))
@@ -1623,7 +1687,20 @@ def serialize_danmaku(row, *, actor=None, video_owner_user_id=None):
     return data
 
 
-def add_video_danmaku(conn, *, actor, video_id, time_ms, content, mode="scroll", color="#ffffff", size="normal"):
+def add_video_danmaku(
+    conn,
+    *,
+    actor,
+    video_id,
+    time_ms,
+    content,
+    mode="scroll",
+    color="#ffffff",
+    size="normal",
+    effect="none",
+    points_service=None,
+    idempotency_key=None,
+):
     ensure_video_schema(conn)
     if not actor:
         raise PermissionError("login required")
@@ -1632,20 +1709,90 @@ def add_video_danmaku(conn, *, actor, video_id, time_ms, content, mode="scroll",
         raise ValueError("video not found")
     if str(video.get("media_type") or "video") != "video":
         raise ValueError("danmaku is only available for video media")
+    user_id = int(_actor_value(actor, "id"))
+    normalized_effect = normalize_danmaku_effect(effect)
+    paid_points = danmaku_special_price(normalized_effect)
+    idem = str(idempotency_key or "").strip()[:160]
+    if idem:
+        existing = conn.execute("SELECT * FROM video_danmaku WHERE idempotency_key=?", (idem,)).fetchone()
+        if existing:
+            if _safe_int(existing["video_id"]) != int(video_id) or _safe_int(existing["user_id"]) != user_id:
+                raise ValueError("idempotency key conflicts with another danmaku")
+            return serialize_danmaku(existing, actor=actor, video_owner_user_id=video.get("owner_user_id"))
+    ledger_debit_uuid = None
+    ledger_credit_uuid = None
+    if paid_points > 0:
+        if not points_service or not hasattr(points_service, "rc1_facade"):
+            raise RuntimeError("PointsChain service is unavailable for special danmaku")
+        if hasattr(points_service, "ensure_schema"):
+            points_service.ensure_schema(conn)
+        root_user = conn.execute("SELECT id FROM users WHERE username='root' LIMIT 1").fetchone()
+        if not root_user:
+            raise RuntimeError("official fee account is unavailable")
+        points_facade = points_service.rc1_facade()
+        charge_uuid = idem or f"video_danmaku:{uuid.uuid4().hex}"
+        metadata = {
+            "video_id": int(video_id),
+            "danmaku_effect": normalized_effect,
+            "from_user_id": user_id,
+            "to_user_id": int(root_user["id"]),
+            "service_fee_points": paid_points,
+            "network_fee_points": 0,
+            "destination_fund_key": "official_treasury",
+        }
+        debit_row, _debit_created = points_facade.append_product_ledger_locked(
+            conn,
+            user_id=user_id,
+            currency_type=DISPLAY_CURRENCY,
+            direction="debit",
+            amount=paid_points,
+            action_type="video_danmaku_special_debit",
+            reference_type="video_danmaku",
+            reference_id=str(video_id),
+            idempotency_key=f"{charge_uuid}:debit",
+            reason="special video danmaku",
+            public_metadata=metadata,
+            actor=actor,
+        )
+        credit_row, _credit_created = points_facade.append_product_ledger_locked(
+            conn,
+            user_id=int(root_user["id"]),
+            currency_type=DISPLAY_CURRENCY,
+            direction="credit",
+            amount=paid_points,
+            action_type="video_danmaku_special_fee",
+            reference_type="video_danmaku",
+            reference_id=str(video_id),
+            idempotency_key=f"{charge_uuid}:credit",
+            reason="special video danmaku official revenue",
+            public_metadata=metadata,
+            actor=actor,
+        )
+        ledger_debit_uuid = debit_row["ledger_uuid"]
+        ledger_credit_uuid = credit_row["ledger_uuid"]
     now = utc_now()
     cur = conn.execute(
         """
-        INSERT INTO video_danmaku (video_id, user_id, time_ms, content, mode, color, size, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'visible', ?, ?)
+        INSERT INTO video_danmaku (
+            video_id, user_id, time_ms, content, mode, color, size, effect,
+            paid_points, ledger_debit_uuid, ledger_credit_uuid, idempotency_key,
+            status, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'visible', ?, ?)
         """,
         (
             int(video_id),
-            int(_actor_value(actor, "id")),
+            user_id,
             normalize_danmaku_time_ms(time_ms),
             normalize_danmaku_content(content),
             normalize_danmaku_mode(mode),
             normalize_danmaku_color(color),
             normalize_danmaku_size(size),
+            normalized_effect,
+            paid_points,
+            ledger_debit_uuid,
+            ledger_credit_uuid,
+            idem or None,
             now,
             now,
         ),
@@ -1733,6 +1880,8 @@ def tip_video(conn, *, points_service, actor, video_id, amount, fee_percent=5, i
     to_user_id = int(video_row["owner_user_id"])
     if from_user_id == to_user_id:
         raise ValueError("cannot tip your own video")
+    owner_user = conn.execute("SELECT username, role FROM users WHERE id=? LIMIT 1", (to_user_id,)).fetchone()
+    owner_is_root = str((owner_user or {})["username"] if owner_user else "").strip().lower() == "root"
     if not points_service or not hasattr(points_service, "rc1_facade"):
         raise RuntimeError("PointsChain service is unavailable")
     if hasattr(points_service, "ensure_schema"):
@@ -1758,6 +1907,20 @@ def tip_video(conn, *, points_service, actor, video_id, amount, fee_percent=5, i
             raise RuntimeError("official fee account is unavailable")
         fee_user_id = int(fee_user["id"])
     now = utc_now()
+    common_metadata = {
+        "video_id": int(video_id),
+        "from_user_id": from_user_id,
+        "to_user_id": to_user_id,
+        "gross_points": amount,
+        "fee_points": fee,
+        "net_points": net,
+        "network_fee_points": 0,
+    }
+    if owner_is_root:
+        common_metadata.update({
+            "official_video_owner": True,
+            "creator_revenue_destination": "official_treasury",
+        })
     debit_row, debit_created = points_facade.append_product_ledger_locked(
         conn,
         user_id=from_user_id,
@@ -1769,9 +1932,12 @@ def tip_video(conn, *, points_service, actor, video_id, amount, fee_percent=5, i
         reference_id=str(video_id),
         idempotency_key=f"{idem}:debit",
         reason="video tip",
-        public_metadata={"video_id": int(video_id), "to_user_id": to_user_id, "gross_points": amount, "fee_points": fee, "net_points": net},
+        public_metadata=common_metadata,
         actor=actor,
     )
+    credit_metadata = dict(common_metadata)
+    if owner_is_root:
+        credit_metadata["destination_fund_key"] = "official_treasury"
     credit_row, credit_created = points_facade.append_product_ledger_locked(
         conn,
         user_id=to_user_id,
@@ -1783,7 +1949,7 @@ def tip_video(conn, *, points_service, actor, video_id, amount, fee_percent=5, i
         reference_id=str(video_id),
         idempotency_key=f"{idem}:credit",
         reason="video tip revenue",
-        public_metadata={"video_id": int(video_id), "from_user_id": from_user_id, "gross_points": amount, "fee_points": fee, "net_points": net},
+        public_metadata=credit_metadata,
         actor=actor,
     )
     fee_row = None
@@ -1801,12 +1967,8 @@ def tip_video(conn, *, points_service, actor, video_id, amount, fee_percent=5, i
             idempotency_key=f"{idem}:fee",
             reason="video tip platform fee",
             public_metadata={
-                "video_id": int(video_id),
-                "from_user_id": from_user_id,
-                "to_user_id": to_user_id,
-                "gross_points": amount,
-                "fee_points": fee,
-                "net_points": net,
+                **common_metadata,
+                "destination_fund_key": "official_treasury",
             },
             actor=actor,
         )

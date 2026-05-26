@@ -7,6 +7,8 @@ ROOT = Path(__file__).resolve().parents[3]
 def test_cloud_drive_preview_ui_is_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
+    shared_file_js = (ROOT / "public" / "js" / "shared-file.js").read_text(encoding="utf-8")
+    share_preview_routes = (ROOT / "routes" / "file_sections" / "share_preview_routes.py").read_text(encoding="utf-8")
     server_py = (ROOT / "server.py").read_text(encoding="utf-8")
 
     assert 'id="drive-preview-card"' in index_html
@@ -32,6 +34,20 @@ def test_cloud_drive_preview_ui_is_wired():
     assert "new Blob([blob], { type: targetMime })" in drive_js
     assert "function drivePreviewUsesDirectStream(preview)" in drive_js
     assert 'return category === "audio" || category === "video" || category === "pdf";' in drive_js
+    assert "function drivePreviewHasReadyHls(preview)" in drive_js
+    assert "function drivePreviewSubtitles(preview)" in drive_js
+    assert "function syncDrivePreviewSubtitleTracks(player, preview, fileId = \"\")" in drive_js
+    assert "data-drive-preview-subtitle" in drive_js
+    assert "data-drive-subtitle-shift-step" in drive_js
+    assert "driveSubtitleUrlWithShift" in drive_js
+    assert "shift_ms" in drive_js
+    assert "function attachDriveHlsPreview(fileId, preview" in drive_js
+    assert "DRIVE_HLS_JS_URL" in drive_js
+    assert "/cloud-drive/files/${encodeURIComponent(fileId)}/hls/master.m3u8" in drive_js
+    assert "driveHlsPlayerMarkup(preview" in drive_js
+    assert "sharedFileSubtitleUrlWithShift" in shared_file_js
+    assert "data-shared-file-subtitle-shift-step" in shared_file_js
+    assert "/api/storage/shared/<token>/hls/subtitles/<subtitle_name>.vtt" in share_preview_routes
     assert "async function resolveDrivePreviewMediaUrl(fileId, csrf, preview" in drive_js
     assert 'return drivePreviewContentUrl(fileId);' in drive_js
     assert "function renderDrivePdfPreview(url, title, { encrypted = false } = {})" in drive_js
@@ -98,9 +114,9 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'id="drive-capacity-page"' in index_html
     assert 'id="album-create-title"' in index_html
     assert 'id="album-create-description"' in index_html
-    assert 'id="album-create-share-password"' in index_html
-    assert 'id="album-edit-share-password"' in index_html
-    assert 'id="album-edit-clear-share-password"' in index_html
+    assert 'id="album-create-share-password"' not in index_html
+    assert 'id="album-edit-share-password"' not in index_html
+    assert 'id="album-edit-clear-share-password"' not in index_html
     assert 'id="album-picker-select"' in index_html
     assert 'id="album-smart-strategy"' in index_html
     assert 'data-drive-action="smart-organize-albums"' in index_html
@@ -186,15 +202,31 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'flash(msg, err?.message || "分享連結建立失敗", false)' in drive_js
     assert 'flash(msg.message || "分享連結建立失敗", false)' not in drive_js
     assert "payload.storage_file_id = storageFileId" in drive_js
+    assert 'data-drive-action="share-storage-folder"' in drive_js
+    assert "async function shareStorageFolder(path, name = \"\")" in drive_js
+    assert 'visibility: "unlisted"' in drive_js
+    assert 'openShareCenterEditor("album", shareId)' in drive_js
     assert 'switchModuleTab("shares")' in drive_js
     assert "sharedFileDownload" in shared_file_js
     assert "sharedFilePreview" in shared_file_js
     assert "sharedFileRenderPreviewMetadata" in shared_file_js
     assert "sharedFileRenderBlobPreview" in shared_file_js
+    assert "function sharedFileIsServerEncryptedVideoProcessing(file)" in shared_file_js
+    assert "function sharedFileHasReadyHls(file)" in shared_file_js
+    assert "async function sharedFileRenderHlsPreview(file)" in shared_file_js
+    assert "SHARED_FILE_HLS_JS_URL" in shared_file_js
+    assert "HLS 串流準備中" in shared_file_js
+    assert "完成前不觸發主程序整檔解密預覽" in shared_file_js
+    assert "function sharedFileShowProgress(title" in shared_file_js
+    assert "async function sharedFileFetchBlobWithProgress" in shared_file_js
+    assert "正在伺服器端解密並傳輸原始檔預覽" in shared_file_js
+    assert "正在下載 E2EE 密文以供預覽" in shared_file_js
+    assert "正在瀏覽器端解密 E2EE 預覽" in shared_file_js
     assert "preview_content_url" in shared_file_js
     assert "/api/storage/shared/" in shared_file_js
     assert 'id="shared-file-login-link"' in share_preview_routes
     assert "前往登入" in share_preview_routes
+    assert ".shared-file-progress" in share_preview_routes
     assert "function sharedFileSetLoginRequired(required)" in shared_file_js
     assert 'reason === "login_required"' in shared_file_js
     assert "return_to=" in shared_file_js
@@ -204,13 +236,13 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "async function openAlbum(id" in drive_js
     assert "await openAlbumViewer(id, options);" in drive_js
     assert "async function saveAlbumDetail()" in drive_js
-    assert "function albumShareLinkMarkup(album)" in drive_js
-    assert "async function copyAlbumShareUrl(url, options = {})" in drive_js
-    assert 'data-drive-action="copy-album-share-link"' in drive_js
+    assert "function albumShareButtonMarkup(album)" in drive_js
+    assert "async function shareAlbum(albumId)" in drive_js
+    assert 'data-drive-action="share-album"' in drive_js
+    assert 'data-drive-action="copy-album-share-link"' not in drive_js
     assert "share_url" in drive_js
-    assert "payload.share_password = sharePassword" in drive_js
-    assert "clear_share_password" in drive_js
-    assert "password_required" in drive_js
+    assert 'storageAction(`/storage/albums/${encodeURIComponent(targetId)}`, "PUT", { visibility: "unlisted" })' in drive_js
+    assert 'openShareCenterEditor("album", shareId)' in drive_js
     assert "async function removeAlbumFile(albumId, albumFileId)" in drive_js
     assert "請輸入相簿 id" not in drive_js
     assert 'id="storage-breadcrumb"' in index_html
@@ -290,8 +322,12 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="root-storage-user-select"' in index_html
     assert 'id="root-storage-save-btn"' in index_html
     assert 'id="root-storage-users"' in index_html
+    assert 'id="drive-root-admin-tab"' in index_html
+    assert 'id="drive-root-admin-page"' in index_html
+    assert "雲端硬碟 > Root 管理" in index_html
     assert "function loadRootStorageUsers" in admin_js
     assert "function saveRootStorageOverride" in admin_js
+    assert "function saveDriveRootStorageSettings" in admin_js
     assert '"/root/storage/users"' in admin_js
     assert 'rootStorageSave.addEventListener("click", saveRootStorageOverride)' in bootstrap_js
     album_module_html = index_html.split('id="module-albums"', 1)[1].split('id="module-comfyui"', 1)[0]
@@ -373,7 +409,7 @@ def test_album_viewer_has_dedicated_module():
     assert 'tabModuleAlbums.style.display = (canAccessModule("privacy_uploads") && isFeatureEnabledForUi("feature_storage_albums_enabled", false)) ? "" : "none"' in core_js
     assert "SIDEBAR_MENU_CONFIG" in core_js
     assert '{ label: "相簿", action: "module:albums" }' not in core_js
-    assert 'requiresFeatures: ["feature_storage_albums_enabled"]' in core_js
+    assert 'featureKey: "feature_storage_albums_enabled"' in core_js
     assert "SIDEBAR_ICON_PATHS" in core_js
     assert "sidebar-footer" in index_html
     assert "sidebar-current-user" in index_html
@@ -636,7 +672,7 @@ def test_cloud_drive_e2ee_download_decrypts_in_browser():
 def test_share_link_copy_buttons_have_clipboard_fallback():
     """Issue #176 / #177 regression guard.
 
-    Both `copyAlbumShareUrl` (drive) and `copyVideoLink` (videos) call
+    `copyDriveShareUrl` (drive) and `copyVideoLink` (videos) call
     `navigator.clipboard.writeText`, which is undefined in non-secure
     contexts (HTTP). The fallback MUST give the user a way to manually
     select+copy the URL — not just flash a toast that disappears."""
@@ -644,13 +680,12 @@ def test_share_link_copy_buttons_have_clipboard_fallback():
     video_js = (ROOT / "public" / "js" / "39-videos.js").read_text(encoding="utf-8")
 
     # Drive: prompt-based fallback is OK (user can select+copy).
-    assert "async function copyAlbumShareUrl(url, options = {})" in drive_js
     assert "async function copyDriveShareUrl(url, options = {})" in drive_js
     assert "navigator.clipboard.writeText(shareUrl)" in drive_js
     assert 'setDriveShareCopyStatus("連結已複製"' in drive_js
     assert "分享連結缺少 E2EE 片段金鑰" in drive_js
     assert 'window.prompt("分享連結"' in drive_js, (
-        "drive copyAlbumShareUrl must offer a window.prompt fallback so the "
+        "drive copyDriveShareUrl must offer a window.prompt fallback so the "
         "URL is selectable when navigator.clipboard is unavailable"
     )
 

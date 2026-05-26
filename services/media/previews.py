@@ -13,7 +13,7 @@ AUDIO_EXTENSIONS = {
     ".aac", ".aif", ".aiff", ".amr", ".flac", ".m4a", ".mid", ".midi",
     ".mp3", ".oga", ".ogg", ".opus", ".wav", ".weba",
 }
-VIDEO_EXTENSIONS = {".m4v", ".mov", ".mp4", ".ogv", ".webm"}
+VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".ogv", ".webm", ".wmv"}
 IMAGE_EXTENSIONS = {".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
 ARCHIVE_EXTENSIONS = {

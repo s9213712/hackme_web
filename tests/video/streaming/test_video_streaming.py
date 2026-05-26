@@ -20,9 +20,9 @@ from services.media.e2ee_streaming import (
     upsert_e2ee_stream_v2_variant,
 )
 from services.media import streaming as media_streaming
-from services.job_center import get_job_by_source
+from services.job_center import create_job, get_job_by_source, update_job
 from routes.videos import register_video_routes
-from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
+from services.storage.cloud_drive import encrypt_server_encrypted_chunked_stream, ensure_cloud_drive_attachment_schema
 from services.system.audit import audit as runtime_audit
 from services.system.audit import configure_audit_service
 from services.users.member_levels import ensure_member_level_rules_schema
@@ -431,6 +431,213 @@ def test_prepare_stream_asset_builds_hls_derivatives_for_plain_video(tmp_path, m
     assert 'CODECS="h264"' not in master_text
 
 
+def test_prepare_stream_asset_extracts_embedded_text_subtitles(tmp_path, monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL,
+            storage_path TEXT NOT NULL,
+            privacy_mode TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            scan_status TEXT NOT NULL,
+            original_filename_plain_for_public TEXT,
+            mime_type_plain_for_public TEXT,
+            size_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            deleted_at TEXT
+        )
+        """
+    )
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_uploaded_file(conn, storage_root, file_id="subbed-video", owner_user_id=1, filename="clip.mkv", mime="video/x-matroska")
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id='subbed-video'").fetchone()
+
+    def probe_payload(*_args, **_kwargs):
+        payload = _fake_probe_payload("video")
+        payload["streams"].append({
+            "index": 2,
+            "codec_type": "subtitle",
+            "codec_name": "subrip",
+            "tags": {"language": "zh", "title": "繁中"},
+            "disposition": {"default": 1},
+        })
+        return payload
+
+    def fake_run(cmd, **_kwargs):
+        output_path = Path(cmd[-1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n字幕\n", encoding="utf-8")
+        return type("Completed", (), {"stdout": "", "stderr": "", "returncode": 0})()
+
+    monkeypatch.setattr(media_streaming, "_run_probe", probe_payload)
+    monkeypatch.setattr(media_streaming, "_run_ffmpeg_hls", _fake_hls_package)
+    monkeypatch.setattr(media_streaming.subprocess, "run", fake_run)
+
+    asset = media_streaming.prepare_stream_asset(
+        conn,
+        file_row=row,
+        storage_root=storage_root,
+        server_file_fernet=None,
+    )
+
+    assert asset["status"] == "ready"
+    assert len(asset["subtitles"]) == 1
+    assert asset["subtitles"][0]["label"] == "繁中"
+    assert asset["subtitles"][0]["language"] == "zh"
+    assert asset["subtitles"][0]["is_default"] is True
+    subtitle_path = storage_root / asset["subtitles"][0]["path"]
+    assert subtitle_path.exists()
+    playback = media_streaming.stream_playback_payload(conn, file_row=row, video_id=9)
+    assert playback["subtitles"][0]["url"].startswith("/api/videos/9/hls/subtitles/")
+
+
+def test_refresh_stream_subtitles_repairs_ready_asset_without_rebuilding_hls(tmp_path, monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL,
+            storage_path TEXT NOT NULL,
+            privacy_mode TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            scan_status TEXT NOT NULL,
+            original_filename_plain_for_public TEXT,
+            mime_type_plain_for_public TEXT,
+            size_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            deleted_at TEXT
+        )
+        """
+    )
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_uploaded_file(conn, storage_root, file_id="old-hls-video", owner_user_id=1, filename="clip.mkv", mime="video/x-matroska")
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id='old-hls-video'").fetchone()
+
+    monkeypatch.setattr(media_streaming, "_run_probe", lambda *args, **kwargs: _fake_probe_payload("video"))
+    monkeypatch.setattr(media_streaming, "_run_ffmpeg_hls", _fake_hls_package)
+    asset = media_streaming.prepare_stream_asset(
+        conn,
+        file_row=row,
+        storage_root=storage_root,
+        server_file_fernet=None,
+    )
+    assert asset["status"] == "ready"
+    assert asset["subtitles"] == []
+    variant_rows_before = conn.execute("SELECT COUNT(*) AS c FROM media_stream_variants").fetchone()["c"]
+
+    def probe_payload(*_args, **_kwargs):
+        payload = _fake_probe_payload("video")
+        payload["streams"].append({
+            "index": 2,
+            "codec_type": "subtitle",
+            "codec_name": "ass",
+            "tags": {"language": "chi", "title": "JPSC"},
+            "disposition": {"default": 1},
+        })
+        return payload
+
+    def fake_run(cmd, **_kwargs):
+        output_path = Path(cmd[-1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n字幕\n", encoding="utf-8")
+        return type("Completed", (), {"stdout": "", "stderr": "", "returncode": 0})()
+
+    monkeypatch.setattr(media_streaming, "_run_probe", probe_payload)
+    monkeypatch.setattr(media_streaming.subprocess, "run", fake_run)
+
+    repaired = media_streaming.refresh_stream_subtitles(
+        conn,
+        file_row=row,
+        storage_root=storage_root,
+        server_file_fernet=None,
+    )
+
+    assert len(repaired["subtitles"]) == 1
+    assert repaired["subtitles"][0]["label"] == "JPSC"
+    assert repaired["subtitles"][0]["language"] == "chi"
+    assert repaired["subtitles"][0]["is_default"] is True
+    assert (storage_root / repaired["subtitles"][0]["path"]).exists()
+    assert conn.execute("SELECT COUNT(*) AS c FROM media_stream_variants").fetchone()["c"] == variant_rows_before
+    assert conn.execute(
+        "SELECT job_type FROM media_stream_jobs ORDER BY id DESC LIMIT 1"
+    ).fetchone()["job_type"] == "refresh_subtitles"
+
+
+def test_shift_webvtt_text_offsets_cue_times_without_touching_notes():
+    source = (
+        "WEBVTT\n\n"
+        "NOTE 00:00:10.000 should not change\n\n"
+        "00:00:01.000 --> 00:00:02.250 align:start\n"
+        "字幕\n"
+    )
+
+    shifted = media_streaming.shift_webvtt_text(source, 1500)
+
+    assert "NOTE 00:00:10.000 should not change" in shifted
+    assert "00:00:02.500 --> 00:00:03.750 align:start" in shifted
+    assert media_streaming.shift_webvtt_text(source, -5000).count("00:00:00.000") == 2
+    compact = "WEBVTT\n\n00:00.043 --> 00:06.043\n字幕\n"
+    assert "00:00:00.543 --> 00:00:06.543" in media_streaming.shift_webvtt_text(compact, 500)
+
+
+def test_add_stream_subtitle_converts_uploaded_srt_to_webvtt(tmp_path):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL,
+            storage_path TEXT NOT NULL,
+            privacy_mode TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            scan_status TEXT NOT NULL,
+            original_filename_plain_for_public TEXT,
+            mime_type_plain_for_public TEXT,
+            size_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            deleted_at TEXT
+        )
+        """
+    )
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_uploaded_file(conn, storage_root, file_id="manual-sub-video", owner_user_id=1, filename="clip.mp4", mime="video/mp4")
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id='manual-sub-video'").fetchone()
+    subtitle = tmp_path / "zh.srt"
+    subtitle.write_text("1\n00:00:01,000 --> 00:00:02,000\n你好\n", encoding="utf-8")
+
+    asset = media_streaming.add_stream_subtitle(
+        conn,
+        file_row=row,
+        storage_root=storage_root,
+        subtitle_file_path=subtitle,
+        original_filename="zh.srt",
+        label="繁中",
+        language="zh-Hant",
+    )
+
+    assert len(asset["subtitles"]) == 1
+    item = asset["subtitles"][0]
+    assert item["label"] == "繁中"
+    assert item["language"] == "zh-hant"
+    text = (storage_root / item["path"]).read_text(encoding="utf-8")
+    assert text.startswith("WEBVTT")
+    assert "00:00:01.000 --> 00:00:02.000" in text
+    playback = media_streaming.stream_playback_payload(conn, file_row=row, video_id=12)
+    assert playback["subtitles"][0]["url"].endswith(".vtt")
+
+
 def test_prepare_stream_asset_hides_quality_derivative_larger_than_original(tmp_path, monkeypatch):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -561,6 +768,68 @@ def test_prepare_stream_asset_decrypts_server_encrypted_media_before_packaging(t
 
     assert asset["status"] == "ready"
     assert asset["source_mode"] == "server_encrypted"
+
+
+def test_prepare_stream_asset_reports_chunked_decrypt_progress(tmp_path, monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL,
+            storage_path TEXT NOT NULL,
+            privacy_mode TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            scan_status TEXT NOT NULL,
+            original_filename_plain_for_public TEXT,
+            mime_type_plain_for_public TEXT,
+            size_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            deleted_at TEXT
+        )
+        """
+    )
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    plaintext = b"chunked-server-encrypted-video-payload" * 4
+    fernet = Fernet(Fernet.generate_key())
+    target = _seed_uploaded_file(
+        conn,
+        storage_root,
+        file_id="chunked-encrypted-video",
+        owner_user_id=1,
+        filename="secret.mp4",
+        mime="video/mp4",
+        privacy_mode="server_encrypted",
+        payload=b"placeholder",
+    )
+    encrypt_server_encrypted_chunked_stream(io.BytesIO(plaintext), target, fernet, size_bytes=len(plaintext), chunk_size=16)
+    conn.execute("UPDATE uploaded_files SET size_bytes=? WHERE id='chunked-encrypted-video'", (target.stat().st_size,))
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id='chunked-encrypted-video'").fetchone()
+
+    def fake_probe(source_path, **kwargs):
+        assert Path(source_path).read_bytes() == plaintext
+        return _fake_probe_payload("video")
+
+    progress_events = []
+    monkeypatch.setattr(media_streaming, "_run_probe", fake_probe)
+    monkeypatch.setattr(media_streaming, "_run_ffmpeg_hls", _fake_hls_package)
+
+    asset = media_streaming.prepare_stream_asset(
+        conn,
+        file_row=row,
+        storage_root=storage_root,
+        server_file_fernet=fernet,
+        progress_callback=lambda percent, stage, detail: progress_events.append((percent, stage, detail)),
+    )
+
+    decrypt_events = [event for event in progress_events if event[1] == "decrypting"]
+    assert asset["status"] == "ready"
+    assert len(decrypt_events) > 1
+    assert max(event[0] for event in decrypt_events) > 20
+    assert any("正在解密伺服器端加密影音" in event[2] for event in decrypt_events)
 
 
 def test_prepare_stream_asset_releases_sqlite_writer_before_ffmpeg(tmp_path, monkeypatch):
@@ -728,6 +997,72 @@ def test_ffmpeg_hls_applies_target_bitrate_for_quality_variants(tmp_path, monkey
     assert cmd[cmd.index("-vf") + 1] == "scale=-2:720"
 
 
+def test_ffmpeg_hls_falls_back_to_transcode_when_copy_fails(tmp_path, monkeypatch):
+    source = tmp_path / "clip.mkv"
+    source.write_bytes(b"fake-video")
+    derivative_dir = tmp_path / "derivatives"
+    calls = []
+
+    class FakeStdout:
+        def __init__(self):
+            self.lines = iter(["progress=end\n"])
+            self.done = False
+
+        def readline(self):
+            try:
+                return next(self.lines)
+            except StopIteration:
+                self.done = True
+                return ""
+
+    class FakeStderr:
+        def __init__(self, text=""):
+            self.text = text
+
+        def read(self):
+            return self.text
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            self.stdout = FakeStdout()
+            self.stderr = FakeStderr("copy failed" if len(calls) == 0 else "")
+            self.returncode = 1 if len(calls) == 0 else 0
+            calls.append((cmd, kwargs, self.returncode))
+
+        def poll(self):
+            return self.returncode if self.stdout.done else None
+
+        def wait(self):
+            return self.returncode
+
+        def kill(self):
+            self.stdout.done = True
+
+    def fake_select(readers, _writers, _errors, _timeout):
+        return readers, [], []
+
+    monkeypatch.setattr(media_streaming.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(media_streaming.select, "select", fake_select)
+
+    variant_name, playlist_path, init_path = media_streaming._run_ffmpeg_hls(
+        source,
+        derivative_dir=derivative_dir,
+        media_type="video",
+        variant_name="original",
+        ffmpeg_bin="ffmpeg",
+        copy_codecs=True,
+    )
+
+    assert variant_name == "original"
+    assert playlist_path.name == "playlist.m3u8"
+    assert init_path.name == "init.mp4"
+    assert len(calls) == 2
+    assert calls[0][0][calls[0][0].index("-c") + 1] == "copy"
+    assert "libx264" in calls[1][0]
+    assert "-sn" in calls[0][0]
+    assert "-dn" in calls[0][0]
+
+
 def test_get_stream_status_marks_e2ee_media_unavailable(tmp_path):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -854,6 +1189,17 @@ def test_shared_standard_video_playback_uses_shared_hls_and_stream_urls(tmp_path
         monkeypatch.setattr(media_streaming, "_run_probe", lambda *args, **kwargs: _fake_probe_payload("video"))
         monkeypatch.setattr(media_streaming, "_run_ffmpeg_hls", _fake_hls_package)
         media_streaming.prepare_stream_asset(conn, file_row=row, storage_root=storage_root, server_file_fernet=fernet)
+        subtitle = tmp_path / "shared-zh.srt"
+        subtitle.write_text("1\n00:00:01,000 --> 00:00:02,000\n共享字幕\n", encoding="utf-8")
+        media_streaming.add_stream_subtitle(
+            conn,
+            file_row=row,
+            storage_root=storage_root,
+            subtitle_file_path=subtitle,
+            original_filename="shared-zh.srt",
+            label="繁中",
+            language="zh-Hant",
+        )
         conn.commit()
         token = video["share_url"].rsplit("/", 1)[-1]
     finally:
@@ -871,6 +1217,8 @@ def test_shared_standard_video_playback_uses_shared_hls_and_stream_urls(tmp_path
     assert payload["master_url"].startswith(f"/api/videos/shared/{token}/hls/master.m3u8")
     assert payload["stream_url"].startswith(f"/api/videos/shared/{token}/stream")
     assert payload["fallback_url"].startswith(f"/api/videos/shared/{token}/stream")
+    assert payload["subtitles"][0]["url"].startswith(f"/api/videos/shared/{token}/hls/subtitles/")
+    assert "share_session=" in payload["subtitles"][0]["url"]
     assert f"/api/videos/{video['id']}/" not in payload["master_url"]
     assert f"/api/videos/{video['id']}/" not in payload["stream_url"]
 
@@ -892,6 +1240,14 @@ def test_shared_standard_video_playback_uses_shared_hls_and_stream_urls(tmp_path
     stream = viewer.get(payload["stream_url"])
     assert stream.status_code == 200
     assert stream.mimetype == "video/mp4"
+
+    subtitle_res = viewer.get(payload["subtitles"][0]["url"])
+    assert subtitle_res.status_code == 200
+    assert subtitle_res.mimetype == "text/vtt"
+    assert "WEBVTT" in subtitle_res.get_data(as_text=True)
+    shifted_subtitle_res = viewer.get(payload["subtitles"][0]["url"] + "&shift_ms=500")
+    assert shifted_subtitle_res.status_code == 200
+    assert "00:00:01.500 --> 00:00:02.500" in shifted_subtitle_res.get_data(as_text=True)
 
     stateless_viewer = _build_app(db_path, storage_root, fernet, current_user=None).test_client()
     stateless_master = stateless_viewer.get(payload["master_url"])
@@ -1056,6 +1412,23 @@ def test_hls_prepare_worker_updates_job_center_until_ready(tmp_path, monkeypatch
     conn.row_factory = sqlite3.Row
     try:
         _seed_uploaded_file(conn, storage_root, file_id="worker-video", owner_user_id=1, filename="worker.mp4", mime="video/mp4")
+        stale_job = create_job(
+            conn,
+            owner_user_id=1,
+            job_type="media.hls.prepare",
+            title="Worker Movie",
+            source_module="media_hls_prepare",
+            source_ref="media_stream:worker-video",
+            status="running",
+            progress_percent=12,
+            stage="waiting_worker_slot",
+        )
+        update_job(
+            conn,
+            stale_job["job_uuid"],
+            error_message="previous worker failed",
+            error_stage="waiting_worker_slot",
+        )
         conn.commit()
     finally:
         conn.close()
@@ -1094,6 +1467,8 @@ def test_hls_prepare_worker_updates_job_center_until_ready(tmp_path, monkeypatch
         assert job["status"] == "succeeded"
         assert job["progress_percent"] == 100
         assert job["stage"] == "ready"
+        assert not job["error_message"]
+        assert not job["error_stage"]
         assert "Worker Movie" in job["title"]
         events = conn.execute(
             "SELECT event_type, stage FROM job_center_events WHERE job_uuid=? ORDER BY id",
@@ -1101,6 +1476,34 @@ def test_hls_prepare_worker_updates_job_center_until_ready(tmp_path, monkeypatch
         ).fetchall()
         assert ("progress", "transcoding") in [(row["event_type"], row["stage"]) for row in events]
         assert ("progress", "ready") in [(row["event_type"], row["stage"]) for row in events]
+    finally:
+        conn.close()
+
+
+def test_hls_prepare_worker_serializes_only_large_jobs_by_default(tmp_path, monkeypatch):
+    db_path = tmp_path / "worker-slot-policy.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(conn, storage_root, file_id="small-video", owner_user_id=1, filename="small.mp4", mime="video/mp4")
+        small = conn.execute("SELECT * FROM uploaded_files WHERE id='small-video'").fetchone()
+        assert hls_prepare_worker._hls_worker_slot_required(small) is False
+
+        conn.execute(
+            "UPDATE uploaded_files SET size_bytes=? WHERE id='small-video'",
+            (hls_prepare_worker.DEFAULT_HLS_SERIALIZE_MIN_BYTES,),
+        )
+        large = conn.execute("SELECT * FROM uploaded_files WHERE id='small-video'").fetchone()
+        assert hls_prepare_worker._hls_worker_slot_required(large) is True
+
+        monkeypatch.setenv("HACKME_MEDIA_HLS_SERIALIZE_MIN_BYTES", "0")
+        assert hls_prepare_worker._hls_worker_slot_required(large) is False
+
+        monkeypatch.setenv("HACKME_MEDIA_HLS_SERIALIZE_ALL", "1")
+        assert hls_prepare_worker._hls_worker_slot_required(small) is True
     finally:
         conn.close()
 

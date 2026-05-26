@@ -10,6 +10,7 @@ import re
 import secrets
 import subprocess
 import sys
+import tempfile
 import threading
 from datetime import datetime, timedelta
 
@@ -25,10 +26,13 @@ from services.storage.cloud_drive import (
 )
 from services.core.http_headers import build_content_disposition
 from services.media.streaming import (
+    add_stream_subtitle,
     ensure_media_stream_schema,
     get_stream_status,
     mark_stream_asset_processing,
+    parse_subtitle_shift_ms,
     repair_hls_master_manifest_text,
+    shift_webvtt_text,
     should_auto_prepare_stream,
     STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON,
     stream_playback_payload,
@@ -106,7 +110,7 @@ def register_video_routes(app, deps):
     stream_prepare_jobs = set()
 
     def _now_iso():
-        return datetime.utcnow().replace(microsecond=0).isoformat()
+        return datetime.now().replace(microsecond=0).isoformat()
 
     def _parse_json_body():
         try:
@@ -173,6 +177,24 @@ def register_video_routes(app, deps):
             raise ValueError("找不到影音檔案")
         return row
 
+    def _table_exists(conn, table_name):
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+                (str(table_name or ""),),
+            ).fetchone()
+            return bool(row)
+        except Exception:
+            return False
+
+    def _video_row_for_stream_file(conn, file_id):
+        if not _table_exists(conn, "videos"):
+            return None
+        return conn.execute(
+            "SELECT id, title, owner_user_id, visibility FROM videos WHERE cloud_file_id=? AND deleted_at IS NULL LIMIT 1",
+            (str(file_id or ""),),
+        ).fetchone()
+
     def _video_e2ee_owner_key(conn, file_row):
         return conn.execute(
             """
@@ -226,6 +248,24 @@ def register_video_routes(app, deps):
         text = repair_hls_master_manifest_text(Path(path).read_text(encoding="utf-8"))
         text = _append_share_session_to_hls_manifest(text, share_session_id)
         return Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
+
+    def _subtitle_match(asset, subtitle_name):
+        clean = str(subtitle_name or "").strip()
+        if not clean or "/" in clean or ".." in clean:
+            return None
+        return next((item for item in (asset.get("subtitles") or []) if item.get("name") == clean), None)
+
+    def _send_subtitle_file(path, *, download_name):
+        shift_ms = parse_subtitle_shift_ms(request.args.get("shift_ms"))
+        if shift_ms:
+            text = shift_webvtt_text(Path(path).read_text(encoding="utf-8", errors="replace"), shift_ms)
+            return Response(
+                text,
+                status=200,
+                mimetype="text/vtt; charset=utf-8",
+                headers={"Cache-Control": "no-store"},
+            )
+        return send_file(path, as_attachment=False, download_name=download_name, mimetype="text/vtt; charset=utf-8", conditional=True)
 
     def _video_stream_worker_key(file_id):
         return str(file_id or "").strip()
@@ -692,10 +732,7 @@ def register_video_routes(app, deps):
                     "error": "strict_e2ee_server_transcode_disabled",
                     "status_code": 409,
                 }
-            video_row = conn.execute(
-                "SELECT id, title, owner_user_id, visibility FROM videos WHERE cloud_file_id=? AND deleted_at IS NULL LIMIT 1",
-                (row["id"],),
-            ).fetchone()
+            video_row = _video_row_for_stream_file(conn, row["id"])
             title = video_row["title"] if video_row else row["original_filename_plain_for_public"]
             owner_user_id = video_row["owner_user_id"] if video_row else row["owner_user_id"]
             asset, stream_warning, stream_queued = _queue_stream_prepare(
@@ -991,7 +1028,7 @@ def register_video_routes(app, deps):
         return raw if isinstance(raw, dict) else {}
 
     def _store_shared_video_session_state(state):
-        now = datetime.utcnow().replace(microsecond=0).isoformat()
+        now = datetime.now().replace(microsecond=0).isoformat()
         cleaned = {}
         for key, value in (state or {}).items():
             if not isinstance(value, dict):
@@ -1032,7 +1069,7 @@ def register_video_routes(app, deps):
         return data if isinstance(data, dict) else None
 
     def _signed_shared_video_session_id(token, *, password_verified=False, hours=8):
-        expires_at = (datetime.utcnow() + timedelta(hours=max(1, int(hours)))).replace(microsecond=0).isoformat()
+        expires_at = (datetime.now() + timedelta(hours=max(1, int(hours)))).replace(microsecond=0).isoformat()
         payload_text = _encode_shared_video_session_payload({
             "v": 1,
             "token_digest": _shared_video_session_token_digest(token),
@@ -1060,7 +1097,7 @@ def register_video_routes(app, deps):
         if str(payload.get("token_digest") or "") != _shared_video_session_token_digest(token):
             return None
         expires_at = str(payload.get("expires_at") or "").strip()
-        now = datetime.utcnow().replace(microsecond=0).isoformat()
+        now = datetime.now().replace(microsecond=0).isoformat()
         if not expires_at or expires_at <= now:
             return None
         return {
@@ -1101,7 +1138,7 @@ def register_video_routes(app, deps):
             "token": str(token or ""),
             "password_verified": bool(password_verified),
             "counted": True,
-            "expires_at": (datetime.utcnow() + timedelta(hours=max(1, int(hours)))).replace(microsecond=0).isoformat(),
+            "expires_at": (datetime.now() + timedelta(hours=max(1, int(hours)))).replace(microsecond=0).isoformat(),
             "signed": True,
         }
         session["video_share_sessions"] = state
@@ -1178,6 +1215,11 @@ def register_video_routes(app, deps):
                 for key in ("manifest_url", "chunk_url_template"):
                     if variant.get(key):
                         variant[key] = _url_with_share_session(variant[key], share_session_id)
+        for subtitle in payload.get("subtitles") or []:
+            if not isinstance(subtitle, dict):
+                continue
+            if subtitle.get("url"):
+                subtitle["url"] = _url_with_share_session(subtitle["url"], share_session_id)
         return payload
 
     def _shared_video_error_response(reason):
@@ -1239,7 +1281,7 @@ def register_video_routes(app, deps):
 </body>
 </html>"""
 
-    def _resolve_shared_video(conn, token, *, allow_counted_session_limit=False):
+    def _resolve_shared_video(conn, token, *, allow_counted_session_limit=False, allow_processing=False):
         if request.args.get("vk"):
             share_session_id, session_state = _shared_video_session_for_request(token)
             return None, "forbidden_fragment_transport", False, bool(session_state and session_state.get("counted")), share_session_id
@@ -1252,6 +1294,7 @@ def register_video_routes(app, deps):
             password=_shared_video_password_from_request(),
             password_verified=password_verified,
             counted_in_session=bool(allow_counted_session_limit and counted_in_session),
+            allow_processing=allow_processing,
         )
         return row, reason, password_verified, counted_in_session, share_session_id
 
@@ -1383,6 +1426,9 @@ def register_video_routes(app, deps):
             for variant in payload.get("variants") or []:
                 if isinstance(variant, dict) and variant.get("name"):
                     variant["playlist_url"] = f"{shared_base}/hls/{variant['name']}/playlist.m3u8"
+            for subtitle in payload.get("subtitles") or []:
+                if isinstance(subtitle, dict) and subtitle.get("name"):
+                    subtitle["url"] = f"{shared_base}/hls/subtitles/{subtitle['name']}.vtt"
         payload["high_performance_streaming"] = payload.get("mode") == "hls"
         return payload
 
@@ -1409,11 +1455,12 @@ def register_video_routes(app, deps):
     .msg {{ min-height:1.4rem; color:#b9c2f0; margin:.75rem 0; white-space:pre-wrap; }}
     .field {{ display:grid; gap:.35rem; margin:.75rem 0; }}
     input, button, textarea {{ font:inherit; }}
-    input[type=password] {{ width:100%; box-sizing:border-box; padding:.7rem .9rem; border-radius:12px; border:1px solid #39405c; background:#0f1422; color:#eef2ff; }}
+    input[type=password], input[type=number] {{ width:100%; box-sizing:border-box; padding:.7rem .9rem; border-radius:12px; border:1px solid #39405c; background:#0f1422; color:#eef2ff; }}
     button {{ padding:.7rem 1rem; border-radius:12px; border:0; background:#3d78ff; color:#fff; cursor:pointer; }}
     button.secondary {{ background:#2b3148; }}
     .quality-control {{ margin:.7rem 0 0; display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; color:#b8bfd8; }}
-    .quality-control select {{ min-height:2.35rem; border-radius:10px; border:1px solid #39405c; background:#0f1422; color:#eef2ff; padding:.45rem .7rem; }}
+    .quality-control select, .quality-control input[type=number] {{ min-height:2.35rem; border-radius:10px; border:1px solid #39405c; background:#0f1422; color:#eef2ff; padding:.45rem .7rem; }}
+    .quality-control input[type=number] {{ width:6rem; }}
     .quality-control small {{ flex:1 1 16rem; line-height:1.45; }}
     #player-host {{ width:100%; min-height:0; margin-top:.8rem; display:grid; place-items:center; }}
     #player-host video, #player-host audio {{ display:block; width:100%; max-width:100%; border-radius:14px; background:#070b15; }}
@@ -1845,7 +1892,12 @@ def register_video_routes(app, deps):
     def shared_video_page(token):
         conn = get_db()
         try:
-            row, reason, _password_verified, _counted_in_session, _share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
+            row, reason, _password_verified, _counted_in_session, _share_session_id = _resolve_shared_video(
+                conn,
+                token,
+                allow_counted_session_limit=True,
+                allow_processing=True,
+            )
             if not row and reason != "password_required":
                 status = 400 if reason == "forbidden_fragment_transport" else 410
                 return Response(_shared_video_ended_html(reason), status=status, mimetype="text/html")
@@ -1863,7 +1915,13 @@ def register_video_routes(app, deps):
             if sensitive:
                 return sensitive
             password = str(data.get("password") or "")
-            row, reason = resolve_video_share_token(conn, token, password=password, password_verified=False)
+            row, reason = resolve_video_share_token(
+                conn,
+                token,
+                password=password,
+                password_verified=False,
+                allow_processing=True,
+            )
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
@@ -1884,7 +1942,12 @@ def register_video_routes(app, deps):
     def shared_video_detail(token):
         conn = get_db()
         try:
-            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(
+                conn,
+                token,
+                allow_counted_session_limit=True,
+                allow_processing=True,
+            )
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
@@ -1897,7 +1960,13 @@ def register_video_routes(app, deps):
                 share_session_id=share_session_id,
                 counted_in_session=counted_in_session,
             )
-            video, _ = shared_video_payload(conn, token, password_verified=password_verified, counted_in_session=True)
+            video, _ = shared_video_payload(
+                conn,
+                token,
+                password_verified=password_verified,
+                counted_in_session=True,
+                allow_processing=True,
+            )
             conn.commit()
             return json_resp({"ok": True, "video": video, "share_session_id": share_session_id})
         finally:
@@ -1907,7 +1976,12 @@ def register_video_routes(app, deps):
     def shared_video_playback(token):
         conn = get_db()
         try:
-            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(
+                conn,
+                token,
+                allow_counted_session_limit=True,
+                allow_processing=True,
+            )
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
@@ -2183,6 +2257,27 @@ def register_video_routes(app, deps):
             conn.commit()
             text = _append_share_session_to_hls_manifest(Path(path).read_text(encoding="utf-8"), share_session_id)
             return Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>/hls/subtitles/<subtitle_name>.vtt", methods=["GET"])
+    def shared_video_hls_subtitle(token, subtitle_name):
+        conn = get_db()
+        try:
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            asset = get_stream_status(conn, file_row=file_row, include_segments=False)
+            match = _subtitle_match(asset or {}, subtitle_name)
+            if not match:
+                return json_resp({"ok": False, "msg": "找不到字幕", "error": "subtitle_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, {"storage_path": match["path"]})
+            conn.commit()
+            return _send_subtitle_file(path, download_name=f"{subtitle_name}.vtt")
         finally:
             conn.close()
 
@@ -2521,10 +2616,7 @@ def register_video_routes(app, deps):
                     "reason": STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON,
                     "allowed_mode": "client_side_transcode_then_encrypt",
                 }), 409
-            video_row = conn.execute(
-                "SELECT id, title, owner_user_id, visibility FROM videos WHERE cloud_file_id=? AND deleted_at IS NULL LIMIT 1",
-                (row["id"],),
-            ).fetchone()
+            video_row = _video_row_for_stream_file(conn, row["id"])
             asset, stream_warning, stream_queued = _queue_stream_prepare(
                 conn,
                 file_row=row,
@@ -3044,6 +3136,75 @@ def register_video_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/videos/<int:video_id>/hls/subtitles/<subtitle_name>.vtt", methods=["GET"])
+    @require_csrf
+    def video_hls_subtitle(video_id, subtitle_name):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            ensure_media_stream_schema(conn)
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            asset = get_stream_status(conn, file_row=row, include_segments=False)
+            match = _subtitle_match(asset or {}, subtitle_name)
+            if not match:
+                return json_resp({"ok": False, "msg": "找不到字幕", "error": "subtitle_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, {"storage_path": match["path"]})
+            return _send_subtitle_file(path, download_name=f"{subtitle_name}.vtt")
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/subtitles", methods=["POST"])
+    @require_csrf
+    def video_subtitle_upload(video_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            video = get_video(conn, video_id, actor=actor)
+            if not video or not video.get("can_edit"):
+                return json_resp({"ok": False, "msg": "找不到影音", "error": "not_found"}), 404
+            if str(video.get("media_type") or "video") != "video":
+                return json_resp({"ok": False, "msg": "只有影片可上傳字幕", "error": "not_video"}), 400
+            upload = request.files.get("subtitle")
+            filename = str(getattr(upload, "filename", "") or "").strip()
+            if not upload or not filename:
+                return json_resp({"ok": False, "msg": "請選擇字幕檔", "error": "missing_subtitle"}), 400
+            if Path(filename).suffix.lower() not in {".srt", ".vtt", ".ass", ".ssa"}:
+                return json_resp({"ok": False, "msg": "字幕格式只支援 .srt/.vtt/.ass/.ssa", "error": "unsupported_subtitle_format"}), 400
+            row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            with tempfile.TemporaryDirectory(prefix="hackme_subtitle_upload_") as temp_dir:
+                temp_path = Path(temp_dir) / (safe_public_filename(filename) or "subtitle")
+                upload.save(temp_path)
+                asset = add_stream_subtitle(
+                    conn,
+                    file_row=row,
+                    storage_root=storage_root,
+                    subtitle_file_path=temp_path,
+                    original_filename=filename,
+                    label=request.form.get("label") or "",
+                    language=request.form.get("language") or "und",
+                    ffmpeg_bin=ffmpeg_bin,
+                )
+            conn.commit()
+            playback = stream_playback_payload(conn, file_row=row, video_id=video_id)
+            return json_resp({"ok": True, "asset": asset, "subtitles": asset.get("subtitles") or [], "playback": playback})
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        except subprocess.CalledProcessError as exc:
+            return json_resp({"ok": False, "msg": "字幕轉換失敗，請確認檔案內容可讀取", "error": "subtitle_conversion_failed", "detail": str(exc)[:300]}), 400
+        finally:
+            conn.close()
+
     @app.route("/api/videos/<int:video_id>/hls/<variant>/<segment>", methods=["GET"])
     @require_csrf
     def video_hls_segment(video_id, variant, segment):
@@ -3237,6 +3398,9 @@ def register_video_routes(app, deps):
                 mode=data.get("mode") or "scroll",
                 color=data.get("color") or "#ffffff",
                 size=data.get("size") or "normal",
+                effect=data.get("effect") or "none",
+                points_service=points_service,
+                idempotency_key=data.get("idempotency_key") or "",
             )
             conn.commit()
             audit(

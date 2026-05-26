@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 import zipfile
+from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
@@ -17,6 +18,7 @@ from services.storage.cloud_drive import (
     decrypt_server_encrypted_bytes,
     ensure_cloud_drive_attachment_schema,
 )
+from services.media.streaming import ensure_media_stream_schema
 from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage.storage_albums import ensure_storage_album_schema
 from services.security.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
@@ -180,8 +182,8 @@ def test_storage_upgrade_catalog_falls_back_when_points_schema_is_locked(tmp_pat
     assert res.status_code == 200
     assert body["ok"] is True
     assert [item["item_key"] for item in body["catalog"]] == ["cloud_storage_1gb_30d"]
-    assert body["catalog"][0]["duration_days"] == 7
-    assert body["catalog"][0]["label"] == "雲端容量 1GB / 7 天"
+    assert body["catalog"][0]["duration_days"] == 30
+    assert body["catalog"][0]["label"] == "雲端容量 1GB / 30 天"
 
 
 def test_dm_upload_enters_owner_drive_and_grants_counterparty_download(tmp_path):
@@ -342,6 +344,79 @@ def test_cloud_drive_resumable_upload_can_resume_chunks_and_complete(tmp_path):
     file_id = body["file"]["file_id"]
     assert body["session"]["status"] == "completed"
     assert client.get(f"/api/cloud-drive/files/{file_id}/download").data == payload
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        session_row = conn.execute("SELECT * FROM cloud_resumable_upload_sessions WHERE session_id=?", (session_id,)).fetchone()
+        assert session_row["status"] == "completed"
+        upload_job = conn.execute(
+            "SELECT * FROM job_center_jobs WHERE source_module='cloud_drive_resumable_upload' AND source_ref=?",
+            (f"upload_session:{session_id}",),
+        ).fetchone()
+        assert upload_job is not None
+        assert upload_job["status"] == "succeeded"
+        assert upload_job["progress_percent"] == 100
+    finally:
+        conn.close()
+
+
+def test_cloud_drive_resumable_complete_reuses_existing_merged_file_after_interruption(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    chunk_size = 256 * 1024
+    payload = (b"A" * chunk_size) + (b"B" * chunk_size) + b"tail"
+    started = client.post(
+        "/api/cloud-drive/resumable-upload/start",
+        json={
+            "filename": "resume-existing-complete.txt",
+            "mime_type": "text/plain",
+            "total_bytes": len(payload),
+            "chunk_size": chunk_size,
+            "privacy_mode": "standard_plain",
+        },
+    )
+    assert started.status_code == 200
+    session_id = started.get_json()["session"]["session_id"]
+    chunks = (b"A" * chunk_size, b"B" * chunk_size, b"tail")
+    for index, chunk in enumerate(chunks):
+        assert client.post(
+            f"/api/cloud-drive/resumable-upload/{session_id}/chunks/{index}",
+            data={"chunk": (io.BytesIO(chunk), f"part{index}")},
+            content_type="multipart/form-data",
+        ).status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        session_row = conn.execute(
+            "SELECT * FROM cloud_resumable_upload_sessions WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        temp_dir = Path(session_row["temp_dir"])
+        (temp_dir / "complete.upload").write_bytes(payload)
+        for part in temp_dir.glob("*.part"):
+            part.unlink()
+        conn.execute(
+            "UPDATE cloud_resumable_upload_sessions SET status='completing' WHERE session_id=?",
+            (session_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    completed = client.post(f"/api/cloud-drive/resumable-upload/{session_id}/complete")
+    assert completed.status_code == 200
+    body = completed.get_json()
+    file_id = body["file"]["file_id"]
+    assert body["session"]["status"] == "completed"
+    assert client.get(f"/api/cloud-drive/files/{file_id}/download").data == payload
+    assert not temp_dir.exists()
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -1329,6 +1404,35 @@ def test_storage_album_crud_and_file_membership(tmp_path):
     assert client.get(protected_download).status_code == 401
     assert client.get(protected_download, query_string={"password": "AlbumPass123"}).status_code == 200
 
+    limited = client.post("/api/storage/albums", json={"title": "Limited Trip", "visibility": "unlisted"})
+    assert limited.status_code == 200
+    limited_album = limited.get_json()["album"]
+    limited_token = limited_album["share_url"].rsplit("/", 1)[-1]
+    expired = client.post("/api/storage/albums", json={"title": "Expired Trip", "visibility": "unlisted"})
+    assert expired.status_code == 200
+    expired_album = expired.get_json()["album"]
+    expired_token = expired_album["share_url"].rsplit("/", 1)[-1]
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE album_share_links SET max_views=1, access_count=0 WHERE id=?",
+            (limited_album["share_link"]["id"],),
+        )
+        conn.execute(
+            "UPDATE album_share_links SET expires_at=? WHERE id=?",
+            ("2000-01-01T00:00:00", expired_album["share_link"]["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    assert client.get(f"/api/storage/shared/albums/{limited_token}").status_code == 200
+    limited_exhausted = client.get(f"/api/storage/shared/albums/{limited_token}")
+    assert limited_exhausted.status_code == 410
+    assert limited_exhausted.get_json()["reason"] == "view_limit_reached"
+    expired_public = client.get(f"/api/storage/shared/albums/{expired_token}")
+    assert expired_public.status_code == 410
+    assert expired_public.get_json()["reason"] == "expired"
+
     updated = client.put(f"/api/storage/albums/{album['id']}", json={"title": "Trip 2", "visibility": "public"})
     assert updated.status_code == 200
     assert updated.get_json()["album"]["title"] == "Trip 2"
@@ -1542,6 +1646,163 @@ def test_storage_share_link_download_and_revoke(tmp_path):
     assert revoked.get_json()["share_link"]["revoked_at"]
     denied = client.get(f"/api/storage/shared/{share_link['token']}/download")
     assert denied.status_code == 404
+
+
+def test_server_encrypted_mkv_share_preview_does_not_decrypt_entire_file(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"not-a-real-mkv-but-route-test"), "clip.mkv", "application/octet-stream"),
+            "virtual_path": "clip.mkv",
+            "privacy_mode": "server_encrypted",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    storage_file = uploaded.get_json()["storage_file"]
+    storage_file_id = storage_file["id"]
+    uploaded_file_id = storage_file["file_id"]
+    created = client.post("/api/storage/share-links", json={"storage_file_id": storage_file_id})
+    assert created.status_code == 200
+    token = created.get_json()["share_link"]["token"]
+    derivative_root = storage_root / "media_derivatives" / uploaded_file_id
+    (derivative_root / "original").mkdir(parents=True)
+    (derivative_root / "master.m3u8").write_text(
+        "#EXTM3U\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=1000000\n"
+        "original/playlist.m3u8\n",
+        encoding="utf-8",
+    )
+    (derivative_root / "original" / "playlist.m3u8").write_text(
+        "#EXTM3U\n"
+        "#EXT-X-MAP:URI=\"init.mp4\"\n"
+        "#EXTINF:1.0,\n"
+        "seg_00001.m4s\n"
+        "#EXT-X-ENDLIST\n",
+        encoding="utf-8",
+    )
+    (derivative_root / "subtitles").mkdir(parents=True)
+    (derivative_root / "subtitles" / "sub01_zh.vtt").write_text(
+        "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n字幕\n",
+        encoding="utf-8",
+    )
+    (derivative_root / "original" / "init.mp4").write_bytes(b"init")
+    (derivative_root / "original" / "seg_00001.m4s").write_bytes(b"seg")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        ensure_media_stream_schema(conn)
+        cur = conn.execute(
+            """
+            INSERT INTO media_stream_assets (
+                uploaded_file_id, source_mode, media_type, status, storage_mode,
+                master_manifest_path, duration_seconds, source_mime_type,
+                source_size_bytes, error_message, created_at, updated_at
+            ) VALUES (?, 'server_encrypted', 'video', 'ready', 'acl_protected_plain',
+                ?, 1.0, 'video/x-matroska', 28, '',
+                '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+            """,
+            (uploaded_file_id, f"media_derivatives/{uploaded_file_id}/master.m3u8"),
+        )
+        asset_id = cur.lastrowid
+        cur = conn.execute(
+            """
+            INSERT INTO media_stream_variants (
+                asset_id, name, width, height, bitrate, codec, playlist_path,
+                init_segment_path, created_at
+            ) VALUES (?, 'original', 1920, 1080, 1000000, 'hvc1',
+                ?, ?, '2026-01-01T00:00:00')
+            """,
+                (
+                    asset_id,
+                    f"media_derivatives/{uploaded_file_id}/original/playlist.m3u8",
+                    f"media_derivatives/{uploaded_file_id}/original/init.mp4",
+                ),
+            )
+        variant_id = cur.lastrowid
+        conn.execute(
+            """
+            INSERT INTO media_stream_segments (
+                variant_id, sequence_number, filename, path, duration_seconds,
+                byte_size, created_at
+            ) VALUES (?, 1, 'seg_00001.m4s', ?, 1.0, 3, '2026-01-01T00:00:00')
+            """,
+            (variant_id, f"media_derivatives/{uploaded_file_id}/original/seg_00001.m4s"),
+        )
+        conn.execute(
+            """
+            INSERT INTO media_stream_subtitles (
+                asset_id, name, label, language, codec, path, is_default, created_at
+            ) VALUES (?, 'sub01_zh', '繁中', 'zh', 'subrip', ?, 1, '2026-01-01T00:00:00')
+            """,
+            (asset_id, f"media_derivatives/{uploaded_file_id}/subtitles/sub01_zh.vtt"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    def fail_full_decrypt(*_args, **_kwargs):
+        raise AssertionError("share preview metadata should not decrypt full server-encrypted media")
+
+    monkeypatch.setattr(files_routes, "write_decrypted_server_encrypted_file", fail_full_decrypt)
+
+    preview = client.get(f"/api/storage/shared/{token}/preview")
+    assert preview.status_code == 200
+    preview_json = preview.get_json()["preview"]
+    assert preview_json["category"] == "video"
+    assert preview_json["render_mode"] == "media"
+
+    file_api = client.get(f"/api/storage/shared/{token}")
+    file_json = file_api.get_json()["file"]
+    assert file_json["stream_asset"]["status"] == "ready"
+    assert file_json["stream_asset"]["master_url"] == f"/api/storage/shared/{token}/hls/master.m3u8"
+    assert file_json["stream_asset"]["subtitles"][0]["url"] == f"/api/storage/shared/{token}/hls/subtitles/sub01_zh.vtt"
+
+    own_preview = client.get(f"/api/cloud-drive/files/{uploaded_file_id}/preview")
+    assert own_preview.status_code == 200
+    own_stream = own_preview.get_json()["preview"]["stream_asset"]
+    assert own_stream["status"] == "ready"
+    assert own_stream["master_url"] == f"/api/cloud-drive/files/{uploaded_file_id}/hls/master.m3u8"
+    assert own_stream["subtitles"][0]["url"] == f"/api/cloud-drive/files/{uploaded_file_id}/hls/subtitles/sub01_zh.vtt"
+
+    own_master = client.get(f"/api/cloud-drive/files/{uploaded_file_id}/hls/master.m3u8")
+    assert own_master.status_code == 200
+    assert own_master.mimetype == "application/vnd.apple.mpegurl"
+
+    own_subtitle = client.get(f"/api/cloud-drive/files/{uploaded_file_id}/hls/subtitles/sub01_zh.vtt")
+    assert own_subtitle.status_code == 200
+    assert own_subtitle.mimetype == "text/vtt"
+    assert "WEBVTT" in own_subtitle.get_data(as_text=True)
+    shifted_own_subtitle = client.get(f"/api/cloud-drive/files/{uploaded_file_id}/hls/subtitles/sub01_zh.vtt?shift_ms=500")
+    assert shifted_own_subtitle.status_code == 200
+    assert "00:00:00.500 --> 00:00:01.500" in shifted_own_subtitle.get_data(as_text=True)
+
+    master = client.get(f"/api/storage/shared/{token}/hls/master.m3u8?password=demo")
+    assert master.status_code == 200
+    assert master.mimetype == "application/vnd.apple.mpegurl"
+    assert "original/playlist.m3u8?password=demo" in master.get_data(as_text=True)
+
+    playlist = client.get(f"/api/storage/shared/{token}/hls/original/playlist.m3u8?password=demo")
+    assert playlist.status_code == 200
+    playlist_text = playlist.get_data(as_text=True)
+    assert 'URI="init.mp4?password=demo"' in playlist_text
+    assert "seg_00001.m4s?password=demo" in playlist_text
+
+    shared_subtitle = client.get(f"/api/storage/shared/{token}/hls/subtitles/sub01_zh.vtt?password=demo&shift_ms=500")
+    assert shared_subtitle.status_code == 200
+    assert shared_subtitle.mimetype == "text/vtt"
+    assert "00:00:00.500 --> 00:00:01.500" in shared_subtitle.get_data(as_text=True)
+
+    segment = client.get(f"/api/storage/shared/{token}/hls/original/seg_00001.m4s?password=demo")
+    assert segment.status_code == 200
+    assert segment.data == b"seg"
 
 
 def test_storage_share_link_account_scope_and_view_limit(tmp_path):
@@ -2086,7 +2347,10 @@ def test_root_storage_user_quota_override_api(tmp_path):
     actor_box["actor"] = _actor(5, "root", "super_admin")
     listed = client.get("/api/root/storage/users")
     assert listed.status_code == 200
-    assert any(row["username"] == "alice" for row in listed.get_json()["users"])
+    listed_payload = listed.get_json()
+    assert any(row["username"] == "alice" for row in listed_payload["users"])
+    assert listed_payload["storage_capacity"]["disk"]["free_bytes"] >= 0
+    assert listed_payload["storage_capacity"]["cloud_used_bytes"] >= 0
 
     saved = client.put(
         "/api/root/storage/users/1/quota-override",
@@ -2640,6 +2904,174 @@ def test_remote_download_task_status_falls_back_to_persisted_job(tmp_path):
     actor_box["actor"] = _actor(2, "bob")
     denied = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
     assert denied.status_code == 403
+
+    denied_remove = client.delete(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+    assert denied_remove.status_code == 403
+    actor_box["actor"] = _actor(1, "alice")
+    removed = client.delete(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+    assert removed.status_code == 200
+    assert removed.get_json()["removed"] is True
+    listed_after_remove = client.get("/api/cloud-drive/remote-download/tasks").get_json()["tasks"]
+    assert all(item["id"] != task_id for item in listed_after_remove)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        job_row = conn.execute(
+            "SELECT * FROM job_center_jobs WHERE source_module='cloud_drive_remote_download' AND source_ref=?",
+            (f"remote_download:{task_id}",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert job_row is None
+
+
+def test_remote_download_persisted_running_task_can_be_cancel_requested_without_memory(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+    task_id = "persisted-running-task"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        create_job(
+            conn,
+            owner_user_id=1,
+            created_by_user_id=1,
+            job_type="cloud_drive.remote_download.bt.magnet",
+            title="BT 下載：magnet",
+            description="遠端 direct link / BT 下載、掃描與保存",
+            source_module="cloud_drive_remote_download",
+            source_ref=f"remote_download:{task_id}",
+            status="running",
+            progress_percent=0,
+            stage="downloading",
+            stage_detail="下載中",
+            cancellable=True,
+            metadata={
+                "task_id": task_id,
+                "source_type": "magnet",
+                "filename": "BT/magnet",
+                "url": "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "timeout_seconds": 1800,
+            },
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    listed = client.get("/api/cloud-drive/remote-download/tasks").get_json()["tasks"]
+    assert any(item["id"] == task_id and item["status"] == "running" for item in listed)
+
+    actor_box["actor"] = _actor(2, "bob")
+    denied = client.post(f"/api/cloud-drive/remote-download/tasks/{task_id}/cancel")
+    assert denied.status_code == 403
+
+    actor_box["actor"] = _actor(1, "alice")
+    cancel = client.post(f"/api/cloud-drive/remote-download/tasks/{task_id}/cancel")
+    body = cancel.get_json()
+    assert cancel.status_code == 200
+    assert body["ok"] is True
+    assert body["task"]["id"] == task_id
+    assert body["task"]["status"] == "running"
+    assert body["task"]["phase"] == "cancel_requested"
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        job = conn.execute(
+            "SELECT status, stage, cancel_requested_at FROM job_center_jobs WHERE source_module='cloud_drive_remote_download' AND source_ref=?",
+            (f"remote_download:{task_id}",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert job["status"] == "running"
+    assert job["stage"] == "cancel_requested"
+    assert job["cancel_requested_at"]
+
+    still_running = client.delete(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+    assert still_running.status_code == 409
+
+
+def test_remote_download_worker_honors_persisted_cancel_request(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    started = threading.Event()
+
+    def fake_download(url, **kwargs):
+        cancel_check = kwargs.get("cancel_check")
+        assert callable(cancel_check)
+        started.set()
+        while True:
+            cancel_check()
+            time.sleep(0.01)
+
+    monkeypatch.setattr("routes.files.download_remote_url", fake_download)
+    created = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={
+            "url": "https://93.184.216.34/cross-worker-cancel.txt",
+            "privacy_mode": "standard_plain",
+            "virtual_path": "/Downloads/cross-worker-cancel.txt",
+        },
+    )
+    assert created.status_code == 202
+    task_id = created.get_json()["task"]["id"]
+    assert started.wait(timeout=10)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        job = conn.execute(
+            "SELECT * FROM job_center_jobs WHERE source_module='cloud_drive_remote_download' AND source_ref=?",
+            (f"remote_download:{task_id}",),
+        ).fetchone()
+        assert job is not None
+        metadata = json.loads(job["metadata_json"] or "{}")
+        metadata["control_action"] = "cancel"
+        now = "2026-05-24T00:00:00"
+        conn.execute(
+            """
+            UPDATE job_center_jobs
+            SET cancel_requested_at=?, stage='cancel_requested', stage_detail=?, metadata_json=?, updated_at=?
+            WHERE job_uuid=?
+            """,
+            (
+                now,
+                "已要求取消下載任務，正在停止目前 worker",
+                json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                now,
+                job["job_uuid"],
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    final = {}
+    for _ in range(300):
+        final = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}").get_json()["task"]
+        if final["status"] == "cancelled":
+            break
+        time.sleep(0.03)
+    assert final["status"] == "cancelled"
+    assert final["file"] is None
+    assert final["storage_file"] is None
+
+    conn = sqlite3.connect(db_path)
+    try:
+        saved = conn.execute("SELECT COUNT(*) FROM uploaded_files WHERE original_filename_plain_for_public LIKE '%cross-worker-cancel%'").fetchone()[0]
+        assert saved == 0
+    finally:
+        conn.close()
 
 
 def test_remote_download_task_can_pause_and_resume(tmp_path, monkeypatch):

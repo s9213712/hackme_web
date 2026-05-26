@@ -35,10 +35,11 @@ from services.server.database import get_db as open_db  # noqa: E402
 from services.system.notifications import create_notification_if_enabled  # noqa: E402
 
 HLS_JOB_SOURCE_MODULE = "media_hls_prepare"
+DEFAULT_HLS_SERIALIZE_MIN_BYTES = 256 * 1024 * 1024
 
 
 def _now_iso():
-    return datetime.utcnow().replace(microsecond=0).isoformat()
+    return datetime.now().replace(microsecond=0).isoformat()
 
 
 def _build_fernet(secret):
@@ -92,6 +93,31 @@ def _lower_worker_priority():
         os.nice(min(19, nice_value))
     except Exception:
         return
+
+
+def _bounded_env_int(name, default, *, min_value=0, max_value=10 * 1024 * 1024 * 1024):
+    try:
+        value = int(float(str(os.environ.get(name, default)).strip()))
+    except Exception:
+        value = int(default)
+    return max(int(min_value), min(int(max_value), value))
+
+
+def _hls_worker_slot_required(file_row):
+    if str(os.environ.get("HACKME_MEDIA_HLS_SERIALIZE_ALL") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    threshold = _bounded_env_int(
+        "HACKME_MEDIA_HLS_SERIALIZE_MIN_BYTES",
+        DEFAULT_HLS_SERIALIZE_MIN_BYTES,
+        min_value=0,
+    )
+    if threshold <= 0:
+        return False
+    try:
+        size_bytes = int(_row_value(file_row, "size_bytes", 0) or 0)
+    except Exception:
+        size_bytes = 0
+    return size_bytes >= threshold
 
 
 def _acquire_hls_worker_slot(conn, *, args, file_row):
@@ -191,6 +217,10 @@ def _sync_hls_platform_job(
             if error_message:
                 updates["error_message"] = error_message
                 updates["error_stage"] = stage
+            elif status != "failed":
+                updates["error_code"] = None
+                updates["error_message"] = None
+                updates["error_stage"] = None
             job = update_job(conn, existing["job_uuid"], defer_progress=False, flush=True, **updates)
             add_job_event(
                 conn,
@@ -362,7 +392,11 @@ def main(argv=None):
             stage_detail="HLS 外部程序已啟動，正在等待轉檔資源。",
         )
         conn.commit()
-        slot_lock = _acquire_hls_worker_slot(conn, args=args, file_row=file_row)
+        if _hls_worker_slot_required(file_row):
+            slot_lock = _acquire_hls_worker_slot(conn, args=args, file_row=file_row)
+            stage_detail = "HLS 外部程序正在轉封裝與產生播放清單。"
+        else:
+            stage_detail = "小型影音不等待大型 HLS 任務，已直接開始轉封裝與產生播放清單。"
         _sync_hls_platform_job(
             conn,
             args=args,
@@ -370,7 +404,7 @@ def main(argv=None):
             status="running",
             progress_percent=15,
             stage="transcoding",
-            stage_detail="HLS 外部程序正在轉封裝與產生播放清單。",
+            stage_detail=stage_detail,
         )
         conn.commit()
         server_file_fernet = _load_server_file_fernet(
@@ -411,7 +445,7 @@ def main(argv=None):
                 result=_asset_result_summary(asset),
             )
             conn.commit()
-            print(json.dumps({"ok": True, "asset": asset}, ensure_ascii=False), flush=True)
+            print(json.dumps({"ok": True, "asset": _asset_result_summary(asset)}, ensure_ascii=False), flush=True)
             return 0
         _sync_hls_platform_job(
             conn,
@@ -425,7 +459,7 @@ def main(argv=None):
             result=_asset_result_summary(asset or {}),
         )
         conn.commit()
-        print(json.dumps({"ok": False, "asset": asset, "error": "stream_not_ready"}, ensure_ascii=False), flush=True)
+        print(json.dumps({"ok": False, "asset": _asset_result_summary(asset or {}), "error": "stream_not_ready"}, ensure_ascii=False), flush=True)
         return 1
     except sqlite3.Error as exc:
         try:

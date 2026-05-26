@@ -240,6 +240,15 @@ def iter_decrypted_server_encrypted_chunks(path, server_file_fernet, *, start=No
                 yield plain[slice_start:slice_end]
 
 
+def _chunked_server_encrypted_plaintext_size(path):
+    with open(path, "rb") as handle:
+        manifest = _read_chunked_manifest(handle)
+    try:
+        return max(0, int((manifest or {}).get("plaintext_size") or 0))
+    except Exception:
+        return 0
+
+
 def decrypt_server_encrypted_bytes(path, server_file_fernet):
     if not server_file_fernet:
         raise ValueError("server-side file encryption key is unavailable")
@@ -254,14 +263,29 @@ def decrypt_server_encrypted_bytes(path, server_file_fernet):
         raise ValueError("此檔案無法以目前伺服器金鑰解密，可能是重設或換鑰後留下的舊檔案，請重新上傳") from exc
 
 
-def write_decrypted_server_encrypted_file(path, target, server_file_fernet):
+def _emit_decrypt_progress(progress_callback, bytes_written, total_bytes):
+    if not progress_callback:
+        return
+    try:
+        progress_callback(int(bytes_written or 0), int(total_bytes or 0))
+    except Exception:
+        return
+
+
+def write_decrypted_server_encrypted_file(path, target, server_file_fernet, *, progress_callback=None):
     target = Path(target)
     if _is_chunked_server_encrypted_path(path):
+        bytes_written = 0
+        total_bytes = _chunked_server_encrypted_plaintext_size(path)
         with open(target, "wb") as out:
             for chunk in iter_decrypted_server_encrypted_chunks(path, server_file_fernet):
                 out.write(chunk)
+                bytes_written += len(chunk)
+                _emit_decrypt_progress(progress_callback, bytes_written, total_bytes)
         return target
-    target.write_bytes(decrypt_server_encrypted_bytes(path, server_file_fernet))
+    plaintext = decrypt_server_encrypted_bytes(path, server_file_fernet)
+    target.write_bytes(plaintext)
+    _emit_decrypt_progress(progress_callback, len(plaintext), len(plaintext))
     return target
 
 

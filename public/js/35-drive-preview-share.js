@@ -13,42 +13,34 @@ function absoluteAlbumShareUrl(url) {
   }
 }
 
-function albumShareLinkMarkup(album) {
-  const url = album?.share_url || album?.share_link?.url || "";
-  const visibility = album?.visibility || "";
-  if (!url) {
-    if (visibility === "unlisted") {
-      return `<div class="drive-card-sub drive-share-link">分享連結建立中，請儲存或刷新相簿後再複製。</div>`;
-    }
-    return "";
-  }
-  const absolute = absoluteAlbumShareUrl(url);
-  const passwordNote = album?.share_link?.password_required
-    ? `<span class="drive-share-password-note">已設定分享密碼，請另外告知對方密碼。</span>`
-    : "";
-  return `
-    <div class="drive-card-sub drive-share-link">
-      <span>持連結可看：<a href="${sanitize(url)}" target="_blank" rel="noreferrer">${sanitize(absolute)}</a></span>
-      <button class="btn btn-sm" type="button" data-drive-action="copy-album-share-link" data-share-url="${sanitize(absolute)}">複製</button>
-      ${passwordNote}
-    </div>
-  `;
+function albumShareButtonMarkup(album) {
+  const albumId = album?.id || "";
+  if (!albumId) return "";
+  return `<button class="btn btn-sm btn-primary" type="button" data-drive-action="share-album" data-album-id="${sanitize(albumId)}">分享</button>`;
 }
 
-async function copyAlbumShareUrl(url, options = {}) {
-  const button = options.button || null;
-  const shareUrl = absoluteAlbumShareUrl(url);
-  if (!shareUrl) {
-    alert("這本相簿尚未產生分享連結");
+async function shareAlbum(albumId) {
+  const targetId = albumId || selectedAlbumId || selectedAlbumViewerId || "";
+  if (!targetId) {
+    alert("請先選擇相簿");
     return;
   }
   try {
-    await navigator.clipboard.writeText(shareUrl);
-    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "已完成複製", true);
-    else alert("已複製分享連結");
+    const json = await storageAction(`/storage/albums/${encodeURIComponent(targetId)}`, "PUT", { visibility: "unlisted" });
+    const album = json.album || {};
+    const shareId = album?.share_link?.id || "";
+    selectedAlbumId = album.id || targetId;
+    selectedAlbumViewerId = album.id || targetId;
+    await loadDriveDashboard();
+    await loadAlbumGallery();
+    if (typeof switchModuleTab === "function") switchModuleTab("shares");
+    if (typeof openShareCenterEditor === "function") {
+      await openShareCenterEditor("album", shareId);
+    } else if (typeof loadShareCenter === "function") {
+      await loadShareCenter();
+    }
   } catch (err) {
-    if (typeof showCopyLinkFeedback === "function") showCopyLinkFeedback(button, "請在彈出視窗複製完整連結", false);
-    window.prompt("分享連結", shareUrl);
+    alert(err.message || "相簿分享設定開啟失敗");
   }
 }
 
@@ -61,19 +53,14 @@ function renderAlbumDetail(album) {
   const meta = $("album-detail-meta");
   if (title) title.textContent = album.title || "相簿內容";
   if (meta) {
-    meta.innerHTML = `${sanitize(albumVisibilityLabel(album.visibility))} · ${Number((album.files || []).length)} 個檔案 · ${sanitize(album.updated_at || album.created_at || "")}${albumShareLinkMarkup(album)}`;
+    meta.innerHTML = `${sanitize(albumVisibilityLabel(album.visibility))} · ${Number((album.files || []).length)} 個檔案 · ${sanitize(album.updated_at || album.created_at || "")}`;
   }
+  card.querySelectorAll('[data-drive-action="share-album"]').forEach((button) => {
+    button.dataset.albumId = album.id || "";
+  });
   if ($("album-edit-title")) $("album-edit-title").value = album.title || "";
   if ($("album-edit-description")) $("album-edit-description").value = album.description || "";
   if ($("album-edit-visibility")) $("album-edit-visibility").value = album.visibility || "private";
-  if ($("album-edit-share-password")) $("album-edit-share-password").value = "";
-  if ($("album-edit-clear-share-password")) $("album-edit-clear-share-password").checked = false;
-  const passwordState = $("album-edit-share-password-state");
-  if (passwordState) {
-    passwordState.textContent = album?.share_link?.password_required
-      ? "目前已設定分享密碼。留空不變，輸入新密碼可更新。"
-      : "目前未設定分享密碼。";
-  }
 }
 
 async function openAlbum(id, options = {}) {
@@ -99,9 +86,6 @@ async function saveAlbumDetail() {
       description: $("album-edit-description")?.value || "",
       visibility: $("album-edit-visibility")?.value || "private",
     };
-    const sharePassword = $("album-edit-share-password")?.value || "";
-    if (sharePassword) payload.share_password = sharePassword;
-    if ($("album-edit-clear-share-password")?.checked) payload.clear_share_password = true;
     const json = await storageAction(`/storage/albums/${encodeURIComponent(selectedAlbumId)}`, "PUT", payload);
     renderAlbumDetail(json.album || {});
     await loadDriveDashboard();
@@ -129,9 +113,11 @@ function renderAlbumGallery(albums) {
       <div>
         <strong>${sanitize(album.title || album.id)}</strong>
         <div class="drive-card-sub">${sanitize(albumVisibilityLabel(album.visibility))} · ${Number(album.file_count || 0)} 個檔案</div>
-        ${albumShareLinkMarkup(album)}
       </div>
-      <button class="btn btn-primary" type="button" data-drive-action="open-album-viewer" data-album-id="${sanitize(album.id)}">預覽</button>
+      <div class="drive-file-actions">
+        ${albumShareButtonMarkup(album)}
+        <button class="btn btn-primary" type="button" data-drive-action="open-album-viewer" data-album-id="${sanitize(album.id)}">預覽</button>
+      </div>
     </div>
   `).join("");
 }
@@ -257,8 +243,11 @@ async function openAlbumViewer(id, options = {}) {
     albumPreviewIndex = -1;
     if (title) title.textContent = album.title || "相簿";
     if (meta) {
-      meta.innerHTML = `${sanitize(albumVisibilityLabel(album.visibility))} · ${files.length} 個檔案${album.description ? ` · ${sanitize(album.description)}` : ""}${albumShareLinkMarkup(album)}`;
+      meta.innerHTML = `${sanitize(albumVisibilityLabel(album.visibility))} · ${files.length} 個檔案${album.description ? ` · ${sanitize(album.description)}` : ""}`;
     }
+    card?.querySelectorAll?.('[data-drive-action="share-album"]').forEach((button) => {
+      button.dataset.albumId = album.id || "";
+    });
     if (!filesEl) return;
     setAlbumThumbSize(getAlbumThumbSize());
     filesEl.classList.add("album-photo-grid");

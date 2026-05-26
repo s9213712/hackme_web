@@ -60,7 +60,7 @@ from services.storage.remote_downloads import (
     validate_remote_url,
 )
 from services.media.e2ee_streaming import cleanup_e2ee_stream_v2_assets
-from services.media.streaming import cleanup_stream_asset
+from services.media.streaming import cleanup_stream_asset, get_stream_status, parse_subtitle_shift_ms, shift_webvtt_text
 from services.storage.storage_albums import (
     add_album_file,
     create_album,
@@ -118,8 +118,12 @@ from services.core.http_headers import build_content_disposition
 from services.job_center import (
     add_job_event as add_platform_job_event,
     create_job as create_platform_job,
+    expire_stale_cloud_remote_download_jobs,
     get_job_by_source as get_platform_job_by_source,
     list_jobs as list_platform_jobs,
+    purge_terminal_jobs as purge_platform_terminal_jobs,
+    serialize_job as serialize_platform_job,
+    utc_now as platform_job_utc_now,
     update_job as update_platform_job,
 )
 from flask import Response, after_this_request, request, send_file, stream_with_context
@@ -414,6 +418,7 @@ def register_file_routes(app, deps):
             "url": task.get("url"),
             "loaded_bytes": task.get("loaded_bytes"),
             "total_bytes": task.get("total_bytes"),
+            "timeout_seconds": task.get("timeout_seconds"),
             "speed_bytes_per_sec": task.get("speed_bytes_per_sec"),
             "file_id": file_info.get("file_id"),
             "file_size_bytes": file_info.get("size_bytes"),
@@ -483,6 +488,147 @@ def register_file_routes(app, deps):
             "updated_at": job.get("updated_at"),
         }
 
+    def _remote_download_job_for_task_id(conn, task_id, *, merge_cached=True):
+        source_ref = f"remote_download:{str(task_id)}"
+        if merge_cached:
+            return get_platform_job_by_source(conn, "cloud_drive_remote_download", source_ref)
+        row = conn.execute(
+            """
+            SELECT *
+            FROM job_center_jobs
+            WHERE source_module='cloud_drive_remote_download'
+              AND source_ref=?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (source_ref,),
+        ).fetchone()
+        return serialize_platform_job(row) if row else None
+
+    def _mark_persisted_remote_download_control(task_id, actor, action):
+        task_id = str(task_id or "").strip()
+        action = str(action or "").strip().lower()
+        if action not in {"pause", "cancel"}:
+            return {"ok": False, "msg": "下載任務操作不支援"}, 400
+        actor_id = int(_actor_value(actor, "id") or 0)
+        now = platform_job_utc_now()
+        conn = get_db()
+        try:
+            expire_stale_cloud_remote_download_jobs(conn)
+            job = _remote_download_job_for_task_id(conn, task_id, merge_cached=False)
+            if not job:
+                conn.rollback()
+                return {"ok": False, "msg": "找不到下載任務"}, 404
+            if int(job.get("owner_user_id") or 0) != actor_id:
+                conn.rollback()
+                return {"ok": False, "msg": "沒有下載任務權限"}, 403
+            status = str(job.get("status") or "")
+            if status in {"succeeded", "failed", "cancelled", "expired"}:
+                if action == "cancel" and status == "cancelled":
+                    conn.commit()
+                    task = _remote_download_task_from_job(job)
+                    return {"ok": True, "task": _task_snapshot(task), "msg": "下載任務已取消"}, 200
+                conn.rollback()
+                return {"ok": False, "msg": "已結束的下載任務不能取消"}, 409
+            metadata = dict(job.get("metadata") or {})
+            metadata.update({
+                "control_action": action,
+                f"{action}_requested_at": now,
+            })
+            if action == "pause":
+                if status == "queued":
+                    updated = update_platform_job(
+                        conn,
+                        job["job_uuid"],
+                        status="paused",
+                        progress_percent=job.get("progress_percent") or 0,
+                        stage="paused",
+                        stage_detail="下載任務已暫停，可稍後繼續",
+                        metadata_json=metadata,
+                        cancellable=True,
+                        flush=True,
+                    )
+                    event_type = "paused"
+                    msg = "下載任務已暫停"
+                elif status == "paused":
+                    updated = job
+                    event_type = ""
+                    msg = "下載任務已暫停"
+                else:
+                    updated = update_platform_job(
+                        conn,
+                        job["job_uuid"],
+                        status=status,
+                        progress_percent=job.get("progress_percent") or 0,
+                        stage="pause_requested",
+                        stage_detail="已要求暫停下載任務，正在停止目前 worker",
+                        metadata_json=metadata,
+                        cancellable=True,
+                        flush=True,
+                    )
+                    event_type = "pause_requested"
+                    msg = "已要求暫停下載任務"
+            else:
+                if status in {"queued", "paused"}:
+                    updated = update_platform_job(
+                        conn,
+                        job["job_uuid"],
+                        status="cancelled",
+                        progress_percent=100,
+                        stage="cancelled",
+                        stage_detail="下載任務已取消",
+                        metadata_json=metadata,
+                        cancellable=False,
+                        cancel_requested_at=now,
+                        finished_at=now,
+                        flush=True,
+                    )
+                    event_type = "cancelled"
+                    msg = "下載任務已取消"
+                else:
+                    updated = update_platform_job(
+                        conn,
+                        job["job_uuid"],
+                        status=status,
+                        progress_percent=job.get("progress_percent") or 0,
+                        stage="cancel_requested",
+                        stage_detail="已要求取消下載任務，正在停止目前 worker",
+                        metadata_json=metadata,
+                        cancellable=True,
+                        cancel_requested_at=now,
+                        flush=True,
+                    )
+                    event_type = "cancel_requested"
+                    msg = "已要求取消下載任務"
+            if event_type:
+                add_platform_job_event(
+                    conn,
+                    updated["job_uuid"],
+                    event_type=event_type,
+                    stage=updated.get("stage"),
+                    message=updated.get("stage_detail") or msg,
+                    progress_percent=updated.get("progress_percent"),
+                    payload=metadata,
+                    flush=True,
+                )
+            conn.commit()
+            task = _remote_download_task_from_job(updated)
+            if task and action == "cancel" and status not in {"queued", "paused"}:
+                task["cancel_requested"] = True
+                task["control_action"] = "cancel"
+            if task and action == "pause" and status not in {"queued", "paused"}:
+                task["pause_requested"] = True
+                task["control_action"] = "pause"
+            return {"ok": True, "task": _task_snapshot(task), "msg": msg}, 200
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
     def _sync_remote_download_job(task, *, force_event=False):
         task = dict(task or {})
         task_id = str(task.get("id") or "").strip()
@@ -498,7 +644,7 @@ def register_file_routes(app, deps):
             stage_detail = str(task.get("msg") or task.get("error") or "")[:1000]
             metadata = _remote_download_job_metadata(task)
             existing = get_platform_job_by_source(conn, source_module, source_ref)
-            now = datetime.now().replace(microsecond=0).isoformat()
+            now = platform_job_utc_now()
             defer_progress = not force_event and status not in {"succeeded", "failed", "cancelled", "expired"}
             if not existing:
                 job = create_platform_job(
@@ -579,6 +725,8 @@ def register_file_routes(app, deps):
             return 0
 
     def _apply_upload_transfer_policy(actor, file_storage):
+        if str(os.environ.get("HACKME_CAPACITY_PROBE_UNLIMITED") or "").strip().lower() in {"1", "true", "yes", "on"}:
+            return None
         policy = _actor_transfer_policy(actor)
         if not policy.get("enabled"):
             return None
@@ -1298,12 +1446,36 @@ def register_file_routes(app, deps):
             return max(3600, timeout + 3600)
         return max(300, timeout + 180)
 
+    def _remote_task_terminal_retention_seconds(task):
+        status = str((task or {}).get("status") or "")
+        if status == "completed":
+            raw = os.environ.get(
+                "HACKME_REMOTE_DOWNLOAD_SUCCEEDED_RETENTION_SECONDS",
+                os.environ.get("HACKME_JOB_CENTER_SUCCEEDED_RETENTION_SECONDS", "60"),
+            )
+        elif status in {"failed", "cancelled"}:
+            raw = os.environ.get(
+                "HACKME_REMOTE_DOWNLOAD_FAILED_RETENTION_SECONDS",
+                os.environ.get("HACKME_JOB_CENTER_FAILED_RETENTION_SECONDS", "300"),
+            )
+        else:
+            return None
+        try:
+            return max(0, int(float(str(raw).strip())))
+        except Exception:
+            return 60 if status == "completed" else 300
+
     def _cleanup_stale_remote_download_tasks_locked():
         active_users = set()
-        for task in _REMOTE_DOWNLOAD_TASKS.values():
-            if task.get("status") not in {"queued", "running"}:
+        remove_task_ids = []
+        for task_id, task in list(_REMOTE_DOWNLOAD_TASKS.items()):
+            retention = _remote_task_terminal_retention_seconds(task)
+            if retention is not None and _remote_task_age_seconds(task) >= retention:
+                remove_task_ids.append(task_id)
                 continue
             owner_user_id = int(task.get("owner_user_id") or 0)
+            if task.get("status") not in {"queued", "running"}:
+                continue
             if _remote_task_age_seconds(task) > _remote_task_stale_after_seconds(task):
                 task.update(
                     status="failed",
@@ -1317,6 +1489,10 @@ def register_file_routes(app, deps):
                 continue
             if task.get("status") == "running" and owner_user_id:
                 active_users.add(owner_user_id)
+        for task_id in remove_task_ids:
+            task = _REMOTE_DOWNLOAD_TASKS.pop(task_id, None)
+            if task and task.get("torrent_cleanup_dir"):
+                shutil.rmtree(str(task.get("torrent_cleanup_dir") or ""), ignore_errors=True)
         _REMOTE_DOWNLOAD_ACTIVE_USERS.intersection_update(active_users)
 
     def _get_remote_download_task(task_id):
@@ -1331,11 +1507,9 @@ def register_file_routes(app, deps):
             return task
         conn = get_db()
         try:
-            job = get_platform_job_by_source(
-                conn,
-                "cloud_drive_remote_download",
-                f"remote_download:{str(task_id)}",
-            )
+            expire_stale_cloud_remote_download_jobs(conn)
+            conn.commit()
+            job = _remote_download_job_for_task_id(conn, task_id, merge_cached=False)
             return _remote_download_task_from_job(job)
         finally:
             conn.close()
@@ -1348,15 +1522,48 @@ def register_file_routes(app, deps):
         _task_update(task_id, **changes)
 
     def _remote_download_control_action(task_id):
+        task_id = str(task_id)
+        poll_job = False
         with _REMOTE_DOWNLOAD_TASKS_LOCK:
-            task = _REMOTE_DOWNLOAD_TASKS.get(str(task_id))
+            task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
             if not task:
                 return ""
             if task.get("cancel_requested") or task.get("status") == "cancelled" or task.get("control_action") == "cancel":
                 return "cancel"
             if task.get("pause_requested") or task.get("control_action") == "pause":
                 return "pause"
+            now_mono = time.monotonic()
+            last_poll = float(task.get("_job_control_last_poll_mono") or 0)
+            if now_mono - last_poll >= 0.5:
+                task["_job_control_last_poll_mono"] = now_mono
+                poll_job = True
+        if not poll_job:
             return ""
+        conn = get_db()
+        try:
+            job = _remote_download_job_for_task_id(conn, task_id, merge_cached=False)
+            if not job:
+                return ""
+            metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+            stage = str(job.get("stage") or "")
+            action = str(metadata.get("control_action") or "")
+            cancel_requested = bool(job.get("cancel_requested_at") or action == "cancel" or stage == "cancel_requested" or job.get("status") == "cancelled")
+            pause_requested = bool(action == "pause" or stage == "pause_requested")
+            if not (cancel_requested or pause_requested):
+                return ""
+            with _REMOTE_DOWNLOAD_TASKS_LOCK:
+                task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
+                if not task:
+                    return ""
+                if cancel_requested:
+                    task.update(cancel_requested=True, control_action="cancel", phase="cancel_requested", msg="已要求取消下載任務，正在停止目前 worker")
+                    return "cancel"
+                if pause_requested:
+                    task.update(pause_requested=True, control_action="pause", phase="pause_requested", msg="已要求暫停下載任務，正在停止目前 worker")
+                    return "pause"
+            return ""
+        finally:
+            conn.close()
 
     def _remote_download_cancel_check(task_id):
         action = _remote_download_control_action(task_id)
@@ -1378,7 +1585,7 @@ def register_file_routes(app, deps):
             _cleanup_stale_remote_download_tasks_locked()
             task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
             if not task:
-                return {"ok": False, "msg": "找不到下載任務"}, 404
+                return _mark_persisted_remote_download_control(task_id, actor, action)
             if int(task.get("owner_user_id") or 0) != actor_id:
                 return {"ok": False, "msg": "沒有下載任務權限"}, 403
             status = str(task.get("status") or "")
@@ -1488,6 +1695,9 @@ def register_file_routes(app, deps):
             visible.append(snapshot)
         conn = get_db()
         try:
+            expire_stale_cloud_remote_download_jobs(conn)
+            purge_platform_terminal_jobs(conn)
+            conn.commit()
             for job in list_platform_jobs(conn, user_id=actor_id, include_all=False, limit=50):
                 if str(job.get("source_module") or "") != "cloud_drive_remote_download":
                     continue
@@ -2614,7 +2824,7 @@ def register_file_routes(app, deps):
                 return json_resp({"ok": False, "msg": msg, "error": "not_found"}), 404
             if row["status"] == "completed":
                 return json_resp({"ok": True, **_resumable_result(row), "session": _serialize_resumable_session(row)})
-            if row["status"] not in {"uploading", "failed"}:
+            if row["status"] not in {"uploading", "completing", "failed"}:
                 return json_resp({"ok": False, "msg": "此 upload session 目前不能完成", "session": _serialize_resumable_session(row)}), 409
             received = _resumable_received_chunks(row)
             total_chunks = int(row["total_chunks"] or 0)
@@ -2623,22 +2833,66 @@ def register_file_routes(app, deps):
                 return json_resp({"ok": False, "msg": "仍有分段尚未上傳", "missing_chunks": missing[:100], "session": _serialize_resumable_session(row)}), 409
             temp_dir = Path(row["temp_dir"])
             complete_path = temp_dir / "complete.upload"
-            with complete_path.open("wb") as out:
-                for idx in range(total_chunks):
-                    part = temp_dir / f"{idx:08d}.part"
-                    if not part.exists():
-                        return json_resp({"ok": False, "msg": "分段檔案遺失，請重新上傳", "error": "missing_chunk_file"}), 409
-                    with part.open("rb") as src:
-                        shutil.copyfileobj(src, out, length=1024 * 1024)
-            if complete_path.stat().st_size != int(row["total_bytes"]):
-                return json_resp({"ok": False, "msg": "合併後大小不正確，請重新上傳", "error": "merged_size_mismatch"}), 400
+            expected_size = int(row["total_bytes"] or 0)
+            complete_ready = complete_path.exists() and complete_path.stat().st_size == expected_size
+            if not complete_ready:
+                missing_part_files = [idx for idx in range(total_chunks) if not (temp_dir / f"{idx:08d}.part").exists()]
+                if missing_part_files:
+                    now = datetime.now().replace(microsecond=0).isoformat()
+                    conn.execute(
+                        "UPDATE cloud_resumable_upload_sessions SET status='uploading', error_message=?, updated_at=? WHERE session_id=?",
+                        ("missing_chunk_file", now, row["session_id"]),
+                    )
+                    row = conn.execute("SELECT * FROM cloud_resumable_upload_sessions WHERE session_id=?", (row["session_id"],)).fetchone()
+                    _sync_resumable_upload_job(conn, actor, row, status="running", stage="uploading", detail="分段檔案遺失，等待重新上傳缺失分段")
+                    conn.commit()
+                    return json_resp({"ok": False, "msg": "分段檔案遺失，請重新上傳", "error": "missing_chunk_file", "missing_chunks": missing_part_files[:100]}), 409
             now = datetime.now().replace(microsecond=0).isoformat()
             conn.execute(
                 "UPDATE cloud_resumable_upload_sessions SET status='completing', updated_at=? WHERE session_id=?",
                 (now, row["session_id"]),
             )
             row = conn.execute("SELECT * FROM cloud_resumable_upload_sessions WHERE session_id=?", (row["session_id"],)).fetchone()
-            _sync_resumable_upload_job(conn, actor, row, status="running", progress_percent=95, stage="finalizing", detail="分段已合併，正在掃描與保存")
+            _sync_resumable_upload_job(
+                conn,
+                actor,
+                row,
+                status="running",
+                progress_percent=92 if not complete_ready else 95,
+                stage="merging" if not complete_ready else "finalizing",
+                detail="正在合併分段檔案" if not complete_ready else "分段已合併，正在掃描與保存",
+            )
+            conn.commit()
+            if not complete_ready:
+                temp_complete_path = temp_dir / "complete.upload.tmp"
+                with temp_complete_path.open("wb") as out:
+                    for idx in range(total_chunks):
+                        part = temp_dir / f"{idx:08d}.part"
+                        with part.open("rb") as src:
+                            shutil.copyfileobj(src, out, length=1024 * 1024)
+                if temp_complete_path.stat().st_size != expected_size:
+                    try:
+                        temp_complete_path.unlink()
+                    except Exception:
+                        pass
+                    now = datetime.now().replace(microsecond=0).isoformat()
+                    conn.execute(
+                        "UPDATE cloud_resumable_upload_sessions SET status='uploading', error_message=?, updated_at=? WHERE session_id=?",
+                        ("merged_size_mismatch", now, row["session_id"]),
+                    )
+                    row = conn.execute("SELECT * FROM cloud_resumable_upload_sessions WHERE session_id=?", (row["session_id"],)).fetchone()
+                    _sync_resumable_upload_job(conn, actor, row, status="running", stage="uploading", detail="合併後大小不正確，等待重新上傳分段")
+                    conn.commit()
+                    return json_resp({"ok": False, "msg": "合併後大小不正確，請重新上傳", "error": "merged_size_mismatch"}), 400
+                os.replace(temp_complete_path, complete_path)
+                now = datetime.now().replace(microsecond=0).isoformat()
+                conn.execute(
+                    "UPDATE cloud_resumable_upload_sessions SET status='completing', updated_at=? WHERE session_id=?",
+                    (now, row["session_id"]),
+                )
+                row = conn.execute("SELECT * FROM cloud_resumable_upload_sessions WHERE session_id=?", (row["session_id"],)).fetchone()
+                _sync_resumable_upload_job(conn, actor, row, status="running", progress_percent=95, stage="finalizing", detail="分段已合併，正在掃描與保存")
+                conn.commit()
             metadata = _resumable_metadata(row)
             rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
             file_storage = _resumable_uploaded_file_storage(row, complete_path)
@@ -3760,9 +4014,138 @@ def register_file_routes(app, deps):
                     preview = build_preview_metadata(preview_row, readable_path)
             except ValueError as exc:
                 preview = _decryption_unavailable_preview(preview_row, str(exc))
+            try:
+                stream_asset = get_stream_status(conn, file_row=row, include_segments=False)
+                if stream_asset:
+                    stream_payload = {
+                        "status": stream_asset.get("status") or "",
+                        "media_type": stream_asset.get("media_type") or "",
+                        "master_manifest_ready": bool(stream_asset.get("master_manifest_path")),
+                        "master_url": f"/api/cloud-drive/files/{file_id}/hls/master.m3u8" if stream_asset.get("master_manifest_path") else "",
+                        "error_message": stream_asset.get("error_message") or "",
+                        "updated_at": stream_asset.get("updated_at") or "",
+                        "subtitles": [
+                            {
+                                "name": str(item.get("name") or ""),
+                                "label": str(item.get("label") or item.get("language") or "字幕"),
+                                "language": str(item.get("language") or "und"),
+                                "is_default": bool(item.get("is_default")),
+                                "url": f"/api/cloud-drive/files/{file_id}/hls/subtitles/{item.get('name')}.vtt",
+                            }
+                            for item in (stream_asset.get("subtitles") or [])
+                            if item.get("name")
+                        ],
+                    }
+                    preview["stream_asset"] = stream_payload
+            except Exception:
+                pass
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview", result="allowed", reason=preview["category"], ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             return json_resp({"ok": True, "preview": preview})
+        finally:
+            conn.close()
+
+    def _cloud_drive_hls_asset(conn, file_id, *, include_segments=False):
+        actor, err = _actor_or_401()
+        if err:
+            return None, None, None, err
+        allowed, reason, row = can_download_file(conn, actor=actor, file_id=file_id, action="preview")
+        if not row or row["deleted_at"]:
+            return actor, row, None, (json_resp({"ok": False, "msg": "找不到檔案"}), 404)
+        if not allowed:
+            if reason == "deleted":
+                return actor, row, None, (json_resp({"ok": False, "msg": "找不到檔案"}), 404)
+            return actor, row, None, (json_resp({"ok": False, "msg": "沒有預覽權限或檔案尚未通過安全檢查", "reason": reason}), 403)
+        if is_e2ee_file(row):
+            return actor, row, None, (json_resp({"ok": False, "msg": "E2EE 檔案不支援伺服器端 HLS 預覽"}), 409)
+        policy = get_cloud_drive_security_policy(conn)
+        ok, msg = _preview_allowed_by_policy(policy, row)
+        if not ok:
+            return actor, row, None, (json_resp({"ok": False, "msg": msg}), 403)
+        asset = get_stream_status(conn, file_row=row, include_segments=include_segments)
+        if not asset or asset.get("status") != "ready" or not asset.get("master_manifest_path"):
+            return actor, row, asset, (json_resp({"ok": False, "msg": "HLS 串流尚未準備完成", "error": "stream_not_ready"}), 409)
+        return actor, row, asset, None
+
+    @app.route("/api/cloud-drive/files/<file_id>/hls/master.m3u8", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_hls_master(file_id):
+        conn = get_db()
+        try:
+            actor, row, asset, err = _cloud_drive_hls_asset(conn, file_id, include_segments=False)
+            if err:
+                return err
+            path = resolve_file_storage_path(storage_root, {"storage_path": asset["master_manifest_path"]})
+            log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview_hls", result="allowed", reason="hls_master", ip=get_client_ip(), user_agent=get_ua())
+            conn.commit()
+            return send_file(path, as_attachment=False, download_name="master.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+        finally:
+            conn.close()
+
+    @app.route("/api/cloud-drive/files/<file_id>/hls/<variant>/playlist.m3u8", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_hls_variant_playlist(file_id, variant):
+        conn = get_db()
+        try:
+            _actor, _row, asset, err = _cloud_drive_hls_asset(conn, file_id, include_segments=False)
+            if err:
+                return err
+            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            if not match:
+                return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, {"storage_path": match["playlist_path"]})
+            return send_file(path, as_attachment=False, download_name="playlist.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+        finally:
+            conn.close()
+
+    @app.route("/api/cloud-drive/files/<file_id>/hls/subtitles/<subtitle_name>.vtt", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_hls_subtitle(file_id, subtitle_name):
+        conn = get_db()
+        try:
+            _actor, _row, asset, err = _cloud_drive_hls_asset(conn, file_id, include_segments=False)
+            if err:
+                return err
+            clean = str(subtitle_name or "").strip()
+            match = next((item for item in (asset.get("subtitles") or []) if item.get("name") == clean), None)
+            if not match:
+                return json_resp({"ok": False, "msg": "找不到字幕", "error": "subtitle_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, {"storage_path": match["path"]})
+            shift_ms = parse_subtitle_shift_ms(request.args.get("shift_ms"))
+            if shift_ms:
+                text = shift_webvtt_text(Path(path).read_text(encoding="utf-8", errors="replace"), shift_ms)
+                return Response(
+                    text,
+                    status=200,
+                    mimetype="text/vtt; charset=utf-8",
+                    headers={"Cache-Control": "no-store"},
+                )
+            return send_file(path, as_attachment=False, download_name=f"{clean}.vtt", mimetype="text/vtt; charset=utf-8", conditional=True)
+        finally:
+            conn.close()
+
+    @app.route("/api/cloud-drive/files/<file_id>/hls/<variant>/<segment>", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_hls_segment(file_id, variant, segment):
+        conn = get_db()
+        try:
+            _actor, _row, asset, err = _cloud_drive_hls_asset(conn, file_id, include_segments=True)
+            if err:
+                return err
+            if "/" in segment or ".." in segment:
+                return json_resp({"ok": False, "msg": "無效的串流片段", "error": "invalid_segment"}), 400
+            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            if not match:
+                return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
+            rel = next((item["path"] for item in (match.get("segments") or []) if item.get("filename") == segment), "")
+            if not rel:
+                if segment == "init.mp4" and match.get("init_segment_path"):
+                    rel = match["init_segment_path"]
+                else:
+                    return json_resp({"ok": False, "msg": "找不到串流片段", "error": "segment_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, {"storage_path": rel})
+            mimetype = "video/mp4" if segment.endswith((".mp4", ".m4s")) else "application/octet-stream"
+            return send_file(path, as_attachment=False, download_name=segment, mimetype=mimetype, conditional=True)
         finally:
             conn.close()
 

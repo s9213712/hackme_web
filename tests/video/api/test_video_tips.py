@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from services.points_chain import DISPLAY_CURRENCY, PointsLedgerService
@@ -79,6 +81,47 @@ def test_video_tip_debits_viewer_credits_uploader_and_is_idempotent():
     assert sum(int(row["amount"]) for row in tip_events) == 100
     assert tip_events[0]["destination_fund_key"] in {"", None}
     assert tip_events[1]["destination_fund_key"] == "official_treasury"
+
+
+def test_root_video_tip_net_revenue_is_official_treasury_income():
+    conn = video_test_db()
+    seed_cloud_file(conn, owner_user_id=9)
+    video = publish_video(conn, actor=actor(9, "root", "super_admin"), cloud_file_id="file-video", title="Official")
+    service = _points_service(conn)
+
+    result = tip_video(
+        conn,
+        points_service=service,
+        actor=actor(2, "viewer"),
+        video_id=video["id"],
+        amount=100,
+        fee_percent=5,
+        idempotency_key="tip-root-video",
+    )
+
+    assert result["created"] is True
+    assert result["tip"]["to_user_id"] == 9
+    tip_events = conn.execute(
+        """
+        SELECT transaction_type, destination_fund_key, amount
+        FROM points_economy_events
+        WHERE transaction_type LIKE 'video_tip_%'
+        ORDER BY id ASC
+        """
+    ).fetchall()
+    assert [(row["transaction_type"], row["destination_fund_key"], int(row["amount"])) for row in tip_events] == [
+        ("video_tip_credit", "official_treasury", 95),
+        ("video_tip_platform_fee", "official_treasury", 5),
+    ]
+    assert sum(int(row["amount"]) for row in tip_events) == 100
+    credit = conn.execute(
+        "SELECT public_metadata_json FROM points_ledger WHERE ledger_uuid=?",
+        (result["ledger"]["credit_uuid"],),
+    ).fetchone()
+    assert credit is not None
+    metadata = json.loads(credit["public_metadata_json"])
+    assert metadata["destination_fund_key"] == "official_treasury"
+    assert metadata["wallet_flow_snapshot"]["destination_fund_key"] == "official_treasury"
 
 
 def test_video_tip_rejects_idempotency_key_reuse_for_different_tip():

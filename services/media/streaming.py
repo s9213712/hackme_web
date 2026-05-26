@@ -1,11 +1,13 @@
 import json
 import mimetypes
 import os
+import re
 import select
 import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -35,7 +37,7 @@ STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON = (
 
 
 def _now():
-    return datetime.utcnow().replace(microsecond=0).isoformat()
+    return datetime.now().replace(microsecond=0).isoformat()
 
 
 def _table_columns(conn, table):
@@ -105,6 +107,21 @@ def ensure_media_stream_schema(conn):
         )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS media_stream_subtitles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asset_id INTEGER NOT NULL REFERENCES media_stream_assets(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            label TEXT NOT NULL,
+            language TEXT NOT NULL DEFAULT 'und',
+            codec TEXT,
+            path TEXT NOT NULL,
+            is_default INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS media_stream_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             asset_id INTEGER NOT NULL REFERENCES media_stream_assets(id) ON DELETE CASCADE,
@@ -121,6 +138,7 @@ def ensure_media_stream_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_stream_assets_status ON media_stream_assets(status, updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_stream_variants_asset ON media_stream_variants(asset_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_stream_segments_variant_seq ON media_stream_segments(variant_id, sequence_number)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_media_stream_subtitles_asset ON media_stream_subtitles(asset_id, name)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_stream_jobs_asset ON media_stream_jobs(asset_id, created_at)")
 
 
@@ -293,6 +311,13 @@ def _segment_rows(conn, variant_id):
     ).fetchall()
 
 
+def _subtitle_rows(conn, asset_id):
+    return conn.execute(
+        "SELECT * FROM media_stream_subtitles WHERE asset_id=? ORDER BY is_default DESC, id ASC",
+        (int(asset_id),),
+    ).fetchall()
+
+
 def _segment_summary(conn, variant_id):
     row = conn.execute(
         """
@@ -321,6 +346,7 @@ def serialize_stream_asset(conn, uploaded_file_id, *, include_segments=True):
     data["source_size_bytes"] = _safe_int(data.get("source_size_bytes"), 0)
     data["duration_seconds"] = _safe_float(data.get("duration_seconds"), 0.0)
     data["variants"] = []
+    data["subtitles"] = []
     for variant in _variant_rows(conn, asset["id"]):
         item = _row_dict(variant)
         item["width"] = _safe_int(item.get("width"), 0)
@@ -346,6 +372,10 @@ def serialize_stream_asset(conn, uploaded_file_id, *, include_segments=True):
         else:
             item.update(_segment_summary(conn, variant["id"]))
         data["variants"].append(item)
+    for subtitle in _subtitle_rows(conn, asset["id"]):
+        item = _row_dict(subtitle)
+        item["is_default"] = bool(_safe_int(item.get("is_default"), 0))
+        data["subtitles"].append(item)
     return data
 
 
@@ -438,16 +468,17 @@ def _set_asset_failed(conn, *, file_row, reason):
     return _asset_row(conn, file_row["id"])
 
 
-def _record_job(conn, *, asset_id, status, error_message=None, started_at=None):
+def _record_job(conn, *, asset_id, status, error_message=None, started_at=None, job_type="prepare_hls"):
     now = _now()
     conn.execute(
         """
         INSERT INTO media_stream_jobs (
             asset_id, job_type, status, started_at, finished_at, error_message, created_at
-        ) VALUES (?, 'prepare_hls', ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(asset_id),
+            str(job_type or "prepare_hls"),
             str(status),
             str(started_at or now),
             now if status in {"ready", "failed", "unavailable"} else None,
@@ -486,6 +517,19 @@ def _parse_probe_metadata(payload):
     audio_codec = (audio_stream or {}).get("codec_name") or ""
     audio_codec_tag = (audio_stream or {}).get("codec_tag_string") or ""
     media_type = "audio" if video_stream is None and audio_stream is not None else "video"
+    subtitle_streams = []
+    for stream in streams:
+        if stream.get("codec_type") != "subtitle":
+            continue
+        tags = stream.get("tags") if isinstance(stream.get("tags"), dict) else {}
+        disposition = stream.get("disposition") if isinstance(stream.get("disposition"), dict) else {}
+        subtitle_streams.append({
+            "index": _safe_int(stream.get("index"), -1),
+            "codec": str(stream.get("codec_name") or ""),
+            "language": str(tags.get("language") or "und").strip()[:16] or "und",
+            "title": str(tags.get("title") or "").strip()[:80],
+            "is_default": bool(_safe_int(disposition.get("default"), 0)),
+        })
     return {
         "duration_seconds": duration_seconds,
         "bitrate": bitrate,
@@ -496,7 +540,362 @@ def _parse_probe_metadata(payload):
         "audio_codec": str(audio_codec),
         "audio_codec_tag": str(audio_codec_tag),
         "media_type": media_type,
+        "subtitle_streams": subtitle_streams,
     }
+
+
+def _subtitle_language(value):
+    text = str(value or "und").strip().lower()
+    text = re.sub(r"[^a-z0-9_-]+", "", text)[:16]
+    return text or "und"
+
+
+def _subtitle_label(stream, index):
+    title = str((stream or {}).get("title") or "").strip()
+    language = _subtitle_language((stream or {}).get("language"))
+    if title:
+        return title[:80]
+    if language != "und":
+        return f"字幕 {index} ({language})"
+    return f"字幕 {index}"
+
+
+def _subtitle_codec_supported(codec):
+    return str(codec or "").strip().lower() in {
+        "ass",
+        "ssa",
+        "subrip",
+        "srt",
+        "mov_text",
+        "webvtt",
+        "text",
+    }
+
+
+def _extract_subtitles_to_webvtt(source_path, *, derivative_dir, derivative_root_rel, metadata, ffmpeg_bin="ffmpeg"):
+    subtitle_streams = list((metadata or {}).get("subtitle_streams") or [])
+    subtitle_dir = Path(derivative_dir) / "subtitles"
+    rows = []
+    errors = []
+    supported_index = 0
+    for stream in subtitle_streams[:20]:
+        codec = str(stream.get("codec") or "").strip().lower()
+        stream_index = _safe_int(stream.get("index"), -1)
+        if stream_index < 0:
+            continue
+        if not _subtitle_codec_supported(codec):
+            errors.append(f"subtitle stream {stream_index}: unsupported codec {codec or 'unknown'}")
+            continue
+        supported_index += 1
+        language = _subtitle_language(stream.get("language"))
+        name = f"sub{supported_index:02d}_{language}"
+        subtitle_dir.mkdir(parents=True, exist_ok=True)
+        output_path = subtitle_dir / f"{name}.vtt"
+        cmd = [
+            str(ffmpeg_bin),
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source_path),
+            "-map",
+            f"0:{stream_index}",
+            "-vn",
+            "-an",
+            "-c:s",
+            "webvtt",
+            str(output_path),
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=_ffmpeg_timeout_seconds())
+        except Exception as exc:
+            errors.append(f"subtitle stream {stream_index}: {str(exc)[:180]}")
+            continue
+        if not output_path.exists() or output_path.stat().st_size <= 0:
+            errors.append(f"subtitle stream {stream_index}: empty WebVTT output")
+            continue
+        rows.append({
+            "name": name,
+            "label": _subtitle_label(stream, supported_index),
+            "language": language,
+            "codec": codec,
+            "path": f"{derivative_root_rel}/subtitles/{name}.vtt",
+            "is_default": bool(stream.get("is_default")) or supported_index == 1,
+            "absolute_path": output_path,
+        })
+    return rows, errors
+
+
+def _srt_text_to_webvtt(text):
+    lines = ["WEBVTT", ""]
+    for raw in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw
+        if "-->" in line:
+            line = re.sub(r"(\d{2}:\d{2}:\d{2}),(\d{3})", r"\1.\2", line)
+        lines.append(line)
+    return "\n".join(lines).strip() + "\n"
+
+
+def parse_subtitle_shift_ms(value, *, min_ms=-60 * 60 * 1000, max_ms=60 * 60 * 1000):
+    try:
+        if value is None or value == "":
+            return 0
+        parsed = int(round(float(value)))
+    except Exception:
+        return 0
+    return max(int(min_ms), min(int(max_ms), parsed))
+
+
+def _format_webvtt_timestamp(total_ms):
+    total = max(0, int(round(total_ms or 0)))
+    hours, remainder = divmod(total, 60 * 60 * 1000)
+    minutes, remainder = divmod(remainder, 60 * 1000)
+    seconds, millis = divmod(remainder, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{millis:03d}"
+
+
+def _webvtt_timestamp_to_ms(match):
+    hours = _safe_int(match.group("hours"), 0)
+    minutes = _safe_int(match.group("minutes"), 0)
+    seconds = _safe_int(match.group("seconds"), 0)
+    millis = _safe_int(match.group("millis"), 0)
+    return (((hours * 60) + minutes) * 60 + seconds) * 1000 + millis
+
+
+WEBVTT_TIMESTAMP_RE = re.compile(
+    r"(?:(?P<hours>\d{2,}):)?(?P<minutes>\d{2}):(?P<seconds>\d{2})\.(?P<millis>\d{3})"
+)
+
+
+def shift_webvtt_text(text, shift_ms):
+    offset = parse_subtitle_shift_ms(shift_ms)
+    if not offset:
+        return str(text or "")
+    shifted = []
+    for raw_line in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if "-->" not in raw_line:
+            shifted.append(raw_line)
+            continue
+        shifted.append(WEBVTT_TIMESTAMP_RE.sub(lambda match: _format_webvtt_timestamp(_webvtt_timestamp_to_ms(match) + offset), raw_line))
+    return "\n".join(shifted)
+
+
+def _normalize_uploaded_subtitle_to_webvtt(source_path, output_path, *, original_filename="", ffmpeg_bin="ffmpeg"):
+    suffix = Path(original_filename or source_path).suffix.lower()
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if suffix == ".vtt":
+        text = Path(source_path).read_text(encoding="utf-8", errors="replace")
+        if not text.lstrip().upper().startswith("WEBVTT"):
+            text = "WEBVTT\n\n" + text
+        output_path.write_text(text, encoding="utf-8")
+        return
+    if suffix == ".srt":
+        text = Path(source_path).read_text(encoding="utf-8", errors="replace")
+        output_path.write_text(_srt_text_to_webvtt(text), encoding="utf-8")
+        return
+    if suffix in {".ass", ".ssa"}:
+        cmd = [
+            str(ffmpeg_bin),
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source_path),
+            "-c:s",
+            "webvtt",
+            str(output_path),
+        ]
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=_ffmpeg_timeout_seconds())
+        return
+    raise ValueError("unsupported subtitle format; use .srt, .vtt, .ass, or .ssa")
+
+
+def add_stream_subtitle(
+    conn,
+    *,
+    file_row,
+    storage_root,
+    subtitle_file_path,
+    original_filename="",
+    label="",
+    language="und",
+    ffmpeg_bin="ffmpeg",
+):
+    ensure_media_stream_schema(conn)
+    if not file_row or _row_value(file_row, "deleted_at"):
+        raise ValueError("file not found")
+    if is_e2ee_file(file_row):
+        raise ValueError("strict E2EE media subtitles must be prepared by the browser-side E2EE package")
+    existing = _asset_row(conn, file_row["id"])
+    asset = _upsert_asset_row(
+        conn,
+        file_row=file_row,
+        status=str(existing["status"] if existing else "pending"),
+        error_message=(existing["error_message"] if existing else None),
+    )
+    derivative_root_rel = _derivative_root_relpath(file_row["id"])
+    derivative_root = resolve_storage_path(storage_root, derivative_root_rel, create_parent=True)
+    subtitle_dir = derivative_root / "subtitles"
+    subtitle_dir.mkdir(parents=True, exist_ok=True)
+    language = _subtitle_language(language)
+    name = f"user_{uuid.uuid4().hex[:12]}_{language}"
+    output_path = subtitle_dir / f"{name}.vtt"
+    _normalize_uploaded_subtitle_to_webvtt(
+        subtitle_file_path,
+        output_path,
+        original_filename=original_filename,
+        ffmpeg_bin=ffmpeg_bin,
+    )
+    if not output_path.exists() or output_path.stat().st_size <= 0:
+        raise ValueError("subtitle conversion produced an empty file")
+    now = _now()
+    has_existing = conn.execute(
+        "SELECT 1 FROM media_stream_subtitles WHERE asset_id=? LIMIT 1",
+        (int(asset["id"]),),
+    ).fetchone()
+    conn.execute(
+        """
+        INSERT INTO media_stream_subtitles (
+            asset_id, name, label, language, codec, path, is_default, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(asset["id"]),
+            name,
+            str(label or Path(original_filename or "").stem or language or "字幕")[:80],
+            language,
+            Path(original_filename or "").suffix.lower().lstrip(".") or "webvtt",
+            f"{derivative_root_rel}/subtitles/{name}.vtt",
+            0 if has_existing else 1,
+            now,
+        ),
+    )
+    return serialize_stream_asset(conn, file_row["id"], include_segments=False)
+
+
+def refresh_stream_subtitles(
+    conn,
+    *,
+    file_row,
+    storage_root,
+    server_file_fernet=None,
+    source_path_override=None,
+    force=False,
+    ffprobe_bin="ffprobe",
+    ffmpeg_bin="ffmpeg",
+    progress_callback=None,
+):
+    ensure_media_stream_schema(conn)
+    if not file_row or _row_value(file_row, "deleted_at"):
+        raise ValueError("file not found")
+    if is_e2ee_file(file_row):
+        raise ValueError("strict E2EE media subtitles must be prepared by the browser-side E2EE package")
+    asset = _asset_row(conn, file_row["id"])
+    if not asset or str(asset["status"] or "") != "ready":
+        raise ValueError("HLS asset must be ready before refreshing subtitles")
+    existing = _subtitle_rows(conn, asset["id"])
+    if existing and not force:
+        return serialize_stream_asset(conn, file_row["id"], include_segments=False)
+
+    derivative_root_rel = _derivative_root_relpath(file_row["id"])
+    derivative_root = resolve_storage_path(storage_root, derivative_root_rel, create_parent=True)
+    derivative_root.mkdir(parents=True, exist_ok=True)
+    started_at = _now()
+    try:
+        with tempfile.TemporaryDirectory(prefix=f"hackme_stream_subtitles_{file_row['id']}_") as temp_dir:
+            prepared_source = Path(source_path_override) if source_path_override else resolve_file_storage_path(storage_root, file_row)
+            if source_path_override is None and is_server_encrypted_file(file_row):
+                if progress_callback:
+                    progress_callback(10, "decrypting", "正在解密伺服器端加密影音以抽取字幕。")
+                source_path = resolve_file_storage_path(storage_root, file_row)
+                temp_source = Path(temp_dir) / (str(file_row["original_filename_plain_for_public"] or file_row["id"]) or "media.bin")
+                write_decrypted_server_encrypted_file(
+                    source_path,
+                    temp_source,
+                    server_file_fernet,
+                    progress_callback=(
+                        (lambda written, total: progress_callback(
+                            10 + int((max(0, min(int(written or 0), int(total or 0))) / max(1, int(total or 0))) * 45),
+                            "decrypting",
+                            f"正在解密伺服器端加密影音以抽取字幕：{_format_bytes_short(written)} / {_format_bytes_short(total)}。",
+                        ))
+                        if progress_callback else None
+                    ),
+                )
+                prepared_source = temp_source
+            if progress_callback:
+                progress_callback(60, "probing", "正在讀取字幕軌資訊。")
+            probe_payload = _run_probe(prepared_source, ffprobe_bin=ffprobe_bin)
+            metadata = _parse_probe_metadata(probe_payload)
+            if progress_callback:
+                progress_callback(75, "extracting", "正在轉換字幕為 WebVTT。")
+            subtitle_rows, subtitle_errors = _extract_subtitles_to_webvtt(
+                prepared_source,
+                derivative_dir=derivative_root,
+                derivative_root_rel=derivative_root_rel,
+                metadata=metadata,
+                ffmpeg_bin=ffmpeg_bin,
+            )
+        now = _now()
+        conn.execute(
+            "DELETE FROM media_stream_subtitles WHERE asset_id=?",
+            (int(asset["id"]),),
+        )
+        for subtitle in subtitle_rows:
+            conn.execute(
+                """
+                INSERT INTO media_stream_subtitles (
+                    asset_id, name, label, language, codec, path, is_default, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(asset["id"]),
+                    str(subtitle.get("name") or ""),
+                    str(subtitle.get("label") or ""),
+                    str(subtitle.get("language") or "und"),
+                    str(subtitle.get("codec") or ""),
+                    str(subtitle.get("path") or ""),
+                    1 if subtitle.get("is_default") else 0,
+                    now,
+                ),
+            )
+        warning = "; ".join(subtitle_errors or [])[:800]
+        conn.execute(
+            """
+            UPDATE media_stream_assets
+            SET error_message=?, updated_at=?
+            WHERE id=?
+            """,
+            (warning, now, int(asset["id"])),
+        )
+        _record_job(
+            conn,
+            asset_id=asset["id"],
+            status="ready" if subtitle_rows else "failed",
+            error_message=warning,
+            started_at=started_at,
+            job_type="refresh_subtitles",
+        )
+        _safe_commit(conn)
+        if progress_callback:
+            progress_callback(100, "ready" if subtitle_rows else "failed", "字幕抽取完成。" if subtitle_rows else "沒有可用的文字字幕軌。")
+        return serialize_stream_asset(conn, file_row["id"], include_segments=False)
+    except Exception as exc:
+        _record_job(
+            conn,
+            asset_id=asset["id"],
+            status="failed",
+            error_message=str(exc),
+            started_at=started_at,
+            job_type="refresh_subtitles",
+        )
+        _safe_commit(conn)
+        raise
 
 
 def hls_codec_string(*, width=0, height=0, codec=""):
@@ -702,6 +1101,10 @@ def _run_ffmpeg_hls(
         "-i",
         str(source_path),
     ]
+    if media_type == "audio":
+        cmd.extend(["-map", "0:a:0?", "-sn", "-dn"])
+    else:
+        cmd.extend(["-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn"])
     if copy_codecs:
         cmd.extend(["-c", "copy"])
     elif media_type == "audio":
@@ -751,54 +1154,74 @@ def _run_ffmpeg_hls(
     ])
     timeout_seconds = _ffmpeg_timeout_seconds()
     started_at = time.monotonic()
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        stdin=subprocess.DEVNULL,
-        text=True,
-    )
-    stderr_chunks = []
-    last_progress = 0.0
-    duration = max(0.0, float(duration_seconds or 0))
-    try:
-        while True:
-            if timeout_seconds > 0 and time.monotonic() - started_at > timeout_seconds:
-                process.kill()
-                raise subprocess.TimeoutExpired(cmd, timeout_seconds)
-            ready, _, _ = select.select([process.stdout], [], [], 0.5) if process.stdout else ([], [], [])
-            if ready:
-                line = process.stdout.readline()
-                if not line:
-                    if process.poll() is not None:
-                        break
+    def run_hls_command(command):
+        process = None
+        stderr_chunks = []
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+            )
+            last_progress = 0.0
+            duration = max(0.0, float(duration_seconds or 0))
+            while True:
+                if timeout_seconds > 0 and time.monotonic() - started_at > timeout_seconds:
+                    process.kill()
+                    raise subprocess.TimeoutExpired(command, timeout_seconds)
+                ready, _, _ = select.select([process.stdout], [], [], 0.5) if process.stdout else ([], [], [])
+                if ready:
+                    line = process.stdout.readline()
+                    if not line:
+                        if process.poll() is not None:
+                            break
+                        continue
+                    key, _, value = line.strip().partition("=")
+                    if key == "out_time_ms" and duration > 0:
+                        try:
+                            current = max(0.0, min(1.0, float(value or 0) / 1_000_000.0 / duration))
+                        except Exception:
+                            current = 0.0
+                        if current >= last_progress + 0.01:
+                            last_progress = current
+                            if progress_callback:
+                                progress_callback(current)
+                    elif key == "progress" and value == "end" and progress_callback:
+                        progress_callback(1.0)
                     continue
-                key, _, value = line.strip().partition("=")
-                if key == "out_time_ms" and duration > 0:
-                    try:
-                        current = max(0.0, min(1.0, float(value or 0) / 1_000_000.0 / duration))
-                    except Exception:
-                        current = 0.0
-                    if current >= last_progress + 0.01:
-                        last_progress = current
-                        if progress_callback:
-                            progress_callback(current)
-                elif key == "progress" and value == "end" and progress_callback:
-                    progress_callback(1.0)
-                continue
-            if process.poll() is not None:
-                break
-        if process.stderr:
-            stderr_chunks.append(process.stderr.read() or "")
-        return_code = process.wait()
-        if return_code != 0:
-            raise subprocess.CalledProcessError(return_code, cmd, output="", stderr="".join(stderr_chunks))
-    finally:
-        if process.poll() is None:
-            try:
+                if process.poll() is not None:
+                    break
+            if process.stderr:
+                stderr_chunks.append(process.stderr.read() or "")
+            return_code = process.wait()
+            if return_code != 0:
+                raise subprocess.CalledProcessError(return_code, command, output="", stderr="".join(stderr_chunks))
+        finally:
+            if process is not None and process.poll() is None:
                 process.kill()
-            except Exception:
-                pass
+
+    try:
+        run_hls_command(cmd)
+    except subprocess.CalledProcessError:
+        if copy_codecs:
+            shutil.rmtree(variant_dir, ignore_errors=True)
+            return _run_ffmpeg_hls(
+                source_path,
+                derivative_dir=derivative_dir,
+                media_type=media_type,
+                variant_name=variant_name,
+                ffmpeg_bin=ffmpeg_bin,
+                segment_seconds=segment_seconds,
+                duration_seconds=duration_seconds,
+                source_height=source_height,
+                target_height=target_height,
+                target_bitrate=target_bitrate,
+                copy_codecs=False,
+                progress_callback=progress_callback,
+            )
+        raise
     return variant_name, playlist_path, variant_dir / "init.mp4"
 
 
@@ -897,6 +1320,7 @@ def prepare_stream_asset(
     derivative_root = resolve_storage_path(storage_root, derivative_root_rel, create_parent=True)
     conn.execute("DELETE FROM media_stream_segments WHERE variant_id IN (SELECT id FROM media_stream_variants WHERE asset_id=?)", (int(asset["id"]),))
     conn.execute("DELETE FROM media_stream_variants WHERE asset_id=?", (int(asset["id"]),))
+    conn.execute("DELETE FROM media_stream_subtitles WHERE asset_id=?", (int(asset["id"]),))
     _safe_commit(conn)
     if derivative_root.exists():
         shutil.rmtree(derivative_root)
@@ -908,7 +1332,19 @@ def prepare_stream_asset(
             if progress_callback:
                 progress_callback(20, "decrypting", "正在以外部程序解密伺服器端加密影音，主站可繼續操作。")
             temp_source = Path(temp_dir) / (str(file_row["original_filename_plain_for_public"] or file_row["id"]) or "media.bin")
-            write_decrypted_server_encrypted_file(source_path, temp_source, server_file_fernet)
+            write_decrypted_server_encrypted_file(
+                source_path,
+                temp_source,
+                server_file_fernet,
+                progress_callback=(
+                    (lambda written, total: progress_callback(
+                        20 + int((max(0, min(int(written or 0), int(total or 0))) / max(1, int(total or 0))) * 9),
+                        "decrypting",
+                        f"正在解密伺服器端加密影音：{_format_bytes_short(written)} / {_format_bytes_short(total)}。",
+                    ))
+                    if progress_callback else None
+                ),
+            )
             prepared_source = temp_source
         try:
             if progress_callback:
@@ -916,6 +1352,13 @@ def prepare_stream_asset(
             probe_payload = _run_probe(prepared_source, ffprobe_bin=ffprobe_bin)
             metadata = _parse_probe_metadata(probe_payload)
             copy_codecs = _metadata_supports_stream_copy(metadata)
+            subtitle_rows, subtitle_errors = _extract_subtitles_to_webvtt(
+                prepared_source,
+                derivative_dir=derivative_root,
+                derivative_root_rel=derivative_root_rel,
+                metadata=metadata,
+                ffmpeg_bin=ffmpeg_bin,
+            )
             if progress_callback:
                 detail = "正在以低負載快速封裝建立 HLS；進度會顯示在任務中心。" if copy_codecs else "正在建立 HLS 播放清單與片段，進度會顯示在任務中心。"
                 progress_callback(40, "transcoding", detail)
@@ -925,7 +1368,7 @@ def prepare_stream_asset(
             master_manifest_path = derivative_root / "master.m3u8"
             now = _now()
             manifest_rows = []
-            variant_errors = []
+            variant_errors = list(subtitle_errors or [])
             original_variant_total_bytes = 0
             total_specs = max(1, len(variant_specs))
             for spec_index, spec in enumerate(variant_specs):
@@ -1042,6 +1485,24 @@ def prepare_stream_asset(
                 progress_callback(92, "finalizing", "HLS 片段已產生，正在寫入播放索引。")
             if not manifest_rows:
                 raise RuntimeError("HLS 沒有成功產生任何可播放畫質")
+            for subtitle in subtitle_rows:
+                conn.execute(
+                    """
+                    INSERT INTO media_stream_subtitles (
+                        asset_id, name, label, language, codec, path, is_default, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        int(asset["id"]),
+                        str(subtitle.get("name") or ""),
+                        str(subtitle.get("label") or ""),
+                        str(subtitle.get("language") or "und"),
+                        str(subtitle.get("codec") or ""),
+                        str(subtitle.get("path") or ""),
+                        1 if subtitle.get("is_default") else 0,
+                        now,
+                    ),
+                )
             _write_master_manifest_variants(master_manifest_path, manifest_rows)
             asset = _set_asset_ready(
                 conn,
@@ -1082,6 +1543,7 @@ def get_stream_status(conn, *, file_row, include_segments=True):
             "source_size_bytes": _safe_int(file_row["size_bytes"], 0),
             "error_message": STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON,
             "variants": [],
+            "subtitles": [],
         }
     return {
         "uploaded_file_id": file_row["id"],
@@ -1095,6 +1557,7 @@ def get_stream_status(conn, *, file_row, include_segments=True):
         "source_size_bytes": _safe_int(file_row["size_bytes"], 0),
         "error_message": "",
         "variants": [],
+        "subtitles": [],
     }
 
 
@@ -1110,6 +1573,7 @@ def cleanup_stream_asset(conn, *, uploaded_file_id, storage_root):
     asset_ids = [int(row["id"]) for row in asset_rows]
     variant_count = 0
     segment_count = 0
+    subtitle_count = 0
     if asset_ids:
         placeholders = ",".join("?" for _ in asset_ids)
         variant_rows = conn.execute(
@@ -1118,6 +1582,10 @@ def cleanup_stream_asset(conn, *, uploaded_file_id, storage_root):
         ).fetchall()
         variant_ids = [int(row["id"]) for row in variant_rows]
         variant_count = len(variant_ids)
+        subtitle_count = conn.execute(
+            f"SELECT COUNT(*) AS c FROM media_stream_subtitles WHERE asset_id IN ({placeholders})",
+            asset_ids,
+        ).fetchone()["c"]
         if variant_ids:
             variant_placeholders = ",".join("?" for _ in variant_ids)
             segment_count = conn.execute(
@@ -1128,6 +1596,7 @@ def cleanup_stream_asset(conn, *, uploaded_file_id, storage_root):
                 f"DELETE FROM media_stream_segments WHERE variant_id IN ({variant_placeholders})",
                 variant_ids,
             )
+        conn.execute(f"DELETE FROM media_stream_subtitles WHERE asset_id IN ({placeholders})", asset_ids)
         conn.execute(f"DELETE FROM media_stream_variants WHERE asset_id IN ({placeholders})", asset_ids)
         conn.execute(f"DELETE FROM media_stream_jobs WHERE asset_id IN ({placeholders})", asset_ids)
         conn.execute(f"DELETE FROM media_stream_assets WHERE id IN ({placeholders})", asset_ids)
@@ -1143,6 +1612,7 @@ def cleanup_stream_asset(conn, *, uploaded_file_id, storage_root):
         "assets_removed": len(asset_ids),
         "variants_removed": int(variant_count or 0),
         "segments_removed": int(segment_count or 0),
+        "subtitles_removed": int(subtitle_count or 0),
     }
 
 
@@ -1163,9 +1633,22 @@ def stream_playback_payload(conn, *, file_row, video_id):
         "stream_warning": "目前使用直接串流。" if direct_fallback_allowed else "伺服端加密影音不提供主程序直接解密串流，請等待 HLS 處理完成。",
         "status": status,
         "variants": [],
+        "subtitles": [],
         "streaming_ready": False,
         "direct_fallback_allowed": direct_fallback_allowed,
     }
+    if status and status.get("subtitles"):
+        payload["subtitles"] = [
+            {
+                "name": str(item.get("name") or ""),
+                "label": str(item.get("label") or item.get("language") or "字幕"),
+                "language": str(item.get("language") or "und"),
+                "is_default": bool(item.get("is_default")),
+                "url": f"/api/videos/{int(video_id)}/hls/subtitles/{item.get('name')}.vtt",
+            }
+            for item in (status.get("subtitles") or [])
+            if item.get("name")
+        ]
     if status and status.get("status") == "ready" and status.get("master_manifest_path"):
         variants = []
         for variant in status.get("variants") or []:

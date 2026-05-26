@@ -11,8 +11,48 @@ from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
 from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage.storage_albums import ensure_storage_album_schema
 from services.security.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
-from services.media.videos import get_video, list_videos, publish_video
+from services.media.videos import (
+    create_video_social_share,
+    get_video,
+    list_videos,
+    publish_video,
+    resolve_video_share_token,
+    shared_video_payload,
+)
 from tests.video.helpers.video_test_helpers import actor, seed_cloud_file, video_test_db
+
+
+def test_video_share_password_hash_uses_configured_argon2_cost(monkeypatch):
+    import services.media.videos as videos_module
+
+    captured = {}
+
+    def fake_argon2_hash_secret_raw(secret, salt, *, time_cost, memory_cost, parallelism, hash_len, type):
+        captured.update({
+            "time_cost": time_cost,
+            "memory_cost": memory_cost,
+            "parallelism": parallelism,
+            "hash_len": hash_len,
+            "type": type,
+        })
+        return b"x" * hash_len
+
+    monkeypatch.setenv("HTML_LEARNING_ARGON2_TIME_COST", "1")
+    monkeypatch.setenv("HTML_LEARNING_ARGON2_MEMORY_COST", "8192")
+    monkeypatch.setenv("HTML_LEARNING_ARGON2_PARALLELISM", "1")
+    monkeypatch.setattr(videos_module, "argon2_hash_secret_raw", fake_argon2_hash_secret_raw)
+    monkeypatch.setattr(videos_module, "Argon2Type", type("Argon2TypeStub", (), {"ID": "id"}))
+
+    stored = videos_module._hash_video_share_password("ViewerPass123")
+
+    assert stored.startswith("argon2id$1$8192$1$")
+    assert captured == {
+        "time_cost": 1,
+        "memory_cost": 8192,
+        "parallelism": 1,
+        "hash_len": 32,
+        "type": "id",
+    }
 
 
 def test_publish_media_requires_owner_and_video_or_audio_mime():
@@ -103,6 +143,44 @@ def test_publish_accepts_server_encrypted_video_for_server_streaming():
     video = publish_video(conn, actor=actor(1, "owner"), cloud_file_id="server-encrypted-video", title="encrypted stream")
 
     assert video["cloud_file_id"] == "server-encrypted-video"
+
+
+def test_public_video_social_share_link_resolves_for_shared_page():
+    conn = video_test_db()
+    seed_cloud_file(conn, file_id="public-video", owner_user_id=1, mime="video/mp4", privacy_mode="server_encrypted")
+    video = publish_video(conn, actor=actor(1, "owner"), cloud_file_id="public-video", title="shareable stream")
+
+    share, msg = create_video_social_share(conn, actor=actor(2, "viewer"), video_id=video["id"])
+    assert msg is None
+
+    token = share["url"].rsplit("/", 1)[-1]
+    payload, reason = shared_video_payload(conn, token)
+
+    assert reason is None
+    assert payload["id"] == video["id"]
+    assert payload["share_url"] == share["url"]
+
+
+def test_processing_unlisted_share_can_show_status_without_serving_as_ready():
+    conn = video_test_db()
+    seed_cloud_file(conn, file_id="processing-video", owner_user_id=1, mime="video/mp4", privacy_mode="server_encrypted")
+    video = publish_video(
+        conn,
+        actor=actor(1, "owner"),
+        cloud_file_id="processing-video",
+        title="processing stream",
+        visibility="unlisted",
+    )
+    token = video["share_url"].rsplit("/", 1)[-1]
+    conn.execute("UPDATE videos SET status='processing' WHERE id=?", (video["id"],))
+
+    assert resolve_video_share_token(conn, token)[1] == "not_ready"
+    payload, reason = shared_video_payload(conn, token, allow_processing=True)
+
+    assert reason is None
+    assert payload["id"] == video["id"]
+    assert payload["status"] == "processing"
+    assert payload["share_url"] == video["share_url"]
 
 
 def test_publish_share_link_hash_uses_kdf_and_revoke_regenerate_controls():

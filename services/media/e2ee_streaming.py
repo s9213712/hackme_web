@@ -39,7 +39,7 @@ def _stream_v2_capabilities():
 
 
 def _now():
-    return datetime.utcnow().replace(microsecond=0).isoformat()
+    return datetime.now().replace(microsecond=0).isoformat()
 
 
 def _table_columns(conn, table):

@@ -71,6 +71,8 @@ def _album_share_link_payload(row):
         "id": row["id"],
         "album_id": row["album_id"],
         "created_at": row["created_at"],
+        "expires_at": row["expires_at"] if "expires_at" in row.keys() else "",
+        "max_views": int(row["max_views"] or 0) if "max_views" in row.keys() else 0,
         "access_count": int(row["access_count"] or 0),
         "last_accessed_at": row["last_accessed_at"],
         "url": _album_share_url(token),
@@ -112,17 +114,81 @@ def _apply_album_share_password(conn, link_id, *, password=None, clear_password=
     return None
 
 
-def ensure_album_share_link(conn, *, actor, album_id, password=None, password_provided=False, clear_password=False):
+def _normalize_album_share_expires_at(value):
+    text = str(value or "").strip()
+    return text or None
+
+
+def _normalize_album_share_max_views(value):
+    try:
+        count = int(value or 0)
+    except Exception as exc:
+        raise ValueError("最大存取次數格式錯誤") from exc
+    if count < 0:
+        raise ValueError("最大存取次數不可小於 0")
+    return min(count, 1_000_000)
+
+
+def _apply_album_share_limits(conn, link_id, *, expires_at=None, expires_at_provided=False, max_views=None, max_views_provided=False, reset_access_count=False):
+    updates = []
+    params = []
+    if expires_at_provided:
+        updates.append("expires_at=?")
+        params.append(_normalize_album_share_expires_at(expires_at))
+    if max_views_provided:
+        updates.append("max_views=?")
+        params.append(_normalize_album_share_max_views(max_views))
+    if reset_access_count:
+        updates.append("access_count=0")
+        updates.append("last_accessed_at=NULL")
+    if not updates:
+        return None
+    params.append(link_id)
+    conn.execute(f"UPDATE album_share_links SET {', '.join(updates)} WHERE id=?", tuple(params))
+    return None
+
+
+def ensure_album_share_link(
+    conn,
+    *,
+    actor,
+    album_id,
+    password=None,
+    password_provided=False,
+    clear_password=False,
+    expires_at=None,
+    expires_at_provided=False,
+    max_views=None,
+    max_views_provided=False,
+    reset_access_count=False,
+):
     ensure_storage_album_schema(conn)
     album = _album_row(conn, album_id)
     if not album or album["deleted_at"] or int(album["owner_user_id"]) != int(actor["id"]):
         return None, "找不到相簿"
+    try:
+        initial_max_views = _normalize_album_share_max_views(max_views) if max_views_provided else 0
+    except ValueError as exc:
+        return None, str(exc)
     existing = _active_album_share_link(conn, album_id)
     if existing:
         if password_provided or clear_password:
             msg = _apply_album_share_password(conn, existing["id"], password=password, clear_password=clear_password)
             if msg:
                 return None, msg
+        try:
+            _apply_album_share_limits(
+                conn,
+                existing["id"],
+                expires_at=expires_at,
+                expires_at_provided=expires_at_provided,
+                max_views=max_views,
+                max_views_provided=max_views_provided,
+                reset_access_count=reset_access_count,
+            )
+        except ValueError as exc:
+            return None, str(exc)
+        if password_provided or clear_password or expires_at_provided or max_views_provided or reset_access_count:
             existing = conn.execute("SELECT * FROM album_share_links WHERE id=?", (existing["id"],)).fetchone()
         return _album_share_link_payload(existing), None
     now = _now()
@@ -140,8 +206,8 @@ def ensure_album_share_link(conn, *, actor, album_id, password=None, password_pr
         """
         INSERT INTO album_share_links (
             id, album_id, owner_user_id, token, token_hash, password_required,
-            password_hash, created_by, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            password_hash, expires_at, max_views, created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             link_id,
@@ -151,6 +217,8 @@ def ensure_album_share_link(conn, *, actor, album_id, password=None, password_pr
             _hash_share_token(token),
             password_required,
             password_hash,
+            _normalize_album_share_expires_at(expires_at) if expires_at_provided else None,
+            initial_max_views,
             int(actor["id"]),
             now,
         ),
@@ -809,6 +877,11 @@ def resolve_album_share_token(conn, token, password=None):
         return None, "revoked"
     if row["visibility"] != "unlisted":
         return None, "not_unlisted"
+    if row["expires_at"] and row["expires_at"] <= _now():
+        return None, "expired"
+    max_views = int(row["max_views"] or 0)
+    if max_views > 0 and int(row["access_count"] or 0) >= max_views:
+        return None, "view_limit_reached"
     if _album_share_password_required(row):
         if not str(password or ""):
             return None, "password_required"

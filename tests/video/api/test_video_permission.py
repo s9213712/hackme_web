@@ -62,3 +62,36 @@ def test_blocked_video_metadata_owner_visible_but_stream_denied():
     row = conn.execute("SELECT * FROM videos WHERE id=?", (video["id"],)).fetchone()
     assert can_view_video(actor(1, "owner"), row)
     assert not can_view_video(actor(1, "owner"), row, for_stream=True)
+
+
+def test_video_payload_marks_server_encrypted_as_not_direct_streamable():
+    conn = video_test_db()
+    seed_cloud_file(
+        conn,
+        file_id="server-encrypted-video",
+        owner_user_id=1,
+        mime="video/mp4",
+        privacy_mode="server_encrypted",
+    )
+    encrypted = publish_video(
+        conn,
+        actor=actor(1, "owner"),
+        cloud_file_id="server-encrypted-video",
+        title="Encrypted video",
+        visibility="public",
+    )
+    seed_cloud_file(conn, file_id="plain-video", owner_user_id=1, mime="video/mp4")
+    plain = publish_video(
+        conn,
+        actor=actor(1, "owner"),
+        cloud_file_id="plain-video",
+        title="Plain video",
+        visibility="public",
+    )
+
+    encrypted_payload = get_video(conn, encrypted["id"], actor=actor(2, "viewer"))
+    plain_payload = get_video(conn, plain["id"], actor=actor(2, "viewer"))
+
+    assert encrypted_payload["cloud_privacy_mode"] == "server_encrypted"
+    assert encrypted_payload["direct_stream_allowed"] is False
+    assert plain_payload["direct_stream_allowed"] is True

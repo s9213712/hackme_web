@@ -6,14 +6,19 @@ from datetime import datetime, timedelta, timezone
 STORAGE_UPGRADE_PRODUCTS = {
     "cloud_storage_1gb_30d": {
         "storage_bytes": 1024 ** 3,
-        "duration_days": 7,
-        "label": "雲端容量 1GB / 7 天",
+        "duration_days": 30,
+        "label": "雲端容量 1GB / 30 天",
+    },
+    "birthday_storage_1gb_30d": {
+        "storage_bytes": 1024 ** 3,
+        "duration_days": 30,
+        "label": "生日禮 1GB / 30 天",
     },
 }
 
 STORAGE_UPGRADE_PRICE_DEFAULTS = {
     "cloud_storage_1gb_30d": {
-        "item_name": "雲端容量 1GB / 7 天",
+        "item_name": "雲端容量 1GB / 30 天",
         "category": "cloud_drive",
         "currency_type": "soft",
         "base_price": 100,
@@ -23,11 +28,15 @@ STORAGE_UPGRADE_PRICE_DEFAULTS = {
         "enabled": 1,
         "metadata_json": json.dumps({
             "storage_bytes": 1024 ** 3,
-            "duration_days": 7,
-            "label": "雲端容量 1GB / 7 天",
+            "duration_days": 30,
+            "label": "雲端容量 1GB / 30 天",
         }, ensure_ascii=False, separators=(",", ":")),
     },
 }
+
+BIRTHDAY_STORAGE_GIFT_ITEM_KEY = "birthday_storage_1gb_30d"
+BIRTHDAY_STORAGE_GIFT_BYTES = 1024 ** 3
+BIRTHDAY_STORAGE_GIFT_DAYS = 30
 
 
 def _now():
@@ -228,6 +237,38 @@ def record_storage_quota_purchase(conn, *, user_id, item_key, quantity, points_s
         ),
     )
     return get_storage_quota_purchase(conn, purchase_id)
+
+
+def grant_birthday_storage_quota(conn, *, user_id, birthday_year, ledger_uuid=None):
+    ensure_storage_quota_purchase_schema(conn)
+    year = int(birthday_year)
+    if year < 1970:
+        raise ValueError("birthday_year is invalid")
+    purchase_id = f"birthday_storage:{int(user_id)}:{year}"
+    existing = get_storage_quota_purchase(conn, purchase_id)
+    if existing:
+        return {"ok": True, "created": False, "purchase": existing}
+    starts_at = _now()
+    expires_at = starts_at + timedelta(days=BIRTHDAY_STORAGE_GIFT_DAYS)
+    conn.execute(
+        """
+        INSERT INTO storage_quota_purchases (
+            id, user_id, item_key, quantity, purchased_bytes, points_spent,
+            ledger_uuid, starts_at, expires_at, status, created_at
+        ) VALUES (?, ?, ?, 1, ?, 0, ?, ?, ?, 'active', ?)
+        """,
+        (
+            purchase_id,
+            int(user_id),
+            BIRTHDAY_STORAGE_GIFT_ITEM_KEY,
+            BIRTHDAY_STORAGE_GIFT_BYTES,
+            str(ledger_uuid or "") or None,
+            _iso(starts_at),
+            _iso(expires_at),
+            _iso(starts_at),
+        ),
+    )
+    return {"ok": True, "created": True, "purchase": get_storage_quota_purchase(conn, purchase_id)}
 
 
 def get_storage_quota_purchase(conn, purchase_id):

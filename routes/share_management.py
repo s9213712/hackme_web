@@ -11,6 +11,30 @@ from services.storage.catalog import _normalize_storage_share_max_views, _normal
 from services.users.friends import assert_can_target_user
 
 
+def parse_share_expiry_datetime(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text.replace(" ", "T")
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed.replace(tzinfo=None)
+
+
+def share_expiry_is_elapsed(value, *, now=None):
+    expires_at = parse_share_expiry_datetime(value)
+    if expires_at is None:
+        return False
+    base = now or datetime.now()
+    if base.tzinfo is not None:
+        base = base.astimezone().replace(tzinfo=None)
+    return expires_at <= base.replace(tzinfo=None)
+
+
 def register_share_management_routes(app, deps):
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_db = deps["get_db"]
@@ -37,7 +61,7 @@ def register_share_management_routes(app, deps):
         return actor, None, None
 
     def now_text():
-        return datetime.utcnow().replace(microsecond=0).isoformat()
+        return datetime.now().replace(microsecond=0).isoformat()
 
     def utc_client_time(value):
         text = str(value or "").strip()
@@ -57,7 +81,7 @@ def register_share_management_routes(app, deps):
         if row.get("revoked_at"):
             return "revoked"
         expires_at = str(row.get("expires_at") or "").strip()
-        if expires_at and expires_at <= now_text():
+        if share_expiry_is_elapsed(expires_at):
             return "expired"
         max_views = int(row.get("max_views") or 0)
         access_count = int(row.get("access_count") or 0)
@@ -147,8 +171,8 @@ def register_share_management_routes(app, deps):
             "password_required": bool(row_int(data, "password_required")),
             "can_preview": True,
             "can_download": False,
-            "expires_at": None,
-            "max_views": 0,
+            "expires_at": data.get("expires_at"),
+            "max_views": row_int(data, "max_views"),
             "access_count": row_int(data, "access_count"),
             "last_accessed_at": share_row_time(data, "last_accessed_at", "album"),
             "created_at": share_row_time(data, "created_at", "album"),
@@ -286,6 +310,32 @@ def register_share_management_routes(app, deps):
             return video_share_payload(row)
         return None
 
+    def get_storage_share_payload_row(conn, share_id):
+        if table_exists(conn, "uploaded_files"):
+            upload_name_select = "uf.original_filename_plain_for_public"
+            upload_join = "LEFT JOIN uploaded_files uf ON uf.id=sl.file_id"
+        else:
+            upload_name_select = "NULL AS original_filename_plain_for_public"
+            upload_join = ""
+        if table_exists(conn, "users"):
+            required_user_select = "u.username AS required_username"
+            required_user_join = "LEFT JOIN users u ON u.id=sl.required_user_id"
+        else:
+            required_user_select = "NULL AS required_username"
+            required_user_join = ""
+        return conn.execute(
+            f"""
+            SELECT sl.*, sf.display_name, {upload_name_select}, {required_user_select}
+            FROM storage_share_links sl
+            LEFT JOIN storage_files sf ON sf.id=sl.storage_file_id
+            {required_user_join}
+            {upload_join}
+            WHERE sl.id=?
+            LIMIT 1
+            """,
+            (str(share_id),),
+        ).fetchone()
+
     def update_file_share(conn, actor, row, data):
         access_scope = _normalize_storage_share_scope(data.get("access_scope", row["access_scope"] or "link"))
         required_user_id = None
@@ -352,7 +402,7 @@ def register_share_management_routes(app, deps):
             )
             if msg:
                 raise ValueError(msg)
-        return conn.execute("SELECT * FROM storage_share_links WHERE id=?", (row["id"],)).fetchone()
+        return get_storage_share_payload_row(conn, row["id"])
 
     def update_album_share(conn, actor, row, data):
         password_provided = "share_password" in data
@@ -364,6 +414,11 @@ def register_share_management_routes(app, deps):
             password=str(data.get("share_password") or ""),
             password_provided=password_provided,
             clear_password=clear_password,
+            expires_at=optional_text(data, "expires_at", row["expires_at"]),
+            expires_at_provided="expires_at" in data,
+            max_views=data.get("max_views", row["max_views"]),
+            max_views_provided="max_views" in data,
+            reset_access_count=truthy(data.get("reset_access_count")),
         )
         if msg:
             raise ValueError(msg)

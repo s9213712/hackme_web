@@ -41,7 +41,17 @@ def test_storage_album_schema_creates_core_tables_and_indexes():
         "revoked_at",
         "access_count",
     } <= share_cols
-    assert {"album_id", "owner_user_id", "token_hash", "revoked_at", "access_count", "password_required", "password_hash"} <= album_share_cols
+    assert {
+        "album_id",
+        "owner_user_id",
+        "token_hash",
+        "revoked_at",
+        "access_count",
+        "password_required",
+        "password_hash",
+        "max_views",
+        "expires_at",
+    } <= album_share_cols
     assert {"owner_user_id", "title", "visibility", "cover_file_id"} <= album_cols
     assert {"album_id", "storage_file_id", "file_id", "sort_order", "added_by"} <= album_file_cols
     assert {"idx_storage_files_owner_path", "idx_album_files_album", "idx_album_share_links_album"} <= indexes

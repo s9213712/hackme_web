@@ -45,6 +45,8 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "video-audio-player" in videos_js
     assert "function videoThumbMarkup(video)" in videos_js
     assert "video.cover_url" in videos_js
+    assert "direct_stream_allowed" in videos_js
+    assert '["server_encrypted", "e2ee"].includes(privacyMode)' in videos_js
     assert "function videoPlaybackUrl(video)" in videos_js
     assert "playback_url" in videos_js
     assert 'form.append("cover", coverFile)' in videos_js
@@ -67,9 +69,16 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "video-danmaku-layer" in videos_js
     assert "function startVideoDanmakuLoop" in videos_js
     assert "function sendVideoDanmaku" in videos_js
+    assert "videoDanmakuSpecialPrice" in videos_js
+    assert 'id="video-danmaku-effect"' in videos_js
+    assert 'id="video-danmaku-size"' in videos_js
+    assert "videoState.danmakuShown.add(Number(json.danmaku?.id || 0));" in videos_js
     assert "/danmaku?from_ms=" in videos_js
     assert "data-video-danmaku-send" in videos_js
     assert ".video-danmaku-layer" in styles
+    assert "left: 100%" in styles
+    assert "--video-danmaku-travel" in styles
+    assert ".video-danmaku-effect-rainbow" in styles
     assert "@keyframes video-danmaku-scroll" in styles
     assert "function humanVideoStreamStatus" in videos_js
     assert "data-video-prepare-stream" in videos_js
@@ -99,6 +108,9 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "derivative.blob.size >= sourceSize" in videos_js
     assert "renderVideoE2eeQualityControl" in videos_js
     assert "selectedVideoE2eeQualityVariant" in videos_js
+    assert "function videoSubtitleUrlWithShift" in videos_js
+    assert "data-video-subtitle-shift-step" in videos_js
+    assert "shift_ms" in videos_js
     assert "E2EE Streaming v2 密文分段上傳中" in videos_js
     assert "E2EE 省流量版本" in videos_js
     assert "E2EE Streaming v2 manifest 儲存中" in videos_js
@@ -203,6 +215,9 @@ def test_video_share_copy_and_shared_page_guardrails_are_visible_in_ui_code():
     assert "sharedE2eeFragmentKey" in shared_page
     assert "activeChunkUrlTemplate" in shared_page
     assert "variant.manifest_url" in shared_page
+    assert "function subtitleUrlWithShift" in shared_page
+    assert "data-subtitle-shift-step" in shared_page
+    assert "shared_video_subtitle_shift_ms" in shared_page
     assert "正在追上快轉目標" in shared_page
     assert "function bindSharedSeekProtection" in shared_page
     assert "function sharedQualityFallbackDeferredForSeek" in shared_page

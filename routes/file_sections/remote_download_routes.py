@@ -10,6 +10,7 @@ from flask import request
 
 from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema, store_cloud_upload
 from services.storage.storage_albums import create_storage_file_entry, ensure_storage_album_schema
+from services.job_center import TERMINAL_JOB_STATUSES, ensure_job_center_schema
 from services.system.notifications import create_notification_if_enabled
 from services.security.upload_security import get_user_cloud_drive_usage, safe_public_filename
 
@@ -86,6 +87,45 @@ def register_file_remote_download_routes(app, ctx):
                 "member_level": actor_value(actor, "member_level"),
                 "effective_level": actor_value(actor, "effective_level"),
             }
+
+    def _dismiss_persisted_remote_download_job(task_id, actor, *, allow_non_terminal=False):
+        source_ref = f"remote_download:{str(task_id)}"
+        actor_id = int(actor_value(actor, "id") or 0)
+        conn = get_db()
+        try:
+            ensure_job_center_schema(conn)
+            job = conn.execute(
+                """
+                SELECT job_uuid, owner_user_id, status
+                FROM job_center_jobs
+                WHERE source_module='cloud_drive_remote_download'
+                  AND source_ref=?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (source_ref,),
+            ).fetchone()
+            if not job:
+                conn.commit()
+                return {"ok": True, "removed": False}
+            if int(job["owner_user_id"] or 0) != actor_id:
+                conn.rollback()
+                return {"ok": False, "msg": "沒有下載任務權限", "status": 403}
+            if not allow_non_terminal and str(job["status"] or "") not in TERMINAL_JOB_STATUSES:
+                conn.rollback()
+                return {"ok": False, "msg": "下載任務仍在進行，不能移除紀錄", "status": 409}
+            conn.execute("DELETE FROM job_center_events WHERE job_uuid=?", (job["job_uuid"],))
+            conn.execute("DELETE FROM job_center_jobs WHERE job_uuid=?", (job["job_uuid"],))
+            conn.commit()
+            return {"ok": True, "removed": True}
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
 
     @app.route("/api/cloud-drive/remote-download/capabilities", methods=["GET"])
     @require_csrf_safe
@@ -315,7 +355,10 @@ def register_file_remote_download_routes(app, ctx):
             cleanup_stale_remote_download_tasks_locked()
             task = remote_download_tasks.get(task_id)
             if not task:
-                return json_resp({"ok": True, "removed": False})
+                persisted = _dismiss_persisted_remote_download_job(task_id, actor)
+                if not persisted.get("ok"):
+                    return json_resp({"ok": False, "msg": persisted.get("msg") or "下載任務移除失敗"}), int(persisted.get("status") or 400)
+                return json_resp({"ok": True, "removed": bool(persisted.get("removed"))})
             if int(task.get("owner_user_id") or 0) != int(actor_value(actor, "id")):
                 return json_resp({"ok": False, "msg": "沒有下載任務權限"}), 403
             if task.get("status") in {"queued", "running"}:
@@ -324,6 +367,7 @@ def register_file_remote_download_routes(app, ctx):
             remote_download_tasks.pop(task_id, None)
         if cleanup_dir:
             shutil.rmtree(cleanup_dir, ignore_errors=True)
+        _dismiss_persisted_remote_download_job(task_id, actor, allow_non_terminal=True)
         return json_resp({"ok": True, "removed": True})
 
     @app.route("/api/cloud-drive/remote-download", methods=["POST"])

@@ -2,7 +2,7 @@ from datetime import datetime
 
 from flask import request
 
-from services.storage.capacity_audit import can_allocate_storage_bytes
+from services.storage.capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
 from services.storage.maintenance import run_storage_maintenance, storage_maintenance_status
 from services.storage.quota_overrides import (
     clear_storage_quota_override,
@@ -114,7 +114,9 @@ def register_file_admin_storage_routes(app, ctx):
                 usage["trashed_files"] = int(trashed.get(int(row["id"]), 0))
                 users.append(usage)
             users.sort(key=lambda item: (-int(item.get("used_bytes") or 0), -int(item.get("file_count") or 0), int(item.get("user_id") or 0)))
-            return json_resp({"ok": True, "users": users})
+            settings = get_system_settings() if get_system_settings else {}
+            capacity = audit_storage_capacity(conn, storage_root, settings=settings)
+            return json_resp({"ok": True, "users": users, "storage_capacity": capacity})
         finally:
             conn.close()
 
@@ -135,7 +137,9 @@ def register_file_admin_storage_routes(app, ctx):
                 if query and query not in str(usage.get("username") or "").lower():
                     continue
                 users.append(usage)
-            return json_resp({"ok": True, "users": users})
+            settings = get_system_settings() if get_system_settings else {}
+            capacity = audit_storage_capacity(conn, storage_root, settings=settings)
+            return json_resp({"ok": True, "users": users, "storage_capacity": capacity})
         finally:
             conn.close()
 

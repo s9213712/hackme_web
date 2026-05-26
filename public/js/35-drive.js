@@ -77,6 +77,8 @@ let driveRemoteDownloadCapabilities = { direct: true, bt_magnet: false, bt_file:
 let driveLatestQuota = null;
 let driveDashboardInFlight = null;
 let driveDashboardLoadedAt = 0;
+let chatAttachmentUploadInFlight = false;
+let chatAttachmentUploadFingerprint = "";
 const driveRemotePollingTaskIds = new Set();
 const DRIVE_TRANSFER_COMPLETED_VISIBLE_MS = 6000;
 const DRIVE_TRANSFER_FAILED_VISIBLE_MS = 15000;
@@ -768,6 +770,8 @@ function renderDriveCapacityGauge(percent, level, options = {}) {
 }
 
 function renderDriveDashboard(payload) {
+  const rootTab = $("drive-root-admin-tab");
+  if (rootTab) rootTab.hidden = currentUser !== "root";
   const security = payload && payload.security ? payload.security : {};
   const quota = security.usage || (payload && payload.quota) || {};
   driveLatestQuota = quota;
@@ -2677,6 +2681,8 @@ async function moveCloudFileToStorage(fileId, name) {
 }
 
 let currentDrivePreviewUrl = "";
+let currentDrivePreviewHls = null;
+let driveHlsLibraryPromise = null;
 let selectedAlbumId = "";
 let selectedStorageFileId = "";
 let selectedStorageFilePath = "";
@@ -2692,6 +2698,7 @@ let albumPreviewSequence = [];
 let albumPreviewIndex = -1;
 let lastDrivePreviewClick = { fileId: "", at: 0 };
 const DRIVE_FULLSCREEN_PREVIEW_MS = 450;
+const DRIVE_HLS_JS_URL = "/js/hls.light.min.js?v=20260505-hlsjs";
 
 function getAlbumThumbSize() {
   const key = typeof accountScopedStorageKey === "function" ? accountScopedStorageKey("albumThumbSize") : "albumThumbSize";
@@ -2718,6 +2725,12 @@ function clearAlbumThumbObjectUrls() {
 }
 
 function clearDrivePreviewUrl() {
+  if (currentDrivePreviewHls && typeof currentDrivePreviewHls.destroy === "function") {
+    try {
+      currentDrivePreviewHls.destroy();
+    } catch (_) {}
+  }
+  currentDrivePreviewHls = null;
   if (currentDrivePreviewUrl) {
     URL.revokeObjectURL(currentDrivePreviewUrl);
     currentDrivePreviewUrl = "";
@@ -2851,6 +2864,12 @@ async function buildDriveE2eePreview(fileId, csrf) {
 }
 
 function clearAlbumFullPreviewUrl() {
+  if (currentDrivePreviewHls && typeof currentDrivePreviewHls.destroy === "function") {
+    try {
+      currentDrivePreviewHls.destroy();
+    } catch (_) {}
+  }
+  currentDrivePreviewHls = null;
   if (currentAlbumFullPreviewUrl) {
     URL.revokeObjectURL(currentAlbumFullPreviewUrl);
     currentAlbumFullPreviewUrl = "";
@@ -2889,6 +2908,199 @@ async function fetchDrivePreviewContent(fileId, csrf, expectedMime = "") {
 function drivePreviewUsesDirectStream(preview) {
   const category = String(preview?.category || "");
   return category === "audio" || category === "video" || category === "pdf";
+}
+
+function drivePreviewStreamAsset(preview) {
+  return preview?.stream_asset && typeof preview.stream_asset === "object" ? preview.stream_asset : null;
+}
+
+function drivePreviewHasReadyHls(preview) {
+  const category = String(preview?.category || "");
+  const stream = drivePreviewStreamAsset(preview);
+  return ["audio", "video"].includes(category)
+    && stream
+    && stream.status === "ready"
+    && !!stream.master_manifest_ready;
+}
+
+function drivePreviewHlsMasterUrl(fileId, preview) {
+  const stream = drivePreviewStreamAsset(preview);
+  return stream?.master_url || `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/hls/master.m3u8`;
+}
+
+function drivePreviewSubtitles(preview) {
+  const stream = drivePreviewStreamAsset(preview);
+  const tracks = Array.isArray(stream?.subtitles) ? stream.subtitles : [];
+  return tracks
+    .filter((track) => track && track.name && track.url)
+    .map((track) => ({
+      label: String(track.label || track.language || "字幕"),
+      language: String(track.language || "und"),
+      url: String(track.url || ""),
+      isDefault: !!track.is_default,
+    }));
+}
+
+function driveSubtitleShiftStorageKey(fileId) {
+  return `hackme_web.drive_subtitle_shift_ms.${String(fileId || "")}`;
+}
+
+function clampDriveSubtitleShiftMs(value) {
+  const parsed = Number(value || 0);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(-3600000, Math.min(3600000, Math.round(parsed)));
+}
+
+function driveSubtitleShiftSecondsValue(ms) {
+  const seconds = clampDriveSubtitleShiftMs(ms) / 1000;
+  return Number.isInteger(seconds) ? String(seconds) : seconds.toFixed(1).replace(/\.0$/, "");
+}
+
+function getDriveSubtitleShiftMs(fileId) {
+  try {
+    return clampDriveSubtitleShiftMs(localStorage.getItem(driveSubtitleShiftStorageKey(fileId)) || 0);
+  } catch (_) {
+    return 0;
+  }
+}
+
+function setDriveSubtitleShiftMs(fileId, value) {
+  const offset = clampDriveSubtitleShiftMs(value);
+  try {
+    const key = driveSubtitleShiftStorageKey(fileId);
+    if (offset) localStorage.setItem(key, String(offset));
+    else localStorage.removeItem(key);
+  } catch (_) {}
+  return offset;
+}
+
+function driveSubtitleUrlWithShift(url, shiftMs) {
+  const raw = String(url || "");
+  if (!raw) return raw;
+  const offset = clampDriveSubtitleShiftMs(shiftMs);
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    if (offset) parsed.searchParams.set("shift_ms", String(offset));
+    else parsed.searchParams.delete("shift_ms");
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch (_) {
+    if (!offset) return raw;
+    const separator = raw.includes("?") ? "&" : "?";
+    return `${raw}${separator}shift_ms=${encodeURIComponent(String(offset))}`;
+  }
+}
+
+function syncDrivePreviewSubtitleTracks(player, preview, fileId = "") {
+  if (!player) return;
+  Array.from(player.querySelectorAll('track[data-drive-preview-subtitle="1"]')).forEach((track) => track.remove());
+  const shiftMs = getDriveSubtitleShiftMs(fileId);
+  drivePreviewSubtitles(preview).forEach((track, index) => {
+    const el = document.createElement("track");
+    el.kind = "subtitles";
+    el.label = track.label || track.language || "字幕";
+    el.srclang = track.language || "und";
+    el.src = driveSubtitleUrlWithShift(track.url, shiftMs);
+    el.dataset.drivePreviewSubtitle = "1";
+    if (track.isDefault || index === 0) el.default = true;
+    player.appendChild(el);
+  });
+}
+
+function driveBrowserSupportsNativeHls(mediaType = "video") {
+  const probe = document.createElement(mediaType === "audio" ? "audio" : "video");
+  return !!(probe && typeof probe.canPlayType === "function" && probe.canPlayType("application/vnd.apple.mpegurl"));
+}
+
+function loadDriveHlsLibrary() {
+  if (window.Hls) return Promise.resolve(window.Hls);
+  if (driveHlsLibraryPromise) return driveHlsLibraryPromise;
+  driveHlsLibraryPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-drive-hls-js="1"]');
+    if (existing) {
+      existing.addEventListener("load", () => resolve(window.Hls || null), { once: true });
+      existing.addEventListener("error", () => reject(new Error("HLS.js 載入失敗")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = DRIVE_HLS_JS_URL;
+    script.async = true;
+    script.defer = true;
+    script.dataset.driveHlsJs = "1";
+    script.onload = () => resolve(window.Hls || null);
+    script.onerror = () => reject(new Error("HLS.js 載入失敗"));
+    document.head.appendChild(script);
+  }).catch((err) => {
+    driveHlsLibraryPromise = null;
+    throw err;
+  });
+  return driveHlsLibraryPromise;
+}
+
+function driveSubtitleShiftControlsMarkup(preview, { fullscreen = false, fileId = "" } = {}) {
+  if (!drivePreviewSubtitles(preview).length) return "";
+  const prefix = fullscreen ? "drive-fullscreen" : "drive-preview";
+  return `
+    <div class="video-quality-control drive-subtitle-shift-control">
+      <label for="${prefix}-subtitle-shift-seconds">字幕延遲</label>
+      <button class="btn btn-sm" type="button" data-drive-subtitle-shift-step="-500">-0.5s</button>
+      <input id="${prefix}-subtitle-shift-seconds" type="number" min="-3600" max="3600" step="0.1" value="${sanitize(driveSubtitleShiftSecondsValue(getDriveSubtitleShiftMs(fileId)))}" />
+      <button class="btn btn-sm" type="button" data-drive-subtitle-shift-step="500">+0.5s</button>
+      <button class="btn btn-sm" type="button" data-drive-subtitle-shift-reset="1">重置</button>
+    </div>
+  `;
+}
+
+function driveHlsPlayerMarkup(preview, { fullscreen = false, fileId = "" } = {}) {
+  const playerId = fullscreen ? "drive-fullscreen-hls-player" : "drive-preview-hls-player";
+  const autoplay = fullscreen ? "autoplay " : "";
+  const controls = driveSubtitleShiftControlsMarkup(preview, { fullscreen, fileId });
+  if (preview.category === "audio") return `<audio id="${playerId}" controls ${autoplay}preload="metadata"></audio>${controls}`;
+  return `<video id="${playerId}" controls ${autoplay}preload="metadata" playsinline></video>${controls}`;
+}
+
+async function attachDriveHlsPreview(fileId, preview, { fullscreen = false } = {}) {
+  const player = $(fullscreen ? "drive-fullscreen-hls-player" : "drive-preview-hls-player");
+  if (!player) return;
+  const masterUrl = drivePreviewHlsMasterUrl(fileId, preview);
+  const mediaType = preview.category === "audio" ? "audio" : "video";
+  syncDrivePreviewSubtitleTracks(player, preview, fileId);
+  bindDriveSubtitleShiftControls(fileId, preview, player, { fullscreen });
+  if (driveBrowserSupportsNativeHls(mediaType)) {
+    player.src = masterUrl;
+    return;
+  }
+  const HlsCtor = await loadDriveHlsLibrary();
+  if (!HlsCtor || typeof HlsCtor.isSupported !== "function" || !HlsCtor.isSupported()) {
+    player.src = drivePreviewContentUrl(fileId);
+    return;
+  }
+  if (currentDrivePreviewHls && typeof currentDrivePreviewHls.destroy === "function") {
+    try {
+      currentDrivePreviewHls.destroy();
+    } catch (_) {}
+  }
+  const hls = new HlsCtor({ enableWorker: true, backBufferLength: 30 });
+  currentDrivePreviewHls = hls;
+  hls.loadSource(masterUrl);
+  hls.attachMedia(player);
+}
+
+function bindDriveSubtitleShiftControls(fileId, preview, player, { fullscreen = false } = {}) {
+  const prefix = fullscreen ? "drive-fullscreen" : "drive-preview";
+  const input = $(`${prefix}-subtitle-shift-seconds`);
+  if (!input) return;
+  const applyShift = (nextMs) => {
+    const offset = setDriveSubtitleShiftMs(fileId, nextMs);
+    input.value = driveSubtitleShiftSecondsValue(offset);
+    syncDrivePreviewSubtitleTracks(player, preview, fileId);
+  };
+  input.addEventListener("change", () => applyShift(Number(input.value || 0) * 1000));
+  const container = input.closest(".drive-subtitle-shift-control") || document;
+  container.querySelectorAll("[data-drive-subtitle-shift-step]").forEach((button) => {
+    button.addEventListener("click", () => applyShift(getDriveSubtitleShiftMs(fileId) + Number(button.dataset.driveSubtitleShiftStep || 0)));
+  });
+  const reset = container.querySelector("[data-drive-subtitle-shift-reset]");
+  if (reset) reset.addEventListener("click", () => applyShift(0));
 }
 
 async function resolveDrivePreviewMediaUrl(fileId, csrf, preview, { fullscreen = false } = {}) {
@@ -3087,6 +3299,11 @@ async function previewDriveFile(fileId, options = {}) {
       return;
     }
     if (preview.render_mode === "media") {
+      if (drivePreviewHasReadyHls(preview)) {
+        panel.innerHTML += driveHlsPlayerMarkup(preview, { fileId });
+        await attachDriveHlsPreview(fileId, preview);
+        return;
+      }
       const url = await resolveDrivePreviewMediaUrl(fileId, csrf, preview);
       if (preview.category === "audio") panel.innerHTML += `<audio controls preload="metadata" src="${url}"></audio>`;
       else if (preview.category === "video") panel.innerHTML += `<video controls preload="metadata" playsinline src="${url}"></video>`;
@@ -3196,6 +3413,12 @@ async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
     }
     if (preview.render_mode !== "media") {
       throw new Error("這個檔案類型目前只提供右側 metadata 預覽");
+    }
+    if (drivePreviewHasReadyHls(preview)) {
+      if (meta) meta.textContent = `${formatDriveBytes(preview.size_bytes || 0)} · ${preview.mime_type || "-"} · HLS 串流已就緒 · 字幕 ${drivePreviewSubtitles(preview).length} 軌`;
+      body.innerHTML = driveHlsPlayerMarkup(preview, { fullscreen: true, fileId });
+      await attachDriveHlsPreview(fileId, preview, { fullscreen: true });
+      return;
     }
     const url = await resolveDrivePreviewMediaUrl(fileId, csrf, preview, { fullscreen: true });
     currentAlbumFullPreviewUrl = drivePreviewUsesDirectStream(preview) ? "" : url;
@@ -3466,30 +3689,49 @@ async function uploadPendingChatAttachment() {
     input.value = "";
     return;
   }
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const form = new FormData();
-  form.append("file", selectedFile);
-  form.append("privacy_mode", "standard_plain");
-  form.append("virtual_path", attachmentStoragePath(selectedFile, "chat"));
-  form.append("display_name", selectedFile.name || "attachment.bin");
-  const res = await apiFetch(API + "/cloud-drive/upload", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" },
-    body: form
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || !json.ok) {
-    alert(json.error_code ? `${json.msg || "附件上傳失敗"}（${json.error_code}）` : (json.msg || `附件上傳失敗（HTTP ${res.status}）`));
+  const fingerprint = [
+    selectedFile.name || "",
+    selectedFile.size || 0,
+    selectedFile.lastModified || 0,
+    selectedChatRoomId || "",
+  ].join(":");
+  if (chatAttachmentUploadInFlight && chatAttachmentUploadFingerprint === fingerprint) {
+    setChatMsg("chat-room-warn", "附件正在加入待送清單，請稍候", true);
     return;
   }
-  input.value = "";
-  await ensureAttachmentFileOptionsLoaded({ force: true });
-  if (typeof addPendingChatAttachment === "function") {
-    addPendingChatAttachment(json.file || {});
+  chatAttachmentUploadInFlight = true;
+  chatAttachmentUploadFingerprint = fingerprint;
+  if (input) input.disabled = true;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const form = new FormData();
+    form.append("file", selectedFile);
+    form.append("privacy_mode", "standard_plain");
+    form.append("virtual_path", attachmentStoragePath(selectedFile, "chat"));
+    form.append("display_name", selectedFile.name || "attachment.bin");
+    const res = await apiFetch(API + "/cloud-drive/upload", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+      body: form
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) {
+      alert(json.error_code ? `${json.msg || "附件上傳失敗"}（${json.error_code}）` : (json.msg || `附件上傳失敗（HTTP ${res.status}）`));
+      return;
+    }
+    input.value = "";
+    await ensureAttachmentFileOptionsLoaded({ force: true });
+    if (typeof addPendingChatAttachment === "function") {
+      addPendingChatAttachment(json.file || {});
+    }
+    setChatMsg("chat-room-warn", "附件已加入待送清單，按送出後會出現在該則訊息下方", true);
+  } finally {
+    chatAttachmentUploadInFlight = false;
+    chatAttachmentUploadFingerprint = "";
+    if (input) input.disabled = false;
   }
-  setChatMsg("chat-room-warn", "附件已加入待送清單，按送出後會出現在該則訊息下方", true);
 }
 
 function openChatAttachmentPicker() {
@@ -3736,6 +3978,7 @@ function storageFolderRows(folders) {
           <div class="drive-file-actions">
             <button class="btn btn-primary" type="button" data-drive-action="open-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">開啟</button>
             <button class="btn" type="button" data-drive-action="rename-storage-folder" data-path="${sanitize(folder.virtual_path || "")}" data-name="${sanitize(name)}">重新命名</button>
+            <button class="btn" type="button" data-drive-action="share-storage-folder" data-path="${sanitize(folder.virtual_path || "")}" data-name="${sanitize(name)}">分享</button>
             <button class="btn" type="button" data-drive-action="folder-to-album" data-path="${sanitize(folder.virtual_path || "")}" data-name="${sanitize(name)}">設為相簿</button>
             <button class="btn" type="button" data-drive-action="select-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">移動</button>
             <button class="btn btn-danger" type="button" data-drive-action="trash-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">刪除</button>
@@ -3869,9 +4112,9 @@ function renderAlbums(albums) {
       <div>
         <strong>${sanitize(album.title || album.id)}</strong>
         <div class="drive-card-sub">${sanitize(albumVisibilityLabel(album.visibility))} · ${Number(album.file_count || 0)} 個檔案${album.description ? ` · ${sanitize(album.description)}` : ""}</div>
-        ${albumShareLinkMarkup(album)}
       </div>
       <div class="drive-file-actions">
+        ${albumShareButtonMarkup(album)}
         <button class="btn btn-primary" type="button" data-drive-action="open-album" data-album-id="${sanitize(album.id)}">預覽</button>
         <button class="btn btn-danger" type="button" data-drive-action="delete-album" data-album-id="${sanitize(album.id)}">刪除</button>
       </div>
@@ -4102,6 +4345,40 @@ async function createAlbumFromFolder(path, name = "") {
     alert(`已建立相簿「${json.album?.title || cleanTitle}」，加入 ${Number(json.album?.added_count || json.album?.files?.length || 0)} 個檔案`);
   } catch (err) {
     alert(err.message || "資料夾設為相簿失敗");
+  }
+}
+
+async function shareStorageFolder(path, name = "") {
+  const folderPath = normalizeStoragePath(path);
+  const defaultTitle = name || storageBaseName(folderPath) || "資料夾分享";
+  const title = window.prompt("資料夾分享名稱", defaultTitle);
+  if (title === null) return;
+  const cleanTitle = title.trim();
+  if (!cleanTitle) {
+    alert("分享名稱不可為空");
+    return;
+  }
+  try {
+    const json = await storageAction("/storage/folders/album", "POST", {
+      path: folderPath,
+      title: cleanTitle,
+      visibility: "unlisted"
+    });
+    const album = json.album || {};
+    const shareId = album?.share_link?.id || "";
+    storageAlbumsCache = [];
+    selectedAlbumId = album.id || selectedAlbumId;
+    selectedAlbumViewerId = album.id || selectedAlbumViewerId;
+    await loadDriveDashboard();
+    await loadAlbumGallery();
+    if (typeof switchModuleTab === "function") switchModuleTab("shares");
+    if (shareId && typeof openShareCenterEditor === "function") {
+      await openShareCenterEditor("album", shareId);
+    } else if (typeof loadShareCenter === "function") {
+      await loadShareCenter();
+    }
+  } catch (err) {
+    alert(err.message || "資料夾分享建立失敗");
   }
 }
 
@@ -4527,18 +4804,15 @@ async function createAlbum() {
   const title = $("album-create-title")?.value || "";
   const description = $("album-create-description")?.value || "";
   const visibility = $("album-create-visibility")?.value || "private";
-  const sharePassword = $("album-create-share-password")?.value || "";
   if (!title.trim()) {
     alert("請輸入相簿名稱");
     return;
   }
   try {
     const payload = { title, description, visibility };
-    if (sharePassword) payload.share_password = sharePassword;
     const json = await storageAction("/storage/albums", "POST", payload);
     $("album-create-title").value = "";
     if ($("album-create-description")) $("album-create-description").value = "";
-    if ($("album-create-share-password")) $("album-create-share-password").value = "";
     selectedAlbumId = json.album?.id || "";
     await loadDriveDashboard();
     await loadAlbumGallery();
@@ -4608,7 +4882,10 @@ async function addStorageFileToAlbum(storageFileId, fileLabel = "") {
 }
 
 function setDriveActivePage(page = "files") {
-  const selected = page === "capacity" ? "capacity" : "files";
+  const rootAllowed = currentUser === "root";
+  const rootTab = $("drive-root-admin-tab");
+  if (rootTab) rootTab.hidden = !rootAllowed;
+  const selected = page === "root-admin" && rootAllowed ? "root-admin" : (page === "capacity" ? "capacity" : "files");
   document.querySelectorAll("[data-drive-page-tab]").forEach((tab) => {
     const active = tab.dataset.drivePageTab === selected;
     tab.classList.toggle("active", active);
@@ -4619,6 +4896,10 @@ function setDriveActivePage(page = "files") {
     panel.classList.toggle("active", active);
     panel.hidden = !active;
   });
+  if (selected === "root-admin") {
+    if (typeof loadSettings === "function") loadSettings();
+    if (typeof loadRootStorageUsers === "function") loadRootStorageUsers();
+  }
 }
 
 function bindDriveSectionTabs() {
@@ -4734,12 +5015,13 @@ document.addEventListener("click", (event) => {
     if (action === "purge-storage") return purgeStorageFile(storageFileId);
     if (action === "rename-storage-folder") return renameStorageFolder(path, name);
     if (action === "trash-storage-folder") return trashStorageFolder(path);
+    if (action === "share-storage-folder") return shareStorageFolder(path, name);
     if (action === "folder-to-album") return createAlbumFromFolder(path, name);
     if (action === "restore-storage-trash") return restoreStorageTrash();
     if (action === "purge-storage-trash") return purgeStorageTrash();
     if (action === "select-storage-folder") return selectStorageFolderForMove(path);
     if (action === "open-album") return openAlbum(albumId);
-    if (action === "copy-album-share-link") return copyAlbumShareUrl(shareUrl, { button });
+    if (action === "share-album") return shareAlbum(albumId);
     if (action === "delete-album") return deleteAlbum(albumId);
     if (action === "close-album-detail") return closeAlbumDetail();
     if (action === "save-album-detail") return saveAlbumDetail();
