@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260523-account-pagination-bundles" />
+  <link rel="stylesheet" href="/styles.css?v=20260526-profile-process-detail" />
   <link rel="stylesheet" href="/experiments.css?v=20260517-plane-view-angle" />
   <link rel="stylesheet" href="/i18n-language-switcher.css?v=20260520-deep-audit" />
 </head>
@@ -229,23 +229,24 @@
         <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="收合側邊欄" aria-expanded="true">‹</button>
       </div>
       <nav class="tabs sidebar-nav" id="module-main-tabs">
+        <button class="tab" id="tab-module-announcements">公告</button>
         <button class="tab active" id="tab-module-chat">聊天</button>
         <button class="tab" id="tab-module-profile">個人面板</button>
-        <button class="tab" id="tab-module-announcements">公告</button>
         <button class="tab" id="tab-module-community">討論區</button>
         <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
         <button class="tab" id="tab-module-albums" style="display:none;">相簿</button>
         <button class="tab" id="tab-module-videos" style="display:none;">影音</button>
         <button class="tab" id="tab-module-games" style="display:none;">遊戲區</button>
-        <button class="tab" id="tab-module-experiments" style="display:none;">實驗區</button>
         <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
         <button class="tab" id="tab-module-economy" style="display:none;">積分系統</button>
         <button class="tab" id="tab-module-trading" style="display:none;">積分交易所</button>
-        <button class="tab" id="tab-module-appeals">申覆</button>
         <button class="tab" id="tab-module-jobs" style="display:none;">任務中心</button>
         <button class="tab" id="tab-module-shares" style="display:none;">分享管理</button>
+        <button class="tab" id="tab-module-appeals">申覆</button>
         <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
+        <button class="tab" id="tab-module-system" style="display:none;">系統管理</button>
         <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
+        <button class="tab" id="tab-module-experiments" style="display:none;">實驗區</button>
       </nav>
       <div class="sidebar-footer" id="sidebar-footer">
         <div class="sidebar-user-card" id="sidebar-user-card" role="button" tabindex="0" aria-label="開啟個人面板">
@@ -424,6 +425,7 @@
 
       <section class="profile-pane active" id="profile-pane-home">
         <div class="profile-summary">
+          <div class="profile-decoration-layer" id="profile-home-decoration" aria-hidden="true"></div>
           <button class="profile-avatar-large profile-avatar-upload-button" id="profile-home-avatar" type="button" aria-label="上傳或更換頭像">-</button>
           <div class="profile-summary-main">
             <h3 id="profile-home-name">-</h3>
@@ -432,6 +434,7 @@
             <p class="drive-card-sub" id="profile-home-signature"></p>
             <div class="profile-home-actions" id="profile-home-actions"></div>
           </div>
+          <div class="profile-sticker-layer" id="profile-home-stickers" aria-hidden="true"></div>
         </div>
         <div class="settings-option-grid profile-stats-grid">
           <div><span class="drive-card-sub">朋友數</span><strong id="profile-home-friend-count">0</strong></div>
@@ -441,6 +444,123 @@
           <div><span class="drive-card-sub">主頁可見性</span><strong id="profile-home-visibility">public</strong></div>
           <div><span class="drive-card-sub">我的好友代碼</span><strong id="profile-home-friend-code">-</strong></div>
         </div>
+        <details class="profile-quick-customize" id="profile-quick-customize-card">
+          <summary>主頁快速設定</summary>
+          <div class="settings-option-grid">
+            <label class="field">
+              <span>主頁模板</span>
+              <select id="profile-edit-template">
+                <option value="classic">經典</option>
+                <option value="creator">創作者</option>
+                <option value="compact">精簡</option>
+                <option value="showcase">展示</option>
+                <option value="gallery">相簿展示</option>
+                <option value="neon">霓虹舞台</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>主頁配色</span>
+              <select id="profile-edit-accent">
+                <option value="default">預設</option>
+                <option value="ocean">海洋</option>
+                <option value="sunrise">日出</option>
+                <option value="forest">森林</option>
+                <option value="mono">黑白</option>
+                <option value="violet">紫晶</option>
+                <option value="ruby">紅寶石</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>主頁密度</span>
+              <select id="profile-edit-density">
+                <option value="comfortable">標準</option>
+                <option value="compact">緊湊</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>封面背景</span>
+              <select id="profile-edit-banner">
+                <option value="none">無封面</option>
+                <option value="aurora">極光</option>
+                <option value="neon_grid">霓虹格線</option>
+                <option value="paper">紙張紋理</option>
+                <option value="night_sky">夜空</option>
+                <option value="terminal">終端機</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>背景強度</span>
+              <select id="profile-edit-background-tone">
+                <option value="soft">柔和</option>
+                <option value="standard">標準</option>
+                <option value="bold">鮮明</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>頭像框</span>
+              <select id="profile-edit-avatar-frame">
+                <option value="none">無框</option>
+                <option value="soft_ring">柔光環</option>
+                <option value="neon">霓虹</option>
+                <option value="pixel">像素</option>
+                <option value="botanical">花草</option>
+                <option value="crown">王冠</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>頭像大小</span>
+              <select id="profile-edit-avatar-size">
+                <option value="large">大</option>
+                <option value="xl">加大</option>
+                <option value="hero">主視覺</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>名稱字形</span>
+              <select id="profile-edit-name-font">
+                <option value="system">系統</option>
+                <option value="rounded">圓體</option>
+                <option value="serif">襯線</option>
+                <option value="mono">等寬</option>
+                <option value="display">標題</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>名稱大小</span>
+              <select id="profile-edit-name-size">
+                <option value="normal">標準</option>
+                <option value="large">大</option>
+                <option value="hero">主標題</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>貼圖</span>
+              <select id="profile-edit-sticker">
+                <option value="none">不顯示</option>
+                <option value="sparkles">閃光</option>
+                <option value="star">星星</option>
+                <option value="heart">愛心</option>
+                <option value="music">音樂</option>
+                <option value="game">遊戲</option>
+                <option value="code">程式</option>
+                <option value="crown">王冠</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>裝飾</span>
+              <select id="profile-edit-decoration">
+                <option value="none">無裝飾</option>
+                <option value="minimal">細線</option>
+                <option value="badges">徽章列</option>
+                <option value="ribbon">緞帶</option>
+                <option value="constellation">星圖</option>
+              </select>
+            </label>
+          </div>
+          <div class="drive-file-actions" style="justify-content:flex-start;">
+            <button class="btn btn-primary" id="profile-appearance-save-btn" type="button">儲存主頁設定</button>
+          </div>
+        </details>
       </section>
 
       <section class="profile-pane" id="profile-pane-edit">
@@ -463,6 +583,21 @@
               <option value="public">公開</option>
               <option value="friends">好友</option>
               <option value="private">私人</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>顯示時區</span>
+            <select id="profile-edit-display-timezone">
+              <option value="auto">跟隨瀏覽器</option>
+              <option value="UTC">UTC</option>
+              <option value="Asia/Taipei">Asia/Taipei</option>
+              <option value="Asia/Tokyo">Asia/Tokyo</option>
+              <option value="Asia/Seoul">Asia/Seoul</option>
+              <option value="Asia/Hong_Kong">Asia/Hong_Kong</option>
+              <option value="Asia/Shanghai">Asia/Shanghai</option>
+              <option value="America/Los_Angeles">America/Los_Angeles</option>
+              <option value="America/New_York">America/New_York</option>
+              <option value="Europe/London">Europe/London</option>
             </select>
           </label>
         </div>
@@ -536,6 +671,10 @@
           <p>集中查看 ComfyUI、影音轉碼、報告、檢查與其他長時間任務。</p>
         </div>
         <button class="btn" id="job-center-refresh-btn" type="button">重新整理</button>
+      </div>
+      <div class="tabs compact-tabs" role="tablist" aria-label="任務中心分類" style="margin:.55rem 0 .75rem;">
+        <button class="tab active" type="button" data-job-center-view="general" aria-selected="true">一般任務 <span id="job-center-general-count">0</span></button>
+        <button class="tab" type="button" data-job-center-view="trading" aria-selected="false">交易背景 <span id="job-center-trading-count">0</span></button>
       </div>
       <div class="settings-option-grid economy-wallet-grid">
         <div><span class="drive-card-sub">進行中</span><strong id="job-center-running-count">0</strong><small>running / waiting</small></div>
@@ -877,6 +1016,7 @@
       <div class="tabs drive-section-tabs" id="drive-section-tabs" role="tablist" aria-label="雲端硬碟分頁">
         <button class="tab active" id="drive-files-tab" type="button" role="tab" aria-selected="true" aria-controls="drive-files-page" data-drive-page-tab="files">檔案管理</button>
         <button class="tab" id="drive-capacity-tab" type="button" role="tab" aria-selected="false" aria-controls="drive-capacity-page" data-drive-page-tab="capacity">容量管理</button>
+        <button class="tab" id="drive-root-admin-tab" type="button" role="tab" aria-selected="false" aria-controls="drive-root-admin-page" data-drive-page-tab="root-admin" hidden>Root 管理</button>
       </div>
       <div class="drive-subpage" id="drive-capacity-page" data-drive-page-panel="capacity" role="tabpanel" aria-labelledby="drive-capacity-tab" hidden>
       <div class="drive-dashboard-grid">
@@ -931,6 +1071,85 @@
       <div class="admin-toolbar" style="margin-top:.75rem;">
         <button class="btn btn-primary" id="drive-refresh-btn" type="button">重新整理雲端硬碟狀態</button>
       </div>
+      </div>
+      <div class="drive-subpage" id="drive-root-admin-page" data-drive-page-panel="root-admin" role="tabpanel" aria-labelledby="drive-root-admin-tab" hidden>
+        <div class="drive-dashboard-grid">
+          <div class="drive-card">
+            <div class="drive-card-title">儲存根目錄</div>
+            <div class="drive-card-sub">變更後需重啟才會切換實際檔案位置。</div>
+            <div class="field" style="margin-top:.75rem;">
+              <label>儲存根目錄（空白代表沿用 HTML_LEARNING_STORAGE_DIR / 目前啟動設定）</label>
+              <input type="text" id="s-cloud-drive-storage-root" placeholder="/srv/hackme_web/storage" />
+            </div>
+            <div class="field">
+              <label>全用戶雲端硬碟容量上限 MB（-1 代表儲存磁碟總容量 95%）</label>
+              <input type="number" id="s-cloud-drive-global-capacity-limit-mb" min="-1" step="1" placeholder="-1" />
+            </div>
+            <div class="admin-toolbar" style="margin-top:.55rem;">
+              <button class="btn btn-primary" type="button" id="drive-root-storage-settings-save-btn">儲存儲存設定</button>
+            </div>
+            <div id="cloud-drive-storage-status" style="font-size:.78rem;color:var(--muted);margin:.55rem 0 0;"></div>
+          </div>
+
+          <div class="drive-card">
+            <div class="drive-card-title">實體磁碟容量</div>
+            <div class="drive-card-sub">依目前雲端硬碟 storage root 所在磁碟即時偵測。</div>
+            <div id="root-storage-capacity-summary" class="drive-summary" style="margin-top:.75rem;"></div>
+          </div>
+
+          <div class="drive-card">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">雲端硬碟政策與維護</div>
+                <div class="drive-card-sub">掃描、回收筒、下載政策與每日維護都在雲端硬碟管理頁調整。</div>
+              </div>
+              <button class="btn btn-primary btn-sm" type="button" data-settings-save-action>儲存雲端設定</button>
+            </div>
+            <div id="drive-root-settings-slot"></div>
+          </div>
+
+          <div class="drive-card">
+            <div class="drive-card-title">Root 帳號雲端硬碟管理</div>
+            <div class="drive-card-sub">查看各帳號用量並覆寫單一帳號容量 / 上傳限制。</div>
+            <div class="settings-option-grid" style="margin-top:.75rem;">
+              <div class="field">
+                <label>管理帳號</label>
+                <select id="root-storage-user-select"><option value="">讀取帳號中...</option></select>
+              </div>
+              <div class="field">
+                <label>直接容量上限 MB（空白沿用角色/等級）</label>
+                <input type="number" id="root-storage-quota-mb" min="0" placeholder="例如 1024" />
+              </div>
+              <div class="field">
+                <label>直接單檔上限 MB（空白沿用角色/等級）</label>
+                <input type="number" id="root-storage-max-file-mb" min="0" placeholder="例如 100" />
+              </div>
+              <div class="field">
+                <label>每日上傳次數（空白沿用角色/等級）</label>
+                <input type="number" id="root-storage-daily-limit" min="0" placeholder="例如 20" />
+              </div>
+              <div class="field">
+                <label>上傳權限</label>
+                <select id="root-storage-can-upload">
+                  <option value="inherit">沿用角色/等級</option>
+                  <option value="true">允許上傳</option>
+                  <option value="false">禁止上傳</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>覆寫原因</label>
+                <input type="text" id="root-storage-override-reason" placeholder="例如：臨時專案容量、違規處分、人工例外" />
+              </div>
+            </div>
+            <div class="admin-toolbar" style="margin-top:.55rem;">
+              <button class="btn" type="button" id="root-storage-refresh-btn">重新整理用量</button>
+              <button class="btn btn-primary" type="button" id="root-storage-save-btn">套用 root 直接設定</button>
+              <button class="btn btn-danger" type="button" id="root-storage-clear-btn">清除直接設定</button>
+            </div>
+            <div id="root-storage-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
+          </div>
+        </div>
+        <div id="root-storage-users" class="drive-file-list" style="margin-top:.75rem;"></div>
       </div>
       <input type="file" id="storage-upload-file" hidden />
       <input type="file" id="storage-upload-folder" hidden webkitdirectory directory multiple />
@@ -1050,10 +1269,6 @@
               </select>
             </div>
             <div class="field">
-              <label>分享密碼（選填）</label>
-              <input type="password" id="album-create-share-password" placeholder="持連結可看時生效" autocomplete="new-password" />
-            </div>
-            <div class="field">
               <label>&nbsp;</label>
               <button class="btn btn-primary" id="album-create-btn" type="button">建立</button>
             </div>
@@ -1065,7 +1280,10 @@
                 <div class="drive-card-title" id="album-detail-title">相簿內容</div>
                 <div class="drive-card-sub" id="album-detail-meta"></div>
               </div>
-              <button class="btn" type="button" data-drive-action="close-album-detail">關閉</button>
+              <div class="drive-file-actions">
+                <button class="btn btn-primary" type="button" data-drive-action="share-album" data-album-id="">分享</button>
+                <button class="btn" type="button" data-drive-action="close-album-detail">關閉</button>
+              </div>
             </div>
             <div class="settings-option-grid">
               <div class="field">
@@ -1083,15 +1301,6 @@
                   <option value="unlisted">不列出，持連結可看</option>
                   <option value="public">公開</option>
                 </select>
-              </div>
-              <div class="field">
-                <label>分享密碼</label>
-                <input type="password" id="album-edit-share-password" placeholder="留空不變，輸入新密碼可更新" autocomplete="new-password" />
-                <div class="drive-card-sub" id="album-edit-share-password-state">目前未設定分享密碼。</div>
-                <label class="inline-check">
-                  <input type="checkbox" id="album-edit-clear-share-password" />
-                  清除分享密碼
-                </label>
               </div>
               <div class="field">
                 <label>&nbsp;</label>
@@ -1125,6 +1334,7 @@
         </summary>
         <div class="drive-collapsible-body">
           <div class="drive-file-actions" style="justify-content:flex-start;margin-bottom:.7rem;">
+            <button class="btn btn-primary" type="button" data-drive-action="share-album" data-album-id="">分享</button>
             <button class="btn" type="button" data-drive-action="close-album-viewer">關閉</button>
           </div>
           <div id="album-viewer-files" class="drive-gallery-grid"></div>
@@ -1866,6 +2076,7 @@
         <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="history">歷史重跑</button>
         <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="workflow">Workflow</button>
         <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="models" hidden>模型管理</button>
+        <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="settings" hidden>系統設定</button>
       </div>
       <div class="comfyui-subview active" id="comfyui-view-generate" data-comfyui-view-panel="generate" role="tabpanel">
       <div class="comfyui-layout">
@@ -2095,7 +2306,7 @@
             <div class="field"><label>高度</label><input type="number" id="comfyui-height" min="64" max="2048" step="8" value="1024" /></div>
             <div class="field"><label>步數</label><input type="number" id="comfyui-steps" min="1" max="80" value="20" /></div>
             <div class="field"><label>CFG</label><input type="number" id="comfyui-cfg" min="1" max="30" step="0.5" value="7" /></div>
-            <div class="field"><label>張數</label><input type="number" id="comfyui-batch-size" min="1" max="1" value="1" title="目前系統限制單次只能產生 1 張，root 可在安全中心調整" /></div>
+            <div class="field"><label>張數</label><input type="number" id="comfyui-batch-size" min="1" max="1" value="1" title="目前系統限制單次只能產生 1 張，root 可在系統管理調整" /></div>
             <div class="field"><label>執行次數</label><input type="number" id="comfyui-run-count" min="1" max="10" value="1" title="連續送出幾次產圖工作；結果會合併顯示" /></div>
             <div class="field"><label>Seed（空白=隨機）</label><input type="number" id="comfyui-seed" min="0" placeholder="random" /></div>
             <div class="field"><label>Seed 生成後</label><select id="comfyui-seed-after-generate"><option value="random">生成後隨機</option><option value="fixed" selected>固定</option><option value="increment">+1</option><option value="decrement">-1</option></select></div>
@@ -2493,6 +2704,18 @@
         </details>
       </div>
       </div>
+      <div class="comfyui-subview" id="comfyui-view-settings" data-comfyui-view-panel="settings" role="tabpanel" hidden>
+        <div class="drive-card comfyui-root-panel" id="comfyui-root-settings-panel" style="display:none;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">AI 產圖系統設定</div>
+              <div class="drive-card-sub">ComfyUI 連線模式、Diffusers、本地啟動與預設產圖參數都在這裡調整。</div>
+            </div>
+            <button class="btn btn-primary btn-sm" type="button" data-settings-save-action>儲存 AI 設定</button>
+          </div>
+          <div id="comfyui-settings-slot" style="margin-top:.75rem;"></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -2501,12 +2724,9 @@
         <div class="mini-title" id="economy-page-title">PointsChain 積分錢包</div>
       <div class="tabs economy-subtabs" id="economy-subtabs" aria-label="積分系統分頁">
         <button class="tab active" id="tab-economy-balance" type="button" data-economy-page="balance">積分餘額</button>
-        <button class="tab" id="tab-economy-transactions" type="button" data-economy-page="transactions">交易管理</button>
+        <button class="tab" id="tab-economy-transactions" type="button" data-economy-page="transactions">鏈上交易</button>
         <button class="tab" id="tab-economy-explorer" type="button" data-economy-page="explorer">鏈上瀏覽器</button>
         <button class="tab" id="tab-economy-governance" type="button" data-economy-page="governance">治理看板</button>
-        <button class="tab" id="tab-economy-funding-pools" type="button" data-economy-page="funding-pools" style="display:none;">資金池管理</button>
-        <button class="tab" id="tab-economy-all-positions" type="button" data-economy-page="all-positions" style="display:none;">全用戶倉位管理</button>
-        <button class="tab" id="tab-economy-positions" type="button" data-economy-page="positions" style="display:none;">倉位管理</button>
         <button class="tab" id="tab-economy-chain" type="button" data-economy-page="chain">積分私有鏈</button>
       </div>
       <div class="economy-subpage active" id="economy-balance-page">
@@ -2537,23 +2757,21 @@
         <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
           <div><span class="drive-card-sub">錢包數</span><strong id="economy-wallet-count">0</strong><small id="economy-wallet-primary-note">-</small></div>
           <div><span class="drive-card-sub">主要地址</span><strong id="economy-wallet-identity-address">-</strong><small id="economy-wallet-identity-status">-</small></div>
-          <div><span class="drive-card-sub">初始配點</span><strong id="economy-wallet-initial-grant">-</strong><small id="economy-wallet-initial-grant-note">綁定錢包後匯入</small></div>
-          <div><span class="drive-card-sub">註冊禮</span><strong id="economy-wallet-signup-bonus">-</strong><small>完成錢包後發放</small></div>
         </div>
         <div class="drive-file-list" id="economy-wallet-identity-list" style="margin-top:.75rem;"></div>
-        <div class="drive-card-sub" style="margin-top:.5rem;">冷錢包可在錢包卡片右側操作；刪除後不再列入帳戶總額，持有備份碼者可恢復該地址。</div>
+        <div class="drive-card-sub" style="margin-top:.5rem;">冷錢包可在錢包卡片右側操作；刪除後不再列入帳戶總額，持有錢包檔與冷錢包解鎖助記詞者可恢復該地址。</div>
         <div id="economy-wallet-bound-actions" style="display:none;"></div>
       </div>
       <details class="drive-card" id="economy-wallet-create-card" style="display:none;margin-top:.75rem;">
         <summary class="drive-card-heading">
           <div>
-            <div class="drive-card-title">創建錢包</div>
-            <div class="drive-card-sub">新增官方熱錢包或冷錢包；初始配點會在明確綁定錢包後匯入。一般用戶多簽在 RC1 僅保留觀察/收款能力。</div>
+            <div class="drive-card-title">冷錢包管理</div>
+            <div class="drive-card-sub">站內託管錢包由平台自動建立且每人唯一；這裡僅建立或匯入自管冷錢包。一般用戶多簽在 RC1 僅保留觀察/收款能力。</div>
           </div>
         </summary>
         <div id="economy-wallet-onboarding-actions" style="margin-top:.75rem;">
           <div class="drive-file-actions economy-inline-actions">
-            <button class="btn" id="economy-wallet-official-hot-btn" type="button">使用官方熱錢包</button>
+            <button class="btn" id="economy-wallet-official-hot-btn" type="button" style="display:none;">修復站內託管錢包</button>
             <button class="btn" id="economy-wallet-create-cold-btn" type="button">建立冷錢包</button>
             <button class="btn" id="economy-wallet-import-cold-btn" type="button">匯入冷錢包</button>
           </div>
@@ -2567,22 +2785,40 @@
           <div class="field" id="economy-wallet-generated-panel" style="display:none;margin-top:.75rem;">
             <label>新冷錢包地址</label>
             <input type="text" id="economy-wallet-generated-address" readonly autocomplete="off" />
-            <label style="margin-top:.5rem;">新冷錢包私鑰備份碼</label>
-            <textarea id="economy-wallet-generated-private-key" rows="4" spellcheck="false" readonly placeholder="按建立冷錢包後顯示一次。"></textarea>
-            <div class="drive-card-sub">這只是新建草稿，不會自動匯入、綁定或接收初始配點；私鑰備份碼可恢復此地址，請離線保存，不要交給任何人。</div>
+            <label style="margin-top:.5rem;">錢包檔</label>
+            <input type="text" id="economy-wallet-generated-file-name" readonly autocomplete="off" placeholder="按建立冷錢包後產生 .pcw1.json" />
+            <label style="margin-top:.5rem;">冷錢包解鎖助記詞（交易簽署密碼）</label>
+            <input type="text" id="economy-wallet-generated-trade-password" readonly spellcheck="false" autocomplete="off" placeholder="只顯示一次，請離線保存" />
+            <div class="drive-card-sub">這只是新建草稿，不會自動匯入或綁定；私鑰已加密封存在錢包檔中，冷錢包解鎖助記詞只顯示一次，本站無法替你找回。</div>
+            <div class="drive-card-sub" style="margin-top:.35rem;">此助記詞用來解鎖錢包檔並在本機簽署交易，不是私鑰種子。注意：pcp1 只是解鎖助記詞前綴，不是第一個 pc1 冷錢包；官方 pc0 熱錢包也不計入第一個 pc1 冷錢包，第一個 pc1 冷錢包仍免費。</div>
+            <button class="btn" id="economy-wallet-start-mnemonic-quiz-btn" type="button" disabled style="margin-top:.5rem;">確認已保存，隱藏助記詞並開始考試</button>
+            <div class="drive-card" id="economy-wallet-mnemonic-quiz" style="display:none;margin-top:.65rem;">
+              <div class="drive-card-title">記憶詞考試</div>
+              <div class="drive-card-sub">按上方確認後會先隱藏解鎖助記詞，再填回指定序號的詞；答錯會作廢本次草稿並要求重來。</div>
+              <div class="settings-option-grid" id="economy-wallet-mnemonic-quiz-prompts" style="margin-top:.5rem;"></div>
+              <div class="drive-file-actions economy-inline-actions" style="margin-top:.5rem;">
+                <button class="btn" id="economy-wallet-mnemonic-check-btn" type="button">檢查記憶詞</button>
+                <span class="drive-card-sub" id="economy-wallet-mnemonic-quiz-status"></span>
+              </div>
+            </div>
             <div class="drive-file-actions economy-inline-actions" style="margin-top:.5rem;">
-              <button class="btn" id="economy-wallet-use-generated-cold-btn" type="button">選用此冷錢包</button>
+              <button class="btn" id="economy-wallet-download-file-btn" type="button">下載錢包檔</button>
+              <button class="btn" id="economy-wallet-copy-trade-password-btn" type="button">複製解鎖助記詞</button>
+              <button class="btn" id="economy-wallet-use-generated-cold-btn" type="button" disabled>先完成記憶詞考試</button>
               <span class="drive-card-sub" id="economy-wallet-generated-selection-status">尚未選用</span>
             </div>
           </div>
           <div class="field" style="margin-top:.75rem;">
-            <label>匯入 / 綁定冷錢包私鑰備份碼</label>
-            <textarea id="economy-wallet-private-key" rows="4" spellcheck="false" placeholder="貼上 pcw1 私鑰備份碼；也相容舊 JWK JSON。建立冷錢包不會自動填入此欄。"></textarea>
-            <div class="drive-card-sub">私鑰備份碼只在瀏覽器中產生、匯入或本機簽署；送到伺服器的只有 public key、地址與簽章。</div>
+            <label>匯入 / 綁定冷錢包檔</label>
+            <input type="file" id="economy-wallet-file-input" accept=".pcw1.json,application/json" />
+            <label style="margin-top:.5rem;">冷錢包解鎖助記詞（交易簽署密碼）</label>
+            <input type="password" id="economy-wallet-file-password" autocomplete="off" placeholder="輸入建立時顯示的 12 個解鎖助記詞" />
+            <div class="drive-card-sub">錢包檔與冷錢包解鎖助記詞只在瀏覽器本機解密簽署；送到伺服器的只有 public key、地址與簽章。</div>
+            <input type="file" id="economy-wallet-signing-file-input" accept=".pcw1.json,application/json,.json" style="display:none;" />
           </div>
           <label class="drive-card-sub" style="display:flex;gap:.45rem;align-items:center;margin-top:.5rem;">
             <input type="checkbox" id="economy-wallet-private-key-confirmed" />
-            我已離線保存私鑰備份碼，遺失時本站無法替我還原冷錢包。
+            我已下載錢包檔並離線保存冷錢包解鎖助記詞，遺失時本站無法替我還原冷錢包。
           </label>
           <div class="drive-file-actions economy-inline-actions" style="margin-top:.75rem;">
             <button class="btn btn-primary" id="economy-wallet-confirm-cold-btn" type="button">確認並綁定冷錢包</button>
@@ -2590,21 +2826,8 @@
       </div>
       </details>
       <div class="msg" id="economy-wallet-onboarding-msg"></div>
-      <div class="drive-card" id="economy-wallet-transfer-card" style="display:none;margin-top:.75rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title">鏈上送單</div>
-            <div class="drive-card-sub">像正式區塊鏈一樣由錢包地址送出交易；手續費進 BURN 銷毀錢包。</div>
-          </div>
-        </div>
-        <div class="settings-option-grid">
-          <div class="field"><label>From</label><select id="economy-transfer-source-wallet"><option value="">尚無可用錢包</option></select></div>
-          <div class="field"><label>To</label><input type="text" id="economy-transfer-destination-wallet" placeholder="pc1..." autocomplete="off" /></div>
-          <div class="field"><label>Value</label><input type="number" id="economy-transfer-amount" min="1" value="1" /></div>
-          <div class="field"><label>Transaction Fee</label><input type="number" id="economy-transfer-fee" min="0" value="1" /><small id="economy-transfer-fee-estimate" class="drive-card-sub">預估 Proved 時間讀取中...</small></div>
-          <div class="field"><label>Input Data</label><input type="text" id="economy-transfer-memo" maxlength="180" placeholder="可留空" /></div>
-          <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-transfer-submit-btn" type="button">送出交易</button></div>
-        </div>
+      <div id="economy-wallet-action-panel" style="display:none;margin-top:.75rem;">
+        <div id="economy-wallet-action-content"></div>
         <div class="msg" id="economy-transfer-msg"></div>
         <div id="economy-transfer-last-result" class="drive-card-sub" style="margin-top:.5rem;"></div>
       </div>
@@ -2612,7 +2835,7 @@
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">系統錢包</div>
-            <div class="drive-card-sub">Mint、官方、PROMO、交易所與 Burn 錢包；餘額由 append-only ledger replay 產生。</div>
+            <div class="drive-card-sub">Mint/Burn 是系統特殊地址；官方 Treasury、PROMO、交易所是平台 pc0 基金錢包；餘額由 append-only ledger replay 產生。</div>
           </div>
           <button class="btn" id="economy-root-wallet-refresh-btn" type="button">更新報告</button>
         </div>
@@ -2633,6 +2856,43 @@
           </div>
           <div class="msg" id="economy-root-official-grant-msg"></div>
         </details>
+        <div class="economy-collapse" id="economy-treasury-signer-center-card" style="display:none;margin-top:.75rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">官方財庫收支分析</div>
+              <div class="drive-card-sub" id="economy-treasury-signer-center-status">讀取中</div>
+            </div>
+          </div>
+          <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+            <div><span class="drive-card-sub">官方錢包餘額</span><strong id="economy-treasury-signer-official-balance">-</strong><small id="economy-treasury-signer-official-address">-</small></div>
+            <div><span class="drive-card-sub">Signer / Threshold</span><strong id="economy-treasury-signer-threshold">-</strong><small id="economy-treasury-signer-policy">-</small></div>
+            <div><span class="drive-card-sub">待簽 / 待執行</span><strong id="economy-treasury-signer-pending-count">0</strong><small id="economy-treasury-signer-branch">-</small></div>
+          </div>
+          <div class="drive-card-sub" style="margin-top:.65rem;">治理通過不會自動取得官方錢包控制權；必須在 timelock 後完成官方多簽 threshold 才能執行。</div>
+          <div class="drive-card-sub" style="margin-top:.65rem;">鏈上轉帳 fee / 加速 fee 仍進 BURN；站內功能服務費與影音投幣平台抽成由 pc0 站內託管帳本即時歸官方 Treasury。</div>
+          <div class="drive-card-sub" style="margin-top:.35rem;">此處是本月收入與官方錢包治理看板；服務扣點單價請到系統管理「伺服器設定 > 計費」調整，或在各功能頁右上快速設定同步調整。</div>
+          <div class="admin-toolbar" style="margin-top:.65rem;justify-content:flex-start;">
+            <button class="btn btn-sm" type="button" id="economy-treasury-analysis-refresh-btn">重新整理收支</button>
+            <span class="drive-card-sub" id="economy-treasury-analysis-updated-at">尚未更新</span>
+          </div>
+          <div class="economy-flow-dashboard finance-flow-panel" id="economy-treasury-analysis-summary" style="margin-top:.75rem;"></div>
+          <div class="drive-file-list finance-flow-dashboard-list" id="economy-treasury-service-fee-list" style="margin-top:.75rem;"></div>
+          <div class="drive-file-list finance-flow-dashboard-list" id="economy-treasury-income-list" style="margin-top:.75rem;"></div>
+          <div class="drive-file-list finance-flow-dashboard-list" id="economy-treasury-expense-list" style="margin-top:.75rem;"></div>
+          <div class="drive-file-list finance-flow-dashboard-list" id="economy-treasury-monthly-feature-list" style="margin-top:.75rem;"></div>
+          <div class="drive-file-list" id="economy-treasury-signer-list" style="margin-top:.75rem;"></div>
+          <div class="drive-file-list" id="economy-treasury-signer-pending-list" style="margin-top:.75rem;"></div>
+        </div>
+      </div>
+      <div class="drive-card" id="economy-root-pricing-settings-card" style="display:none;margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">服務計價設定</div>
+            <div class="drive-card-sub">服務扣點、容量商品與影音投幣抽成；收入統計仍留在官方 Treasury 收支看板。</div>
+          </div>
+          <button class="btn btn-primary btn-sm" type="button" data-settings-save-action>儲存計價設定</button>
+        </div>
+        <div id="economy-pricing-settings-slot" style="margin-top:.75rem;"></div>
       </div>
       <div class="drive-card" id="economy-user-ledger-card" style="margin-top:.75rem;">
         <div class="drive-card-heading">
@@ -2654,7 +2914,7 @@
         <div class="drive-card">
           <div class="drive-card-heading">
             <div>
-              <div class="drive-card-title">交易管理</div>
+              <div class="drive-card-title">鏈上交易</div>
               <div class="drive-card-sub">近期轉入、轉出、交易 hash 與 Proved 狀態</div>
             </div>
             <button class="btn" id="economy-transactions-refresh-btn" type="button">重新整理</button>
@@ -2673,10 +2933,17 @@
           <div class="drive-card-heading">
             <div>
               <div class="drive-card-title">PointsChain Explorer</div>
-              <div class="drive-card-sub">交易 hash、Ledger UUID、錢包地址、區塊 hash 或區塊高度</div>
+              <div class="drive-card-sub">分層 Ledger Explorer：PC1 settlement、PC0 operational、Bridge 與 Audit 分開查詢並可互相跳轉</div>
             </div>
             <button class="btn" id="economy-explorer-refresh-btn" type="button">重新查詢</button>
           </div>
+          <div class="segmented-control economy-explorer-layer-tabs" id="economy-explorer-layer-tabs" aria-label="Explorer layer" style="margin-top:.75rem;">
+            <button class="active" type="button" data-economy-explorer-layer="pc1">Settlement Explorer</button>
+            <button type="button" data-economy-explorer-layer="pc0">Operational Explorer</button>
+            <button type="button" data-economy-explorer-layer="bridge">Bridge Explorer</button>
+            <button type="button" data-economy-explorer-layer="audit">Audit Explorer</button>
+          </div>
+          <div class="drive-card-sub" id="economy-explorer-layer-description" style="margin-top:.45rem;">PC1 Canonical Settlement Layer：只看 canonical reserve、封塊、鏈上 fee 與治理結算。</div>
           <div class="settings-option-grid economy-explorer-rule-grid" style="margin-top:.75rem;">
             <div><span class="drive-card-sub">成交條件</span><strong>20 Proved</strong><small>模擬鏈 finality</small></div>
             <div><span class="drive-card-sub">預估時間</span><strong>動態</strong><small>受鏈上忙碌度影響</small></div>
@@ -2703,7 +2970,6 @@
               <select id="economy-governance-category-select" style="min-width:12rem;padding:.48rem .6rem;border-radius:8px;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.12);color:inherit;">
                 <option value="all">全部治理</option>
                 <option value="dispute">選取案件</option>
-                <option value="public">公共治理</option>
                 <option value="emergency">緊急安全</option>
                 <option value="treasury">官方財庫</option>
                 <option value="mint">Mint 申請</option>
@@ -2726,49 +2992,6 @@
           <div class="drive-card-sub" id="economy-governance-selected-case" style="margin-top:.5rem;">未選取疑義交易案件。</div>
           <div id="economy-governance-list" class="drive-file-list" style="margin-top:.75rem;"></div>
           <div class="msg" id="economy-governance-msg"></div>
-          <div class="economy-collapse" id="economy-treasury-signer-center-card" style="display:none;margin-top:.75rem;">
-            <div class="drive-card-heading">
-              <div>
-                <div class="drive-card-title">官方財庫多簽 Treasury Signer Center</div>
-                <div class="drive-card-sub" id="economy-treasury-signer-center-status">讀取中</div>
-              </div>
-            </div>
-            <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
-              <div><span class="drive-card-sub">官方錢包餘額</span><strong id="economy-treasury-signer-official-balance">-</strong><small id="economy-treasury-signer-official-address">-</small></div>
-              <div><span class="drive-card-sub">Signer / Threshold</span><strong id="economy-treasury-signer-threshold">-</strong><small id="economy-treasury-signer-policy">-</small></div>
-              <div><span class="drive-card-sub">待簽 / 待執行</span><strong id="economy-treasury-signer-pending-count">0</strong><small id="economy-treasury-signer-branch">-</small></div>
-            </div>
-            <div class="drive-card-sub" style="margin-top:.65rem;">治理通過不會自動取得官方錢包控制權；必須在 timelock 後完成官方多簽 threshold 才能執行。</div>
-            <div class="drive-card-sub" style="margin-top:.65rem;">鏈上轉帳 fee / 加速 fee 仍進 BURN；站內功能服務費與影音投幣平台抽成歸官方 Treasury，採小帳本累積後批次鏈上結算。</div>
-            <div class="admin-toolbar" style="margin-top:.65rem;justify-content:flex-start;">
-              <button class="btn btn-sm" type="button" id="economy-treasury-analysis-refresh-btn">重新整理收支</button>
-              <span class="drive-card-sub" id="economy-treasury-analysis-updated-at">尚未更新</span>
-            </div>
-            <div class="settings-option-grid economy-wallet-grid" id="economy-treasury-analysis-summary" style="margin-top:.75rem;"></div>
-            <div class="drive-file-list" id="economy-treasury-service-fee-list" style="margin-top:.75rem;"></div>
-            <div class="drive-file-list" id="economy-treasury-income-list" style="margin-top:.75rem;"></div>
-            <div class="drive-file-list" id="economy-treasury-expense-list" style="margin-top:.75rem;"></div>
-            <div class="drive-file-list" id="economy-treasury-pricing-fit-list" style="margin-top:.75rem;"></div>
-            <div class="drive-file-list" id="economy-treasury-signer-list" style="margin-top:.75rem;"></div>
-            <div class="drive-file-list" id="economy-treasury-signer-pending-list" style="margin-top:.75rem;"></div>
-          </div>
-          <details class="economy-collapse" id="economy-public-governance-create-details" style="display:none;margin-top:.75rem;">
-            <summary>公共治理提案</summary>
-            <div class="drive-card-sub" id="economy-public-governance-hint" style="margin-top:.45rem;">trusted 以上會員可送出公共提案；一般會員需先提升信任等級。一般用戶提案會進 REVIEW，需 manager+ sponsor 才開放投票。</div>
-            <div class="settings-option-grid" style="margin-top:.65rem;">
-              <div class="field"><label>詐騙地址</label><input type="text" id="economy-governance-scam-address" placeholder="pc1..." autocomplete="off" /></div>
-              <div class="field"><label>理由</label><input type="text" id="economy-governance-scam-reason" maxlength="500" placeholder="evidence and incident reason" /></div>
-              <div class="field"><label>證據 hash</label><textarea id="economy-governance-scam-evidence" rows="2" placeholder="每行一個 tx hash / reference"></textarea></div>
-              <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-governance-scam-create-btn" type="button">提出詐騙標記</button></div>
-            </div>
-            <div class="settings-option-grid" style="margin-top:.65rem;">
-              <div class="field"><label>凍結 / 解凍地址</label><input type="text" id="economy-governance-freeze-address" placeholder="pc1..." autocomplete="off" /></div>
-              <div class="field"><label>動作</label><select id="economy-governance-freeze-action"><option value="freeze">凍結轉出</option><option value="unfreeze">解除凍結</option></select></div>
-              <div class="field"><label>理由</label><input type="text" id="economy-governance-freeze-reason" maxlength="500" placeholder="governance freeze reason" /></div>
-              <div class="field"><label>證據 hash</label><textarea id="economy-governance-freeze-evidence" rows="2" placeholder="每行一個 tx hash / reference"></textarea></div>
-              <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-governance-freeze-create-btn" type="button">提出凍結提案</button></div>
-            </div>
-          </details>
           <details class="economy-collapse" id="economy-governance-emergency-create-details" style="display:none;margin-top:.75rem;border-color:rgba(255,95,95,.45);background:rgba(160,20,20,.12);">
             <summary>Emergency Security</summary>
             <div class="drive-card-sub" style="margin-top:.45rem;color:#ffb4b4;">緊急安全治理只供 manager+ / emergency council 使用；rollback branch 只切換 canonical branch pointer，不刪改舊 ledger。</div>
@@ -2789,16 +3012,6 @@
               <div class="field"><label>緊急鎖定範圍</label><input type="text" id="economy-governance-lockdown-scope" maxlength="240" placeholder="transfer,exchange,governance_execute" /></div>
               <div class="field"><label>理由</label><input type="text" id="economy-governance-lockdown-reason" maxlength="500" placeholder="exploit / replay attack / treasury incident" /></div>
               <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-governance-lockdown-create-btn" type="button">提出緊急鎖定</button></div>
-            </div>
-          </details>
-          <details class="economy-collapse" id="economy-governance-treasury-create-details" style="display:none;margin-top:.75rem;">
-            <summary>官方財庫提案</summary>
-            <div class="settings-option-grid" style="margin-top:.65rem;">
-              <div class="field"><label>動作</label><select id="economy-governance-treasury-action"><option value="TREASURY_TRANSFER">官方撥款</option><option value="EXCHANGE_FUND_REPLENISH">撥補交易所基金</option><option value="CONTEST_REWARD_PAYOUT">競賽獎金</option></select></div>
-              <div class="field"><label>To 錢包地址</label><input type="text" id="economy-governance-treasury-destination" placeholder="pc1..." autocomplete="off" /></div>
-              <div class="field"><label>Value</label><input type="number" id="economy-governance-treasury-amount" min="1" value="1" /></div>
-              <div class="field"><label>Reason</label><input type="text" id="economy-governance-treasury-reason" maxlength="180" placeholder="official treasury proposal" /></div>
-              <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-governance-treasury-create-btn" type="button">提出財庫提案</button></div>
             </div>
           </details>
           <details class="economy-collapse" id="economy-governance-mint-create-details" style="display:none;margin-top:.75rem;">
@@ -2832,152 +3045,27 @@
           <div id="economy-disputes-list" class="drive-file-list" style="margin-top:.75rem;"></div>
         </div>
       </div>
-      <div class="economy-subpage" id="economy-positions-page">
-      <div class="drive-card" id="economy-root-virtual-card" style="display:none;margin-top:.75rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title">root 虛擬積分</div>
-            <div class="drive-card-sub">只用於交易模擬；不寫入 PointsChain，也不影響帳戶實際積分。</div>
-          </div>
-          <div class="drive-file-actions">
-            <button class="btn btn-sm" type="button" onclick="toggleWalletCard('economy-root-virtual-body',this)" style="font-size:.8rem;padding:.2rem .5rem;">▾</button>
-            <button class="btn" id="economy-root-virtual-open-btn" type="button">開啟交易所</button>
-          </div>
-        </div>
-        <div id="economy-root-virtual-body">
-          <div class="settings-option-grid economy-wallet-grid">
-            <div><span class="drive-card-sub">目前總價值</span><strong id="economy-root-virtual-total">-</strong><small>剩餘積分 + 現貨估值 + 借貸權益</small></div>
-            <div><span class="drive-card-sub">剩餘積分</span><strong id="economy-root-virtual-available">-</strong><small id="economy-root-virtual-locked">鎖定 -</small></div>
-            <div><span class="drive-card-sub">現貨估值</span><strong id="economy-root-virtual-spot-value">-</strong><small id="economy-root-virtual-spot-summary">尚無現貨</small></div>
-            <div><span class="drive-card-sub">借貸權益</span><strong id="economy-root-virtual-margin-value">-</strong><small id="economy-root-virtual-margin-summary">尚無借貸倉位</small></div>
-          </div>
-        </div>
-      </div>
-      <div class="drive-card" id="economy-trading-summary-card" style="margin-top:.75rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title">現貨、進階、合約與交易明細</div>
-            <div class="drive-card-sub">錢包頁顯示目前現貨、融資 / 借券、合約狀態、訂單與成交明細；下單請到積分交易所。</div>
-          </div>
-          <div class="drive-file-actions">
-            <button class="btn btn-sm" type="button" onclick="toggleWalletCard('economy-trading-body',this)" style="font-size:.8rem;padding:.2rem .5rem;">▾</button>
-            <button class="btn" id="economy-trading-open-btn" type="button">開啟交易所</button>
-            <button class="btn" id="economy-trading-export-btn" type="button">下載交易 CSV</button>
-          </div>
-        </div>
-        <div id="economy-trading-safe-mode" class="drive-card-sub">交易狀態讀取中</div>
-        <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
-          <div><span class="drive-card-sub">現貨部位</span><strong id="economy-spot-position-quantity">尚無現貨</strong><small id="economy-spot-position-summary">各交易對分開計算</small></div>
-          <div><span class="drive-card-sub">進階倉位</span><strong id="economy-margin-position-count">0</strong><small id="economy-margin-position-summary">融資 / 借券</small></div>
-          <div><span class="drive-card-sub">合約持倉</span><strong id="economy-contract-position-count">0</strong><small id="economy-contract-position-summary">未開放</small></div>
-          <div><span class="drive-card-sub">交易明細</span><strong id="economy-trading-fill-count">0</strong><small id="economy-trading-order-count">訂單 0</small></div>
-        </div>
-        <div id="economy-trading-body">
-          <div class="drive-card" style="margin-top:.75rem;">
-            <div class="drive-card-heading compact-heading">
-              <div>
-                <div class="drive-card-title">現貨明細</div>
-                <div class="drive-card-sub">BTC/USDT、ETH/USDT 分開顯示；可限價賣出或用市價平倉。</div>
-              </div>
-            </div>
-            <div id="economy-spot-position-detail-list" class="trading-spot-detail-list"></div>
-          </div>
-          <div class="drive-card" style="margin-top:.75rem;">
-            <div class="drive-card-heading compact-heading">
-              <div>
-                <div class="drive-card-title">進階倉位明細</div>
-                <div class="drive-card-sub">融資買入與借券放空分開列出；顯示本金、原始保證金、維持保證金、累積利息與下一次計息時間。</div>
-              </div>
-            </div>
-            <div id="economy-margin-position-detail-list" class="drive-file-list"></div>
-          </div>
-          <div class="settings-option-grid" style="margin-top:.75rem;">
-            <div>
-              <div class="drive-card-title">訂單</div>
-              <div id="economy-trading-order-list" class="drive-file-list"></div>
-            </div>
-            <div>
-              <div class="drive-card-title">成交</div>
-              <div id="economy-trading-fill-list" class="drive-file-list"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="drive-card" id="economy-asset-overview-card" style="margin-top:.75rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title">交易資產總覽</div>
-            <div class="drive-card-sub" id="economy-asset-confidence">價格可信度只作風險提示，不阻擋積分交易。</div>
-          </div>
-          <button class="btn btn-sm" type="button" onclick="loadTradingAssetOverview()" style="font-size:.8rem;padding:.2rem .5rem;">更新</button>
-        </div>
-        <div class="settings-option-grid economy-wallet-grid">
-          <div><span class="drive-card-sub">總權益</span><strong id="economy-asset-total-equity">-</strong><small>可用 + 鎖定 + 現貨 + 借貸</small></div>
-          <div><span class="drive-card-sub">可用積分</span><strong id="economy-asset-available">-</strong><small id="economy-asset-locked">鎖定 -</small></div>
-          <div><span class="drive-card-sub">現貨估值</span><strong id="economy-asset-spot">-</strong><small>依目前市場價估算</small></div>
-          <div><span class="drive-card-sub">借貸權益</span><strong id="economy-asset-margin">-</strong><small id="economy-asset-interest">利息 -</small></div>
-        </div>
-        <div id="economy-asset-admin-risk" class="drive-card-sub" style="display:none;margin-top:.5rem;"></div>
-      </div>
-      </div>
-      <div class="economy-subpage" id="economy-funding-pools-page">
-      <div class="drive-card" style="margin-top:.75rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title">資金池管理</div>
-            <div class="drive-card-sub">交易準備金、借貸池使用率、手續費與利息收入摘要；此頁唯讀</div>
-          </div>
-          <button class="btn" id="economy-root-funding-refresh-btn" type="button">更新</button>
-        </div>
-        <div class="settings-option-grid economy-wallet-grid">
-          <div><span class="drive-card-sub">準備金餘額</span><strong id="economy-root-reserve-balance">-</strong><small id="economy-root-reserve-updated">更新 -</small></div>
-          <div><span class="drive-card-sub">借貸池可用</span><strong id="economy-root-funding-available">-</strong><small id="economy-root-funding-outstanding">貸出 -</small></div>
-          <div><span class="drive-card-sub">使用率</span><strong id="economy-root-funding-utilization">-</strong><small id="economy-root-funding-apr">APR -</small></div>
-          <div><span class="drive-card-sub">保留收入</span><strong id="economy-root-pool-income">-</strong><small id="economy-root-pool-income-detail">fee / interest -</small></div>
-        </div>
-      </div>
-      <div class="drive-dashboard-grid" style="margin-top:.75rem;">
-        <div class="drive-card">
-          <div class="drive-card-title">借貸池收支</div>
-          <div id="economy-root-lending-pool-list" class="drive-file-list"></div>
-        </div>
-        <div class="drive-card">
-          <div class="drive-card-title">最近資金池事件</div>
-          <div id="economy-root-reserve-events-list" class="drive-file-list"></div>
-        </div>
-      </div>
-      </div>
-      <div class="economy-subpage" id="economy-all-positions-page">
-      <div class="drive-card" style="margin-top:.75rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title">全用戶倉位管理</div>
-            <div class="drive-card-sub">現貨、借貸倉位、開放掛單與交易機器人；root 模擬倉位不列入</div>
-          </div>
-          <button class="btn" id="economy-root-positions-refresh-btn" type="button">更新</button>
-        </div>
-        <div class="settings-option-grid economy-wallet-grid">
-          <div><span class="drive-card-sub">現貨倉位</span><strong id="economy-root-position-spot-count">-</strong><small>非 root 會員</small></div>
-          <div><span class="drive-card-sub">借貸倉位</span><strong id="economy-root-position-margin-count">-</strong><small id="economy-root-position-margin-detail">開倉 -</small></div>
-          <div><span class="drive-card-sub">掛單</span><strong id="economy-root-position-orders">-</strong><small id="economy-root-position-orders-detail">凍結 -</small></div>
-          <div><span class="drive-card-sub">交易機器人</span><strong id="economy-root-position-bots">-</strong><small id="economy-root-position-bots-detail">啟用 -</small></div>
-        </div>
-      </div>
-      <div class="drive-card" style="margin-top:.75rem;">
-        <div class="drive-card-title">現貨倉位</div>
-        <div id="economy-root-spot-position-list" class="drive-file-list"></div>
-      </div>
-      <div class="drive-card" style="margin-top:.75rem;">
-        <div class="drive-card-title">借貸倉位</div>
-        <div id="economy-root-margin-position-list" class="drive-file-list"></div>
-      </div>
-      <div class="drive-card" style="margin-top:.75rem;">
-        <div class="drive-card-title">交易機器人</div>
-        <div class="drive-card-sub">一般 bot、DCA 與網格 bot 的唯讀狀態；處置仍需回交易所風控流程。</div>
-        <div id="economy-root-bot-position-list" class="drive-file-list"></div>
-      </div>
-      </div>
       <div class="economy-subpage" id="economy-chain-page">
+      <div class="drive-card" id="economy-manager-points-management-card" style="display:none;margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+              <div class="drive-card-title">官方錢包管理</div>
+            <div class="drive-card-sub" id="economy-manager-points-status">讀取官方財庫與治理狀態中。</div>
+          </div>
+          <div class="drive-file-actions">
+            <button class="btn btn-sm" id="economy-manager-points-open-wallets-btn" type="button">系統錢包</button>
+            <button class="btn btn-sm" id="economy-manager-points-open-governance-btn" type="button">治理提案</button>
+            <button class="btn btn-sm" id="economy-manager-points-open-explorer-btn" type="button">Explorer</button>
+          </div>
+        </div>
+        <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+          <div><span class="drive-card-sub">官方 Treasury</span><strong id="economy-manager-points-official-balance">-</strong><small id="economy-manager-points-official-address">-</small></div>
+          <div><span class="drive-card-sub">多簽門檻</span><strong id="economy-manager-points-threshold">-</strong><small id="economy-manager-points-policy">-</small></div>
+          <div><span class="drive-card-sub">待簽提案</span><strong id="economy-manager-points-pending-count">0</strong><small id="economy-manager-points-branch">-</small></div>
+        </div>
+        <div class="drive-card-sub" style="margin-top:.65rem;">manager 以上可查看官方基金錢包、建立/簽署治理提案與處理疑義事件；封塊只開放 root，鏈異常須透過分支、forensic bundle 與緊急治理處理。</div>
+        <div id="economy-manager-points-pending-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+      </div>
       <div class="drive-card" id="economy-root-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
@@ -3004,7 +3092,7 @@
           <div><span class="drive-card-sub">Snapshot / Verify</span><strong id="economy-layer-snapshot-height">-</strong><small id="economy-layer-derived-verify">verify -</small></div>
         </div>
         <div class="economy-supply-formula" id="economy-layer-supply-formula" aria-live="polite">
-          <div class="economy-supply-title">閉環公式</div>
+          <div class="economy-supply-title">多帳本結算控制平面</div>
           <div class="economy-supply-equation-ui">
             <div class="economy-formula-card"><span>狀態</span><strong>載入中...</strong></div>
           </div>
@@ -3035,9 +3123,6 @@
         </details>
         <details class="economy-collapse economy-chain-fold" id="economy-chain-incident-details">
           <summary>異常與恢復 Console</summary>
-          <div class="drive-file-actions economy-inline-actions">
-            <button class="btn" id="economy-backup-btn" type="button">建立帳本備份</button>
-          </div>
           <div class="drive-card" style="margin-top:.75rem;">
             <div class="drive-card-title">鏈完整性異常帳本</div>
             <div class="drive-card-sub">只顯示 ledger tamper、未確認、verify mismatch 等鏈完整性問題；治理凍結與詐騙標記顯示於下方治理/風險事件。</div>
@@ -3056,21 +3141,15 @@
             <div class="drive-card-heading">
               <div>
                 <div class="drive-card-title">Emergency / Recovery Console</div>
-                <div class="drive-card-sub">只處理 verify、safe mode、forensic bundle、備份與恢復方案；不得直接改餘額、沒收、處分或覆寫 ledger。</div>
+                <div class="drive-card-sub">只處理 verify、safe mode、forensic bundle、分支與緊急治理方案；禁止以備份還原覆寫 append-only ledger。</div>
               </div>
               <div class="drive-file-actions">
                 <button class="btn" id="economy-recovery-auto-handle-btn" type="button">檢查異常處理方案</button>
-                <button class="btn btn-danger" id="economy-recovery-approve-btn" type="button">確認套用健康備份</button>
               </div>
             </div>
             <div id="economy-recovery-status" class="drive-card-sub">safe mode：-</div>
             <div id="economy-recovery-action-status" class="drive-card-sub" style="margin-top:.4rem;">尚未執行自動恢復。</div>
-            <div class="settings-option-grid" style="margin-top:.65rem;">
-              <div class="field"><label>恢復備份</label><select id="economy-recovery-backup-id"><option value="">尚無可用備份</option></select></div>
-              <div class="field"><label>確認字串</label><input type="text" id="economy-recovery-confirm" placeholder="RESTORE POINTSCHAIN" /></div>
-            </div>
             <div id="economy-restore-plan-list" class="drive-file-list" style="margin-top:.75rem;"></div>
-            <div id="economy-backup-list" class="drive-file-list" style="margin-top:.75rem;"></div>
           </div>
         </details>
         <details class="economy-collapse economy-chain-fold" id="economy-chain-unsealed-details">
@@ -3093,13 +3172,16 @@
       <div class="mini-title">積分交易所</div>
       <div class="drive-card" id="trading-card" style="margin-top:.75rem;">
         <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title">現貨交易所</div>
-            <div class="drive-card-sub" id="trading-availability-note">root 可使用現貨；合約模擬與交易引擎操作已移至伺服器設定的交易所設定。一般用戶可使用已啟用的積分現貨市場。</div>
-          </div>
-          <button class="btn" id="trading-refresh-btn" type="button">重新整理</button>
-	        </div>
-	        <div class="trading-reference-panel trading-reference-panel-primary" style="margin-top:.75rem;">
+            <div>
+              <div class="drive-card-title" id="trading-page-title">交易所</div>
+              <div class="drive-card-sub" id="trading-availability-note">現貨下單、交易機器人與借貸功能都留在同一個交易所頁；root 的全站倉位、基金營運與模擬倉位另列管理頁。</div>
+            </div>
+            <div class="drive-file-actions">
+              <button class="btn" id="trading-root-settings-page-btn" type="button" style="display:none;">交易所管理</button>
+              <button class="btn" id="trading-refresh-btn" type="button">重新整理</button>
+            </div>
+		        </div>
+		        <div class="trading-reference-panel trading-reference-panel-primary" id="trading-exchange-reference-card" style="margin-top:.75rem;">
 	          <div class="drive-card-heading compact-heading">
 	            <div>
 	              <div class="drive-card-title">Binance 參考價格</div>
@@ -3150,7 +3232,153 @@
 	          <div id="trading-risk-dashboard-grid" class="trading-readiness-grid"></div>
 	        </section>
 	        <div id="trading-safe-mode" class="drive-card-sub">交易狀態讀取中</div>
+	        <div id="trading-background-status" class="drive-card-sub" style="display:none;"></div>
 	        <div id="trading-inline-msg" class="msg trading-inline-msg"></div>
+        <div class="drive-card" id="trading-asset-overview-card" style="margin-top:.75rem;">
+          <div class="drive-card-heading compact-heading">
+            <div>
+              <div class="drive-card-title">交易資產總覽</div>
+              <div class="drive-card-sub" id="trading-asset-confidence">交易所內帳、現貨與借貸倉位的估值摘要。</div>
+            </div>
+            <button class="btn btn-sm" id="trading-asset-overview-refresh-btn" type="button">更新</button>
+          </div>
+          <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+            <div><span class="drive-card-sub">總權益</span><strong id="trading-asset-total-equity">-</strong><small>交易所估值</small></div>
+            <div><span class="drive-card-sub">可用</span><strong id="trading-asset-available">-</strong><small>可下單點數</small></div>
+            <div><span class="drive-card-sub">鎖定</span><strong id="trading-asset-locked">-</strong><small>掛單 / 風控凍結</small></div>
+            <div><span class="drive-card-sub">現貨估值</span><strong id="trading-asset-spot">-</strong><small>依 reference price</small></div>
+            <div><span class="drive-card-sub">借貸權益</span><strong id="trading-asset-margin">-</strong><small>含抵押與未實現損益</small></div>
+            <div><span class="drive-card-sub">應計利息</span><strong id="trading-asset-interest">-</strong><small>尚未結算</small></div>
+          </div>
+          <div id="trading-asset-admin-risk" class="drive-card-sub" style="display:none;margin-top:.65rem;"></div>
+        </div>
+        <div class="drive-card" id="trading-root-sitewide-card" style="display:none;margin-top:.75rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title" id="trading-root-sitewide-title">root 全站倉位看板</div>
+              <div class="drive-card-sub" id="trading-root-sitewide-status">交易所全站風控入口；現貨、借貸倉位、掛單與機器人狀態集中唯讀檢視。</div>
+            </div>
+            <div class="drive-file-actions">
+              <button class="btn btn-sm active" type="button" data-trading-root-sitewide-tab="positions">全站倉位</button>
+              <button class="btn btn-sm" type="button" data-trading-root-sitewide-tab="pools">基金營運</button>
+              <button class="btn btn-sm" id="trading-root-sitewide-refresh-btn" type="button">更新</button>
+            </div>
+          </div>
+          <div id="trading-root-sitewide-positions-panel">
+            <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+              <div><span class="drive-card-sub">現貨倉位</span><strong id="trading-root-position-spot-count">-</strong><small>非 root 會員</small></div>
+              <div><span class="drive-card-sub">借貸倉位</span><strong id="trading-root-position-margin-count">-</strong><small id="trading-root-position-margin-detail">開倉 -</small></div>
+              <div><span class="drive-card-sub">掛單</span><strong id="trading-root-position-orders">-</strong><small id="trading-root-position-orders-detail">凍結 -</small></div>
+              <div><span class="drive-card-sub">交易機器人</span><strong id="trading-root-position-bots">-</strong><small id="trading-root-position-bots-detail">啟用 -</small></div>
+              <div><span class="drive-card-sub">未實現盈虧</span><strong id="trading-root-position-pnl">-</strong><small id="trading-root-position-pnl-detail">已實現 -</small></div>
+              <div><span class="drive-card-sub">手續費</span><strong id="trading-root-position-fees">-</strong><small id="trading-root-position-fees-detail">現貨 / 借貸 -</small></div>
+            </div>
+            <div class="drive-dashboard-grid" style="margin-top:.75rem;">
+              <div class="drive-card">
+                <div class="drive-card-title">現貨倉位</div>
+                <div id="trading-root-spot-position-list" class="drive-file-list"></div>
+              </div>
+              <div class="drive-card">
+                <div class="drive-card-title">借貸倉位</div>
+                <div id="trading-root-margin-position-list" class="drive-file-list"></div>
+              </div>
+            </div>
+            <div class="drive-card" style="margin-top:.75rem;">
+              <div class="drive-card-title">交易機器人</div>
+              <div class="drive-card-sub">一般 bot、DCA 與網格 bot 的唯讀狀態；處置仍需回交易所風控流程。</div>
+              <div id="trading-root-bot-position-list" class="drive-file-list"></div>
+            </div>
+          </div>
+          <div id="trading-root-sitewide-pools-panel" style="display:none;">
+            <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+              <div><span class="drive-card-sub">交易所基金餘額</span><strong id="trading-root-reserve-balance">-</strong><small id="trading-root-reserve-updated">更新 -</small></div>
+              <div><span class="drive-card-sub">借貸基金可用</span><strong id="trading-root-funding-available">-</strong><small id="trading-root-funding-outstanding">貸出 -</small></div>
+              <div><span class="drive-card-sub">借貸基金使用率</span><strong id="trading-root-funding-utilization">-</strong><small id="trading-root-funding-apr">APR -</small></div>
+              <div><span class="drive-card-sub">保留收入</span><strong id="trading-root-pool-income">-</strong><small id="trading-root-pool-income-detail">fee / interest -</small></div>
+            </div>
+            <div class="finance-flow-panel" style="margin-top:.75rem;">
+              <div class="finance-flow-panel-head">
+                <div>
+                  <strong>交易所基金流入流出</strong>
+                  <small>只看已實現營運收支；借出 / 歸還本金與官方撥補另列資訊，不混入淨收支。</small>
+                </div>
+                <span id="trading-root-fund-flow-balance">-</span>
+              </div>
+              <div class="finance-flow-meter" id="trading-root-fund-flow-meter"></div>
+              <div class="finance-flow-kpi-grid">
+                <div><span>營運流入</span><strong id="trading-root-fund-flow-inflow">-</strong><small id="trading-root-fund-flow-inflow-detail">資本與本金移轉不列收支</small></div>
+                <div><span>營運流出</span><strong id="trading-root-fund-flow-outflow">-</strong><small id="trading-root-fund-flow-outflow-detail">借出 / 歸還本金另列</small></div>
+                <div><span>營運淨額</span><strong id="trading-root-fund-flow-net">-</strong><small id="trading-root-fund-flow-net-detail">總淨流 -</small></div>
+                <div><span>收支狀態</span><strong id="trading-root-fund-flow-balance-detail">事件回放 -</strong><small>reserve events replay</small></div>
+              </div>
+            </div>
+            <div class="finance-flow-sections" style="margin-top:.75rem;">
+              <section class="finance-flow-section">
+                <div class="drive-card-title">借貸基金本金與收益</div>
+                <div id="trading-root-lending-pool-list" class="drive-file-list"></div>
+              </section>
+              <section class="finance-flow-section">
+                <div class="drive-card-title">已實現淨收支分類</div>
+                <div class="drive-card-sub">只彙總交易所基金已實現營運損益；本金、資本與逐筆事件請看旁邊事件列表。</div>
+                <div id="trading-root-fund-flow-category-list" class="drive-file-list finance-flow-dashboard-list"></div>
+              </section>
+              <section class="finance-flow-section">
+                <div class="drive-card-title">最近基金事件</div>
+                <div id="trading-root-reserve-events-list" class="drive-file-list finance-flow-dashboard-list"></div>
+              </section>
+            </div>
+          </div>
+        </div>
+        <div class="drive-card" id="trading-root-sim-card" style="display:none;margin-top:.75rem;">
+          <div class="drive-card-heading compact-heading">
+            <div>
+              <div class="drive-card-title">root 模擬倉位</div>
+              <div class="drive-card-sub">僅 root 可用，使用 root 模擬資金，不寫入 PointsChain，也不與交易所基金或全站倉位混算。</div>
+            </div>
+            <button class="btn btn-sm" id="trading-root-reset-sim-btn" type="button">重設模擬資金</button>
+          </div>
+          <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+            <div><span class="drive-card-sub">root 模擬資金</span><strong id="trading-root-sim-balance">10000</strong><small>僅供 root 沙盒測試</small></div>
+            <div><span class="drive-card-sub">現貨模擬倉位</span><strong id="trading-root-sim-spot-count">0</strong><small id="trading-root-sim-spot-detail">尚無現貨</small></div>
+            <div><span class="drive-card-sub">借貸模擬倉位</span><strong id="trading-root-sim-margin-count">0</strong><small id="trading-root-sim-margin-detail">尚無借貸</small></div>
+            <div><span class="drive-card-sub">合約模擬倉位</span><strong id="trading-root-sim-contract-count">0</strong><small id="trading-root-sim-contract-detail">尚無合約</small></div>
+          </div>
+          <div class="finance-flow-sections trading-root-sim-position-sections" style="margin-top:.75rem;">
+            <section class="finance-flow-section">
+              <div class="drive-card-title">現貨模擬倉位</div>
+              <div class="drive-card-sub">root 市價 / 限價模擬交易持有的現貨部位。</div>
+              <div id="trading-root-sim-spot-list" class="drive-file-list"></div>
+            </section>
+            <section class="finance-flow-section">
+              <div class="drive-card-title">借貸模擬倉位</div>
+              <div class="drive-card-sub">root 融資做多與借券放空模擬倉位，使用 root 模擬資金。</div>
+              <div id="trading-root-sim-margin-list" class="drive-file-list"></div>
+            </section>
+            <section class="finance-flow-section">
+              <div class="drive-card-title">合約模擬倉位</div>
+              <div class="drive-card-sub">root 合約沙盒持倉，不寫入 PointsChain。</div>
+              <div id="trading-contract-position-list" class="drive-file-list"></div>
+            </section>
+          </div>
+          <details class="drive-collapsible-panel settings-collapse" id="trading-root-contract-card" style="margin-top:.75rem;" open>
+            <summary>
+              <div>
+                <div class="drive-card-title">root 合約模擬</div>
+                <div class="drive-card-sub">僅 root 可用，使用 root 模擬資金，不寫入 PointsChain；root 以外用戶目前只能使用現貨。</div>
+              </div>
+            </summary>
+            <div class="drive-collapsible-body">
+              <div class="settings-option-grid">
+                <div class="field"><label>市場</label><select id="trading-contract-market-select"><option value="">讀取市場中...</option></select></div>
+                <div class="field"><label>方向</label><select id="trading-contract-side"><option value="long">做多</option><option value="short">做空</option></select></div>
+                <div class="field"><label>數量</label><input type="number" id="trading-contract-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
+                <div class="field"><label>槓桿</label><input type="number" id="trading-contract-leverage" min="1" max="20" step="1" value="1" /></div>
+                <div class="field"><label>保證金</label><input type="number" id="trading-contract-margin" min="1" step="1" value="100" /></div>
+                <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-contract-open-btn" type="button">開倉</button></div>
+              </div>
+            </div>
+          </details>
+        </div>
         <div class="settings-option-grid" id="trading-order-form" style="margin-top:.65rem;">
           <div class="field">
             <label>市場</label>
@@ -3188,6 +3416,7 @@
           <div class="field">
             <label>下單</label>
             <button class="btn btn-primary" id="trading-submit-order-btn" type="button">送出訂單</button>
+            <div class="trading-sellable-hint" id="trading-sellable-hint" role="status" aria-live="polite" hidden></div>
             <div class="drive-card-sub" id="trading-order-estimate" style="margin-top:.35rem;">輸入數量後顯示預估金額；停損 / 停利只會套用到買入後留下的現貨部位。</div>
           </div>
           <div class="field">
@@ -3196,12 +3425,32 @@
             <div class="drive-card-sub" id="trading-payment-wallet-note" style="margin-top:.25rem;">交易所使用此錢包作為下單預設付款來源。</div>
           </div>
         </div>
-        <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+        <div class="settings-option-grid economy-wallet-grid" id="trading-market-summary-grid" style="margin-top:.75rem;">
           <div><span class="drive-card-sub">交易總可用</span><strong id="trading-funding-available">-</strong><small id="trading-funding-mode">-</small></div>
           <div><span class="drive-card-sub">交易所體驗金</span><strong id="trading-trial-credit-available">-</strong><small id="trading-trial-credit-note">root 不適用</small></div>
           <div><span class="drive-card-sub" id="trading-current-label">目前價格（reference）</span><strong id="trading-current-price">-</strong><small id="trading-current-delta">即時輪詢 2 秒</small><small id="trading-current-purpose">用途：展示 / 一般估值</small><small id="trading-current-health">🟢 價格來源正常</small><small id="trading-current-market">-</small></div>
-          <div><span class="drive-card-sub">我的部位</span><strong id="trading-position-quantity">-</strong><small id="trading-position-locked">鎖定 -</small></div>
+          <div><span class="drive-card-sub">資產組合</span><strong id="trading-portfolio-total-equity">-</strong><small id="trading-portfolio-detail">讀取中</small></div>
+          <div><span class="drive-card-sub">現貨倉位</span><strong id="trading-position-quantity">-</strong><small id="trading-position-locked">讀取中</small></div>
+          <div><span class="drive-card-sub">借貸 / 合約</span><strong id="trading-portfolio-leverage-count">-</strong><small id="trading-portfolio-leverage-detail">讀取中</small></div>
           <div><span class="drive-card-sub">手續費</span><strong id="trading-fee-rate-percent">-</strong><small>%</small></div>
+        </div>
+        <div class="drive-card" id="trading-portfolio-card" style="display:none;margin-top:.75rem;">
+          <div class="drive-card-heading compact-heading">
+            <div>
+              <div class="drive-card-title">我的資產組合</div>
+              <div class="drive-card-sub">以多資產視角彙整可用點數、現貨、借貸與合約部位；不受目前選取交易對影響。</div>
+            </div>
+          </div>
+          <div id="trading-portfolio-asset-list" class="drive-file-list" style="margin-top:.65rem;"></div>
+        </div>
+        <div class="drive-card" id="trading-spot-position-card" style="margin-top:.75rem;">
+          <div class="drive-card-heading compact-heading">
+            <div>
+              <div class="drive-card-title">現貨明細</div>
+              <div class="drive-card-sub">各交易對分開計算持有成本、損益平衡價與未實現盈虧。</div>
+            </div>
+          </div>
+          <div id="trading-spot-position-detail-list" class="drive-file-list" style="margin-top:.65rem;"></div>
         </div>
 	        <div class="drive-card trading-btc-signal-card" id="trading-btc-signal-card" style="display:none;margin-top:.75rem;">
           <div class="drive-card-heading compact-heading">
@@ -3494,16 +3743,16 @@
           <summary>
             <div>
               <div class="drive-card-title">進階交易：融資 / 借券</div>
-              <div class="drive-card-sub" id="trading-margin-note">由 root 開啟後可用；會凍結保證金，手續費與借貸利息計入資金池。</div>
+              <div class="drive-card-sub" id="trading-margin-note">由 root 開啟後可用；會凍結保證金，手續費與借貸利息計入借貸基金。</div>
             </div>
           </summary>
           <div class="drive-collapsible-body">
             <div class="settings-option-grid" id="trading-funding-pool-public" style="display:none;margin-bottom:.75rem;">
-              <div><span class="drive-card-sub">資金池可借出</span><strong id="trading-funding-pool-available">-</strong><small>POINTS</small></div>
-              <div><span class="drive-card-sub">已借出本金</span><strong id="trading-funding-pool-outstanding">-</strong><small>POINTS</small></div>
-              <div><span class="drive-card-sub">池子使用率</span><strong id="trading-funding-pool-utilization">-</strong><small>%</small></div>
+              <div><span class="drive-card-sub">借貸基金可借出</span><strong id="trading-funding-pool-available">-</strong><small>點</small></div>
+              <div><span class="drive-card-sub">已借出本金</span><strong id="trading-funding-pool-outstanding">-</strong><small>點</small></div>
+              <div><span class="drive-card-sub">借貸基金使用率</span><strong id="trading-funding-pool-utilization">-</strong><small>%</small></div>
               <div><span class="drive-card-sub">BTC / ETH 浮動年利率</span><strong id="trading-funding-pool-rate-btc-eth">-</strong><small>% APR</small></div>
-              <div><span class="drive-card-sub">USDT / POINTS 浮動年利率</span><strong id="trading-funding-pool-rate-usdt-points">-</strong><small>% APR</small></div>
+              <div><span class="drive-card-sub">USDT / 積分 浮動年利率</span><strong id="trading-funding-pool-rate-usdt-points">-</strong><small>% APR</small></div>
             </div>
             <div class="settings-option-grid economy-wallet-grid" id="trading-margin-account-summary" style="display:none;margin-bottom:.75rem;">
               <div><span class="drive-card-sub">全倉維持率</span><strong id="trading-margin-cross-ratio">-</strong><small id="trading-margin-cross-status">-</small></div>
@@ -3530,7 +3779,22 @@
             <div class="drive-file-list" id="trading-margin-position-list" style="margin-top:.75rem;"></div>
           </div>
         </details>
-	        <div class="settings-option-grid" style="margin-top:.75rem;">
+        <div class="drive-card" id="trading-bot-position-card" style="margin-top:.75rem;">
+          <div class="drive-card-heading compact-heading">
+            <div>
+              <div class="drive-card-title">機器人訂單與掛單</div>
+              <div class="drive-card-sub">只顯示已建立機器人、近期觸發、Bot 訂單與網格掛單；新增與策略設定仍留在交易所頁。</div>
+            </div>
+            <button class="btn btn-sm" type="button" id="trading-open-bot-manager-btn">到交易所管理</button>
+          </div>
+          <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+            <div><span class="drive-card-sub">機器人</span><strong id="trading-bot-position-count">0</strong><small id="trading-bot-position-enabled">啟用 0</small></div>
+            <div><span class="drive-card-sub">Bot 掛單</span><strong id="trading-bot-open-order-count">0</strong><small id="trading-bot-open-order-locked">凍結 0</small></div>
+            <div><span class="drive-card-sub">近期觸發</span><strong id="trading-bot-recent-run-count">0</strong><small>最近 20 筆</small></div>
+          </div>
+          <div id="trading-bot-position-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+        </div>
+	        <div class="settings-option-grid" id="trading-orders-fills-grid" style="margin-top:.75rem;">
           <div>
             <div class="drive-card-title">訂單</div>
             <div id="trading-order-list" class="drive-file-list"></div>
@@ -3542,6 +3806,16 @@
         </div>
       </div>
       <div id="trading-msg" class="msg"></div>
+      <div class="drive-card" id="trading-settings-page" style="display:none;margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">交易所管理</div>
+            <div class="drive-card-sub">交易所詳細設定、價格來源、背景引擎、機器人掃描與市場 registry 都集中在這裡，不再放在安全中心。</div>
+          </div>
+          <button class="btn" id="trading-root-settings-back-btn" type="button">回交易所</button>
+        </div>
+        <div id="trading-settings-slot" style="margin-top:.75rem;"></div>
+      </div>
     </div>
   </div>
 
@@ -3553,6 +3827,7 @@
         <button class="tab" id="tab-password-resets">密碼重設審核</button>
         <button class="tab" id="tab-violations">違規計次</button>
         <button class="tab" id="tab-governance">會員治理</button>
+        <button class="tab" id="tab-member-settings">會員設定</button>
         <button class="tab" id="tab-notices">發放通知</button>
         <button class="tab" id="tab-appeals">申覆審核</button>
         <button class="tab" id="tab-reports">訊息檢舉</button>
@@ -3601,6 +3876,21 @@
             <button class="btn btn-primary" type="button" id="admin-open-add-user">➕ 新增帳號</button>
             <span style="font-size:.75rem;color:var(--muted);align-self:center;">新建立帳號預設為一般用戶</span>
           </div>
+        </div>
+      </div>
+
+      <!-- ── 會員設定 ── -->
+      <div class="form-section" id="sec-member-settings">
+        <div class="admin-tools">
+          <div class="drive-card-heading">
+            <div>
+              <div class="mini-title">會員設定</div>
+              <div class="drive-card-sub">會員等級、權限限額與功能入口層級集中放在帳號管理，不再混在伺服器設定。</div>
+            </div>
+            <button class="btn btn-primary btn-sm" type="button" data-settings-save-action>儲存會員設定</button>
+          </div>
+          <div id="accounts-member-settings-slot" style="margin-top:.75rem;"></div>
+          <div id="accounts-module-access-slot" style="margin-top:.75rem;"></div>
         </div>
       </div>
 
@@ -3696,6 +3986,30 @@
               <label>動作值</label>
               <input type="text" id="governance-action-value" placeholder="依處理方式填寫，可留空" />
               <div class="field-hint" id="governance-action-value-help">警告、禁言、要求重設密碼、刪除帳號通常可留空。</div>
+            </div>
+            <div class="field" id="governance-duration-field" style="display:none;">
+              <label id="governance-duration-label">處分期限（小時）</label>
+              <input type="number" id="governance-duration-hours" min="1" max="8760" value="24" />
+              <div class="field-hint">禁言必填；限制功能與暫停帳號可設定到期自動解除。</div>
+            </div>
+            <div class="field" id="governance-restriction-features-field" style="display:none;grid-column:1 / -1;">
+              <label>限制哪些功能</label>
+              <div class="settings-option-grid" id="governance-restriction-features">
+                <label><input type="checkbox" value="community_post" /> 討論區發文</label>
+                <label><input type="checkbox" value="community_comment" /> 留言 / 回覆</label>
+                <label><input type="checkbox" value="chat_send" /> 聊天發言</label>
+                <label><input type="checkbox" value="chat_dm" /> 私訊</label>
+                <label><input type="checkbox" value="cloud_upload" /> 雲端上傳</label>
+                <label><input type="checkbox" value="video_publish" /> 影音發布</label>
+                <label><input type="checkbox" value="trading_order" /> 交易所下單</label>
+                <label><input type="checkbox" value="service_spend" /> 站內付費功能</label>
+                <label><input type="checkbox" value="wallet_transfer" /> 錢包轉出</label>
+              </div>
+              <div class="field-hint">限制功能提案必須選擇至少一項；禁言會自動限制聊天、私訊、發文與留言。</div>
+            </div>
+            <div class="field" id="governance-emergency-field" style="grid-column:1 / -1;">
+              <label><input type="checkbox" id="governance-emergency-execute" /> 緊急執行並事後追認</label>
+              <div class="field-hint">僅限禁言、限制功能、暫停帳號、要求重設密碼。送出後立即套用，投票期限固定 1 小時；逾期未通過或遭否決會自動解除，提案者記違規一次。</div>
             </div>
             <div class="field">
               <label>投票規則</label>
@@ -3815,13 +4129,10 @@
     <div class="admin-tools">
       <div class="mini-title">安全中心</div>
       <div class="tabs" style="margin-top:.65rem;margin-bottom:.7rem;">
-        <button class="tab active" id="tab-server-security">總覽</button>
+        <button class="tab active" id="tab-server-overview">總覽</button>
+        <button class="tab" id="tab-server-server-mode">伺服器模式</button>
         <button class="tab" id="tab-server-audit">審計日誌</button>
-        <button class="tab" id="tab-server-health">健康度</button>
         <button class="tab" id="tab-server-integrity">Integrity Guard</button>
-        <button class="tab" id="tab-server-launch-check">上線前檢查</button>
-        <button class="tab" id="tab-server-settings">伺服器設定</button>
-        <button class="tab" id="tab-server-env">系統環境</button>
       </div>
 
       <div class="form-section" id="sec-server-audit">
@@ -3845,6 +4156,7 @@
         </div>
         <div id="security-save-status" class="msg" style="margin-bottom:.65rem;"></div>
         <div id="security-center-summary" class="health-summary-grid" style="margin-bottom:.8rem;"></div>
+        <div id="security-settings-slot"></div>
         <details class="drive-collapsible-panel settings-collapse">
           <summary>
             <div>
@@ -4161,6 +4473,34 @@
         <div class="drive-card">
           <div class="drive-card-heading">
             <div>
+              <div class="drive-card-title">版本檢查</div>
+              <div class="drive-card-sub">檢查 GitHub 遠端版本與目前程式差異；正式更新請走部署流程。</div>
+            </div>
+            <div class="admin-toolbar" style="gap:.45rem;justify-content:flex-end;">
+              <select id="server-update-branch-select" aria-label="更新來源分支"></select>
+              <button class="btn" type="button" id="server-update-refresh-btn">檢查更新</button>
+              <button class="btn" type="button" id="server-update-preview-btn">預覽 diff</button>
+            </div>
+          </div>
+          <div id="server-update-status" class="msg" style="margin-top:.5rem;"></div>
+          <details class="drive-collapsible-panel settings-collapse" style="margin-top:.65rem;">
+            <summary>
+              <div>
+                <div class="drive-card-title">Diff 與更新摘要</div>
+                <div class="drive-card-sub">只顯示版本資訊，不會在線合併或重啟。</div>
+              </div>
+            </summary>
+            <div class="drive-collapsible-body">
+              <div class="drive-card-sub" style="margin-top:.35rem;">更新摘要</div>
+              <pre id="server-update-summary" class="security-log-box security-log-pre" style="max-height:180px;margin-top:.35rem;"></pre>
+              <div class="drive-card-sub" style="margin-top:.65rem;">Diff 預覽</div>
+              <pre id="server-update-diff" class="security-log-box security-log-pre" style="max-height:260px;margin-top:.35rem;"></pre>
+            </div>
+          </details>
+        </div>
+        <div class="drive-card">
+          <div class="drive-card-heading">
+            <div>
               <div class="drive-card-title">平台流量與積分統計</div>
               <div class="drive-card-sub">root / super_admin 可查看。</div>
             </div>
@@ -4308,6 +4648,7 @@
           <div id="server-mode-requirements" class="security-profile-preview"></div>
           <div id="server-mode-logs" class="security-profile-preview"></div>
           <div id="server-mode-profile-preview" class="security-profile-preview"></div>
+          <div id="server-mode-launch-check-slot" style="display:none;margin-top:.75rem;"></div>
           <div id="server-mode-token-hint" class="drive-card-sub" style="margin-top:.65rem;"></div>
           <details class="drive-collapsible-panel settings-collapse" id="server-mode-internal-test-panel" style="display:none;">
             <summary>
@@ -4410,55 +4751,12 @@
           </details>
           </div>
         </details>
-        <details class="drive-collapsible-panel settings-collapse">
-          <summary>
-            <div>
-              <div class="drive-card-title">GitHub 更新中心</div>
-              <div class="drive-card-sub">root 可從 GitHub 選擇分支、先看 diff，再套用 fast-forward 更新。</div>
-            </div>
-          </summary>
-          <div class="drive-collapsible-body">
-            <div class="settings-option-grid">
-              <div class="field">
-                <label>更新來源分支</label>
-                <select id="server-update-branch-select"></select>
-                <div class="field-hint">只允許從 origin 分支 fast-forward 更新；工作目錄有未提交變更時會拒絕。</div>
-              </div>
-              <div class="field">
-                <label>確認字串</label>
-                <input type="text" id="server-update-confirm" placeholder="APPLY_UNVERIFIED_UPDATE" />
-                <div class="field-hint">套用更新前必須確認：此次更新未經本機驗證，需自行測試與 debug。</div>
-              </div>
-              <div class="field">
-                <label>&nbsp;</label>
-                <button class="btn" type="button" id="server-update-refresh-btn">讀取分支</button>
-              </div>
-              <div class="field">
-                <label>&nbsp;</label>
-                <button class="btn" type="button" id="server-update-preview-btn">預覽 diff</button>
-              </div>
-              <div class="field">
-                <label>&nbsp;</label>
-                <button class="btn btn-primary" type="button" id="server-update-apply-btn">套用更新</button>
-              </div>
-            </div>
-            <div id="server-update-status" class="msg"></div>
-            <div class="drive-card-sub" style="margin-top:.65rem;">更新摘要</div>
-            <pre id="server-update-summary" class="security-log-box security-log-pre" style="max-height:220px;margin-top:.35rem;"></pre>
-            <div class="drive-card-sub" style="margin-top:.65rem;">Diff 預覽</div>
-            <pre id="server-update-diff" class="security-log-box security-log-pre" style="max-height:260px;margin-top:.65rem;"></pre>
-          </div>
-        </details>
         <form id="settings-form" style="margin-top:.6rem;">
-          <div class="tabs" style="margin-bottom:.85rem;">
+	          <div class="tabs" id="settings-inner-tabs" style="display:none;margin-bottom:.85rem;">
             <button class="tab active" type="button" id="tab-settings-security">安全</button>
             <button class="tab" type="button" id="tab-settings-features">功能</button>
             <button class="tab" type="button" id="tab-settings-appearance">外觀</button>
             <button class="tab" type="button" id="tab-settings-system">系統</button>
-            <button class="tab" type="button" id="tab-settings-billing">計費</button>
-            <button class="tab" type="button" id="tab-settings-trading">交易所</button>
-            <button class="tab" type="button" id="tab-settings-drive">雲端硬碟</button>
-            <button class="tab" type="button" id="tab-settings-member-levels">會員等級</button>
           </div>
           <div class="form-section active" id="sec-settings-security">
             <details class="drive-collapsible-panel settings-collapse" open>
@@ -4504,7 +4802,7 @@
             </div>
               </div>
             </details>
-            <details class="drive-collapsible-panel settings-collapse">
+            <details class="drive-collapsible-panel settings-collapse" id="sec-settings-drive-transfer-limits">
               <summary>
                 <div>
                   <div class="drive-card-title">階級傳輸限速</div>
@@ -4519,58 +4817,11 @@
                 <div id="cloud-drive-transfer-limits-list" class="drive-transfer-limit-list"></div>
               </div>
             </details>
-            <details class="drive-collapsible-panel settings-collapse">
-              <summary>
-                <div>
-                  <div class="drive-card-title">登入、密碼重設與 CAPTCHA</div>
-                  <div class="drive-card-sub">低頻調整項目，預設收合。</div>
-                </div>
-              </summary>
-              <div class="drive-collapsible-body">
-            <div class="settings-option-grid">
-              <div class="field">
-                <label>忘記密碼處理模式</label>
-                <select id="s-password-reset-mode">
-                  <option value="admin_review">管理員審核臨時密碼</option>
-                  <option value="email_token">Email 驗證碼重設</option>
-                </select>
-                <div class="field-hint">暫時預設為管理審核；mail 系統完成後可切回 Email token。Email 驗證後端會保留。</div>
-              </div>
-              <div class="field">
-                <label>註冊 CAPTCHA 模式</label>
-                <select id="s-captcha-mode">
-                  <option value="none">none</option>
-                  <option value="math">math</option>
-                  <option value="image">image</option>
-                  <option value="turnstile">turnstile</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>CAPTCHA 到期秒數</label>
-                <input type="number" id="s-captcha-ttl-seconds" min="60" max="3600" />
-              </div>
-              <div class="field">
-                <label><input type="checkbox" id="s-login-autofill-block-enabled" /> 阻擋登入頁瀏覽器自動填寫</label>
-                <div class="field-hint">開啟後，登入頁會改用反 autofill 防護，避免瀏覽器或密碼管理器自動代填帳密。</div>
-              </div>
-              <div class="field" id="captcha-turnstile-site-key-field" style="display:none;">
-                <label>Turnstile site key</label>
-                <input type="text" id="s-captcha-turnstile-site-key" placeholder="未使用可留空" />
-                <div class="field-hint">只在 `turnstile` 模式需要；切到其他 CAPTCHA 模式時會自動隱藏。</div>
-              </div>
-            </div>
-            <div class="field">
-              <label>登入失敗鎖定次數</label>
-              <input type="number" id="s-max-fail" min="1" max="20" />
-            </div>
-            <div class="field">
-              <label>封鎖時長（分鐘）</label>
-              <input type="number" id="s-block-dur" min="1" max="1440" />
-            </div>
-              </div>
-            </details>
-          </div>
-          <div class="form-section" id="sec-settings-features">
+	            <div class="admin-toolbar" style="margin-top:.6rem;">
+	              <button class="btn btn-primary" type="button" id="security-settings-save-btn" data-settings-save-action>儲存安全設定</button>
+	            </div>
+	          </div>
+	          <div class="form-section" id="sec-settings-features">
             <details class="drive-collapsible-panel settings-collapse" open>
               <summary>
                 <div>
@@ -4591,10 +4842,13 @@
                   <div id="feature-advisory-list" class="settings-feature-advisory-list"></div>
                 </div>
                 <div id="feature-switch-groups" class="settings-feature-switch-groups"></div>
-              </div>
-            </details>
-          </div>
-          <div class="form-section" id="sec-settings-appearance">
+	              </div>
+	            </details>
+	            <div class="admin-toolbar" style="margin-top:.6rem;">
+	              <button class="btn btn-primary" type="button" id="system-features-save-btn" data-settings-save-action>儲存功能設定</button>
+	            </div>
+	          </div>
+	          <div class="form-section" id="sec-settings-appearance">
             <details class="drive-collapsible-panel settings-collapse" open>
               <summary>
                 <div>
@@ -4719,9 +4973,12 @@
                 </select>
               </div>
             </div>
-              </div>
-            </details>
-          </div>
+	              </div>
+	            </details>
+	            <div class="admin-toolbar" style="margin-top:.6rem;">
+	              <button class="btn btn-primary" type="button" id="system-appearance-save-btn" data-settings-save-action>儲存外觀設定</button>
+	            </div>
+	          </div>
           <div class="form-section" id="sec-settings-system">
             <details class="drive-collapsible-panel settings-collapse" open>
               <summary>
@@ -4752,6 +5009,56 @@
             </div>
               </div>
             </details>
+            <details class="drive-collapsible-panel settings-collapse" id="sec-settings-login-security">
+              <summary>
+                <div>
+                  <div class="drive-card-title">登入、密碼重設與 CAPTCHA</div>
+                  <div class="drive-card-sub">登入保護、密碼重設與註冊 CAPTCHA，統一放在系統管理。</div>
+                </div>
+              </summary>
+              <div class="drive-collapsible-body">
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>忘記密碼處理模式</label>
+                <select id="s-password-reset-mode">
+                  <option value="admin_review">管理員審核臨時密碼</option>
+                  <option value="email_token">Email 驗證碼重設</option>
+                </select>
+                <div class="field-hint">暫時預設為管理審核；mail 系統完成後可切回 Email token。Email 驗證後端會保留。</div>
+              </div>
+              <div class="field">
+                <label>註冊 CAPTCHA 模式</label>
+                <select id="s-captcha-mode">
+                  <option value="none">none</option>
+                  <option value="math">math</option>
+                  <option value="image">image</option>
+                  <option value="turnstile">turnstile</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>CAPTCHA 到期秒數</label>
+                <input type="number" id="s-captcha-ttl-seconds" min="60" max="3600" />
+              </div>
+              <div class="field">
+                <label><input type="checkbox" id="s-login-autofill-block-enabled" /> 阻擋登入頁瀏覽器自動填寫</label>
+                <div class="field-hint">開啟後，登入頁會改用反 autofill 防護，避免瀏覽器或密碼管理器自動代填帳密。</div>
+              </div>
+              <div class="field" id="captcha-turnstile-site-key-field" style="display:none;">
+                <label>Turnstile site key</label>
+                <input type="text" id="s-captcha-turnstile-site-key" placeholder="未使用可留空" />
+                <div class="field-hint">只在 `turnstile` 模式需要；切到其他 CAPTCHA 模式時會自動隱藏。</div>
+              </div>
+            </div>
+            <div class="field">
+              <label>登入失敗鎖定次數</label>
+              <input type="number" id="s-max-fail" min="1" max="20" />
+            </div>
+            <div class="field">
+              <label>封鎖時長（分鐘）</label>
+              <input type="number" id="s-block-dur" min="1" max="1440" />
+            </div>
+	              </div>
+	            </details>
             <details class="drive-collapsible-panel settings-collapse" open>
               <summary>
                 <div>
@@ -4761,9 +5068,9 @@
               </summary>
               <div class="drive-collapsible-body">
                 <div class="settings-option-grid">
-                  <div class="field">
-                    <label>伺服器應用時區</label>
-                    <input type="text" id="s-server-timezone" list="server-timezone-options" placeholder="UTC / Asia/Taipei / America/New_York" autocomplete="off" />
+	                  <div class="field">
+	                    <label>應用顯示時區（不修改主機 OS 時區）</label>
+	                    <input type="text" id="s-server-timezone" list="server-timezone-options" placeholder="輸入任意 IANA 時區，例如 Asia/Taipei / UTC / America/New_York" autocomplete="off" />
                     <datalist id="server-timezone-options">
                       <option value="UTC"></option>
                       <option value="Asia/Taipei"></option>
@@ -4781,7 +5088,7 @@
                       <option value="Europe/Berlin"></option>
                       <option value="Australia/Sydney"></option>
                     </datalist>
-                    <div class="field-hint">使用 IANA 時區名稱。這是 hackme_web 的應用設定，不會修改作業系統時區。</div>
+	                    <div class="field-hint">可輸入任意有效 IANA 時區；下方時間檢查會同時顯示 OS 實際時區，避免把應用顯示時區誤認成主機時區。</div>
                   </div>
                   <div class="field">
                     <label>時間檢查</label>
@@ -4790,9 +5097,12 @@
                   </div>
                 </div>
                 <div id="server-time-status" class="drive-card-sub" style="margin-top:.6rem;">尚未檢查伺服器時間。</div>
-              </div>
-            </details>
-            <details class="drive-collapsible-panel settings-collapse">
+	              </div>
+	            </details>
+	            <div class="admin-toolbar" style="margin-top:.6rem;">
+	              <button class="btn btn-primary" type="button" id="system-core-save-btn" data-settings-save-action>儲存系統設定</button>
+	            </div>
+	            <details class="drive-collapsible-panel settings-collapse" id="sec-settings-listen">
               <summary>
                 <div>
                   <div class="drive-card-title">伺服器 Listen 設定</div>
@@ -4815,13 +5125,13 @@
             <div id="server-ssl-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;"></div>
               </div>
             </details>
-            <details class="drive-collapsible-panel settings-collapse">
-              <summary>
+            <section class="drive-collapsible-panel settings-static-panel" id="sec-settings-backpressure">
+              <div class="settings-static-panel-heading">
                 <div>
                   <div class="drive-card-title">請求容量與 Backpressure</div>
                   <div class="drive-card-sub">預設依硬體與 worker threads 自動推算；root 可改 manual 覆寫。</div>
                 </div>
-              </summary>
+              </div>
               <div class="drive-collapsible-body">
                 <div id="server-backpressure-status" class="drive-card-sub" style="margin-bottom:.75rem;"></div>
                 <div class="drive-card-sub" style="margin-bottom:.35rem;">近期流量趨勢（每個 worker 各自觀測；綠線為接受請求，紅線為流量高峰拒絕）</div>
@@ -4951,10 +5261,13 @@
                     <input type="number" id="s-drive-dashboard-lazy-refresh-seconds" min="1" max="300" step="1" value="10" />
                     <div class="field-hint">短時間重回雲端硬碟時可沿用已載入狀態，只恢復背景任務。</div>
                   </div>
-                </div>
-              </div>
-            </details>
-            <details class="drive-collapsible-panel settings-collapse">
+	                </div>
+	              </div>
+	            </section>
+	            <div class="admin-toolbar" style="margin-top:.6rem;">
+	              <button class="btn btn-primary" type="button" id="system-capacity-save-btn" data-settings-save-action>儲存請求容量設定</button>
+	            </div>
+            <details class="drive-collapsible-panel settings-collapse" id="sec-settings-comfyui">
               <summary>
                 <div>
                   <div class="drive-card-title">ComfyUI 連線與模型</div>
@@ -5231,7 +5544,7 @@
             <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">儲存後立即生效，不需重啟。若使用本地模式，第一次產圖時會在後台嘗試執行啟動腳本。</div>
               </div>
             </details>
-            <details class="drive-collapsible-panel settings-collapse">
+            <details class="drive-collapsible-panel settings-collapse" id="sec-settings-danger-ops">
               <summary>
                 <div>
                   <div class="drive-card-title">Snapshot / Restore / Reset</div>
@@ -5272,7 +5585,7 @@
             <div id="reset-status" style="font-size:.78rem;margin-top:.5rem;"></div>
               </div>
             </details>
-            <details class="drive-collapsible-panel settings-collapse">
+            <details class="drive-collapsible-panel settings-collapse" id="sec-settings-module-access">
               <summary>
                 <div>
                   <div class="drive-card-title">模組開放層級</div>
@@ -5351,11 +5664,11 @@
               <summary>
                 <div>
                   <div class="drive-card-title">服務扣點與容量商品</div>
-                  <div class="drive-card-sub">管理 economy price catalog；root 不扣點，但可設定一般用戶扣點規則。</div>
+                  <div class="drive-card-sub">這裡是服務計價的實際設定區；各功能右上快速設定會同步更新同一份 catalog。</div>
                 </div>
               </summary>
               <div class="drive-collapsible-body">
-            <div style="font-size:.75rem;color:var(--muted);margin-bottom:.75rem;">ComfyUI、雲端容量、發文、遊戲等服務都從後端 catalog 讀取價格。</div>
+            <div style="font-size:.75rem;color:var(--muted);margin-bottom:.75rem;">ComfyUI、雲端容量、發文、遊戲等服務都從後端 catalog 讀取價格；本月收入統計請到積分錢包的官方 Treasury 看板查看。</div>
             <div class="drive-file-list billing-catalog-list" id="root-service-fee-quick-pricing-list" style="margin-bottom:.85rem;"></div>
             <div class="settings-option-grid billing-editor-grid" style="margin-bottom:.85rem;">
               <div class="field">
@@ -5482,8 +5795,8 @@
             <details class="drive-collapsible-panel settings-collapse" id="trading-root-card" style="display:none;margin-bottom:.85rem;" open>
               <summary>
                 <div>
-                  <div class="drive-card-title">root 交易引擎操作</div>
-                  <div class="drive-card-sub">交易頁只保留下單、行情與倉位；root 專用的撮合、清算、資金池、合約模擬與市場參數集中放在這裡。</div>
+                  <div class="drive-card-title">交易所基金與市場營運</div>
+                  <div class="drive-card-sub">root 專用的撮合、清算、市場參數與審計集中放在這裡；交易所基金撥補需改走官方財庫治理提案，不在伺服器設定直接撥款。</div>
                 </div>
               </summary>
               <div class="drive-collapsible-body">
@@ -5495,30 +5808,10 @@
                 </div>
                 <div id="trading-root-inline-msg" class="msg trading-inline-msg"></div>
                 <div class="settings-option-grid economy-wallet-grid">
-                  <div><span class="drive-card-sub">資金池</span><strong id="trading-reserve-balance">0</strong><small>POINTS</small></div>
+                  <div><span class="drive-card-sub">交易所基金</span><strong id="trading-reserve-balance">0</strong><small>點</small></div>
                   <div><span class="drive-card-sub">交易驗證</span><strong id="trading-verification-status">-</strong><small id="trading-verification-detail">-</small></div>
                   <div><span class="drive-card-sub">高風險功能</span><strong id="trading-risk-flags">關閉</strong><small>futures / pvp</small></div>
-                  <div><span class="drive-card-sub">root 模擬資金</span><strong id="trading-root-sim-balance">10000</strong><small><button class="btn btn-small" id="trading-root-reset-sim-btn" type="button">重設回 10000</button></small></div>
                 </div>
-                <details class="drive-collapsible-panel settings-collapse" id="trading-root-contract-card" style="margin-top:.75rem;">
-                  <summary>
-                    <div>
-                      <div class="drive-card-title">root 合約模擬</div>
-                      <div class="drive-card-sub">僅 root 可用，使用 root 模擬資金，不寫入 PointsChain；root 以外用戶目前只能使用現貨。</div>
-                    </div>
-                  </summary>
-                  <div class="drive-collapsible-body">
-                    <div class="settings-option-grid">
-                      <div class="field"><label>市場</label><select id="trading-contract-market-select"><option value="">讀取市場中...</option></select></div>
-                      <div class="field"><label>方向</label><select id="trading-contract-side"><option value="long">做多</option><option value="short">做空</option></select></div>
-                      <div class="field"><label>數量</label><input type="number" id="trading-contract-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
-                      <div class="field"><label>槓桿</label><input type="number" id="trading-contract-leverage" min="1" max="20" step="1" value="1" /></div>
-                      <div class="field"><label>保證金</label><input type="number" id="trading-contract-margin" min="1" step="1" value="100" /></div>
-                      <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-contract-open-btn" type="button">開倉</button></div>
-                    </div>
-                    <div class="drive-file-list" id="trading-contract-position-list" style="margin-top:.75rem;"></div>
-                  </div>
-                </details>
                 <div class="settings-option-grid" style="margin-top:.75rem;">
                   <div class="field"><label>市場</label><select id="trading-root-market-select"><option value="">讀取市場中...</option></select></div>
                   <div class="field"><label>最後快取價格</label><input type="number" id="trading-root-price" min="1" step="1" readonly /></div>
@@ -5529,19 +5822,14 @@
                   <div class="field"><label><input type="checkbox" id="trading-root-enabled" /> 啟用市場</label></div>
                   <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-root-save-market-btn" type="button">儲存市場</button></div>
                 </div>
-                <div class="settings-option-grid" style="margin-top:.75rem;">
-                  <div class="field"><label>撥入來源帳戶</label><select id="trading-reserve-source-user-id"><option value="">讀取會員中...</option></select></div>
-                  <div class="field"><label>撥入點數</label><input type="number" id="trading-reserve-amount" min="1" step="1" /></div>
-                  <div class="field"><label>原因</label><input type="text" id="trading-reserve-reason" value="ROOT_RESERVE_ALLOCATION" readonly /></div>
-                  <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="trading-reserve-allocate-btn" type="button">撥入資金池</button></div>
-                </div>
+                <div class="field-hint" style="margin-top:.75rem;">交易所基金、借貸基金與盈虧缺口只在此處顯示與審計；新增撥補、官方財庫支應或負債上限調整請至積分錢包的官方 Treasury 提案流程處理。</div>
                 <div class="settings-option-grid" style="margin-top:.75rem;">
                   <div>
                     <div class="drive-card-title">交易審計</div>
                     <div id="trading-audit-list" class="drive-file-list"></div>
                   </div>
                   <div>
-                    <div class="drive-card-title">資金池事件</div>
+                    <div class="drive-card-title">基金事件</div>
                     <div id="trading-reserve-event-list" class="drive-file-list"></div>
                   </div>
                 </div>
@@ -5565,17 +5853,17 @@
                   <div class="field">
                     <label>BTC / ETH 年利率 APR（%）</label>
                     <input type="number" id="root-trading-borrow-apr-btc-eth" min="0" max="100" step="0.01" value="8" />
-                    <div class="field-hint">借券放空或其他借入 BTC / ETH 類資產時使用。實際年利率會依資金池使用率浮動。</div>
+                    <div class="field-hint">借券放空或其他借入 BTC / ETH 類資產時使用。實際年利率會依借貸基金使用率浮動。</div>
                   </div>
                   <div class="field">
-                    <label>USDT / POINTS 年利率 APR（%）</label>
+                    <label>USDT / 積分 年利率 APR（%）</label>
                     <input type="number" id="root-trading-borrow-apr-usdt-points" min="0" max="100" step="0.01" value="10" />
-                    <div class="field-hint">融資買入或其他借入 USDT / POINTS 類資產時使用。實際年利率會依資金池使用率浮動。</div>
+                    <div class="field-hint">融資買入或其他借入 USDT / 積分類資產時使用。實際年利率會依借貸基金使用率浮動。</div>
                   </div>
                   <div class="field">
-                    <label>資金池利率浮動倍率</label>
+                    <label>借貸基金利率浮動倍率</label>
                     <input type="number" id="root-trading-borrow-pressure-multiplier" min="0" max="100" step="0.1" value="4" />
-                    <div class="field-hint">資金池越少，借貸年利率越高；0 代表不浮動，4 代表滿載時約為基礎年利率 5 倍。</div>
+                    <div class="field-hint">借貸基金可借餘額越少，借貸年利率越高；0 代表不浮動，4 代表滿載時約為基礎年利率 5 倍。</div>
                   </div>
                   <div class="field">
                     <label>每次計息間隔（小時）</label>
@@ -5598,9 +5886,29 @@
                     <div class="field-hint">預設 90% = 融資九成；最低自備保證金為剩餘比例。</div>
                   </div>
                   <div class="field">
+                    <label>借貸基金使用率上限（%）</label>
+                    <input type="number" id="root-trading-margin-max-pool-utilization-percent" min="0" max="100" step="0.01" value="80" />
+                    <div class="field-hint">限制全站未償借貸本金；即使交易所基金還有餘額，超過此上限也不得再開新借貸倉位。</div>
+                  </div>
+                  <div class="field">
                     <label>借券原始保證金比例（%）</label>
                     <input type="number" id="root-trading-short-collateral-percent" min="0" max="100" step="0.01" value="60" />
                     <div class="field-hint">預設 60% = 借券六成，用於借券放空最低保證金。</div>
+                  </div>
+                  <div class="field">
+                    <label>交易所暫時負債上限（點）</label>
+                    <input type="number" id="root-trading-exchange-liability-limit-points" min="0" max="100000000" step="1" value="0" />
+                    <div class="field-hint">盈利超過基金可支付額時的治理參考上限；不代表 exchange fund 可記成負數。</div>
+                  </div>
+                  <div class="field">
+                    <label>暫時負債寬限時間（分鐘）</label>
+                    <input type="number" id="root-trading-exchange-liability-grace-minutes" min="0" max="43200" step="1" value="60" />
+                    <div class="field-hint">短缺進入治理後，允許暫時未結盈利等待處理的建議時間。</div>
+                  </div>
+                  <div class="field">
+                    <label>盈利結算週期（分鐘）</label>
+                    <input type="number" id="root-trading-profit-settlement-interval-minutes" min="0" max="43200" step="1" value="0" />
+                    <div class="field-hint">治理可選擇的結算節奏；0 代表即時嘗試用可用交易所基金支付。</div>
                   </div>
                   <div class="field">
                     <label>維持保證金比例（%）</label>
@@ -5617,9 +5925,9 @@
                     <div class="field-hint">系統會定期掃描低於維持保證金的借貸倉位，符合條件時自動平倉。</div>
                   </div>
                   <div class="field">
-                    <label>資金池目前統計</label>
-                    <strong id="root-trading-reserve-pool">0 POINTS</strong>
-                    <div class="field-hint">借貸交易的本金來源；手續費、借貸利息與 root 明確撥入會增加資金池。</div>
+                    <label>借貸基金目前統計</label>
+                    <strong id="root-trading-reserve-pool">0 點</strong>
+                    <div class="field-hint">借貸基金只使用交易所基金中允許出借的部分；其餘保留給 CFD 客戶盈餘、強平風控與營運準備，不可被借貸吃光。</div>
                   </div>
                 </div>
                 <details class="drive-collapsible-panel settings-collapse" id="root-trading-reserved-panel" style="display:none;margin-top:.75rem;">
@@ -5656,8 +5964,13 @@
                     <select id="root-trading-price-source">
                       <option value="fused_weighted">融合價格（多交易所加權平均）</option>
                       <option value="binance_public_api">Binance 公開 API</option>
+                      <option value="manual_root">手動價格（Dev / QA）</option>
                     </select>
-                    <div class="field-hint">預設會用多交易所融合價格；若部分 API 失效，會自動用仍健康的交易所重新分配權重，必要時再退回最後健康快取。</div>
+                    <div class="field-hint" id="root-trading-price-source-note">預設會用多交易所融合價格；若部分 API 失效，會自動用仍健康的交易所重新分配權重，必要時再退回最後健康快取。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-qa-live-price-provider-enabled" /> 啟用 QA 測試價格供應器</label>
+                    <div class="field-hint">只供測試環境使用。若價格卡在 BTC 1000 這類固定值，取消勾選並儲存即可回到 Binance / 融合價格。</div>
                   </div>
                   <div class="field" id="root-trading-price-fusion-mode-field">
                     <label>融合權重模式</label>
@@ -5755,7 +6068,7 @@
                     <div class="field-hint">1 基點 = 0.01%。買單會加價、賣單會減價。</div>
                   </div>
                   <div class="field">
-                    <label>每 10,000 POINTS 名目量追加滑價（基點）</label>
+                    <label>每 10,000 點名目量追加滑價（基點）</label>
                     <input type="number" id="root-trading-simulated-slippage-size-basis-points-per-10k-notional" min="0" max="10000" step="0.01" value="0" />
                     <div class="field-hint">名目量越大，模擬滑價越高；用來粗略模擬大單吃價。</div>
                   </div>
@@ -5915,8 +6228,8 @@
                     <div class="settings-option-grid">
                       <div class="field">
                         <label>內部市場 symbol</label>
-                        <input type="text" id="root-trading-registry-symbol" placeholder="SOL/POINTS" />
-                        <div class="field-hint">目前建議內部 quote 維持 `POINTS`；對外顯示可另外設成 `USDT`。</div>
+                        <input type="text" id="root-trading-registry-symbol" placeholder="SOL/USDT" />
+                        <div class="field-hint">對外報價 quote 使用 USDT；成交與結算會依站內積分匯率換算。</div>
                       </div>
                       <div class="field">
                         <label>Base asset</label>
@@ -5924,7 +6237,7 @@
                       </div>
                       <div class="field">
                         <label>Quote asset</label>
-                        <input type="text" id="root-trading-registry-quote-asset" placeholder="POINTS" />
+                        <input type="text" id="root-trading-registry-quote-asset" placeholder="USDT" />
                       </div>
                       <div class="field">
                         <label>對外顯示 quote</label>
@@ -6042,26 +6355,8 @@
             </details>
           </div>
           <div class="form-section" id="sec-settings-drive">
+            <div class="field-hint" style="margin-bottom:.75rem;">雲端硬碟儲存根目錄、全站容量上限與 root 帳號用量偵查已移至「雲端硬碟 > Root 管理」。</div>
             <details class="drive-collapsible-panel settings-collapse" open>
-              <summary>
-                <div>
-                  <div class="drive-card-title">雲端硬碟儲存位置</div>
-                  <div class="drive-card-sub">儲存根目錄，需重啟生效。</div>
-                </div>
-              </summary>
-              <div class="drive-collapsible-body">
-            <div class="field">
-              <label>儲存根目錄（空白代表沿用 HTML_LEARNING_STORAGE_DIR / 目前啟動設定）</label>
-              <input type="text" id="s-cloud-drive-storage-root" placeholder="/srv/hackme_web/storage" />
-            </div>
-            <div class="field">
-              <label>全用戶雲端硬碟容量上限 MB（-1 代表儲存磁碟總容量 95%）</label>
-              <input type="number" id="s-cloud-drive-global-capacity-limit-mb" min="-1" step="1" placeholder="-1" />
-            </div>
-            <div id="cloud-drive-storage-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .9rem;"></div>
-              </div>
-            </details>
-            <details class="drive-collapsible-panel settings-collapse">
               <summary>
                 <div>
                   <div class="drive-card-title">Storage Maintenance</div>
@@ -6080,53 +6375,6 @@
                 <input type="number" id="s-storage-trash-retention-days" min="0" max="3650" />
               </div>
             </div>
-              </div>
-            </details>
-            <details class="drive-collapsible-panel settings-collapse">
-              <summary>
-                <div>
-                  <div class="drive-card-title">Root 帳號雲端硬碟管理</div>
-                  <div class="drive-card-sub">查看用量並覆寫單一帳號容量/上傳限制。</div>
-                </div>
-              </summary>
-              <div class="drive-collapsible-body">
-            <div class="settings-option-grid">
-              <div class="field">
-                <label>管理帳號</label>
-                <select id="root-storage-user-select"><option value="">讀取帳號中...</option></select>
-              </div>
-              <div class="field">
-                <label>直接容量上限 MB（空白沿用角色/等級）</label>
-                <input type="number" id="root-storage-quota-mb" min="0" placeholder="例如 1024" />
-              </div>
-              <div class="field">
-                <label>直接單檔上限 MB（空白沿用角色/等級）</label>
-                <input type="number" id="root-storage-max-file-mb" min="0" placeholder="例如 100" />
-              </div>
-              <div class="field">
-                <label>每日上傳次數（空白沿用角色/等級）</label>
-                <input type="number" id="root-storage-daily-limit" min="0" placeholder="例如 20" />
-              </div>
-              <div class="field">
-                <label>上傳權限</label>
-                <select id="root-storage-can-upload">
-                  <option value="inherit">沿用角色/等級</option>
-                  <option value="true">允許上傳</option>
-                  <option value="false">禁止上傳</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>覆寫原因</label>
-                <input type="text" id="root-storage-override-reason" placeholder="例如：臨時專案容量、違規處分、人工例外" />
-              </div>
-            </div>
-            <div class="admin-toolbar" style="margin-top:.55rem;">
-              <button class="btn" type="button" id="root-storage-refresh-btn">重新整理用量</button>
-              <button class="btn btn-primary" type="button" id="root-storage-save-btn">套用 root 直接設定</button>
-              <button class="btn btn-danger" type="button" id="root-storage-clear-btn">清除直接設定</button>
-            </div>
-            <div id="root-storage-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
-            <div id="root-storage-users" class="drive-file-list" style="margin-top:.75rem;"></div>
               </div>
             </details>
             <details class="drive-collapsible-panel settings-collapse">
@@ -6234,6 +6482,7 @@
             </div>
           </summary>
           <div class="drive-collapsible-body">
+        <div id="system-danger-ops-slot"></div>
         <div class="admin-toolbar">
           <button class="btn btn-danger" type="button" id="restart-server-btn">
             重啟服務器
@@ -6257,8 +6506,64 @@
           </div>
           <div id="system-resource-gauges" class="system-resource-gauges"></div>
         </section>
-        <div id="server-env-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
-        <div id="server-env-details" style="font-size:.74rem;color:var(--muted);word-break:break-all;"></div>
+        <div id="server-env-summary" class="server-env-summary-grid"></div>
+        <div class="server-env-detail-grid">
+          <section id="server-env-transfer-details" class="server-env-panel" aria-label="系統傳輸量"></section>
+          <section id="server-env-db-details" class="server-env-panel" aria-label="資料庫大小合計"></section>
+        </div>
+        <section id="server-env-process-list" class="server-env-panel server-env-process-panel" aria-label="相關背景程式資源列表"></section>
+      </div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-system">
+    <div class="admin-tools">
+      <div class="mini-title">系統管理</div>
+      <div class="tabs" style="margin-top:.65rem;margin-bottom:.7rem;">
+        <button class="tab active" id="tab-system-health">健康度</button>
+        <button class="tab" id="tab-system-features">功能</button>
+        <button class="tab" id="tab-system-appearance">外觀</button>
+        <button class="tab" id="tab-system-core">系統</button>
+        <button class="tab" id="tab-system-capacity">請求容量</button>
+        <button class="tab" id="tab-system-env">系統環境</button>
+        <button class="tab" id="tab-system-launch-check" style="display:none;">上線前檢查</button>
+        <button class="tab" id="tab-system-bug-reports">Bug 回報</button>
+      </div>
+      <div id="system-health-slot"></div>
+      <div id="system-features-slot" style="display:none;"></div>
+      <div id="system-appearance-slot" style="display:none;"></div>
+      <div id="system-core-slot" style="display:none;"></div>
+      <div id="system-capacity-slot" style="display:none;"></div>
+      <div id="system-env-slot" style="display:none;"></div>
+      <div id="system-launch-check-slot" style="display:none;"></div>
+      <div id="system-bug-reports-slot" style="display:none;">
+        <div class="drive-card-heading compact-heading">
+          <div>
+            <div class="mini-title">Bug 回報管理</div>
+            <div class="drive-card-sub">root 接收、檢視與審核全站使用者送出的 bug 回報；核准後才發放對應獎勵。</div>
+          </div>
+          <div class="admin-toolbar" style="gap:.45rem;justify-content:flex-end;">
+            <select id="root-bug-report-status" aria-label="Bug 回報狀態">
+              <option value="all">全部</option>
+              <option value="new">待審</option>
+              <option value="approved">已核准</option>
+              <option value="rejected">已駁回</option>
+            </select>
+            <button class="btn" type="button" id="root-bug-report-refresh-btn">重新整理</button>
+          </div>
+        </div>
+        <div id="root-bug-report-msg" class="msg"></div>
+        <div id="root-bug-report-summary" class="health-summary-grid" style="margin:.7rem 0;"></div>
+        <div class="server-env-detail-grid">
+          <section class="server-env-panel" aria-label="Bug 回報列表">
+            <div class="drive-card-title">回報列表</div>
+            <div id="root-bug-report-list" class="drive-file-list" style="margin-top:.55rem;"></div>
+          </section>
+          <section class="server-env-panel" aria-label="Bug 回報詳情">
+            <div class="drive-card-title">回報詳情</div>
+            <div id="root-bug-report-detail" class="security-profile-preview" style="margin-top:.55rem;">請從左側選擇一筆 bug 回報。</div>
+          </section>
+        </div>
       </div>
     </div>
   </div>
@@ -6297,6 +6602,35 @@
       <label>電話</label>
       <input type="tel" id="edit-user-phone" placeholder="09xx-xxx-xxx" />
     </div>
+    <details class="drive-collapsible-panel settings-collapse" id="edit-user-preferences-section" style="display:none;" open>
+      <summary>
+        <div>
+          <div class="drive-card-title">個人顯示設定</div>
+          <div class="drive-card-sub">只影響目前帳號看到的時間與介面顯示。</div>
+        </div>
+      </summary>
+      <div class="drive-collapsible-body">
+        <div class="settings-option-grid">
+          <div class="field">
+            <label for="edit-user-display-timezone">顯示時區</label>
+            <select id="edit-user-display-timezone">
+              <option value="auto">跟隨瀏覽器</option>
+              <option value="UTC">UTC</option>
+              <option value="Asia/Taipei">Asia/Taipei</option>
+              <option value="Asia/Tokyo">Asia/Tokyo</option>
+              <option value="Asia/Seoul">Asia/Seoul</option>
+              <option value="Asia/Hong_Kong">Asia/Hong_Kong</option>
+              <option value="Asia/Shanghai">Asia/Shanghai</option>
+              <option value="Asia/Singapore">Asia/Singapore</option>
+              <option value="America/Los_Angeles">America/Los_Angeles</option>
+              <option value="America/New_York">America/New_York</option>
+              <option value="Europe/London">Europe/London</option>
+            </select>
+            <div class="drive-card-sub">通知、聊天與各功能時間會優先使用這個設定；伺服器時區仍由 root 在系統設定管理。</div>
+          </div>
+        </div>
+      </div>
+    </details>
     <details class="drive-collapsible-panel settings-collapse" id="edit-user-appearance-section" style="display:none;">
       <summary>
         <div>
@@ -6453,7 +6787,7 @@
         </div>
         <div class="avatar-cropper-tools">
           <label for="edit-avatar-crop-zoom">縮放</label>
-          <input type="range" id="edit-avatar-crop-zoom" min="1" max="6" step="0.01" value="1" />
+          <input type="range" id="edit-avatar-crop-zoom" min="0.5" max="6" step="0.01" value="1" />
           <button type="button" id="edit-avatar-crop-center" class="btn btn-sm">置中</button>
         </div>
         <div class="avatar-cropper-hint">拖曳圖片調整位置，圓形範圍會成為頭像顯示重點。</div>
@@ -6510,6 +6844,25 @@
         <label>等級變更原因</label>
         <input type="text" id="edit-user-level-reason" placeholder="root 手動調整" />
       </div>
+    </div>
+    <div class="settings-option-grid" id="edit-user-governance-disposition-fields" style="display:none;">
+      <div class="field">
+        <label>限制指定功能</label>
+        <input type="text" id="edit-user-restriction-features" placeholder="例如：cloud_upload,trading_order,wallet_transfer" />
+      </div>
+      <div class="field">
+        <label>罰款點數</label>
+        <input type="number" id="edit-user-fine-amount" min="0" step="1" placeholder="0 表示不建立罰單" />
+      </div>
+      <div class="field">
+        <label>罰單繳款期限（小時）</label>
+        <input type="number" id="edit-user-fine-due-hours" min="1" max="720" step="1" value="72" />
+      </div>
+      <div class="field">
+        <label>處分原因</label>
+        <input type="text" id="edit-user-governance-disposition-reason" placeholder="會員治理處分原因" />
+      </div>
+      <div class="field-hint" style="grid-column:1 / -1;">功能代碼：community_post、community_comment、chat_dm、chat_send、cloud_upload、video_publish、trading_order、service_spend、wallet_transfer。罰款不會自動扣款，會建立可申覆的積分罰單。</div>
     </div>
     <div class="field" id="edit-user-current-pw-field" style="display:none;">
       <label>目前密碼</label>
@@ -6780,7 +7133,7 @@
       </div>
       <div class="avatar-cropper-tools">
         <label for="profile-avatar-crop-zoom">縮放</label>
-        <input type="range" id="profile-avatar-crop-zoom" min="1" max="6" step="0.01" value="1" />
+        <input type="range" id="profile-avatar-crop-zoom" min="0.5" max="6" step="0.01" value="1" />
         <button type="button" id="profile-avatar-crop-center" class="btn btn-sm">置中</button>
       </div>
       <div class="avatar-cropper-hint">不用輸入座標；拖曳圖片、調整縮放後直接上傳。</div>
@@ -6933,34 +7286,34 @@
   <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
-<script src="/js/00-core.js?v=20260523-account-pagination-bundles" defer></script>
+<script src="/js/00-core.js?v=20260526-profile-quick-settings" defer></script>
 <script src="/js/05-i18n.js?v=20260519-vae-builtin" defer></script>
-<script src="/js/01-root-quick-settings.js?v=20260521-comfyui-local-main-args" defer></script>
-<script src="/js/10-users.js?v=20260523-account-pagination-bundles" defer></script>
-<script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
+<script src="/js/01-root-quick-settings.js?v=20260525-settings-split" defer></script>
+<script src="/js/10-users.js?v=20260525-governance-finish" defer></script>
+<script src="/js/20-chat.js?v=20260525-chat-emoji-insert" defer></script>
 <script src="/js/25-community.js?v=20260518-inline-media" defer></script>
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
 <script src="/js/32-notifications.js?v=20260523-dispute-reply-action" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260518-inline-media" defer></script>
-<script src="/js/35-drive.js?v=20260517-share-expiry-picker" defer></script>
+<script src="/js/35-drive.js?v=20260525-chat-attachment-dedupe" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
 <!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
-<script src="/js/36-comfyui.js?v=20260521-diffusers-cpu-fallback" defer></script>
+<script src="/js/36-comfyui.js?v=20260525-settings-split" defer></script>
 <script src="/js/36-comfyui-workflows.js?v=20260520-embedding-empty-hide" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/41-game-modules.js?v=20260518-game-ux" defer></script>
 <script src="/js/games/game-view-registry.js?v=20260513-legacy-modules" defer></script>
-<script src="/js/games/chess.js?v=20260515-stockfish-depth-toggle" defer></script>
+<script src="/js/games/chess.js?v=20260525-move-history-ply" defer></script>
 <script src="/js/38-games.js?v=20260520-racing-physics" defer></script>
 <script src="/js/42-experiments.js?v=20260518-two-experiments" defer></script>
-<script src="/js/39-videos.js?v=20260518-video-overview" defer></script>
-<script src="/js/40-auth-users.js?v=20260517-avatar-cropper" defer></script>
-<script src="/js/50-admin.js?v=20260523-account-pagination-bundles" defer></script>
-<script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>
-<script src="/js/55-economy.js?v=20260523-chain-null-freeze" defer></script>
-<script src="/js/56-trading.js?v=20260523-trading-visible-debug" defer></script>
-<script src="/js/57-platform-centers.js?v=20260523-account-pagination-bundles" defer></script>
-<script src="/js/58-profile-friends.js?v=20260517-profile-avatar-upload" defer></script>
-<script src="/js/90-bootstrap.js?v=20260523-account-pagination-bundles" defer></script>
+<script src="/js/39-videos.js?v=20260525-video-thumb-direct-stream-guard" defer></script>
+<script src="/js/40-auth-users.js?v=20260525-avatar-crop-zoom" defer></script>
+<script src="/js/50-admin.js?v=20260526-process-command-detail-invariant-refresh" defer></script>
+<script src="/js/51-admin-server-mode-launch-check.js?v=20260526-server-mode-prelaunch" defer></script>
+<script src="/js/55-economy.js?v=20260526-financial-settlement-network-invariant-refresh" defer></script>
+<script src="/js/56-trading.js?v=20260525-usdt-market-labels" defer></script>
+<script src="/js/57-platform-centers.js?v=20260524-trading-status-split" defer></script>
+<script src="/js/58-profile-friends.js?v=20260526-profile-quick-settings" defer></script>
+<script src="/js/90-bootstrap.js?v=20260526-server-mode-prelaunch-update-check" defer></script>
 </body>
 </html>

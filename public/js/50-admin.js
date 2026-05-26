@@ -41,6 +41,12 @@ let backpressureTrafficPollTimer = null;
 let systemResourcePollTimer = null;
 let systemResourceRefreshSeconds = 5;
 let systemResourceRefreshInFlight = false;
+let lastServerEnvironment = {};
+let lastServerDatabaseUsage = {};
+let lastServerTransferUsage = {};
+let lastServerResourceUsage = {};
+let rootBugReportsCache = [];
+let rootBugReportSelectedId = "";
 let backpressureTrafficRefreshSeconds = 4;
 let serverOutputRefreshSeconds = 3;
 let securityTestJobPollSeconds = 3;
@@ -108,67 +114,584 @@ function collectCloudDriveTransferLimits() {
   return out;
 }
 
-function switchServerTab(tab) {
-  currentServerTab = tab;
-  if (tab !== "security") stopServerOutputPoll();
-  if (tab !== "settings") stopBackpressureTrafficPoll();
-  if (tab !== "env") stopSystemResourcePoll();
-  ["security", "audit", "health", "integrity", "launch-check", "settings", "env"].forEach((name) => {
-    const sec = $("sec-server-" + name);
-    if (sec) sec.classList.toggle("active", name === tab);
+function relocateSystemAdminSections() {
+  const moves = [
+    ["sec-settings-security", "security-settings-slot"],
+    ["sec-server-health", "system-health-slot"],
+    ["sec-settings-features", "system-features-slot"],
+    ["sec-settings-appearance", "system-appearance-slot"],
+    ["sec-settings-system", "system-core-slot"],
+    ["sec-settings-backpressure", "system-capacity-slot"],
+    ["sec-server-env", "system-env-slot"],
+    ["sec-server-launch-check", "server-mode-launch-check-slot"],
+    ["sec-settings-drive", "drive-root-settings-slot"],
+    ["sec-settings-drive-transfer-limits", "drive-root-settings-slot"],
+    ["sec-settings-member-levels", "accounts-member-settings-slot"],
+    ["sec-settings-module-access", "accounts-module-access-slot"],
+    ["sec-settings-comfyui", "comfyui-settings-slot"],
+    ["sec-settings-billing", "economy-pricing-settings-slot"],
+    ["sec-settings-danger-ops", "system-danger-ops-slot"],
+    ["sec-settings-trading", "trading-settings-slot"],
+  ];
+  moves.forEach(([sectionId, slotId]) => {
+    const section = $(sectionId);
+    const slot = $(slotId);
+    if (section && slot && section.parentElement !== slot) {
+      section.classList.add("active");
+      slot.appendChild(section);
+    }
   });
-  ["tab-server-security", "tab-server-audit", "tab-server-health", "tab-server-integrity", "tab-server-launch-check", "tab-server-settings", "tab-server-env"].forEach((id) => {
+}
+
+function isSystemOverviewActive() {
+  return currentModuleTab === "server" && currentServerTab === "overview";
+}
+
+function isSystemSettingsActive() {
+  return currentModuleTab === "system" && currentSystemTab === "capacity";
+}
+
+function isSystemEnvActive() {
+  return currentModuleTab === "system" && currentSystemTab === "env";
+}
+
+function isSystemBugReportsActive() {
+  return currentModuleTab === "system" && currentSystemTab === "bug-reports";
+}
+
+function updateServerModeLaunchCheckVisibility() {
+  const target = String($("server-mode-select")?.value || currentServerMode || "").trim().toLowerCase();
+  const shouldShow = target === "production";
+  ["tab-system-launch-check", "system-launch-check-slot"].forEach((id) => {
+    const el = $(id);
+    if (el) el.style.display = "none";
+  });
+  const slot = $("server-mode-launch-check-slot");
+  const section = $("sec-server-launch-check");
+  if (slot) slot.style.display = shouldShow ? "" : "none";
+  if (section) section.classList.toggle("active", shouldShow);
+  if (!shouldShow && currentSystemTab === "launch-check") {
+    switchSystemTab("health");
+  }
+  if (shouldShow && currentModuleTab === "server" && currentServerTab === "server-mode" && typeof loadLaunchCheck === "function") {
+    loadLaunchCheck();
+  }
+}
+
+function switchServerTab(tab) {
+  currentServerTab = ["overview", "server-mode", "audit", "integrity"].includes(tab) ? tab : "overview";
+  stopServerOutputPoll();
+  stopBackpressureTrafficPoll();
+  stopSystemResourcePoll();
+  const sectionByTab = {
+    overview: "sec-server-security",
+    "server-mode": "sec-server-settings",
+    audit: "sec-server-audit",
+    integrity: "sec-server-integrity",
+  };
+  Object.entries(sectionByTab).forEach(([name, id]) => {
+    const sec = $(id);
+    if (sec) sec.classList.toggle("active", name === currentServerTab);
+  });
+  ["tab-server-overview", "tab-server-server-mode", "tab-server-audit", "tab-server-integrity"].forEach((id) => {
     const btn = $(id);
     if (!btn) return;
-    btn.classList.toggle("active", id === "tab-server-" + tab);
+    btn.classList.toggle("active", id === "tab-server-" + currentServerTab);
   });
-  if (tab === "security") {
+  if (currentServerTab === "overview") {
     loadSecurityCenter();
+    loadSettings();
     startServerOutputPoll();
   }
-  if (tab === "audit") loadAudit(0);
-  if (tab === "health") { loadServerHealth(); loadPlatformStats(); }
-  if (tab === "integrity") loadIntegrityGuard();
-  if (tab === "launch-check") loadLaunchCheck();
-  if (tab === "settings") {
+  if (currentServerTab === "server-mode") {
+    loadSettings();
+    loadServerMode();
+  }
+  if (currentServerTab === "audit") loadAudit(0);
+  if (currentServerTab === "integrity") loadIntegrityGuard();
+  updateServerModeLaunchCheckVisibility();
+  if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
+}
+
+function switchSystemTab(tab) {
+  relocateSystemAdminSections();
+  const allowedTabs = ["health", "features", "appearance", "core", "capacity", "env", "launch-check", "bug-reports"];
+  currentSystemTab = allowedTabs.includes(tab) ? tab : "health";
+  stopServerOutputPoll();
+  if (currentSystemTab !== "capacity") stopBackpressureTrafficPoll();
+  if (currentSystemTab !== "env") stopSystemResourcePoll();
+  const sectionByTab = {
+    health: "sec-server-health",
+    features: "sec-settings-features",
+    appearance: "sec-settings-appearance",
+    core: "sec-settings-system",
+    capacity: "sec-settings-backpressure",
+    env: "sec-server-env",
+    "launch-check": "sec-server-launch-check",
+    "bug-reports": "system-bug-reports-slot",
+  };
+  Object.entries(sectionByTab).forEach(([name, id]) => {
+    const sec = $(id);
+    const slot = $(`system-${name}-slot`);
+    if (sec) sec.classList.toggle("active", name === currentSystemTab);
+    if (slot) slot.style.display = name === currentSystemTab ? "" : "none";
+  });
+  [
+    "tab-system-health",
+    "tab-system-features",
+    "tab-system-appearance",
+    "tab-system-core",
+    "tab-system-capacity",
+    "tab-system-env",
+    "tab-system-launch-check",
+    "tab-system-bug-reports",
+  ].forEach((id) => {
+    const btn = $(id);
+    if (!btn) return;
+    btn.classList.toggle("active", id === "tab-system-" + currentSystemTab);
+  });
+  if (currentSystemTab === "health") { loadServerHealth(); loadPlatformStats(); loadServerUpdateStatus(false); }
+  if (["features", "appearance", "core"].includes(currentSystemTab)) loadSettings();
+  if (currentSystemTab === "capacity") {
     loadSettings();
     startBackpressureTrafficPoll();
-    loadServerMode();
-    loadServerUpdateStatus(false);
   }
-  if (tab === "env") {
+  if (currentSystemTab === "env") {
     loadServerEnv();
     startSystemResourcePoll();
   }
+  if (currentSystemTab === "launch-check") loadLaunchCheck();
+  if (currentSystemTab === "bug-reports") {
+    loadRootBugReports();
+  }
+  updateServerModeLaunchCheckVisibility();
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
 }
 
 function switchSettingsSection(tab) {
-  currentSettingsSection = tab;
-  ["security", "features", "appearance", "system", "billing", "trading", "drive", "member-levels"].forEach((name) => {
-    const sec = $("sec-settings-" + name);
-    if (sec) sec.classList.toggle("active", name === tab);
-  });
-  ["tab-settings-security", "tab-settings-features", "tab-settings-appearance", "tab-settings-system", "tab-settings-billing", "tab-settings-trading", "tab-settings-drive", "tab-settings-member-levels"].forEach((id) => {
-    const btn = $(id);
-    if (!btn) return;
-    btn.classList.toggle("active", id === "tab-settings-" + tab);
-  });
-  if (tab === "drive") {
-    loadCloudDriveAdminPolicy();
-    loadRootStorageUsers();
+  if (tab === "trading") {
+    if (typeof switchModuleTab === "function") switchModuleTab("trading");
+    if (typeof openTradingSettingsPage === "function") openTradingSettingsPage();
+    return;
+  }
+  if (tab === "drive" || tab === "shares" || tab === "albums") {
+    if (typeof switchModuleTab === "function") switchModuleTab("drive");
+    if (typeof setDriveActivePage === "function") setDriveActivePage("root-admin");
+    if (typeof loadSettings === "function") loadSettings();
+    if (typeof loadCloudDriveAdminPolicy === "function") loadCloudDriveAdminPolicy();
+    return;
+  }
+  if (tab === "member-levels" || tab === "module-access" || tab === "accounts") {
+    if (typeof switchModuleTab === "function") switchModuleTab("accounts");
+    switchAdminTab("member-settings");
+    if (typeof loadSettings === "function") loadSettings();
+    return;
+  }
+  if (tab === "comfyui") {
+    if (typeof switchModuleTab === "function") switchModuleTab("comfyui");
+    if (typeof setComfyuiView === "function") setComfyuiView("settings");
+    if (typeof loadSettings === "function") loadSettings();
+    return;
   }
   if (tab === "billing") {
-    loadRootEconomyCatalog();
+    if (typeof switchModuleTab === "function") switchModuleTab("economy");
+    if (typeof setEconomyActivePage === "function") setEconomyActivePage("balance");
+    if (typeof loadRootEconomyCatalog === "function") loadRootEconomyCatalog();
+    if (typeof loadSettings === "function") loadSettings();
+    return;
   }
-  if (tab === "trading") {
-    loadRootTradingSettings();
-    if (typeof loadTradingDashboard === "function") loadTradingDashboard();
+  if (tab === "security") {
+    if (typeof switchModuleTab === "function") switchModuleTab("server");
+    if (typeof switchServerTab === "function") switchServerTab("overview");
+    return;
   }
-  if (tab === "member-levels") loadEditableMemberLevelRules();
+  const systemTabBySettingsSection = {
+    features: "features",
+    appearance: "appearance",
+    system: "core",
+    core: "core",
+    capacity: "capacity",
+    backpressure: "capacity",
+  };
+  const targetSystemTab = systemTabBySettingsSection[tab] || "core";
+  if (typeof switchModuleTab === "function" && currentModuleTab !== "system") switchModuleTab("system");
+  if (typeof switchSystemTab === "function") switchSystemTab(targetSystemTab);
+  currentSettingsSection = tab || "core";
   if (typeof clearSettingsStatus === "function") {
     if (suppressNextSettingsStatusClear) suppressNextSettingsStatusClear = false;
     else clearSettingsStatus();
+  }
+}
+
+function rootBugReportMsg(text = "", ok = true) {
+  const el = $("root-bug-report-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = text ? "msg show" + (ok ? " ok" : " err") : "msg";
+}
+
+function rootBugReportStatusLabel(status) {
+  return {
+    new: "待審",
+    approved: "已核准",
+    rejected: "已駁回",
+  }[String(status || "")] || String(status || "-");
+}
+
+function rootBugReportSeverityColor(severity) {
+  return {
+    low: "#82b1ff",
+    medium: "#ffd166",
+    high: "#ff9f43",
+    critical: "#ff4f6d",
+  }[String(severity || "").toLowerCase()] || "var(--muted)";
+}
+
+function filteredRootBugReports() {
+  const status = $("root-bug-report-status")?.value || "all";
+  return rootBugReportsCache.filter((item) => status === "all" || String(item.status || "new") === status);
+}
+
+function renderRootBugReportSummary() {
+  const host = $("root-bug-report-summary");
+  if (!host) return;
+  const counts = rootBugReportsCache.reduce((acc, item) => {
+    const status = String(item.status || "new");
+    const severity = String(item.severity || "medium");
+    acc.total += 1;
+    acc[status] = (acc[status] || 0) + 1;
+    acc[`sev_${severity}`] = (acc[`sev_${severity}`] || 0) + 1;
+    return acc;
+  }, { total: 0, new: 0, approved: 0, rejected: 0 });
+  host.innerHTML = [
+    ["全部", counts.total, "var(--accent)"],
+    ["待審", counts.new || 0, "#ffd166"],
+    ["已核准", counts.approved || 0, "#4ade80"],
+    ["已駁回", counts.rejected || 0, "#ff4f6d"],
+    ["Critical", counts.sev_critical || 0, "#ff4f6d"],
+  ].map(([label, value, color]) => `
+    <div class="health-card">
+      <strong style="color:${color};">${sanitize(String(value))}</strong>
+      <span>${sanitize(label)}</span>
+    </div>
+  `).join("");
+}
+
+function renderRootBugReportList() {
+  renderRootBugReportSummary();
+  const list = $("root-bug-report-list");
+  if (!list) return;
+  const rows = filteredRootBugReports();
+  if (!rows.length) {
+    list.innerHTML = `<div class="drive-empty">目前沒有符合篩選條件的 bug 回報</div>`;
+    renderRootBugReportDetail(null);
+    return;
+  }
+  if (!rows.some((item) => String(item.id || "") === String(rootBugReportSelectedId || ""))) {
+    rootBugReportSelectedId = rows[0]?.id || "";
+  }
+  list.innerHTML = rows.map((item) => {
+    const active = String(item.id || "") === String(rootBugReportSelectedId || "");
+    const status = rootBugReportStatusLabel(item.status || "new");
+    const color = rootBugReportSeverityColor(item.severity);
+    return `
+      <button class="drive-file-row ${active ? "active" : ""}" type="button" data-root-bug-report-select="${sanitize(item.id || "")}" style="width:100%;text-align:left;">
+        <div>
+          <strong>${sanitize(item.title || item.id || "-")}</strong>
+          <div class="drive-card-sub">
+            <span style="color:${color};font-weight:700;">${sanitize(item.severity || "medium")}</span>
+            · ${sanitize(status)}
+            · ${sanitize(item.feature || "other")}
+            · ${sanitize(item.device || "unknown")}
+          </div>
+          <div class="drive-card-sub">${sanitize(item.reporter || "-")} · ${sanitize(item.created_at || "")}</div>
+        </div>
+      </button>
+    `;
+  }).join("");
+  list.querySelectorAll("[data-root-bug-report-select]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      rootBugReportSelectedId = btn.dataset.rootBugReportSelect || "";
+      renderRootBugReportList();
+    });
+  });
+  renderRootBugReportDetail(rows.find((item) => String(item.id || "") === String(rootBugReportSelectedId || "")) || rows[0] || null);
+}
+
+function rootBugReportDetailRow(label, value) {
+  if (!value) return "";
+  return `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(label)}</strong>
+        <div class="drive-card-sub" style="white-space:pre-wrap;">${sanitize(String(value))}</div>
+      </div>
+    </div>
+  `;
+}
+
+function rootBugReportSummaryText(item) {
+  if (!item) return "";
+  return [
+    `Bug 回報 ${item.id || "-"}`,
+    `標題：${item.title || "-"}`,
+    `狀態：${rootBugReportStatusLabel(item.status || "new")} / ${item.severity || "medium"}`,
+    `回報者：${item.reporter || "-"}${item.reporter_id ? ` (#${item.reporter_id})` : ""}`,
+    `功能：${item.feature || "other"}`,
+    `頁面：${item.page || "-"}`,
+    `描述：${item.description || "-"}`,
+    `步驟：${item.steps || "-"}`,
+    `預期：${item.expected || "-"}`,
+    `實際：${item.actual || "-"}`,
+  ].join("\n");
+}
+
+function selectedRootBugReport(reportId) {
+  const id = String(reportId || rootBugReportSelectedId || "");
+  return (rootBugReportsCache || []).find((item) => String(item.id || "") === id) || null;
+}
+
+async function copyRootBugReportText(text, button, okMessage) {
+  const value = String(text || "");
+  if (!value) {
+    rootBugReportMsg("沒有可複製的內容。", false);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(value);
+    rootBugReportMsg(okMessage || "已複製 bug 回報內容。");
+    if (typeof showActionFeedback === "function") {
+      showActionFeedback(button || document.activeElement, okMessage || "已複製", true, { skipToast: true });
+    }
+  } catch (_) {
+    rootBugReportMsg("複製失敗，請手動選取內容。", false);
+  }
+}
+
+function renderRootBugReportDetail(item) {
+  const detail = $("root-bug-report-detail");
+  if (!detail) return;
+  detail.classList.add("show");
+  if (!item) {
+    detail.innerHTML = "請從左側選擇一筆 bug 回報。";
+    return;
+  }
+  const reviewed = item.reviewed_at
+    ? `審核：${item.reviewed_by || "-"} · ${item.reviewed_at}${item.ledger_uuid ? ` · ledger ${item.ledger_uuid}` : ""}`
+    : "尚未審核";
+  const canReview = !["approved", "rejected"].includes(String(item.status || ""));
+  const suggestedReward = Number(item.suggested_reward_points ?? item.reward_points ?? 0);
+  detail.innerHTML = `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(item.title || item.id || "-")}</strong>
+        <div class="drive-card-sub">
+          ${sanitize(item.id || "-")} · ${sanitize(rootBugReportStatusLabel(item.status || "new"))}
+          · <span style="color:${rootBugReportSeverityColor(item.severity)};font-weight:700;">${sanitize(item.severity || "medium")}</span>
+          · ${canReview ? "建議" : "實發"}獎勵 ${Number(item.reward_points || 0).toLocaleString()} 點
+        </div>
+        <div class="drive-card-sub">${sanitize(reviewed)}</div>
+      </div>
+      <div class="admin-toolbar" style="gap:.35rem;justify-content:flex-end;">
+        <button class="btn btn-sm" type="button" data-root-bug-report-copy-id="${sanitize(item.id || "")}">複製 ID</button>
+        <button class="btn btn-sm" type="button" data-root-bug-report-copy-summary="${sanitize(item.id || "")}">複製摘要</button>
+        <button class="btn btn-sm" type="button" data-root-bug-report-open-announcement="${sanitize(item.id || "")}">編輯公告草稿</button>
+        ${canReview ? `
+          <button class="btn btn-sm" type="button" data-root-bug-report-approve="${sanitize(item.id || "")}">核准並發獎勵</button>
+          <button class="btn btn-sm btn-danger" type="button" data-root-bug-report-reject="${sanitize(item.id || "")}">駁回</button>
+        ` : ""}
+      </div>
+    </div>
+    ${canReview ? `
+      <label class="field" style="margin:.55rem 0;">
+        <span>實際獎勵點數</span>
+        <input type="number" id="root-bug-report-review-reward" min="0" max="1000000" step="1" value="${Number.isFinite(suggestedReward) ? suggestedReward : 0}" />
+        <div class="field-hint">由 root 依實際影響決定；用戶自評 ${sanitize(item.severity || "medium")} 只作為參考，0 代表核准但不發獎勵。</div>
+      </label>
+      <label class="field" style="margin:.55rem 0;">
+        <span>審核備註</span>
+        <textarea id="root-bug-report-review-note" rows="3" maxlength="1000" placeholder="補充核准、駁回或後續處理原因">${sanitize(item.review_note || "")}</textarea>
+      </label>
+    ` : ""}
+    <section class="server-env-panel" id="root-bug-report-announcement-draft" style="display:none;margin:.7rem 0;" aria-label="Bug 回報公告草稿">
+      <div class="drive-card-title">全站公告草稿</div>
+      <div class="drive-card-sub">請先確認並修改公告標題與內容，再由 root 手動發布。</div>
+      <label class="field" style="margin:.55rem 0;">
+        <span>公告標題</span>
+        <input type="text" id="root-bug-report-announcement-title" maxlength="80" />
+      </label>
+      <label class="field" style="margin:.55rem 0;">
+        <span>公告內容</span>
+        <textarea id="root-bug-report-announcement-content" rows="8" maxlength="3000"></textarea>
+      </label>
+      <label class="inline-check">
+        <input type="checkbox" id="root-bug-report-announcement-pinned" checked />
+        <span>置頂公告</span>
+      </label>
+      <div class="admin-toolbar" style="gap:.45rem;margin-top:.55rem;">
+        <button class="btn btn-primary" type="button" data-root-bug-report-publish-announcement="${sanitize(item.id || "")}">發布公告</button>
+        <button class="btn" type="button" data-root-bug-report-cancel-announcement>取消草稿</button>
+      </div>
+    </section>
+    ${rootBugReportDetailRow("回報者", `${item.reporter || "-"}${item.reporter_id ? ` (#${item.reporter_id})` : ""} · ${item.reporter_role || "-"}`)}
+    ${rootBugReportDetailRow("功能 / 裝置 / 頁面", `${item.feature || "other"} · ${item.device || "unknown"}\n${item.page || ""}`)}
+    ${rootBugReportDetailRow("問題描述", item.description)}
+    ${rootBugReportDetailRow("重現步驟", item.steps)}
+    ${rootBugReportDetailRow("預期結果", item.expected)}
+    ${rootBugReportDetailRow("實際結果", item.actual)}
+    ${rootBugReportDetailRow("請求資訊", `${item.request_ip || "-"}\n${item.user_agent || ""}`)}
+    ${rootBugReportDetailRow("審核備註", item.review_note)}
+    ${rootBugReportDetailRow("檔案", item.file)}
+  `;
+  detail.querySelectorAll("[data-root-bug-report-copy-id]").forEach((btn) => {
+    btn.addEventListener("click", () => copyRootBugReportText(item.id || "", btn, "Bug 回報 ID 已複製"));
+  });
+  detail.querySelectorAll("[data-root-bug-report-copy-summary]").forEach((btn) => {
+    btn.addEventListener("click", () => copyRootBugReportText(rootBugReportSummaryText(item), btn, "Bug 回報摘要已複製"));
+  });
+  detail.querySelectorAll("[data-root-bug-report-open-announcement]").forEach((btn) => {
+    btn.addEventListener("click", () => openRootBugReportAnnouncementDraft(btn.dataset.rootBugReportOpenAnnouncement || ""));
+  });
+  detail.querySelectorAll("[data-root-bug-report-publish-announcement]").forEach((btn) => {
+    btn.addEventListener("click", () => publishRootBugReportAnnouncement(btn.dataset.rootBugReportPublishAnnouncement || ""));
+  });
+  detail.querySelectorAll("[data-root-bug-report-cancel-announcement]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const draft = $("root-bug-report-announcement-draft");
+      if (draft) draft.style.display = "none";
+      rootBugReportMsg("公告草稿已收起，尚未發布。");
+    });
+  });
+  detail.querySelectorAll("[data-root-bug-report-approve]").forEach((btn) => {
+    btn.addEventListener("click", () => reviewRootBugReport(btn.dataset.rootBugReportApprove || "", "approve"));
+  });
+  detail.querySelectorAll("[data-root-bug-report-reject]").forEach((btn) => {
+    btn.addEventListener("click", () => reviewRootBugReport(btn.dataset.rootBugReportReject || "", "reject"));
+  });
+}
+
+async function loadRootBugReports() {
+  if (currentUser !== "root" || !isSystemBugReportsActive()) return;
+  rootBugReportMsg("Bug 回報讀取中...");
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + "/admin/bug-reports", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    rootBugReportsCache = Array.isArray(json.reports) ? json.reports : [];
+    renderRootBugReportList();
+    rootBugReportMsg(`已讀取 ${rootBugReportsCache.length} 筆 bug 回報。`);
+  } catch (err) {
+    rootBugReportMsg(err.message || "Bug 回報讀取失敗", false);
+  }
+}
+
+async function reviewRootBugReport(reportId, decision) {
+  if (currentUser !== "root" || !reportId) return;
+  const label = decision === "approve" ? "核准並發獎勵" : "駁回";
+  const reviewNote = $("root-bug-report-review-note")?.value || "";
+  const rewardInput = $("root-bug-report-review-reward");
+  const rewardPoints = decision === "approve" ? Number.parseInt(rewardInput?.value || "0", 10) : 0;
+  if (decision === "approve" && (!Number.isFinite(rewardPoints) || rewardPoints < 0)) {
+    rootBugReportMsg("實際獎勵點數必須是 0 或正整數。", false);
+    return;
+  }
+  rootBugReportMsg(`${label}中...`);
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + `/admin/bug-reports/${encodeURIComponent(reportId)}/review`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({ decision, review_note: reviewNote, reward_points: rewardPoints }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    rootBugReportMsg(`Bug 回報 ${reportId} 已${decision === "approve" ? "核准" : "駁回"}。`);
+    rootBugReportSelectedId = reportId;
+    await loadRootBugReports();
+  } catch (err) {
+    rootBugReportMsg(err.message || "Bug 回報審核失敗", false);
+  }
+}
+
+function rootBugReportAnnouncementDraft(item) {
+  const title = (`Bug 回報處理：${item?.title || item?.id || ""}`).slice(0, 80);
+  const content = [
+    `Bug 回報：${item?.title || item?.id || "-"}`,
+    `回報編號：${item?.id || "-"}`,
+    `目前狀態：${rootBugReportStatusLabel(item?.status || "new")}`,
+    `影響等級：${item?.severity || "medium"}（以 root 審核為準）`,
+    `相關功能：${item?.feature || "other"}`,
+    "",
+    "摘要：",
+    item?.description || "-",
+    "",
+    "處理說明：",
+    "請 root 在發布前改寫此段，說明已確認的影響範圍、臨時處理方式、修復狀態與用戶需要採取的動作。",
+  ].join("\n").slice(0, 3000);
+  return { title, content };
+}
+
+function openRootBugReportAnnouncementDraft(reportId) {
+  if (currentUser !== "root" || !reportId) return;
+  const item = selectedRootBugReport(reportId);
+  if (!item) {
+    rootBugReportMsg("找不到要建立公告草稿的 bug 回報。", false);
+    return;
+  }
+  const draft = rootBugReportAnnouncementDraft(item);
+  if ($("root-bug-report-announcement-title")) $("root-bug-report-announcement-title").value = draft.title;
+  if ($("root-bug-report-announcement-content")) $("root-bug-report-announcement-content").value = draft.content;
+  if ($("root-bug-report-announcement-pinned")) $("root-bug-report-announcement-pinned").checked = true;
+  const panel = $("root-bug-report-announcement-draft");
+  if (panel) {
+    panel.style.display = "block";
+    panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+  rootBugReportMsg("已建立公告草稿，請確認並修改內容後再發布。");
+}
+
+async function publishRootBugReportAnnouncement(reportId) {
+  if (currentUser !== "root" || !reportId) return;
+  const item = selectedRootBugReport(reportId);
+  if (!item) {
+    rootBugReportMsg("找不到要發布公告的 bug 回報。", false);
+    return;
+  }
+  const draftPanel = $("root-bug-report-announcement-draft");
+  if (draftPanel && draftPanel.style.display === "none") {
+    openRootBugReportAnnouncementDraft(reportId);
+    return;
+  }
+  const title = String($("root-bug-report-announcement-title")?.value || "").trim();
+  const content = String($("root-bug-report-announcement-content")?.value || "").trim();
+  const isPinned = !!$("root-bug-report-announcement-pinned")?.checked;
+  if (!title || !content) {
+    rootBugReportMsg("請先填寫公告標題與公告內容。", false);
+    return;
+  }
+  rootBugReportMsg("全站公告發布中...");
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + "/community/announcements", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({ title: title.slice(0, 80), content: content.slice(0, 3000), is_pinned: isPinned }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    rootBugReportMsg("已發布為全站公告。");
+    if (draftPanel) draftPanel.style.display = "none";
+  } catch (err) {
+    rootBugReportMsg(err.message || "全站公告發布失敗", false);
   }
 }
 
@@ -179,6 +702,8 @@ function canOpenAdminTab(tab) {
     case "users":
     case "password-resets":
       return canAccessModule("accounts");
+    case "member-settings":
+      return currentUser === "root";
     case "violations":
       return canAccessModule("accounts") && (!isFeatureEnabledForUi || isFeatureEnabledForUi("feature_violation_center_enabled", false));
     case "governance":
@@ -195,12 +720,14 @@ function canOpenAdminTab(tab) {
 }
 
 function firstAvailableAdminTab() {
-  return ["users", "password-resets", "violations", "governance", "notices", "appeals", "reports"].find((tab) => canOpenAdminTab(tab)) || "users";
+  return ["users", "password-resets", "violations", "governance", "member-settings", "notices", "appeals", "reports"].find((tab) => canOpenAdminTab(tab)) || "users";
 }
 
 function switchModuleTab(tab) {
+  relocateSystemAdminSections();
   const canAccessAccounts = canAccessModule("accounts");
   const canAccessServer = currentUser === "root";
+  const canAccessSystem = currentUser === "root";
   const canAccessAppeals = currentRole !== "super_admin" && canAccessModule("appeals");
   const canAccessCommunity = !!currentUser && canAccessModule("community");
   const canAccessAnnouncements = canAccessCommunity;
@@ -250,6 +777,7 @@ function switchModuleTab(tab) {
   if (tab === "trading" && !canAccessTrading) normTab = fallbackModule();
   if (tab === "accounts" && !canAccessAccounts) normTab = fallbackModule();
   if (tab === "server" && !canAccessServer) normTab = canAccessAccounts ? "accounts" : fallbackModule();
+  if (tab === "system" && !canAccessSystem) normTab = canAccessAccounts ? "accounts" : fallbackModule();
   if (tab === "appeals" && !canAccessAppeals) normTab = fallbackModule();
 
   const previousModuleTab = currentModuleTab;
@@ -269,6 +797,7 @@ function switchModuleTab(tab) {
   const modEconomy = $("module-economy");
   const modTrading = $("module-trading");
   const modAccounts = $("module-accounts");
+  const modSystem = $("module-system");
   const modServer = $("module-server");
   const modAppeals = $("module-appeals");
   const mChat = $("tab-module-chat");
@@ -286,6 +815,7 @@ function switchModuleTab(tab) {
   const mEconomy = $("tab-module-economy");
   const mTrading = $("tab-module-trading");
   const mAccounts = $("tab-module-accounts");
+  const mSystem = $("tab-module-system");
   const mServer = $("tab-module-server");
   const mAppeals = $("tab-module-appeals");
 
@@ -304,6 +834,7 @@ function switchModuleTab(tab) {
   if (modEconomy) modEconomy.classList.toggle("active", normTab === "economy");
   if (modTrading) modTrading.classList.toggle("active", normTab === "trading");
   if (modAccounts) modAccounts.classList.toggle("active", normTab === "accounts");
+  if (modSystem) modSystem.classList.toggle("active", normTab === "system");
   if (modServer) modServer.classList.toggle("active", normTab === "server");
   if (modAppeals) modAppeals.classList.toggle("active", normTab === "appeals");
   if (mChat) mChat.classList.toggle("active", normTab === "chat");
@@ -321,6 +852,7 @@ function switchModuleTab(tab) {
   if (mEconomy) mEconomy.classList.toggle("active", normTab === "economy");
   if (mTrading) mTrading.classList.toggle("active", normTab === "trading");
   if (mAccounts) mAccounts.classList.toggle("active", normTab === "accounts");
+  if (mSystem) mSystem.classList.toggle("active", normTab === "system");
   if (mServer) mServer.classList.toggle("active", normTab === "server");
   if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
   if (typeof animateActiveModule === "function") animateActiveModule(normTab);
@@ -348,12 +880,16 @@ function switchModuleTab(tab) {
   if (normTab === "announcements" && canAccessAnnouncements) {
     loadAnnouncements();
   }
-  if (normTab !== "server") {
+  if (normTab !== "system") {
     stopServerOutputPoll();
     stopSystemResourcePoll();
+    stopBackpressureTrafficPoll();
   }
   if (normTab === "server" && canAccessServer) {
-    switchServerTab(currentServerTab || "security");
+    switchServerTab(currentServerTab || "overview");
+  }
+  if (normTab === "system" && canAccessSystem) {
+    switchSystemTab(currentSystemTab || "health");
   }
   if (normTab === "drive" && canAccessDrive) {
     loadDriveDashboard({ lazy: true });
@@ -401,11 +937,11 @@ function switchModuleTab(tab) {
 
 function switchAdminTab(tab) {
   currentAdminTab = canOpenAdminTab(tab) ? tab : firstAvailableAdminTab();
-  ["users","password-resets","violations","governance","notices","appeals","reports"].forEach(t => {
+  ["users","password-resets","violations","governance","member-settings","notices","appeals","reports"].forEach(t => {
     const sec = $("sec-" + t);
     if (sec) sec.classList.toggle("active", t === currentAdminTab);
   });
-  ["tab-users","tab-password-resets","tab-violations","tab-governance","tab-notices","tab-appeals","tab-reports"].forEach(id => {
+  ["tab-users","tab-password-resets","tab-violations","tab-governance","tab-member-settings","tab-notices","tab-appeals","tab-reports"].forEach(id => {
     const btn = $(id);
     const tabKey = id.replace(/^tab-/, "");
     if (!btn) return;
@@ -416,6 +952,10 @@ function switchAdminTab(tab) {
   if (currentAdminTab === "users") loadUsers();
   if (currentAdminTab === "violations") loadViolations(0);
   if (currentAdminTab === "governance") loadGovernanceDashboard();
+  if (currentAdminTab === "member-settings") {
+    loadSettings();
+    if (typeof loadEditableMemberLevelRules === "function") loadEditableMemberLevelRules();
+  }
   if (currentAdminTab === "notices") {
     loadUsers();
     renderAdminNoticeTargetOptions();
@@ -861,14 +1401,26 @@ async function reviewViolationFineAppeal(appealId, action) {
 let governancePendingTargetUserId = "";
 const GOVERNANCE_ACTION_VALUE_HELP = {
   warn: "可留空。系統會依提案原因替對象記一次違規警告。",
-  mute: "可留空。通過後會將帳號狀態設為 muted，並使其重新登入。",
-  restrict: "可留空，或填 ISO 到期時間，例如 2026-05-01T18:00。通過後會限制發文、上傳等功能。",
-  suspend: "可留空，或填 ISO 到期時間，例如 2026-05-01T18:00。通過後會暫停帳號使用。",
+  mute: "禁言期限請在下方填寫；通過後會限制聊天、私訊、發文與留言。",
+  restrict: "請在下方選擇要限制的功能；可另外設定處分期限。",
+  suspend: "可在下方設定暫停期限；留空代表需另行治理解除。",
   downgrade_level: "必填：newbie、normal、restricted 或 suspended。用來調整會員等級。",
   force_password_reset: "可留空。通過後對象下次登入必須重新設定密碼。",
   delete: "可留空。通過後帳號會被標記為 deleted，屬高風險操作。",
 };
 const GOVERNANCE_HIGH_RISK_ACTIONS = new Set(["suspend", "delete", "downgrade_level"]);
+const GOVERNANCE_EMERGENCY_ACTIONS = new Set(["mute", "restrict", "suspend", "force_password_reset"]);
+const GOVERNANCE_FEATURE_LABELS = {
+  community_post: "討論區發文",
+  community_comment: "留言 / 回覆",
+  chat_send: "聊天發言",
+  chat_dm: "私訊",
+  cloud_upload: "雲端上傳",
+  video_publish: "影音發布",
+  trading_order: "交易所下單",
+  service_spend: "站內付費功能",
+  wallet_transfer: "錢包轉出",
+};
 
 async function loadGovernanceDashboard() {
   await Promise.allSettled([loadUsers(), loadMemberLevelRulesSummary(), loadGovernanceProposals()]);
@@ -916,20 +1468,51 @@ function governancePolicySummary(action, target) {
     : "一般：需要 1 位 admin/manager 或 root 同意。";
 }
 
+function selectedGovernanceRestrictionFeatures() {
+  return Array.from(document.querySelectorAll("#governance-restriction-features input[type='checkbox']:checked"))
+    .map((input) => input.value)
+    .filter(Boolean);
+}
+
 function updateGovernanceActionValueHelp() {
   const action = $("governance-action-type")?.value || "warn";
   const input = $("governance-action-value");
   const help = $("governance-action-value-help");
   const policy = $("governance-vote-policy");
+  const durationField = $("governance-duration-field");
+  const durationLabel = $("governance-duration-label");
+  const restrictionField = $("governance-restriction-features-field");
+  const emergency = $("governance-emergency-execute");
+  const ttl = $("governance-ttl-hours");
   const text = GOVERNANCE_ACTION_VALUE_HELP[action] || "依處理方式填寫；不需要額外參數時可留空。";
   if (help) help.textContent = text;
   if (policy) policy.textContent = governancePolicySummary(action, selectedGovernanceTarget());
+  const showDuration = ["mute", "restrict", "suspend"].includes(action);
+  if (durationField) durationField.style.display = showDuration ? "" : "none";
+  if (durationLabel) {
+    durationLabel.textContent = action === "mute" ? "禁言多久（小時）" : action === "restrict" ? "功能限制期限（小時）" : "暫停帳號期限（小時）";
+  }
+  if (restrictionField) restrictionField.style.display = action === "restrict" ? "" : "none";
+  if (emergency) {
+    emergency.disabled = !GOVERNANCE_EMERGENCY_ACTIONS.has(action);
+    if (emergency.disabled) emergency.checked = false;
+  }
+  if (ttl) {
+    if (emergency?.checked) {
+      ttl.value = "1";
+      ttl.disabled = true;
+    } else {
+      ttl.disabled = false;
+    }
+  }
   if (input) {
     input.placeholder = action === "downgrade_level"
       ? "newbie / normal / restricted / suspended"
-      : action === "restrict" || action === "suspend"
-        ? "可留空，或填 2026-05-01T18:00"
+      : action === "suspend"
+        ? "可留空；期限請用下方小時欄位"
         : "通常可留空";
+    input.disabled = ["mute", "restrict"].includes(action);
+    if (input.disabled) input.value = "";
   }
 }
 
@@ -1001,6 +1584,12 @@ async function loadGovernanceProposals() {
     const progressText = p.required_root_approval
       ? `root ${p.root_requirement_met ? "已同意" : "未同意"} · admin/manager ${p.manager_approve_count || 0}/${p.required_manager_approvals || 2} · reject ${p.reject_count || 0}`
       : `${p.approve_count || 0}/${p.required_votes || 1} approve · ${p.reject_count || 0} reject`;
+    const payload = p.action_payload || {};
+    const details = [];
+    if (p.is_emergency) details.push(`緊急處分${p.emergency_applied_at ? "已先行套用" : ""}${p.emergency_reverted_at ? " · 已解除" : ""}`);
+    if (payload.duration_hours) details.push(`期限 ${payload.duration_hours} 小時${payload.expires_at ? ` · 到期 ${payload.expires_at}` : ""}`);
+    const featureKeys = payload.restriction_features || payload.mute_features || [];
+    if (featureKeys.length) details.push(`限制功能：${featureKeys.map((key) => GOVERNANCE_FEATURE_LABELS[key] || key).join("、")}`);
     const canVote = p.status === "pending";
     const canExecute = p.status === "approved";
     return `<div style="border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.65rem;margin-bottom:.55rem;background:rgba(0,0,0,.22);">
@@ -1014,6 +1603,7 @@ async function loadGovernanceProposals() {
       </div>
       <div style="color:var(--muted);margin-top:.25rem;">proposer=${sanitize(proposer)} · expires=${sanitize(p.expires_at || "")}</div>
       <div style="color:#82b1ff;margin-top:.25rem;">${sanitize(policyText)}</div>
+      ${details.length ? `<div style="color:#ffb74d;margin-top:.25rem;">${sanitize(details.join(" · "))}</div>` : ""}
       <div style="margin-top:.35rem;white-space:pre-wrap;">${sanitize(p.reason || "")}</div>
       <div style="color:var(--muted);margin-top:.35rem;">votes: ${votes}</div>
       <div class="admin-toolbar" style="display:flex;gap:.45rem;margin-top:.5rem;">
@@ -1043,12 +1633,31 @@ async function createGovernanceProposal() {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
+  const actionType = $("governance-action-type")?.value || "warn";
+  const emergency = Boolean($("governance-emergency-execute")?.checked);
+  const durationHoursRaw = ($("governance-duration-hours")?.value || "").trim();
+  const restrictionFeatures = selectedGovernanceRestrictionFeatures();
+  if (actionType === "restrict" && !restrictionFeatures.length) {
+    alert("限制功能提案必須選擇至少一個功能");
+    return;
+  }
+  if (actionType === "mute" && !durationHoursRaw) {
+    alert("禁言提案必須設定禁言多久");
+    return;
+  }
+  if (emergency && !GOVERNANCE_EMERGENCY_ACTIONS.has(actionType)) {
+    alert("此治理動作不支援緊急執行");
+    return;
+  }
   const payload = {
     target_user_id: targetId,
-    action_type: $("governance-action-type")?.value || "warn",
+    action_type: actionType,
     action_value: ($("governance-action-value")?.value || "").trim() || null,
     ttl_hours: parseInt($("governance-ttl-hours")?.value || "72", 10),
-    reason
+    reason,
+    emergency_execute: emergency,
+    duration_hours: durationHoursRaw ? parseInt(durationHoursRaw, 10) : null,
+    restriction_features: restrictionFeatures
   };
   const res = await apiFetch(API + "/admin/moderation/proposals", {
     method: "POST",
@@ -1367,6 +1976,33 @@ function setRootStorageMsg(text, ok = true) {
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
 }
 
+function renderRootStorageCapacity(capacity) {
+  const target = $("root-storage-capacity-summary");
+  if (!target) return;
+  const audit = capacity && typeof capacity === "object" ? capacity : {};
+  const disk = audit.disk && typeof audit.disk === "object" ? audit.disk : {};
+  const global = audit.global_capacity && typeof audit.global_capacity === "object" ? audit.global_capacity : {};
+  const rows = [
+    ["目前 storage root", disk.path || "-"],
+    ["磁碟總容量", rootStorageFormatBytes(disk.total_bytes || 0)],
+    ["實體剩餘容量", rootStorageFormatBytes(disk.free_bytes || 0)],
+    ["安全可承諾容量", rootStorageFormatBytes(disk.safe_free_bytes || 0)],
+    ["雲端檔案已用", rootStorageFormatBytes(audit.cloud_used_bytes || 0)],
+    ["全站容量上限", global.limit_bytes === null || global.limit_bytes === undefined ? "依磁碟 95%" : rootStorageFormatBytes(global.limit_bytes)],
+    ["已承諾用戶容量", rootStorageFormatBytes(audit.committed_total_bytes || 0)],
+  ];
+  target.innerHTML = rows.map(([label, value]) => `
+    <div class="drive-summary-row">
+      <span>${sanitize(label)}</span>
+      <strong>${sanitize(String(value))}</strong>
+    </div>
+  `).join("") + `
+    <div class="drive-card-sub" style="margin-top:.45rem;color:${audit.ok === false ? "#ffb74d" : "var(--muted)"};">
+      狀態：${sanitize(audit.status || "ok")} · 承諾率 ${Number(audit.percent_committed || 0)}%${Array.isArray(audit.reasons) && audit.reasons.length ? ` · ${sanitize(audit.reasons.join(", "))}` : ""}
+    </div>
+  `;
+}
+
 function renderRootStorageUsers(users) {
   const list = $("root-storage-users");
   const select = $("root-storage-user-select");
@@ -1433,10 +2069,33 @@ async function loadRootStorageUsers() {
     setRootStorageMsg(json.msg || "root 雲端硬碟管理資料讀取失敗", false);
     return;
   }
+  renderRootStorageCapacity(json.storage_capacity || {});
   rootStorageUsersCache = Array.isArray(json.users) ? json.users : [];
   renderRootStorageUsers(rootStorageUsersCache);
   const selected = $("root-storage-user-select")?.value || rootStorageUsersCache[0]?.user_id || "";
   if (selected) fillRootStorageOverrideForm(selected);
+}
+
+async function saveDriveRootStorageSettings() {
+  if (currentUser !== "root") return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = {
+    cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
+    cloud_drive_global_capacity_limit_mb: parseInt($("s-cloud-drive-global-capacity-limit-mb")?.value || "-1", 10),
+  };
+  const res = await apiFetch(API + "/admin/settings", {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json().catch(() => ({}));
+  setRootStorageMsg(json.ok ? "雲端硬碟儲存設定已儲存" : (json.msg || "儲存失敗"), !!json.ok);
+  if (json.ok) {
+    await loadSettings();
+    await loadRootStorageUsers();
+  }
 }
 
 async function saveRootStorageOverride() {
@@ -1500,7 +2159,7 @@ let rootTradingMarketRegistryAuditCache = [];
 let rootTradingMarketProviderCache = [];
 let rootTradingMarketRegistrySelectedId = null;
 let rootTradingMarketProviderSelectedId = null;
-const ROOT_SERVICE_FEE_PRICING_PRESETS = [
+const ROOT_SERVICE_FEE_PRICING_PRESETS = window.HACKME_SERVICE_FEE_PRICING_PRESETS || [
   { item_key: "post_cost_standard", item_name: "一般發文成本", category: "forum", base_price: 1, min_price: 1, max_price: 10, rationale: "低額防洗版，低於每日登入 5 點。" },
   { item_key: "post_pin_24h", item_name: "文章置頂 24 小時", category: "forum", base_price: 100, min_price: 50, max_price: 300, rationale: "曝光型功能，價格約等於 20 天每日登入。" },
   { item_key: "cloud_storage_1gb_30d", item_name: "雲端容量 1GB / 30 天", category: "cloud_drive", base_price: 100, min_price: 50, max_price: 500, metadata: { storage_bytes: 1024 * 1024 * 1024, duration_days: 30, label: "雲端容量 1GB / 30 天" }, rationale: "容量是持續成本，保留較高 sink。" },
@@ -1508,7 +2167,7 @@ const ROOT_SERVICE_FEE_PRICING_PRESETS = [
   { item_key: "comfyui_txt2img_highres", item_name: "高解析生圖一次", category: "comfyui", base_price: 12, min_price: 5, max_price: 60, dynamic_pricing: true, rationale: "高資源消耗，約基礎生圖 2-3 倍。" },
   { item_key: "video_publish_basic", item_name: "影音發布處理費", category: "video", base_price: 2, min_price: 1, max_price: 20, rationale: "發布低價，收入重心在投幣抽成與流量分潤。" },
   { item_key: "video_boost_24h", item_name: "影音曝光加成 24 小時", category: "video", base_price: 80, min_price: 30, max_price: 300, rationale: "曝光型功能需高於一般發布，避免洗推薦。" },
-  { item_key: "game_entry_standard", item_name: "遊戲一般入場", category: "game", base_price: 1, min_price: 1, max_price: 10, rationale: "高頻低額，走服務費小帳本避免每次鏈上等待。" },
+  { item_key: "game_entry_standard", item_name: "遊戲一般入場", category: "game", base_price: 1, min_price: 1, max_price: 10, rationale: "高頻低額，走 pc0 站內帳本即時扣款，不逐筆等待鏈上確認。" },
   { item_key: "marketplace_listing_fee", item_name: "市集上架費", category: "marketplace", base_price: 3, min_price: 1, max_price: 30, rationale: "低額抑制垃圾上架，成交抽成另列平台收入。" },
   { item_key: "ai_agent_task_basic", item_name: "AI Agent 基礎任務", category: "ai_task", base_price: 10, min_price: 5, max_price: 100, dynamic_pricing: true, rationale: "預留外部 API / 任務排程成本。" },
   { item_key: "username_change", item_name: "改名", category: "account", base_price: 200, min_price: 100, max_price: 1000, rationale: "低頻身分操作，維持較高價格降低濫用。" }
@@ -1986,6 +2645,24 @@ function tradingMarketRegistryValue(id, value, fallback = "") {
   if (node) node.value = value == null ? fallback : value;
 }
 
+function rootTradingDisplayMarketSymbol(symbol, displaySymbol = "") {
+  const display = String(displaySymbol || "").trim().toUpperCase();
+  if (display) return display.replace("/POINTS", "/USDT");
+  return String(symbol || "").trim().toUpperCase().replace("/POINTS", "/USDT");
+}
+
+function rootTradingDisplayQuoteAsset(asset) {
+  const normalized = String(asset || "").trim().toUpperCase();
+  if (!normalized || normalized === "POINTS") return "USDT";
+  return normalized;
+}
+
+function rootTradingPointsUnitText(value, digits = 4) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "-";
+  return `${number.toLocaleString(undefined, { maximumFractionDigits: digits })} 點`;
+}
+
 function clearRootTradingMarketProviderForm() {
   rootTradingMarketProviderSelectedId = null;
   if ($("root-trading-market-provider-name")) $("root-trading-market-provider-name").value = "binance_public_api";
@@ -2043,7 +2720,7 @@ function renderRootTradingMarketProviders(payload = {}) {
     renderRootTradingMarketRegistryAudit("");
     return;
   }
-  selected.textContent = `${market.display_name || market.symbol} · provider ${Number(market.provider_count || rootTradingMarketProviderCache.length)} 家 · probe ${market.probe_status || "pending"} · seed ${market.seed_sync_status || "-"}`;
+  selected.textContent = `${rootTradingDisplayMarketSymbol(market.symbol, market.display_name || market.display_symbol)} · provider ${Number(market.provider_count || rootTradingMarketProviderCache.length)} 家 · probe ${market.probe_status || "pending"} · seed ${market.seed_sync_status || "-"}`;
   if (!rootTradingMarketProviderCache.length) {
     list.innerHTML = `<div class="drive-empty">尚無 provider mapping</div>`;
   } else {
@@ -2076,9 +2753,13 @@ function renderRootTradingMarketProviders(payload = {}) {
 function clearRootTradingMarketRegistryForm() {
   rootTradingMarketRegistrySelectedId = null;
   tradingMarketRegistryValue("root-trading-registry-symbol", "");
-  if ($("root-trading-registry-symbol")) $("root-trading-registry-symbol").disabled = false;
+  if ($("root-trading-registry-symbol")) {
+    $("root-trading-registry-symbol").disabled = false;
+    $("root-trading-registry-symbol").dataset.rawSymbol = "";
+  }
   tradingMarketRegistryValue("root-trading-registry-base-asset", "");
-  tradingMarketRegistryValue("root-trading-registry-quote-asset", "POINTS");
+  tradingMarketRegistryValue("root-trading-registry-quote-asset", "USDT");
+  if ($("root-trading-registry-quote-asset")) $("root-trading-registry-quote-asset").dataset.rawQuoteAsset = "";
   tradingMarketRegistryValue("root-trading-registry-display-quote", "USDT");
   tradingMarketRegistryValue("root-trading-registry-display-name", "");
   tradingMarketRegistryValue("root-trading-registry-market-type", "spot");
@@ -2107,10 +2788,14 @@ function populateRootTradingMarketRegistryForm(market = null) {
   clearRootTradingMarketRegistryForm();
   if (!market || typeof market !== "object") return;
   rootTradingMarketRegistrySelectedId = Number(market.id || 0) || null;
-  tradingMarketRegistryValue("root-trading-registry-symbol", market.symbol || "");
-  if ($("root-trading-registry-symbol")) $("root-trading-registry-symbol").disabled = true;
+  tradingMarketRegistryValue("root-trading-registry-symbol", rootTradingDisplayMarketSymbol(market.symbol, market.display_name || market.display_symbol || ""));
+  if ($("root-trading-registry-symbol")) {
+    $("root-trading-registry-symbol").disabled = true;
+    $("root-trading-registry-symbol").dataset.rawSymbol = String(market.symbol || "").trim().toUpperCase();
+  }
   tradingMarketRegistryValue("root-trading-registry-base-asset", market.base_asset || "");
-  tradingMarketRegistryValue("root-trading-registry-quote-asset", market.quote_asset || market.quote_currency || "POINTS");
+  tradingMarketRegistryValue("root-trading-registry-quote-asset", rootTradingDisplayQuoteAsset(market.quote_asset || market.quote_currency || "USDT"));
+  if ($("root-trading-registry-quote-asset")) $("root-trading-registry-quote-asset").dataset.rawQuoteAsset = String(market.quote_asset || market.quote_currency || "").trim().toUpperCase();
   tradingMarketRegistryValue("root-trading-registry-display-quote", market.display_quote_currency || "USDT");
   tradingMarketRegistryValue("root-trading-registry-display-name", market.display_name || "");
   tradingMarketRegistryValue("root-trading-registry-market-type", market.market_type || "spot");
@@ -2133,7 +2818,7 @@ function populateRootTradingMarketRegistryForm(market = null) {
   const ref = market.reference_price_status || {};
   const risk = market.risk_grade_price_status || {};
   rootTradingMarketRegistryEditorStatus(
-    `${market.display_name || market.symbol} · probe ${market.probe_status || "pending"} · seed ${market.registry_source || "-"} / v${Number(market.seed_version || 0)} / ${market.seed_sync_status || "-"} · reference ${ref.source || "-"} / ${ref.confidence || "-"} · risk-grade ${risk.source || "-"} / ${risk.confidence || "-"} / usable ${risk.risk_grade_usable ? "yes" : "no"}${risk.high_risk_blocked ? " · 已封鎖高風險用途" : ""}`
+    `${rootTradingDisplayMarketSymbol(market.symbol, market.display_name || market.display_symbol)} · probe ${market.probe_status || "pending"} · seed ${market.registry_source || "-"} / v${Number(market.seed_version || 0)} / ${market.seed_sync_status || "-"} · reference ${ref.source || "-"} / ${ref.confidence || "-"} · risk-grade ${risk.source || "-"} / ${risk.confidence || "-"} / usable ${risk.risk_grade_usable ? "yes" : "no"}${risk.high_risk_blocked ? " · 已封鎖高風險用途" : ""}`
   );
   loadRootTradingMarketProviders(rootTradingMarketRegistrySelectedId);
 }
@@ -2162,8 +2847,8 @@ function renderRootTradingMarketRegistry(payload = {}) {
     return `
       <div class="drive-file-row billing-catalog-row">
         <div>
-          <strong>${sanitize(market.display_name || market.symbol || "-")}</strong>
-          <div class="drive-card-sub">${sanitize(market.symbol || "-")} · ${market.enabled ? "啟用" : "停用"} · probe ${sanitize(market.probe_status || "pending")} · provider ${Number(market.provider_count || 0)} 家</div>
+          <strong>${sanitize(rootTradingDisplayMarketSymbol(market.symbol, market.display_name || market.display_symbol || ""))}</strong>
+          <div class="drive-card-sub">${market.enabled ? "啟用" : "停用"} · probe ${sanitize(market.probe_status || "pending")} · provider ${Number(market.provider_count || 0)} 家</div>
           <div class="drive-card-sub">registry ${sanitize(seedSource)} · seed v${seedVersion} / catalog v${catalogSeedVersion} · status ${sanitize(seedStatus)}${seedReasons}</div>
           <div class="drive-card-sub">reference ${sanitize(ref.source || "-")} / ${sanitize(ref.confidence || "-")} · stale ${ref.stale ? "yes" : "no"} · degraded ${ref.degraded ? "yes" : "no"} · providers ${Number(ref.provider_count || 0)}</div>
           <div class="drive-card-sub">risk-grade ${sanitize(risk.source || "-")} / ${sanitize(risk.confidence || "-")} · stale ${risk.stale ? "yes" : "no"} · degraded ${risk.degraded ? "yes" : "no"} · providers ${Number(risk.provider_count || 0)} · usable ${risk.risk_grade_usable ? "yes" : "no"}${risk.high_risk_blocked ? " · blocked" : ""}</div>
@@ -2250,10 +2935,13 @@ async function loadRootTradingMarketProviders(marketId) {
 }
 
 function collectRootTradingMarketRegistryForm() {
+  const symbolInput = $("root-trading-registry-symbol");
+  const quoteInput = $("root-trading-registry-quote-asset");
+  const editing = Number(rootTradingMarketRegistrySelectedId || 0) > 0;
   return {
-    symbol: ($("root-trading-registry-symbol")?.value || "").trim().toUpperCase(),
+    symbol: ((editing && symbolInput?.dataset.rawSymbol) || symbolInput?.value || "").trim().toUpperCase(),
     base_asset: ($("root-trading-registry-base-asset")?.value || "").trim().toUpperCase(),
-    quote_asset: ($("root-trading-registry-quote-asset")?.value || "").trim().toUpperCase(),
+    quote_asset: ((editing && quoteInput?.dataset.rawQuoteAsset) || quoteInput?.value || "").trim().toUpperCase(),
     display_quote_currency: ($("root-trading-registry-display-quote")?.value || "").trim().toUpperCase(),
     display_name: ($("root-trading-registry-display-name")?.value || "").trim(),
     market_type: ($("root-trading-registry-market-type")?.value || "spot").trim(),
@@ -2522,7 +3210,7 @@ function renderRootTradingPriceFusionMarketOptions(payload) {
       .filter((market) => liveMarkets.includes(market.symbol))
       .map((market) => [market.symbol, market.display_symbol || market.symbol])
   );
-  const options = liveMarkets.map((symbol) => ({ symbol, label: labels.get(symbol) || symbol.replace("/POINTS", "/USDT") }));
+  const options = liveMarkets.map((symbol) => ({ symbol, label: rootTradingDisplayMarketSymbol(symbol, labels.get(symbol) || "") }));
   const previous = select.value;
   if (!options.length) {
     select.innerHTML = `<option value="">沒有支援融合價格的市場</option>`;
@@ -2551,15 +3239,15 @@ function renderRootTradingPriceFusionStatus(status = {}) {
   const resolvedMode = String(status.resolved_mode || status.requested_mode || "-");
   const requestedMarketSymbol = String(status.requested_market_symbol || "");
   const resolvedMarketSymbol = String(status.resolved_market_symbol || status.market_symbol || "");
-  const displayMarketSymbol = String(status.display_market_symbol || status.market_symbol || "-");
-  const pricePoints = status.price_points == null ? "-" : `${Number(status.price_points || 0).toLocaleString()} POINTS`;
+  const displayMarketSymbol = rootTradingDisplayMarketSymbol(status.market_symbol || "", status.display_market_symbol || status.market_symbol || "-");
+  const pricePoints = status.price_points == null ? "-" : rootTradingPointsUnitText(status.price_points, 8);
   const weightsSum = Number(status.weights_sum_percent || 0).toFixed(2);
   const depthLevels = Number(status.depth_levels || 0);
   const bandPercent = Number(status.depth_band_percent || 0);
   const minCoveragePercent = Number(status.min_orderbook_coverage_percent || 0);
   const minProviderCount = Number(status.min_provider_count || 0);
   const providerCap = Number(status.max_single_provider_weight_percent || 0).toFixed(2);
-  const medianMidpoint = status.median_midpoint_points == null ? "-" : `${formatNumber(status.median_midpoint_points, 8)} POINTS`;
+  const medianMidpoint = status.median_midpoint_points == null ? "-" : `${formatNumber(status.median_midpoint_points, 8)} 點`;
   const usedRows = Array.isArray(status.providers_used) ? status.providers_used : [];
   const excludedRows = Array.isArray(status.excluded_providers) ? status.excluded_providers : [];
   const warnings = Array.isArray(status.warnings) ? status.warnings : [];
@@ -2587,9 +3275,9 @@ function renderRootTradingPriceFusionStatus(status = {}) {
       <div>
         <strong>${sanitize(displayMarketSymbol)}</strong>
         <div class="drive-card-sub">狀態 ${sanitize(stateLabel)} · 目前價格 ${sanitize(pricePoints)}</div>
-        ${requestedMarketSymbol || resolvedMarketSymbol ? `<div class="drive-card-sub">請求市場 ${sanitize(requestedMarketSymbol || "（未指定）")} · 內部市場 ${sanitize(resolvedMarketSymbol || "-")}</div>` : ""}
+        ${requestedMarketSymbol || resolvedMarketSymbol ? `<div class="drive-card-sub">請求市場 ${sanitize(rootTradingDisplayMarketSymbol(requestedMarketSymbol || "（未指定）"))} · 市場 ${sanitize(rootTradingDisplayMarketSymbol(resolvedMarketSymbol || "-"))}</div>` : ""}
         <div class="drive-card-sub">設定來源 ${sanitize(status.configured_source || "-")} · 實際來源 ${sanitize(resolvedSource)} · reference 模式 ${sanitize(status.reference_mode || resolvedMode)} · 風控級模式 ${sanitize(status.risk_grade_mode || "-")}</div>
-        <div class="drive-card-sub">reference 價格 ${sanitize(status.reference_price_points == null ? "-" : `${formatNumber(status.reference_price_points, 8)} POINTS`)} · 風控級價格 ${sanitize(status.risk_grade_price_points == null ? "-" : `${formatNumber(status.risk_grade_price_points, 8)} POINTS`)} · reference 權重合計 ${sanitize(Number(status.reference_weights_sum_percent || weightsSum).toFixed(2))}% · 風控級權重合計 ${sanitize(Number(status.risk_grade_weights_sum_percent || 0).toFixed(2))}%</div>
+        <div class="drive-card-sub">reference 價格 ${sanitize(status.reference_price_points == null ? "-" : `${formatNumber(status.reference_price_points, 8)} 點`)} · 風控級價格 ${sanitize(status.risk_grade_price_points == null ? "-" : `${formatNumber(status.risk_grade_price_points, 8)} 點`)} · reference 權重合計 ${sanitize(Number(status.reference_weights_sum_percent || weightsSum).toFixed(2))}% · 風控級權重合計 ${sanitize(Number(status.risk_grade_weights_sum_percent || 0).toFixed(2))}%</div>
         <div class="drive-card-sub">每家最多採樣 ${sanitize(String(depthLevels || "-"))} 檔 · 目標深度區間 ±${sanitize(String(bandPercent || "-"))}% · 最低覆蓋門檻 ${sanitize(String(minCoveragePercent || "-"))}% · 最少來源 ${sanitize(String(minProviderCount || "-"))} 家 · 單一來源上限 ${sanitize(providerCap)}% · 中位 midpoint ${sanitize(medianMidpoint)}</div>
         <div class="drive-card-sub">${sanitize(referenceSourceText)} · ${sanitize(qualifiedSourceText)} · ${sanitize(providerCountSummary)}</div>
         <div class="drive-card-sub">provider input ${sanitize(String(transportState.mode || "http_polling_only"))} · 連線 ${transportState.connected ? "connected" : "disconnected"} · fallback ${transportState.fallback ? "HTTP polling" : "no"} · stale ${transportState.stale ? "yes" : "no"} · 信心 ${sanitize(String(transportState.confidence || "-"))} · provider_count ${sanitize(String(transportState.provider_count ?? 0))}${transportState.last_update_at ? ` · last update ${sanitize(String(transportState.last_update_at))}` : ""}</div>
@@ -2607,7 +3295,7 @@ function renderRootTradingPriceFusionStatus(status = {}) {
       <div class="drive-file-row">
         <div>
           <strong>${sanitize(row.label || row.source || "-")}</strong>
-          <div class="drive-card-sub">reference 占比 ${Number((row.reference_weight_percent ?? row.normalized_weight_percent) || 0).toFixed(2)}% · 風控級占比 ${Number(row.risk_grade_weight_percent || 0).toFixed(2)}% · 價格 ${formatNumber(row.price_points, 8)} POINTS · midpoint ${formatNumber(row.midpoint_points, 8)}</div>
+          <div class="drive-card-sub">reference 占比 ${Number((row.reference_weight_percent ?? row.normalized_weight_percent) || 0).toFixed(2)}% · 風控級占比 ${Number(row.risk_grade_weight_percent || 0).toFixed(2)}% · 價格 ${formatNumber(row.price_points, 8)} 點 · midpoint ${formatNumber(row.midpoint_points, 8)}</div>
           <div class="drive-card-sub">best bid ${formatNumber(row.best_bid_points, 8)} · best ask ${formatNumber(row.best_ask_points, 8)} · spread ${formatNumber(row.spread_percent, 6)}%</div>
           <div class="drive-card-sub">bid notional ${formatNumber(row.bid_notional_points, 4)} · ask notional ${formatNumber(row.ask_notional_points, 4)} · depth score ${formatNumber(row.depth_score, 4)} · density ${formatNumber(row.depth_density_score, 4)}</div>
           <div class="drive-card-sub">bid coverage ${formatNumber(row.bid_coverage_percent, 6)}%${row.bid_reached_lower_bound ? " ✓" : ""} · ask coverage ${formatNumber(row.ask_coverage_percent, 6)}%${row.ask_reached_upper_bound ? " ✓" : ""} · ${row.orderbook_truncated ? "coverage truncated" : "coverage complete"}</div>
@@ -2811,6 +3499,16 @@ async function runRootTradingBotAudit(force = true) {
 async function reviewTradingAuditBugReport(reportId, decision) {
   if (currentUser !== "root" || !reportId) return;
   const reviewNote = window.prompt(decision === "approve" ? "核准原因（可留空）" : "駁回原因（可留空）", "") || "";
+  let rewardPoints = 0;
+  if (decision === "approve") {
+    const rewardRaw = window.prompt("root 核定獎勵點數（0 代表核准但不發獎勵）", "0");
+    if (rewardRaw === null) return;
+    rewardPoints = Number.parseInt(rewardRaw, 10);
+    if (!Number.isFinite(rewardPoints) || rewardPoints < 0) {
+      rootTradingBotAuditMsg("獎勵點數必須是 0 或正整數。", false);
+      return;
+    }
+  }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   try {
@@ -2818,7 +3516,7 @@ async function reviewTradingAuditBugReport(reportId, decision) {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-      body: JSON.stringify({ decision, review_note: reviewNote }),
+      body: JSON.stringify({ decision, review_note: reviewNote, reward_points: rewardPoints }),
     });
     const json = await parseRootTradingSettingsResponse(res);
     if (!res.ok || !json.ok) {
@@ -2878,9 +3576,36 @@ function toggleRootTradingPriceFusionControls() {
   const mode = $("root-trading-price-fusion-mode")?.value || "auto_depth";
   const modeField = $("root-trading-price-fusion-mode-field");
   const weightsField = $("root-trading-price-fusion-weights-field");
+  const note = $("root-trading-price-source-note");
   const fusionEnabled = source === "fused_weighted";
   if (modeField) modeField.hidden = !fusionEnabled;
   if (weightsField) weightsField.hidden = !(fusionEnabled && mode === "manual_weights");
+  if (note) {
+    if (note.dataset.rawInvalidPriceSource) {
+      note.textContent = note.dataset.rawInvalidPriceSource;
+      note.style.color = "#ffcf85";
+    } else if (source === "manual_root") {
+      note.textContent = rootTradingManualPriceAllowedInCurrentMode()
+        ? "手動價格只供 Dev / QA 測試使用；正式環境請切回 Binance 或融合價格。"
+        : "目前伺服器模式不允許手動價格，儲存會被拒絕；請使用 Binance 或融合價格。";
+      note.style.color = rootTradingManualPriceAllowedInCurrentMode() ? "#ffcf85" : "#ff8a8a";
+    } else {
+      note.textContent = "預設會用多交易所融合價格；若部分 API 失效，會自動用仍健康的交易所重新分配權重，必要時再退回最後健康快取。";
+      note.style.color = "";
+    }
+  }
+}
+
+const ROOT_TRADING_EDITABLE_PRICE_SOURCES = new Set(["fused_weighted", "binance_public_api", "manual_root"]);
+
+function rootTradingNormalizeEditablePriceSource(source) {
+  const value = String(source || "").trim();
+  return ROOT_TRADING_EDITABLE_PRICE_SOURCES.has(value) ? value : "binance_public_api";
+}
+
+function rootTradingManualPriceAllowedInCurrentMode() {
+  const mode = String(currentServerMode || siteConfig?.server_mode || "production").trim().toLowerCase();
+  return ["dev_ready", "test", "internal_test", "superweak"].includes(mode);
 }
 
 function collectRootTradingFusionWeights() {
@@ -2906,8 +3631,23 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-borrow-interest-minimum-hours")) $("root-trading-borrow-interest-minimum-hours").value = Number(settings.borrow_interest_minimum_hours ?? 1);
   if ($("root-trading-grid-fee-discount-percent")) $("root-trading-grid-fee-discount-percent").value = adminPercentValue(settings.grid_fee_discount_percent ?? 25, 25);
   if ($("root-trading-margin-long-financing-percent")) $("root-trading-margin-long-financing-percent").value = adminPercentValue(settings.margin_long_financing_percent ?? 90, 90);
+  if ($("root-trading-margin-max-pool-utilization-percent")) $("root-trading-margin-max-pool-utilization-percent").value = adminPercentValue(settings.margin_max_pool_utilization_percent ?? 80, 80);
   if ($("root-trading-short-collateral-percent")) $("root-trading-short-collateral-percent").value = adminPercentValue(settings.short_collateral_percent ?? 60, 60);
-  if ($("root-trading-price-source")) $("root-trading-price-source").value = settings.price_source || "binance_public_api";
+  if ($("root-trading-exchange-liability-limit-points")) $("root-trading-exchange-liability-limit-points").value = Number(settings.exchange_liability_limit_points ?? 0);
+  if ($("root-trading-exchange-liability-grace-minutes")) $("root-trading-exchange-liability-grace-minutes").value = Number(settings.exchange_liability_grace_minutes ?? 60);
+  if ($("root-trading-profit-settlement-interval-minutes")) $("root-trading-profit-settlement-interval-minutes").value = Number(settings.profit_settlement_interval_minutes ?? 0);
+  const rawPriceSource = settings.price_source || "binance_public_api";
+  const normalizedPriceSource = rootTradingNormalizeEditablePriceSource(rawPriceSource);
+  const rawPriceSourceUnsupported = String(rawPriceSource) !== normalizedPriceSource;
+  if ($("root-trading-price-source")) $("root-trading-price-source").value = normalizedPriceSource;
+  const priceSourceNote = $("root-trading-price-source-note");
+  if (priceSourceNote && rawPriceSourceUnsupported) {
+    priceSourceNote.dataset.rawInvalidPriceSource = `目前資料庫價格來源是 ${rawPriceSource}，不屬於正式可選項；儲存後會改回 ${normalizedPriceSource === "binance_public_api" ? "Binance 公開 API" : normalizedPriceSource}。`;
+    priceSourceNote.textContent = priceSourceNote.dataset.rawInvalidPriceSource;
+    priceSourceNote.style.color = "#ffcf85";
+  } else if (priceSourceNote) {
+    delete priceSourceNote.dataset.rawInvalidPriceSource;
+  }
   if ($("root-trading-price-fusion-mode")) $("root-trading-price-fusion-mode").value = settings.price_fusion_mode || "auto_depth";
   if ($("root-trading-price-fusion-depth-band-percent")) $("root-trading-price-fusion-depth-band-percent").value = Number(settings.price_fusion_depth_band_percent ?? 1);
   if ($("root-trading-price-fusion-depth-levels")) $("root-trading-price-fusion-depth-levels").value = Number(settings.price_fusion_depth_levels ?? 100);
@@ -2927,11 +3667,16 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-simulated-slippage-max-basis-points")) $("root-trading-simulated-slippage-max-basis-points").value = Number(settings.simulated_slippage_max_basis_points ?? 0);
   if ($("root-trading-price-stream-ws-enabled")) $("root-trading-price-stream-ws-enabled").checked = settings.price_stream_ws_enabled !== false;
   if ($("root-trading-price-stream-ws-stale-seconds")) $("root-trading-price-stream-ws-stale-seconds").value = Number(settings.price_stream_ws_stale_seconds ?? 10);
+  if ($("root-trading-qa-live-price-provider-enabled")) $("root-trading-qa-live-price-provider-enabled").checked = rawPriceSourceUnsupported ? false : !!settings.qa_live_price_provider_enabled;
   renderRootTradingFusionWeightInputs(settings);
   renderRootTradingPriceFusionMarketOptions(payload);
   const priceSourceSelect = $("root-trading-price-source");
   if (priceSourceSelect && !priceSourceSelect.dataset.fusionBound) {
-    priceSourceSelect.addEventListener("change", toggleRootTradingPriceFusionControls);
+    priceSourceSelect.addEventListener("change", () => {
+      const note = $("root-trading-price-source-note");
+      if (note) delete note.dataset.rawInvalidPriceSource;
+      toggleRootTradingPriceFusionControls();
+    });
     priceSourceSelect.dataset.fusionBound = "1";
   }
   const fusionModeSelect = $("root-trading-price-fusion-mode");
@@ -3009,7 +3754,10 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-maintenance-percent")) $("root-trading-maintenance-percent").value = adminPercentValue(settings.margin_maintenance_percent ?? 15, 15);
   if ($("root-trading-futures-enabled")) $("root-trading-futures-enabled").checked = !!settings.futures_enabled;
   if ($("root-trading-pvp-enabled")) $("root-trading-pvp-enabled").checked = !!settings.pvp_matching_enabled;
-  if ($("root-trading-reserve-pool")) $("root-trading-reserve-pool").textContent = `${Number(reserve.balance_points || 0)} POINTS`;
+  if ($("root-trading-reserve-pool")) {
+    const fundingPool = json.funding_pool || {};
+    $("root-trading-reserve-pool").textContent = `可借 ${Number(fundingPool.available_points || 0)} / 交易所基金 ${Number(reserve.balance_points || 0)} / CFD 保留 ${Number(fundingPool.cfd_profit_reserve_required_points || 0)} 點`;
+  }
   if ($("root-trading-btc-trade-enabled")) $("root-trading-btc-trade-enabled").checked = !!settings.btc_trade_enabled;
   if ($("root-trading-btc-trade-repo")) $("root-trading-btc-trade-repo").value = settings.btc_trade_repo_url || "https://github.com/s9213712/BTC_trade.git";
   if ($("root-trading-btc-trade-branch")) $("root-trading-btc-trade-branch").value = settings.btc_trade_branch || "strategy/v15b-plus";
@@ -3024,8 +3772,8 @@ function renderRootTradingSettings(payload) {
   list.innerHTML = markets.map((market) => `
     <div class="drive-file-row billing-catalog-row root-trading-market-row" data-root-trading-market="${sanitize(market.symbol || "")}">
       <div>
-        <strong>${sanitize(market.display_symbol || market.symbol || "-")}</strong>
-        <div class="drive-card-sub">現貨手續費 ${adminFormatPercent(market.fee_rate_percent || 0)}% · Grid 折扣後約 ${adminFormatPercent((Number(market.fee_rate_percent || 0) * (100 - Number(settings.grid_fee_discount_percent || 25)) / 100) || 0)}% · 最低 ${Number(market.min_order_points || 0)} · 最高 ${Number(market.max_order_points || 0)} POINTS</div>
+        <strong>${sanitize(rootTradingDisplayMarketSymbol(market.symbol, market.display_symbol || ""))}</strong>
+        <div class="drive-card-sub">現貨手續費 ${adminFormatPercent(market.fee_rate_percent || 0)}% · Grid 折扣後約 ${adminFormatPercent((Number(market.fee_rate_percent || 0) * (100 - Number(settings.grid_fee_discount_percent || 25)) / 100) || 0)}% · 最低 ${Number(market.min_order_points || 0)} 點 · 最高 ${Number(market.max_order_points || 0)} 點</div>
       </div>
       <div class="settings-option-grid billing-market-grid">
         <label><input type="checkbox" data-trading-market-field="enabled" ${market.enabled ? "checked" : ""} /> 啟用</label>
@@ -3081,6 +3829,11 @@ async function saveRootTradingSettings() {
   const saveBtn = $("root-trading-settings-save-btn");
   const wasBtcTradeEnabled = rootTradingSettingsCache?.settings?.btc_trade_enabled === true;
   const willBtcTradeEnable = !!$("root-trading-btc-trade-enabled")?.checked;
+  const selectedPriceSource = $("root-trading-price-source")?.value || "binance_public_api";
+  if (selectedPriceSource === "manual_root" && !rootTradingManualPriceAllowedInCurrentMode()) {
+    rootTradingSettingsMsg("手動價格只允許在 dev_ready / test / internal_test / superweak 模式使用", false);
+    return;
+  }
   if (saveBtn) saveBtn.disabled = true;
   rootTradingSettingsMsg("交易所參數儲存中...");
   const payload = {
@@ -3094,8 +3847,12 @@ async function saveRootTradingSettings() {
       borrow_interest_minimum_hours: Number($("root-trading-borrow-interest-minimum-hours")?.value || 1),
       grid_fee_discount_percent: adminInputPercent($("root-trading-grid-fee-discount-percent")?.value || 25),
       margin_long_financing_percent: adminInputPercent($("root-trading-margin-long-financing-percent")?.value || 90, 90),
+      margin_max_pool_utilization_percent: adminInputPercent($("root-trading-margin-max-pool-utilization-percent")?.value || 80, 80),
       short_collateral_percent: adminInputPercent($("root-trading-short-collateral-percent")?.value || 60, 60),
-      price_source: ($("root-trading-price-source")?.value || "binance_public_api"),
+      exchange_liability_limit_points: Number($("root-trading-exchange-liability-limit-points")?.value || 0),
+      exchange_liability_grace_minutes: Number($("root-trading-exchange-liability-grace-minutes")?.value || 60),
+      profit_settlement_interval_minutes: Number($("root-trading-profit-settlement-interval-minutes")?.value || 0),
+      price_source: selectedPriceSource,
       price_fusion_mode: ($("root-trading-price-fusion-mode")?.value || "auto_depth"),
       price_fusion_manual_weights: collectRootTradingFusionWeights(),
       price_fusion_depth_band_percent: Number($("root-trading-price-fusion-depth-band-percent")?.value || 1),
@@ -3116,6 +3873,7 @@ async function saveRootTradingSettings() {
       simulated_slippage_max_basis_points: Number($("root-trading-simulated-slippage-max-basis-points")?.value || 0),
       price_stream_ws_enabled: !!$("root-trading-price-stream-ws-enabled")?.checked,
       price_stream_ws_stale_seconds: Number($("root-trading-price-stream-ws-stale-seconds")?.value || 10),
+      qa_live_price_provider_enabled: !!$("root-trading-qa-live-price-provider-enabled")?.checked,
       max_price_staleness_seconds: Number($("root-trading-max-price-staleness")?.value || 0),
       margin_liquidation_enabled: !!$("root-trading-liquidation-enabled")?.checked,
       bot_auto_scan_enabled: !!$("root-trading-bot-auto-enabled")?.checked,
@@ -3485,6 +4243,7 @@ async function loadServerMode() {
   const mode = json.mode || {};
   currentServerMode = String(mode.current_mode || "dev_ready").trim().toLowerCase();
   populateSecurityProfiles(json.profiles || securityProfiles, mode.current_mode || "dev_ready");
+  updateServerModeLaunchCheckVisibility();
   if (status) {
     const previous = mode.previous_mode ? `，上一個模式：${mode.previous_mode}` : "";
     const snapshot = mode.active_snapshot_id ? `，active snapshot：${mode.active_snapshot_id}` : "";
@@ -4491,8 +5250,11 @@ function renderServerTimeStatus(serverTime, { sampledAtMs = Date.now() } = {}) {
   const tone = absMs <= 3000 ? "ok" : (absMs <= 30000 ? "warn" : "bad");
   const browserText = new Date(Number(sampledAtMs || Date.now())).toLocaleString();
   const direction = skewMs >= 0 ? "快" : "慢";
+  const appTz = serverTime.timezone || "UTC";
+  const systemTz = serverTime.system_timezone || appTz;
   status.textContent = [
-    `伺服器：${serverTime.server_time_local || serverTime.server_time_utc || "-"}（${serverTime.timezone || "UTC"}，${serverTime.utc_offset_label || ""}）`,
+    `App 顯示：${serverTime.server_time_local || serverTime.server_time_utc || "-"}（${appTz}，${serverTime.utc_offset_label || ""}）`,
+    `主機實際：${serverTime.system_time_local || "-"}（${systemTz}）`,
     `UTC：${serverTime.server_time_utc || "-"}`,
     `瀏覽器：${browserText}`,
     `差距：伺服器約${direction} ${formatServerTimeSkew(skewMs)}`,
@@ -4542,12 +5304,18 @@ function renderBackpressureStatus(backpressure) {
   const heavy = backpressure.heavy || {};
   const root = backpressure.root || {};
   const sources = backpressure.limit_sources || {};
+  const anomalyAudit = backpressure.anomaly_audit || {};
+  const anomalyRecent = Array.isArray(anomalyAudit.recent) ? anomalyAudit.recent : [];
+  const anomalyLogPath = anomalyAudit.log_path || "";
   status.textContent = [
     `目前 PID ${backpressure.pid || "-"}，${backpressure.process_local ? "每個 worker 各自統計" : "全域統計"}`,
     `threads ${backpressure.thread_capacity ?? "-"}，fast lane 保留 ${backpressure.fast_lane_reserved ?? "-"}`,
     `normal ${normal.active || 0}/${normal.limit || 0} rejected ${normal.rejected || 0} (${sources.normal || "auto"})`,
     `heavy ${heavy.active || 0}/${heavy.limit || 0} rejected ${heavy.rejected || 0} (${sources.heavy || "auto"})`,
     `root ${root.active || 0}/${root.limit || 0} rejected ${root.rejected || 0} (${sources.root || "auto"})`,
+    anomalyLogPath
+      ? `異常審計 ${anomalyRecent.length} 筆近期事件，紀錄檔 ${anomalyLogPath}`
+      : `異常審計 ${anomalyRecent.length} 筆近期事件`,
   ].join("；");
   renderBackpressureTrafficChart(backpressure);
 }
@@ -4627,7 +5395,7 @@ function startBackpressureTrafficPoll() {
 }
 
 async function refreshBackpressureTraffic() {
-  if (currentUser !== "root" || currentServerTab !== "settings" || document.hidden) return;
+  if (currentUser !== "root" || !isSystemSettingsActive() || document.hidden) return;
   try {
     const csrf = await fetchCsrfToken();
     const res = await apiFetch(API + "/root/backpressure", {
@@ -4676,7 +5444,7 @@ async function loadSettings() {
   if ($("s-max-fail")) $("s-max-fail").value = s.max_login_failures || 5;
   if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
-  if ($("s-session-idle-timeout")) $("s-session-idle-timeout").value = s.session_idle_timeout_minutes || 10;
+  if ($("s-session-idle-timeout")) $("s-session-idle-timeout").value = s.session_idle_timeout_minutes ?? "";
   if ($("s-notification-muted-types")) $("s-notification-muted-types").value = s.notification_muted_types || "";
   if ($("s-server-ssl-enabled")) $("s-server-ssl-enabled").checked = !!s.server_ssl_enabled;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
@@ -4794,10 +5562,12 @@ async function loadSettings() {
   if (driveStorageStatus) {
     const restartText = driveStorage.restart_required ? "需重啟服務器才會切到新儲存根目錄" : "目前執行中的儲存根目錄已一致";
     const globalCapacity = driveStorage.global_capacity || {};
+    const disk = driveStorage.disk || {};
     const capacityText = globalCapacity.configured_limit_mb === -1
       ? `全用戶容量上限：磁碟總容量 95%（${formatBytes(globalCapacity.limit_bytes)}）`
       : `全用戶容量上限：${formatBytes(globalCapacity.limit_bytes)}`;
-    driveStorageStatus.textContent = `目前 ${driveStorage.current_root || "-"}，下次啟動 ${driveStorage.effective_next_root || "-"}。${restartText}。${capacityText}`;
+    const diskText = disk.total_bytes ? `實體磁碟：剩餘 ${formatBytes(disk.free_bytes)} / 總量 ${formatBytes(disk.total_bytes)}` : "";
+    driveStorageStatus.textContent = `目前 ${driveStorage.current_root || "-"}，下次啟動 ${driveStorage.effective_next_root || "-"}。${restartText}。${capacityText}${diskText ? `。${diskText}` : ""}`;
     driveStorageStatus.style.color = driveStorage.restart_required ? "#ffb74d" : "var(--muted)";
   }
   if ($("s-module-chat-min-role")) $("s-module-chat-min-role").value = s.module_chat_min_role || "user";
@@ -4838,7 +5608,7 @@ async function loadSettings() {
   });
   renderFeatureBundleToolbar();
   renderFeatureAdvisories();
-  switchSettingsSection(currentSettingsSection || "security");
+  updateServerModeLaunchCheckVisibility();
 }
 
 const FEATURE_SETTING_KEYS = [
@@ -5535,9 +6305,9 @@ function renderFeatureBundleToolbar() {
 }
 
 function bindSettingsAssistants() {
-  const serverModule = $("module-server");
-  if (!serverModule || serverModule.dataset.settingsAssistantsBound === "1") return;
-  serverModule.dataset.settingsAssistantsBound = "1";
+  const settingsForm = $("settings-form");
+  if (!settingsForm || settingsForm.dataset.settingsAssistantsBound === "1") return;
+  settingsForm.dataset.settingsAssistantsBound = "1";
   renderFeatureSwitchGroups();
   renderFeatureBundleToolbar();
   renderFeatureAdvisories();
@@ -5554,9 +6324,16 @@ function bindSettingsAssistants() {
 
 function formatBytes(bytes) {
   const value = Number(bytes || 0);
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  const decimals = index === 0 ? 0 : (size >= 100 ? 0 : 1);
+  return `${size.toFixed(decimals)} ${units[index]}`;
 }
 
 const SECURITY_CONTROL_KEYS = [
@@ -6105,7 +6882,7 @@ async function loadServerOutput() {
 }
 
 function startServerOutputPoll() {
-  if (currentUser !== "root" || currentModuleTab !== "server" || currentServerTab !== "security") return;
+  if (currentUser !== "root" || !isSystemOverviewActive()) return;
   if (serverOutputPollTimer) return;
   serverOutputPollTimer = setInterval(loadServerOutput, serverOutputRefreshSeconds * 1000);
 }
@@ -6491,7 +7268,7 @@ async function loadServerHealth() {
     { label: "聊天檔案", value: `${s.chat_files || 0} / ${formatBytes(s.chat_bytes)}`, detail: s.chat_dir || "runtime/chats/", color: "#82b1ff" },
     { label: "Server logs", value: `${s.log_files || 0} / ${formatBytes(s.log_bytes)}`, color: "#82b1ff" },
     { label: "Anchor files", value: `${s.anchor_files || 0} / ${formatBytes(s.anchor_bytes)}`, color: "#82b1ff" },
-    { label: "Storage root", value: `${s.storage_files || 0} / ${formatBytes(s.storage_bytes)}`, color: "#82b1ff" },
+    { label: "雲端硬碟實體根目錄", value: `${s.storage_files || 0} / ${formatBytes(s.storage_bytes)}`, detail: s.storage_dir || capacity.disk?.path || "", color: "#82b1ff" },
     {
       label: "會員雲端容量審計",
       value: capacity.status === "critical" ? "超額" : capacity.status === "warning" ? "接近上限" : "正常",
@@ -6536,7 +7313,17 @@ async function loadServerHealth() {
   if (repairBtn) {
     repairBtn.disabled = currentUser !== "root" || !auditEnabled || auditOk !== false;
   }
-  loadPlaywrightCiHealth().catch(() => {});
+  loadPlaywrightCiHealth().catch((err) => {
+    const host = $("server-health-playwright-ci");
+    if (host) {
+      host.innerHTML = renderHealthRows([{
+        label: "Playwright CI",
+        value: "unavailable",
+        detail: err?.message || "CI 狀態讀取失敗",
+        color: "#ffb74d",
+      }]);
+    }
+  });
 }
 
 async function repairIntegrityChains() {
@@ -6800,7 +7587,7 @@ async function saveSettings() {
     max_login_failures: parseInt($("s-max-fail")?.value || "5"),
     block_duration_minutes: parseInt($("s-block-dur")?.value || "30"),
     session_ttl_hours: parseInt($("s-session-ttl")?.value || "24"),
-    session_idle_timeout_minutes: parseInt($("s-session-idle-timeout")?.value || "0") || null,
+    session_idle_timeout_minutes: parseInt($("s-session-idle-timeout")?.value || "0", 10) || 0,
     notification_muted_types: ($("s-notification-muted-types")?.value || "").trim(),
     server_ssl_enabled: $("s-server-ssl-enabled") ? !!$("s-server-ssl-enabled").checked : true,
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
@@ -6939,6 +7726,7 @@ async function saveSettings() {
   if (json.ok) {
     const activeModule = currentModuleTab;
     const activeServerTab = currentServerTab;
+    const activeSystemTab = currentSystemTab;
     const activeSettingsSection = currentSettingsSection;
     applySiteConfig(payload);
     if (typeof stopTradingModuleTimers === "function" && typeof startTradingModuleTimers === "function") {
@@ -6974,8 +7762,8 @@ async function saveSettings() {
     backpressureTrafficRefreshSeconds = adminRefreshSeconds(payload.server_backpressure_traffic_refresh_seconds, 4, 1, 300);
     serverOutputRefreshSeconds = adminRefreshSeconds(payload.server_output_refresh_seconds, 3, 1, 300);
     securityTestJobPollSeconds = adminRefreshSeconds(payload.security_test_job_poll_seconds, 3, 1, 300);
-    if (trafficChanged && currentServerTab === "settings") startBackpressureTrafficPoll();
-    if (outputChanged && currentServerTab === "security") {
+    if (trafficChanged && isSystemSettingsActive()) startBackpressureTrafficPoll();
+    if (outputChanged && isSystemOverviewActive()) {
       stopServerOutputPoll();
       startServerOutputPoll();
     }
@@ -6993,6 +7781,7 @@ async function saveSettings() {
     if (activeModule && typeof switchModuleTab === "function") {
       suppressNextSettingsStatusClear = true;
       currentServerTab = activeServerTab;
+      currentSystemTab = activeSystemTab;
       currentSettingsSection = activeSettingsSection;
       switchModuleTab(activeModule);
     }
@@ -7107,10 +7896,10 @@ function renderServerUpdatePreview(preview) {
     `目前分支：${state.current_branch || "-"} @ ${state.current_commit || "-"}`,
     `目標分支：${preview.remote_ref || "-"}`,
     `本地 ahead：${summary.ahead ?? "-"}，遠端 ahead：${summary.behind ?? "-"}`,
-    `工作目錄：${state.dirty ? "有未提交變更（更新時將自動暫存）" : "乾淨"}`,
+    `工作目錄：${state.dirty ? "有未提交變更（只檢查，不會線上套用）" : "乾淨"}`,
     "",
     "警告：",
-    preview.warning || "此次更新未經驗證，請自行測試與 debug。",
+    preview.warning || "此頁只提供版本檢查與 diff；正式更新請走部署流程。",
     "",
     "Diff stat：",
     preview.diff_stat || "(無差異)",
@@ -7143,7 +7932,7 @@ async function loadServerUpdateStatus(fetchRemote = false) {
         : `<option value="${sanitize(update.current_branch || "main")}">${sanitize(update.current_branch || "main")}</option>`;
       branchSelect.value = branches.includes(previous) ? previous : (branches.includes(update.current_branch) ? update.current_branch : (branches[0] || update.current_branch || "main"));
     }
-    setServerUpdateStatus(`目前 ${update.current_branch || "-"} @ ${update.current_commit || "-"}；${update.dirty ? "工作目錄有未提交變更，不能套用更新" : "工作目錄乾淨"}`, !update.dirty);
+    setServerUpdateStatus(`目前 ${update.current_branch || "-"} @ ${update.current_commit || "-"}；${update.dirty ? "工作目錄有未提交變更" : "工作目錄乾淨"}。此頁只做檢查，不提供線上套用。`, true);
     renderServerUpdateSummary(update.release_summary || "");
     renderServerUpdatePreview({ ok: true, state: update, warning: json.warning, summary: {}, changed_files: [], diff_stat: "" });
   } catch (err) {
@@ -7173,52 +7962,9 @@ async function previewServerUpdate() {
     const json = await res.json().catch(() => ({}));
     if (!json.ok) throw new Error(json.msg || json.preview?.msg || `diff 預覽失敗（HTTP ${res.status}）`);
     renderServerUpdatePreview(json.preview || {});
-    setServerUpdateStatus("Diff 預覽完成。套用前請確認更新未經驗證，並輸入確認字串。");
+    setServerUpdateStatus("Diff 預覽完成。此頁不提供線上套用；請走部署流程更新。");
   } catch (err) {
     setServerUpdateStatus(err.message || "diff 預覽失敗", false);
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function applyServerUpdate() {
-  const branch = $("server-update-branch-select")?.value || "";
-  const confirmText = $("server-update-confirm")?.value || "";
-  const btn = $("server-update-apply-btn");
-  if (!branch) {
-    setServerUpdateStatus("請先選擇更新分支", false);
-    return;
-  }
-  if (confirmText !== "APPLY_UNVERIFIED_UPDATE") {
-    setServerUpdateStatus("請輸入 APPLY_UNVERIFIED_UPDATE 才能套用未驗證更新", false);
-    return;
-  }
-  if (!confirm("此更新會從 GitHub 套用到目前伺服器程式碼，且尚未經本機測試驗證。確定繼續？")) return;
-  if (btn) btn.disabled = true;
-  setServerUpdateStatus("正在套用 GitHub 更新，請勿關閉頁面...");
-  try {
-    const csrf = await fetchCsrfToken({ force: true });
-    const res = await apiFetch(API + "/root/server-update/apply", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-      body: JSON.stringify({ branch, confirm: confirmText })
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!json.ok) throw new Error(json.msg || `更新套用失敗（HTTP ${res.status}）`);
-    const preview = json.preview || {};
-    const releaseSummary = json.release_summary || preview.release_summary || "";
-    preview.release_summary = releaseSummary;
-    renderServerUpdatePreview(preview);
-    if (releaseSummary) renderServerUpdateSummary(releaseSummary);
-    const integrity = json.integrity?.result?.summary || {};
-    const snapshotId = json.recovery?.snapshot?.snapshot_id || "-";
-    const backupId = json.recovery?.points_backup?.backup_id || "-";
-    const restartMode = json.restart?.mode || "scheduled";
-    setServerUpdateStatus(`更新已套用，已建立 snapshot=${snapshotId}、PointsChain backup=${backupId}，伺服器將自動重啟（${restartMode}）；Integrity pending=${integrity.pending ?? "-"}`);
-    if (typeof loadIntegrityGuard === "function") await loadIntegrityGuard();
-  } catch (err) {
-    setServerUpdateStatus(err.message || "更新套用失敗", false);
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -7297,6 +8043,149 @@ function renderSystemResourceBoard(resource = {}) {
   if (sampled) sampled.textContent = resource.sampled_at ? `最後採樣：${formatChatTime(resource.sampled_at)}` : "等待資料";
 }
 
+function formatBytesPerSecond(bytes) {
+  return `${formatBytes(bytes)}/s`;
+}
+
+function renderServerEnvSummary(env = lastServerEnvironment, transfer = lastServerTransferUsage, database = lastServerDatabaseUsage, resource = lastServerResourceUsage) {
+  const summary = $("server-env-summary");
+  if (!summary) return;
+  const cards = [
+    { label: "作業平台", value: env.platform || "-", color: "#82b1ff" },
+    { label: "Python", value: env.python_version || "-", color: "#82b1ff" },
+  ];
+  summary.innerHTML = cards.map(({ label, value, color, detail }) => `
+    <div class="server-env-stat-card">
+      <div class="server-env-stat-label">${sanitize(label)}</div>
+      <div class="server-env-stat-value" style="color:${color};">${sanitize(value)}</div>
+      ${detail ? `<div class="server-env-stat-detail">${sanitize(detail)}</div>` : ""}
+    </div>
+  `).join("");
+}
+
+function renderServerEnvTransferDetails(transfer = {}) {
+  const host = $("server-env-transfer-details");
+  if (!host) return;
+  const localText = transfer.process_local ? "目前 worker 統計" : "全域統計";
+  const windowSeconds = Number(transfer.recent_window_seconds || transfer.window_seconds || 0);
+  host.innerHTML = `
+    <div class="server-env-panel-title">傳輸量</div>
+    <div class="server-env-kv-grid">
+      <div><span>上傳速度</span><strong>${sanitize(formatBytesPerSecond(transfer.upload_bytes_per_second || 0))}</strong></div>
+      <div><span>下載速度</span><strong>${sanitize(formatBytesPerSecond(transfer.download_bytes_per_second || 0))}</strong></div>
+      <div><span>累計上傳</span><strong>${sanitize(formatBytes(transfer.cumulative_upload_bytes || 0))}</strong></div>
+      <div><span>累計下載</span><strong>${sanitize(formatBytes(transfer.cumulative_download_bytes || 0))}</strong></div>
+      <div><span>累計請求</span><strong>${Number(transfer.cumulative_requests || 0).toLocaleString()}</strong></div>
+      <div><span>採樣範圍</span><strong>${windowSeconds ? `${windowSeconds}s` : "-"} · PID ${sanitize(String(transfer.pid || "-"))}</strong></div>
+    </div>
+    <div class="server-env-panel-note">${sanitize(localText)}；串流或瀏覽器中斷時只能統計 response header 可得的大小。</div>
+  `;
+}
+
+function renderServerEnvDatabaseDetails(database = {}) {
+  const host = $("server-env-db-details");
+  if (!host) return;
+  const files = Array.isArray(database.files) ? database.files.slice() : [];
+  files.sort((a, b) => Number(b.total_bytes || 0) - Number(a.total_bytes || 0));
+  const integrity = database.integrity_check || {};
+  const audit = database.audit_hash_check || {};
+  const integrityTone = integrity.ok === true ? "通過" : (integrity.ok === false ? "異常" : "未檢查");
+  const auditTone = audit.enabled === false
+    ? "未啟用"
+    : (audit.ok === true ? "通過" : (audit.ok === false ? "異常" : "未檢查"));
+  const integrityDetail = [
+    `DB integrity ${integrityTone}`,
+    integrity.schema_version || integrity.expected_schema_version
+      ? `schema ${integrity.schema_version ?? "-"}/${integrity.expected_schema_version ?? "-"}`
+      : "",
+    Array.isArray(integrity.quick_check) && integrity.quick_check.length
+      ? `quick_check ${integrity.quick_check.join(", ")}`
+      : "",
+    Array.isArray(integrity.foreign_key_violations) && integrity.foreign_key_violations.length
+      ? `FK 異常 ${integrity.foreign_key_violations.length} 筆`
+      : "",
+    `Audit hash ${auditTone}`,
+    audit.details || "",
+    audit.broken_at ? `broken_at ${audit.broken_at}` : "",
+  ].filter(Boolean).join(" · ");
+  const rows = files.length ? files.map((item) => `
+    <tr>
+      <td>${sanitize(item.label || "-")}</td>
+      <td>${sanitize(formatBytes(item.total_bytes || 0))}</td>
+      <td>${sanitize(formatBytes(item.database_bytes || 0))}</td>
+      <td>${sanitize(formatBytes((item.wal_bytes || 0) + (item.shm_bytes || 0)))}</td>
+    </tr>
+  `).join("") : '<tr><td colspan="4">尚未偵測到 DB 檔案</td></tr>';
+  host.innerHTML = `
+    <div class="server-env-panel-title">資料庫大小合計</div>
+    <div class="server-env-db-total">${sanitize(formatBytes(database.total_bytes || 0))}</div>
+    <div class="server-env-panel-note">${sanitize(database.db_dir || ".")} · ${Number(database.file_count || 0)} 個 DB 檔案 · WAL/SHM ${sanitize(formatBytes(database.sidecar_bytes || 0))}</div>
+    <div class="server-env-panel-note">${sanitize(integrityDetail || "尚未取得資料庫完整性與 audit hash 檢查結果")}</div>
+    <div class="server-env-table-wrap">
+      <table class="server-env-table">
+        <thead><tr><th>DB</th><th>合計</th><th>主檔</th><th>WAL/SHM</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderServerEnvProcessList(resource = {}) {
+  const host = $("server-env-process-list");
+  if (!host) return;
+  const rows = Array.isArray(resource.processes) ? resource.processes : [];
+  const body = rows.length ? rows.map((item) => {
+    const cpu = item.cpu_percent === null || item.cpu_percent === undefined
+      ? "-"
+      : `${Number(item.cpu_percent).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+    const ram = item.rss_bytes ? formatBytes(item.rss_bytes) : "-";
+    const sockets = item.socket_count === null || item.socket_count === undefined ? "-" : Number(item.socket_count).toLocaleString();
+    const command = String(item.command || item.args || item.process_name || "").trim();
+    const commandSuffix = item.command_truncated ? " …" : "";
+    return `
+      <tr>
+        <td>${sanitize(String(item.pid || "-"))}</td>
+        <td>
+          <strong>${sanitize(item.name || "-")}</strong>
+          <div class="server-env-process-command">${sanitize(command || item.process_name || "-")}${sanitize(commandSuffix)}</div>
+          <div class="drive-card-sub">comm=${sanitize(item.process_name || "-")} · ppid=${sanitize(String(item.ppid || "-"))}</div>
+        </td>
+        <td>${sanitize(cpu)}</td>
+        <td>${sanitize(ram)}</td>
+        <td>${sanitize(sockets)}</td>
+      </tr>
+    `;
+  }).join("") : '<tr><td colspan="5">尚未偵測到相關背景程式</td></tr>';
+  host.innerHTML = `
+    <div class="server-env-panel-title">相關背景程式資源</div>
+    <div class="server-env-panel-note">列出本專案、ffmpeg/HLS、aria2 下載與交易背景引擎相關程序；交易引擎若在 web worker 內執行，會顯示在同一個 worker PID。</div>
+    <div class="server-env-table-wrap">
+      <table class="server-env-table">
+        <thead><tr><th>PID</th><th>主程式 / 詳細命令</th><th>CPU</th><th>RAM</th><th>Socket</th></tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderServerEnvPathDetails(env = {}) {
+  const details = $("server-env-details");
+  if (!details) return;
+  details.textContent = "";
+}
+
+function renderServerEnvOperationalStats({ env, transfer, database, resource } = {}) {
+  if (env) lastServerEnvironment = env;
+  if (transfer) lastServerTransferUsage = transfer;
+  if (database) lastServerDatabaseUsage = database;
+  if (resource) lastServerResourceUsage = resource;
+  renderServerEnvSummary(lastServerEnvironment, lastServerTransferUsage, lastServerDatabaseUsage, lastServerResourceUsage);
+  renderServerEnvTransferDetails(lastServerTransferUsage);
+  renderServerEnvDatabaseDetails(lastServerDatabaseUsage);
+  renderServerEnvProcessList(lastServerResourceUsage);
+  renderServerEnvPathDetails(lastServerEnvironment);
+}
+
 function normalizeSystemResourceRefreshSeconds(value) {
   const parsed = parseInt(value, 10);
   return Math.max(1, Math.min(300, Number.isFinite(parsed) ? parsed : 5));
@@ -7308,7 +8197,7 @@ function applySystemResourceRefreshSeconds(value, { restart = true } = {}) {
   systemResourceRefreshSeconds = next;
   const input = $("s-system-resource-board-refresh-seconds");
   if (input && String(input.value || "") !== String(next)) input.value = String(next);
-  if (changed && restart && currentUser === "root" && currentModuleTab === "server" && currentServerTab === "env") {
+  if (changed && restart && currentUser === "root" && isSystemEnvActive()) {
     startSystemResourcePoll();
   }
   return next;
@@ -7323,12 +8212,12 @@ function stopSystemResourcePoll() {
 
 function startSystemResourcePoll() {
   stopSystemResourcePoll();
-  if (currentUser !== "root" || currentModuleTab !== "server" || currentServerTab !== "env") return;
+  if (currentUser !== "root" || !isSystemEnvActive()) return;
   systemResourcePollTimer = setInterval(refreshSystemResourceBoard, systemResourceRefreshSeconds * 1000);
 }
 
 async function refreshSystemResourceBoard() {
-  if (systemResourceRefreshInFlight || currentUser !== "root" || currentModuleTab !== "server" || currentServerTab !== "env" || document.hidden) return;
+  if (systemResourceRefreshInFlight || currentUser !== "root" || !isSystemEnvActive() || document.hidden) return;
   systemResourceRefreshInFlight = true;
   try {
     const csrf = await fetchCsrfToken();
@@ -7340,6 +8229,12 @@ async function refreshSystemResourceBoard() {
     if (!res.ok || !json.ok) throw new Error(json.msg || "系統資源讀取失敗");
     applySystemResourceRefreshSeconds(json.resource_refresh_seconds, { restart: true });
     renderSystemResourceBoard(json.resource_usage || {});
+    renderServerEnvOperationalStats({
+      env: json.environment || lastServerEnvironment || {},
+      resource: json.resource_usage || {},
+      transfer: json.transfer_usage || {},
+      database: json.database_usage || {},
+    });
   } catch (err) {
     const sampled = $("system-resource-sampled-at");
     if (sampled) sampled.textContent = `資源看板更新失敗：${err.message || "請求失敗"}`;
@@ -7359,38 +8254,22 @@ async function loadServerEnv() {
   const json = await res.json().catch(() => ({}));
   const summary = $("server-env-summary");
   const details = $("server-env-details");
-  if (!summary || !details) return;
+  if (!summary) return;
   if (!json.ok) {
     summary.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "系統環境讀取失敗")}</div>`;
-    details.textContent = "";
+    if (details) details.textContent = "";
     renderSystemResourceBoard({});
     return;
   }
   const env = json.environment || {};
   applySystemResourceRefreshSeconds(json.resource_refresh_seconds, { restart: true });
   renderSystemResourceBoard(json.resource_usage || {});
-  const cards = [
-    ["作業平台", env.platform || "-", "#82b1ff"],
-    ["Python", env.python_version || "-", "#82b1ff"],
-    ["資料庫", formatBytes(env.database_bytes || 0), "#82b1ff"],
-    ["程序 PID", String(env.pid || "-"), "#82b1ff"],
-    ["Log 檔數", String(env.log_files || 0), "#82b1ff"],
-    ["Anchor 檔數", String(env.anchor_files || 0), "#82b1ff"],
-  ];
-  summary.innerHTML = cards.map(([label, value, color]) => `
-    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;">
-      <div style="font-size:.68rem;color:var(--muted);">${label}</div>
-      <div style="font-size:1.05rem;color:${color};font-weight:700;margin-top:.2rem;">${sanitize(value)}</div>
-    </div>
-  `).join("");
-  details.innerHTML = [
-    `BASE_DIR：${sanitize(env.base_dir || ".")}`,
-    `DB：${sanitize(env.database_path || "-")}`,
-    `Log：${sanitize(env.log_dir || "-")}`,
-    `Chat：${sanitize(env.chat_dir || "-")}`,
-    `Anchor：${sanitize(env.anchor_dir || "-")}`,
-    `聊天檔數：${sanitize(String(env.chat_files || 0))}`,
-  ].join("<br>");
+  renderServerEnvOperationalStats({
+    env,
+    resource: json.resource_usage || {},
+    transfer: json.transfer_usage || {},
+    database: json.database_usage || {},
+  });
 }
 
 async function restartServer(event) {
@@ -7710,6 +8589,10 @@ function platformStatNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function platformStatPoints(value) {
+  return platformStatNumber(value).toLocaleString("zh-TW");
+}
+
 function renderPlatformBarChart(title, rows, options = {}) {
   const maxValue = Math.max(1, ...rows.map((row) => Math.abs(platformStatNumber(row.value))));
   return `
@@ -7729,7 +8612,7 @@ function renderPlatformBarChart(title, rows, options = {}) {
               <div style="height:.72rem;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;">
                 <div style="height:100%;width:${percent}%;background:${color};border-radius:999px;"></div>
               </div>
-              <strong style="color:${color};font-size:.78rem;text-align:right;white-space:nowrap;">${sanitize(String(value))}</strong>
+              <strong style="color:${color};font-size:.78rem;text-align:right;white-space:nowrap;">${sanitize(row.format === "points" ? platformStatPoints(value) : String(value))}</strong>
             </div>
           `;
         }).join("")}
@@ -7739,18 +8622,18 @@ function renderPlatformBarChart(title, rows, options = {}) {
 }
 
 function renderPlatformNetChart(stats) {
-  const earned = platformStatNumber(stats.points_earned_month);
-  const spent = platformStatNumber(stats.points_spent_month);
-  const net = platformStatNumber(stats.points_net_month);
-  const maxValue = Math.max(1, earned, spent, Math.abs(net));
+  const inflow = platformStatNumber(stats.points_member_internal_inflow_month ?? stats.points_earned_month);
+  const outflow = platformStatNumber(stats.points_member_internal_outflow_month ?? stats.points_spent_month);
+  const net = platformStatNumber(stats.points_member_internal_net_month ?? stats.points_net_month);
+  const maxValue = Math.max(1, inflow, outflow, Math.abs(net));
   const positiveWidth = net >= 0 ? Math.min(50, Math.round((net / maxValue) * 50)) : 0;
   const negativeWidth = net < 0 ? Math.min(50, Math.round((Math.abs(net) / maxValue) * 50)) : 0;
   const netColor = net >= 0 ? "#4caf50" : "#ff4f6d";
   return `
     <div class="platform-stats-chart" style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.75rem;min-width:0;">
       <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.6rem;">
-        <strong style="color:#e0e0f0;">本月積分淨值</strong>
-        <small style="color:var(--muted);margin-left:auto;">收入 - 支出</small>
+        <strong style="color:#e0e0f0;">本月站內錢包流量</strong>
+        <small style="color:var(--muted);margin-left:auto;">pc0 member ledger</small>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;align-items:center;margin:.9rem 0 .6rem;">
         <div style="height:1.05rem;background:rgba(255,255,255,.08);border-radius:999px 0 0 999px;display:flex;justify-content:flex-end;overflow:hidden;">
@@ -7761,12 +8644,34 @@ function renderPlatformNetChart(stats) {
         </div>
       </div>
       <div style="display:flex;justify-content:space-between;gap:.75rem;font-size:.75rem;color:var(--muted);">
-        <span>支出 ${spent}</span>
-        <strong style="color:${netColor};">淨值 ${net}</strong>
-        <span>收入 ${earned}</span>
+        <span>流出 ${platformStatPoints(outflow)}</span>
+        <strong style="color:${netColor};">淨額 ${platformStatPoints(net)}</strong>
+        <span>流入 ${platformStatPoints(inflow)}</span>
       </div>
       <div style="margin-top:.75rem;border-top:1px solid rgba(255,255,255,.08);padding-top:.65rem;color:#ce93d8;font-weight:700;">
-        積分總庫存 ${sanitize(String(platformStatNumber(stats.total_points)))}
+        用戶站內流通餘額 ${sanitize(platformStatPoints(stats.points_user_hot_circulating ?? stats.total_points))}
+      </div>
+    </div>
+  `;
+}
+
+function renderPlatformSupplyChart(stats) {
+  const gap = platformStatNumber(stats.points_closed_loop_gap);
+  const balanced = gap === 0;
+  const warning = stats.points_economy_error ? ` · ${stats.points_economy_error}` : "";
+  const auditWarning = stats.points_closed_loop_balanced === false && gap === 0 ? " · 對帳提示待查" : "";
+  return `
+    <div class="platform-stats-chart" style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.75rem;min-width:0;">
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.6rem;">
+        <strong style="color:#e0e0f0;">多帳本供應對帳</strong>
+        <small style="color:${balanced ? "#4caf50" : "#ff4f6d"};margin-left:auto;">${balanced ? "Settlement invariant 正常" : "需查帳"}${sanitize(auditWarning)}${sanitize(warning)}</small>
+      </div>
+      <div style="display:grid;gap:.45rem;font-size:.8rem;">
+        <div class="platform-chart-row" style="display:grid;grid-template-columns:minmax(7rem,1fr) minmax(8rem,1fr);gap:.55rem;"><span style="color:var(--muted);">Active Supply</span><strong>${sanitize(platformStatPoints(stats.points_active_supply))}</strong></div>
+        <div class="platform-chart-row" style="display:grid;grid-template-columns:minmax(7rem,1fr) minmax(8rem,1fr);gap:.55rem;"><span style="color:var(--muted);">用戶 pc0 流通</span><strong>${sanitize(platformStatPoints(stats.points_user_hot_circulating))}</strong></div>
+        <div class="platform-chart-row" style="display:grid;grid-template-columns:minmax(7rem,1fr) minmax(8rem,1fr);gap:.55rem;"><span style="color:var(--muted);">官方 pc0 基金</span><strong>${sanitize(platformStatPoints(stats.points_pc0_platform_funds))}</strong></div>
+        <div class="platform-chart-row" style="display:grid;grid-template-columns:minmax(7rem,1fr) minmax(8rem,1fr);gap:.55rem;"><span style="color:var(--muted);">Burn / Mint 未發放</span><strong>${sanitize(platformStatPoints(stats.points_burned_total))} / ${sanitize(platformStatPoints(stats.points_mint_remaining))}</strong></div>
+        <div class="platform-chart-row" style="display:grid;grid-template-columns:minmax(7rem,1fr) minmax(8rem,1fr);gap:.55rem;"><span style="color:var(--muted);">Invariant 差額</span><strong style="color:${balanced ? "#4caf50" : "#ff4f6d"};">${sanitize(platformStatPoints(gap))}</strong></div>
       </div>
     </div>
   `;
@@ -7794,12 +8699,16 @@ async function loadPlatformStats() {
       { label: "本月新用戶", value: stats.new_users_month, color: "#ffb74d" },
       { label: "總用戶數", value: stats.total_users, color: "#82b1ff" },
     ], { caption: "人次 / 帳號" })}
-    ${renderPlatformBarChart("本月積分收支", [
-      { label: "收入", value: stats.points_earned_month, color: "#4caf50" },
-      { label: "支出", value: stats.points_spent_month, color: "#ff4f6d" },
-      { label: "淨值", value: stats.points_net_month, color: platformStatNumber(stats.points_net_month) >= 0 ? "#4caf50" : "#ff4f6d" },
-    ], { caption: "points" })}
+    ${renderPlatformBarChart("官方基金與營運流量", [
+      { label: "Treasury", value: stats.points_official_treasury, color: "#82b1ff", format: "points" },
+      { label: "交易所基金", value: stats.points_exchange_fund, color: "#4caf50", format: "points" },
+      { label: "Promo 基金", value: stats.points_promo_fund, color: "#ffb74d", format: "points" },
+      { label: "本月營運收入", value: stats.points_fund_income_month, color: "#4caf50", format: "points" },
+      { label: "本月基金支出", value: stats.points_fund_expense_month, color: "#ff4f6d", format: "points" },
+      { label: "本月 Burn", value: stats.points_burned_month, color: "#ce93d8", format: "points" },
+    ], { caption: "pc0 funds / events" })}
     ${renderPlatformNetChart(stats)}
+    ${renderPlatformSupplyChart(stats)}
   `;
 }
 

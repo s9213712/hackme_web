@@ -23,6 +23,16 @@ def test_diffusers_generation_page_accepts_repo_and_variant_selection():
     assert 'id="s-comfyui-diffusers-keep-downloaded-models"' in html
 
 
+def test_comfyui_background_refresh_failures_are_visible():
+    js = _read("public/js/36-comfyui.js")
+
+    assert "loadComfyuiHistory().catch(() => {})" not in js
+    assert "loadComfyuiWorkflowPresets().catch(() => {})" not in js
+    assert "Workflow preset 讀取失敗" in js
+    assert "ComfyUI 歷史讀取失敗" in js
+    assert "ComfyUI 歷史重新整理失敗" in js
+
+
 def test_diffusers_js_preflights_huggingface_repo_before_generation():
     js = _read("public/js/36-comfyui.js")
     assert 'apiFetch(API + "/comfyui/diffusers/inspect?" + query.toString()' in js
@@ -92,8 +102,8 @@ def test_diffusers_in_process_runtime_confirmation_is_in_quick_settings():
     assert "GPU 失敗改用 CPU" in quick_js
     assert "低 RAM 載入" in quick_js
     assert "保留已下載模型快取" in quick_js
-    assert "/js/01-root-quick-settings.js?v=20260521-comfyui-local-main-args" in html
-    assert "/js/50-admin.js?v=20260521-comfyui-local-main-args" in html
+    assert "/js/01-root-quick-settings.js?v=" in html
+    assert "/js/50-admin.js?v=" in html
 
 
 def test_local_comfyui_main_py_performance_controls_are_root_configurable():

@@ -129,7 +129,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "async function ensureThreeJsLoaded()" in core_js
     assert "/js/41-game-modules.js?v=20260518-game-ux" in index_html
     assert "/js/games/game-view-registry.js?v=20260513-legacy-modules" in index_html
-    assert "/js/games/chess.js?v=20260515-stockfish-depth-toggle" in index_html
+    assert "/js/games/chess.js?v=20260525-move-history-ply" in index_html
     lazy_game_scripts = [
         "/js/games/snake.js?v=20260513-game-modules",
         "/js/games/game-2048.js?v=20260513-game-modules",
@@ -548,6 +548,9 @@ def test_game_zone_frontend_assets_are_wired():
     assert "Boss 會發射子彈" in index_html
     assert "gameDifficultyLabel" in chess_module_js
     assert "gameOpponentColor" in chess_module_js
+    assert "function chessVisibleMoveHistory(moves, limit = 16)" in chess_module_js
+    assert "startPly + index + 1" in chess_module_js
+    assert "data-chess-ply" in chess_module_js
     assert "buildOptimisticChessMatch" in chess_module_js
     assert "normalizeChessUciInput" in chess_module_js
     assert "submitChessUciMove" in chess_module_js

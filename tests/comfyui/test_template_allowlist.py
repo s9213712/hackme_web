@@ -52,6 +52,7 @@ def test_denylist_named_high_risk_classes():
         "FaceDetailer",
         "ReActorFaceSwap",
         "IPAdapterApply",
+        "AnimateDiffSampler",
     }
     assert expected <= EXPLICIT_DENYLIST
 
@@ -69,6 +70,7 @@ def test_is_allowed_class_simple_cases():
 def test_is_explicitly_denied_class_named_set():
     assert is_explicitly_denied_class("ReActorFaceSwap") is True
     assert is_explicitly_denied_class("FaceDetailer") is True
+    assert is_explicitly_denied_class("AnimateDiffSampler") is True
     assert is_explicitly_denied_class("VHS_VideoCombine") is False
     assert is_explicitly_denied_class("KSampler") is False  # allowed, not denied
     assert is_explicitly_denied_class("") is False

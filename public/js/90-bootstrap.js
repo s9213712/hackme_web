@@ -1,6 +1,7 @@
 function bindUiEvents() {
   if (typeof decorateSidebarMenu === "function") decorateSidebarMenu();
   if (typeof bindProfileFriendsControls === "function") bindProfileFriendsControls();
+  if (typeof relocateSystemAdminSections === "function") relocateSystemAdminSections();
   const tabLogin    = $("tab-login");
   const tabRegister = $("tab-register");
   const tabModuleChat = $("tab-module-chat");
@@ -18,28 +19,31 @@ function bindUiEvents() {
   const tabModuleEconomy = $("tab-module-economy");
   const tabModuleTrading = $("tab-module-trading");
   const tabModuleAccounts = $("tab-module-accounts");
+  const tabModuleSystem = $("tab-module-system");
   const tabModuleServer = $("tab-module-server");
   const tabModuleAppeals = $("tab-module-appeals");
-  const tabServerHealth = $("tab-server-health");
-  const tabServerSecurity = $("tab-server-security");
+  const tabSystemHealth = $("tab-system-health");
+  const tabSystemFeatures = $("tab-system-features");
+  const tabSystemAppearance = $("tab-system-appearance");
+  const tabSystemCore = $("tab-system-core");
+  const tabSystemCapacity = $("tab-system-capacity");
+  const tabSystemEnv = $("tab-system-env");
+  const tabSystemLaunchCheck = $("tab-system-launch-check");
+  const tabSystemBugReports = $("tab-system-bug-reports");
+  const tabServerOverview = $("tab-server-overview");
+  const tabServerServerMode = $("tab-server-server-mode");
   const tabServerAudit = $("tab-server-audit");
   const tabServerIntegrity = $("tab-server-integrity");
-  const tabServerLaunchCheck = $("tab-server-launch-check");
-  const tabServerSettings = $("tab-server-settings");
-  const tabServerEnv = $("tab-server-env");
   const envRefresh = $("env-refresh-btn");
   const tabSettingsSecurity = $("tab-settings-security");
   const tabSettingsFeatures = $("tab-settings-features");
   const tabSettingsAppearance = $("tab-settings-appearance");
   const tabSettingsSystem = $("tab-settings-system");
-  const tabSettingsBilling = $("tab-settings-billing");
-  const tabSettingsTrading = $("tab-settings-trading");
-  const tabSettingsDrive = $("tab-settings-drive");
-  const tabSettingsMemberLevels = $("tab-settings-member-levels");
   const tabUsers    = $("tab-users");
   const tabPasswordResets = $("tab-password-resets");
   const tabViol     = $("tab-violations");
   const tabGovernance = $("tab-governance");
+  const tabMemberSettings = $("tab-member-settings");
   const tabNotices = $("tab-notices");
   const tabAppeals  = $("tab-appeals");
   const tabReports  = $("tab-reports");
@@ -82,6 +86,7 @@ function bindUiEvents() {
   const adminReportsBulkApproveBtn = $("admin-reports-bulk-approve");
   const adminReportsBulkRejectBtn = $("admin-reports-bulk-reject");
   const settingsSave = $("settings-save-btn");
+  const driveRootStorageSettingsSave = $("drive-root-storage-settings-save-btn");
   const settingsPanel = $("sec-server-settings");
   const serverTimeCheckBtn = $("server-time-check-btn");
   const comfyuiTestConnectionBtn = $("comfyui-test-connection-btn");
@@ -101,7 +106,6 @@ function bindUiEvents() {
   const serverModeApply = $("server-mode-apply-btn");
   const serverUpdateRefresh = $("server-update-refresh-btn");
   const serverUpdatePreview = $("server-update-preview-btn");
-  const serverUpdateApply = $("server-update-apply-btn");
   const internalTestTokenRefresh = $("internal-test-token-refresh-btn");
   const internalTestTokenRotate = $("internal-test-token-rotate-btn");
   const testerTokenCreate = $("tester-token-create-btn");
@@ -135,6 +139,8 @@ function bindUiEvents() {
   const securityFunctionalStart = $("security-functional-start-btn");
   const securityStressStart = $("security-stress-start-btn");
   const serverModeSelect = $("server-mode-select");
+  const rootBugReportRefresh = $("root-bug-report-refresh-btn");
+  const rootBugReportStatus = $("root-bug-report-status");
   const editSaveBtn = $("user-edit-save");
   const editCancelBtn = $("user-edit-cancel");
   const avatarUploadBtn = $("edit-user-avatar-upload");
@@ -252,30 +258,36 @@ function bindUiEvents() {
   if (tabModuleShares) tabModuleShares.addEventListener("click", () => switchModuleTab("shares"));
   if (tabModuleComfyui) tabModuleComfyui.addEventListener("click", () => switchModuleTab("comfyui"));
   if (tabModuleEconomy) tabModuleEconomy.addEventListener("click", () => switchModuleTab("economy"));
-  if (tabModuleTrading) tabModuleTrading.addEventListener("click", () => switchModuleTab("trading"));
+  if (tabModuleTrading) tabModuleTrading.addEventListener("click", () => {
+    switchModuleTab("trading");
+    if (typeof openTradingExchangePage === "function") openTradingExchangePage();
+  });
   if (tabModuleAppeals) tabModuleAppeals.addEventListener("click", () => switchModuleTab("appeals"));
   if (tabModuleAccounts) tabModuleAccounts.addEventListener("click", () => switchModuleTab("accounts"));
+  if (tabModuleSystem) tabModuleSystem.addEventListener("click", () => switchModuleTab("system"));
   if (tabModuleServer) tabModuleServer.addEventListener("click", () => switchModuleTab("server"));
-  if (tabServerSecurity) tabServerSecurity.addEventListener("click", () => switchServerTab("security"));
+  if (tabSystemHealth) tabSystemHealth.addEventListener("click", () => switchSystemTab("health"));
+  if (tabSystemFeatures) tabSystemFeatures.addEventListener("click", () => switchSystemTab("features"));
+  if (tabSystemAppearance) tabSystemAppearance.addEventListener("click", () => switchSystemTab("appearance"));
+  if (tabSystemCore) tabSystemCore.addEventListener("click", () => switchSystemTab("core"));
+  if (tabSystemCapacity) tabSystemCapacity.addEventListener("click", () => switchSystemTab("capacity"));
+  if (tabSystemEnv) tabSystemEnv.addEventListener("click", () => switchSystemTab("env"));
+  if (tabSystemLaunchCheck) tabSystemLaunchCheck.addEventListener("click", () => switchSystemTab("launch-check"));
+  if (tabSystemBugReports) tabSystemBugReports.addEventListener("click", () => switchSystemTab("bug-reports"));
+  if (tabServerOverview) tabServerOverview.addEventListener("click", () => switchServerTab("overview"));
+  if (tabServerServerMode) tabServerServerMode.addEventListener("click", () => switchServerTab("server-mode"));
   if (tabServerAudit) tabServerAudit.addEventListener("click", () => switchServerTab("audit"));
-  if (tabServerHealth) tabServerHealth.addEventListener("click", () => switchServerTab("health"));
   if (tabServerIntegrity) tabServerIntegrity.addEventListener("click", () => switchServerTab("integrity"));
-  if (tabServerLaunchCheck) tabServerLaunchCheck.addEventListener("click", () => switchServerTab("launch-check"));
-  if (tabServerSettings) tabServerSettings.addEventListener("click", () => switchServerTab("settings"));
-  if (tabServerEnv) tabServerEnv.addEventListener("click", () => switchServerTab("env"));
   if (envRefresh) envRefresh.addEventListener("click", loadServerEnv);
   if (tabSettingsSecurity) tabSettingsSecurity.addEventListener("click", () => switchSettingsSection("security"));
   if (tabSettingsFeatures) tabSettingsFeatures.addEventListener("click", () => switchSettingsSection("features"));
   if (tabSettingsAppearance) tabSettingsAppearance.addEventListener("click", () => switchSettingsSection("appearance"));
   if (tabSettingsSystem) tabSettingsSystem.addEventListener("click", () => switchSettingsSection("system"));
-  if (tabSettingsBilling) tabSettingsBilling.addEventListener("click", () => switchSettingsSection("billing"));
-  if (tabSettingsTrading) tabSettingsTrading.addEventListener("click", () => switchSettingsSection("trading"));
-  if (tabSettingsDrive) tabSettingsDrive.addEventListener("click", () => switchSettingsSection("drive"));
-  if (tabSettingsMemberLevels) tabSettingsMemberLevels.addEventListener("click", () => switchSettingsSection("member-levels"));
   if (tabUsers)    tabUsers.addEventListener("click",    () => switchAdminTab("users"));
   if (tabPasswordResets) tabPasswordResets.addEventListener("click", () => switchAdminTab("password-resets"));
   if (tabViol)     tabViol.addEventListener("click",     () => switchAdminTab("violations"));
   if (tabGovernance) tabGovernance.addEventListener("click", () => switchAdminTab("governance"));
+  if (tabMemberSettings) tabMemberSettings.addEventListener("click", () => switchAdminTab("member-settings"));
   if (tabNotices) tabNotices.addEventListener("click", () => switchAdminTab("notices"));
   if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchAdminTab("appeals"));
   if (tabReports)  tabReports.addEventListener("click",   () => switchAdminTab("reports"));
@@ -341,7 +353,7 @@ function bindUiEvents() {
   if (chatRoomInviteBtn) chatRoomInviteBtn.addEventListener("click", inviteChatRoomMembers);
   if (chatRoomExportBtn) chatRoomExportBtn.addEventListener("click", exportChatRoom);
   document.querySelectorAll("[data-chat-sticker]").forEach((btn) => {
-    btn.addEventListener("click", () => sendChatSticker(btn.dataset.chatSticker || ""));
+    btn.addEventListener("click", () => insertChatSticker(btn.dataset.chatSticker || ""));
   });
   if (chatAttachmentPickBtn) chatAttachmentPickBtn.addEventListener("click", openChatAttachmentPicker);
   if (chatAttachmentFile) chatAttachmentFile.addEventListener("change", uploadChatAttachment);
@@ -532,10 +544,16 @@ function bindUiEvents() {
   if (adminNoticeSendBtn) adminNoticeSendBtn.addEventListener("click", sendAdminNotice);
   if ($("governance-action-type")) $("governance-action-type").addEventListener("change", updateGovernanceActionValueHelp);
   if ($("governance-target-user-id")) $("governance-target-user-id").addEventListener("change", updateGovernanceActionValueHelp);
+  if ($("governance-emergency-execute")) $("governance-emergency-execute").addEventListener("change", updateGovernanceActionValueHelp);
   if ($("governance-proposal-status")) $("governance-proposal-status").addEventListener("change", loadGovernanceProposals);
 
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
+  document.querySelectorAll("[data-settings-save-action]").forEach((btn) => {
+    if (btn.dataset.settingsSaveBound === "1") return;
+    btn.dataset.settingsSaveBound = "1";
+    btn.addEventListener("click", saveSettings);
+  });
   if (settingsPanel) {
     const clearHandler = () => {
       if (typeof clearSettingsStatus === "function") clearSettingsStatus();
@@ -552,6 +570,7 @@ function bindUiEvents() {
   if ($("s-server-backpressure-mode")) $("s-server-backpressure-mode").addEventListener("change", updateBackpressureModeFields);
   if (typeof bindSettingsAssistants === "function") bindSettingsAssistants();
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
+  if (driveRootStorageSettingsSave) driveRootStorageSettingsSave.addEventListener("click", saveDriveRootStorageSettings);
   if (rootCatalogNew) rootCatalogNew.addEventListener("click", clearRootCatalogForm);
   if (rootCatalogRefresh) rootCatalogRefresh.addEventListener("click", loadRootEconomyCatalog);
   if (rootCatalogSave) rootCatalogSave.addEventListener("click", saveRootEconomyCatalogItem);
@@ -569,7 +588,6 @@ function bindUiEvents() {
   if (serverModeApply) serverModeApply.addEventListener("click", applyServerMode);
   if (serverUpdateRefresh) serverUpdateRefresh.addEventListener("click", () => loadServerUpdateStatus(true));
   if (serverUpdatePreview) serverUpdatePreview.addEventListener("click", previewServerUpdate);
-  if (serverUpdateApply) serverUpdateApply.addEventListener("click", applyServerUpdate);
   if (internalTestTokenRefresh) internalTestTokenRefresh.addEventListener("click", loadInternalTestTokenStatus);
   if (internalTestTokenRotate) internalTestTokenRotate.addEventListener("click", rotateInternalTestToken);
   if (testerTokenCreate) testerTokenCreate.addEventListener("click", createTesterToken);
@@ -626,7 +644,10 @@ function bindUiEvents() {
   if (serverModeSelect) serverModeSelect.addEventListener("change", () => {
     previewSecurityProfileSelection("server-mode-select", "server-mode-profile-preview", "s");
     if (typeof updateServerModeTokenPanels === "function") updateServerModeTokenPanels(serverModeSelect.value);
+    if (typeof updateServerModeLaunchCheckVisibility === "function") updateServerModeLaunchCheckVisibility();
   });
+  if (rootBugReportRefresh) rootBugReportRefresh.addEventListener("click", loadRootBugReports);
+  if (rootBugReportStatus) rootBugReportStatus.addEventListener("change", renderRootBugReportList);
 }
 
 $("li-pw").addEventListener("keydown", (e) => {

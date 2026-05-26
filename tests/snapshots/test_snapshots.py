@@ -231,7 +231,7 @@ def test_snapshot_file_roots_exclude_and_preserve_snapshot_repository(tmp_path):
     assert preserved_snapshot_file.read_text(encoding="utf-8") == "local snapshot repository"
 
 
-def test_snapshot_covers_points_chain_backup_file_root(tmp_path):
+def test_snapshot_does_not_capture_legacy_points_chain_backup_root(tmp_path):
     audit_log = []
     base = tmp_path / "app"
     base.mkdir()
@@ -250,19 +250,22 @@ def test_snapshot_covers_points_chain_backup_file_root(tmp_path):
         runtime_base_dir=base / "runtime",
         storage_root=base / "runtime" / "storage",
         audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
-        file_roots=[points_backup_root],
+        file_roots=[],
         config_files=[],
     )
     (points_backup_root / "chain-backup.json").write_text('{"height": 7}', encoding="utf-8")
 
-    snap = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="points chain backups")
-    (points_backup_root / "chain-backup.json").write_text("dirty", encoding="utf-8")
-    (points_backup_root / "dirty.json").write_text("dirty", encoding="utf-8")
-    restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="restore points backups")
+    snap = service.create_snapshot(
+        snapshot_type="manual",
+        actor={"id": 1, "username": "root"},
+        notes="points chain backup policy boundary",
+    )
+    snapshot_dir = service._snapshot_dir(snap.snapshot_id)
+    with tarfile.open(snapshot_dir / "uploads.tar.gz", "r:gz") as tar:
+        names = set(tar.getnames())
 
-    assert restored["ok"] is True
-    assert (points_backup_root / "chain-backup.json").read_text(encoding="utf-8") == '{"height": 7}'
-    assert not (points_backup_root / "dirty.json").exists()
+    assert snap.ok is True
+    assert all("points_chain_backups" not in name for name in names)
 
 
 def test_snapshot_runtime_secret_paths_use_runtime_prefix_for_external_runtime_dir(tmp_path):
@@ -1704,6 +1707,15 @@ class _FakeServerModeService:
         return {"ok": True, "balance_points": self.shadow_wallet_balance, "formal_points_chain_changed": False}
 
 
+class _FakePointsService:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def force_seal_block(self, *, actor=None, reason=""):
+        self.calls.append(("points_block", reason))
+        return {"ok": True, "sealed": False, "reason": reason, "forced": True}
+
+
 def _build_admin_app(actor_box, snapshot_service, restart_calls=None, extra_deps=None):
     app = Flask(__name__)
     app.testing = True
@@ -1764,6 +1776,46 @@ def test_snapshot_api_is_root_only_and_supports_dry_run_restore():
     actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
     denied = client.post("/api/admin/snapshots", json={"type": "manual"})
     assert denied.status_code == 403
+
+
+def test_snapshot_api_seals_points_block_before_writing_snapshot():
+    calls = []
+
+    class OrderedSnapshotService(_FakeSnapshotService):
+        def create_snapshot(self, *, snapshot_type, actor, notes=None):
+            calls.append(("snapshot", snapshot_type))
+            return super().create_snapshot(snapshot_type=snapshot_type, actor=actor, notes=notes)
+
+    snapshot_service = OrderedSnapshotService()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_admin_app(
+        actor_box,
+        snapshot_service,
+        extra_deps={"points_service": _FakePointsService(calls)},
+    ).test_client()
+
+    created = client.post("/api/admin/snapshots", json={"type": "manual", "notes": "api"})
+
+    assert created.status_code == 200
+    assert created.get_json()["points_block"]["reason"] == "snapshot_create_pre"
+    assert calls == [("points_block", "snapshot_create_pre"), ("snapshot", "manual")]
+
+
+def test_system_reset_rejects_bad_confirm_without_sealing_points_block():
+    calls = []
+    snapshot_service = _FakeSnapshotService()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_admin_app(
+        actor_box,
+        snapshot_service,
+        extra_deps={"points_service": _FakePointsService(calls)},
+    ).test_client()
+
+    denied = client.post("/api/admin/system-reset", json={"confirm": "WRONG"})
+
+    assert denied.status_code == 400
+    assert denied.get_json()["ok"] is False
+    assert calls == []
 
 
 def test_snapshot_api_downloads_and_restores_uploaded_portable_archive(tmp_path):
@@ -2094,3 +2146,32 @@ def test_server_output_falls_back_to_gunicorn_error_log_when_runtime_buffer_is_e
     assert payload["lines"]
     assert payload["lines"][0]["stream"] == "info"
     assert "Starting gunicorn 26.0.0" in payload["lines"][0]["line"]
+
+
+def test_server_output_falls_back_to_server_direct_log_when_gunicorn_error_missing(tmp_path):
+    snapshot_service = _FakeSnapshotService()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "server.log").write_text("", encoding="utf-8")
+    (log_dir / "server_direct.out").write_text(
+        "127.0.0.1 - - [25/May/2026:11:39:24 +0800] \"GET /api/version HTTP/1.1\" 200 412\n",
+        encoding="utf-8",
+    )
+    client = _build_admin_app(
+        actor_box,
+        snapshot_service,
+        extra_deps={
+            "LOG_DIR": str(log_dir),
+            "SERVER_LOG_PATH": str(log_dir / "server.log"),
+            "get_server_output": lambda limit=200: {"lines": [], "max_lines": 2000},
+        },
+    ).test_client()
+
+    response = client.get("/api/admin/server-output?limit=10")
+
+    assert response.status_code == 200
+    payload = response.get_json()["server_output"]
+    assert payload["source"] == "server_direct.out"
+    assert payload["lines"]
+    assert "GET /api/version" in payload["lines"][0]["line"]

@@ -355,6 +355,18 @@ def test_preview_rejects_explicitly_denied_class():
     assert "ReActorFaceSwap" in body["denied_classes"]
 
 
+def test_preview_rejects_animatediff_sampler_class():
+    store = InMemoryPreviewStore()
+    app = _build_app(client=_stub_client(classes={"KSampler", "AnimateDiffSampler"}), store=store)
+    bad = {**TXT2IMG, "10": {"class_type": "AnimateDiffSampler", "inputs": {}}}
+    with app.test_client() as c:
+        rv = c.post("/api/comfyui/templates/preview", json={"workflow": bad})
+    assert rv.status_code == 400
+    body = rv.get_json()
+    assert body["stage"] == "allowlist"
+    assert "AnimateDiffSampler" in body["denied_classes"]
+
+
 def test_preview_unauthenticated_returns_401():
     app = _build_app(actor=None, store=InMemoryPreviewStore())
     with app.test_client() as c:

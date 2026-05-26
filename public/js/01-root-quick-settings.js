@@ -1,5 +1,27 @@
 'use strict';
 
+const ROOT_SERVICE_FEE_QUICK_PRESETS = [
+  { item_key: "post_cost_standard", item_name: "一般發文成本", category: "forum", base_price: 1, min_price: 1, max_price: 10, rationale: "低額防洗版，低於每日登入 5 點。" },
+  { item_key: "post_pin_24h", item_name: "文章置頂 24 小時", category: "forum", base_price: 100, min_price: 50, max_price: 300, rationale: "曝光型功能，價格約等於 20 天每日登入。" },
+  { item_key: "cloud_storage_1gb_30d", item_name: "雲端容量 1GB / 30 天", category: "cloud_drive", base_price: 100, min_price: 50, max_price: 500, metadata: { storage_bytes: 1024 * 1024 * 1024, duration_days: 30, label: "雲端容量 1GB / 30 天" }, rationale: "容量是持續成本，保留較高 sink。" },
+  { item_key: "comfyui_txt2img_basic", item_name: "ComfyUI 基礎生圖一次", category: "comfyui", base_price: 5, min_price: 1, max_price: 25, dynamic_pricing: true, rationale: "等同每日登入一次，適合低門檻試用。" },
+  { item_key: "comfyui_txt2img_highres", item_name: "ComfyUI 高解析生圖一次", category: "comfyui", base_price: 12, min_price: 5, max_price: 60, dynamic_pricing: true, rationale: "高資源消耗，約基礎生圖 2-3 倍。" },
+  { item_key: "comfyui_batch_10", item_name: "ComfyUI 批次生圖 10 張", category: "comfyui", base_price: 45, min_price: 20, max_price: 200, dynamic_pricing: true, rationale: "批次任務佔用較久，保留折扣但高於單次。" },
+  { item_key: "video_publish_basic", item_name: "影音發布處理費", category: "video", base_price: 2, min_price: 1, max_price: 20, rationale: "發布低價，收入重心在投幣抽成與流量分潤。" },
+  { item_key: "video_boost_24h", item_name: "影音曝光加成 24 小時", category: "video", base_price: 80, min_price: 30, max_price: 300, rationale: "曝光型功能需高於一般發布，避免洗推薦。" },
+  { item_key: "game_entry_standard", item_name: "遊戲一般入場", category: "game", base_price: 1, min_price: 1, max_price: 10, rationale: "高頻低額，走 pc0 站內帳本即時扣款，不逐筆等待鏈上確認。" },
+  { item_key: "game_virtual_item_common", item_name: "普通虛寶", category: "game", base_price: 20, min_price: 5, max_price: 100, rationale: "遊戲內消耗品，價格應低於長期曝光型功能。" },
+  { item_key: "marketplace_listing_fee", item_name: "市集上架費", category: "marketplace", base_price: 3, min_price: 1, max_price: 30, rationale: "低額抑制垃圾上架，成交抽成另列平台收入。" },
+  { item_key: "ai_agent_task_basic", item_name: "AI Agent 基礎任務", category: "ai_task", base_price: 10, min_price: 5, max_price: 100, dynamic_pricing: true, rationale: "預留外部 API / 任務排程成本。" },
+  { item_key: "username_change", item_name: "改名", category: "account", base_price: 200, min_price: 100, max_price: 1000, rationale: "低頻身分操作，維持較高價格降低濫用。" },
+  { item_key: "profile_decoration", item_name: "個人頁裝飾", category: "account", base_price: 50, min_price: 10, max_price: 250, rationale: "個人頁外觀型服務，作為中低額 sink。" },
+  { item_key: "violation_fine", item_name: "違規罰款繳納", category: "governance", base_price: 300, min_price: 1, max_price: 100000, metadata: { destination: "burn", description: "違規罰款由用戶授權付款，預設銷毀。" }, rationale: "罰款需可調整，但付款仍由用戶授權並預設銷毀。" },
+];
+
+window.HACKME_SERVICE_FEE_PRICING_PRESETS = ROOT_SERVICE_FEE_QUICK_PRESETS;
+
+let rootModuleEconomyCatalogCache = [];
+
 const ROOT_MODULE_QUICK_SETTINGS = {
   chat: {
     label: "聊天室",
@@ -15,6 +37,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   announcements: {
     label: "公告",
     section: "features",
+    pricingKeys: ["post_cost_standard", "post_pin_24h"],
     fields: [
       { id: "s-feature-community-enabled", label: "開放公告 / 討論功能" },
       { id: "s-module-community-min-role", label: "公告與討論最低角色" },
@@ -25,6 +48,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   community: {
     label: "討論區",
     section: "features",
+    pricingKeys: ["post_cost_standard", "post_pin_24h"],
     fields: [
       { id: "s-feature-community-enabled", label: "開放討論區" },
       { id: "s-module-community-min-role", label: "最低可用角色" },
@@ -36,6 +60,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   drive: {
     label: "雲端硬碟",
     section: "drive",
+    pricingKeys: ["cloud_storage_1gb_30d"],
     fields: [
       { id: "s-feature-privacy-uploads-enabled", label: "開放雲端硬碟 / E2EE" },
       { id: "s-feature-storage-albums-enabled", label: "開放相簿" },
@@ -49,6 +74,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   albums: {
     label: "相簿",
     section: "drive",
+    pricingKeys: ["cloud_storage_1gb_30d"],
     fields: [
       { id: "s-feature-storage-albums-enabled", label: "開放相簿" },
       { id: "s-feature-privacy-uploads-enabled", label: "開放雲端硬碟 / E2EE" },
@@ -59,6 +85,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   videos: {
     label: "影音",
     section: "billing",
+    pricingKeys: ["video_publish_basic", "video_boost_24h"],
     fields: [
       { id: "s-feature-videos-enabled", label: "開放影音分享" },
       { id: "s-module-videos-min-role", label: "最低可用角色" },
@@ -70,6 +97,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   games: {
     label: "遊戲區",
     section: "features",
+    pricingKeys: ["game_entry_standard", "game_virtual_item_common"],
     fields: [
       { id: "s-feature-games-enabled", label: "開放遊戲區" },
       { id: "s-module-games-min-role", label: "最低可用角色" },
@@ -92,6 +120,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   shares: {
     label: "分享管理",
     section: "drive",
+    pricingKeys: ["cloud_storage_1gb_30d", "video_publish_basic"],
     fields: [
       { id: "s-feature-privacy-uploads-enabled", label: "開放檔案分享來源" },
       { id: "s-feature-storage-albums-enabled", label: "開放相簿分享來源" },
@@ -102,7 +131,8 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   },
   comfyui: {
     label: "AI 產圖",
-    section: "system",
+    section: "comfyui",
+    pricingKeys: ["comfyui_txt2img_basic", "comfyui_txt2img_highres", "comfyui_batch_10"],
     fields: [
       { id: "s-feature-comfyui-enabled", label: "開放 AI 產圖" },
       { id: "s-module-comfyui-min-role", label: "最低可用角色" },
@@ -163,6 +193,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   appeals: {
     label: "申覆",
     section: "features",
+    pricingKeys: ["violation_fine"],
     fields: [
       { id: "s-feature-appeals-enabled", label: "開放用戶申覆" },
       { id: "s-module-appeals-min-role", label: "最低可用角色" },
@@ -171,7 +202,8 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   },
   accounts: {
     label: "帳號管理",
-    section: "features",
+    section: "accounts",
+    pricingKeys: ["username_change", "profile_decoration", "violation_fine"],
     fields: [
       { id: "s-feature-accounts-enabled", label: "開放帳號管理" },
       { id: "s-module-accounts-min-role", label: "最低可用角色" },
@@ -180,6 +212,14 @@ const ROOT_MODULE_QUICK_SETTINGS = {
       { id: "s-feature-member-governance-enabled", label: "會員治理與投票" },
       { id: "s-feature-violation-center-enabled", label: "違規中心" },
       { id: "s-feature-reports-notifications-enabled", label: "管理通知" },
+    ],
+  },
+  profile: {
+    label: "個人面板",
+    section: "system",
+    pricingKeys: ["username_change", "profile_decoration"],
+    fields: [
+      { id: "s-module-profile-min-role", label: "最低可用角色" },
     ],
   },
   server: {
@@ -259,6 +299,10 @@ function ensureRootModuleSettingsModal() {
       </div>
       <div class="root-module-settings-note" id="root-module-settings-note"></div>
       <div class="settings-option-grid root-module-settings-grid" id="root-module-settings-fields"></div>
+      <div class="root-module-pricing-panel" id="root-module-pricing-panel" hidden>
+        <div class="drive-card-sub root-module-pricing-note">此功能的服務扣點項目。root 儲存後會寫入 economy price catalog，收入以 pc0 站內帳本即時入官方 Treasury。</div>
+        <div class="drive-file-list root-module-pricing-list" id="root-module-pricing-list"></div>
+      </div>
       <div id="root-module-settings-msg" class="msg"></div>
       <div class="edit-user-actions">
         <button type="button" id="root-module-settings-full" class="btn">完整設定</button>
@@ -292,6 +336,98 @@ function rootModuleFieldVisible(field) {
   if (!source) return true;
   const values = Array.isArray(field.visibleWhen.value) ? field.visibleWhen.value : [field.visibleWhen.value];
   return values.includes(rootModuleFieldValue(source));
+}
+
+function rootModulePricingPresets(config) {
+  const keys = Array.isArray(config?.pricingKeys) ? new Set(config.pricingKeys) : null;
+  const categories = Array.isArray(config?.pricingCategories) ? new Set(config.pricingCategories) : null;
+  if (!keys && !categories) return [];
+  return ROOT_SERVICE_FEE_QUICK_PRESETS.filter((item) => (
+    (keys && keys.has(item.item_key)) || (categories && categories.has(item.category))
+  ));
+}
+
+function rootModuleCatalogByKey() {
+  return new Map((rootModuleEconomyCatalogCache || []).map((item) => [String(item.item_key || ""), item]));
+}
+
+async function loadRootModuleEconomyCatalogIfNeeded(config) {
+  if (!rootModulePricingPresets(config).length) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/root/economy/catalog", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" },
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.msg || `服務扣點讀取失敗（HTTP ${res.status}）`);
+  rootModuleEconomyCatalogCache = Array.isArray(json.catalog) ? json.catalog : [];
+}
+
+function rootModulePricingPayloadForKey(itemKey) {
+  const catalog = rootModuleCatalogByKey();
+  const preset = ROOT_SERVICE_FEE_QUICK_PRESETS.find((item) => item.item_key === itemKey);
+  const current = catalog.get(itemKey) || {};
+  if (!preset && !current.item_key) return null;
+  const escapedKey = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(itemKey) : String(itemKey).replace(/"/g, '\\"');
+  const input = document.querySelector(`[data-root-module-pricing-price="${escapedKey}"]`);
+  const enabled = document.querySelector(`[data-root-module-pricing-enabled="${escapedKey}"]`);
+  const basePrice = Math.max(0, Math.round(Number(input?.value || current.base_price || preset?.base_price || 0)));
+  return {
+    item_key: itemKey,
+    item_name: current.item_name || preset?.item_name || itemKey,
+    category: current.category || preset?.category || "custom",
+    base_price: basePrice,
+    min_price: current.min_price ?? preset?.min_price ?? "",
+    max_price: current.max_price ?? preset?.max_price ?? "",
+    dynamic_pricing: current.dynamic_pricing !== undefined ? !!current.dynamic_pricing : !!preset?.dynamic_pricing,
+    enabled: enabled ? !!enabled.checked : (current.enabled !== 0 && current.enabled !== false && preset?.enabled !== false),
+    metadata: current.metadata || preset?.metadata || {},
+  };
+}
+
+function renderRootModulePricingFields(tab) {
+  const config = rootModuleQuickConfig(tab);
+  const panel = $("root-module-pricing-panel");
+  const list = $("root-module-pricing-list");
+  if (!panel || !list || !config) return;
+  const presets = rootModulePricingPresets(config);
+  panel.hidden = !presets.length;
+  if (!presets.length) {
+    list.innerHTML = "";
+    return;
+  }
+  const catalog = rootModuleCatalogByKey();
+  list.innerHTML = presets.map((preset) => {
+    const current = catalog.get(preset.item_key);
+    const active = current ? (current.enabled !== 0 && current.enabled !== false) : preset.enabled !== false;
+    const price = Number(current?.base_price ?? preset.base_price ?? 0);
+    const bounds = [
+      preset.min_price !== undefined && preset.min_price !== "" ? `下限 ${Number(preset.min_price)} 點` : "",
+      preset.max_price !== undefined && preset.max_price !== "" ? `上限 ${Number(preset.max_price)} 點` : "",
+      preset.dynamic_pricing ? "動態定價" : "",
+    ].filter(Boolean).join(" · ");
+    const currentText = current ? `目前 ${Number(current.base_price || 0)} 點${active ? "" : " · 停用"}` : "尚未建立，儲存後建立";
+    return `
+      <div class="drive-file-row root-module-pricing-row">
+        <div>
+          <strong>${sanitize(preset.item_name)}</strong>
+          <div class="drive-card-sub">${sanitize(preset.item_key)} · ${sanitize(currentText)}${bounds ? ` · ${sanitize(bounds)}` : ""}</div>
+          <div class="drive-card-sub">${sanitize(preset.rationale || "")}</div>
+        </div>
+        <div class="root-module-pricing-controls">
+          <label>
+            每次消耗點數
+            <input type="number" min="0" step="1" value="${sanitize(String(price))}" data-root-module-pricing-price="${sanitize(preset.item_key)}" />
+          </label>
+          <label class="root-module-pricing-enabled">
+            <input type="checkbox" ${active ? "checked" : ""} data-root-module-pricing-enabled="${sanitize(preset.item_key)}" />
+            啟用
+          </label>
+        </div>
+      </div>
+    `;
+  }).join("");
 }
 
 function updateRootModuleConditionalFields() {
@@ -363,6 +499,7 @@ function renderRootModuleSettingsFields(tab) {
   fieldsWrap.innerHTML = renderedFields.length
     ? renderedFields.join("")
     : `<div class="drive-empty">此頁目前沒有專用快速設定，請使用完整設定。</div>`;
+  renderRootModulePricingFields(tab);
   fieldsWrap.querySelectorAll("input, select, textarea").forEach((el) => {
     el.addEventListener("input", updateRootModuleConditionalFields);
     el.addEventListener("change", updateRootModuleConditionalFields);
@@ -375,6 +512,7 @@ async function preloadRootModuleSettings(config) {
   if (saves.has("settings") && typeof loadSettings === "function") await loadSettings();
   if (saves.has("drivePolicy") && typeof loadCloudDriveAdminPolicy === "function") await loadCloudDriveAdminPolicy();
   if (saves.has("trading") && typeof loadRootTradingSettings === "function") await loadRootTradingSettings();
+  await loadRootModuleEconomyCatalogIfNeeded(config);
 }
 
 async function openRootModuleSettings(tab = currentModuleTab) {
@@ -386,6 +524,7 @@ async function openRootModuleSettings(tab = currentModuleTab) {
   $("root-module-settings-title").textContent = `${config.label}設定`;
   $("root-module-settings-subtitle").textContent = "root 快速設定";
   $("root-module-settings-fields").innerHTML = `<div class="drive-empty">設定讀取中...</div>`;
+  if ($("root-module-pricing-panel")) $("root-module-pricing-panel").hidden = true;
   const msg = $("root-module-settings-msg");
   if (msg) msg.className = "msg";
   overlay.classList.add("show");
@@ -422,6 +561,35 @@ function syncRootModuleProxyValues() {
   if (typeof updateComfyuiConnectionModeFields === "function") updateComfyuiConnectionModeFields();
 }
 
+async function saveRootModulePricing(config) {
+  const presets = rootModulePricingPresets(config);
+  if (!presets.length) return 0;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  let saved = 0;
+  for (const preset of presets) {
+    const payload = rootModulePricingPayloadForKey(preset.item_key);
+    if (!payload) continue;
+    const res = await apiFetch(API + "/root/economy/catalog", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `${preset.item_name} 扣點設定儲存失敗（HTTP ${res.status}）`);
+    rootModuleEconomyCatalogCache = Array.isArray(json.catalog) ? json.catalog : rootModuleEconomyCatalogCache;
+    saved += 1;
+  }
+  renderRootModulePricingFields($("root-module-settings-overlay")?.dataset.moduleTab || currentModuleTab);
+  if (typeof loadRootEconomyCatalog === "function") loadRootEconomyCatalog();
+  if (typeof loadEconomy === "function") loadEconomy();
+  if (typeof refreshComfyuiStatus === "function" && rootModulePricingPresets(config).some((item) => item.category === "comfyui")) {
+    refreshComfyuiStatus({ switchAway: false }).catch(() => {});
+  }
+  return saved;
+}
+
 async function saveRootModuleSettings() {
   const overlay = $("root-module-settings-overlay");
   const config = rootModuleQuickConfig(overlay?.dataset.moduleTab || currentModuleTab);
@@ -439,8 +607,9 @@ async function saveRootModuleSettings() {
     if (saves.has("drivePolicy") && typeof saveCloudDriveAdminPolicy === "function") await saveCloudDriveAdminPolicy();
     if (saves.has("trading") && typeof saveRootTradingSettings === "function") await saveRootTradingSettings();
     if (saves.has("settings") && typeof saveSettings === "function") await saveSettings();
+    const pricingSaved = await saveRootModulePricing(config);
     if (msg) {
-      msg.textContent = `${config.label}設定已送出`;
+      msg.textContent = `${config.label}設定已送出${pricingSaved ? `，服務扣點 ${pricingSaved} 項已更新` : ""}`;
       msg.className = "msg show ok";
       scheduleInlineMessageClear(msg, msg.textContent, true);
     }
@@ -458,9 +627,17 @@ async function saveRootModuleSettings() {
 function openRootModuleFullSettings(tab = $("root-module-settings-overlay")?.dataset.moduleTab || currentModuleTab) {
   const config = rootModuleQuickConfig(tab);
   closeRootModuleSettings();
-  if (typeof switchModuleTab === "function") switchModuleTab("server");
-  if (typeof switchServerTab === "function") switchServerTab("settings");
-  if (config?.section && typeof switchSettingsSection === "function") switchSettingsSection(config.section);
+  if (config?.section === "trading") {
+    if (typeof switchModuleTab === "function") switchModuleTab("trading");
+    if (typeof openTradingSettingsPage === "function") openTradingSettingsPage();
+    return;
+  }
+  if (config?.section && typeof switchSettingsSection === "function") {
+    switchSettingsSection(config.section);
+    return;
+  }
+  if (typeof switchModuleTab === "function") switchModuleTab("system");
+  if (typeof switchSystemTab === "function") switchSystemTab("settings");
 }
 
 if (document.readyState === "loading") {
@@ -468,3 +645,6 @@ if (document.readyState === "loading") {
 } else {
   syncRootModuleSettingsButtons();
 }
+document.addEventListener("hackme:module-changed", syncRootModuleSettingsButtons);
+window.syncRootModuleSettingsButtons = syncRootModuleSettingsButtons;
+window.openRootModuleSettings = openRootModuleSettings;

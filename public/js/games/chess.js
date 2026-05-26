@@ -449,6 +449,24 @@ function chessMoveSan(move) {
   return `${move.from}${move.to}${move.promotion || ""}`;
 }
 
+function chessVisibleMoveHistory(moves, limit = 16) {
+  const allMoves = Array.isArray(moves) ? moves : [];
+  const visibleMoves = allMoves.slice(-Math.max(1, Number(limit) || 16));
+  const startPly = Math.max(0, allMoves.length - visibleMoves.length);
+  return visibleMoves.map((move, index) => ({
+    move,
+    plyNumber: startPly + index + 1,
+  }));
+}
+
+function renderChessMoveHistory(match, history) {
+  if (!history) return;
+  const rows = chessVisibleMoveHistory(match?.move_history || []);
+  history.innerHTML = rows.length
+    ? rows.map(({ move, plyNumber }) => `<span data-chess-ply="${plyNumber}">${plyNumber}. ${sanitize(move.from)}→${sanitize(move.to)}${move.computer ? " · CPU" : ""}</span>`).join("")
+    : "<span style=\"color:var(--muted);\">尚未走棋</span>";
+}
+
 function renderChessAnalysis(match, prefix = "") {
   const panel = $("game-chess-analysis-panel");
   if (!panel) return;
@@ -726,12 +744,7 @@ function renderChessBoard(match) {
     <div class="chess-board-grid">${squares.join("")}</div>
     <div class="chess-file-labels" aria-hidden="true">${"abcdefgh".split("").map((file) => `<span>${file}</span>`).join("")}</div>
   `;
-  if (history) {
-    const moves = Array.isArray(match.move_history) ? match.move_history : [];
-    history.innerHTML = moves.length
-      ? moves.slice(-16).map((move, index) => `<span>${moves.length - 16 + index + 1 > 0 ? moves.length - 16 + index + 1 : index + 1}. ${sanitize(move.from)}→${sanitize(move.to)}${move.computer ? " · CPU" : ""}</span>`).join("")
-      : "<span style=\"color:var(--muted);\">尚未走棋</span>";
-  }
+  renderChessMoveHistory(match, history);
   renderChessAnalysis(match);
 }
 

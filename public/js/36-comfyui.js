@@ -812,7 +812,7 @@ function renderComfyuiModelFamilyHints(values = []) {
 
 function normalizeComfyuiView(view) {
   const value = String(view || "").trim().toLowerCase();
-  return ["generate", "history", "workflow", "models"].includes(value) ? value : "generate";
+  return ["generate", "history", "workflow", "models", "settings"].includes(value) ? value : "generate";
 }
 
 function canManageComfyuiLocalModels(modeOverride = null) {
@@ -823,8 +823,11 @@ function canManageComfyuiLocalModels(modeOverride = null) {
 function setComfyuiView(view, { persist = true } = {}) {
   const selected = normalizeComfyuiView(view);
   const modelTab = document.querySelector('[data-comfyui-view="models"]');
+  const settingsTab = document.querySelector('[data-comfyui-view="settings"]');
+  if (settingsTab) settingsTab.hidden = currentUser !== "root";
   const modelsUnavailable = selected === "models" && (!canManageComfyuiLocalModels() || (modelTab && modelTab.hidden));
-  const activeView = selected === "models" && modelsUnavailable ? "generate" : selected;
+  const settingsUnavailable = selected === "settings" && currentUser !== "root";
+  const activeView = (selected === "models" && modelsUnavailable) || settingsUnavailable ? "generate" : selected;
   document.querySelectorAll("[data-comfyui-view]").forEach((button) => {
     const isActive = button.dataset.comfyuiView === activeView;
     button.classList.toggle("active", isActive);
@@ -838,8 +841,21 @@ function setComfyuiView(view, { persist = true } = {}) {
   if (persist) {
     try { localStorage.setItem(comfyuiUserStorageKey(COMFYUI_VIEW_STORAGE_KEY), activeView); } catch (_) {}
   }
-  if (activeView === "history") loadComfyuiHistory().catch(() => {});
-  if (activeView === "workflow") loadComfyuiWorkflowPresets().catch(() => {});
+  if (activeView === "history") {
+    loadComfyuiHistory().catch((err) => setComfyuiHistoryActionMessage(err?.message || "ComfyUI 歷史讀取失敗", false));
+  }
+  if (activeView === "workflow") {
+    loadComfyuiWorkflowPresets().catch((err) => {
+      if (typeof setComfyuiWorkflowStatus === "function") {
+        setComfyuiWorkflowStatus(err?.message || "Workflow preset 讀取失敗");
+      } else {
+        setComfyuiMessage(err?.message || "Workflow preset 讀取失敗", false);
+      }
+    });
+  }
+  if (activeView === "settings" && typeof loadSettings === "function") {
+    loadSettings();
+  }
 }
 
 function bindComfyuiSubnav() {
@@ -2114,16 +2130,22 @@ function restoreComfyuiDraft({ includeDynamicSelects = true } = {}) {
 
 function updateComfyuiRootPanelVisibility(modeOverride = null) {
   const panel = $("comfyui-root-model-panel");
+  const settingsPanel = $("comfyui-root-settings-panel");
   const details = $("comfyui-root-model-details");
   const hint = $("comfyui-root-model-mode-hint");
   const modelsTab = document.querySelector('[data-comfyui-view="models"]');
+  const settingsTab = document.querySelector('[data-comfyui-view="settings"]');
   const mode = String(modeOverride || comfyuiConnectionMode || "remote").trim().toLowerCase();
   const localReady = mode === "local";
   const showLocalModels = canManageComfyuiLocalModels(mode);
+  const canManageSettings = currentUser === "root";
   updateComfyuiModeNote(mode);
   if (panel) panel.style.display = showLocalModels ? "" : "none";
   if (modelsTab) modelsTab.hidden = !showLocalModels;
-  if (!showLocalModels && document.querySelector('[data-comfyui-view-panel="models"]')?.classList.contains("active")) {
+  if (settingsPanel) settingsPanel.style.display = canManageSettings ? "" : "none";
+  if (settingsTab) settingsTab.hidden = !canManageSettings;
+  if ((!showLocalModels && document.querySelector('[data-comfyui-view-panel="models"]')?.classList.contains("active"))
+      || (!canManageSettings && document.querySelector('[data-comfyui-view-panel="settings"]')?.classList.contains("active"))) {
     setComfyuiView("generate");
   }
   if (details && !showLocalModels) details.open = false;
@@ -3098,7 +3120,7 @@ async function rerunComfyuiHistory(historyId) {
     }
     stopComfyuiProgress({ complete: true });
     updateComfyuiResultButtons(!!images.length);
-    loadComfyuiHistory().catch(() => {});
+    loadComfyuiHistory().catch((err) => setComfyuiHistoryActionMessage(err?.message || "ComfyUI 歷史重新整理失敗", false));
     setComfyuiMessage(`已重跑第 ${targetId} 筆 ComfyUI 歷史。`, true);
   } catch (err) {
     stopComfyuiProgress({ error: err.message || "ComfyUI 歷史重跑失敗" });
@@ -3382,9 +3404,15 @@ async function loadComfyuiModels() {
     updateComfyuiDiffusersUi();
     applyComfyuiRuntimeLimits(json);
     comfyuiModelsLoaded = true;
-    loadComfyuiAlbums({ force: true }).catch(() => {});
-    loadComfyuiHistory().catch(() => {});
-    loadComfyuiWorkflowPresets().catch(() => {});
+    loadComfyuiAlbums({ force: true }).catch((err) => setComfyuiMessage(err?.message || "相簿讀取失敗", false));
+    loadComfyuiHistory().catch((err) => setComfyuiHistoryActionMessage(err?.message || "ComfyUI 歷史讀取失敗", false));
+    loadComfyuiWorkflowPresets().catch((err) => {
+      if (typeof setComfyuiWorkflowStatus === "function") {
+        setComfyuiWorkflowStatus(err?.message || "Workflow preset 讀取失敗");
+      } else {
+        setComfyuiMessage(err?.message || "Workflow preset 讀取失敗", false);
+      }
+    });
     setComfyuiTabAvailability(true);
     if (status) status.textContent = `已連線 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}，模型 ${Number((json.models || []).length)} 個，LoRA ${Number((json.loras || []).length)} 個，Embedding ${Number((json.embeddings || []).length)} 個，VAE ${Number((json.vaes || []).length)} 個${comfyuiPaidApiStatusText(json)}${comfyuiStorageWarningText(json)}`;
   } catch (err) {
@@ -4004,7 +4032,7 @@ async function generateComfyuiImage() {
     stopComfyuiProgress({ complete: true });
     updateComfyuiResultButtons(true);
     applyComfyuiSeedAfterGenerate(generated[generated.length - 1]?.seed);
-    loadComfyuiHistory().catch(() => {});
+    loadComfyuiHistory().catch((err) => setComfyuiHistoryActionMessage(err?.message || "ComfyUI 歷史重新整理失敗", false));
     const billingText = totalCharged > 0
       ? `已扣 ${totalCharged} 點。`
       : "";

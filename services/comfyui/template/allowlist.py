@@ -107,8 +107,6 @@ MEDIA_WORKFLOW_ALLOWLIST = frozenset(
         "VHS_SelectEveryNthImage",
         "VHS_PruneOutputs",
         "AnimateDiffLoader",
-        "AnimateDiffSampler",
-        "AnimateDiffCombine",
         "ImageOnlyCheckpointLoader",
         "LoraLoaderModelOnly",
         "ConditioningSetTimestepRange",
@@ -245,6 +243,7 @@ EXPLICIT_DENYLIST = frozenset(
         # IP / face — out of scope for v1 (privacy + multi-stage pipeline complexity)
         "IPAdapterApply",
         "IPAdapterModelLoader",
+        "AnimateDiffSampler",
         "FaceDetailer",
         "DetailerForEach",
         "ReActorFaceSwap",

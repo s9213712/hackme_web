@@ -12,11 +12,13 @@ let currentRole = "user";
 let currentRoleLabel = "user";
 let currentAuthScope = "";
 let currentAllowedFeatures = [];
+const USER_DISPLAY_TIMEZONE_STORAGE_KEY = "hackme_display_timezone";
 let currentMustChangePassword = false;
 let forcedPasswordChangeMode = false;
 let canManageUsers = false;
 let currentModuleTab = "chat";
-let currentServerTab = "security";
+let currentServerTab = "overview";
+let currentSystemTab = "health";
 let users = [];
 let adminUsersPage = 1;
 let adminUsersPageSize = 25;
@@ -236,30 +238,32 @@ const SIDEBAR_ICON_PATHS = {
   appeal: '<path d="M6 4h12v16H6z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><path d="M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   shield: '<path d="M12 3 20 6v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-5"/>',
+  system: '<path d="M4 5h16v10H4z"/><path d="M8 19h8"/><path d="M12 15v4"/><path d="M8 9h3M8 12h6"/>',
 };
 const SIDEBAR_MENU_CONFIG = [
-  { tabId: "tab-module-chat", module: "chat", tab: "chat", icon: "chat", label: "聊天", group: "日常" },
+  { tabId: "tab-module-announcements", module: "community", tab: "announcements", icon: "bell", label: "公告", group: "公告" },
+  { tabId: "tab-module-chat", module: "chat", tab: "chat", icon: "chat", label: "聊天", group: "社交" },
   {
     tabId: "tab-module-profile",
     module: "profile",
     tab: "profile",
     icon: "users",
     label: "個人面板",
-    group: "日常",
+    group: "社交",
     submenu: [
       { label: "我的主頁", action: "profile:home" },
+      { label: "主頁快速設定", action: "profile:appearance" },
       { label: "編輯資料", action: "profile:edit" },
       { label: "好友", action: "profile:friends" },
     ],
   },
-  { tabId: "tab-module-announcements", module: "community", tab: "announcements", icon: "bell", label: "公告", group: "社群" },
   {
     tabId: "tab-module-community",
     module: "community",
     tab: "community",
     icon: "forum",
-    label: "討論區",
-    group: "社群",
+    label: "社群",
+    group: "社交",
     submenu: [
       { label: "看板清單", action: "module:community" },
       { label: "主題審核", action: "community:review", requiresCommunityReview: true },
@@ -271,39 +275,49 @@ const SIDEBAR_MENU_CONFIG = [
     tab: "drive",
     icon: "drive",
     label: "雲端硬碟",
-    group: "工具",
+    group: "功能",
     submenu: [
       { label: "檔案清單", action: "module:drive" },
+      { label: "相簿", action: "module:albums", moduleKey: "privacy_uploads", featureKey: "feature_storage_albums_enabled" },
     ],
   },
+  { tabId: "tab-module-videos", module: "videos", tab: "videos", icon: "video", label: "影音", group: "功能" },
+  { tabId: "tab-module-games", module: "games", tab: "games", icon: "game", label: "遊戲區", group: "功能" },
+  { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "功能" },
   {
-    tabId: "tab-module-albums",
-    module: "privacy_uploads",
-    tab: "albums",
-    icon: "image",
-    label: "相簿",
-    group: "工具",
-    requiresFeatures: ["feature_storage_albums_enabled"],
-  },
-  {
-    tabId: "tab-module-videos",
-    module: "videos",
-    tab: "videos",
-    icon: "video",
-    label: "影音",
-    group: "工具",
+    tabId: "tab-module-economy",
+    module: "economy",
+    tab: "economy",
+    icon: "wallet",
+    label: "積分錢包",
+    group: "帳務",
     submenu: [
-      { label: "影音列表", action: "module:videos" },
+      { label: "錢包管理", action: "economy:balance" },
+      { label: "鏈上交易", action: "economy:transactions" },
+      { label: "鏈上瀏覽器", action: "economy:explorer" },
+      { label: "治理看板", action: "economy:governance" },
+      { label: "積分私有鏈", action: "economy:chain", role: "root" },
     ],
   },
-  { tabId: "tab-module-games", module: "games", tab: "games", icon: "game", label: "遊戲區", group: "工具" },
-  { tabId: "tab-module-experiments", module: "experiments", tab: "experiments", icon: "spark", label: "實驗區", group: "工具" },
-  { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "工具" },
-  { tabId: "tab-module-economy", module: "economy", tab: "economy", icon: "wallet", label: "積分錢包", group: "工具" },
-  { tabId: "tab-module-trading", module: "trading", tab: "trading", icon: "wallet", label: "積分交易所", group: "工具" },
-  { tabId: "tab-module-appeals", module: "appeals", tab: "appeals", icon: "appeal", label: "申覆", group: "支援", hideForSuperAdmin: true },
+  {
+    tabId: "tab-module-trading",
+    module: "trading",
+    tab: "trading",
+    icon: "wallet",
+    label: "積分交易所",
+    group: "帳務",
+    submenu: [
+      { label: "交易所", action: "module:trading" },
+      { label: "我的倉位", action: "trading:my-positions", hideForRoot: true },
+      { label: "全站倉位看板", action: "trading:sitewide-positions", role: "root" },
+      { label: "基金營運管理", action: "trading:fund-ops", role: "root" },
+      { label: "root 模擬倉位", action: "trading:root-sim", role: "root" },
+      { label: "交易所設定", action: "trading:settings", role: "root" },
+    ],
+  },
   { tabId: "tab-module-jobs", module: "jobs", tab: "jobs", icon: "bell", label: "任務中心", group: "管理" },
   { tabId: "tab-module-shares", module: "shares", tab: "shares", icon: "share", label: "分享管理", group: "管理" },
+  { tabId: "tab-module-appeals", module: "appeals", tab: "appeals", icon: "appeal", label: "申覆", group: "管理", hideForSuperAdmin: true },
   {
     tabId: "tab-module-accounts",
     module: "accounts",
@@ -328,14 +342,30 @@ const SIDEBAR_MENU_CONFIG = [
     label: "安全中心",
     group: "管理",
     submenu: [
-      { label: "總覽", action: "server:security" },
+      { label: "總覽", action: "server:overview" },
+      { label: "伺服器模式", action: "server:server-mode" },
       { label: "審計日誌", action: "server:audit", featureKey: "feature_audit_log_enabled" },
-      { label: "健康度", action: "server:health", featureKey: "feature_system_health_enabled" },
       { label: "Integrity Guard", action: "server:integrity" },
-      { label: "伺服器設定", action: "server:settings" },
-      { label: "系統環境", action: "server:env" },
     ],
   },
+  {
+    tabId: "tab-module-system",
+    role: "root",
+    tab: "system",
+    icon: "system",
+    label: "系統管理",
+    group: "管理",
+    submenu: [
+      { label: "健康度", action: "system:health", featureKey: "feature_system_health_enabled" },
+      { label: "功能", action: "system:features" },
+      { label: "外觀", action: "system:appearance" },
+      { label: "系統", action: "system:core" },
+      { label: "請求容量", action: "system:capacity" },
+      { label: "系統環境", action: "system:env" },
+      { label: "Bug 回報", action: "system:bug-reports" },
+    ],
+  },
+  { tabId: "tab-module-experiments", module: "experiments", tab: "experiments", icon: "spark", label: "實驗區", group: "實驗區" },
 ];
 
 function sidebarIconSvg(icon) {
@@ -353,12 +383,17 @@ function canShowSidebarItem(item) {
   if (item.role === "root") return currentUser === "root";
   if (item.role === "super_admin") return currentRole === "super_admin";
   if (Array.isArray(item.requiresFeatures) && item.requiresFeatures.some((key) => !isFeatureEnabledForUi(key))) return false;
+  if (Array.isArray(item.accessAny) && item.accessAny.length) return item.accessAny.some((key) => canAccessModule(key));
   if (item.module === "trading") return canAccessModule("economy") && canAccessModule("trading");
   return canAccessModule(item.module);
 }
 
 function canShowSidebarSubitem(sub) {
   if (!sub) return false;
+  if (sub.hideForRoot && currentUser === "root") return false;
+  if (sub.role === "root" && currentUser !== "root") return false;
+  if (sub.role === "super_admin" && currentRole !== "super_admin") return false;
+  if (Array.isArray(sub.roles) && !sub.roles.includes(currentRole)) return false;
   if (sub.moduleKey && !canAccessModule(sub.moduleKey)) return false;
   if (sub.featureKey && !isFeatureEnabledForUi(sub.featureKey)) return false;
   if (sub.requiresCommunityReview) {
@@ -435,6 +470,10 @@ function collapseSidebarAfterMobileNavigation() {
 function syncSidebarMenuVisibility() {
   decorateSidebarMenu();
   const visibleGroups = new Set();
+  const configuredTabIds = new Set(SIDEBAR_MENU_CONFIG.map((item) => item.tabId));
+  document.querySelectorAll("#module-main-tabs > .tab[id^='tab-module-']").forEach((button) => {
+    if (!configuredTabIds.has(button.id)) button.style.display = "none";
+  });
   SIDEBAR_MENU_CONFIG.forEach((item) => {
     const button = $(item.tabId);
     const submenu = $(item.tabId + "-submenu");
@@ -478,23 +517,39 @@ function updateSidebarIdentity() {
   if (effective) effective.textContent = currentUser ? (effective.dataset.effectiveLevel || "-") : "-";
 }
 
+function isSidebarActionActive(action) {
+  if (!action) return false;
+  if (action.startsWith("server:")) return currentModuleTab === "server" && currentServerTab === action.split(":")[1];
+  if (action.startsWith("system:")) return currentModuleTab === "system" && currentSystemTab === action.split(":")[1];
+  if (action.startsWith("admin:")) return currentModuleTab === "accounts" && typeof currentAdminTab !== "undefined" && currentAdminTab === action.split(":")[1];
+  if (action === "profile:appearance") return currentModuleTab === "profile" && typeof profileQuickCustomizeOpen !== "undefined" && !!profileQuickCustomizeOpen;
+  if (action.startsWith("profile:")) return currentModuleTab === "profile" && typeof currentProfileTab !== "undefined" && currentProfileTab === action.split(":")[1];
+  if (action.startsWith("economy:")) return currentModuleTab === "economy" && typeof economyActivePage !== "undefined" && economyActivePage === action.split(":")[1];
+  if (action === "module:trading" || action === "trading:spot" || action === "trading:bots" || action === "trading:lending") return currentModuleTab === "trading" && (typeof tradingActivePage === "undefined" || tradingActivePage === "spot" || tradingActivePage === "exchange");
+  if (action === "trading:my-positions") return currentModuleTab === "trading" && typeof tradingActivePage !== "undefined" && tradingActivePage === "my-positions";
+  if (action === "trading:sitewide-positions") return currentModuleTab === "trading" && typeof tradingActivePage !== "undefined" && tradingActivePage === "sitewide-positions";
+  if (action === "trading:sitewide-pools" || action === "trading:fund-ops") return currentModuleTab === "trading" && typeof tradingActivePage !== "undefined" && (tradingActivePage === "fund-ops" || tradingActivePage === "sitewide-pools");
+  if (action === "trading:root-sim") return currentModuleTab === "trading" && typeof tradingActivePage !== "undefined" && tradingActivePage === "root-sim";
+  if (action === "trading:settings") return currentModuleTab === "trading" && typeof tradingActivePage !== "undefined" && tradingActivePage === "settings";
+  if (action === "module:" + currentModuleTab) return true;
+  if (action === "community:review") return currentModuleTab === "community" && typeof communityMode !== "undefined" && communityMode === "review";
+  return false;
+}
+
 function updateSidebarActiveState() {
   const collapsed = document.body.classList.contains("sidebar-collapsed");
   SIDEBAR_MENU_CONFIG.forEach((item) => {
     const submenu = $(item.tabId + "-submenu");
     const button = $(item.tabId);
-    if (!submenu || !button) return;
-    const isActive = button.classList.contains("active");
+    if (!button) return;
+    const submenuActive = Array.isArray(item.submenu) && item.submenu.some((sub) => isSidebarActionActive(sub.action));
+    const isActive = button.classList.contains("active") || submenuActive;
+    button.classList.toggle("active", isActive);
+    if (!submenu) return;
     submenu.classList.toggle("show", isActive && !collapsed);
     submenu.querySelectorAll("[data-sidebar-action]").forEach((sub) => {
       const action = sub.dataset.sidebarAction || "";
-      let active = false;
-      if (action.startsWith("server:")) active = currentModuleTab === "server" && currentServerTab === action.split(":")[1];
-      if (action.startsWith("admin:")) active = currentModuleTab === "accounts" && typeof currentAdminTab !== "undefined" && currentAdminTab === action.split(":")[1];
-      if (action.startsWith("profile:")) active = currentModuleTab === "profile" && typeof currentProfileTab !== "undefined" && currentProfileTab === action.split(":")[1];
-      if (action === "module:" + currentModuleTab) active = true;
-      if (action === "community:review") active = currentModuleTab === "community" && typeof communityMode !== "undefined" && communityMode === "review";
-      sub.classList.toggle("active", active);
+      sub.classList.toggle("active", isSidebarActionActive(action));
     });
   });
 }
@@ -522,6 +577,7 @@ function runSidebarAction(action) {
   const [scope, value] = action.split(":");
   if (scope === "module" && value && typeof switchModuleTab === "function") {
     switchModuleTab(value);
+    if (value === "trading" && typeof openTradingExchangePage === "function") openTradingExchangePage();
     return;
   }
   if (scope === "server" && value && typeof switchModuleTab === "function" && typeof switchServerTab === "function") {
@@ -529,9 +585,55 @@ function runSidebarAction(action) {
     switchServerTab(value);
     return;
   }
+  if (scope === "system" && value && typeof switchModuleTab === "function" && typeof switchSystemTab === "function") {
+    switchModuleTab("system");
+    switchSystemTab(value);
+    return;
+  }
   if (scope === "admin" && value && typeof switchModuleTab === "function" && typeof switchAdminTab === "function") {
     switchModuleTab("accounts");
     switchAdminTab(value);
+    return;
+  }
+  if (scope === "economy" && value && typeof switchModuleTab === "function") {
+    switchModuleTab("economy");
+    if (typeof setEconomyActivePage === "function") setEconomyActivePage(value);
+    return;
+  }
+  if (scope === "trading" && value && typeof switchModuleTab === "function") {
+    switchModuleTab("trading");
+    if (value === "spot" && typeof openTradingSpotPage === "function") {
+      openTradingSpotPage();
+      return;
+    }
+    if (value === "bots" && typeof openTradingBotPanel === "function") {
+      openTradingBotPanel("mybots");
+      return;
+    }
+    if (value === "lending" && typeof openTradingLendingPanel === "function") {
+      openTradingLendingPanel();
+      return;
+    }
+    if (value === "my-positions" && typeof openTradingMyPositionsPanel === "function") {
+      openTradingMyPositionsPanel();
+      return;
+    }
+    if (value === "sitewide-positions" && typeof openTradingRootSitewidePanel === "function") {
+      openTradingRootSitewidePanel("positions", { refreshSnapshot: false });
+      return;
+    }
+    if ((value === "sitewide-pools" || value === "fund-ops") && typeof openTradingRootFundOpsPanel === "function") {
+      openTradingRootFundOpsPanel({ refreshSnapshot: false });
+      return;
+    }
+    if (value === "root-sim" && typeof openTradingRootSimulationPanel === "function") {
+      openTradingRootSimulationPanel();
+      return;
+    }
+    if (value === "settings" && typeof openTradingSettingsPage === "function") {
+      openTradingSettingsPage();
+      return;
+    }
     return;
   }
   if (scope === "profile" && value && typeof switchModuleTab === "function") {
@@ -563,7 +665,7 @@ function stopInactivityTimer() {
   if (renderInactivitySuspendedState()) return;
   const label = $("session-countdown-label");
   if (label) {
-    label.textContent = currentUser ? "閒置登出：--:--" : "未登入";
+    label.textContent = currentUser && inactivityLogoutMs <= 0 ? "閒置登出：停用" : (currentUser ? "閒置登出：--:--" : "未登入");
     label.style.color = "var(--muted)";
   }
 }
@@ -624,7 +726,7 @@ function updateInactivityCountdown() {
   if (!label) return;
   if (renderInactivitySuspendedState()) return;
   if (!currentUser || !inactivityDeadline) {
-    label.textContent = currentUser ? "閒置登出：--:--" : "未登入";
+    label.textContent = currentUser && inactivityLogoutMs <= 0 ? "閒置登出：停用" : (currentUser ? "閒置登出：--:--" : "未登入");
     label.style.color = "var(--muted)";
     return;
   }
@@ -666,6 +768,54 @@ function sanitize(str) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#x27;')
     .replace(/\//g, '&#x2F;');
+}
+
+function chatMessageUrlParts(rawUrl) {
+  let url = String(rawUrl || "");
+  let suffix = "";
+  while (url && /[.,!?;:，。！？；：）\])}】》]/.test(url[url.length - 1])) {
+    suffix = url[url.length - 1] + suffix;
+    url = url.slice(0, -1);
+  }
+  return { url, suffix };
+}
+
+function chatSafeMessageHref(rawUrl) {
+  const candidate = String(rawUrl || "").trim();
+  if (!candidate) return "";
+  try {
+    if (candidate.startsWith("/")) {
+      if (!candidate.startsWith("/shared/videos/")) return "";
+      return new URL(candidate, window.location.origin).href;
+    }
+    const parsed = new URL(candidate);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    return parsed.href;
+  } catch (_err) {
+    return "";
+  }
+}
+
+function renderChatMessageContent(content) {
+  const text = String(content || "");
+  const urlRe = /(https?:\/\/[^\s<>"']+|\/shared\/videos\/[A-Za-z0-9_-]+(?:[?#][^\s<>"']*)?)/g;
+  let cursor = 0;
+  const parts = [];
+  for (const match of text.matchAll(urlRe)) {
+    const index = Number(match.index || 0);
+    const raw = String(match[0] || "");
+    if (index > cursor) parts.push(sanitize(text.slice(cursor, index)));
+    const split = chatMessageUrlParts(raw);
+    const href = chatSafeMessageHref(split.url);
+    if (href) {
+      parts.push(`<a class="chat-inline-link" href="${sanitize(href)}" target="_blank" rel="noopener noreferrer">${sanitize(split.url)}</a>${sanitize(split.suffix)}`);
+    } else {
+      parts.push(sanitize(raw));
+    }
+    cursor = index + raw.length;
+  }
+  if (cursor < text.length) parts.push(sanitize(text.slice(cursor)));
+  return `<div class="chat-message-content">${parts.join("").replace(/\n/g, "<br>")}</div>`;
 }
 
 function shareExpiryTodayDate() {
@@ -1732,11 +1882,54 @@ function formatChatTime(ts) {
   }
   const d = new Date(input);
   if (Number.isNaN(d.getTime())) return ts;
+  const displayTimezone = getUserDisplayTimezone();
+  if (displayTimezone && displayTimezone !== "auto") {
+    try {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: displayTimezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).formatToParts(d).reduce((acc, part) => {
+        acc[part.type] = part.value;
+        return acc;
+      }, {});
+      return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+    } catch (err) {
+      setUserDisplayTimezone("auto");
+    }
+  }
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   const hh = String(d.getHours()).padStart(2, "0");
   const mi = String(d.getMinutes()).padStart(2, "0");
   return `${d.getFullYear()}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+function normalizeUserDisplayTimezone(value) {
+  const text = String(value || "auto").trim();
+  return text || "auto";
+}
+
+function setUserDisplayTimezone(value) {
+  const timezone = normalizeUserDisplayTimezone(value);
+  window.hackmeDisplayTimezone = timezone;
+  try {
+    localStorage.setItem(USER_DISPLAY_TIMEZONE_STORAGE_KEY, timezone);
+  } catch (err) {}
+  return timezone;
+}
+
+function getUserDisplayTimezone() {
+  if (window.hackmeDisplayTimezone) return normalizeUserDisplayTimezone(window.hackmeDisplayTimezone);
+  try {
+    const stored = localStorage.getItem(USER_DISPLAY_TIMEZONE_STORAGE_KEY);
+    if (stored) return normalizeUserDisplayTimezone(stored);
+  } catch (err) {}
+  return "auto";
 }
 
 function canRemoveContextAttachment(ref) {
@@ -1804,7 +1997,7 @@ function renderChatMessages(messages) {
       ? `<div class="chat-revoked">訊息已收回</div>`
       : (m.message_type === "sticker"
         ? `<div class="chat-sticker">${sanitize(chatStickerLabel(m.sticker_key, m.sticker))}</div>`
-        : sanitize(m.content || ""));
+        : renderChatMessageContent(m.content || ""));
     const attachments = Array.isArray(m.attachments) && m.attachments.length
       ? `<div class="chat-message-attachments">${m.attachments.map((file) => {
           const name = file.original_filename_plain_for_public || file.file_id || "附件";
@@ -2002,6 +2195,7 @@ function setAuthState(json, showLoginHero = false) {
   currentRole = json.role || "user";
   currentRoleLabel = json.role_label || currentRole || "user";
   currentAuthScope = json.auth_scope || json._auth_scope || "";
+  setUserDisplayTimezone(json.display_timezone || "auto");
   setCurrentAllowedFeatures(json.allowed_features || json._allowed_features || []);
   currentMustChangePassword = !!json.must_change_password;
   try {
@@ -2086,6 +2280,7 @@ function setAuthState(json, showLoginHero = false) {
 
   // Module access controls
   const tabModuleAccounts = $("tab-module-accounts");
+  const tabModuleSystem = $("tab-module-system");
   const tabModuleServer = $("tab-module-server");
   const tabModuleChat = $("tab-module-chat");
   const tabModuleProfile = $("tab-module-profile");
@@ -2107,6 +2302,7 @@ function setAuthState(json, showLoginHero = false) {
   const governanceTab = $("tab-governance");
   const noticesTab = $("tab-notices");
   if (tabModuleAccounts) tabModuleAccounts.style.display = canAccessModule("accounts") ? "" : "none";
+  if (tabModuleSystem) tabModuleSystem.style.display = currentUser === "root" ? "" : "none";
   if (tabModuleServer) tabModuleServer.style.display = currentUser === "root" ? "" : "none";
   if (tabModuleChat) tabModuleChat.style.display = canAccessModule("chat") ? "" : "none";
   if (tabModuleProfile) tabModuleProfile.style.display = canAccessModule("profile") ? "" : "none";
@@ -2144,8 +2340,11 @@ function setAuthState(json, showLoginHero = false) {
   if (governanceTab) governanceTab.style.display = ((currentRole === "manager" || currentRole === "super_admin") && isFeatureEnabledForUi("feature_member_governance_enabled", false)) ? "" : "none";
   if (noticesTab) noticesTab.style.display = ((currentRole === "manager" || currentRole === "super_admin") && isFeatureEnabledForUi("feature_reports_notifications_enabled", false)) ? "" : "none";
   const restartBtn = $("restart-server-btn");
-  if (restartBtn) restartBtn.style.display = currentUser === "root" ? "" : "none";
-  syncActiveAccountStorageScope(previousAccountScope);
+	  if (restartBtn) restartBtn.style.display = currentUser === "root" ? "" : "none";
+	  if (typeof setDriveActivePage === "function") {
+	    setDriveActivePage(document.querySelector("[data-drive-page-tab].active")?.dataset.drivePageTab || "files");
+	  }
+	  syncActiveAccountStorageScope(previousAccountScope);
 
   if (currentMustChangePassword) {
     resetInactivityTimer();
@@ -2214,7 +2413,8 @@ function resetAuthState() {
   canManageUsers = false;
   syncActiveAccountStorageScope(previousAccountScope);
   users = [];
-  currentServerTab = "security";
+  currentServerTab = "overview";
+  currentSystemTab = "health";
   editingUserIsSelf = false;
   updateSidebarIdentity();
   stopInactivityTimer();
@@ -2245,6 +2445,7 @@ function resetAuthState() {
   const moduleEconomy = $("module-economy");
   const moduleTrading = $("module-trading");
   const moduleAccounts = $("module-accounts");
+  const moduleSystem = $("module-system");
   const moduleServer = $("module-server");
   const moduleAppeals = $("module-appeals");
   if (moduleChat) moduleChat.classList.remove("active");
@@ -2262,6 +2463,7 @@ function resetAuthState() {
   if (moduleEconomy) moduleEconomy.classList.remove("active");
   if (moduleTrading) moduleTrading.classList.remove("active");
   if (moduleAccounts) moduleAccounts.classList.remove("active");
+  if (moduleSystem) moduleSystem.classList.remove("active");
   if (moduleServer) moduleServer.classList.remove("active");
   if (moduleAppeals) moduleAppeals.classList.remove("active");
   if (typeof setComfyuiTabAvailability === "function") setComfyuiTabAvailability(null);

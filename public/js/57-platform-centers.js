@@ -52,6 +52,7 @@ let shareCenterCountdownTimer = null;
 let shareCenterActiveTab = "links";
 let shareCenterEditingKey = "";
 let shareCenterLatestShares = [];
+let jobCenterActiveView = "general";
 let jobCenterPollTimer = null;
 let jobCenterLoadPromise = null;
 const JOB_CENTER_POLL_INTERVAL_MS = 3000;
@@ -114,6 +115,12 @@ function isJobCenterActiveJob(job = {}) {
   return JOB_CENTER_ACTIVE_STATUSES.has(String(job.status || ""));
 }
 
+function isTradingBackgroundJob(job = {}) {
+  const source = String(job.source_module || "");
+  const type = String(job.job_type || "");
+  return source === "trading_background" || type.startsWith("trading.background.");
+}
+
 function canFetchOwnerScopedLiveJob(job = {}) {
   const ownerId = job.owner_user_id;
   if (ownerId === null || ownerId === undefined || ownerId === "") return true;
@@ -125,18 +132,34 @@ function isLowSignalJobCenterNoise(job = {}) {
   const source = String(job.source_module || "");
   const type = String(job.job_type || "");
   if (status !== "succeeded") return false;
-  if (source === "cloud_drive_upload" && type === "cloud_drive.upload") return true;
+  if (source === "cloud_drive_upload" && ["cloud_drive.upload", "storage.upload"].includes(type)) return true;
+  if (source === "cloud_drive_resumable_upload") return true;
   return false;
 }
 
 function summarizeJobCenterJobs(jobs = []) {
-  const hidden = jobs.filter(isLowSignalJobCenterNoise);
-  const visible = jobs.filter((job) => !isLowSignalJobCenterNoise(job));
+  const general = jobs.filter((job) => !isTradingBackgroundJob(job));
+  const trading = jobs.filter(isTradingBackgroundJob);
+  const selected = jobCenterActiveView === "trading" ? trading : general;
+  const hidden = selected.filter(isLowSignalJobCenterNoise);
+  const visible = selected.filter((job) => !isLowSignalJobCenterNoise(job));
   return {
     visible,
     hiddenCount: hidden.length,
     activeCount: visible.filter(isJobCenterActiveJob).length,
+    generalCount: general.filter((job) => !isLowSignalJobCenterNoise(job)).length,
+    tradingCount: trading.length,
   };
+}
+
+function setJobCenterView(view, { reload = true } = {}) {
+  jobCenterActiveView = view === "trading" ? "trading" : "general";
+  document.querySelectorAll("[data-job-center-view]").forEach((btn) => {
+    const active = btn.dataset.jobCenterView === jobCenterActiveView;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  if (reload && isJobCenterActive()) loadJobCenter({ quiet: false, force: true });
 }
 
 function markMissingLiveSourceJobs(jobs = [], liveKeys = new Set()) {
@@ -183,13 +206,27 @@ function formatShareCenterCountdown(ms) {
   return `剩餘 ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+function shareCenterEffectiveStatus(share = {}, now = Date.now()) {
+  const status = String(share.status || "active");
+  if (status !== "active") return status;
+  const timestamp = parseShareCenterExpiresAt(share.expires_at);
+  if (timestamp && timestamp <= now) return "expired";
+  return status;
+}
+
 function updateShareCenterCountdowns() {
   const items = Array.from(document.querySelectorAll("[data-share-countdown-until]"));
   const now = Date.now();
+  let shouldRerender = false;
   items.forEach((item) => {
     const timestamp = parseShareCenterExpiresAt(item.getAttribute("data-share-countdown-until"));
+    const expired = !!timestamp && timestamp <= now;
     item.textContent = timestamp ? `倒數計時：${formatShareCenterCountdown(timestamp - now)}` : "";
+    if (expired && item.dataset.shareCountdownStatus !== "expired") {
+      shouldRerender = true;
+    }
   });
+  if (shouldRerender) setTimeout(rerenderShareCenter, 0);
   if (!items.length && shareCenterCountdownTimer) {
     clearInterval(shareCenterCountdownTimer);
     shareCenterCountdownTimer = null;
@@ -211,6 +248,11 @@ function scheduleShareCenterCountdowns() {
 function renderJobCenterJobs(jobs = [], { hiddenCount = 0 } = {}) {
   const list = $("job-center-list");
   if (!list) return;
+  document.querySelectorAll("[data-job-center-view]").forEach((btn) => {
+    const active = btn.dataset.jobCenterView === jobCenterActiveView;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
   const running = jobs.filter((j) => ["queued", "running", "waiting_external", "retry_wait"].includes(j.status)).length;
   const failed = jobs.filter((j) => ["failed", "expired"].includes(j.status)).length;
   const done = jobs.filter((j) => j.status === "succeeded").length;
@@ -218,12 +260,12 @@ function renderJobCenterJobs(jobs = [], { hiddenCount = 0 } = {}) {
   if ($("job-center-failed-count")) $("job-center-failed-count").textContent = String(failed);
   if ($("job-center-done-count")) $("job-center-done-count").textContent = String(done);
   if (!jobs.length) {
-    const hiddenNote = hiddenCount ? `已隱藏 ${hiddenCount} 筆已完成的即時上傳。` : "目前沒有任務紀錄。";
+    const hiddenNote = hiddenCount ? `已隱藏 ${hiddenCount} 筆已完成的上傳任務。` : "目前沒有任務紀錄。";
     list.innerHTML = `<p style="color:var(--muted);">${sanitize(hiddenNote)}</p>`;
     return;
   }
   const hiddenNote = hiddenCount
-    ? `<div class="drive-card-sub" style="margin-bottom:.55rem;">已隱藏 ${hiddenCount} 筆已完成的即時上傳，任務中心優先顯示仍在處理、失敗或需要操作的任務。</div>`
+    ? `<div class="drive-card-sub" style="margin-bottom:.55rem;">已隱藏 ${hiddenCount} 筆已完成的上傳任務，任務中心優先顯示仍在處理、失敗或需要操作的任務。</div>`
     : "";
   list.innerHTML = hiddenNote + jobs.map((job) => {
     const percent = Math.max(0, Math.min(100, Number(job.progress_percent || 0)));
@@ -253,6 +295,10 @@ function renderJobCenterJobs(jobs = [], { hiddenCount = 0 } = {}) {
     const retry = ["failed", "retry_wait", "expired", "cancelled"].includes(job.status)
       ? `<button class="btn" type="button" data-job-retry="${sanitize(job.job_uuid)}">重試</button>`
       : "";
+    const remoteDismissAttr = remoteTaskId ? ` data-job-remote-download-task="${sanitize(remoteTaskId)}"` : "";
+    const dismiss = ["succeeded", "failed", "cancelled", "expired"].includes(job.status)
+      ? `<button class="btn" type="button" data-job-dismiss="${sanitize(job.job_uuid)}"${remoteDismissAttr}>移除</button>`
+      : "";
     return `
       <div class="drive-file-row">
         <div>
@@ -269,6 +315,7 @@ function renderJobCenterJobs(jobs = [], { hiddenCount = 0 } = {}) {
           ${resume}
           ${cancel}
           ${retry}
+          ${dismiss}
         </div>
       </div>
     `;
@@ -285,6 +332,11 @@ function renderJobCenterJobs(jobs = [], { hiddenCount = 0 } = {}) {
   });
   list.querySelectorAll("[data-job-retry]").forEach((btn) => {
     btn.addEventListener("click", () => updateJobCenterJob(btn.dataset.jobRetry, "retry"));
+  });
+  list.querySelectorAll("[data-job-dismiss]").forEach((btn) => {
+    btn.addEventListener("click", () => dismissJobCenterJob(btn.dataset.jobDismiss, {
+      remoteTaskId: btn.dataset.jobRemoteDownloadTask || "",
+    }));
   });
 }
 
@@ -335,13 +387,17 @@ function mapMediaStreamStatusToPlatform(status) {
 
 function mergeMediaStreamLiveProgress(job = {}, asset = {}) {
   const status = mapMediaStreamStatusToPlatform(asset.status);
-  const detail = asset.error_message
+  const assetDetail = asset.error_message
     || (status === "succeeded" ? "HLS 已可播放" : status === "running" ? "HLS 外部轉檔仍在處理" : "等待 HLS 處理");
+  const jobDetail = String(job.stage_detail || "").trim();
+  const jobStage = String(job.stage || "").trim();
+  const keepJobProgressDetail = status === "running" && !asset.error_message && (jobDetail || jobStage);
+  const detail = keepJobProgressDetail ? (jobDetail || assetDetail) : assetDetail;
   return {
     ...job,
     status,
     progress_percent: status === "succeeded" || status === "failed" ? 100 : Math.max(Number(job.progress_percent || 0), status === "running" ? 20 : 5),
-    stage: asset.status || job.stage,
+    stage: keepJobProgressDetail ? (jobStage || asset.status || job.stage) : (asset.status || job.stage),
     stage_detail: detail,
     error_message: status === "failed" ? detail : "",
     error_stage: status === "failed" ? (asset.status || "failed") : "",
@@ -432,9 +488,12 @@ async function loadJobCenter(options = {}) {
     const summary = summarizeJobCenterJobs(jobs);
     renderJobCenterJobs(summary.visible, { hiddenCount: summary.hiddenCount });
     const time = new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    const hiddenText = summary.hiddenCount ? `，已隱藏 ${summary.hiddenCount} 筆即時完成雜訊` : "";
+    if ($("job-center-general-count")) $("job-center-general-count").textContent = String(summary.generalCount);
+    if ($("job-center-trading-count")) $("job-center-trading-count").textContent = String(summary.tradingCount);
+    const hiddenText = summary.hiddenCount ? `，已隱藏 ${summary.hiddenCount} 筆已完成上傳` : "";
+    const viewText = jobCenterActiveView === "trading" ? "交易背景" : "一般任務";
     if (!quiet) {
-      platformCenterSetMsg("job-center-msg", `已同步 ${summary.visible.length} 筆任務，進行中 ${summary.activeCount} 筆${hiddenText} · ${time}`, true);
+      platformCenterSetMsg("job-center-msg", `${viewText}：已同步 ${summary.visible.length} 筆，進行中 ${summary.activeCount} 筆${hiddenText} · ${time}`, true);
     }
     return summary;
   })();
@@ -478,6 +537,13 @@ function startJobCenterPolling({ immediate = true, force = false } = {}) {
 document.addEventListener("hackme:module-changed", (event) => {
   if (event.detail?.current === "jobs") startJobCenterPolling({ immediate: true });
   else stopJobCenterPolling();
+});
+
+document.addEventListener("click", (event) => {
+  const btn = event.target?.closest?.("[data-job-center-view]");
+  if (!btn) return;
+  event.preventDefault();
+  setJobCenterView(btn.dataset.jobCenterView || "general");
 });
 
 document.addEventListener("visibilitychange", () => {
@@ -536,6 +602,36 @@ async function updateJobCenterRemoteDownloadTask(taskId, action) {
   }
   platformCenterSetMsg("job-center-msg", json.msg || "下載任務已更新", true);
   await loadJobCenter();
+}
+
+async function dismissJobCenterJob(jobUuid, options = {}) {
+  if (!jobUuid) return;
+  if (!(await platformConfirm("將這筆已結束的任務從列表移除？審計紀錄仍會保留。", {
+    title: "移除任務紀錄",
+    confirmLabel: "移除",
+  }))) return;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const remoteTaskId = String(options.remoteTaskId || "").trim();
+    const url = remoteTaskId
+      ? API + `/cloud-drive/remote-download/tasks/${encodeURIComponent(remoteTaskId)}`
+      : API + `/jobs/${encodeURIComponent(jobUuid)}`;
+    const res = await apiFetch(url, {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) {
+      platformCenterSetMsg("job-center-msg", json.msg || "任務移除失敗", false);
+      return;
+    }
+    platformCenterSetMsg("job-center-msg", json.msg || "任務已移除", true);
+    await loadJobCenter();
+  } catch (err) {
+    platformCenterSetMsg("job-center-msg", `任務移除失敗：${err?.message || err || "請稍後重試"}`, false);
+  }
 }
 
 function setShareCenterTab(tab, { load = true } = {}) {
@@ -673,7 +769,7 @@ function renderShareCenterEditForm(share = {}) {
   const key = shareCenterItemKey(share);
   const type = String(share.share_type || "");
   const reactivateHint = shareCenterReactivateHint(share);
-  const commonFields = (type === "file" || type === "video")
+  const commonFields = (type === "file" || type === "album" || type === "video")
     ? `
       <div class="field">
         <span>到期時間</span>
@@ -739,7 +835,8 @@ function renderShareCenter(shares = []) {
   shareCenterLatestShares = Array.isArray(shares) ? shares : [];
   const list = $("share-center-list");
   if (!list) return;
-  const active = shares.filter((s) => s.status === "active").length;
+  const now = Date.now();
+  const active = shares.filter((s) => shareCenterEffectiveStatus(s, now) === "active").length;
   const ended = shares.length - active;
   const accesses = shares.reduce((total, s) => total + Number(s.access_count || 0), 0);
   if ($("share-center-active-count")) $("share-center-active-count").textContent = String(active);
@@ -753,25 +850,27 @@ function renderShareCenter(shares = []) {
   }
   list.innerHTML = shares.map((share) => {
     const key = shareCenterItemKey(share);
-    const status = share.status === "expired" ? "expired_share" : share.status;
+    const effectiveStatus = shareCenterEffectiveStatus(share, now);
+    const viewShare = { ...share, status: effectiveStatus };
+    const status = effectiveStatus === "expired" ? "expired_share" : effectiveStatus;
     const link = shareCenterLinkUrl(share);
     const url = link.url;
     const missingFragment = link.missingFragment;
-    const copy = url && shareCenterCanCopy(share) ? `<button class="btn" type="button" data-share-copy="${sanitize(url)}" data-share-missing-fragment="${missingFragment ? "1" : "0"}">複製</button>` : "";
-    const edit = shareCenterCanEdit(share)
-      ? `<button class="btn" type="button" data-share-edit="${sanitize(key)}">${share.status === "active" ? "編輯" : "重新分享設定"}</button>`
+    const copy = url && shareCenterCanCopy(viewShare) ? `<button class="btn" type="button" data-share-copy="${sanitize(url)}" data-share-missing-fragment="${missingFragment ? "1" : "0"}">複製</button>` : "";
+    const edit = shareCenterCanEdit(viewShare)
+      ? `<button class="btn" type="button" data-share-edit="${sanitize(key)}">${effectiveStatus === "active" ? "編輯" : "重新分享設定"}</button>`
       : "";
     const events = `<button class="btn" type="button" data-share-events-type="${sanitize(share.share_type)}" data-share-events-id="${sanitize(share.id)}">紀錄</button>`;
-    const revoke = shareCenterCanRevoke(share)
+    const revoke = shareCenterCanRevoke(viewShare)
       ? `<button class="btn btn-danger" type="button" data-share-revoke-type="${sanitize(share.share_type)}" data-share-revoke-id="${sanitize(share.id)}">撤銷</button>`
       : "";
     const countdown = share.expires_at
-      ? `<div class="drive-card-sub share-center-countdown" data-share-countdown-until="${sanitize(share.expires_at)}">倒數計時：${sanitize(formatShareCenterCountdown((parseShareCenterExpiresAt(share.expires_at) || 0) - Date.now()))}</div>`
+      ? `<div class="drive-card-sub share-center-countdown" data-share-countdown-until="${sanitize(share.expires_at)}" data-share-countdown-status="${sanitize(effectiveStatus)}">倒數計時：${sanitize(formatShareCenterCountdown((parseShareCenterExpiresAt(share.expires_at) || 0) - now))}</div>`
       : "";
     const scopeText = share.access_scope === "account"
       ? `指定帳戶：${share.required_username || share.required_user_id || "-"}`
       : "知道連結即可存取";
-    const endedHint = ["expired", "view_limit_reached"].includes(String(share.status || ""))
+    const endedHint = ["expired", "view_limit_reached"].includes(String(effectiveStatus || ""))
       ? `<div class="drive-card-sub">此連結目前不可存取。請先按「重新分享設定」，調整到期時間或存取次數後再複製給對方。</div>`
       : "";
     return `
@@ -792,7 +891,7 @@ function renderShareCenter(shares = []) {
           ${events}
           ${revoke}
         </div>
-        ${shareCenterEditingKey === key ? renderShareCenterEditForm(share) : ""}
+        ${shareCenterEditingKey === key ? renderShareCenterEditForm(viewShare) : ""}
       </div>
     `;
   }).join("");
@@ -860,7 +959,7 @@ async function saveShareCenterOptions(key) {
     if (password || clearPassword) payload.share_password = clearPassword ? "" : password;
     payload.clear_password = clearPassword;
   }
-  if (share.share_type === "file" || share.share_type === "video") {
+  if (share.share_type === "file" || share.share_type === "album" || share.share_type === "video") {
     if (typeof syncShareExpiryPickers === "function") syncShareExpiryPickers(form);
     payload.expires_at = form.querySelector("[data-share-edit-expires]")?.value || "";
     payload.max_views = form.querySelector("[data-share-edit-max-views]")?.value || "0";
@@ -897,7 +996,7 @@ async function loadShareCenter() {
 }
 
 async function loadShareCenterLinks() {
-  if (!currentUser) return;
+  if (!currentUser) return [];
   platformCenterSetMsg("share-center-msg", "正在讀取分享連結...", true);
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
@@ -910,12 +1009,25 @@ async function loadShareCenterLinks() {
     if (!json.ok) {
       platformCenterSetMsg("share-center-msg", json.msg || "分享連結讀取失敗", false);
       renderShareCenter([]);
-      return;
+      return [];
     }
     renderShareCenter(json.shares || []);
     platformCenterSetMsg("share-center-msg", `已載入 ${(json.shares || []).length} 個分享連結`, true);
+    return json.shares || [];
   } catch (_) {
     platformCenterSetMsg("share-center-msg", "分享連結讀取失敗，請稍後再試。", false);
+    return [];
+  }
+}
+
+async function openShareCenterEditor(type, id) {
+  const shareType = String(type || "").trim();
+  const shareId = String(id || "").trim();
+  if (typeof setShareCenterTab === "function") setShareCenterTab("links", { load: false });
+  shareCenterEditingKey = shareType && shareId ? `${shareType}:${shareId}` : "";
+  const shares = await loadShareCenterLinks();
+  if (shareCenterEditingKey && !shares.some((share) => shareCenterItemKey(share) === shareCenterEditingKey)) {
+    platformCenterSetMsg("share-center-msg", "已建立相簿分享，請在列表中調整設定。", true);
   }
 }
 
@@ -1418,29 +1530,29 @@ document.addEventListener("click", (event) => {
 
 function renderTradingAssetOverview(overview = {}) {
   const map = {
-    "economy-asset-total-equity": overview.total_equity_points,
-    "economy-asset-available": overview.available_points,
-    "economy-asset-locked": overview.locked_points,
-    "economy-asset-spot": overview.spot_market_value_points,
-    "economy-asset-margin": overview.margin_position_equity_points,
-    "economy-asset-interest": overview.accrued_interest_points
+    "trading-asset-total-equity": overview.total_equity_points,
+    "trading-asset-available": overview.available_points,
+    "trading-asset-locked": overview.locked_points,
+    "trading-asset-spot": overview.spot_market_value_points,
+    "trading-asset-margin": overview.margin_position_equity_points,
+    "trading-asset-interest": overview.accrued_interest_points
   };
   Object.entries(map).forEach(([id, value]) => {
     if ($(id)) $(id).textContent = `${formatTradingPointsValue(Number(value || 0))} 點`;
   });
-  if ($("economy-asset-confidence")) {
-    $("economy-asset-confidence").textContent = `${overview.low_confidence_price_count || 0} 個低信心價格 · ${overview.confidence_note || ""}`;
+  if ($("trading-asset-confidence")) {
+    $("trading-asset-confidence").textContent = `${overview.low_confidence_price_count || 0} 個低信心價格 · ${overview.confidence_note || ""}`;
   }
 }
 
 function renderTradingAdminAssetOverview(risk = {}) {
-  const el = $("economy-asset-admin-risk");
+  const el = $("trading-asset-admin-risk");
   if (!el) return;
   el.style.display = "block";
   el.textContent = `管理摘要：使用者 ${risk.account_count || 0} · 開放委託 ${risk.open_order_count || 0} · 借貸倉位 ${risk.open_margin_positions || 0} · 借貸本金 ${formatTradingPointsValue(Number(risk.total_margin_principal_points || 0))} 點 · 低信心市場 ${risk.low_confidence_price_count || 0}`;
 }
 
-async function loadTradingAssetOverview() {
+async function loadTradingAssetOverview({ quiet = false } = {}) {
   if (!currentUser || !canAccessModule("trading")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
@@ -1451,7 +1563,7 @@ async function loadTradingAssetOverview() {
     });
     const json = await res.json().catch(() => ({}));
     if (!json.ok) {
-      platformCenterSetMsg("economy-msg", json.msg || "交易資產總覽讀取失敗", false);
+      if (!quiet) platformCenterSetMsg("trading-inline-msg", json.msg || "交易資產總覽讀取失敗", false);
       return;
     }
     renderTradingAssetOverview(json.overview || {});
@@ -1462,12 +1574,19 @@ async function loadTradingAssetOverview() {
       });
       const adminJson = await adminRes.json().catch(() => ({}));
       if (!adminJson.ok) {
-        platformCenterSetMsg("economy-msg", adminJson.msg || "交易管理風險摘要讀取失敗", false);
+        if (!quiet) platformCenterSetMsg("trading-inline-msg", adminJson.msg || "交易所風險摘要讀取失敗", false);
         return;
       }
       renderTradingAdminAssetOverview(adminJson.risk || {});
     }
   } catch (err) {
-    platformCenterSetMsg("economy-msg", err?.message || "交易資產總覽讀取失敗", false);
+    if (!quiet) platformCenterSetMsg("trading-inline-msg", err?.message || "交易資產總覽讀取失敗", false);
   }
 }
+
+document.addEventListener("click", (event) => {
+  const btn = event.target?.closest?.("#trading-asset-overview-refresh-btn");
+  if (!btn) return;
+  event.preventDefault();
+  loadTradingAssetOverview({ quiet: false });
+});

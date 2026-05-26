@@ -20,6 +20,7 @@ async function loadServerMode() {
   const mode = json.mode || {};
   currentServerMode = String(mode.current_mode || "dev_ready").trim().toLowerCase();
   populateSecurityProfiles(json.profiles || securityProfiles, mode.current_mode || "dev_ready");
+  if (typeof updateServerModeLaunchCheckVisibility === "function") updateServerModeLaunchCheckVisibility();
   if (status) {
     const previous = mode.previous_mode ? `，上一個模式：${mode.previous_mode}` : "";
     const snapshot = mode.active_snapshot_id ? `，active snapshot：${mode.active_snapshot_id}` : "";
