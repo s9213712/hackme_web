@@ -6755,6 +6755,7 @@ class PointsLedgerService:
                 """
                 SELECT * FROM points_chain_bridge_events
                 WHERE chain=? AND chain_tx_hash=?
+                  AND chain_tx_hash<>''
                 LIMIT 1
                 """,
                 (chain, tx_hash),
@@ -7101,7 +7102,7 @@ class PointsLedgerService:
         payload["deposit_addresses"] = deposit_addresses
         payload["deposit_address"] = deposit_addresses[0]["address"] if deposit_addresses else ""
         payload["deposit_model"] = "external_or_cold_chain_to_platform_deposit_address_then_internal_pc0_credit"
-        identity_balances = self._wallet_identity_balances_for_user(conn, user_id)
+        identity_balances = self._wallet_identity_balances_for_user(conn, user_id, account_statement=statement)
         payload["account_points_balance"] = int(payload.get("points_balance") or 0)
         payload["account_points_frozen"] = int(payload.get("points_frozen") or 0)
         payload["active_wallet_address"] = identity_balances.get("primary_address") or ""
@@ -7567,7 +7568,7 @@ class PointsLedgerService:
         try:
             rows = list_wallet_identities(conn, int(user_id), include_inactive=True)
         except Exception:
-            return {"has_identity": False, "primary": None, "addresses": set()}
+            return {"has_identity": False, "primary": None, "addresses": set(), "identity_row_count": 0, "active_identity_count": 0}
         has_identity_history = bool(rows)
         if not has_identity_history:
             try:
@@ -7583,15 +7584,23 @@ class PointsLedgerService:
                 has_identity_history = False
         primary = None
         addresses = set()
+        active_count = 0
         for row in rows:
             status = str(row.get("status") if isinstance(row, dict) else row["status"] or "")
             address = str(row.get("address") if isinstance(row, dict) else row["address"] or "")
             if address and status in {"pending_backup", "active"}:
                 addresses.add(address)
+                active_count += 1
             is_primary = bool(row.get("is_primary")) if isinstance(row, dict) else bool(int(row["is_primary"] or 0))
             if is_primary and status in {"pending_backup", "active"}:
                 primary = row
-        return {"has_identity": has_identity_history, "primary": primary, "addresses": addresses}
+        return {
+            "has_identity": has_identity_history,
+            "primary": primary,
+            "addresses": addresses,
+            "identity_row_count": len(rows),
+            "active_identity_count": active_count,
+        }
 
     def _legacy_counterparty_account(self, value):
         try:
@@ -8037,7 +8046,16 @@ class PointsLedgerService:
             return {}
         return {str(row["source_wallet_address"] or ""): int(row["pending_total"] or 0) for row in rows}
 
-    def _wallet_identity_balances_for_user(self, conn, user_id, *, include_pending=True, exclude_request_uuid=None, branch_uuid=None):
+    def _wallet_identity_balances_for_user(
+        self,
+        conn,
+        user_id,
+        *,
+        include_pending=True,
+        exclude_request_uuid=None,
+        branch_uuid=None,
+        account_statement=None,
+    ):
         state = self._wallet_identity_state_for_user(conn, user_id)
         branch = str(branch_uuid or self._canonical_branch_uuid(conn) or self._main_branch_uuid())
         balances = {}
@@ -8045,7 +8063,12 @@ class PointsLedgerService:
             return {"has_identity": False, "primary_address": "", "balances": balances}
         for address in state["addresses"]:
             balances[address] = {"balance": 0, "frozen": 0, "pending_outgoing": 0}
-        if len(balances) == 1:
+        can_use_single_wallet_aggregate = (
+            len(balances) == 1
+            and int(state.get("identity_row_count") or 0) == 1
+            and int(state.get("active_identity_count") or 0) == 1
+        )
+        if can_use_single_wallet_aggregate:
             wallet = conn.execute(
                 """
                 SELECT soft_balance, hard_balance, soft_frozen, hard_frozen
@@ -8056,26 +8079,35 @@ class PointsLedgerService:
             ).fetchone()
             if wallet:
                 address = next(iter(balances))
-                balances[address]["balance"] = int(wallet["soft_balance"] or 0) + int(wallet["hard_balance"] or 0)
-                balances[address]["frozen"] = int(wallet["soft_frozen"] or 0) + int(wallet["hard_frozen"] or 0)
-                if include_pending:
-                    pending_by_address = self._pending_transfer_outgoing_by_address(
-                        conn,
-                        balances.keys(),
-                        exclude_request_uuid=exclude_request_uuid,
-                        branch_uuid=branch,
+                aggregate_balance = int(wallet["soft_balance"] or 0) + int(wallet["hard_balance"] or 0)
+                aggregate_frozen = int(wallet["soft_frozen"] or 0) + int(wallet["hard_frozen"] or 0)
+                statement_matches = True
+                if account_statement is not None:
+                    statement_matches = (
+                        aggregate_balance == int(account_statement.get("balance") or 0)
+                        and aggregate_frozen == int(account_statement.get("frozen") or 0)
                     )
-                    pending = int(pending_by_address.get(address) or 0)
-                    if pending > 0:
-                        balances[address]["balance"] -= pending
-                        balances[address]["frozen"] += pending
-                        balances[address]["pending_outgoing"] = pending
-                primary = state["primary"]
-                return {
-                    "has_identity": True,
-                    "primary_address": primary["address"] if primary else address,
-                    "balances": balances,
-                }
+                if statement_matches:
+                    balances[address]["balance"] = aggregate_balance
+                    balances[address]["frozen"] = aggregate_frozen
+                    if include_pending:
+                        pending_by_address = self._pending_transfer_outgoing_by_address(
+                            conn,
+                            balances.keys(),
+                            exclude_request_uuid=exclude_request_uuid,
+                            branch_uuid=branch,
+                        )
+                        pending = int(pending_by_address.get(address) or 0)
+                        if pending > 0:
+                            balances[address]["balance"] -= pending
+                            balances[address]["frozen"] += pending
+                            balances[address]["pending_outgoing"] = pending
+                    primary = state["primary"]
+                    return {
+                        "has_identity": True,
+                        "primary_address": primary["address"] if primary else address,
+                        "balances": balances,
+                    }
         rows = conn.execute(
             """
             SELECT * FROM points_ledger
@@ -9216,6 +9248,7 @@ class PointsLedgerService:
             SELECT *
             FROM points_chain_bridge_events
             WHERE chain=? AND chain_tx_hash=?
+              AND chain_tx_hash<>''
             LIMIT 1
             """,
             (chain, tx_hash),
@@ -11165,10 +11198,10 @@ class PointsLedgerService:
         identity_balances = self._wallet_identity_balances_for_user(
             conn,
             user_id,
-            include_pending=direction != "unfreeze",
-            exclude_request_uuid=exclude_pending_request_uuid or None,
+            include_pending=False,
             branch_uuid=active_branch,
         )
+        available_balance_before = None
         if identity_balances.get("has_identity"):
             identity_balance_map = identity_balances.get("balances") or {}
             account_balance_before = sum(int(item.get("balance") or 0) for item in identity_balance_map.values())
@@ -11193,6 +11226,16 @@ class PointsLedgerService:
             active = identity_balance_map.get(ledger_address, {"balance": 0, "frozen": 0})
             balance_before = int(active.get("balance") or 0)
             frozen_before = int(active.get("frozen") or 0)
+            if direction in {"debit", "transfer_out", "reverse", "freeze"} and action_type not in {"wallet_transfer_out", "wallet_transfer_fee"}:
+                spendable_state = self._wallet_identity_balances_for_user(
+                    conn,
+                    user_id,
+                    include_pending=True,
+                    exclude_request_uuid=exclude_pending_request_uuid or None,
+                    branch_uuid=active_branch,
+                )
+                spendable_active = (spendable_state.get("balances") or {}).get(ledger_address, {"balance": balance_before})
+                available_balance_before = int(spendable_active.get("balance") or 0)
         else:
             balance_before = account_balance_before
             frozen_before = account_frozen_before
@@ -11207,12 +11250,12 @@ class PointsLedgerService:
             balance_after += amount
             account_balance_after += amount
         elif direction in {"debit", "transfer_out", "reverse"}:
-            if balance_before < amount:
+            if (available_balance_before if available_balance_before is not None else balance_before) < amount:
                 raise ValueError("insufficient balance")
             balance_after -= amount
             account_balance_after -= amount
         elif direction == "freeze":
-            if balance_before < amount:
+            if (available_balance_before if available_balance_before is not None else balance_before) < amount:
                 raise ValueError("insufficient balance")
             balance_after -= amount
             frozen_after += amount

@@ -1108,6 +1108,7 @@ def ensure_points_economy_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_user_time ON points_ledger(user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_branch_user_time ON points_ledger(chain_branch, user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_branch_id ON points_ledger(chain_branch, id DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_branch_user_id_desc ON points_ledger(chain_branch, user_id, id DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_action_ref ON points_ledger(action_type, reference_type, reference_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_block ON points_ledger(chain_block_id, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_pending_status ON points_pending_rewards(status, created_at)")

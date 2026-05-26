@@ -66,6 +66,32 @@ def _service(tmp_path):
     )
 
 
+def test_points_schema_adds_finance_hot_path_indexes(tmp_path):
+    service = _service(tmp_path)
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        ledger_indexes = {row["name"] for row in conn.execute("PRAGMA index_list(points_ledger)").fetchall()}
+        assert "idx_points_ledger_branch_user_id_desc" in ledger_indexes
+
+        bridge_indexes = {row["name"] for row in conn.execute("PRAGMA index_list(points_chain_bridge_events)").fetchall()}
+        assert "idx_points_chain_bridge_chain_tx" in bridge_indexes
+
+        plan = conn.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT * FROM points_chain_bridge_events
+            WHERE chain=? AND chain_tx_hash=? AND chain_tx_hash<>''
+            LIMIT 1
+            """,
+            ("points_chain_sim", "tx-finance-hot-path"),
+        ).fetchall()
+        details = " ".join(str(row["detail"]) for row in plan)
+        assert "idx_points_chain_bridge_chain_tx" in details
+    finally:
+        conn.close()
+
+
 def _official_hot_wallet(service, user_id):
     conn = service.get_db()
     try:

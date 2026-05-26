@@ -244,6 +244,23 @@ def test_ensure_trading_schema_is_idempotent(tmp_path):
     conn.close()
 
 
+def test_ensure_trading_schema_adds_finance_hot_path_indexes(tmp_path):
+    """Batch A1 indexes must exist without depending on a runtime migration."""
+    with closing(_build_fresh_db(tmp_path)) as conn:
+        _, indexes = _capture_tables_and_indexes(conn)
+
+    required = {
+        "idx_trading_orders_user_id_desc",
+        "idx_trading_fills_user_id_desc",
+        "idx_trading_margin_user_id_desc",
+        "idx_trading_bots_user_id_desc",
+        "idx_trading_bot_runs_user_id_desc",
+        "idx_trading_grid_orders_user_order",
+    }
+    missing = required - set(indexes)
+    assert not missing, f"missing finance hot-path indexes: {sorted(missing)}"
+
+
 def test_ensure_trading_schema_critical_columns_present(tmp_path):
     """For each well-known critical table, assert specific columns exist
     with their expected (type, notnull, pk) signature. Slice 4b must

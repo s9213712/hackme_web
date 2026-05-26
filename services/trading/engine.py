@@ -852,6 +852,37 @@ def _sync_registry_markets_to_runtime(conn):
             )
 
 
+def _ensure_trading_hot_path_indexes(conn):
+    """Install low-risk read indexes for the finance 5K hot-path baseline."""
+    for ddl in (
+        """
+        CREATE INDEX IF NOT EXISTS idx_trading_orders_user_id_desc
+        ON trading_orders(user_id, id DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_trading_fills_user_id_desc
+        ON trading_fills(user_id, id DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_trading_margin_user_id_desc
+        ON trading_margin_positions(user_id, id DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_trading_bots_user_id_desc
+        ON trading_bots(user_id, id DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_trading_bot_runs_user_id_desc
+        ON trading_bot_runs(user_id, id DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_trading_grid_orders_user_order
+        ON trading_grid_orders(user_id, trading_order_uuid)
+        """,
+    ):
+        conn.execute(ddl)
+
+
 def ensure_trading_schema(conn):
     # Slice 4b: pure CREATE TABLE DDL strings live in schema_ddl.py so
     # this function shrinks from 740 lines to ~280. Imperative migrations
@@ -1219,6 +1250,7 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_grid_bots ADD COLUMN stop_loss_percent REAL")
     if "take_profit_percent" not in grid_bot_cols:
         conn.execute("ALTER TABLE trading_grid_bots ADD COLUMN take_profit_percent REAL")
+    _ensure_trading_hot_path_indexes(conn)
 
 
 def _connection_path(conn):
