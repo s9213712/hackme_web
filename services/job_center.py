@@ -857,20 +857,35 @@ def _cloud_remote_download_stale_after_seconds(job):
     timeout = _safe_int(metadata.get("timeout_seconds"), 0)
     if timeout <= 0:
         timeout = 1800 if source_type in {"magnet", "torrent_file", "torrent_url"} else 120
-    if status == "queued":
-        return max(3600, timeout + 3600)
     return max(300, timeout + 180)
+
+
+def _cloud_remote_download_last_activity_at(job, *, now=None):
+    now = now or datetime.now(timezone.utc)
+    metadata = (job or {}).get("metadata") if isinstance((job or {}).get("metadata"), dict) else {}
+    candidates = [
+        (job or {}).get("updated_at"),
+        (job or {}).get("created_at"),
+        metadata.get("worker_heartbeat_at"),
+        metadata.get("progress_heartbeat_at"),
+    ]
+    parsed = []
+    for value in candidates:
+        timestamp = _parse_utc_timestamp(value)
+        if timestamp and timestamp <= now + timedelta(seconds=60):
+            parsed.append(timestamp)
+    return max(parsed) if parsed else None
 
 
 def _cloud_remote_download_job_is_stale(job, *, now=None):
     status = str((job or {}).get("status") or "")
     if status not in {"queued", "running", "waiting_external", "retry_wait"}:
         return False
-    updated = _parse_utc_timestamp((job or {}).get("updated_at") or (job or {}).get("created_at"))
-    if not updated:
-        return False
     now = now or datetime.now(timezone.utc)
-    age = max(0, int((now - updated).total_seconds()))
+    active_at = _cloud_remote_download_last_activity_at(job, now=now)
+    if not active_at:
+        return False
+    age = max(0, int((now - active_at).total_seconds()))
     return age > _cloud_remote_download_stale_after_seconds(job)
 
 
@@ -887,12 +902,18 @@ def _cloud_remote_download_cancel_request_is_stale(job, *, now=None):
     )
     if not has_cancel_request:
         return False
-    updated = _parse_utc_timestamp((job or {}).get("updated_at") or (job or {}).get("created_at"))
-    if not updated:
+    requested_at = _parse_utc_timestamp(
+        (job or {}).get("cancel_requested_at")
+        or metadata.get("cancel_requested_at")
+        or metadata.get("cancel_recovered_at")
+        or (job or {}).get("updated_at")
+        or (job or {}).get("created_at")
+    )
+    if not requested_at:
         return False
     now = now or datetime.now(timezone.utc)
     grace_seconds = max(5, _safe_int(os.environ.get("HACKME_REMOTE_DOWNLOAD_CANCEL_ACK_GRACE_SECONDS"), 30))
-    age = max(0, int((now - updated).total_seconds()))
+    age = max(0, int((now - requested_at).total_seconds()))
     return age >= grace_seconds
 
 

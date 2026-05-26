@@ -122,6 +122,79 @@ def test_stale_cloud_remote_download_jobs_are_marked_failed():
     assert paused_row["finished_at"] is None
 
 
+def test_cloud_remote_download_heartbeat_prevents_false_stale_failure():
+    conn = connection()
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)")
+    conn.execute("INSERT INTO users (id, username) VALUES (1, 'alice')")
+    ensure_job_center_schema(conn)
+    fresh_heartbeat = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    active = create_job(
+        conn,
+        owner_user_id=1,
+        created_by_user_id=1,
+        job_type="cloud_drive.remote_download.bt.magnet",
+        title="BT 下載",
+        source_module="cloud_drive_remote_download",
+        source_ref="remote_download:heartbeat-active",
+        status="running",
+        stage="downloading",
+        metadata={
+            "task_id": "heartbeat-active",
+            "source_type": "magnet",
+            "timeout_seconds": 1800,
+            "worker_heartbeat_at": fresh_heartbeat,
+        },
+        cancellable=True,
+    )
+    conn.execute(
+        "UPDATE job_center_jobs SET created_at='2026-05-01T00:00:00', updated_at='2026-05-01T00:00:00' WHERE job_uuid=?",
+        (active["job_uuid"],),
+    )
+    conn.commit()
+
+    expired = expire_stale_cloud_remote_download_jobs(conn)
+    conn.commit()
+
+    assert expired == []
+    row = conn.execute("SELECT status, finished_at FROM job_center_jobs WHERE job_uuid=?", (active["job_uuid"],)).fetchone()
+    assert row["status"] == "running"
+    assert row["finished_at"] is None
+
+
+def test_orphaned_queued_cloud_remote_download_jobs_are_marked_failed():
+    conn = connection()
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)")
+    conn.execute("INSERT INTO users (id, username) VALUES (1, 'alice')")
+    ensure_job_center_schema(conn)
+    queued = create_job(
+        conn,
+        owner_user_id=1,
+        created_by_user_id=1,
+        job_type="cloud_drive.remote_download.bt.torrent_file",
+        title="BT 下載",
+        source_module="cloud_drive_remote_download",
+        source_ref="remote_download:queued-orphan",
+        status="queued",
+        stage="queued",
+        metadata={"task_id": "queued-orphan", "source_type": "torrent_file", "timeout_seconds": 1800},
+        cancellable=True,
+    )
+    conn.execute(
+        "UPDATE job_center_jobs SET created_at='2026-05-01T00:00:00', updated_at='2026-05-01T00:00:00' WHERE job_uuid=?",
+        (queued["job_uuid"],),
+    )
+    conn.commit()
+
+    expired = expire_stale_cloud_remote_download_jobs(conn)
+    conn.commit()
+
+    assert [job["job_uuid"] for job in expired] == [queued["job_uuid"]]
+    row = conn.execute("SELECT status, error_code, finished_at FROM job_center_jobs WHERE job_uuid=?", (queued["job_uuid"],)).fetchone()
+    assert row["status"] == "failed"
+    assert row["error_code"] == "remote_download_task_stale"
+    assert row["finished_at"]
+
+
 def test_cancel_requested_remote_download_jobs_are_resolved_cancelled():
     conn = connection()
     conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)")

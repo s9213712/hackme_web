@@ -426,6 +426,11 @@ def register_file_routes(app, deps):
             "storage_file_id": storage_info.get("id"),
             "storage_virtual_path": storage_info.get("virtual_path"),
             "storage_file": storage_info,
+            "worker_heartbeat_at": task.get("worker_heartbeat_at"),
+            "progress_heartbeat_at": task.get("progress_heartbeat_at"),
+            "control_action": task.get("control_action"),
+            "cancel_requested": bool(task.get("cancel_requested")),
+            "pause_requested": bool(task.get("pause_requested")),
         }
 
     def _remote_download_task_from_job(job):
@@ -1395,11 +1400,17 @@ def register_file_routes(app, deps):
             _sync_remote_download_job(sync_task)
 
     def _task_touch(task_id):
+        sync_task = None
         with _REMOTE_DOWNLOAD_TASKS_LOCK:
             task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
             if not task or task.get("status") not in {"queued", "running"}:
                 return
-            task["updated_at"] = datetime.now().isoformat()
+            now_text = datetime.now().isoformat()
+            task["updated_at"] = now_text
+            task["worker_heartbeat_at"] = now_text
+            sync_task = dict(task)
+        if sync_task:
+            _sync_remote_download_job(sync_task)
 
     def _task_snapshot(task):
         public = {
@@ -1438,12 +1449,6 @@ def register_file_routes(app, deps):
             timeout = int(task.get("timeout_seconds") or 0)
         except Exception:
             timeout = 0
-        if task.get("status") == "queued":
-            # Queued downloads may legitimately wait behind a large BT/direct
-            # transfer.  The worker refreshes updated_at while waiting, so this
-            # long stale window mainly catches orphaned queued tasks after a
-            # server crash/reload.
-            return max(3600, timeout + 3600)
         return max(300, timeout + 180)
 
     def _remote_task_terminal_retention_seconds(task):
@@ -1926,6 +1931,7 @@ def register_file_routes(app, deps):
                     pass
             phase = event.get("phase") or "downloading"
             msg = "下載中" if phase == "downloading" else "下載完成，準備保存"
+            progress_heartbeat_at = datetime.now().isoformat()
             _task_update(
                 task_id,
                 status="running",
@@ -1936,6 +1942,7 @@ def register_file_routes(app, deps):
                 progress_percent=percent,
                 speed_bytes_per_sec=max(0, int(speed or 0)),
                 msg=msg,
+                progress_heartbeat_at=progress_heartbeat_at,
             )
         return _callback
 
