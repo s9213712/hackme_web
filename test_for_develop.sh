@@ -6,6 +6,7 @@ DEFAULT_GIT_REPO_DIR="$SOURCE_ROOT"
 CAPACITY_DEFAULTS_FILE="${HACKME_DEV_CAPACITY_DEFAULTS_FILE:-$SOURCE_ROOT/.hackme_capacity_defaults.env}"
 CLOUD_DRIVE_STORAGE_ROOT="${HACKME_DEV_CLOUD_DRIVE_STORAGE_ROOT:-}"
 CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB="${HACKME_DEV_CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB:-}"
+MAX_CONTENT_MB="${HACKME_DEV_MAX_CONTENT_MB:-${HTML_LEARNING_MAX_CONTENT_MB:-}}"
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 RUN_ROOT=""
 HOST="${HOST:-127.0.0.1}"
@@ -201,6 +202,10 @@ Options:
   --cloud-drive-max-size SIZE
                            Same cap with units, e.g. 1024M, 10G, 1.5TB.
                            A bare number means MB.
+  --max-content-mb MB,
+  --upload-request-max-mb MB
+                           Override HTML_LEARNING_MAX_CONTENT_MB for large
+                           upload QA. Blank keeps the app default.
   --dry-run                Print resolved config and exit before copying/starting
   --run-root PATH          Use a fixed /tmp run root instead of auto-generating one
   --in-place, --no-copy    Launch from the current repo; runtime still uses run-root
@@ -398,6 +403,14 @@ normalize_cloud_drive_options() {
   normalize_cloud_drive_capacity_limit
 }
 
+normalize_max_content_option() {
+  if [[ -z "$MAX_CONTENT_MB" ]]; then
+    return 0
+  fi
+  [[ "$MAX_CONTENT_MB" =~ ^[0-9]+$ ]] || die "max content MB must be a positive integer"
+  (( MAX_CONTENT_MB >= 128 )) || die "max content MB must be at least 128"
+}
+
 maybe_run_capacity_probe_for_gunicorn_defaults() {
   if [[ "$SERVER_RUNNER" != "gunicorn" ]]; then
     return 0
@@ -525,6 +538,7 @@ normalize_runtime_options() {
   DEV_TOKEN_FEATURES="$NORMALIZED_DEV_TOKEN_FEATURES"
   normalize_server_runner
   normalize_cloud_drive_options
+  normalize_max_content_option
   maybe_run_capacity_probe_for_gunicorn_defaults
   resolve_auto_gunicorn_settings
   normalize_port_conflict_action
@@ -590,6 +604,7 @@ print_resolved_config() {
   say "  server_mode:         $SERVER_MODE"
   say "  cloud_drive_root:    ${CLOUD_DRIVE_STORAGE_ROOT:-<runtime/storage>}"
   say "  cloud_drive_max_mb:  ${CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB:-<default disk 95%>}"
+  say "  max_content_mb:      ${MAX_CONTENT_MB:-<app default>}"
   say "  server_runner:       $SERVER_RUNNER"
   if [[ "$SERVER_RUNNER" == "gunicorn" ]]; then
     say "  gunicorn:            workers=$GUNICORN_WORKERS threads=$GUNICORN_THREADS timeout=$GUNICORN_TIMEOUT backlog=$GUNICORN_BACKLOG max_requests=$GUNICORN_MAX_REQUESTS jitter=$GUNICORN_MAX_REQUESTS_JITTER"
@@ -1951,6 +1966,10 @@ while [[ $# -gt 0 ]]; do
       CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB="${2:?missing cloud drive max size}"
       shift 2
       ;;
+    --max-content-mb|--upload-request-max-mb|--html-learning-max-content-mb)
+      MAX_CONTENT_MB="${2:?missing max content MB}"
+      shift 2
+      ;;
     --dry-run)
       DRY_RUN=1
       shift
@@ -2088,6 +2107,10 @@ export HTML_LEARNING_PORT="$PORT"
 export HTML_LEARNING_ROOT_PASSWORD="$ROOT_PASSWORD"
 export HTML_LEARNING_MANAGER_PASSWORD="$MANAGER_PASSWORD"
 export HTML_LEARNING_TEST_PASSWORD="$TEST_PASSWORD"
+if [[ -n "$MAX_CONTENT_MB" ]]; then
+  export HTML_LEARNING_MAX_CONTENT_MB="$MAX_CONTENT_MB"
+  export HACKME_DEV_MAX_CONTENT_MB="$MAX_CONTENT_MB"
+fi
 export HTML_LEARNING_ARGON2_TIME_COST="${HTML_LEARNING_ARGON2_TIME_COST:-1}"
 export HTML_LEARNING_ARGON2_MEMORY_COST="${HTML_LEARNING_ARGON2_MEMORY_COST:-8192}"
 export HTML_LEARNING_ARGON2_PARALLELISM="${HTML_LEARNING_ARGON2_PARALLELISM:-1}"
@@ -2729,6 +2752,9 @@ if [[ "$FOREGROUND" == "1" ]]; then
   if [[ -n "$CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB" ]]; then
     say "[dev-tmp] storage cap: ${CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB} MB"
   fi
+  if [[ -n "$MAX_CONTENT_MB" ]]; then
+    say "[dev-tmp] max content: ${MAX_CONTENT_MB} MB"
+  fi
   say "[dev-tmp] mode:      foreground $SERVER_RUNNER"
   if [[ "$SERVER_RUNNER" == "flask" ]]; then
     say "[dev-tmp] warning:   Flask/Werkzeug direct server is debug-only; use gunicorn for uploads/HLS/load."
@@ -2790,6 +2816,9 @@ say "[dev-tmp] runtime:   $RUNTIME_ROOT"
 say "[dev-tmp] storage:   $EFFECTIVE_STORAGE_ROOT"
 if [[ -n "$CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB" ]]; then
   say "[dev-tmp] storage cap: ${CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB} MB"
+fi
+if [[ -n "$MAX_CONTENT_MB" ]]; then
+  say "[dev-tmp] max content: ${MAX_CONTENT_MB} MB"
 fi
 say "[dev-tmp] pid:       $SERVER_PID"
 say "[dev-tmp] runner:    $SERVER_RUNNER"

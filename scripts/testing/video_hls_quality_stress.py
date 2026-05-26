@@ -29,6 +29,7 @@ import argparse
 import concurrent.futures
 import json
 import math
+import mimetypes
 import os
 import re
 import sqlite3
@@ -37,6 +38,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +48,105 @@ import urllib3
 
 TERMINAL_JOB_STATUSES = {"succeeded", "failed", "cancelled", "expired"}
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+class StreamingMultipartBody:
+    """Small multipart/form-data stream that does not buffer large files."""
+
+    def __init__(
+        self,
+        *,
+        fields: dict[str, str],
+        file_field: str,
+        file_path: Path,
+        content_type: str,
+    ) -> None:
+        self.boundary = f"----hackme-probe-{uuid.uuid4().hex}"
+        self.content_type = f"multipart/form-data; boundary={self.boundary}"
+        self._file_path = file_path
+        self._file = None
+        prefix_parts: list[bytes] = []
+        boundary = self.boundary
+        for name, value in fields.items():
+            prefix_parts.append(
+                (
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="{_quote_header(name)}"\r\n\r\n'
+                    f"{value}\r\n"
+                ).encode("utf-8")
+            )
+        filename = _quote_header(file_path.name)
+        prefix_parts.append(
+            (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="{_quote_header(file_field)}"; filename="{filename}"\r\n'
+                f"Content-Type: {content_type}\r\n\r\n"
+            ).encode("utf-8")
+        )
+        self._prefix = b"".join(prefix_parts)
+        self._suffix = f"\r\n--{boundary}--\r\n".encode("utf-8")
+        self._prefix_offset = 0
+        self._suffix_offset = 0
+        self._phase = "prefix"
+        self._length = len(self._prefix) + file_path.stat().st_size + len(self._suffix)
+
+    def __len__(self) -> int:
+        return self._length
+
+    def close(self) -> None:
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+
+    def _read_prefix(self, limit: int) -> bytes:
+        chunk = self._prefix[self._prefix_offset : self._prefix_offset + limit]
+        self._prefix_offset += len(chunk)
+        if self._prefix_offset >= len(self._prefix):
+            self._phase = "file"
+        return chunk
+
+    def _read_file(self, limit: int) -> bytes:
+        if self._file is None:
+            self._file = self._file_path.open("rb")
+        chunk = self._file.read(limit)
+        if not chunk:
+            self.close()
+            self._phase = "suffix"
+            return b""
+        return chunk
+
+    def _read_suffix(self, limit: int) -> bytes:
+        chunk = self._suffix[self._suffix_offset : self._suffix_offset + limit]
+        self._suffix_offset += len(chunk)
+        if self._suffix_offset >= len(self._suffix):
+            self._phase = "done"
+        return chunk
+
+    def read(self, size: int = -1) -> bytes:
+        if self._phase == "done":
+            return b""
+        if size is None or size < 0:
+            size = 1024 * 1024
+        remaining = size
+        chunks: list[bytes] = []
+        while remaining > 0 and self._phase != "done":
+            if self._phase == "prefix":
+                chunk = self._read_prefix(remaining)
+            elif self._phase == "file":
+                chunk = self._read_file(remaining)
+                if not chunk:
+                    continue
+            else:
+                chunk = self._read_suffix(remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+
+
+def _quote_header(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
 
 
 def utc_ms() -> int:
@@ -154,20 +255,29 @@ def upload_video(
         return result
     title = f"stress-{username}-{utc_ms()}"
     started = time.perf_counter()
+    mime_type = mimetypes.guess_type(video_path.name)[0] or "application/octet-stream"
+    body = StreamingMultipartBody(
+        fields={
+            "title": title,
+            "description": "Long video quality stress probe",
+            "visibility": "public",
+            "privacy_mode": privacy_mode,
+        },
+        file_field="video",
+        file_path=video_path,
+        content_type=mime_type,
+    )
     try:
-        with video_path.open("rb") as handle:
-            response = auth["session"].post(
-                f"{base_url}/api/videos/upload",
-                data={
-                    "title": title,
-                    "description": "Long video quality stress probe",
-                    "visibility": "public",
-                    "privacy_mode": privacy_mode,
-                },
-                files={"video": (video_path.name, handle, "video/mp4")},
-                headers={"X-CSRF-Token": auth["token"]},
-                timeout=timeout_seconds,
-            )
+        response = auth["session"].post(
+            f"{base_url}/api/videos/upload",
+            data=body,
+            headers={
+                "Content-Type": body.content_type,
+                "Content-Length": str(len(body)),
+                "X-CSRF-Token": auth["token"],
+            },
+            timeout=timeout_seconds,
+        )
         elapsed = time.perf_counter() - started
         try:
             payload: Any = response.json()
@@ -197,6 +307,8 @@ def upload_video(
             "message": str(exc),
         })
         return result
+    finally:
+        body.close()
 
 
 def ps_snapshot(runtime_marker: str) -> list[dict[str, Any]]:
@@ -251,7 +363,14 @@ def db_state(db_path: Path) -> dict[str, Any]:
     conn = db_connect(db_path)
     try:
         state: dict[str, Any] = {}
-        for table in ("uploaded_files", "videos", "job_center_jobs", "media_stream_assets", "media_stream_variants"):
+        for table in (
+            "uploaded_files",
+            "videos",
+            "job_center_jobs",
+            "media_stream_assets",
+            "media_stream_variants",
+            "media_stream_subtitles",
+        ):
             try:
                 state[f"{table}_count"] = conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
             except Exception as exc:
@@ -319,6 +438,21 @@ def db_state(db_path: Path) -> dict[str, Any]:
             ]
         except Exception as exc:
             state["variants_error"] = str(exc)
+        try:
+            state["subtitles"] = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT st.asset_id, a.uploaded_file_id, st.name, st.label,
+                           st.language, st.codec, st.path, st.is_default
+                    FROM media_stream_subtitles st
+                    JOIN media_stream_assets a ON a.id=st.asset_id
+                    ORDER BY st.asset_id, st.id
+                    """
+                ).fetchall()
+            ]
+        except Exception as exc:
+            state["subtitles_error"] = str(exc)
         return state
     finally:
         conn.close()
@@ -475,6 +609,16 @@ def wait_for_hls(args: argparse.Namespace) -> dict[str, Any]:
         if args.print_wait_status:
             print(format_wait_status(state, processes, elapsed_s), flush=True)
         jobs = state.get("jobs") or []
+        if not jobs:
+            return {
+                "phase": "wait",
+                "ok": False,
+                "error": "no_hls_jobs",
+                "elapsed_s": elapsed_s,
+                "final_state": state,
+                "final_processes": processes,
+                "history_tail": history[-10:],
+            }
         if jobs and all(str(job.get("status") or "") in TERMINAL_JOB_STATUSES for job in jobs):
             return {
                 "phase": "wait",
@@ -608,6 +752,58 @@ def measure_variant_burst(
     }
 
 
+def measure_subtitle_tracks(
+    *,
+    base_url: str,
+    session: requests.Session,
+    token: str,
+    tracks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for track in tracks:
+        url = str(track.get("url") or "")
+        item = {
+            "name": track.get("name"),
+            "label": track.get("label"),
+            "language": track.get("language"),
+            "is_default": bool(track.get("is_default")),
+            "url": url,
+        }
+        if not url:
+            item.update({"ok": False, "error": "missing_url"})
+            results.append(item)
+            continue
+        started = time.perf_counter()
+        try:
+            response = session.get(f"{base_url}{url}", headers={"X-CSRF-Token": token}, timeout=30)
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            content = response.content
+            preview = content[:256].decode("utf-8", errors="replace")
+            looks_like_webvtt = preview.lstrip("\ufeff\r\n\t ").startswith("WEBVTT")
+            item.update({
+                "ok": response.status_code == 200 and looks_like_webvtt,
+                "status": response.status_code,
+                "elapsed_ms": round(elapsed_ms, 2),
+                "bytes": len(content),
+                "looks_like_webvtt": looks_like_webvtt,
+                "preview": preview[:120],
+            })
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            item.update({
+                "ok": False,
+                "status": 0,
+                "elapsed_ms": round(elapsed_ms, 2),
+                "bytes": 0,
+                "looks_like_webvtt": False,
+                "error": f"{exc.__class__.__name__}: {exc}",
+            })
+        if not item["ok"]:
+            item.setdefault("error", "subtitle_fetch_or_format_failed")
+        results.append(item)
+    return results
+
+
 def measure_hls_variants(args: argparse.Namespace) -> dict[str, Any]:
     auth = login(args.base_url, args.measure_username, args.measure_password)
     if not auth["ok"]:
@@ -616,10 +812,17 @@ def measure_hls_variants(args: argparse.Namespace) -> dict[str, Any]:
     token = auth["token"]
     state = db_state(Path(args.db))
     measurements: list[dict[str, Any]] = []
+    phase_ok = True
     for video in state.get("videos") or []:
         video_id = int(video["id"])
         playback = timed_get(session, f"{args.base_url}/api/videos/{video_id}/playback", token, timeout=20)
-        entry: dict[str, Any] = {"video_id": video_id, "title": video.get("title"), "playback": playback, "variants": []}
+        entry: dict[str, Any] = {
+            "video_id": video_id,
+            "title": video.get("title"),
+            "playback": playback,
+            "variants": [],
+            "subtitles": [],
+        }
         variants: list[dict[str, Any]] = []
         if playback.get("status") == 200:
             status, payload, elapsed = request_json(
@@ -636,10 +839,23 @@ def measure_hls_variants(args: argparse.Namespace) -> dict[str, Any]:
                     "mode": payload.get("mode") if isinstance(payload, dict) else None,
                     "streaming_ready": payload.get("streaming_ready") if isinstance(payload, dict) else None,
                     "variants": payload.get("variants") if isinstance(payload, dict) else [],
+                    "subtitles": payload.get("subtitles") if isinstance(payload, dict) else [],
                 },
             }
             if isinstance(payload, dict):
                 variants = list(payload.get("variants") or [])
+                subtitle_tracks = list(payload.get("subtitles") or [])
+                entry["subtitles"] = measure_subtitle_tracks(
+                    base_url=args.base_url,
+                    session=session,
+                    token=token,
+                    tracks=subtitle_tracks,
+                )
+                if args.expect_subtitles and not entry["subtitles"]:
+                    entry["subtitle_error"] = "expected_subtitles_missing"
+                    phase_ok = False
+                if any(not item.get("ok") or not item.get("looks_like_webvtt") for item in entry["subtitles"]):
+                    phase_ok = False
         for variant in variants:
             name = str(variant.get("name") or "")
             playlist_url = str(variant.get("playlist_url") or "")
@@ -669,7 +885,7 @@ def measure_hls_variants(args: argparse.Namespace) -> dict[str, Any]:
         measurements.append(entry)
     return {
         "phase": "measure",
-        "ok": True,
+        "ok": phase_ok,
         "state": state,
         "measurements": measurements,
         "processes_after_measure": ps_snapshot(args.runtime_marker),
@@ -711,6 +927,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--measure-password", default="root")
     parser.add_argument("--segment-concurrency", type=int, default=4)
     parser.add_argument("--max-segments-per-variant", type=int, default=12)
+    parser.add_argument("--expect-subtitles", action="store_true", help="Fail measure phase when playback has no usable subtitle tracks.")
     parser.add_argument("--upload", action="store_true", help="Run concurrent upload phase.")
     parser.add_argument("--wait", action="store_true", help="Wait for HLS jobs to finish.")
     parser.add_argument("--measure", action="store_true", help="Measure generated HLS quality variants.")
