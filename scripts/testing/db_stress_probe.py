@@ -185,11 +185,17 @@ class ResourceMonitor:
         return round(max(0.0, min(100.0, (1.0 - (idle_delta / total_delta)) * 100.0)), 2)
 
     def _db_snapshot(self, label: str, path: Path) -> dict[str, Any]:
+        def safe_size(target: Path) -> int:
+            try:
+                return target.stat().st_size
+            except FileNotFoundError:
+                return 0
+
         payload: dict[str, Any] = {
             "path": str(path),
-            "db_bytes": path.stat().st_size if path.exists() else 0,
-            "wal_bytes": path.with_name(path.name + "-wal").stat().st_size if path.with_name(path.name + "-wal").exists() else 0,
-            "shm_bytes": path.with_name(path.name + "-shm").stat().st_size if path.with_name(path.name + "-shm").exists() else 0,
+            "db_bytes": safe_size(path),
+            "wal_bytes": safe_size(path.with_name(path.name + "-wal")),
+            "shm_bytes": safe_size(path.with_name(path.name + "-shm")),
         }
         try:
             conn = get_readonly_db(str(path))

@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
@@ -24,9 +24,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from scripts.testing.db_stress_probe import ResourceMonitor
 from services.platform.db_mode_triggers import register_app_mode_function
 from services.points_chain import PointsLedgerService
-from services.points_chain.economy_layer import append_economy_event
+from services.points_chain.economy_layer import append_economy_event, load_economy_policy, replay_economy_events
 
 
 class ProbeClient:
@@ -122,6 +123,16 @@ def utc_old(seconds: int = 900) -> str:
 
 def random_unowned_address(rng: random.Random) -> str:
     return "pc1" + "".join(rng.choice("0123456789abcdef") for _ in range(48))
+
+
+def parse_pids(value: str) -> list[int]:
+    pids = []
+    for item in str(value or "").replace(",", " ").split():
+        try:
+            pids.append(int(item))
+        except Exception:
+            pass
+    return pids
 
 
 def pick_other_client_address(
@@ -223,7 +234,42 @@ def fixture_official_grant(service: PointsLedgerService, *, root_actor: dict[str
         conn.close()
 
 
+def numeric_latency_summary(values: list[float]) -> dict[str, Any]:
+    values = sorted(float(value or 0) for value in values if float(value or 0) > 0)
+    if not values:
+        return {"count": 0}
+    return {
+        "count": len(values),
+        "min_ms": round(values[0], 3),
+        "median_ms": round(median(values), 3),
+        "p95_ms": round(values[int(len(values) * 0.95) - 1], 3),
+        "p99_ms": round(values[int(len(values) * 0.99) - 1], 3),
+        "max_ms": round(values[-1], 3),
+    }
+
+
+def economy_fund_balances(service: PointsLedgerService) -> dict[str, int]:
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        policy = load_economy_policy(conn)
+        replay = replay_economy_events(
+            conn,
+            policy=policy,
+            chain_secret=service.chain_secret,
+            persist_cache=False,
+            chain_branch=service._canonical_branch_uuid(conn),
+        )
+        balances = replay.get("balances") or {}
+        return {str(key): int((value or {}).get("balance") or 0) for key, value in balances.items()}
+    finally:
+        conn.close()
+
+
 def fixture_mint_to_treasury(service: PointsLedgerService, *, root_actor: dict[str, Any], amount: int, request_uuid: str) -> dict[str, Any]:
+    amount = int(amount or 0)
+    if amount <= 0:
+        return {"event_uuid": "", "created": False, "amount": 0, "skipped": True}
     conn = service.get_db()
     try:
         service.ensure_schema(conn)
@@ -249,6 +295,39 @@ def fixture_mint_to_treasury(service: PointsLedgerService, *, root_actor: dict[s
         raise
     finally:
         conn.close()
+
+
+def ensure_fixture_treasury_funding(
+    service: PointsLedgerService,
+    *,
+    root_actor: dict[str, Any],
+    needed_amount: int,
+    request_uuid: str,
+) -> dict[str, Any]:
+    balances = economy_fund_balances(service)
+    treasury_balance = int(balances.get("official_treasury") or 0)
+    shortfall = max(0, int(needed_amount or 0) - treasury_balance)
+    if shortfall <= 0:
+        return {
+            "event_uuid": "",
+            "created": False,
+            "amount": 0,
+            "skipped": True,
+            "treasury_balance_before": treasury_balance,
+            "needed_amount": int(needed_amount or 0),
+        }
+    minted = fixture_mint_to_treasury(
+        service,
+        root_actor=root_actor,
+        amount=shortfall,
+        request_uuid=request_uuid,
+    )
+    minted.update({
+        "treasury_balance_before": treasury_balance,
+        "needed_amount": int(needed_amount or 0),
+        "shortfall": shortfall,
+    })
+    return minted
 
 
 def db_scalar(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> int:
@@ -441,6 +520,16 @@ def create_or_get_user(root: ProbeClient, username: str, password: str) -> dict[
     raise RuntimeError(f"user not found after create: {username}")
 
 
+def login_with_retry(client: ProbeClient, *, attempts: int = 8, base_sleep: float = 0.5) -> dict[str, Any]:
+    last: dict[str, Any] = {}
+    for attempt in range(max(1, int(attempts))):
+        last = client.login()
+        if int(last.get("status") or 0) != 429:
+            return last
+        time.sleep(float(base_sleep) * (attempt + 1))
+    return last
+
+
 def wallet_balance(client: ProbeClient) -> dict[str, int]:
     res = client.request("GET", "/api/points/wallet")
     wallet = res.get("wallet") or {}
@@ -492,10 +581,15 @@ def main() -> int:
     parser.add_argument("--accounts", type=int, default=20)
     parser.add_argument("--grant-points", type=int, default=5000)
     parser.add_argument("--transfer-ops", type=int, default=50)
+    parser.add_argument("--direct-transfer-ops", type=int, default=0, help="Additional service-layer pc0->pc0 transfers for high-volume financial invariant stress.")
     parser.add_argument("--trading-ops", type=int, default=30)
     parser.add_argument("--concurrency", type=int, default=16)
+    parser.add_argument("--external-transfer-every", type=int, default=5, help="Send every Nth wallet transfer to an unowned pc1 address. 0 disables this path.")
+    parser.add_argument("--max-external-transfers", type=int, default=0, help="Maximum unowned pc1 bridge/withdrawal transfers. 0 means unlimited.")
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--mode", default="dev_ready")
+    parser.add_argument("--server-pids", default="", help="Comma/space separated server process PIDs to sample during the probe.")
+    parser.add_argument("--resource-interval", type=float, default=1.0)
     args = parser.parse_args()
 
     requests.packages.urllib3.disable_warnings()
@@ -503,6 +597,7 @@ def main() -> int:
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    run_started = time.perf_counter()
     database = db_path(args.runtime_root)
     points_service = service_for_runtime(args.runtime_root, mode=args.mode)
     root_actor = root_actor_for_service(points_service)
@@ -511,10 +606,29 @@ def main() -> int:
     samples: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
     fee_market_samples: list[dict[str, Any]] = []
+    resource_summary: dict[str, Any] = {}
+    monitor = None
+    pids = parse_pids(args.server_pids)
+    if pids:
+        database_dir = db_path(args.runtime_root).parent
+        monitor = ResourceMonitor(
+            runtime_root=Path(args.runtime_root),
+            paths={
+                "main": database_dir / "database.db",
+                "auth": database_dir / "auth.db",
+                "audit": database_dir / "audit.db",
+                "control": database_dir / "control.db",
+            },
+            interval=max(0.2, float(args.resource_interval or 1.0)),
+            pids=pids,
+        )
+        monitor.start()
 
     root = ProbeClient(args.base_url, "root", args.root_password, timeout=args.timeout)
-    root_login = root.login()
+    root_login = login_with_retry(root)
     if int(root_login.get("status") or 0) != 200:
+        if monitor:
+            monitor.stop()
         raise SystemExit(f"root login failed: {root_login}")
     fee_market_samples.append(fee_market_snapshot(root, "baseline_before_internal_grants"))
 
@@ -527,7 +641,7 @@ def main() -> int:
     clients: list[dict[str, Any]] = []
     for item in users:
         client = ProbeClient(args.base_url, item["username"], password, timeout=args.timeout)
-        login = client.login()
+        login = login_with_retry(client)
         samples.append({"op": "login", **login})
         if int(login.get("status") or 0) != 200:
             findings.append({"severity": "high", "title": "stress user login failed", "user": item["username"], "response": login})
@@ -536,10 +650,10 @@ def main() -> int:
         before = wallet_balance(client)
         clients.append({"user": item, "client": client, "address": address, "balance_before_grant": before})
 
-    fixture_mint = fixture_mint_to_treasury(
+    fixture_mint = ensure_fixture_treasury_funding(
         points_service,
         root_actor=root_actor,
-        amount=max(0, len(clients) * int(args.grant_points) + 1000),
+        needed_amount=max(0, len(clients) * int(args.grant_points) + 1000),
         request_uuid=prefix + "fixture-mint",
     )
     samples.append({"op": "fixture_mint_to_treasury", "status": 200, "ok": True, "expected": True, **fixture_mint})
@@ -599,10 +713,15 @@ def main() -> int:
             })
 
     transfer_tasks: list[tuple[dict[str, Any], str, int, int, str, str]] = []
+    external_transfer_count = 0
+    external_every = max(0, int(args.external_transfer_every or 0))
+    max_external = max(0, int(args.max_external_transfers or 0))
     for idx in range(max(1, int(args.transfer_ops))):
         sender = clients[idx % len(clients)]
-        if idx % 5 == 0:
+        should_external = bool(external_every and idx % external_every == 0 and (max_external <= 0 or external_transfer_count < max_external))
+        if should_external:
             destination = random_unowned_address(rng)
+            external_transfer_count += 1
         else:
             destination = pick_other_client_address(clients, sender, rng=rng)
         amount = rng.randint(5, 45)
@@ -637,6 +756,105 @@ def main() -> int:
     with ThreadPoolExecutor(max_workers=max(1, int(args.concurrency))) as pool:
         for fut in as_completed([pool.submit(submit_transfer, task) for task in transfer_tasks]):
             samples.append(fut.result())
+
+    direct_transfer_completed = 0
+    direct_transfer_errors = 0
+    direct_latency_values: list[float] = []
+    direct_status_counts: Counter[str] = Counter()
+    direct_error_samples: list[dict[str, Any]] = []
+
+    def submit_direct_transfer(idx: int) -> dict[str, Any]:
+        sender = clients[idx % len(clients)]
+        recipient = clients[(idx * 7 + 1) % len(clients)]
+        if recipient["address"] == sender["address"]:
+            recipient = clients[(idx + 1) % len(clients)]
+        amount = 1 + (idx % 5)
+        request_uuid = prefix + f"direct-{idx:06d}"
+        started = time.perf_counter()
+        try:
+            actor = {
+                "id": int(sender["user"]["id"]),
+                "username": sender["user"]["username"],
+                "role": "user",
+                "member_level": "trusted",
+                "effective_level": "trusted",
+            }
+            result = points_service.submit_wallet_transaction(
+                actor=actor,
+                source_wallet_address=sender["address"],
+                destination_wallet_address=recipient["address"],
+                amount_points=amount,
+                fee_points=0,
+                request_uuid=request_uuid,
+                memo="direct service-layer extreme transfer",
+            )
+            return {
+                "op": "direct_wallet_transfer",
+                "ok": True,
+                "expected": True,
+                "status": 200,
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+                "request_uuid": request_uuid,
+                "tx_group_hash": result.get("tx_group_hash"),
+                "settlement_rail": ((result.get("transaction") or {}).get("settlement_rail") or ""),
+                "amount": amount,
+            }
+        except Exception as exc:
+            return {
+                "op": "direct_wallet_transfer",
+                "ok": False,
+                "expected": False,
+                "status": 0,
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+                "request_uuid": request_uuid,
+                "error": f"{exc.__class__.__name__}: {str(exc)[:240]}",
+                "amount": amount,
+            }
+
+    direct_ops = max(0, int(args.direct_transfer_ops or 0))
+    if direct_ops:
+        print(f"[direct-transfer] starting {direct_ops} service-layer pc0 transfers", flush=True)
+        max_workers = max(1, int(args.concurrency))
+        max_inflight = max_workers * 4
+        with ThreadPoolExecutor(max_workers=max(1, int(args.concurrency))) as pool:
+            futures = set()
+            next_idx = 0
+            while next_idx < direct_ops and len(futures) < max_inflight:
+                futures.add(pool.submit(submit_direct_transfer, next_idx))
+                next_idx += 1
+            while futures:
+                done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    result = fut.result()
+                    direct_transfer_completed += 1
+                    elapsed_ms = float(result.get("elapsed_ms") or 0)
+                    if elapsed_ms > 0:
+                        direct_latency_values.append(elapsed_ms)
+                    direct_status_counts[str(result.get("status", 0))] += 1
+                    if not result.get("ok"):
+                        direct_transfer_errors += 1
+                        if len(direct_error_samples) < 100:
+                            direct_error_samples.append(result)
+                            samples.append(result)
+                    if direct_transfer_completed % 5000 == 0 or direct_transfer_completed == direct_ops:
+                        samples.append({
+                            "op": "direct_wallet_transfer_progress",
+                            "ok": True,
+                            "expected": True,
+                            "status": 200,
+                            "completed": direct_transfer_completed,
+                            "requested": direct_ops,
+                            "errors": direct_transfer_errors,
+                            "elapsed_ms": elapsed_ms,
+                        })
+                        print(
+                            f"[direct-transfer] completed {direct_transfer_completed}/{direct_ops} "
+                            f"errors={direct_transfer_errors}",
+                            flush=True,
+                        )
+                while next_idx < direct_ops and len(futures) < max_inflight:
+                    futures.add(pool.submit(submit_direct_transfer, next_idx))
+                    next_idx += 1
 
     duplicate_task = (clients[0], clients[1]["address"], 11, 1, prefix + "duplicate-once", "duplicate idempotency")
     dup_first = submit_transfer(duplicate_task)
@@ -826,6 +1044,14 @@ def main() -> int:
     hard_5xx = [s for s in samples if int(s.get("status") or 0) >= 500 and int(s.get("status") or 0) != 503]
     if hard_5xx:
         findings.append({"severity": "high", "title": "HTTP 5xx during destructive stress", "count": len(hard_5xx), "samples": hard_5xx[:10]})
+    if monitor:
+        resource_summary = monitor.stop()
+    status_by_operation = {
+        op: dict(Counter(str(item.get("status", 0)) for item in samples if item.get("op") == op))
+        for op in sorted({str(item.get("op") or "") for item in samples})
+    }
+    if direct_ops:
+        status_by_operation["direct_wallet_transfer"] = dict(direct_status_counts)
 
     payload = {
         "ok": not findings,
@@ -833,19 +1059,25 @@ def main() -> int:
         "base_url": args.base_url,
         "runtime_root": args.runtime_root,
         "database": str(database),
+        "elapsed_seconds": round(time.perf_counter() - run_started, 3),
         "accounts_requested": int(args.accounts),
         "accounts_active": len(clients),
         "grant_points": int(args.grant_points),
+        "transfer_ops_requested": int(args.transfer_ops),
+        "direct_transfer_ops_requested": direct_ops,
+        "direct_transfer_completed": direct_transfer_completed,
+        "direct_transfer_errors": direct_transfer_errors,
+        "external_transfer_count": external_transfer_count,
+        "direct_latency": numeric_latency_summary(direct_latency_values),
+        "direct_status_counts": dict(direct_status_counts),
         "forced_grants": forced_grants,
         "explorer_finalized_grants": explorer_finalized_grants,
         "forced_transfers": forced_transfers,
         "explorer_finalized_transfers": explorer_finalized,
         "latency": latency_summary(samples),
+        "resource_monitor": resource_summary,
         "fee_market_samples": fee_market_samples,
-        "status_by_operation": {
-            op: dict(Counter(str(item.get("status", 0)) for item in samples if item.get("op") == op))
-            for op in sorted({str(item.get("op") or "") for item in samples})
-        },
+        "status_by_operation": status_by_operation,
         "notification_checks": notification_checks,
         "db_counts": counts,
         "seal": seal,
@@ -858,7 +1090,7 @@ def main() -> int:
             "sitewide_pools": trading_pools,
         },
         "findings": findings,
-        "sample_errors": [s for s in samples if not s.get("expected", True) or int(s.get("status") or 0) >= 500][:100],
+        "sample_errors": ([s for s in samples if not s.get("expected", True) or int(s.get("status") or 0) >= 500] + direct_error_samples)[:100],
     }
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
