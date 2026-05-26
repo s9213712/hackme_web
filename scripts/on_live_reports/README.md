@@ -25,7 +25,7 @@ relevant API, or compose multiple sub-drivers.
 | `permission` | `permission.py` (symlink) | `scripts/security/pentest/functional_permission_pentest.py` |
 | `functional` | `functional.py` (wrapper) | `run_functional_smoke.sh --core-only` + `tests/security/smoke/smoke_suite.py` |
 | `pentest` | `pentest.py` (symlink) | `scripts/security/pentest/session_security_pentest.py` |
-| `snapshot_restore` | `snapshot_restore.py` (wrapper) | `tests/snapshots/test_snapshots.py` |
+| `snapshot_restore` | `snapshot_restore.py` (wrapper) | `tests/snapshots/test_snapshots.py` boundary checks; PointsChain ledger backup/restore must stay disabled |
 | `points_chain_consistency` | `points_chain_consistency.py` (wrapper) | `tests/points/test_points_chain.py` |
 | `cloud_drive_quota_permission` | `cloud_drive_quota_permission.py` (wrapper) | `tests/storage/test_cloud_drive_attachments.py` + `tests/storage/test_storage_albums_schema.py` |
 

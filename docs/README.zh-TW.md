@@ -50,7 +50,9 @@ Nginx 對外，Gunicorn 只綁 127.0.0.1:8000。
 | 主題 | 文件 |
 |---|---|
 | 安全模型 | [06_SECURITY_MODEL.md](06_SECURITY_MODEL.md), [SECURITY.md](SECURITY.md) |
-| PointsChain | [07_POINTSCHAIN.md](07_POINTSCHAIN.md), [architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md](architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md), [architecture/ECONOMY_LAYER_GUARDRAILS.md](architecture/ECONOMY_LAYER_GUARDRAILS.md) |
+| PointsChain | [07_POINTSCHAIN.md](07_POINTSCHAIN.md), [architecture/POINTSCHAIN_FINANCIAL_SETTLEMENT_NETWORK.md](architecture/POINTSCHAIN_FINANCIAL_SETTLEMENT_NETWORK.md), [architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md](architecture/BLOCKCHAIN_WALLET_IDENTITY_CONTRACT.md), [architecture/ECONOMY_LAYER_GUARDRAILS.md](architecture/ECONOMY_LAYER_GUARDRAILS.md) |
+| 帳本 / DB 架構 | [architecture/PC0_DUAL_RAIL_WALLET_MODEL.md](architecture/PC0_DUAL_RAIL_WALLET_MODEL.md), [architecture/DATABASE_DOMAIN_SPLIT.md](architecture/DATABASE_DOMAIN_SPLIT.md) |
+| 設定 UI 重整 | [architecture/SETTINGS_UI_REDESIGN_TODO.md](architecture/SETTINGS_UI_REDESIGN_TODO.md) |
 | Trading | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [trading/README.md](trading/README.md) |
 | Snapshot / Reset / Restore | [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [ops_boundaries/README.md](ops_boundaries/README.md) |
 | 個人主頁 / 好友系統 | [social/USER_PROFILES_AND_FRIENDS.md](social/USER_PROFILES_AND_FRIENDS.md) |

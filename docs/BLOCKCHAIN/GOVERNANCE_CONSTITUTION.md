@@ -45,6 +45,10 @@ Proposal authority:
 
 Voting authority:
 - Active users vote.
+- Quorum is not a fixed number of accounts. It is calculated from the proposal's
+  eligible voter snapshot using the domain policy rate, with a small minimum
+  floor where enough voters exist. This keeps small sandboxes usable while
+  making production public governance scale with total active membership.
 - Root has no veto.
 - Root can propose, vote, sponsor if manager+ by role, and execute a passed
   proposal, but cannot cancel or override the result.

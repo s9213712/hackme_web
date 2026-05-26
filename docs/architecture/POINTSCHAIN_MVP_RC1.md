@@ -28,7 +28,7 @@ RC1 must support:
 - chain verify
 - replay and derived-cache verification
 - backup, recovery, and safe mode
-- service-fee reserve, release, capture, batch debit, and burn
+- pc0 service-fee immediate internal debit plus legacy service-fee audit replay
 - exchange fund accounting and reconciliation
 - root/admin governance guardrails
 - feature-flagged basic economy mode
@@ -110,21 +110,21 @@ Standard service-fee flow:
 
 ```text
 request service
--> create service_fee_reserve
--> freeze amount
--> service success
--> pending settlement
--> batch debit
--> BURN
+-> pc0 internal custody debit
+-> service revenue credit to official Treasury
+-> no network fee and no batch threshold
 ```
+
+Legacy `service_fee_reserve` / batch rows may still exist in old runtimes and
+are read for audit compatibility only. New service payments must not create
+reserve rows or wait for a 100-point threshold.
 
 Failure flow:
 
 ```text
 request service
--> create reserve
--> service failed
--> release reserve
+-> no ledger write before successful service commit, or append refund/compensation
+   from the same pc0 rail if a later product step fails after debit
 -> no burn
 ```
 

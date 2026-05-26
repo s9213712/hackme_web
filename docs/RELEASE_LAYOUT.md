@@ -21,7 +21,7 @@ separate locations so a downloaded release starts cleanly.
 
 Runtime data is generated on the deployment host and must not be committed.
 A fresh checkout starts in `test` server mode. Chat messages, forum content,
-Cloud Drive files, PointsChain ledger rows, PointsChain blocks, ledger backups,
+Cloud Drive files, PointsChain ledger rows, PointsChain blocks, forensic bundles,
 and audit chain rows are expected to start empty. Admin initial grants and
 weekly salary jobs are not run at startup unless the operator explicitly sets
 `HTML_LEARNING_BOOTSTRAP_POINTS_CHAIN=true` for a controlled test environment.
@@ -40,7 +40,7 @@ weekly salary jobs are not run at startup unless the operator explicitly sets
 | `runtime/reports/security/` | Security, smoke, and pentest reports. |
 | `runtime/reports/games/` | 西洋棋自動對弈訓練報告。 |
 | `secure_backups/` | Legacy local PointsChain backup path; ignored. |
-| `runtime/database/points_chain_backups/` | Current PointsChain ledger backup location when using the default runtime layout. |
+| `runtime/database/points_chain_backups/` | Legacy-named PointsChain forensic bundle directory. It must not contain restorable ledger backups. |
 | `runtime/cert.pem`, `runtime/key.pem` | Local TLS files generated on first start. |
 | `runtime/.chain_seed`, `runtime/.csrfkey`, `runtime/.fkey`, `runtime/.filekey`, `runtime/.integrity_key`, `runtime/integrity_manifest.json` | Runtime secrets and integrity state generated locally. |
 

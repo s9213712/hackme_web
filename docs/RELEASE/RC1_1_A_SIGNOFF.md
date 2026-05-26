@@ -13,7 +13,7 @@
 
 Included:
 
-- restore drill
+- snapshot-boundary drill
 - signed local chain checkpoint anchor v0
 - RC1.1 gate
 - operational integrity docs
@@ -51,21 +51,21 @@ Artifact manifest:
 ## Gate Summary
 
 - RC1.1 gate: PASS
-- restore drill: PASS
+- snapshot-boundary drill: PASS
 - operational tests: PASS
 - snapshot tests: PASS
 - artifact secret scan: PASS
 
-Restore drill summary:
+Snapshot-boundary drill summary:
 
 - source runtime: synthetic / isolated
-- backup created: true
+- PointsChain ledger backup/restore disabled: true
 - dirty state created: true
 - restore performed: true
 - chain verify after restore: pass
 - count invariants after restore: pass
 - file invariants after restore: pass
-- ledger invariants after restore: pass
+- ledger backup restore exercised: false
 - production DB mutated: false
 
 ## Anchor Summary

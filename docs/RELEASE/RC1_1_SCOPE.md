@@ -8,7 +8,7 @@ financial surface.
 
 ## Goals
 
-- Prove backup/restore mechanics with a repeatable isolated drill.
+- Prove ordinary snapshot/restore boundaries with a repeatable isolated drill, while keeping PointsChain ledger backup/restore disabled.
 - Export signed local chain checkpoints that can be copied to offline or
   read-only storage.
 - Keep release checks runnable from a single RC1.1 gate script.
@@ -20,10 +20,10 @@ financial surface.
 - `scripts/ops/rc1_restore_drill.py`
   - builds an isolated synthetic runtime
   - creates PointsChain ledger/block data
-  - creates a server snapshot and PointsChain ledger backup
+  - creates a server snapshot and verifies PointsChain append-only recovery policy
   - dirties DB and runtime files
   - restores the snapshot
-  - verifies chain and restore invariants
+  - verifies chain, restore-boundary, and backup-disabled invariants
 - `scripts/ops/export_chain_anchor.py`
   - exports a signed checkpoint JSON
   - includes chain height, latest block hash, latest ledger hash, chain root,
@@ -32,7 +32,7 @@ financial surface.
 - `scripts/qa/points_chain_rc1_1_gate.py`
   - compiles new ops scripts
   - runs RC1.1 operational tests and snapshot tests
-  - runs the isolated restore drill and emits a JSON gate artifact
+  - runs the isolated snapshot-boundary drill and emits a JSON gate artifact
   - generates the RC1.1-A artifact manifest and runs the artifact secret scan
 
 ## Explicitly Not Included

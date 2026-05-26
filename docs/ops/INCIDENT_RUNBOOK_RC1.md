@@ -52,7 +52,7 @@ pytest -q tests/points/test_points_chain.py \
 ```
 
 If verify fails, keep safe mode on and treat the runtime as compromised until
-the backup/restore plan is chosen.
+the branch/governance recovery plan is chosen.
 
 ## 4. Scanner Check
 

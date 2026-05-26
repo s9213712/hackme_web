@@ -74,6 +74,75 @@ Generated runtime files remain local and must not be committed:
 更完整的 system binary / external service 清單請看
 [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md)。
 
+## Pre-Deploy Capacity Probe
+
+部署前可先在同一台機器上探勘 Gunicorn workers / threads 的安全範圍：
+
+```bash
+python3 scripts/testing/predeploy_capacity_probe.py
+```
+
+腳本會透過 `test_for_develop.sh` 啟動隔離的 `/tmp` 測試站台，建立臨時帳號並跑聊天、
+討論區、雲端硬碟、相簿、遊戲、PointsChain、治理、申覆、疑義交易、交易所三大交易方式、
+三大交易機器人、借貸清算、掛單撮合與交易背景任務的混合前後端流量。測試結束預設會 kill
+測試 Gunicorn 並刪除臨時 runtime、DB、uploads 與 fixture；JSON 報告保留在 `/tmp`，不污染
+後續部署。
+
+負載型態用 `--load-profile` 選：
+
+- `normal`：預設值，模擬一般會員與 root 維運背景工作；只有這個 profile 的成功結果會同步
+  `.hackme_capacity_defaults.env`。
+- `malicious`：在 normal 上增加 SQL/XSS/錯誤 CSRF/越權讀取/錯誤治理與交易 payload 等攻擊與
+  例外請求，用來測防禦與錯誤處理，不會同步部署預設值。
+- `heavy`：在 normal 上增加重複預覽/下載、分段上傳、線上文字更新、交易回測、snapshot 與
+  PointsChain backup，用來測 I/O、CPU 與背景任務壓力，不會同步部署預設值。
+- `full`：同時啟用 malicious 與 heavy。也可用 `--load-kinds normal,malicious,heavy` 自訂組合。
+
+成功完成探勘時，腳本會同步更新 repo root 的 `.hackme_capacity_defaults.env`。之後
+`test_for_develop.sh` 的 Gunicorn `auto` 會優先使用這份本機實測結果；檔案不存在時才會
+自動跑一次探勘。若要重新測試，用 `./test_for_develop.sh --capacity-probe` 或直接重跑
+`predeploy_capacity_probe.py`；若只想產生報告、不更新本機預設值，加 `--no-sync-defaults`。
+
+容量探勘預設使用 HTTP keep-alive，較接近瀏覽器和正式反向代理後方的行為；不要用
+`Connection: close` 的結果判定機器極限。需要特別測試短連線/相容性時再加
+`--close-connections`。短測試也會把 Gunicorn `max-requests` 預設設為 `10000`，避免 worker
+回收剛好發生在探勘期間，造成 `RemoteDisconnected` 這類假性容量錯誤。
+
+探勘伺服器是獨立 `/tmp` 環境，預設會關閉登入/IP/使用者/上傳等濫用與流量限制，避免
+防刷規則先於機器極限觸發；若要測正式防濫用策略本身，加 `--keep-app-limits`。伺服器
+backpressure 預設保留，因為它是防止程序被打爆的保護線；若要測裸跑崩潰行為，加
+`--disable-backpressure`。
+
+常用範例：
+
+```bash
+python3 scripts/testing/predeploy_capacity_probe.py \
+  --profiles 1x6,2x6,3x6,4x6 \
+  --target-p95-ms 1500
+```
+
+`--account-counts` 預設為 `auto`；腳本會從 `--start-accounts` 開始按 `--growth-factor`
+往上探，體驗開始劣化後改用 `--fine-growth-factor` 細找伺服器穩定線。為避免使用者誤跑
+過久，預設有 `--max-rounds 8` 與 `--max-accounts 256` 的安全煞車；若要在高階機器上找
+硬崩線，明確加 `--max-rounds 0 --max-accounts 0 --continue-after-failure`。
+
+長時間探勘會持續輸出進度：目前帳號、每帳號操作清單、各帳號卡在哪個功能、完成比例、
+CPU/RAM、以及即時最慢功能延遲。若輸出太多，可用 `--progress-active-limit N` 限制每次
+顯示的活躍帳號數，或用 `--no-progress` 關閉。
+
+報告裡的 `recommendation.suggested_test_for_develop_args` 和 `suggested_env` 可作為本機或
+staging 的初始設定。若報告出現 `multi_worker_cpu_observed: true`，代表測試期間至少兩個
+Gunicorn worker 同時有 CPU 活動；`active_worker_peak` 越接近 worker 數，越能證明該設定
+真的有利用多核心。
+
+容量報告也會輸出 `limits`，同時標示兩種門檻：
+
+- `limits.experience.degradation_starts_at`：使用者體驗開始不佳，預設以 `p95 >= 2000ms`
+  或 `p99 >= 4000ms` 判定，可用 `--ux-p95-ms`、`--ux-p99-ms` 調整。
+- `limits.server_instability.first_observed_at`：伺服器或應用穩定性失效，例如連線錯誤、
+  `503 server_busy`、非預期 `5xx`，或延遲超過 `--hard-p95-ms` / `--hard-max-ms`。`429`
+  會另外列在 `limits.application_limit`，代表防濫用/限流先被觸發，不等同伺服器崩潰。
+
 ## Functional Smoke
 
 Run:

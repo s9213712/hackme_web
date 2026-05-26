@@ -94,12 +94,11 @@ wallet address.
 
 ## Service Fee Reserve Signatures
 
-Wallet-to-wallet transfers sign `points_wallet_transfer`. High-frequency site
-service fees sign `points_service_fee_reserve` when the source wallet is
-`self_custody`. The payload includes user id, source wallet address, item key,
-quantity, amount, request UUID, and reference fields. The server writes only a
-freeze ledger at service time; batch settlement later appends unfreeze + debit
-ledgers and sends the final debit to BURN.
+Wallet-to-wallet transfers sign `points_wallet_transfer`. Site service fees now
+default to the member's pc0 internal custody wallet and settle immediately with
+`network_fee_points=0`. Direct self-custody cold-wallet service payment is
+disabled until a full cold-chain approval rail exists. Legacy
+`points_service_fee_reserve` signatures may appear only in old audit rows.
 
 ## Frontend Checks
 

@@ -323,7 +323,7 @@ python3 scripts/on_live_reports/snapshot_restore.py
 | `permission` | `python3 scripts/security/pentest/functional_permission_pentest.py` | 動態 | `runtime/reports/security/functional_permission_pentest_<timestamp>.json|.md` |
 | `functional` | `scripts/security/pentest/run_functional_smoke.sh --core-only` + `tests/security/smoke/smoke_suite.py` | 動態 | `runtime/reports/security/functional_<run_id>/00_FUNCTIONAL_SMOKE.md`、`results.tsv`、`server.out`、`raw/` |
 | `pentest` | `scripts/security/pentest/run_pentest.sh` + `python3 scripts/security/pentest/session_security_pentest.py` | 動態 | `runtime/reports/security/<run_id>/00_SUMMARY.md` + `raw/*.json|*.md|*.txt` |
-| `snapshot_restore` | `scripts/testing/pytest_in_tmp.sh -q tests/snapshots/test_snapshots.py` + 手動 `create → restore → verify` | 固定 40 | `runtime/reports/security/production_gate/snapshot_restore_report.json` |
+| `snapshot_restore` | `scripts/testing/pytest_in_tmp.sh -q tests/snapshots/test_snapshots.py` + 手動 snapshot integrity / restore-boundary verify；PointsChain ledger backup/restore 必須維持停用 | 固定 40 | `runtime/reports/security/production_gate/snapshot_restore_report.json` |
 | `points_chain_consistency` | `scripts/testing/pytest_in_tmp.sh -q tests/points/test_points_chain.py` + `services/points_chain.verify_chain()` | 固定 27 | `runtime/reports/security/production_gate/points_chain_consistency_report.json` |
 | `cloud_drive_quota_permission` | `scripts/testing/pytest_in_tmp.sh -q tests/storage/test_cloud_drive_attachments.py tests/storage/test_storage_albums_schema.py` | 固定 55 | `runtime/reports/security/production_gate/cloud_drive_quota_permission_report.json` |
 
@@ -567,7 +567,7 @@ python3 scripts/on_live_reports/snapshot_restore.py
   - Grid Bot 停止時是否詢問保留底倉或賣出，並正確釋放未用資金與結算費用
   - Workflow bot 預算增減是否只釋放 free budget，不可低於已凍結、待成交、未結費用與風控保留
   - root `run-once` 是否回 202 enqueue，不可把重報表或交易 job 放回 root request 同步執行
-  - root sitewide report / 資金池 / 全用戶倉位是否讀 snapshot；沒有 snapshot 時回 503，而不是現場重算到卡住
+  - root sitewide report / 交易所基金與借貸流動性 / 全用戶倉位是否讀 snapshot；沒有 snapshot 時回 503，而不是現場重算到卡住
   - 詳細清單見 `docs/AGENTS/TRADING_QA_REGRESSION_MATRIX.md`
 - 若本次改到站點外觀 / 個人外觀，至少補：
   - root 改全站預設後，未登入與一般使用者是否都先看到新預設

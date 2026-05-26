@@ -183,11 +183,13 @@ photo grids should behave like a continuous photo stream: no permanent preview
 / download buttons on every photo, slight hover enlargement, full-page preview
 on click, and left/right navigation between neighboring photos.
 
-Set album visibility to `不列出，持連結可看` to generate an album share URL.
-Open the album detail or preview panel and use the `複製` button next to
-`持連結可看` to copy the URL for another person. Album share links can also
-have an optional password; the password is stored as a hash and must be shared
-out of band with the recipient.
+Use the album `分享` button to generate a `不列出，持連結可看` album share
+and jump into Share Management. Album detail and preview panels do not show the
+raw share URL or password controls. Share Management is the only front-end
+place to copy the album URL, set or clear the optional password, configure an
+expiry time, set a maximum access count, revoke the link, or inspect access
+events. Album share passwords are stored as hashes and must be shared out of
+band with the recipient.
 
 ### Video Platform
 
@@ -369,18 +371,19 @@ Root-facing security and operations pages are grouped under Security Center:
 
 The PointsChain operations panel includes a root-only one-click abnormal-chain
 handler. It is intended for safe-mode recovery: the button verifies the chain,
-uses the prepared healthy backup only when available, rebuilds wallets from the
-ledger, and reports manual-required when no trusted backup exists.
+returns a forensic / branch / emergency-governance recovery plan when needed,
+and never restores a ledger backup or overwrites append-only history.
 
 ### Points Exchange
 
 The Economy branch includes a first-stage spot exchange. The UI displays
-`BTC/USDT`, `ETH/USDT`, `XRP/USDT`, `BNB/USDT`, and `PAXG/USDT`; the internal
-API symbols remain `BTC/POINTS`, `ETH/POINTS`, `XRP/POINTS`, `BNB/POINTS`, and
-`PAXG/POINTS`. Spot trading is open to normal users and root. Normal-user
-settlement uses the local PointsChain ledger, while root spot settlement uses a
-separate simulated trading balance. POINTS are treated as USDT-equivalent in the
-trading UI (`1 POINT = 1 USDT`) so market prices match the public quote unit.
+`BTC/USDT`, `ETH/USDT`, `XRP/USDT`, `BNB/USDT`, and `PAXG/USDT`. Some legacy DB
+and registry keys may still use `*/POINTS` internally for compatibility, but
+normal price widgets, errors, and market labels must use the `*/USDT` display
+symbols. Spot trading is open to normal users and root. Normal-user settlement
+uses the local PointsChain ledger, while root spot settlement uses a separate
+simulated trading balance. POINTS are treated as USDT-equivalent in the trading
+UI (`1 POINT = 1 USDT`) so market prices match the public quote unit.
 BTC/ETH spot execution defaults to Binance public live prices so small servers
 do not fetch multi-exchange order books on every normal refresh. If the primary
 API is unavailable, execution falls back to fused weighted price using the
@@ -398,11 +401,11 @@ options available. The chart is also used by the frontend to refresh
 the displayed current price; the backend still fetches its own price again
 before execution:
 
-- `BTC/POINTS` maps to public BTC/USDT or BTC/USD provider symbols.
-- `ETH/POINTS` maps to public ETH/USDT or ETH/USD provider symbols.
-- `XRP/POINTS` maps to public XRP/USDT or XRP/USD provider symbols.
-- `BNB/POINTS` maps to public BNB/USDT provider symbols where available.
-- `PAXG/POINTS` maps to public PAXG/USDT provider symbols where available.
+- BTC display markets map to public BTC/USDT or BTC/USD provider symbols.
+- ETH display markets map to public ETH/USDT or ETH/USD provider symbols.
+- XRP display markets map to public XRP/USDT or XRP/USD provider symbols.
+- BNB display markets map to public BNB/USDT provider symbols where available.
+- PAXG display markets map to public PAXG/USDT provider symbols where available.
 - The fixed display conversion is `1 POINT = 1 USDT`.
 - If public providers are unavailable, live-price execution can temporarily use
   the recent last-good price within the configured staleness window. After that

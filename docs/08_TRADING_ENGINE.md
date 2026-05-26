@@ -18,9 +18,9 @@
 ### 目前範圍
 
 - 現貨交易：`BTC/USDT`、`ETH/USDT`、`XRP/USDT`、`BNB/USDT`、`PAXG/USDT`
-  前台顯示
-- 內部符號仍是 `BTC/POINTS`、`ETH/POINTS`、`XRP/POINTS`、`BNB/POINTS`、
-  `PAXG/POINTS`
+  作為前台與一般 API 顯示名稱。
+- 舊 DB / registry 內部相容鍵可能仍保存 `*/POINTS`，但不得出現在一般使用者價格看板、
+  交易錯誤訊息或市場選單；交易顯示層固定採 `1 POINT = 1 USDT`。
 - DCA / 網格 / workflow bots
 - 回測
 - 實驗性 borrow trading
@@ -44,6 +44,25 @@
   被排除來源，以及是否已降級成保守模式
 - 使用者交易資金走 PointsChain
 - root 有獨立模擬餘額，不污染正式點數
+- 交易所基金不是 root 可隨意花用的鬆散餘額，而是 PointsChain economy layer
+  中的閉環基金。現貨買入本金、交易 fee、借貸利息、借貸平倉損失與清算回收會增加基金；
+  現貨賣出總支付與借貸平倉已實現盈利會消耗基金。交易所 reserve pool 與
+  PointsChain exchange fund 必須能重播對帳，且不得出現負餘額
+- 借貸交易不得因交易所基金看起來還很多就無上限放款。root 設定
+  `trading.margin_max_pool_utilization_percent` 會限制未償本金使用率；超過上限時，
+  即使 exchange fund 還有餘額，也必須拒絕開新借貸倉位
+- 若使用者大規模盈利，而交易所基金不足以一次支付全部已實現盈利，系統不得自動從官方
+  wallet 撥補，也不得拒絕整筆平倉回滾。實際規則是：先用可用交易所基金支付可支付部分，
+  倉位照常關閉並釋放抵押；剩餘未付盈利寫入 `trading_pending_profit` 暫時負債，
+  同時建立 `TRADING_EXCHANGE_SHORTFALL_RESOLUTION` 緊急治理提案，由治理決定：
+  `official_treasury_replenishment` 官方 Treasury 是否撥補、`forced_borrower_repayment`
+  是否要求借貸方提前還款或降槓桿、或 `accept_temporary_liability` 是否接受限額內
+  暫時負債與結算節奏
+- 暫時負債治理設定包含 `trading.exchange_liability_limit_points`、
+  `trading.exchange_liability_grace_minutes` 與
+  `trading.profit_settlement_interval_minutes`。這些設定只描述治理可接受的負債政策，
+  不代表系統可以把 exchange fund 記成負數；PointsChain supply equation 必須保持
+  gap `0`
 - POINTS 帳本仍是整數制；交易手續費與借貸利息自 `2026.05.03-063` 之後走
   `Decimal` / micropoints 累積，不在每次預估或每小時 accrual 直接進位。
   只有現貨賣出、機器人停止、借貸結算或清算等真正結算點才轉成整數 POINT，
@@ -51,7 +70,7 @@
   例如用 100 保證金借 400 買入時，以 500 名目金額計 fee
 - 借貸利率已拆成兩組 root 可調設定：
   - `BTC / ETH = 8% APR`
-  - `USDT / POINTS = 10% APR`
+  - USDT-equivalent quote asset = `10% APR`
   系統會依實際借入資產決定用哪一組
 - 借貸利息自 `2026.05.04-066` 起改成先累積 `micropoints` 殘值，再跨過整點時才入帳；
   這樣 `50 @ 1% / day` 不會再在 1 天後直接被記成 `1` 點
@@ -112,7 +131,7 @@ Server Mode v2 暫停或限制。
 
 目前背景 worker 基礎已落地：server 啟動時會啟動 trading background worker，
 並提供 root status / pause / resume API；root `run-once` 會排進背景佇列並立即
-回 `202 Accepted`。root 交易報表、資金池摘要與全用戶倉位摘要已改讀
+回 `202 Accepted`。root 交易報表、交易所基金 / 借貸流動性摘要與全用戶倉位摘要已改讀
 `trading_root_snapshots`，沒有快照時回 503 等待背景 job，不再於 root request
 內臨時計算。完整 order / bot / TP-SL / risk drilldown UI 仍屬 staged work，
 部署時不可把未落地的 planned API 當成已可操作功能。
@@ -127,7 +146,7 @@ Server Mode v2 暫停或限制。
 ## Root Sitewide Trading Management
 
 root 交易所頁已具備背景 engine 健康度與受控 job 操作入口；root 報表與積分錢包的
-資金池 / 全用戶倉位摘要應讀背景快照。完整「全站交易管理」分頁仍應補齊，用於查看
+交易所基金 / 借貸流動性 / 全用戶倉位摘要應讀背景快照。完整「全站交易管理」分頁仍應補齊，用於查看
 全站價格刷新、掛單撮合、所有用戶 bot 運作、止盈止損觸發、借貸清算、風控異常與
 全站用戶借貸交易整戶維持率。
 
@@ -195,6 +214,16 @@ PointsChain、倉位或清算結果。
   `下一次計息`；利息小數先累積，只有借貸結算或清算時才轉整數 POINT 並進位
 - 小本金借貸利息 carry 驗證，例如 `principal=50, daily_rate=1%, 24h -> interest_points=0, carry=0.5`
 - 驗證現貨與借貸成交後，`volume_stats` / root report `volume_summary` 是否同步增加
+- 交易所基金閉環驗收：
+  - 大規模虧損平倉後，虧損與 fee 必須增加 exchange fund / reserve pool
+  - 大規模盈利平倉後，已支付盈利只能從 exchange fund 支應並降低基金餘額
+  - 借貸開倉必須受 `margin_max_pool_utilization_percent` 未償本金上限限制，
+    不能因基金餘額足夠就無限制放款
+  - 極限情境下把 exchange fund 用到 `0` 後，再平倉大幅盈利倉位時，倉位應關閉、
+    可支付部分入帳、超額盈利進 `trading_pending_profit`，並產生緊急治理提案；
+    不得自動動用 official wallet，也不得讓 PointsChain supply equation 出現缺口
+  - 一般使用者不得直接修改 `exchange_liability_*` / `profit_settlement_interval_*`
+    root 設定，也不得自行建立 `PARAMETER_CHANGE` 來提高交易所負債額度
 - 融合價格自動權重 / 手動權重 / API 故障補位驗證
 - DCA `max_runs=-1` 長期執行與重啟後續跑驗證
 - `BTC/USDT 1h` 全年回測（約 `8784` 根）是否仍可通過，不再被舊的 `5000` 根上限擋住

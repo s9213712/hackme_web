@@ -75,7 +75,7 @@
 正式上線前至少要確認三件事：
 
 1. 你知道如何建立 server snapshot
-2. 你知道 PointsChain restore 與整站 snapshot restore 的界線
+2. 你知道 PointsChain safe-mode/forensic/branch recovery 與整站 snapshot restore 的界線
 3. 你已在非 production 環境驗證過 restore / reset
 
 補充：

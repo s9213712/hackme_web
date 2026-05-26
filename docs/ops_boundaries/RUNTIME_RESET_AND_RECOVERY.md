@@ -61,12 +61,14 @@ hashes before the restore is accepted as complete.
 Server restore should be used for whole-server rollback, migration, or
 cross-machine restore.
 
-## PointsChain Ledger Backup / Restore
+## PointsChain Ledger Recovery Boundary
 
-PointsChain backup is independent from server snapshot. It protects the economy
-ledger and chain data specifically.
+PointsChain no longer supports a restorable ledger backup path. A backup restore
+would overwrite append-only financial history, so the only supported recovery
+model is to preserve the old event history and append corrective or governance
+events.
 
-It includes:
+The recovery boundary covers:
 
 - `points_ledger`
 - `points_chain_blocks`
@@ -74,30 +76,26 @@ It includes:
 - chain audit logs
 - wallet state snapshot
 - schema/version metadata
-- manifest and HMAC signature
+- forensic bundle and HMAC signature
 
-When restoring PointsChain, wallet balances are rebuilt from the restored
-healthy ledger. The old `points_wallets` balance is not trusted as source of
-truth.
-
-PointsChain restore is only valid in PointsChain safe mode and requires root
-confirmation. It does not replace the whole server database and it does not
-restore unrelated application state.
+Wallet balances are always rebuilt from ledger replay. The old `points_wallets`
+balance is never trusted as source of truth.
 
 Root can use the one-click anomaly handler from the PointsChain operations card
 or `POST /api/root/points/chain/recovery/auto-handle`. That action still follows
-the recovery boundary above: it first verifies the chain, only applies the
-recommended healthy backup when safe mode already exists, rebuilds wallets from
-ledger replay, and writes audit events for start, clean result, restore, manual
-required, or failure outcomes. If there is no healthy backup, it returns manual
-required instead of overwriting the live ledger.
+the recovery boundary above: it first verifies the chain, returns clean status
+when no incident exists, or returns a branch/governance recovery plan with the
+forensic bundle reference. It never applies a backup or overwrites the live
+ledger.
 
 ## Conflict Rules
 
 - Use server snapshot restore when the whole site state must roll back together.
-- Use PointsChain restore when only the economy ledger is corrupt or tampered.
-- Do not run PointsChain restore immediately after full server restore unless a
-  new chain verification fails and safe mode prepares a restore plan.
+- Use PointsChain safe mode, forensic bundle, recovery branch, emergency
+  governance, disputes, and corrective transactions when only the economy ledger
+  is corrupt or tampered.
+- Do not attempt a PointsChain backup restore after full server restore. If chain
+  verification fails, safe mode must prepare a branch/governance recovery plan.
 - Reset may create a pre-reset server snapshot, but reset itself intentionally
   creates a fresh PointsChain and audit chain.
 - Runtime reset still clears local runtime secrets and generated manifests.
@@ -105,9 +103,9 @@ required instead of overwriting the live ledger.
   snapshot restore replays the captured runtime secrets, while reset deletes
   them and expects regeneration or reinjection on next boot.
 
-These boundaries prevent a server snapshot from silently overriding the
-independent ledger-backup policy, and prevent wallet balances from being trusted
-without ledger replay.
+These boundaries prevent a server snapshot from silently becoming a financial
+ledger rewrite tool, and prevent wallet balances from being trusted without
+ledger replay.
 
 
 ---

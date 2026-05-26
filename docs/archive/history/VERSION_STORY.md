@@ -113,10 +113,10 @@ template, and introduces a validation script that checks trigger behavior,
 downloads public K-line data, runs backend backtests, and compares them with an
 independent replay.
 
-Release `2026.05.02-041` makes the root GitHub update flow safer by creating a
-server snapshot and a PointsChain ledger backup before applying a fast-forward
-update, aborting if either protection point fails, and scheduling an automatic
-server restart after a successful update.
+Release `2026.05.02-041` made the root GitHub update flow safer by creating a
+server snapshot before applying a fast-forward update. Later PointsChain policy
+disabled ledger backup/restore because overwriting append-only history must be
+handled through branches, forensic bundles, and governance corrections instead.
 
 Release `2026.05.02-040` keeps the active Economy workflow line focused on
 trading automation usability: DCA bots execute their first run immediately,

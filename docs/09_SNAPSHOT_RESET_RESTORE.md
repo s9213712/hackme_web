@@ -7,7 +7,7 @@
 部署者最容易混淆的就是：
 
 - server snapshot restore
-- PointsChain restore
+- PointsChain safe-mode / forensic / branch recovery
 - runtime reset
 - server mode checkpoint / rollback
 
@@ -36,10 +36,10 @@
 - server snapshot：保護主要站台 DB、split runtime DB、runtime file roots、config archive。
 - 主要 DB：`runtime/database/database.db`，仍保留 legacy `db.sqlite3.backup` 檔名，讓舊 snapshot 匯入/驗證可相容。
 - split runtime DB：`auth.db`、`audit.db`、`control.db`、`chess_experiment.db` 會備份到 `databases/*.sqlite3.backup`，restore 時依本機設定的 label 還原。
-- runtime file roots：`runtime/chats`、`runtime/storage`、`runtime/database/points_chain_backups`。
+- runtime file roots：`runtime/chats`、`runtime/storage`，以及 PointsChain forensic bundle 目錄。
 - `runtime/storage/snapshots` 與 `.imports` 是 snapshot repository 本身，不會被打包進 `uploads.tar.gz`，restore 清檔時也會保留，避免 snapshot 自我遞迴或被還原流程刪掉。
 - server snapshot 也會帶入目前設定的 runtime secret files，例如 `runtime/.chain_seed`、`runtime/.csrfkey`、`runtime/.filekey`、`runtime/.fkey`、`runtime/.integrity_key`、`runtime/integrity_manifest.json`、`runtime/cert.pem`、`runtime/key.pem`
-- PointsChain backup：只保護經濟 ledger / chain
+- PointsChain ledger backup/restore：已停用；鏈異常不得以備份覆寫，需走 safe mode、forensic bundle、分支與緊急治理。
 - runtime reset：清掉可重建 runtime 與 live data，並要求重啟
 - server mode checkpoint：保護 mode switch / rollback 場景
 

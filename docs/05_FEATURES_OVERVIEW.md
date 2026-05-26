@@ -71,7 +71,7 @@
 
 - 一句話說明：提供上傳、分享、預覽、隱私模式、資料夾、垃圾桶與相簿。
 - 設計目的：集中處理檔案、權限、加密模式與媒體功能的共同基礎。
-- 使用方法：Cloud Drive 分成檔案管理與容量管理分頁；容量狀態用水位式視覺而不是電池隱喻。上傳可走 resumable/chunk upload；重新整理後任務中心會顯示未完成 session，使用者需重新選擇同一檔案才能繼續補 chunk。BT / direct link 下載也進任務中心，顯示速度、進度、可用度提示，並提供暫停 / 恢復 / 取消。分享連結可下載也可在瀏覽器預覽，複製連結後按鈕下方會顯示已完成複製；分享管理已移到「管理」並可編輯分享選項。相簿改成連續照片流，hover 可放大，點選進全頁檢視並用左右按鈕切換。
+- 使用方法：Cloud Drive 分成檔案管理與容量管理分頁；容量狀態用水位式視覺而不是電池隱喻。上傳可走 resumable/chunk upload；重新整理後任務中心會顯示未完成 session，使用者需重新選擇同一檔案才能繼續補 chunk。BT / direct link 下載也進任務中心，顯示速度、進度、可用度提示，並提供暫停 / 恢復 / 取消。分享連結可下載也可在瀏覽器預覽，複製連結後按鈕下方會顯示已完成複製；分享管理已移到「管理」並可編輯檔案、相簿、影音分享選項。相簿改成連續照片流，hover 可放大，點選進全頁檢視並用左右按鈕切換；相簿頁只保留分享入口，密碼、到期、最大存取次數都在分享管理調整。
 - 原理：不同隱私模式決定 server 能否掃描 / 預覽 / 解密，並影響影片等上層模組。strict E2EE 仍以瀏覽器端解密為主；server_encrypted 新上傳一律使用 chunked server-side encryption，下載與媒體 inline content 逐段解密，避免主伺服器一次載入完整檔案；舊的單檔 Fernet 格式只保留讀取相容。
 - 失敗情境與提示：配額不足、加密模式不支援某些預覽、權限不足、檔案被 quarantine、重整後未重選原始檔、分享連結缺少 E2EE fragment key；strict E2EE PDF 若內嵌檢視器失敗，畫面會保留新分頁開啟備援；E2EE 檔案則會先嘗試本次 session 最近成功的密碼，不會每次都強制重新輸入。
 - 測試方式：一般上傳、分段上傳重整 / 續傳、預覽、分享管理編輯、指定好友分享、BT/direct link 併發與 pause/resume/cancel、刪除、恢復、相簿操作、E2EE / server_encrypted 邊界。
@@ -139,10 +139,10 @@
 
 - 一句話說明：站內點數、經濟帳本、封塊與驗證系統，是交易與打賞的可信來源。
 - 設計目的：讓所有重要金額變動都走同一條可驗證鏈，而不是直接改 wallet balance。
-- 使用方法：一般使用者透過正常功能消費；root 可調整、封塊、驗證、備份、恢復。
+- 使用方法：一般使用者透過正常功能消費；root 可封塊、驗證與啟動 safe mode/forensic/分支治理復原；不得用備份覆寫 ledger。
 - 原理：ledger 是 source of truth，wallet 由 ledger replay 重建；Phase 1A 私有鏈經濟層也以 append-only economy events replay 出 MINT、BURN、treasury、PROMO、EXCHANGE fund balances。
-- 失敗情境與提示：safe mode、chain verify fail、恢復需要人工確認、餘額顯示與鏈不一致。
-- 測試方式：credit/debit、seal/verify、backup/recovery、economy replay / derived-cache verify、影片打賞、交易資金流。
+- 失敗情境與提示：safe mode、chain verify fail、分支/緊急治理復原需要人工確認、餘額顯示與鏈不一致。
+- 測試方式：credit/debit、seal/verify、safe mode/forensic/branch recovery、economy replay / derived-cache verify、影片打賞、交易資金流。
 - 相關文件連結：[07_POINTSCHAIN.md](07_POINTSCHAIN.md), [architecture/ECONOMY_LAYER_GUARDRAILS.md](architecture/ECONOMY_LAYER_GUARDRAILS.md), [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md)
 
 ### Games / Board AI
@@ -169,7 +169,7 @@
 - 設計目的：驗證金額、風控、撮合、PointsChain 結算與策略流程。
 - 使用方法：root 先啟用 economy / trading，再到 `交易所` 分頁選擇價格來源（預設 Binance、可改融合價格或 root 手動價格）、調整手續費 / 借貸 APR，並決定是否要啟用 market registry、Bot Audit 與外部 `BTC_trade`。一般使用者交易頁的 `目前價格` 會每 `2` 秒刷新一次，買入/賣出預估與現貨 / 借貸浮盈虧也會同步更新。系統明確分成 `reference price` 與 `risk-grade price`：前者只用在展示、一般估值與 K 線；後者用在融資、強平、保證金、bot 風控、交易限制與正式風控口徑的 PnL。若來源降級成 fallback / cached / degraded，頁面會亮黃燈並提示「目前風控級價格不可用，已暫停市價單與高風險交易；限價單仍可使用」；但一般限價單仍需通過後端資產與市場狀態驗證。root 的 `融合價格即時比例` dashboard 顯示的是各 provider 在**本系統價格融合中的實際使用權重**、被排除原因與降級狀態，不代表整體市場的真實流動性占比。Grid Bot 建立前會先試算毛利、手續費、扣費後淨利與損益兩平間距；Bot Audit 會顯示未稽核 / 綠 / 黃 / 紅燈；market registry 則讓 root 新增 / 停用市場、調整 precision / lot size / tick size、維護 provider mapping，並先 probe 再決定是否允許 `risk-grade` 用途。詳細見 `08_TRADING_ENGINE.md`、`TRADING.md`、`TRADING_RISK_PRICE.md` 與 `TRADING_BOT_AUDIT.md`。
 - 原理：前台顯示是輔助，實際撮合與結算由後端重新驗證；關鍵金額不信任前端。預設價格來源先走 Binance 公開 API，小型部署常態下不抓多交易所 order book，以降低交易頁輪詢延遲；若主要 API 不可用，才退到融合價格。root 若明確切成融合價格，系統會抓 Binance / OKX / Coinbase / Kraken / Gemini / Bitstamp 的掛單簿中價與深度，依深度或 root 手動權重融合；只要至少一個健康來源符合設定，就可作為交易風控來源，除非 root 提高門檻或啟用降級暫停策略。市場 seed、顯示 symbol、各交易所 provider id、預設手動價與 BTC_trade 支援條件仍集中在 `services/trading_markets.py`，但真正啟用中的市場、precision、lot/tick size、provider mapping 與 `risk-grade` 使用權限已進 DB registry，由 root 後台控制。交易頁每 `2` 秒輪詢一次輕量 `live-price` API，且每次拿到新價格後會同步重算買入/賣出預估；同一輪也會重算積分錢包裡的 spot / margin 浮盈虧與 root 虛擬總額，不再等到較慢的 full dashboard refresh 才跳一次。這支 API 不是純 read-only：它會在後端同步刷新 `trading_markets.manual_price_points / price_source` 的最新快取，讓後續撮合、估值與 dashboard 能共用同一份最新交易參考價。Grid Bot preview 也統一改由後端 `Decimal` 精算，會把每格毛利、買/賣手續費、扣費後淨利、損益兩平 spread 與紅/黃/綠燈一起回傳；前端只做顯示，不自行用浮點數偷算。交易帳本仍以整數 POINT 為最小單位，但手續費與利息的累積過程使用 `Decimal` / micropoints 保存小數殘值；只有現貨賣出、機器人停止、借貸結算或清算等真正結算點才轉成整數 POINT，且不足 1 點或有小數時無條件進位。借貸交易本身另有以名目金額計算的開 / 平倉手續費，例如保證金 100、借 400 買入時以 500 名目金額計費；借貸 APR 依借入資產分組，多單與空單因此可能使用不同利率；前台會直接顯示 `累積利息`、`已實扣`、`下一次計息`。後端也會同步累積每位使用者的 spot / margin 名目成交量、總 fee 與成交次數，供後續 VIP 系統或 root report 使用。回測引擎則把單批執行上限和總上限拆開：內部分段每批最多 `10,000` 根，但整體回測最多可連續處理 `20,000` 根；若 `candles < 2`，只有顯式 opt-in 才會抓 reference candles，不再靜默把隔離資料換成 live public history。交易 bot 稽核則由後端 scheduler 執行，先用「首筆成交或啟用滿 24 小時」作為納入條件，再產生綠 / 黃 / 紅燈與 bug report 對照資訊。BTC_trade 一鍵啟動則改成背景工作：資料 / 模型檢查、必要更新、重訓與預測都在伺服器端串接，root 前端只輪詢工作狀態，不會把長時間訓練誤判成 timeout 失敗。
-- 失敗情境與提示：餘額不足、價格來源失效、circuit breaker、借貸池不足、功能旗標未完整啟用；若融合價格手動權重全部設成 0，系統會退回自動深度權重，並在 root dashboard / log 直接標示 `manual weights invalid`；若 order book 全失敗，會顯示 `價格來源降級` 並進入保守模式，而不是靜默把單一 ticker 當成正常 fused price。若你在手算小額單手續費時看到與舊版不同，先確認是否已升到 `2026.05.03-063` 之後的 rounding 規則，也確認是否還誤把 Grid 當成舊版 `50%` 折扣。若你在借貸部位看到 `interest_points` 暫時仍是 0，但 `interest_exact_points` 已有小數，代表系統正在累積未滿 1 點的利息殘值；若 APR 看起來和你預期不同，也要先分辨目前借的是 `BTC / ETH` 還是 `USDT / POINTS`。若回測區間超過 `20,000` 根 K 線，前後端都會明確要求縮小區間，而不是靜默截斷；若 `candles < 2` 卻還看到回測像是自己變成真實行情，請先確認 server 是否已升到 `2026.05.04-070`。若交易頁的 `目前價格` 看起來跟參考 K 線最新收盤不同，這在 `2026.05.04-071` 之後是正常設計：前者是實際交易參考價，後者只是圖表參考資料。若 root 稽核 dashboard 顯示 `未稽核`，通常代表 bot 尚未成交且也未滿 24 小時，不是系統壞掉。若 BTC_trade 一鍵啟動長時間停在訓練中，先看背景工作狀態；新版不再因單純 timeout 就判成失敗，只有腳本實際退出錯誤或等不到新的 report 才會轉紅。
+- 失敗情境與提示：餘額不足、價格來源失效、circuit breaker、借貸流動性不足、功能旗標未完整啟用；若融合價格手動權重全部設成 0，系統會退回自動深度權重，並在 root dashboard / log 直接標示 `manual weights invalid`；若 order book 全失敗，會顯示 `價格來源降級` 並進入保守模式，而不是靜默把單一 ticker 當成正常 fused price。若你在手算小額單手續費時看到與舊版不同，先確認是否已升到 `2026.05.03-063` 之後的 rounding 規則，也確認是否還誤把 Grid 當成舊版 `50%` 折扣。若你在借貸部位看到 `interest_points` 暫時仍是 0，但 `interest_exact_points` 已有小數，代表系統正在累積未滿 1 點的利息殘值；若 APR 看起來和你預期不同，也要先分辨目前借的是 `BTC / ETH` 還是 USDT-equivalent quote asset。若回測區間超過 `20,000` 根 K 線，前後端都會明確要求縮小區間，而不是靜默截斷；若 `candles < 2` 卻還看到回測像是自己變成真實行情，請先確認 server 是否已升到 `2026.05.04-070`。若交易頁的 `目前價格` 看起來跟參考 K 線最新收盤不同，這在 `2026.05.04-071` 之後是正常設計：前者是實際交易參考價，後者只是圖表參考資料。若 root 稽核 dashboard 顯示 `未稽核`，通常代表 bot 尚未成交且也未滿 24 小時，不是系統壞掉。若 BTC_trade 一鍵啟動長時間停在訓練中，先看背景工作狀態；新版不再因單純 timeout 就判成失敗，只有腳本實際退出錯誤或等不到新的 report 才會轉紅。
 - 測試方式：正常交易、邊界輸入、精度、回測、stress pentest、單一交易所 API 失效後的融合價格重算、root-only 融合價格 dashboard、Grid Bot fee preview 的紅 / 黃 / 綠燈與 break-even 驗證、交易 bot `未稽核 -> 綠 / 黃 / 紅燈` 稽核流程、DCA `max_runs=-1` 連續執行、restore consistency、`BTC/USDT 1h` 全年歷史回測、超過 `10,000` 根時的後端自動分段續跑、`candles < 2` isolation 驗證、小本金借貸利息 carry 驗證、參考 K 線圖的 `MA10 / MA20 / MA30 / MA60 / EMA12 / EMA26 / EMA50 / 布林線 / RSI14 / KD` 指標顯示，以及 `volume_stats / volume_summary` 是否正確累積。
 - 相關文件連結：[08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](trading/TRADING.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 
@@ -177,8 +177,8 @@
 
 - 一句話說明：提供整站 snapshot、portable restore、runtime reset 與 PointsChain 恢復邊界。
 - 設計目的：把「還原整站」與「修復帳本」分開，避免災難恢復時互相覆蓋。
-- 使用方法：root 先建 snapshot，再進行 restore / reset / ledger recovery。
-- 原理：server snapshot、PointsChain backup、audit chain、runtime reset 各自有明確所有權邊界。
+- 使用方法：root 先建 snapshot，再進行 restore / reset；PointsChain 異常走 safe mode、forensic bundle、分支與緊急治理，不做 ledger backup restore。
+- 原理：server snapshot、PointsChain append-only recovery、audit chain、runtime reset 各自有明確所有權邊界。
 - 失敗情境與提示：snapshot restore 會回放 runtime secret files，若 restore event 出現 `runtime secret validation failed` 要先修這批檔案；reset 仍會清掉 runtime secrets 並要求重啟；PointsChain recovery 不能拿來代替全站 restore。
 - 測試方式：create/list/download/restore/upload-restore/reset、post-restore consistency、offline/reconnect reset smoke。
 - 相關文件連結：[09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md), [11_QA_TESTING.md](11_QA_TESTING.md)

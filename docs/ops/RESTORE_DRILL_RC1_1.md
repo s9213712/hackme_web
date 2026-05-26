@@ -1,8 +1,9 @@
-# RC1.1 Restore Drill
+# RC1.1 Snapshot Boundary Drill
 
-The RC1.1 restore drill proves that snapshot and PointsChain restore mechanics
-work in an isolated runtime. It is safe to run from a developer checkout because
-it creates a synthetic runtime under `/tmp` unless `--workdir` is supplied.
+The RC1.1 drill proves that ordinary runtime snapshot/restore mechanics work
+without reintroducing PointsChain ledger backup/restore. It is safe to run from
+a developer checkout because it creates a synthetic runtime under `/tmp` unless
+`--workdir` is supplied.
 
 ## Command
 
@@ -16,12 +17,12 @@ The drill:
 1. Creates a temporary runtime and SQLite database.
 2. Seeds root/admin/test users and required settings.
 3. Creates PointsChain genesis ledger/block data.
-4. Creates a PointsChain ledger backup.
+4. Confirms PointsChain ledger backup/restore is disabled.
 5. Creates a server snapshot.
-6. Adds dirty DB rows, dirty runtime files, and a dirty ledger entry.
+6. Adds dirty ordinary DB rows and dirty runtime files.
 7. Restores the snapshot.
 8. Runs PointsChain verify.
-9. Checks that dirty data was removed and baseline files/ledger counts returned.
+9. Checks that dirty ordinary data was removed while ledger backup/restore stayed disabled.
 
 ## Artifact
 
@@ -29,7 +30,7 @@ The output JSON includes:
 
 - `ok`
 - snapshot id
-- PointsChain ledger backup id
+- PointsChain backup/restore disabled status
 - baseline/dirty/restored counts
 - restore result
 - baseline and restored chain verify results
@@ -47,4 +48,6 @@ Run this drill:
 - after changing runtime secret or file-root configuration
 
 For live deployments, run the drill against an isolated staging runtime. Do not
-use it as a substitute for live backup verification or off-host backup storage.
+use it as a ledger rollback mechanism; PointsChain incidents must use safe mode,
+forensic bundles, recovery branches, emergency governance, and append-only
+correction transactions.

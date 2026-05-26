@@ -276,10 +276,10 @@ tokens remain single-use.
 Trading market metadata is now centralized in
 `services/trading_markets.py`. That module is the canonical source for:
 
-- internal symbols such as `BTC/POINTS`, `ETH/POINTS`, `XRP/POINTS`,
-  `BNB/POINTS`, and `PAXG/POINTS`
 - user-facing display symbols such as `BTC/USDT`, `ETH/USDT`, `XRP/USDT`,
   `BNB/USDT`, and `PAXG/USDT`
+- legacy DB / registry compatibility keys such as `*/POINTS`, which must not
+  leak into normal user-facing market labels or price errors
 - per-provider identifiers for Binance / OKX / Coinbase / Kraken / Gemini /
   Bitstamp / CoinGecko
 - which markets support live price, reference candles, and BTC_trade
@@ -686,16 +686,16 @@ ComfyUI notes:
 - `POST /api/root/points/chain/seal`
 - `GET /api/root/points/chain/verify`
 - `GET /api/root/points/chain/recovery`
-- `POST /api/root/points/chain/backups`
-- `POST /api/root/points/chain/recovery/approve`
+- `POST /api/root/points/chain/backups`（已停用，410）
+- `POST /api/root/points/chain/recovery/approve`（已停用，410）
 - `POST /api/root/points/chain/recovery/auto-handle`
 - `GET /api/root/points/system-wallets`
 
 `recovery/auto-handle` is root-only and CSRF-protected. It verifies the chain,
-returns clean status when no recovery is needed, or applies the recommended
-healthy ledger backup only when PointsChain is already in safe mode. Wallets are
-rebuilt from ledger replay; current wallet balances are never trusted as the
-source of truth.
+returns clean status when no recovery is needed, or returns a safe-mode
+forensic/branch/governance recovery plan. It must never apply a ledger backup:
+overwriting an append-only chain is a ledger mutation and must be represented by
+branches, emergency governance, disputes, and corrective transactions instead.
 
 `GET /api/root/points/report` also returns `stats.circulation`, including
 member outstanding points, root-held points, confirmed ledger net points,
@@ -758,8 +758,9 @@ Root/admin trading APIs:
 Trading API notes:
 
 - Public UI pairs are displayed as `BTC/USDT`, `ETH/USDT`, `XRP/USDT`,
-  `BNB/USDT`, and `PAXG/USDT`; internal symbols remain `BTC/POINTS`,
-  `ETH/POINTS`, `XRP/POINTS`, `BNB/POINTS`, and `PAXG/POINTS`.
+  `BNB/USDT`, and `PAXG/USDT`. Legacy `*/POINTS` keys may exist internally for
+  DB/API compatibility, but should not appear in normal user-facing market
+  labels or price errors.
 - Trading uses `1 POINT = 1 USDT`.
 - User funds must flow through PointsChain. Do not directly update wallet
   balances for trading.

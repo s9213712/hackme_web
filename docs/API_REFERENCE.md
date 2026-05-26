@@ -259,6 +259,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET | `/api/storage/shared/<token>/preview/content` | anonymous | 共享檔案瀏覽器預覽內容；strict E2EE 只回密文或 metadata |
 | GET | `/api/storage/shared/albums/<token>` | anonymous | 共享相簿 |
 | GET | `/api/storage/shared/albums/<token>/files/<file_id>/download` | anonymous | 共享相簿檔案下載 |
+| PUT | `/api/shares/album/<share_id>` | logged-in | 在分享管理更新相簿分享密碼、到期時間、最大存取次數 |
 | GET | `/api/cloud-drive/remote-download/capabilities` | logged-in | 遠端下載能力，例如 aria2 / BT 可用狀態 |
 | GET/POST | `/api/cloud-drive/remote-download/tasks` | logged-in | 遠端下載任務 |
 | GET/DELETE | `/api/cloud-drive/remote-download/tasks/<task_id>` | logged-in | 單一遠端下載任務 |
@@ -392,7 +393,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 
 ### Economy / PointsChain
 
-`feature_economy_enabled` controls the basic points ledger, catalog, wallet summary, CSV export, and normal service-fee spending. `feature_points_chain_enabled` controls the heavier PointsChain layer: wallet identities, wallet-to-wallet transactions, Explorer, finality/proved status, block sealing, backups, root chain report, and official Treasury grant. When the chain flag is off, those chain endpoints return `503` with `code=points_chain_disabled`; the basic points endpoints remain available.
+`feature_economy_enabled` controls the basic points ledger, catalog, wallet summary, CSV export, and normal service-fee spending. `feature_points_chain_enabled` controls the heavier PointsChain layer: wallet identities, wallet-to-wallet transactions, Explorer, finality/proved status, block sealing, root chain report, and official Treasury governance execution. Restorable PointsChain ledger backups are intentionally disabled. When the chain flag is off, those chain endpoints return `503` with `code=points_chain_disabled`; the basic points endpoints remain available.
 
 來源：`routes/economy.py`
 
@@ -400,7 +401,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 |---|---|---|---|
 | GET | `/api/points/wallet` | logged-in | 積分錢包 |
 | GET | `/api/points/wallet/onboarding` | logged-in | 查錢包 onboarding；回傳多錢包列表、付款錢包餘額、註冊禮與 `initial_grant` 狀態 |
-| POST | `/api/points/wallet/onboarding` | logged-in | 建立或綁定官方熱錢包、冷錢包、匯入冷錢包；legacy/API `multisig` 只會成為 `user_multisig_preview` 收款/觀察錢包，不能轉出 |
+| POST | `/api/points/wallet/onboarding` | logged-in | 建立或綁定站內託管錢包（pc0，官方託管）、冷錢包、匯入冷錢包；legacy/API `multisig` 只會成為 `user_multisig_preview` 收款/觀察錢包，不能轉出 |
 | GET | `/api/admin/points/governance/treasury-signer-center` | manager+ | 官方財庫多簽 signer center：官方錢包、signer roles/weight、threshold、pending treasury proposals、可簽署項目與 readiness |
 | DELETE | `/api/points/wallet/onboarding` | logged-in | 刪除目前或指定冷錢包身份；不刪 append-only 帳本 |
 | GET | `/api/points/ledger` | logged-in | 個人 ledger |
@@ -410,26 +411,26 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET | `/api/points/explorer/block/<block_ref>` | public safe GET | 查區塊狀態與交易列表 |
 | POST | `/api/points/explorer/accelerate` | logged-in | 送出模擬鏈交易加速費；費用走 append-only ledger debit 並進 BURN。設定驅動自動發放交易免鏈上費用；root 人工操作官方錢包不算自動發放 |
 | GET | `/api/points/transactions` | logged-in | 目前登入者近期 wallet-to-wallet 轉入 / 轉出交易；root 會看到全站近期 pending/confirmed 交易與官方 Treasury 發點；包含 `transaction_hash`、pending/confirmed/failed、Proved 進度與 pending 統計，不含 username 標籤 |
-| POST | `/api/points/transactions/submit` | logged-in | 用戶以自己的錢包地址送出 wallet-to-wallet 模擬鏈交易；pending 時凍結發送方 Value+Fee、產生 transaction hash 與通知，不入帳收款方；達 20/20 Proved 後才 append ledger，手續費進 BURN，並通知雙方成交 |
+| POST | `/api/points/transactions/submit` | logged-in | 用戶以自己的錢包地址送出交易；`pc0 -> pc0` 為站內託管帳本即時轉帳、免鏈上 fee；`pc0 -> burn` 寫入 system burn sink；`pc0 -> pc1` 走 withdrawal bridge lock 並等待 Proved；`pc1/cold -> pc0` 會被拒絕並引導使用平台入金地址 |
 | GET | `/api/points/wallet/export.csv` | logged-in | 匯出錢包 |
 | GET | `/api/points/catalog` | logged-in | 點數商品目錄 |
 | GET/PUT | `/api/root/economy/catalog` | root | root 調整商品目錄 |
 | GET | `/api/points/rules` | logged-in | 點數規則 |
-| POST | `/api/points/spend` | logged-in | 站內服務費支付；可帶 `source_wallet_address` 指定付款錢包，必須屬於登入用戶。先建立 `service_fee_reserve:*` 凍結可用額，累積達門檻後批次 `service_fee_batch_debit` 鏈上扣款並進官方 Treasury；鏈上轉帳 fee / 加速 fee 仍進 BURN。自管冷錢包需帶 `request_uuid` 與本機私鑰簽出的 `signature` |
+| POST | `/api/points/spend` | logged-in | 站內服務費支付；預設使用 `pc0` 站內託管錢包即時 internal debit，`network_fee_points=0`、`service_fee_points=amount`，收入進官方 Treasury 可 replay 對帳。自管冷錢包直接服務付款目前拒絕，需先入金到 pc0 或等待正式 cold-chain approval rail |
 | GET | `/api/points/ledger/<ledger_uuid>/proof` | logged-in | ledger proof |
 | GET | `/api/admin/points/wallets/<user_id>` | manager | 已停用，回 410；不得用 user_id 查用戶錢包 |
 | POST | `/api/root/points/wallets/<user_id>/sanction` | root | 已停用，回 410；不得由 root 直接處分用戶錢包 |
 | GET | `/api/admin/points/ledger` | manager | 已停用，回 410；請改用公開 Explorer 以 hash、地址或區塊查詢 |
 | POST | `/api/admin/points/adjust` | manager | 已停用，回 410；不得手動加減用戶積分 |
-| POST | `/api/root/points/official-wallet/grant` | root | 官方 Treasury 對公開錢包地址發點；只接受 `destination_wallet_address`，不接受 username/user_id；送出後先建立 pending transaction hash 並通知雙方，達 20/20 Proved 後才入帳 |
+| POST | `/api/root/points/official-wallet/grant` | root | 建立官方 Treasury 撥款治理提案；只接受 `destination_wallet_address`，不接受 username/user_id。提案通過、timelock 與多簽條件完成後才執行；若目的地是已登記 pc0 official hot/system fund，執行時為 internal settlement，不等待 20/20 Proved |
 | GET | `/api/admin/points/pending-rewards` | manager | 已停用，回 410；官方發點需走官方錢包送單或治理核准規則 |
 | POST | `/api/admin/points/pending-rewards/<pending_reward_id>/review` | manager | 已停用，回 410；後台待審加點流程移除 |
 | POST | `/api/root/points/chain/seal` | root | seal chain |
 | GET | `/api/root/points/chain/verify` | root | verify chain |
-| POST | `/api/root/points/chain/recovery` | root | recovery |
-| POST | `/api/root/points/chain/recovery/auto-handle` | root | auto recovery |
-| GET | `/api/root/points/chain/backups` | root | backups |
-| POST | `/api/root/points/chain/recovery/approve` | root | approve recovery |
+| GET | `/api/root/points/chain/recovery` | root | safe mode / forensic / branch-governance recovery status |
+| POST | `/api/root/points/chain/recovery/auto-handle` | root | verify chain and return branch/governance recovery guidance; never restores a backup |
+| POST | `/api/root/points/chain/backups` | root | 已停用，回 410；PointsChain 不建立可還原 ledger backup |
+| POST | `/api/root/points/chain/recovery/approve` | root | 已停用，回 410；不得以備份覆寫 append-only ledger |
 | GET | `/api/root/points/report` | root | points 報表，含封塊、審計、異常與近期未封交易 hash |
 | GET | `/api/root/points/audit` | root | points audit |
 | POST | `/api/root/points/ledger/<ledger_uuid>/rollback` | root | 已停用，回 410；修正必須追加新的鏈上補償交易 |
@@ -445,9 +446,11 @@ curl -k -sS https://127.0.0.1:5000/api/version
 
 目前預設 seed 市場包含：
 
-- display symbols: `BTC/USDT`, `ETH/USDT`, `XRP/USDT`, `BNB/USDT`, `PAXG/USDT`
-- internal canonical symbols: `BTC/POINTS`, `ETH/POINTS`, `XRP/POINTS`,
-  `BNB/POINTS`, `PAXG/POINTS`
+- user-facing display symbols: `BTC/USDT`, `ETH/USDT`, `XRP/USDT`,
+  `BNB/USDT`, `PAXG/USDT`
+- legacy internal registry symbols may still use `*/POINTS` for DB/API
+  compatibility. They must not leak into normal price widgets, errors, or user
+  market labels; the UI treats `1 POINT = 1 USDT` for display and calculation.
 
 正式啟用中的市場、precision、lot size、tick size、provider mapping 與
 `allow_risk_grade_usage` 則由 root 後台的 trading market registry 決定。
@@ -480,7 +483,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/trading/margin/<position_uuid>/collateral` | logged-in | 補保證金 |
 | POST | `/api/trading/margin/<position_uuid>/collateral/withdraw` | logged-in | 取回可釋放保證金；後端重新計算維持率 |
 | GET | `/api/admin/trading/report` | root | 交易報表快照；無快照時回 503 |
-| GET | `/api/root/trading/sitewide/pools` | root | root 積分錢包資金池唯讀快照；無快照時回 503 |
+| GET | `/api/root/trading/sitewide/pools` | root | root 交易所基金 / 借貸流動性唯讀快照；無快照時回 503 |
 | GET | `/api/root/trading/sitewide/user-positions` | root | root 積分錢包全用戶倉位唯讀快照；無快照時回 503 |
 | GET/PUT | `/api/root/trading/settings` | root | root 交易設定 |
 | GET | `/api/admin/trading/markets` | root | 交易市場 registry 列表 |
@@ -516,7 +519,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/root/trading/liquidations/scan` | root | 手動掃清算 |
 | POST | `/api/root/trading/orders/match` | root | 手動撮合 |
 | GET/PUT | `/api/root/trading/markets/<symbol>` | root | root 市場設定 / 手動價 |
-| POST | `/api/root/trading/reserve/allocate` | root | 撥資金池 |
+| POST | `/api/root/trading/reserve/allocate` | root | QA / 維運用交易所流動性配置入口；正式撥補仍應走治理與官方錢包規則 |
 | POST | `/api/root/trading/simulated-balance/reset` | root | 重置 root 模擬資金 |
 | GET | `/api/root/trading/contracts` | root | root 衍生品模擬列表；路徑名稱保留相容性 |
 | POST | `/api/root/trading/contracts/<position_uuid>/close` | root | root 衍生品模擬平倉；路徑名稱保留相容性 |

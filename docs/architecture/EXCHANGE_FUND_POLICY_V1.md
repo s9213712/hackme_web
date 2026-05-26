@@ -22,6 +22,13 @@ Rules:
 - fallback from treasury writes `economic_model_stress`.
 - trading reserve pool and chain exchange fund balance must reconcile.
 - branch recovery cannot reuse old-branch exchange balances as new-branch spendable truth.
+- Spot trading is treated as CFD-style house counterparty accounting in RC1:
+  user buy principal is collected into the exchange reserve pool, user sell
+  payout is paid from that pool, and the retained spread/fee remains visible in
+  reserve events. The platform must not credit user trading wins from nowhere.
+- Trading fees and borrow interest are platform revenue, but they are first
+  recorded through exchange reserve events so the exchange liability loop can be
+  replayed before any later treasury revenue transfer policy.
 
 RC1 exposes current buckets and reconciliation; P2P/contract/official market
 making risk can be added only after RC1.

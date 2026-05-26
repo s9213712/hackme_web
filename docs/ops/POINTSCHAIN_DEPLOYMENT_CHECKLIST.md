@@ -7,7 +7,7 @@ Before promoting RC1:
 3. pentest/session security report has no unresolved P0/P1.
 4. stress/destructive PointsChain report has no negative balance, duplicate credit, or replay mismatch.
 5. production profile guard rejects default credentials and dev overrides.
-6. backup/restore drill verifies ledger, governance audit, branch pointer, and replay cache.
+6. snapshot-boundary drill verifies ordinary runtime restore boundaries and confirms PointsChain ledger backup/restore remains disabled.
 7. root/admin legacy direct wallet APIs still return disabled/410.
 8. latest `docs/AGENTS/reports/*pointschain*` report has no open blocker.
 

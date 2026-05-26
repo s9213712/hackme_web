@@ -35,8 +35,8 @@ Enabled in this line:
 
 - Spot trading for `BTC/USDT`, `ETH/USDT`, `XRP/USDT`, `BNB/USDT`, and
   `PAXG/USDT` display pairs.
-- Internal API symbols remain `BTC/POINTS`, `ETH/POINTS`, `XRP/POINTS`,
-  `BNB/POINTS`, and `PAXG/POINTS`.
+- Legacy DB / registry compatibility keys may still use `*/POINTS`, but normal
+  user-facing APIs and UI labels should expose the `*/USDT` display pair.
 - Market/provider definitions are centralized in
   `services/trading_markets.py`, so future points-quoted assets can reuse the
   same live-price, reference-price, and UI mapping pipeline instead of adding
@@ -75,9 +75,10 @@ Root uses a separate simulated trading balance:
 - Root spot / derivatives simulation does not write to PointsChain and does not
   affect account points.
 
-The trading funding pool is conservative:
+The trading exchange fund and lending liquidity are conservative:
 
-- It starts at `10000 POINTS`.
+- The legacy lending liquidity starts at `10000 POINTS` in isolated test/runtime
+  setups.
 - It is the lending source for margin long and short borrow trades.
 - It only grows from explicit root allocation, trading fees, and borrow
   interest.
@@ -652,13 +653,16 @@ or write trading ledger entries.
 
 Server snapshot/restore should restore trading tables together with normal
 server state. Trading verification checks replay spot positions, open-order
-locks, funding pool state, root simulated account, and margin collateral locks.
+locks, exchange-fund / lending-liquidity state, root simulated account, and
+margin collateral locks.
 
 If trading replay or margin collateral validation fails, trading enters safe
 mode and write operations are blocked until root handles the issue.
 
-PointsChain restore is separate from server snapshot restore. Trading funds for
-normal users still depend on PointsChain as the source of truth.
+PointsChain ledger backup restore is disabled; trading recovery must preserve
+append-only history and use branch/governance/corrective settlement when needed.
+Trading funds for normal users still depend on PointsChain as the source of
+truth.
 
 ## Validation Scripts
 
