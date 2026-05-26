@@ -24,17 +24,14 @@ def test_server_update_routes_are_root_only_and_use_safe_git_flow():
     assert '["fetch", "--prune", "origin"]' in system_admin
     assert '["diff", "--name-status", "HEAD", remote_ref, "--"]' in system_admin
     assert '["show", f"{ref}:docs/UPDATE_SUMMARY.md"]' in system_admin
-    assert '["merge", "--ff-only", f"origin/{branch}"]' in system_admin
-    assert "APPLY_UNVERIFIED_UPDATE" in system_admin
+    assert '["merge", "--ff-only", f"origin/{branch}"]' not in system_admin
+    assert "APPLY_UNVERIFIED_UPDATE" not in system_admin
     assert "release_summary" in system_admin
     assert "read_update_summary_from_ref(remote_ref)" in system_admin
-    assert "prepare_server_update_recovery_points(actor, branch)" in system_admin
-    assert 'snapshot_type="pre_update"' in system_admin
-    assert 'kind="pre_server_update"' in system_admin
-    assert "schedule_server_restart(reason=f\"server update from origin/{branch}\"" in system_admin
-    assert "rebuild_integrity_baseline_after_update(actor, branch, preview)" in system_admin
-    assert "integrity_guard.rebaseline_paths(" in system_admin
-    assert 'Integrity Guard baseline 已依本次更新檔案重建' in system_admin
+    assert "線上套用 GitHub 更新已停用" in system_admin
+    assert "SERVER_UPDATE_APPLY_DISABLED" in system_admin
+    assert "schedule_server_restart(reason=f\"server update from origin/{branch}\"" not in system_admin
+    assert 'Integrity Guard baseline 已依本次更新檔案重建' not in system_admin
     assert "SERVER_UPDATE_WARNING" in system_admin
     assert "git reset --hard" not in system_admin
     assert "checkout -B" not in system_admin
@@ -57,5 +54,7 @@ def test_server_update_frontend_displays_update_summary():
     assert "function renderServerUpdateSummary" in admin_js
     assert "docs/UPDATE_SUMMARY.md" in admin_js
     assert "preview.release_summary" in admin_js
-    assert "PointsChain backup" in admin_js
-    assert "伺服器將自動重啟" in admin_js
+    assert "版本檢查" in index
+    assert "server-update-apply-btn" not in index
+    assert "applyServerUpdate" not in admin_js
+    assert "此頁不提供線上套用" in admin_js

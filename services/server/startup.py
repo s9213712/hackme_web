@@ -87,6 +87,38 @@ def _env_flag(name, *, default=False):
     return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def _env_flag_from(environ, name, *, default=False):
+    raw = (environ or {}).get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def should_start_import_mode_workers(*, module_name, argv=None, environ=None):
+    """Return whether a WSGI import should launch server-owned workers.
+
+    ``python server.py`` starts workers from the ``__main__`` path. Gunicorn and
+    other WSGI runners import ``server:app`` instead, so their worker processes
+    need an import-mode bootstrap. Plain imports from tests, setup scripts, and
+    one-off maintenance commands must stay side-effect-light.
+    """
+    if str(module_name or "") == "__main__":
+        return False
+    environ = environ or os.environ
+    if (
+        _env_flag_from(environ, "HTML_LEARNING_DISABLE_IMPORT_WORKERS", default=False)
+        or _env_flag_from(environ, "HACKME_DISABLE_IMPORT_WORKERS", default=False)
+    ):
+        return False
+    if (
+        _env_flag_from(environ, "HTML_LEARNING_START_IMPORT_WORKERS", default=False)
+        or _env_flag_from(environ, "HACKME_START_IMPORT_WORKERS", default=False)
+    ):
+        return True
+    argv_text = " ".join(str(part or "") for part in (argv or [])).lower()
+    return any(marker in argv_text for marker in ("gunicorn", "uwsgi", "mod_wsgi"))
+
+
 def _startup_backtest_probe_enabled(get_system_settings):
     raw_env = os.environ.get("HTML_LEARNING_TRADING_BACKTEST_PROBE_ON_STARTUP")
     if raw_env is not None:
@@ -291,15 +323,6 @@ def start_points_chain_block_worker(
                     if _wait_or_stop(shutdown_event, check_interval):
                         break
                     continue
-                backup_result = points_service.create_scheduled_backup_if_due()
-                if backup_result.get("created"):
-                    audit(
-                        "POINTS_SCHEDULED_BACKUP_CREATED",
-                        "0.0.0.0",
-                        user="system",
-                        success=bool(backup_result.get("ok")),
-                        detail=backup_result.get("backup_id"),
-                    )
                 result = points_service.seal_due_block(
                     actor=actor,
                     ledger_threshold=ledger_threshold,

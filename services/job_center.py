@@ -5,7 +5,7 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from services.core.progress_backend import (
     DEFAULT_PROGRESS_TTL_SECONDS,
@@ -27,6 +27,8 @@ JOB_STATUSES = {
 }
 
 TERMINAL_JOB_STATUSES = {"succeeded", "failed", "cancelled", "expired"}
+DEFAULT_SUCCEEDED_JOB_RETENTION_SECONDS = 60
+DEFAULT_FAILED_JOB_RETENTION_SECONDS = 5 * 60
 _JOB_PROGRESS_NAMESPACE = "job_center:jobs"
 _JOB_PROGRESS_EVENT_NAMESPACE = "job_center:events"
 _JOB_PROGRESS_FLUSH_STATE = {}
@@ -49,6 +51,14 @@ def _env_float(name, default, *, minimum=0.0, maximum=3600.0):
     except Exception:
         value = float(default)
     return max(float(minimum), min(float(maximum), value))
+
+
+def _env_int(name, default, *, minimum=0, maximum=31 * 24 * 60 * 60):
+    try:
+        value = int(float(str(os.environ.get(name, default)).strip()))
+    except Exception:
+        value = int(default)
+    return max(int(minimum), min(int(maximum), value))
 
 
 def _progress_buffer_enabled():
@@ -198,6 +208,45 @@ def _safe_int(value, default=0):
         return int(value)
     except Exception:
         return default
+
+
+def _parse_utc_timestamp(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _parse_terminal_age_timestamp(value, *, now=None):
+    parsed = _parse_utc_timestamp(value)
+    if not parsed:
+        return None
+    now = now or datetime.now(timezone.utc)
+    if parsed <= now:
+        return parsed
+    # Some older media/job integrations wrote local wall-clock timestamps
+    # without an offset. If treating the value as UTC puts it far in the future,
+    # retry as the host's local timezone so terminal cleanup does not stall.
+    text = str(value or "").strip()
+    if not text or text.endswith("Z") or "+" in text[10:] or "-" in text[10:]:
+        return parsed
+    if (parsed - now).total_seconds() <= 5 * 60:
+        return parsed
+    candidate_tzs = [datetime.now().astimezone().tzinfo, timezone(timedelta(hours=8))]
+    for candidate_tz in candidate_tzs:
+        try:
+            local_parsed = datetime.fromisoformat(text).replace(tzinfo=candidate_tz).astimezone(timezone.utc)
+            if local_parsed <= now + timedelta(seconds=60):
+                return local_parsed
+        except Exception:
+            continue
+    return parsed
 
 
 def _progress_ttl_seconds():
@@ -385,11 +434,14 @@ def _schema_cache_key(conn):
                 return f"path:{file_path}"
     except Exception:
         pass
-    return f"conn:{id(conn)}"
+    return None
 
 
 def ensure_job_center_schema(conn):
     cache_key = _schema_cache_key(conn)
+    if cache_key is None:
+        _ensure_job_center_schema_uncached(conn)
+        return
     if cache_key in _JOB_CENTER_SCHEMA_READY:
         return
     with _JOB_CENTER_SCHEMA_LOCK:
@@ -430,7 +482,9 @@ def _ensure_job_center_schema_uncached(conn):
             started_at TEXT,
             updated_at TEXT NOT NULL,
             finished_at TEXT,
-            expires_at TEXT
+            expires_at TEXT,
+            dismissed_at TEXT,
+            dismissed_by_user_id INTEGER
         )
         """
     )
@@ -467,6 +521,8 @@ def _ensure_job_center_schema_uncached(conn):
         "started_at": "TEXT",
         "finished_at": "TEXT",
         "expires_at": "TEXT",
+        "dismissed_at": "TEXT",
+        "dismissed_by_user_id": "INTEGER",
     }
     for name, ddl in additions.items():
         if name not in cols:
@@ -698,6 +754,7 @@ def list_jobs(conn, *, user_id=None, include_all=False, status=None, limit=50):
     ensure_job_center_schema(conn)
     where = []
     params = []
+    where.append("dismissed_at IS NULL")
     if not include_all:
         where.append("owner_user_id=?")
         params.append(int(user_id))
@@ -710,6 +767,333 @@ def list_jobs(conn, *, user_id=None, include_all=False, status=None, limit=50):
         tuple(params + [max(1, min(200, _safe_int(limit, 50)))]),
     ).fetchall()
     return [_merge_cached_job(serialize_job(row)) for row in rows]
+
+
+def terminal_job_retention_seconds(status):
+    value = str(status or "")
+    if value in {"succeeded", "cancelled"}:
+        return _env_int(
+            "HACKME_JOB_CENTER_SUCCEEDED_RETENTION_SECONDS",
+            DEFAULT_SUCCEEDED_JOB_RETENTION_SECONDS,
+            minimum=0,
+        )
+    if value in {"failed", "expired"}:
+        return _env_int(
+            "HACKME_JOB_CENTER_FAILED_RETENTION_SECONDS",
+            DEFAULT_FAILED_JOB_RETENTION_SECONDS,
+            minimum=0,
+        )
+    return None
+
+
+def purge_terminal_jobs(conn, *, limit=200, now=None):
+    ensure_job_center_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT job_uuid, status, COALESCE(finished_at, updated_at, created_at) AS terminal_at
+        FROM job_center_jobs
+        WHERE status IN ('succeeded', 'failed', 'cancelled', 'expired')
+        ORDER BY COALESCE(finished_at, updated_at, created_at) ASC, id ASC
+        LIMIT ?
+        """,
+        (max(1, min(1000, _safe_int(limit, 200))),),
+    ).fetchall()
+    base = now or datetime.now(timezone.utc)
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+    purged = []
+    for row in rows:
+        retention = terminal_job_retention_seconds(row["status"])
+        if retention is None:
+            continue
+        terminal_at = _parse_terminal_age_timestamp(row["terminal_at"], now=base)
+        if not terminal_at:
+            continue
+        age = max(0, int((base - terminal_at).total_seconds()))
+        if age < retention:
+            continue
+        job_uuid = str(row["job_uuid"] or "")
+        conn.execute("DELETE FROM job_center_events WHERE job_uuid=?", (job_uuid,))
+        conn.execute("DELETE FROM job_center_jobs WHERE job_uuid=?", (job_uuid,))
+        _delete_cached_job(job_uuid)
+        purged.append({"job_uuid": job_uuid, "status": row["status"], "age_seconds": age})
+    return purged
+
+
+def dismiss_job(conn, job_uuid, *, actor_user_id=None, allow_active=False):
+    ensure_job_center_schema(conn)
+    job = get_job(conn, job_uuid)
+    if not job:
+        return None
+    if not allow_active and str(job.get("status") or "") not in TERMINAL_JOB_STATUSES:
+        raise ValueError("active_job")
+    now = utc_now()
+    conn.execute(
+        """
+        UPDATE job_center_jobs
+        SET dismissed_at=?, dismissed_by_user_id=?, updated_at=?
+        WHERE job_uuid=?
+        """,
+        (now, actor_user_id, now, str(job_uuid)),
+    )
+    add_job_event(
+        conn,
+        job_uuid,
+        event_type="dismissed",
+        stage=str(job.get("stage") or job.get("status") or "dismissed"),
+        message="任務已從列表移除",
+        progress_percent=job.get("progress_percent", 100),
+        payload={"dismissed_by_user_id": actor_user_id},
+        flush=True,
+    )
+    _delete_cached_job(job_uuid)
+    return get_job(conn, job_uuid)
+
+
+def _cloud_remote_download_stale_after_seconds(job):
+    status = str((job or {}).get("status") or "")
+    metadata = (job or {}).get("metadata") if isinstance((job or {}).get("metadata"), dict) else {}
+    source_type = str(metadata.get("source_type") or "")
+    timeout = _safe_int(metadata.get("timeout_seconds"), 0)
+    if timeout <= 0:
+        timeout = 1800 if source_type in {"magnet", "torrent_file", "torrent_url"} else 120
+    if status == "queued":
+        return max(3600, timeout + 3600)
+    return max(300, timeout + 180)
+
+
+def _cloud_remote_download_job_is_stale(job, *, now=None):
+    status = str((job or {}).get("status") or "")
+    if status not in {"queued", "running", "waiting_external", "retry_wait"}:
+        return False
+    updated = _parse_utc_timestamp((job or {}).get("updated_at") or (job or {}).get("created_at"))
+    if not updated:
+        return False
+    now = now or datetime.now(timezone.utc)
+    age = max(0, int((now - updated).total_seconds()))
+    return age > _cloud_remote_download_stale_after_seconds(job)
+
+
+def _cloud_remote_download_cancel_request_is_stale(job, *, now=None):
+    status = str((job or {}).get("status") or "")
+    if status not in {"running", "waiting_external", "retry_wait"}:
+        return False
+    metadata = (job or {}).get("metadata") if isinstance((job or {}).get("metadata"), dict) else {}
+    stage = str((job or {}).get("stage") or "")
+    has_cancel_request = bool(
+        (job or {}).get("cancel_requested_at")
+        or stage == "cancel_requested"
+        or str(metadata.get("control_action") or "") == "cancel"
+    )
+    if not has_cancel_request:
+        return False
+    updated = _parse_utc_timestamp((job or {}).get("updated_at") or (job or {}).get("created_at"))
+    if not updated:
+        return False
+    now = now or datetime.now(timezone.utc)
+    grace_seconds = max(5, _safe_int(os.environ.get("HACKME_REMOTE_DOWNLOAD_CANCEL_ACK_GRACE_SECONDS"), 30))
+    age = max(0, int((now - updated).total_seconds()))
+    return age >= grace_seconds
+
+
+def expire_stale_cloud_remote_download_jobs(conn, *, limit=100):
+    """Mark orphaned persisted cloud-drive remote-download jobs as failed.
+
+    In-memory remote-download tasks are lost on worker restart/HUP. Persisted
+    Job Center rows should remain visible, but active rows that exceed the same
+    timeout window as their worker must not stay "running" forever.
+    """
+    ensure_job_center_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM job_center_jobs
+        WHERE source_module='cloud_drive_remote_download'
+          AND status IN ('queued', 'running', 'waiting_external', 'retry_wait')
+        ORDER BY updated_at ASC, id ASC
+        LIMIT ?
+        """,
+        (max(1, min(500, _safe_int(limit, 100))),),
+    ).fetchall()
+    now = datetime.now(timezone.utc)
+    now_text = now.replace(tzinfo=None, microsecond=0).isoformat()
+    message = "遠端下載任務逾時或已中斷，請重新建立下載任務"
+    cancel_message = "下載任務已取消；worker 未在時間內回報，系統已清理任務狀態"
+    expired = []
+    for row in rows:
+        job = _merge_cached_job(serialize_job(row))
+        if _cloud_remote_download_cancel_request_is_stale(job, now=now):
+            metadata = dict(job.get("metadata") or {})
+            metadata.update({
+                "cancel_recovered_at": now_text,
+                "cancel_recovery_reason": "remote_download_cancel_request_not_acknowledged",
+            })
+            updated = update_job(
+                conn,
+                job["job_uuid"],
+                status="cancelled",
+                progress_percent=100,
+                stage="cancelled",
+                stage_detail=cancel_message,
+                metadata_json=metadata,
+                cancellable=False,
+                finished_at=now_text,
+                flush=True,
+            )
+            if updated:
+                add_job_event(
+                    conn,
+                    job["job_uuid"],
+                    event_type="cancelled",
+                    stage="cancelled",
+                    message=cancel_message,
+                    progress_percent=100,
+                    payload=metadata,
+                    flush=True,
+                )
+                expired.append(updated)
+            continue
+        if not _cloud_remote_download_job_is_stale(job, now=now):
+            continue
+        metadata = dict(job.get("metadata") or {})
+        metadata.update({
+            "stale_recovered_at": now_text,
+            "stale_recovery_reason": "remote_download_worker_missing_or_timed_out",
+        })
+        updated = update_job(
+            conn,
+            job["job_uuid"],
+            status="failed",
+            progress_percent=100,
+            stage="failed",
+            stage_detail=message,
+            error_code="remote_download_task_stale",
+            error_message=message,
+            error_stage="stale_task_cleanup",
+            metadata_json=metadata,
+            cancellable=False,
+            finished_at=now_text,
+            flush=True,
+        )
+        if updated:
+            add_job_event(
+                conn,
+                job["job_uuid"],
+                event_type="failed",
+                stage="failed",
+                message=message,
+                progress_percent=100,
+                payload=metadata,
+                flush=True,
+            )
+            expired.append(updated)
+    return expired
+
+
+def _table_exists(conn, table_name):
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (str(table_name),),
+        ).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _resumable_upload_job_stale_after_seconds(job):
+    metadata = (job or {}).get("metadata") if isinstance((job or {}).get("metadata"), dict) else {}
+    stage = str((job or {}).get("stage") or "").strip().lower()
+    received_bytes = _safe_int(metadata.get("received_bytes"), 0)
+    if received_bytes <= 0 and stage in {"", "created", "queued", "uploading"}:
+        return _env_int("HACKME_RESUMABLE_UPLOAD_EMPTY_STALE_SECONDS", 15 * 60, minimum=60)
+    return _env_int("HACKME_RESUMABLE_UPLOAD_STALE_SECONDS", 60 * 60, minimum=5 * 60)
+
+
+def _resumable_upload_job_is_stale(job, *, now=None):
+    status = str((job or {}).get("status") or "")
+    if status not in {"queued", "running", "waiting_external", "retry_wait"}:
+        return False
+    updated = _parse_utc_timestamp((job or {}).get("updated_at") or (job or {}).get("created_at"))
+    if not updated:
+        return False
+    now = now or datetime.now(timezone.utc)
+    age = max(0, int((now - updated).total_seconds()))
+    return age >= _resumable_upload_job_stale_after_seconds(job)
+
+
+def expire_stale_resumable_upload_jobs(conn, *, limit=100):
+    """Expire orphaned resumable-upload jobs that no longer receive chunks.
+
+    A resumable upload is user-driven, so a short gap is normal. Rows that stay
+    at 0 bytes for the stale window are misleading in the task center: they are
+    not an active background process and should not remain "running" forever.
+    """
+
+    ensure_job_center_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM job_center_jobs
+        WHERE source_module='cloud_drive_resumable_upload'
+          AND status IN ('queued', 'running', 'waiting_external', 'retry_wait')
+        ORDER BY updated_at ASC, id ASC
+        LIMIT ?
+        """,
+        (max(1, min(500, _safe_int(limit, 100))),),
+    ).fetchall()
+    now = datetime.now(timezone.utc)
+    now_text = now.replace(tzinfo=None, microsecond=0).isoformat()
+    message = "分段上傳 session 長時間沒有進度，系統已標記過期；請重新上傳"
+    expired = []
+    for row in rows:
+        job = _merge_cached_job(serialize_job(row))
+        if not _resumable_upload_job_is_stale(job, now=now):
+            continue
+        metadata = dict(job.get("metadata") or {})
+        session_id = str(metadata.get("session_id") or "").strip()
+        metadata.update({
+            "stale_recovered_at": now_text,
+            "stale_recovery_reason": "resumable_upload_no_progress",
+        })
+        updated = update_job(
+            conn,
+            job["job_uuid"],
+            status="expired",
+            progress_percent=100,
+            stage="expired",
+            stage_detail=message,
+            error_code="resumable_upload_stale",
+            error_message=message,
+            error_stage="stale_session_cleanup",
+            metadata_json=metadata,
+            cancellable=False,
+            finished_at=now_text,
+            flush=True,
+        )
+        if session_id and _table_exists(conn, "cloud_resumable_upload_sessions"):
+            conn.execute(
+                """
+                UPDATE cloud_resumable_upload_sessions
+                SET status='expired', error_message=?, updated_at=?
+                WHERE session_id=?
+                  AND status IN ('created', 'uploading', 'completing')
+                """,
+                (message, now_text, session_id),
+            )
+        if updated:
+            add_job_event(
+                conn,
+                job["job_uuid"],
+                event_type="expired",
+                stage="expired",
+                message=message,
+                progress_percent=100,
+                payload=metadata,
+                flush=True,
+            )
+            expired.append(updated)
+    return expired
 
 
 def list_job_events(conn, job_uuid, *, limit=100):

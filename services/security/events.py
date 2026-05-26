@@ -1,4 +1,5 @@
 import sqlite3
+import os
 import threading
 import time
 from datetime import datetime, timedelta
@@ -32,6 +33,10 @@ SECURITY_EVENT_TYPES = {
     "session_revoked",
     "login_location_suspicious",
 }
+
+
+def _capacity_probe_unlimited():
+    return str(os.environ.get("HACKME_CAPACITY_PROBE_UNLIMITED") or "").strip().lower() in {"1", "true", "yes", "on"}
 ROOT_NOTIFICATION_EVENT_TYPES = {
     "ip_block",
     "rate_limit",
@@ -358,6 +363,8 @@ def clear_failed_logins(ip):
 
 
 def is_rate_limited(ip, max_req=30, window_sec=60):
+    if _capacity_probe_unlimited():
+        return False, {"count": 0, "limit": max_req, "disabled": "capacity_probe_unlimited"}
     blocked, info = _check_window_limit(_RATE_LIMIT_BUCKETS, str(ip), max_req=max_req, window_sec=window_sec)
     if blocked:
         record_security_event("rate_limit", ip, detail=f"limit={max_req},window={window_sec}")
@@ -365,6 +372,8 @@ def is_rate_limited(ip, max_req=30, window_sec=60):
 
 
 def check_user_rate_limit(user_id, action, max_req=10, window_sec=3600):
+    if _capacity_probe_unlimited():
+        return False, {"count": 0, "limit": max_req, "disabled": "capacity_probe_unlimited"}
     key = (int(user_id), str(action))
     blocked, info = _check_window_limit(_USER_RATE_LIMIT_BUCKETS, key, max_req=max_req, window_sec=window_sec)
     if blocked:

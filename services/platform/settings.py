@@ -512,8 +512,14 @@ def _import_legacy_settings_files(conn):
 
 
 def get_system_settings():
+    global _SYSTEM_SETTINGS
     with _SETTINGS_LOCK:
-        return (_SYSTEM_SETTINGS.copy() if isinstance(_SYSTEM_SETTINGS, dict) else _load_settings_from_db())
+        # Settings are security-relevant runtime controls. In a multi-worker
+        # deployment, save_settings() only refreshes the worker that handled the
+        # write, so returning a long-lived in-process cache can leave other
+        # workers enforcing stale feature gates or maintenance flags.
+        _SYSTEM_SETTINGS = _load_settings_from_db()
+        return _SYSTEM_SETTINGS.copy()
 
 
 def load_system_settings_from_db(conn=None):
@@ -521,10 +527,7 @@ def load_system_settings_from_db(conn=None):
 
 
 def get_cached_system_setting(key, default=None):
-    settings = _SYSTEM_SETTINGS
-    if isinstance(settings, dict):
-        return settings.get(key, default)
-    return DEFAULT_SETTINGS.get(key, default)
+    return get_system_settings().get(key, DEFAULT_SETTINGS.get(key, default))
 
 
 def load_settings():

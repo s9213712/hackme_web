@@ -1,5 +1,34 @@
 import json
 from datetime import datetime
+import re
+
+
+_ISO_TZ_RE = re.compile(r"(?:[zZ]|[+-]\d{2}:\d{2})$")
+
+
+def _local_timezone():
+    try:
+        return datetime.now().astimezone().tzinfo
+    except Exception:
+        return None
+
+
+def serialize_notification_timestamp(value):
+    text = str(value or "").strip()
+    if not text:
+        return text
+    if _ISO_TZ_RE.search(text):
+        return text
+    try:
+        dt = datetime.fromisoformat(text)
+    except Exception:
+        return text
+    if dt.tzinfo is not None:
+        return dt.isoformat()
+    local_tz = _local_timezone()
+    if not local_tz:
+        return text
+    return dt.replace(tzinfo=local_tz).isoformat()
 
 
 def notifications_enabled(default=True):
@@ -188,10 +217,10 @@ def serialize_notification(row):
         "body": row["body"],
         "link": row["link"],
         "is_read": bool(row["is_read"]),
-        "dismissed_at": row["dismissed_at"] if "dismissed_at" in row.keys() else None,
+        "dismissed_at": serialize_notification_timestamp(row["dismissed_at"]) if "dismissed_at" in row.keys() and row["dismissed_at"] else None,
         "source_module": row["source_module"] if "source_module" in row.keys() else None,
         "source_ref": row["source_ref"] if "source_ref" in row.keys() else None,
         "metadata": metadata,
-        "created_at": row["created_at"],
-        "read_at": row["read_at"],
+        "created_at": serialize_notification_timestamp(row["created_at"]),
+        "read_at": serialize_notification_timestamp(row["read_at"]) if row["read_at"] else None,
     }

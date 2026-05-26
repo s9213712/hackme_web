@@ -26,6 +26,84 @@ def test_security_center_logs_have_non_overlapping_layout():
     assert "grid-template-columns: auto auto minmax(0, .9fr) minmax(0, .7fr) minmax(0, 1.6fr);" in css
 
 
+def test_server_and_system_management_tabs_are_split_by_domain():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
+    bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
+
+    assert 'id="tab-server-overview"' in index_html
+    assert 'id="tab-server-server-mode"' in index_html
+    assert 'id="security-settings-slot"' in index_html
+    assert 'id="tab-system-health"' in index_html
+    assert 'id="tab-system-server-mode"' not in index_html
+    assert 'id="tab-system-features"' in index_html
+    assert 'id="tab-system-appearance"' in index_html
+    assert 'id="tab-system-core"' in index_html
+    assert 'id="tab-system-capacity"' in index_html
+    assert 'id="tab-system-env"' in index_html
+    assert 'id="tab-system-launch-check" style="display:none;"' in index_html
+    assert 'id="server-mode-launch-check-slot" style="display:none;margin-top:.75rem;"' in index_html
+    assert 'id="tab-system-overview"' not in index_html
+    assert 'id="tab-system-settings"' not in index_html
+    assert 'id="tab-server-launch-check"' not in index_html
+    assert 'id="sec-settings-listen"' in index_html
+    assert 'id="sec-settings-backpressure"' in index_html
+    assert index_html.index('id="sec-settings-listen"') < index_html.index('id="sec-settings-backpressure"')
+    assert '<section class="drive-collapsible-panel settings-static-panel" id="sec-settings-backpressure">' in index_html
+    assert 'id="sec-settings-backpressure"><summary>' not in index_html
+    assert '{ label: "總覽", action: "server:overview" }' in core_js
+    assert '{ label: "伺服器模式", action: "server:server-mode" }' in core_js
+    assert 'action: "system:server-mode"' not in core_js
+    assert '{ label: "請求容量", action: "system:capacity" }' in core_js
+    assert 'switchServerTab(currentServerTab || "overview")' in admin_js
+    assert 'switchSystemTab(currentSystemTab || "health")' in admin_js
+    assert 'const shouldShow = target === "production";' in admin_js
+    assert '["sec-server-launch-check", "server-mode-launch-check-slot"]' in admin_js
+    assert '["sec-settings-backpressure", "system-capacity-slot"]' in admin_js
+    assert '["sec-server-launch-check", "system-launch-check-slot"]' not in admin_js
+    assert '["sec-server-settings", "system-server-mode-slot"]' not in admin_js
+    assert 'tabSystemCapacity.addEventListener("click", () => switchSystemTab("capacity"))' in bootstrap_js
+    assert 'tabServerServerMode.addEventListener("click", () => switchServerTab("server-mode"))' in bootstrap_js
+    assert 'tabSystemServerMode' not in bootstrap_js
+    assert 'tabServerLaunchCheck' not in bootstrap_js
+    assert 'case "member-settings":\n      return currentUser === "root";' in admin_js
+    assert "const balanced = gap === 0;" in admin_js
+    assert "對帳提示待查" in admin_js
+
+
+def test_system_environment_processes_and_integrity_are_rendered_below_resources():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    security_routes = (ROOT / "routes" / "system_admin_sections" / "security_routes.py").read_text(encoding="utf-8")
+    backpressure_py = (ROOT / "services" / "server" / "backpressure.py").read_text(encoding="utf-8")
+    server_py = (ROOT / "server.py").read_text(encoding="utf-8")
+
+    assert 'id="server-env-process-list"' in index_html
+    assert 'renderServerEnvProcessList' in admin_js
+    assert '"程序 PID"' not in admin_js
+    assert '"environment": _environment_identity_payload()' in security_routes
+    assert '"platform": platform.platform()' in security_routes
+    assert '"python_version": sys.version.split()[0]' in security_routes
+    assert 'env: json.environment || lastServerEnvironment || {}' in admin_js
+    assert 'HLS decode / ffmpeg' in security_routes
+    assert 'aria2 download' in security_routes
+    assert 'trading engine worker' in security_routes
+    assert '<th>主程式 / 詳細命令</th>' in admin_js
+    assert 'item.command || item.args || item.process_name' in admin_js
+    assert '"command": command[:command_limit]' in security_routes
+    assert '"command_truncated": len(command) > command_limit' in security_routes
+    assert 'per-process bytes unavailable' not in security_routes
+    assert 'item.network' not in admin_js
+    assert '"integrity_check": integrity_check or {}' in security_routes
+    assert '"audit_hash_check": audit_hash_check or {}' in security_routes
+    assert '"processes": _related_processes_snapshot(base_dir=base_dir)' in security_routes
+    assert "server_busy_rejected" in backpressure_py
+    assert "hard_5xx_response" in backpressure_py
+    assert "anomaly_audit" in backpressure_py
+    assert "BACKPRESSURE_ANOMALY" in server_py
+
+
 def test_saving_settings_preserves_current_admin_surface():
     admin_js = (
         (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
@@ -148,7 +226,7 @@ def test_security_control_and_threshold_saves_show_visible_status():
     assert "btn.disabled = true" in thresholds_body
 
 
-def test_server_update_ui_warns_and_requires_preview_then_apply():
+def test_server_update_ui_is_health_card_preview_only():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     admin_js = (
         (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
@@ -157,21 +235,26 @@ def test_server_update_ui_warns_and_requires_preview_then_apply():
     )
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
-    assert "GitHub 更新中心" in index_html
+    health_section = index_html.split('id="sec-server-health"', 1)[1].split('id="sec-server-integrity"', 1)[0]
+    server_mode_section = index_html.split('id="sec-server-settings"', 1)[1].split('<form id="settings-form"', 1)[0]
+
+    assert "版本檢查" in health_section
+    assert "GitHub 更新中心" not in index_html
     assert 'id="server-update-branch-select"' in index_html
     assert 'id="server-update-preview-btn"' in index_html
-    assert 'id="server-update-apply-btn"' in index_html
+    assert 'id="server-update-apply-btn"' not in index_html
     assert 'id="server-update-diff"' in index_html
-    assert "APPLY_UNVERIFIED_UPDATE" in index_html
+    assert "APPLY_UNVERIFIED_UPDATE" not in index_html
+    assert 'id="server-update-branch-select"' not in server_mode_section
     assert "loadServerUpdateStatus" in admin_js
     assert "previewServerUpdate" in admin_js
-    assert "applyServerUpdate" in admin_js
+    assert "applyServerUpdate" not in admin_js
     assert 'API + "/root/server-update/preview"' in admin_js
-    assert 'API + "/root/server-update/apply"' in admin_js
-    assert "此次更新未經驗證" in admin_js
+    assert 'API + "/root/server-update/apply"' not in admin_js
+    assert "此頁不提供線上套用" in admin_js
     assert "serverUpdateRefresh.addEventListener" in bootstrap_js
     assert "serverUpdatePreview.addEventListener" in bootstrap_js
-    assert "serverUpdateApply.addEventListener" in bootstrap_js
+    assert "serverUpdateApply" not in bootstrap_js
 
 
 def test_launch_check_treats_production_profile_settings_as_auto_applied_not_manual_blockers():
@@ -309,6 +392,9 @@ def test_system_environment_has_resource_dashboard():
     assert 'class="system-resource-board"' in env_section
     assert 'id="system-resource-gauges"' in env_section
     assert 'id="system-resource-sampled-at"' in env_section
+    assert 'id="server-env-transfer-details"' in env_section
+    assert 'id="server-env-db-details"' in env_section
+    assert 'class="server-env-summary-grid"' in env_section
     assert 'id="s-system-resource-board-refresh-seconds"' in index_html
     assert 'id="s-job-center-refresh-seconds"' in index_html
     assert 'id="s-trading-dashboard-refresh-seconds"' in index_html
@@ -330,9 +416,23 @@ def test_system_environment_has_resource_dashboard():
     assert "server_connection_monitor_seconds" in admin_js
     assert "drive_dashboard_lazy_refresh_seconds" in admin_js
     assert "systemResourceGaugeMarkup" in admin_js
+    assert "renderServerEnvOperationalStats" in admin_js
+    assert "upload_bytes_per_second" in admin_js
+    assert "cumulative_download_bytes" in admin_js
+    assert "database_usage" in admin_js
     assert "json.resource_usage" in admin_js
+    summary_renderer = admin_js.split("function renderServerEnvSummary", 1)[1].split(
+        "function renderServerEnvTransferDetails", 1
+    )[0]
+    assert "上傳速度" not in summary_renderer
+    assert "下載速度" not in summary_renderer
+    assert "累計上傳" not in summary_renderer
+    assert "累計下載" not in summary_renderer
+    assert "DB 合計" not in summary_renderer
     assert 'envRefresh.addEventListener("click", loadServerEnv)' in bootstrap_js
     assert ".system-resource-arc" in css
+    assert ".server-env-detail-grid" in css
+    assert ".server-env-table" in css
     assert "conic-gradient(from 270deg at 50% 100%" in css
     assert "@keyframes system-resource-arc-pulse" in css
 

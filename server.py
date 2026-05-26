@@ -6,6 +6,7 @@ CSRF tokens, strict CSP, full security headers, rate-limit amplification.
 """
 
 import argparse
+import gzip
 import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl, subprocess, signal, sys, platform, smtplib, ssl, urllib.parse
 from ipaddress import ip_address
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 import argon2
 from flask_talisman import Talisman
+from services.core.sqlite_hardening import is_sqlite_lock_error
 from services.system.audit import (
     _chain_hash,
     audit,
@@ -196,6 +198,7 @@ from services.server.container import build_runtime_services
 from services.server.startup import (
     measure_backtest_capacity_if_needed as measure_backtest_capacity_if_needed_helper,
     run_server_main as run_server_main_helper,
+    should_start_import_mode_workers,
     start_daily_snapshot_worker as start_daily_snapshot_worker_helper,
     start_points_chain_block_worker as start_points_chain_block_worker_helper,
     start_storage_maintenance_worker as start_storage_maintenance_worker_helper,
@@ -205,6 +208,11 @@ from services.server.startup import (
 )
 
 SERVER_SHUTDOWN_EVENT = None
+SERVER_IMPORT_WORKERS = []
+SERVER_IMPORT_WORKERS_STARTED = False
+SERVER_IMPORT_WORKERS_RETRY_STARTED = False
+SERVER_IMPORT_WORKERS_LOCK = threading.Lock()
+SERVER_IMPORT_WORKERS_LOCK_FILE = None
 ENTRYPOINT_DOCTOR_MODE = __name__ == "__main__" and "--doctor" in sys.argv[1:]
 ENTRYPOINT_START_MODE = __name__ == "__main__" and not ENTRYPOINT_DOCTOR_MODE
 from services.server.request_guards import (
@@ -266,6 +274,10 @@ DB_PATH = os.path.join(DB_DIR, "database.db")
 AUTH_DB_PATH = _env_path("HTML_LEARNING_AUTH_DB_PATH", os.path.join(DB_DIR, "auth.db"))
 AUDIT_DB_PATH = _env_path("HTML_LEARNING_AUDIT_DB_PATH", os.path.join(DB_DIR, "audit.db"))
 CONTROL_DB_PATH = _env_path("HTML_LEARNING_CONTROL_DB_PATH", os.path.join(DB_DIR, "control.db"))
+STORAGE_CATALOG_DB_PATH = _env_path("HTML_LEARNING_STORAGE_DB_PATH", os.path.join(DB_DIR, "storage_catalog.db"))
+POINTS_CHAIN_DB_PATH = _env_path("HTML_LEARNING_POINTSCHAIN_DB_PATH", os.path.join(DB_DIR, "points_chain.db"))
+TRADING_DB_PATH = _env_path("HTML_LEARNING_TRADING_DB_PATH", os.path.join(DB_DIR, "trading.db"))
+JOBS_DB_PATH = _env_path("HTML_LEARNING_JOBS_DB_PATH", os.path.join(DB_DIR, "jobs.db"))
 CHESS_ENGINE_DB_PATH = _env_path("HTML_LEARNING_CHESS_ENGINE_DB_PATH", os.path.join(RUNTIME_DIR, "games", "models", "chess_experiment.db"))
 LOG_DIR = _env_path("HTML_LEARNING_LOG_DIR", os.path.join(RUNTIME_DIR, "logs"))
 CHAT_DIR = _env_path("HTML_LEARNING_CHAT_DIR", os.path.join(RUNTIME_DIR, "chats"))
@@ -1008,12 +1020,16 @@ _runtime_services = build_runtime_services(
         "file_roots": [
             CHAT_DIR,
             STORAGE_DIR,
-            POINTS_CHAIN_BACKUP_DIR,
+            os.path.join(POINTS_CHAIN_BACKUP_DIR, "forensics"),
         ],
         "additional_db_paths": {
             "auth": AUTH_DB_PATH,
             "audit": AUDIT_DB_PATH,
             "control": CONTROL_DB_PATH,
+            "storage_catalog": STORAGE_CATALOG_DB_PATH,
+            "points_chain": POINTS_CHAIN_DB_PATH,
+            "trading": TRADING_DB_PATH,
+            "jobs": JOBS_DB_PATH,
             "chess_engine": CHESS_ENGINE_DB_PATH,
         },
         "config_files": [
@@ -1117,8 +1133,54 @@ talisman = Talisman(app,
     },
     referrer_policy="no-referrer",
     feature_policy={},
-    force_https=FORCE_HTTPS,        # SSL termination at proxy level
-)
+	    force_https=FORCE_HTTPS,        # SSL termination at proxy level
+	)
+
+
+def should_gzip_frontend_asset(response):
+    if request.method != "GET" or response.status_code != 200:
+        return False
+    accept_encoding = str(request.headers.get("Accept-Encoding") or "").lower()
+    if "gzip" not in accept_encoding or response.headers.get("Content-Encoding"):
+        return False
+    path = request.path or ""
+    if not (
+        path == "/"
+        or path == "/styles.css"
+        or path.endswith(".css")
+        or path.startswith("/js/")
+    ):
+        return False
+    content_type = str(response.headers.get("Content-Type") or "").lower()
+    return (
+        "text/html" in content_type
+        or "text/css" in content_type
+        or "javascript" in content_type
+        or "application/json" in content_type
+    )
+
+
+def gzip_frontend_asset_response(response):
+    try:
+        response.direct_passthrough = False
+        payload = response.get_data()
+    except Exception:
+        return response
+    if len(payload) < 1024:
+        return response
+    compressed = gzip.compress(payload, compresslevel=5)
+    if len(compressed) >= len(payload):
+        return response
+    response.set_data(compressed)
+    response.headers["Content-Encoding"] = "gzip"
+    vary = response.headers.get("Vary")
+    if vary:
+        if "accept-encoding" not in vary.lower():
+            response.headers["Vary"] = f"{vary}, Accept-Encoding"
+    else:
+        response.headers["Vary"] = "Accept-Encoding"
+    response.headers["Content-Length"] = str(len(compressed))
+    return response
 
 # ── Legacy security headers (supplement Talisman) ─────────────────────────────
 @app.after_request
@@ -1138,6 +1200,8 @@ def extra_security_headers(response):
     ):
         response.headers["Cache-Control"] = f"public, max-age={STATIC_ASSET_CACHE_SECONDS}, immutable"
         response.headers.pop("Pragma", None)
+    if should_gzip_frontend_asset(response):
+        gzip_frontend_asset_response(response)
     return response
 
 
@@ -1183,6 +1247,23 @@ def api_unhandled_exception(error):
                 "error": str(error.name or "http_error").strip().lower().replace(" ", "_"),
             }), int(error.code or 500)
         return error
+    if is_sqlite_lock_error(error):
+        try:
+            app.logger.warning("SQLite busy while serving %s %s: %s", request.method, request.path, error)
+        except Exception:
+            pass
+        if request.path.startswith("/api"):
+            response = json_resp({
+                "ok": False,
+                "msg": "目前資料庫忙碌，請稍候再試",
+                "error": "server_busy",
+                "retry_after_seconds": 2,
+            }, 503)
+            response.headers["Retry-After"] = "2"
+            return response
+        response = make_response("Server busy", 503)
+        response.headers["Retry-After"] = "2"
+        return response
     try:
         app.logger.exception("Unhandled exception while serving %s %s", request.method, request.path)
     except Exception:
@@ -1229,10 +1310,30 @@ def is_root_backpressure_priority_request():
         return False
 
 
+def audit_backpressure_anomaly(event):
+    try:
+        detail = (
+            f"event={event.get('event')},gate={event.get('gate')},status={event.get('status_code')},"
+            f"path={event.get('path')},pid={event.get('pid')}"
+        )
+        audit(
+            "BACKPRESSURE_ANOMALY",
+            event.get("remote_addr") or "-",
+            user="-",
+            success=False,
+            ua=event.get("user_agent") or "-",
+            detail=detail,
+        )
+    except Exception:
+        pass
+
+
 install_backpressure(
     app,
     settings_provider=refresh_system_settings,
     root_priority_detector=is_root_backpressure_priority_request,
+    anomaly_audit_callback=audit_backpressure_anomaly,
+    anomaly_log_path=os.path.join(LOG_DIR, "backpressure_anomalies.jsonl"),
 )
 
 
@@ -1416,6 +1517,115 @@ def measure_backtest_capacity_first_boot():
     return measure_backtest_capacity_if_needed_helper(trading_service=trading_service, audit=audit)
 
 
+def _acquire_import_worker_leadership():
+    global SERVER_IMPORT_WORKERS_LOCK_FILE
+    lock_dir = os.path.join(RUNTIME_DIR, "locks")
+    os.makedirs(lock_dir, exist_ok=True)
+    lock_path = os.path.join(lock_dir, "server_import_workers.lock")
+    lock_file = open(lock_path, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        return False
+    except OSError:
+        lock_file.close()
+        raise
+    lock_file.seek(0)
+    lock_file.truncate()
+    lock_file.write(f"pid={os.getpid()}\nstarted_at={SERVER_STARTED_AT}\n")
+    lock_file.flush()
+    SERVER_IMPORT_WORKERS_LOCK_FILE = lock_file
+    return True
+
+
+def _start_import_mode_worker(label, starter, workers):
+    try:
+        worker = starter(shutdown_event=SERVER_SHUTDOWN_EVENT)
+        if worker is not None:
+            workers.append(worker)
+            return True
+    except Exception as exc:
+        audit(
+            "IMPORT_MODE_BACKGROUND_WORKER_START_FAILED",
+            "0.0.0.0",
+            user="system-startup",
+            success=False,
+            detail=json.dumps({"worker": label, "error": str(exc)}, ensure_ascii=False),
+        )
+    return False
+
+
+def _start_import_mode_workers_with_leadership_locked():
+    global SERVER_SHUTDOWN_EVENT, SERVER_IMPORT_WORKERS, SERVER_IMPORT_WORKERS_STARTED
+    if SERVER_SHUTDOWN_EVENT is None:
+        SERVER_SHUTDOWN_EVENT = threading.Event()
+    workers = []
+    started = []
+    for label, starter in (
+        ("daily_snapshot", start_daily_snapshot_worker),
+        ("storage_maintenance", start_storage_maintenance_worker),
+        ("points_chain_block", start_points_chain_block_worker),
+        ("trading_background", start_trading_background_worker),
+    ):
+        if _start_import_mode_worker(label, starter, workers):
+            started.append(label)
+    SERVER_IMPORT_WORKERS = workers
+    SERVER_IMPORT_WORKERS_STARTED = True
+    audit(
+        "IMPORT_MODE_BACKGROUND_WORKERS_STARTED",
+        "0.0.0.0",
+        user="system-startup",
+        success=True,
+        detail=json.dumps(
+            {"pid": os.getpid(), "workers": started, "runner": "wsgi_import"},
+            ensure_ascii=False,
+        ),
+    )
+    return SERVER_IMPORT_WORKERS
+
+
+def _schedule_import_mode_worker_leadership_retry():
+    global SERVER_SHUTDOWN_EVENT, SERVER_IMPORT_WORKERS_RETRY_STARTED
+    if SERVER_IMPORT_WORKERS_RETRY_STARTED:
+        return
+    if SERVER_SHUTDOWN_EVENT is None:
+        SERVER_SHUTDOWN_EVENT = threading.Event()
+    SERVER_IMPORT_WORKERS_RETRY_STARTED = True
+
+    def retry_loop():
+        while SERVER_SHUTDOWN_EVENT is None or not SERVER_SHUTDOWN_EVENT.wait(2.0):
+            with SERVER_IMPORT_WORKERS_LOCK:
+                if SERVER_IMPORT_WORKERS_STARTED:
+                    return
+                try:
+                    if not _acquire_import_worker_leadership():
+                        continue
+                    _start_import_mode_workers_with_leadership_locked()
+                    return
+                except Exception as exc:
+                    audit(
+                        "IMPORT_MODE_BACKGROUND_WORKERS_RETRY_FAILED",
+                        "0.0.0.0",
+                        user="system-startup",
+                        success=False,
+                        detail=str(exc),
+                    )
+
+    thread = threading.Thread(target=retry_loop, name="import-mode-worker-leadership-retry", daemon=True)
+    thread.start()
+
+
+def start_import_mode_workers_once():
+    with SERVER_IMPORT_WORKERS_LOCK:
+        if SERVER_IMPORT_WORKERS_STARTED:
+            return SERVER_IMPORT_WORKERS
+        if not _acquire_import_worker_leadership():
+            _schedule_import_mode_worker_leadership_retry()
+            return []
+        return _start_import_mode_workers_with_leadership_locked()
+
+
 def _warn_direct_server_entrypoint():
     if os.environ.get("HACKME_SUPPRESS_DIRECT_SERVER_WARNING", "").strip().lower() in {"1", "true", "yes", "on"}:
         return
@@ -1436,10 +1646,17 @@ def _warn_direct_server_entrypoint():
         flush=True,
     )
     print(
-        "[startup-warning] Gunicorn imports `server:app` and will not run this `__main__` block or its in-process workers.\n",
+        "[startup-warning] Gunicorn imports `server:app`; import-mode workers are started there with a runtime lock.\n",
         file=sys.stderr,
         flush=True,
     )
+
+
+if should_start_import_mode_workers(module_name=__name__, argv=sys.argv, environ=os.environ):
+    try:
+        start_import_mode_workers_once()
+    except Exception as exc:
+        audit("IMPORT_MODE_BACKGROUND_WORKERS_FAILED", "0.0.0.0", user="system-startup", success=False, detail=str(exc))
 
 
 # ── Start ──────────────────────────────────────────────────────────────────────

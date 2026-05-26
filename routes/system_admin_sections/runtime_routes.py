@@ -71,10 +71,10 @@ def register_system_admin_runtime_routes(app, ctx):
         snapshot_type = data.get("type") or "manual"
         if snapshot_type == "before_superweak" and actor["username"] != "root":
             return json_resp({"ok":False,"msg":"before_superweak snapshot 必須由 root 建立"}), 403
+        block_result = force_points_block("snapshot_create_pre", actor)
         result = snapshot_service.create_snapshot(snapshot_type=snapshot_type, actor=actor, notes=data.get("notes") or "")
         if not result.ok:
             return json_resp({"ok":False,"msg":"snapshot 建立失敗","error":result.error,"snapshot_id":result.snapshot_id}), 500
-        block_result = force_points_block("snapshot_create", actor)
         payload = {"ok":True,"snapshot_id":result.snapshot_id,"status":result.status}
         if block_result:
             payload["points_block"] = block_result
@@ -99,6 +99,9 @@ def register_system_admin_runtime_routes(app, ctx):
             return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         if data.get("confirm") != "RUN_DAILY_SNAPSHOT":
             return json_resp({"ok":False,"msg":"confirm 必須等於 RUN_DAILY_SNAPSHOT"}), 400
+        daily_status = snapshot_service.daily_snapshot_status(settings=settings)
+        will_create = bool(data.get("force")) or bool(daily_status.get("due"))
+        block_result = force_points_block("daily_snapshot_pre", actor) if will_create else None
         result = snapshot_service.create_daily_snapshot_if_due(
             actor=actor,
             settings=settings,
@@ -107,7 +110,7 @@ def register_system_admin_runtime_routes(app, ctx):
             notes=data.get("notes") or "",
         )
         if result.get("ok") and result.get("created"):
-            result["points_block"] = force_points_block("daily_snapshot", actor)
+            result["points_block"] = block_result
         return json_resp(result), (200 if result.get("ok") else 500)
 
     @app.route("/api/admin/system-reset", methods=["POST"])
@@ -124,11 +127,16 @@ def register_system_admin_runtime_routes(app, ctx):
             return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
             return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
+        if data.get("confirm") != "RESET_RUNTIME_STATE":
+            return json_resp({"ok": False, "msg": "confirm 必須等於 RESET_RUNTIME_STATE"}), 400
+        pre_reset_points_block = force_points_block("pre_system_reset_snapshot", actor)
         result = snapshot_service.reset_runtime_state(
             actor=actor,
             confirm=data.get("confirm"),
             reason=data.get("reason") or "",
         )
+        if pre_reset_points_block:
+            result["pre_reset_points_block"] = pre_reset_points_block
         if result.get("ok"):
             try:
                 restart = schedule_server_restart(reason="system-reset", delay_seconds=1.25)
@@ -904,6 +912,21 @@ def register_system_admin_runtime_routes(app, ctx):
             except Exception:
                 pv_today = 0
 
+            def _table_exists(name):
+                try:
+                    return bool(conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                        (name,),
+                    ).fetchone())
+                except Exception:
+                    return False
+
+            def _int_value(value):
+                try:
+                    return int(value or 0)
+                except (TypeError, ValueError):
+                    return 0
+
             try:
                 total_points = conn.execute("SELECT COALESCE(SUM(points), 0) AS c FROM users").fetchone()["c"]
             except Exception:
@@ -925,6 +948,155 @@ def register_system_admin_runtime_routes(app, ctx):
             except Exception:
                 points_spent_month = 0
 
+            ledger_month = {
+                "member_inflow": 0,
+                "member_outflow": 0,
+                "confirmed_entries": 0,
+            }
+            if _table_exists("points_ledger"):
+                try:
+                    ledger_row = conn.execute(
+                        """
+                        SELECT
+                            COALESCE(SUM(CASE WHEN l.direction IN ('credit','transfer_in','unfreeze') THEN l.amount ELSE 0 END), 0) AS member_inflow,
+                            COALESCE(SUM(CASE WHEN l.direction IN ('debit','transfer_out','reverse','freeze') THEN l.amount ELSE 0 END), 0) AS member_outflow,
+                            COUNT(*) AS confirmed_entries
+                        FROM points_ledger l
+                        LEFT JOIN users u ON u.id=l.user_id
+                        WHERE l.status='confirmed'
+                          AND l.created_at >= ?
+                          AND COALESCE(LOWER(u.username), '') != 'root'
+                        """,
+                        (month_start,),
+                    ).fetchone()
+                    ledger_month = {
+                        "member_inflow": _int_value(ledger_row["member_inflow"] if ledger_row else 0),
+                        "member_outflow": _int_value(ledger_row["member_outflow"] if ledger_row else 0),
+                        "confirmed_entries": _int_value(ledger_row["confirmed_entries"] if ledger_row else 0),
+                    }
+                except Exception:
+                    ledger_month = {"member_inflow": 0, "member_outflow": 0, "confirmed_entries": 0}
+
+            fund_month = {
+                "fund_income": 0,
+                "fund_expense": 0,
+                "official_income": 0,
+                "official_expense": 0,
+                "exchange_income": 0,
+                "exchange_expense": 0,
+                "promo_income": 0,
+                "promo_expense": 0,
+                "minted": 0,
+                "burned": 0,
+                "event_count": 0,
+            }
+            if _table_exists("points_economy_events"):
+                try:
+                    non_income_principal_types = (
+                        "margin_principal_lent",
+                        "margin_collateral_withdraw_principal_lent",
+                        "margin_principal_repaid",
+                    )
+                    fund_row = conn.execute(
+                        """
+                        SELECT
+                            COALESCE(SUM(CASE WHEN destination_fund_key IN ('official_treasury','promo_fund','exchange_fund') AND COALESCE(source_fund_key, '')<>'mint' AND transaction_type NOT IN (?, ?, ?) THEN amount ELSE 0 END), 0) AS fund_income,
+                            COALESCE(SUM(CASE WHEN source_fund_key IN ('official_treasury','promo_fund','exchange_fund') AND transaction_type NOT IN (?, ?, ?) THEN amount ELSE 0 END), 0) AS fund_expense,
+                            COALESCE(SUM(CASE WHEN destination_fund_key='official_treasury' AND COALESCE(source_fund_key, '')<>'mint' THEN amount ELSE 0 END), 0) AS official_income,
+                            COALESCE(SUM(CASE WHEN source_fund_key='official_treasury' THEN amount ELSE 0 END), 0) AS official_expense,
+                            COALESCE(SUM(CASE WHEN destination_fund_key='exchange_fund' AND COALESCE(source_fund_key, '')<>'mint' AND transaction_type NOT IN (?, ?, ?) THEN amount ELSE 0 END), 0) AS exchange_income,
+                            COALESCE(SUM(CASE WHEN source_fund_key='exchange_fund' AND transaction_type NOT IN (?, ?, ?) THEN amount ELSE 0 END), 0) AS exchange_expense,
+                            COALESCE(SUM(CASE WHEN destination_fund_key='promo_fund' AND COALESCE(source_fund_key, '')<>'mint' THEN amount ELSE 0 END), 0) AS promo_income,
+                            COALESCE(SUM(CASE WHEN source_fund_key='promo_fund' THEN amount ELSE 0 END), 0) AS promo_expense,
+                            COALESCE(SUM(CASE WHEN source_fund_key='mint' THEN amount ELSE 0 END), 0) AS minted,
+                            COALESCE(SUM(CASE WHEN destination_fund_key='burn' THEN amount ELSE 0 END), 0) AS burned,
+                            COUNT(*) AS event_count
+                        FROM points_economy_events
+                        WHERE status='confirmed'
+                          AND created_at >= ?
+                        """,
+                        (
+                            *non_income_principal_types,
+                            *non_income_principal_types,
+                            *non_income_principal_types,
+                            *non_income_principal_types,
+                            month_start,
+                        ),
+                    ).fetchone()
+                    fund_month = {
+                        "fund_income": _int_value(fund_row["fund_income"] if fund_row else 0),
+                        "fund_expense": _int_value(fund_row["fund_expense"] if fund_row else 0),
+                        "official_income": _int_value(fund_row["official_income"] if fund_row else 0),
+                        "official_expense": _int_value(fund_row["official_expense"] if fund_row else 0),
+                        "exchange_income": _int_value(fund_row["exchange_income"] if fund_row else 0),
+                        "exchange_expense": _int_value(fund_row["exchange_expense"] if fund_row else 0),
+                        "promo_income": _int_value(fund_row["promo_income"] if fund_row else 0),
+                        "promo_expense": _int_value(fund_row["promo_expense"] if fund_row else 0),
+                        "minted": _int_value(fund_row["minted"] if fund_row else 0),
+                        "burned": _int_value(fund_row["burned"] if fund_row else 0),
+                        "event_count": _int_value(fund_row["event_count"] if fund_row else 0),
+                    }
+                except Exception:
+                    fund_month = {
+                        "fund_income": 0,
+                        "fund_expense": 0,
+                        "official_income": 0,
+                        "official_expense": 0,
+                        "exchange_income": 0,
+                        "exchange_expense": 0,
+                        "promo_income": 0,
+                        "promo_expense": 0,
+                        "minted": 0,
+                        "burned": 0,
+                        "event_count": 0,
+                    }
+
+            points_economy = {}
+            points_economy_error = ""
+            if points_service:
+                try:
+                    points_economy = points_service.economy_stats() or {}
+                except Exception as exc:
+                    points_economy_error = str(exc)
+                    points_economy = {}
+            layer = points_economy.get("economy_layer") if isinstance(points_economy, dict) else {}
+            layer = layer if isinstance(layer, dict) else {}
+            supply = layer.get("supply") if isinstance(layer.get("supply"), dict) else {}
+            equation = layer.get("supply_equation") if isinstance(layer.get("supply_equation"), dict) else {}
+            funds = layer.get("funds") if isinstance(layer.get("funds"), dict) else {}
+
+            def _fund_balance(key):
+                item = funds.get(key) if isinstance(funds, dict) else {}
+                return _int_value(item.get("balance") if isinstance(item, dict) else 0)
+
+            member_internal = _int_value(equation.get("member_internal_circulating_points"))
+            root_internal = _int_value(equation.get("root_internal_circulating_points"))
+            platform_funds = _int_value(equation.get("pc0_platform_internal_fund_balance"))
+            official_treasury = _int_value(equation.get("official_treasury_balance")) or _fund_balance("official_treasury")
+            exchange_fund = _int_value(equation.get("exchange_fund_balance")) or _fund_balance("exchange_fund")
+            promo_fund = _int_value(equation.get("promo_fund_balance")) or _fund_balance("promo_fund")
+            if not platform_funds:
+                platform_funds = official_treasury + exchange_fund + promo_fund
+            active_supply = _int_value(supply.get("active_supply"))
+            circulating_supply = _int_value(supply.get("circulating_supply"))
+            fund_supply = _int_value(supply.get("fund_supply")) or platform_funds
+            burned_total = _int_value(equation.get("system_burn_sink_balance")) or _int_value(supply.get("burned_total"))
+            mint_remaining = _int_value(equation.get("system_mint_unissued_balance")) or _int_value(supply.get("mint_remaining"))
+            max_supply = _int_value(equation.get("max_supply")) or _int_value(supply.get("max_supply"))
+            closed_loop_gap = _int_value(equation.get("bridged_supply_equation_gap_points"))
+            if "bridged_supply_equation_gap_points" not in equation:
+                closed_loop_gap = _int_value(equation.get("actual_supply_equation_gap_points"))
+            closed_loop_balanced = bool(equation.get("bridged_supply_equation_balanced", closed_loop_gap == 0))
+            if not member_internal and total_points:
+                member_internal = _int_value(total_points)
+            if not circulating_supply:
+                circulating_supply = member_internal + root_internal + _int_value(equation.get("off_wallet_economy_external_points"))
+            if not active_supply:
+                active_supply = circulating_supply + fund_supply
+
+            member_inflow_month = ledger_month["member_inflow"] or _int_value(points_earned_month)
+            member_outflow_month = ledger_month["member_outflow"] or _int_value(points_spent_month)
+
             return json_resp({
                 "ok": True,
                 "stats": {
@@ -932,10 +1104,46 @@ def register_system_admin_runtime_routes(app, ctx):
                     "new_users_month": new_users_month,
                     "active_sessions": active_sessions,
                     "page_views_today": pv_today,
-                    "total_points": total_points,
-                    "points_earned_month": points_earned_month,
-                    "points_spent_month": points_spent_month,
-                    "points_net_month": points_earned_month - points_spent_month,
+                    "points_model_version": "pc0_pc1_dual_rail_v1",
+                    "points_economy_available": bool(points_economy),
+                    "points_economy_error": points_economy_error,
+                    "total_points": member_internal,
+                    "points_earned_month": member_inflow_month,
+                    "points_spent_month": member_outflow_month,
+                    "points_net_month": member_inflow_month - member_outflow_month,
+                    "points_user_hot_circulating": member_internal,
+                    "points_root_hot_circulating": root_internal,
+                    "points_member_hot_available": _int_value(equation.get("member_internal_available_points")),
+                    "points_member_hot_frozen": _int_value(equation.get("member_internal_frozen_points")),
+                    "points_official_treasury": official_treasury,
+                    "points_exchange_fund": exchange_fund,
+                    "points_promo_fund": promo_fund,
+                    "points_pc0_platform_funds": platform_funds,
+                    "points_fund_supply": fund_supply,
+                    "points_active_supply": active_supply,
+                    "points_circulating_supply": circulating_supply,
+                    "points_burned_total": burned_total,
+                    "points_mint_remaining": mint_remaining,
+                    "points_max_supply": max_supply,
+                    "points_closed_loop_gap": closed_loop_gap,
+                    "points_closed_loop_balanced": closed_loop_balanced,
+                    "points_closed_loop_status": "balanced" if closed_loop_balanced and closed_loop_gap == 0 else "needs_audit",
+                    "points_member_internal_inflow_month": member_inflow_month,
+                    "points_member_internal_outflow_month": member_outflow_month,
+                    "points_member_internal_net_month": member_inflow_month - member_outflow_month,
+                    "points_member_internal_ledger_entries_month": ledger_month["confirmed_entries"],
+                    "points_fund_income_month": fund_month["fund_income"],
+                    "points_fund_expense_month": fund_month["fund_expense"],
+                    "points_fund_net_month": fund_month["fund_income"] - fund_month["fund_expense"],
+                    "points_official_income_month": fund_month["official_income"],
+                    "points_official_expense_month": fund_month["official_expense"],
+                    "points_exchange_income_month": fund_month["exchange_income"],
+                    "points_exchange_expense_month": fund_month["exchange_expense"],
+                    "points_promo_income_month": fund_month["promo_income"],
+                    "points_promo_expense_month": fund_month["promo_expense"],
+                    "points_minted_month": fund_month["minted"],
+                    "points_burned_month": fund_month["burned"],
+                    "points_economy_events_month": fund_month["event_count"],
                 }
             })
         finally:

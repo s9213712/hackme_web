@@ -4,6 +4,8 @@ import pytest
 from flask import Flask, jsonify, make_response
 
 from routes.public import register_public_routes
+from services.platform.db_mode_triggers import register_app_mode_function
+from services.points_chain import PointsLedgerService, SIGNUP_BONUS_POINTS
 
 
 def _json_resp(payload, status=200):
@@ -21,6 +23,8 @@ def _build_app(db_path, *, points_service=None):
     def get_db():
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        register_app_mode_function(conn, mode_reader=lambda: "production")
         return conn
 
     register_public_routes(app, {
@@ -134,15 +138,24 @@ def test_register_validation_returns_field_for_username(tmp_path):
     assert payload["field"] == "username"
 
 
-def test_register_defers_signup_bonus_until_wallet_onboarding(tmp_path):
+def test_register_awards_signup_bonus_to_official_hot_wallet(tmp_path):
     db_path = tmp_path / "register.db"
     _init_register_tables(db_path)
 
-    class NoSignupBonusDuringRegister:
-        def award_signup_bonus(self, **_kwargs):
-            raise AssertionError("signup bonus must be deferred until wallet onboarding")
+    def points_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        register_app_mode_function(conn, mode_reader=lambda: "production")
+        return conn
 
-    client = _build_app(db_path, points_service=NoSignupBonusDuringRegister()).test_client()
+    points_service = PointsLedgerService(
+        get_db=points_db,
+        chain_secret="test-secret",
+        backup_dir=tmp_path / "points_chain_backups",
+        mode_reader=lambda: "production",
+    )
+    client = _build_app(db_path, points_service=points_service).test_client()
 
     response = client.post(
         "/api/register",
@@ -157,14 +170,28 @@ def test_register_defers_signup_bonus_until_wallet_onboarding(tmp_path):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["ok"] is True
-    assert payload["wallet_onboarding_required"] is True
-    assert payload["signup_bonus_deferred"] is True
+    assert payload["wallet_onboarding_required"] is False
+    assert payload["signup_bonus_deferred"] is False
+    assert payload["official_hot_wallet_address"].startswith("pc0")
+    assert payload["signup_bonus"]["created"] is True
+    assert payload["signup_bonus"]["wallet_address"] == payload["official_hot_wallet_address"]
     conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
     try:
         user = conn.execute("SELECT username, status FROM users WHERE username='alice123'").fetchone()
+        ledger = conn.execute(
+            """
+            SELECT * FROM points_ledger
+            WHERE action_type='new_user_signup_bonus'
+              AND user_id=(SELECT id FROM users WHERE username='alice123')
+            """
+        ).fetchone()
     finally:
         conn.close()
-    assert user == ("alice123", "pending")
+    assert tuple(user) == ("alice123", "pending")
+    assert ledger is not None
+    assert int(ledger["amount"]) == SIGNUP_BONUS_POINTS
+    assert points_service.get_wallet(ledger["user_id"])["points_balance"] == SIGNUP_BONUS_POINTS
 
 
 def test_register_validation_returns_field_for_password_confirmation(tmp_path):

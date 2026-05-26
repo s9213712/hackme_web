@@ -27,7 +27,7 @@ def _env_int(name: str, default: int, *, minimum: int | None = None, maximum: in
 
 
 def sqlite_busy_timeout_ms() -> int:
-    return _env_int("HACKME_SQLITE_BUSY_TIMEOUT_MS", 30000, minimum=1000, maximum=120000)
+    return _env_int("HACKME_SQLITE_BUSY_TIMEOUT_MS", 3000, minimum=1000, maximum=120000)
 
 
 def sqlite_retry_attempts() -> int:
@@ -63,6 +63,15 @@ def is_sqlite_lock_error(exc: BaseException) -> bool:
         return False
     message = str(exc).lower()
     return "database is locked" in message or "database table is locked" in message or "database is busy" in message
+
+
+def is_sqlite_retryable_operational_error(exc: BaseException) -> bool:
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+    if is_sqlite_lock_error(exc):
+        return True
+    message = str(exc).lower()
+    return "database schema has changed" in message
 
 
 def _sql_starts_with(sql: str, prefixes: tuple[str, ...]) -> bool:
@@ -169,7 +178,7 @@ class HardenedSQLiteConnection(sqlite3.Connection):
             try:
                 return operation()
             except sqlite3.OperationalError as exc:
-                if not is_sqlite_lock_error(exc) or attempt >= attempts - 1:
+                if not is_sqlite_retryable_operational_error(exc) or attempt >= attempts - 1:
                     raise
                 time.sleep(base_sleep * (attempt + 1))
 

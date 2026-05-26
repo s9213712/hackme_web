@@ -66,3 +66,4 @@ architecture_scan.md
 notes/
 security/reports/*
 !security/reports/.gitkeep
+.hackme_capacity_defaults.env

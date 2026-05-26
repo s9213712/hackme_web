@@ -218,3 +218,36 @@ def test_points_bootstrap_initial_grants_skip_internal_test_without_force():
 
     assert result["skipped"] is True
     assert result["mode"] == "internal_test"
+
+
+def test_import_mode_workers_start_for_gunicorn_import_but_not_plain_import():
+    env = {}
+
+    assert startup.should_start_import_mode_workers(
+        module_name="server",
+        argv=["python", "-m", "gunicorn", "server:app"],
+        environ=env,
+    ) is True
+    assert startup.should_start_import_mode_workers(
+        module_name="server",
+        argv=["python", "-"],
+        environ=env,
+    ) is False
+    assert startup.should_start_import_mode_workers(
+        module_name="__main__",
+        argv=["python", "server.py"],
+        environ=env,
+    ) is False
+
+
+def test_import_mode_workers_env_override_and_disable():
+    assert startup.should_start_import_mode_workers(
+        module_name="server",
+        argv=["pytest"],
+        environ={"HTML_LEARNING_START_IMPORT_WORKERS": "true"},
+    ) is True
+    assert startup.should_start_import_mode_workers(
+        module_name="server",
+        argv=["python", "-m", "gunicorn", "server:app"],
+        environ={"HTML_LEARNING_DISABLE_IMPORT_WORKERS": "1", "HTML_LEARNING_START_IMPORT_WORKERS": "1"},
+    ) is False

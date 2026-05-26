@@ -41,7 +41,8 @@ def _make_app(tmp_path, actor=None, audit_result=(True, None, "integrity OK"), i
         CREATE TABLE moderation_proposals (id INTEGER PRIMARY KEY, status TEXT);
         CREATE TABLE secure_violations (id INTEGER PRIMARY KEY);
         CREATE TABLE secure_audit (id INTEGER PRIMARY KEY);
-        CREATE TABLE uploaded_files (id TEXT PRIMARY KEY, scan_status TEXT, risk_level TEXT, deleted_at TEXT);
+        CREATE TABLE uploaded_files (id TEXT PRIMARY KEY, scan_status TEXT, risk_level TEXT, deleted_at TEXT, size_bytes INTEGER DEFAULT 0);
+        CREATE TABLE storage_files (id TEXT PRIMARY KEY);
         CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
         """
     if include_forum_tables:
@@ -132,6 +133,14 @@ def test_health_readiness_and_db_integrity_endpoints(tmp_path):
 
 def test_admin_health_summary_includes_grouped_dashboard_data(tmp_path):
     app = _make_app(tmp_path)
+    nested = tmp_path / "storage" / "user-1" / "files"
+    nested.mkdir(parents=True)
+    (nested / "asset.bin").write_bytes(b"abc")
+    conn = sqlite3.connect(tmp_path / "health.db")
+    conn.execute("INSERT INTO uploaded_files (id, scan_status, risk_level, deleted_at, size_bytes) VALUES ('asset', 'clean', 'low', NULL, 3)")
+    conn.execute("INSERT INTO storage_files (id) VALUES ('sf1')")
+    conn.commit()
+    conn.close()
     res = app.test_client().get("/api/admin/health")
     data = res.get_json()
 
@@ -142,6 +151,9 @@ def test_admin_health_summary_includes_grouped_dashboard_data(tmp_path):
     assert data["counts"]["pending_reports"] == 1
     assert "pending_moderation_proposals" in data["counts"]
     assert {"log_files", "anchor_files", "storage_files"} <= set(data["storage"])
+    assert data["storage"]["storage_files"] == 1
+    assert data["storage"]["storage_bytes"] == 3
+    assert data["storage"]["storage_dir"] == "storage"
     assert data["readiness"]["database"]["schema_version"] == CURRENT_SCHEMA_VERSION
     assert "signals" in data["anomaly"]
 

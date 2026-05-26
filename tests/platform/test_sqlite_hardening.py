@@ -2,7 +2,13 @@ import sqlite3
 
 import pytest
 
-from services.core.sqlite_hardening import connect_sqlite, connect_sqlite_readonly
+from services.core.sqlite_hardening import connect_sqlite, connect_sqlite_readonly, sqlite_busy_timeout_ms
+
+
+def test_sqlite_busy_timeout_default_fails_fast_for_web_requests(monkeypatch):
+    monkeypatch.delenv("HACKME_SQLITE_BUSY_TIMEOUT_MS", raising=False)
+
+    assert sqlite_busy_timeout_ms() == 3000
 
 
 def test_hardened_sqlite_applies_runtime_pragmas(tmp_path):
@@ -39,3 +45,22 @@ def test_readonly_sqlite_connection_allows_reads_and_blocks_writes(tmp_path):
             ro.commit()
     finally:
         ro.close()
+
+
+def test_hardened_sqlite_retries_schema_changed_transient(tmp_path, monkeypatch):
+    db_path = tmp_path / "schema_changed_retry.db"
+    monkeypatch.setenv("HACKME_SQLITE_LOCK_RETRY_ATTEMPTS", "3")
+    conn = connect_sqlite(db_path)
+    calls = {"count": 0}
+
+    def flaky_operation():
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise sqlite3.OperationalError("database schema has changed")
+        return "ok"
+
+    try:
+        assert conn._with_locked_retry(flaky_operation) == "ok"
+        assert calls["count"] == 2
+    finally:
+        conn.close()

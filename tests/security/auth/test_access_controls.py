@@ -811,10 +811,14 @@ def test_admin_environment_exposes_relative_paths_and_pid():
     assert env["log_dir"] == "."
     assert env["chat_dir"] == "."
     resources = res.get_json()["resource_usage"]
+    database_usage = res.get_json()["database_usage"]
+    transfer_usage = res.get_json()["transfer_usage"]
     assert res.get_json()["resource_refresh_seconds"] == 5
     assert {"cpu", "gpu", "vram", "ram", "sampled_at"} <= set(resources)
     assert resources["cpu"]["label"] == "CPU"
     assert resources["ram"]["label"] == "RAM"
+    assert {"total_bytes", "file_count", "files"} <= set(database_usage)
+    assert {"upload_bytes_per_second", "download_bytes_per_second", "cumulative_upload_bytes", "cumulative_download_bytes"} <= set(transfer_usage)
     assert env["anchor_dir"] == "."
     for key in ("base_dir", "database_path", "log_dir", "chat_dir", "anchor_dir"):
         assert not str(env[key]).startswith("/")
@@ -831,6 +835,8 @@ def test_admin_environment_resources_is_lightweight_resource_endpoint():
     assert body["ok"] is True
     assert body["resource_refresh_seconds"] == 9
     assert {"cpu", "gpu", "vram", "ram", "sampled_at"} <= set(body["resource_usage"])
+    assert {"total_bytes", "file_count", "files"} <= set(body["database_usage"])
+    assert {"upload_bytes_per_second", "download_bytes_per_second", "cumulative_upload_bytes", "cumulative_download_bytes"} <= set(body["transfer_usage"])
 
 
 def test_effective_server_bind_falls_back_to_environment():

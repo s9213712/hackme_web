@@ -9,6 +9,7 @@ from routes.public import register_public_routes
 from services.security.captcha import create_captcha_challenge
 from services.server.database import get_auth_db
 from services.points_chain import BIRTHDAY_GIFT_POINTS, PointsLedgerService
+from services.storage.quota_purchases import BIRTHDAY_STORAGE_GIFT_BYTES, active_storage_quota_purchases
 from services.users import auth as auth_service
 
 
@@ -166,6 +167,12 @@ def _build_public_auth_app(main_db_path, auth_db_path, *, ensure_membership=None
     def _json_resp(payload, status=200):
         return make_response(jsonify(payload), status)
 
+    token_counter = {"n": 0}
+
+    def _make_token(username):
+        token_counter["n"] += 1
+        return f"session-{username}-{token_counter['n']}"
+
     register_public_routes(app, {
         "CSRF_TOKEN_TTL": 3600,
         "PUBLIC_DIR": str(main_db_path.parent),
@@ -199,7 +206,7 @@ def _build_public_auth_app(main_db_path, auth_db_path, *, ensure_membership=None
         "is_rate_limited": lambda *args, **kwargs: (False, {"limit": 30}),
         "json_resp": _json_resp,
         "make_csrf_token": auth_service.make_csrf_token,
-        "make_token": lambda username: f"session-{username}",
+        "make_token": _make_token,
         "normalize_text": lambda value: value.strip() if isinstance(value, str) else "",
         "parse_birthdate": lambda value: value,
         "record_login_failure": lambda *args, **kwargs: None,
@@ -401,7 +408,30 @@ def test_public_login_awards_birthday_gift_once_for_current_year(tmp_path):
     assert login_json["ok"] is True
     assert login_json["birthday_gift"]["created"] is True
     assert login_json["birthday_gift"]["amount"] == BIRTHDAY_GIFT_POINTS
+    assert login_json["birthday_gift"]["storage_quota_gift"]["created"] is True
+    assert login_json["birthday_gift"]["storage_quota_gift"]["purchase"]["purchased_bytes"] == BIRTHDAY_STORAGE_GIFT_BYTES
     assert points_service.get_wallet(1)["points_balance"] == BIRTHDAY_GIFT_POINTS
+
+    second_csrf = client.get("/api/csrf-token").get_json()["csrf_token"]
+    second_login = client.post(
+        "/api/login",
+        json={"username": "alice", "password": "correct-horse-battery-staple"},
+        headers={"X-CSRF-Token": second_csrf},
+    )
+    assert second_login.status_code == 200
+    second_json = second_login.get_json()
+    assert second_json["birthday_gift"]["created"] is False
+    assert second_json["birthday_gift"]["storage_quota_gift"]["created"] is False
+    assert points_service.get_wallet(1)["points_balance"] == BIRTHDAY_GIFT_POINTS
+
+    conn = _get_main_db()
+    try:
+        purchases = active_storage_quota_purchases(conn, 1)
+    finally:
+        conn.close()
+    assert len(purchases) == 1
+    assert purchases[0]["item_key"] == "birthday_storage_1gb_30d"
+    assert purchases[0]["purchased_bytes"] == BIRTHDAY_STORAGE_GIFT_BYTES
 
 
 def test_public_login_survives_locked_official_room_membership_sync(tmp_path):

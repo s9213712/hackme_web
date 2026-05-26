@@ -67,6 +67,47 @@ def test_feature_settings_roundtrip_and_ignore_unknown_keys(tmp_path):
         settings._SYSTEM_SETTINGS = original_cache
 
 
+def test_system_settings_reload_cross_worker_db_updates(tmp_path):
+    db_path = tmp_path / "settings.db"
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    original_state = dict(settings._STATE)
+    original_cache = settings._SYSTEM_SETTINGS
+    try:
+        settings.configure_settings_service(get_db=get_db, load_json=lambda path: {}, base_dir=str(tmp_path))
+        conn = get_db()
+        settings.init_system_settings_table(conn)
+        settings._seed_missing_settings_to_db(conn)
+        conn.commit()
+        conn.close()
+        settings.refresh_system_settings()
+        assert settings.get_system_settings()["feature_points_chain_enabled"] is True
+
+        other_worker_conn = get_db()
+        other_worker_conn.execute(
+            """
+            UPDATE system_settings
+               SET value = 'False', updated_at = '2026-05-23T00:00:00', updated_by = 'other_worker'
+             WHERE key = 'feature_points_chain_enabled'
+            """
+        )
+        other_worker_conn.commit()
+        other_worker_conn.close()
+
+        assert settings._SYSTEM_SETTINGS["feature_points_chain_enabled"] is True
+        assert settings.get_system_settings()["feature_points_chain_enabled"] is False
+        assert settings.get_cached_system_setting("feature_points_chain_enabled", True) is False
+        assert settings.is_feature_enabled("points_chain") is False
+    finally:
+        settings._STATE.clear()
+        settings._STATE.update(original_state)
+        settings._SYSTEM_SETTINGS = original_cache
+
+
 def test_feature_gate_maps_existing_modules():
     assert feature_gate_for_path("/api/chat/rooms") == "feature_chat_enabled"
     assert feature_gate_for_path("/api/community/boards") == "feature_community_enabled"
@@ -261,8 +302,8 @@ def test_notifications_remain_enabled_after_management_only_reset():
     assert settings.MANAGEMENT_ONLY_RESET_SETTINGS["feature_reports_notifications_enabled"] is True
 
 
-def test_feature_disabled_payload_names_missing_parent_feature():
-    db_path = ":memory:"
+def test_feature_disabled_payload_names_missing_parent_feature(tmp_path):
+    db_path = tmp_path / "settings.db"
 
     def get_db():
         conn = sqlite3.connect(db_path)
@@ -273,11 +314,13 @@ def test_feature_disabled_payload_names_missing_parent_feature():
     original_cache = settings._SYSTEM_SETTINGS
     try:
         settings.configure_settings_service(get_db=get_db, load_json=lambda path: {}, base_dir=".")
-        settings._SYSTEM_SETTINGS = {
-            **settings.DEFAULT_SETTINGS,
-            "feature_trading_enabled": False,
-            "feature_economy_enabled": False,
-        }
+        conn = get_db()
+        settings.init_system_settings_table(conn)
+        settings._seed_missing_settings_to_db(conn)
+        conn.execute("UPDATE system_settings SET value = 'False' WHERE key = 'feature_trading_enabled'")
+        conn.execute("UPDATE system_settings SET value = 'False' WHERE key = 'feature_economy_enabled'")
+        conn.commit()
+        conn.close()
         payload = settings.build_feature_disabled_payload("feature_trading_enabled")
         assert payload["feature"] == "feature_trading_enabled"
         assert payload["feature_label"] == "積分交易所"
@@ -289,8 +332,8 @@ def test_feature_disabled_payload_names_missing_parent_feature():
         settings._SYSTEM_SETTINGS = original_cache
 
 
-def test_feature_disabled_payload_lists_enabled_dependents_of_blocked_parent():
-    db_path = ":memory:"
+def test_feature_disabled_payload_lists_enabled_dependents_of_blocked_parent(tmp_path):
+    db_path = tmp_path / "settings.db"
 
     def get_db():
         conn = sqlite3.connect(db_path)
@@ -301,13 +344,15 @@ def test_feature_disabled_payload_lists_enabled_dependents_of_blocked_parent():
     original_cache = settings._SYSTEM_SETTINGS
     try:
         settings.configure_settings_service(get_db=get_db, load_json=lambda path: {}, base_dir=".")
-        settings._SYSTEM_SETTINGS = {
-            **settings.DEFAULT_SETTINGS,
-            "feature_privacy_uploads_enabled": False,
-            "feature_storage_albums_enabled": True,
-            "feature_videos_enabled": True,
-            "feature_comfyui_enabled": True,
-        }
+        conn = get_db()
+        settings.init_system_settings_table(conn)
+        settings._seed_missing_settings_to_db(conn)
+        conn.execute("UPDATE system_settings SET value = 'False' WHERE key = 'feature_privacy_uploads_enabled'")
+        conn.execute("UPDATE system_settings SET value = 'True' WHERE key = 'feature_storage_albums_enabled'")
+        conn.execute("UPDATE system_settings SET value = 'True' WHERE key = 'feature_videos_enabled'")
+        conn.execute("UPDATE system_settings SET value = 'True' WHERE key = 'feature_comfyui_enabled'")
+        conn.commit()
+        conn.close()
         payload = settings.build_feature_disabled_payload("feature_privacy_uploads_enabled")
         assert payload["feature_label"] == "隱私分級上傳 / E2EE"
         assert payload["enabled_dependents_required"] == ["feature_storage_albums_enabled"]

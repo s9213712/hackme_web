@@ -10,6 +10,7 @@ from services.security.access_controls import (
     verify_maintenance_bypass_token,
 )
 from services.server.backpressure import install_backpressure
+from services.server import backpressure as backpressure_module
 from services.server.request_guards import (
     enforce_browser_only_mode,
     get_request_maintenance_bypass_token,
@@ -201,6 +202,14 @@ def test_backpressure_preserves_fast_lane_root_priority_and_heavy_limits():
     def version_probe():
         return jsonify({"ok": True})
 
+    @app.route("/api/csrf-token")
+    def csrf_probe():
+        return jsonify({"ok": True, "csrf_token": "token"})
+
+    @app.route("/api/me")
+    def me_probe():
+        return jsonify({"ok": True, "username": "alice"})
+
     @app.route("/api/normal")
     def normal_probe():
         return jsonify({"ok": True})
@@ -226,6 +235,14 @@ def test_backpressure_preserves_fast_lane_root_priority_and_heavy_limits():
         assert fast_lane.status_code == 200
         assert fast_lane.get_json()["ok"] is True
 
+        csrf_lane = client.get("/api/csrf-token")
+        assert csrf_lane.status_code == 200
+        assert csrf_lane.get_json()["csrf_token"] == "token"
+
+        me_lane = client.get("/api/me")
+        assert me_lane.status_code == 200
+        assert me_lane.get_json()["username"] == "alice"
+
         root_priority = client.get("/api/root/points/report")
         assert root_priority.status_code == 200
         assert root_priority.get_json()["root"] is True
@@ -234,9 +251,126 @@ def test_backpressure_preserves_fast_lane_root_priority_and_heavy_limits():
 
     heavy_lease = state["heavy"].acquire()
     try:
-        blocked_heavy = client.post("/api/files/upload")
+        blocked_heavy = client.post("/api/files/upload", data=b"abc")
         assert blocked_heavy.status_code == 503
         assert blocked_heavy.get_json()["gate"] == "heavy"
         assert blocked_heavy.headers["Retry-After"] == "2"
     finally:
         heavy_lease.release()
+    traffic = state["traffic"].snapshot()
+    assert traffic["totals"]["upload_bytes"] >= 3
+    assert traffic["totals"]["download_bytes"] > 0
+    assert traffic["cumulative"]["upload_bytes"] >= 3
+    assert traffic["cumulative"]["download_bytes"] > 0
+    assert "upload_bytes_per_sec" in traffic
+    assert "download_bytes_per_sec" in traffic
+
+
+def test_backpressure_auto_uses_gunicorn_threads_from_argv(monkeypatch):
+    monkeypatch.delenv("HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY", raising=False)
+    monkeypatch.delenv("HACKME_DEV_GUNICORN_THREADS", raising=False)
+    monkeypatch.delenv("GUNICORN_THREADS", raising=False)
+    monkeypatch.setattr(backpressure_module, "_total_memory_mb", lambda: 8192)
+    monkeypatch.setattr(
+        backpressure_module.sys,
+        "argv",
+        ["python", "-m", "gunicorn", "server:app", "--worker-class", "gthread", "--threads", "12"],
+    )
+
+    state = backpressure_module._build_backpressure_state({
+        "server_backpressure_enabled": True,
+        "server_backpressure_mode": "auto",
+        "server_backpressure_thread_capacity": 0,
+        "server_backpressure_normal_limit": 0,
+        "server_backpressure_heavy_limit": 0,
+        "server_backpressure_root_limit": 0,
+        "server_backpressure_fast_lane_reserved": 0,
+        "server_backpressure_root_priority_enabled": True,
+    })
+
+    assert state["limits"]["thread_capacity"] == 12
+    assert state["limits"]["normal"] == 12
+    assert state["limits"]["heavy"] == 6
+    assert state["limits"]["root"] == 1
+    assert state["limits"]["fast_lane_reserved"] == 4
+
+
+def test_backpressure_auto_keeps_small_gthread_workers_usable(monkeypatch):
+    monkeypatch.delenv("HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY", raising=False)
+    monkeypatch.delenv("HACKME_DEV_GUNICORN_THREADS", raising=False)
+    monkeypatch.delenv("GUNICORN_THREADS", raising=False)
+    monkeypatch.setattr(backpressure_module, "_total_memory_mb", lambda: 8192)
+    monkeypatch.setattr(
+        backpressure_module.sys,
+        "argv",
+        ["python", "-m", "gunicorn", "server:app", "--worker-class", "gthread", "--threads", "6"],
+    )
+
+    state = backpressure_module._build_backpressure_state({
+        "server_backpressure_enabled": True,
+        "server_backpressure_mode": "auto",
+        "server_backpressure_thread_capacity": 0,
+        "server_backpressure_normal_limit": 0,
+        "server_backpressure_heavy_limit": 0,
+        "server_backpressure_root_limit": 0,
+        "server_backpressure_fast_lane_reserved": 0,
+        "server_backpressure_root_priority_enabled": True,
+    })
+
+    assert state["limits"]["thread_capacity"] == 6
+    assert state["limits"]["normal"] == 6
+    assert state["limits"]["heavy"] == 5
+    assert state["limits"]["root"] == 1
+    assert state["limits"]["fast_lane_reserved"] == 1
+
+
+def test_backpressure_auto_does_not_scale_with_large_cpu_count(monkeypatch):
+    monkeypatch.delenv("HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY", raising=False)
+    monkeypatch.delenv("HACKME_DEV_GUNICORN_THREADS", raising=False)
+    monkeypatch.delenv("GUNICORN_THREADS", raising=False)
+    monkeypatch.setattr(backpressure_module.sys, "argv", ["python", "server.py"])
+    monkeypatch.setattr(backpressure_module.os, "cpu_count", lambda: 64)
+    monkeypatch.setattr(backpressure_module, "_total_memory_mb", lambda: 131072)
+
+    state = backpressure_module._build_backpressure_state({
+        "server_backpressure_enabled": True,
+        "server_backpressure_mode": "auto",
+        "server_backpressure_thread_capacity": 0,
+        "server_backpressure_normal_limit": 0,
+        "server_backpressure_heavy_limit": 0,
+        "server_backpressure_root_limit": 0,
+        "server_backpressure_fast_lane_reserved": 0,
+        "server_backpressure_root_priority_enabled": True,
+    })
+
+    assert state["limits"]["thread_capacity"] == 8
+    assert state["limits"]["normal"] == 8
+    assert state["limits"]["heavy"] == 4
+    assert state["limits"]["root"] == 1
+    assert state["limits"]["fast_lane_reserved"] == 1
+
+
+def test_backpressure_auto_keeps_heavy_limit_low_on_tiny_memory(monkeypatch):
+    monkeypatch.delenv("HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY", raising=False)
+    monkeypatch.delenv("HACKME_DEV_GUNICORN_THREADS", raising=False)
+    monkeypatch.delenv("GUNICORN_THREADS", raising=False)
+    monkeypatch.setattr(
+        backpressure_module.sys,
+        "argv",
+        ["python", "-m", "gunicorn", "server:app", "--worker-class", "gthread", "--threads", "8"],
+    )
+    monkeypatch.setattr(backpressure_module, "_total_memory_mb", lambda: 1536)
+
+    state = backpressure_module._build_backpressure_state({
+        "server_backpressure_enabled": True,
+        "server_backpressure_mode": "auto",
+        "server_backpressure_thread_capacity": 0,
+        "server_backpressure_normal_limit": 0,
+        "server_backpressure_heavy_limit": 0,
+        "server_backpressure_root_limit": 0,
+        "server_backpressure_fast_lane_reserved": 0,
+        "server_backpressure_root_priority_enabled": True,
+    })
+
+    assert state["limits"]["thread_capacity"] == 8
+    assert state["limits"]["heavy"] == 1

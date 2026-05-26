@@ -8,10 +8,14 @@ and status requests.
 
 from __future__ import annotations
 
+import json
 import os
+import sys
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
 from flask import g, jsonify, request
 
@@ -24,6 +28,12 @@ HEALTH_FAST_LANE_PATHS = {
     "/api/readyz",
     "/api/healthz",
     "/api/version",
+}
+
+AUTH_FAST_LANE_PATHS = {
+    "/api/csrf-token",
+    "/api/me",
+    "/api/site-config",
 }
 
 BACKPRESSURE_FAST_LANE_PREFIXES = (
@@ -39,6 +49,10 @@ BACKPRESSURE_FAST_LANE_PREFIXES = (
     "/api/root/backpressure",
     "/api/root/trading/background/status",
     "/api/trading/safety",
+    "/styles.css",
+    "/experiments.css",
+    "/i18n-language-switcher.css",
+    "/js/",
 )
 
 ROOT_PRIORITY_PREFIXES = (
@@ -133,6 +147,40 @@ def _env_int_or_none(name: str, minimum: int = 1, maximum: int = 4096) -> int | 
     return max(minimum, min(maximum, parsed))
 
 
+def _parse_gunicorn_threads_from_tokens(tokens) -> int | None:
+    values = list(tokens or [])
+    for idx, token in enumerate(values):
+        text = str(token or "").strip()
+        if text == "--threads" and idx + 1 < len(values):
+            try:
+                parsed = int(str(values[idx + 1]).strip())
+            except Exception:
+                continue
+            return max(1, min(256, parsed))
+        if text.startswith("--threads="):
+            try:
+                parsed = int(text.split("=", 1)[1].strip())
+            except Exception:
+                continue
+            return max(1, min(256, parsed))
+    return None
+
+
+def _gunicorn_thread_capacity_from_process() -> int | None:
+    parsed = _parse_gunicorn_threads_from_tokens(getattr(sys, "argv", []) or [])
+    if parsed:
+        return parsed
+    try:
+        raw = open("/proc/self/cmdline", "rb").read()
+    except Exception:
+        return None
+    try:
+        tokens = [part.decode("utf-8", "ignore") for part in raw.split(b"\0") if part]
+    except Exception:
+        return None
+    return _parse_gunicorn_threads_from_tokens(tokens)
+
+
 def _total_memory_mb() -> int:
     try:
         pages = os.sysconf("SC_PHYS_PAGES")
@@ -156,11 +204,19 @@ def _thread_capacity(settings: dict | None = None) -> int:
         value = _env_int_or_none(name, minimum=4, maximum=256)
         if value:
             return value
+    gunicorn_threads = _gunicorn_thread_capacity_from_process()
+    if gunicorn_threads:
+        # Auto-detected WSGI threads are not the same as effective app
+        # throughput. SQLite write serialization, Python scheduling, and
+        # chain/accounting critical sections mean this app often saturates
+        # before every configured thread is productive. Keep auto mode
+        # conservative; root can raise this explicitly through settings/env.
+        return max(4, min(12, gunicorn_threads))
     cpu_count = max(1, int(os.cpu_count() or 1))
     mem_mb = _total_memory_mb()
-    cpu_cap = max(4, min(64, cpu_count * 4))
+    cpu_cap = max(4, min(8, cpu_count))
     if mem_mb > 0:
-        mem_cap = max(4, min(64, mem_mb // 256))
+        mem_cap = max(4, min(8, mem_mb // 512))
         return max(4, min(cpu_cap, mem_cap))
     return max(4, cpu_cap)
 
@@ -174,9 +230,7 @@ def _auto_fast_lane_reserved(thread_capacity: int, settings: dict | None = None)
         return min(configured, max(1, thread_capacity - 2))
     if thread_capacity <= 8:
         return 1
-    if thread_capacity <= 16:
-        return 1
-    return min(4, max(2, thread_capacity // 6))
+    return min(max(2, thread_capacity // 3), max(1, thread_capacity - 2))
 
 
 def _auto_heavy_limit(thread_capacity: int, cpu_count: int, mem_mb: int, settings: dict | None = None) -> tuple[int, str]:
@@ -186,11 +240,18 @@ def _auto_heavy_limit(thread_capacity: int, cpu_count: int, mem_mb: int, setting
     configured = _env_int_or_none("HTML_LEARNING_BACKPRESSURE_HEAVY_LIMIT", minimum=1, maximum=256)
     if configured:
         return min(configured, max(1, thread_capacity - 1)), "env"
-    if thread_capacity < 12 or cpu_count <= 4 or (mem_mb and mem_mb < 4096):
+    if thread_capacity <= 4 or (mem_mb > 0 and mem_mb < 2048):
         return 1, "auto"
-    if thread_capacity >= 16 and cpu_count >= 6 and (not mem_mb or mem_mb >= 8192):
-        return 2, "auto"
-    return 1, "auto"
+    heavy_limit = max(2, thread_capacity // 2)
+    if thread_capacity <= 6:
+        # A 6-thread gthread worker is the default dev/capacity profile. The
+        # previous cap of 4 rejected heavy uploads/backtests while the process
+        # still had CPU and memory headroom; keep one thread back, not two.
+        heavy_limit = max(heavy_limit, thread_capacity - 1)
+    if mem_mb > 0 and mem_mb < 4096:
+        heavy_limit = min(heavy_limit, 2)
+    heavy_ceiling = max(1, thread_capacity - (1 if thread_capacity <= 6 else 2))
+    return min(heavy_limit, heavy_ceiling), "auto"
 
 
 def _root_priority_enabled(settings: dict | None = None) -> bool:
@@ -207,8 +268,6 @@ def _auto_root_limit(thread_capacity: int, settings: dict | None = None) -> tupl
     configured = _env_int_or_none("HTML_LEARNING_BACKPRESSURE_ROOT_LIMIT", minimum=1, maximum=64)
     if configured:
         return configured, "env"
-    if thread_capacity >= 10:
-        return 2, "auto"
     return 1, "auto"
 
 
@@ -221,23 +280,32 @@ def _resolve_gate_limits(settings: dict | None = None) -> dict:
     reserved = _auto_fast_lane_reserved(thread_capacity, manual_settings)
     heavy_limit, heavy_source = _auto_heavy_limit(thread_capacity, cpu_count, mem_mb, manual_settings)
     root_limit, root_source = _auto_root_limit(thread_capacity, manual_settings if mode == "manual" else settings)
-    root_limit = min(root_limit, max(0, thread_capacity - reserved - heavy_limit - 1))
+    if mode == "manual":
+        root_limit = min(root_limit, max(0, thread_capacity - reserved - heavy_limit))
     setting_normal = _setting_int_or_none(manual_settings, "server_backpressure_normal_limit", minimum=1, maximum=2048)
     env_normal = _env_int_or_none("HTML_LEARNING_BACKPRESSURE_NORMAL_LIMIT", minimum=1, maximum=2048)
     configured_normal = setting_normal or env_normal
     normal_source = "settings" if setting_normal else ("env" if env_normal else "auto")
-    max_normal = max(1, thread_capacity - reserved - heavy_limit - root_limit)
+    # In auto mode, let the WSGI worker's own thread pool own normal request
+    # queueing. Keeping the normal gate below the detected gthread count caused
+    # short, ordinary frontend bursts to get 503 responses while CPU and memory
+    # still had headroom. Manual mode still honors explicit reserve budgeting.
+    fast_lane_budget = reserved if mode == "manual" else 0
+    heavy_budget = heavy_limit if mode == "manual" else 0
+    max_normal = max(1, thread_capacity - fast_lane_budget - heavy_budget)
     normal_limit = min(configured_normal, max_normal) if configured_normal else max_normal
     if normal_limit < 1:
         normal_limit = 1
-    if normal_limit + heavy_limit + root_limit + reserved > thread_capacity:
-        overflow = normal_limit + heavy_limit + root_limit + reserved - thread_capacity
+    # Root and heavy priority are opportunistic in auto mode; only manual
+    # budgets should reduce normal capacity.
+    if normal_limit + heavy_budget + fast_lane_budget > thread_capacity:
+        overflow = normal_limit + heavy_budget + fast_lane_budget - thread_capacity
         normal_limit = max(1, normal_limit - overflow)
     return {
         "normal": int(normal_limit),
         "heavy": int(heavy_limit),
         "root": int(root_limit),
-        "fast_lane_reserved": int(max(0, thread_capacity - normal_limit - heavy_limit - root_limit)),
+        "fast_lane_reserved": int(reserved),
         "thread_capacity": int(thread_capacity),
         "cpu_count": int(cpu_count),
         "memory_total_mb": int(mem_mb),
@@ -273,6 +341,8 @@ def is_health_fast_lane_path(path: str) -> bool:
 
 def is_backpressure_fast_lane_path(path: str) -> bool:
     path = path or ""
+    if path in AUTH_FAST_LANE_PATHS:
+        return True
     return any(path == prefix or path.startswith(prefix) for prefix in BACKPRESSURE_FAST_LANE_PREFIXES)
 
 
@@ -366,11 +436,25 @@ class RequestTrafficWindow:
         self.window_seconds = max(30, min(600, int(window_seconds or 120)))
         self._lock = threading.Lock()
         self._buckets: dict[int, dict] = {}
+        self._started_at = int(time.time())
+        self._cumulative_upload_bytes = 0
+        self._cumulative_download_bytes = 0
+        self._cumulative_requests = 0
 
-    def record(self, label: str, status_code: int = 0, rejected: bool = False) -> None:
+    def record(
+        self,
+        label: str,
+        status_code: int = 0,
+        rejected: bool = False,
+        *,
+        upload_bytes: int = 0,
+        download_bytes: int = 0,
+    ) -> None:
         now = int(time.time())
         label = label if label in {"normal", "heavy", "root", "fast_lane", "off"} else "other"
         status_code = int(status_code or 0)
+        upload_bytes = max(0, int(upload_bytes or 0))
+        download_bytes = max(0, int(download_bytes or 0))
         with self._lock:
             bucket = self._buckets.setdefault(now, {
                 "ts": now,
@@ -384,9 +468,16 @@ class RequestTrafficWindow:
                 "off": 0,
                 "other": 0,
                 "hard_5xx": 0,
+                "upload_bytes": 0,
+                "download_bytes": 0,
             })
             bucket["total"] += 1
             bucket[label] += 1
+            bucket["upload_bytes"] += upload_bytes
+            bucket["download_bytes"] += download_bytes
+            self._cumulative_requests += 1
+            self._cumulative_upload_bytes += upload_bytes
+            self._cumulative_download_bytes += download_bytes
             if rejected:
                 bucket["rejected"] += 1
             else:
@@ -412,8 +503,14 @@ class RequestTrafficWindow:
             "off": 0,
             "other": 0,
             "hard_5xx": 0,
+            "upload_bytes": 0,
+            "download_bytes": 0,
         }
         points = []
+        recent_upload = 0
+        recent_download = 0
+        recent_window_seconds = min(10, self.window_seconds)
+        recent_start = now - recent_window_seconds + 1
         with self._lock:
             for ts in range(start, now + 1):
                 source = self._buckets.get(ts) or {}
@@ -425,12 +522,95 @@ class RequestTrafficWindow:
                 for key in totals:
                     totals[key] += point[key]
                 points.append(point)
+                if ts >= recent_start:
+                    recent_upload += int(point.get("upload_bytes") or 0)
+                    recent_download += int(point.get("download_bytes") or 0)
+            cumulative = {
+                "started_at": self._started_at,
+                "requests": self._cumulative_requests,
+                "upload_bytes": self._cumulative_upload_bytes,
+                "download_bytes": self._cumulative_download_bytes,
+            }
         return {
             "window_seconds": self.window_seconds,
             "process_local": True,
             "points": points,
             "totals": totals,
+            "recent_window_seconds": recent_window_seconds,
+            "upload_bytes_per_sec": int(recent_upload / max(1, recent_window_seconds)),
+            "download_bytes_per_sec": int(recent_download / max(1, recent_window_seconds)),
+            "cumulative": cumulative,
         }
+
+
+def _safe_request_content_length() -> int:
+    try:
+        return max(0, int(request.content_length or 0))
+    except Exception:
+        return 0
+
+
+def _safe_response_content_length(response) -> int:
+    try:
+        header_value = response.headers.get("Content-Length")
+        if header_value is not None:
+            return max(0, int(header_value))
+    except Exception:
+        pass
+    try:
+        calculated = response.calculate_content_length()
+        return max(0, int(calculated or 0))
+    except Exception:
+        return 0
+
+
+def _backpressure_anomaly_log_path(app):
+    configured = app.config.get("HACKME_BACKPRESSURE_ANOMALY_LOG_PATH")
+    if configured:
+        return str(configured)
+    runtime = os.environ.get("HACKME_RUNTIME_DIR")
+    if not runtime:
+        return ""
+    return str(Path(runtime) / "logs" / "backpressure_anomalies.jsonl")
+
+
+def _record_backpressure_anomaly(app, payload: dict) -> None:
+    now = time.time()
+    event = {
+        "ts": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "pid": os.getpid(),
+        "event": payload.get("event") or "backpressure_anomaly",
+        "method": request.method,
+        "path": request.path,
+        "remote_addr": request.headers.get("X-Forwarded-For", request.remote_addr or "-"),
+        "user_agent": (request.headers.get("User-Agent") or "")[:240],
+        **payload,
+    }
+    signature = "|".join(str(event.get(key) or "") for key in ("event", "path", "gate", "status_code"))
+    cache = app.config.setdefault("HACKME_BACKPRESSURE_ANOMALY_THROTTLE", {})
+    if now - float(cache.get(signature) or 0) < 30:
+        return
+    cache[signature] = now
+    recent = app.config.setdefault("HACKME_BACKPRESSURE_RECENT_ANOMALIES", [])
+    recent.append(event)
+    del recent[:-50]
+
+    log_path = _backpressure_anomaly_log_path(app)
+    if log_path:
+        try:
+            path = Path(log_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        except Exception:
+            pass
+
+    callback = app.config.get("HACKME_BACKPRESSURE_AUDIT_CALLBACK")
+    if callable(callback):
+        try:
+            callback(dict(event))
+        except Exception:
+            pass
 
 
 def _build_backpressure_state(settings: dict | None = None, previous_state: dict | None = None) -> dict:
@@ -525,7 +705,7 @@ def _maybe_refresh_backpressure_state(app, *, force: bool = False) -> dict:
         lock.release()
 
 
-def install_backpressure(app, settings_provider=None, root_priority_detector=None) -> dict:
+def install_backpressure(app, settings_provider=None, root_priority_detector=None, anomaly_audit_callback=None, anomaly_log_path=None) -> dict:
     settings = None
     if callable(settings_provider):
         try:
@@ -534,6 +714,9 @@ def install_backpressure(app, settings_provider=None, root_priority_detector=Non
             settings = None
     app.config["HACKME_BACKPRESSURE_SETTINGS_PROVIDER"] = settings_provider
     app.config["HACKME_BACKPRESSURE_ROOT_PRIORITY_DETECTOR"] = root_priority_detector
+    app.config["HACKME_BACKPRESSURE_AUDIT_CALLBACK"] = anomaly_audit_callback
+    if anomaly_log_path:
+        app.config["HACKME_BACKPRESSURE_ANOMALY_LOG_PATH"] = anomaly_log_path
     app.config["HACKME_BACKPRESSURE_REFRESH_LOCK"] = threading.Lock()
     app.config["HACKME_BACKPRESSURE"] = _build_backpressure_state(settings)
 
@@ -577,6 +760,12 @@ def install_backpressure(app, settings_provider=None, root_priority_detector=Non
         if lease is None:
             g._backpressure_traffic_label = gate.label
             g._backpressure_rejected = True
+            _record_backpressure_anomaly(app, {
+                "event": "server_busy_rejected",
+                "gate": gate.label,
+                "status_code": 503,
+                "retry_after": int(state.get("retry_after") or 2),
+            })
             return _busy_response(gate.label, int(state.get("retry_after") or 2))
         g._backpressure_lease = lease
         g._backpressure_traffic_label = lease.label
@@ -590,7 +779,19 @@ def install_backpressure(app, settings_provider=None, root_priority_detector=Non
         if label is None and response.status_code == 503:
             label = response.headers.get("X-Hackme-Backpressure") or None
         if label and hasattr(traffic, "record"):
-            traffic.record(label, response.status_code, bool(getattr(g, "_backpressure_rejected", False)))
+            traffic.record(
+                label,
+                response.status_code,
+                bool(getattr(g, "_backpressure_rejected", False)),
+                upload_bytes=_safe_request_content_length(),
+                download_bytes=_safe_response_content_length(response),
+            )
+        if response.status_code >= 500 and not bool(getattr(g, "_backpressure_rejected", False)):
+            _record_backpressure_anomaly(app, {
+                "event": "hard_5xx_response",
+                "gate": label or "unknown",
+                "status_code": int(response.status_code or 0),
+            })
         lease = getattr(g, "_backpressure_lease", None)
         if lease is None:
             return response
@@ -639,4 +840,8 @@ def backpressure_status(app) -> dict:
         "heavy": heavy.snapshot() if hasattr(heavy, "snapshot") else {},
         "root": root.snapshot() if hasattr(root, "snapshot") else {},
         "traffic": traffic.snapshot() if hasattr(traffic, "snapshot") else {},
+        "anomaly_audit": {
+            "log_path": _backpressure_anomaly_log_path(app),
+            "recent": list(app.config.get("HACKME_BACKPRESSURE_RECENT_ANOMALIES") or [])[-20:],
+        },
     }

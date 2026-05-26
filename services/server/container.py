@@ -37,6 +37,7 @@ def build_runtime_services(*, config, deps):
         session_idle_timeout=deps["session_idle_timeout"],
         tester_token_user_lookup=deps["tester_token_user_lookup"],
         get_runtime_server_mode=deps["get_runtime_server_mode"],
+        get_system_settings=deps.get("get_system_settings"),
     )
     configure_audit_service(
         get_db=deps.get("get_audit_db", deps["get_db"]),

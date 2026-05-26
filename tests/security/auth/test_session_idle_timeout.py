@@ -111,6 +111,121 @@ def test_active_session_refreshes_last_seen(tmp_path):
         auth._STATE.update(original_state)
 
 
+def test_system_idle_setting_overrides_configured_auth_idle_timeout(tmp_path):
+    db_path = tmp_path / "idle-settings.db"
+    _seed_db(db_path)
+    original_state = dict(auth._STATE)
+
+    try:
+        auth.configure_auth_service(
+            get_db=_get_db_factory(str(db_path)),
+            get_user_by_username=lambda username: None,
+            fernet=None,
+            session_ttl=3600,
+            csrf_token_ttl=3600,
+            session_idle_timeout=180,
+            get_system_settings=lambda: {
+                "session_idle_timeout_minutes": 10,
+                "session_ttl_hours": 1,
+            },
+        )
+        auth.db_save_session(1, "token", "127.0.0.1", "test-agent")
+
+        stale_but_allowed = (datetime.now() - timedelta(seconds=181)).isoformat()
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE sessions SET last_seen=? WHERE id=1", (stale_but_allowed,))
+        conn.commit()
+        conn.close()
+
+        assert auth.db_get_user_from_token("token") == "alice"
+
+        stale_too_long = (datetime.now() - timedelta(seconds=601)).isoformat()
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE sessions SET last_seen=?, is_revoked=0, revoked_at=NULL WHERE id=1", (stale_too_long,))
+        conn.commit()
+        conn.close()
+
+        assert auth.db_get_user_from_token("token") is None
+    finally:
+        auth._STATE.clear()
+        auth._STATE.update(original_state)
+
+
+def test_system_idle_setting_zero_disables_idle_timeout(tmp_path):
+    db_path = tmp_path / "idle-disabled.db"
+    _seed_db(db_path)
+    original_state = dict(auth._STATE)
+
+    try:
+        auth.configure_auth_service(
+            get_db=_get_db_factory(str(db_path)),
+            get_user_by_username=lambda username: None,
+            fernet=None,
+            session_ttl=3600,
+            csrf_token_ttl=3600,
+            session_idle_timeout=180,
+            get_system_settings=lambda: {
+                "session_idle_timeout_minutes": 0,
+                "session_ttl_hours": 1,
+            },
+        )
+        auth.db_save_session(1, "token", "127.0.0.1", "test-agent")
+
+        stale = (datetime.now() - timedelta(seconds=1800)).isoformat()
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE sessions SET last_seen=? WHERE id=1", (stale,))
+        conn.commit()
+        conn.close()
+
+        assert auth.effective_session_idle_timeout_seconds() == 0
+        assert auth.db_get_user_from_token("token") == "alice"
+    finally:
+        auth._STATE.clear()
+        auth._STATE.update(original_state)
+
+
+def test_system_session_ttl_setting_controls_saved_and_validated_expiry(tmp_path):
+    db_path = tmp_path / "ttl-settings.db"
+    _seed_db(db_path)
+    original_state = dict(auth._STATE)
+
+    try:
+        auth.configure_auth_service(
+            get_db=_get_db_factory(str(db_path)),
+            get_user_by_username=lambda username: None,
+            fernet=None,
+            session_ttl=3600,
+            csrf_token_ttl=3600,
+            session_idle_timeout=180,
+            get_system_settings=lambda: {
+                "session_idle_timeout_minutes": 1440,
+                "session_ttl_hours": 168,
+            },
+        )
+        auth.db_save_session(1, "token", "127.0.0.1", "test-agent")
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT created_at, expires_at FROM sessions WHERE id=1").fetchone()
+        saved_created_at = datetime.fromisoformat(row["created_at"])
+        saved_expires_at = datetime.fromisoformat(row["expires_at"])
+        short_expiry = (datetime.now() + timedelta(hours=1)).isoformat()
+        conn.execute("UPDATE sessions SET expires_at=? WHERE id=1", (short_expiry,))
+        conn.commit()
+        conn.close()
+
+        assert saved_expires_at - saved_created_at > timedelta(days=6)
+        assert auth.db_get_user_from_token("token") == "alice"
+
+        conn = sqlite3.connect(db_path)
+        updated_expiry = datetime.fromisoformat(conn.execute("SELECT expires_at FROM sessions WHERE id=1").fetchone()[0])
+        conn.close()
+        assert updated_expiry - saved_created_at > timedelta(days=6)
+    finally:
+        auth._STATE.clear()
+        auth._STATE.update(original_state)
+
+
 def test_db_save_session_stores_device_info_when_column_exists(tmp_path):
     db_path = tmp_path / "device.db"
     _seed_db(db_path)

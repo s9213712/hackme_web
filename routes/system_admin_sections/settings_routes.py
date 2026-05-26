@@ -490,6 +490,11 @@ def register_system_admin_settings_routes(app, ctx):
             if reset_mode not in {"admin_review", "email_token"}:
                 return json_resp({"ok":False,"msg":"password_reset_mode 必須是 admin_review 或 email_token"}), 400
             data["password_reset_mode"] = reset_mode
+        if "session_idle_timeout_minutes" in data:
+            idle_timeout_minutes = parse_int_in_range(data.get("session_idle_timeout_minutes") or 0, 0, 1440)
+            if idle_timeout_minutes is None:
+                return json_resp({"ok":False,"msg":"session_idle_timeout_minutes 必須是 0-1440 分鐘；0 代表停用"}), 400
+            data["session_idle_timeout_minutes"] = idle_timeout_minutes
         backpressure_error = normalize_backpressure_updates(data)
         if backpressure_error:
             return json_resp({"ok":False,"msg":backpressure_error}), 400

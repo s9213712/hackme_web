@@ -1,8 +1,22 @@
+import sqlite3
+import os
+
 from services.security.identity import is_admin_role, role_rank
 from services.governance.violation_fines import assert_user_feature_allowed
-from services.users.member_levels import get_member_level_rule, refresh_user_effective_level
+from services.users.member_levels import compute_effective_level, get_member_level_rule_readonly
 
 ACTIVE_STATUS = "active"
+PERMISSION_USER_COLUMNS = (
+    "id",
+    "username",
+    "role",
+    "status",
+    "member_level",
+    "base_level",
+    "effective_level",
+    "sanction_status",
+    "sanction_until",
+)
 ACTION_RULE_FIELDS = {
     "chat_dm_create": "can_send_dm",
     "chat_send": "can_comment",
@@ -26,6 +40,10 @@ ACTION_RESTRICTION_FEATURES = {
     "community_reply": "community_comment",
     "upload_attachment": "cloud_upload",
 }
+
+
+def _capacity_probe_unlimited():
+    return str(os.environ.get("HACKME_CAPACITY_PROBE_UNLIMITED") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _actor_dict(actor):
@@ -73,20 +91,80 @@ def require_role(actor, min_role):
     return True, "", 200
 
 
-def get_permission_rule(conn, actor):
-    data = _actor_dict(actor)
-    if actor_is_admin(actor):
-        return None
-    has_explicit_sanction_level = (
+def _has_explicit_sanction_level(data):
+    return (
         not data.get("base_level")
         and not data.get("effective_level")
         and data.get("member_level") in {"restricted", "suspended"}
     )
-    if conn is not None and data.get("id") and not has_explicit_sanction_level:
-        refreshed = refresh_user_effective_level(conn, data["id"], reason="permission check")
-        if refreshed:
-            actor = {**data, **refreshed}
-    return get_member_level_rule(conn, actor_effective_level(actor)) if conn is not None else None
+
+
+def _users_table_columns(conn):
+    try:
+        rows = conn.execute("PRAGMA table_info(users)").fetchall()
+    except sqlite3.OperationalError as exc:
+        message = str(exc).lower()
+        if "no such table" not in message and "no such column" not in message:
+            raise
+        return set()
+    columns = set()
+    for row in rows:
+        try:
+            columns.add(row["name"])
+        except Exception:
+            columns.add(row[1])
+    return columns
+
+
+def _permission_user_snapshot(conn, user_id):
+    columns = _users_table_columns(conn)
+    if "id" not in columns:
+        return None
+    selected = [column for column in PERMISSION_USER_COLUMNS if column in columns]
+    if not selected:
+        return None
+    quoted_columns = ", ".join(selected)
+    try:
+        row = conn.execute(f"SELECT {quoted_columns} FROM users WHERE id=?", (user_id,)).fetchone()
+    except sqlite3.OperationalError as exc:
+        message = str(exc).lower()
+        if "no such table" not in message and "no such column" not in message:
+            raise
+        return None
+    if not row:
+        return None
+
+    data = dict(row)
+    base_level = data.get("base_level") or data.get("member_level") or "normal"
+    effective_level = compute_effective_level({**data, "base_level": base_level})
+    data["base_level"] = base_level
+    data["effective_level"] = effective_level
+    data["member_level"] = effective_level
+    if data.get("sanction_status") in {"restricted", "suspended"} and effective_level == base_level:
+        data["sanction_status"] = "none"
+        data["sanction_until"] = None
+    return data
+
+
+def _permission_actor_data(actor, conn=None):
+    data = _actor_dict(actor)
+    if actor_is_admin(data) or _has_explicit_sanction_level(data):
+        return data
+    if conn is None or not data.get("id"):
+        return data
+    snapshot = _permission_user_snapshot(conn, data["id"])
+    if not snapshot:
+        return data
+    return {**data, **snapshot}
+
+
+def get_permission_rule(conn, actor):
+    if conn is None:
+        return None
+    data = _permission_actor_data(actor, conn=conn)
+    if actor_is_admin(data):
+        return None
+    return get_member_level_rule_readonly(conn, actor_effective_level(data))
 
 
 def _provided_or_loaded_rule(actor, rule=None, conn=None):
@@ -98,15 +176,18 @@ def _provided_or_loaded_rule(actor, rule=None, conn=None):
 
 
 def _rule_allows(actor, permission, rule=None, conn=None, target=None):
-    if actor_is_admin(actor):
+    actor_data = _permission_actor_data(actor, conn=conn)
+    if actor_is_admin(actor_data):
         return True
-    if actor_effective_level(actor) == "suspended":
+    if actor_effective_level(actor_data) == "suspended":
         return False
     if permission is None:
         return True
-    loaded_rule = _provided_or_loaded_rule(actor, rule=rule, conn=conn)
+    loaded_rule = rule or (
+        get_member_level_rule_readonly(conn, actor_effective_level(actor_data)) if conn is not None else None
+    )
     if not loaded_rule:
-        return actor_effective_level(actor) not in {"restricted", "suspended"}
+        return actor_effective_level(actor_data) not in {"restricted", "suspended"}
     return bool(loaded_rule.get(permission))
 
 
@@ -135,9 +216,14 @@ def can_report(user, conn=None):
 
 
 def get_rate_limit(user, action, conn=None, rule=None):
-    if actor_is_admin(user):
+    if _capacity_probe_unlimited():
         return None
-    loaded_rule = _provided_or_loaded_rule(user, rule=rule, conn=conn)
+    actor_data = _permission_actor_data(user, conn=conn)
+    if actor_is_admin(actor_data):
+        return None
+    loaded_rule = rule or (
+        get_member_level_rule_readonly(conn, actor_effective_level(actor_data)) if conn is not None else None
+    )
     if not loaded_rule:
         return None
     field = ACTION_RATE_LIMIT_FIELDS.get(action)
@@ -150,8 +236,11 @@ def require_member_action(actor, action, rule=None, conn=None, target=None):
     ok, msg, status = require_active_actor(actor)
     if not ok:
         return ok, msg, status
+    actor_data = _permission_actor_data(actor, conn=conn)
+    ok, msg, status = require_active_actor(actor_data)
+    if not ok:
+        return ok, msg, status
     feature_key = ACTION_RESTRICTION_FEATURES.get(action)
-    actor_data = _actor_dict(actor)
     if conn is not None and actor_data.get("id") and actor_data.get("username") != "root" and feature_key:
         allowed, restriction_msg, _restrictions = assert_user_feature_allowed(
             conn,
@@ -160,13 +249,13 @@ def require_member_action(actor, action, rule=None, conn=None, target=None):
         )
         if not allowed:
             return False, restriction_msg, 423
-    if actor_is_admin(actor):
+    if actor_is_admin(actor_data):
         return True, "", 200
-    effective_level = actor_effective_level(actor)
+    effective_level = actor_effective_level(actor_data)
     if effective_level == "suspended":
         return False, "會員等級已停權，僅可登入、查看通知與申訴", 403
     rule_field = ACTION_RULE_FIELDS.get(action)
-    if not _rule_allows(actor, rule_field, rule=rule, conn=conn, target=target):
+    if not _rule_allows(actor_data, rule_field, rule=rule, conn=conn, target=target):
         if effective_level == "restricted":
             return False, "會員等級受限，僅可閱讀不可互動", 403
         return False, "會員等級規則不允許此操作", 403

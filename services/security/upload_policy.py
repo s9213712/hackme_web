@@ -373,6 +373,7 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
     ensure_upload_security_schema(conn)
     data = dict(user or {})
     user_id = int(data.get("id") or 0)
+    capacity_probe_unlimited = str(os.environ.get("HACKME_CAPACITY_PROBE_UNLIMITED") or "").strip().lower() in {"1", "true", "yes", "on"}
     admin_actor = _user_is_admin(data)
     root_actor = _user_is_root(data)
     manager_quota_actor = admin_actor and not root_actor
@@ -466,6 +467,11 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
         "by_scan_status": _count_grouped(conn, user_id, "scan_status"),
     }
     usage = apply_storage_quota_override(usage, get_storage_quota_override(conn, user_id))
+    if capacity_probe_unlimited:
+        usage.update({
+            "can_upload": True,
+            "upload_rate_limit_per_day": None,
+        })
     if server_mode == "superweak":
         total_bytes = SUPERWEAK_CLOUD_DRIVE_QUOTA_BYTES
         remaining_bytes = max(0, total_bytes - used_bytes)

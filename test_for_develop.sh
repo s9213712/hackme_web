@@ -3,6 +3,9 @@ set -Eeuo pipefail
 
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_GIT_REPO_DIR="$SOURCE_ROOT"
+CAPACITY_DEFAULTS_FILE="${HACKME_DEV_CAPACITY_DEFAULTS_FILE:-$SOURCE_ROOT/.hackme_capacity_defaults.env}"
+CLOUD_DRIVE_STORAGE_ROOT="${HACKME_DEV_CLOUD_DRIVE_STORAGE_ROOT:-}"
+CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB="${HACKME_DEV_CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB:-}"
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 RUN_ROOT=""
 HOST="${HOST:-127.0.0.1}"
@@ -38,9 +41,71 @@ GUNICORN_TIMEOUT="${HACKME_DEV_GUNICORN_TIMEOUT:-20}"
 GUNICORN_GRACEFUL_TIMEOUT="${HACKME_DEV_GUNICORN_GRACEFUL_TIMEOUT:-10}"
 GUNICORN_KEEP_ALIVE="${HACKME_DEV_GUNICORN_KEEP_ALIVE:-2}"
 GUNICORN_BACKLOG="${HACKME_DEV_GUNICORN_BACKLOG:-64}"
-GUNICORN_MAX_REQUESTS="${HACKME_DEV_GUNICORN_MAX_REQUESTS:-1000}"
-GUNICORN_MAX_REQUESTS_JITTER="${HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER:-200}"
+GUNICORN_MAX_REQUESTS="${HACKME_DEV_GUNICORN_MAX_REQUESTS:-10000}"
+GUNICORN_MAX_REQUESTS_JITTER="${HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER:-1000}"
+CAPACITY_PROBE_MODE="${HACKME_DEV_CAPACITY_PROBE:-auto}"
 DRY_RUN=0
+
+is_auto_capacity_value() {
+  local value="${1:-}"
+  value="${value,,}"
+  [[ -z "$value" || "$value" == "auto" || "$value" == "dynamic" || "$value" == "probe" ]]
+}
+
+gunicorn_capacity_auto_requested() {
+  [[ "$SERVER_RUNNER" == "gunicorn" ]] || return 1
+  is_auto_capacity_value "$GUNICORN_WORKERS" || is_auto_capacity_value "$GUNICORN_THREADS"
+}
+
+load_local_capacity_defaults() {
+  local mode="${1:-normal}"
+  [[ "${HACKME_DEV_USE_CAPACITY_DEFAULTS:-1}" != "0" ]] || return 0
+  [[ -f "$CAPACITY_DEFAULTS_FILE" ]] || return 0
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -n "$line" && "$line" == *=* ]] || continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    case "$key" in
+      HACKME_DEV_GUNICORN_WORKERS)
+        if [[ "$mode" == "force" ]] || is_auto_capacity_value "$GUNICORN_WORKERS"; then
+          GUNICORN_WORKERS="$value"
+          export HACKME_DEV_GUNICORN_WORKERS="$value"
+        fi
+        ;;
+      HACKME_DEV_GUNICORN_THREADS)
+        if [[ "$mode" == "force" ]] || is_auto_capacity_value "$GUNICORN_THREADS"; then
+          GUNICORN_THREADS="$value"
+          export HACKME_DEV_GUNICORN_THREADS="$value"
+        fi
+        ;;
+      HACKME_DEV_GUNICORN_MAX_REQUESTS)
+        if [[ "$mode" == "force" || -z "${HACKME_DEV_GUNICORN_MAX_REQUESTS+x}" ]]; then
+          GUNICORN_MAX_REQUESTS="$value"
+          export HACKME_DEV_GUNICORN_MAX_REQUESTS="$value"
+        fi
+        ;;
+      HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER)
+        if [[ "$mode" == "force" || -z "${HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER+x}" ]]; then
+          GUNICORN_MAX_REQUESTS_JITTER="$value"
+          export HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER="$value"
+        fi
+        ;;
+      HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY)
+        if [[ "$mode" == "force" || -z "${HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY+x}" || "$(printf '%s' "${HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY:-}" | tr '[:upper:]' '[:lower:]')" == "auto" ]]; then
+          export HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY="$value"
+        fi
+        ;;
+    esac
+  done < "$CAPACITY_DEFAULTS_FILE"
+}
 
 usage() {
   cat <<'USAGE'
@@ -110,9 +175,32 @@ Options:
                            in this temporary runtime
   --server-runner RUNNER    flask or gunicorn. Default: gunicorn
   --gunicorn-workers N      Default: auto when --server-runner gunicorn
+                           auto means local capacity probe result when present;
+                           otherwise the script runs one unless disabled.
   --gunicorn-threads N      Default: auto when --server-runner gunicorn
   --gunicorn-timeout N      Default: 20 seconds
   --gunicorn-backlog N      Default: 64
+  --gunicorn-max-requests N Default: 10000; 0 disables worker recycling
+  --capacity-probe          Run/refresh the local capacity probe before launch
+  --no-capacity-probe       Do not probe when auto has no local result; use the
+                           conservative hardware fallback for this run
+  --capacity-defaults-file PATH
+                           Default: .hackme_capacity_defaults.env in repo root
+  --cloud-drive-root PATH,
+  --cloud-drive-storage-root PATH
+                           Use PATH as the actual cloud-drive file storage
+                           location instead of runtime/storage. Must be an
+                           absolute, non-public, non-project-root path.
+                           If the selected run-root already has files under
+                           runtime/storage, missing files are copied into PATH
+                           on startup so existing dev metadata remains readable.
+  --cloud-drive-max-mb MB,
+  --cloud-drive-global-capacity-limit-mb MB
+                           Set total cloud-drive occupancy cap in MB. -1 keeps
+                           the disk-backed default of 95% host capacity.
+  --cloud-drive-max-size SIZE
+                           Same cap with units, e.g. 1024M, 10G, 1.5TB.
+                           A bare number means MB.
   --dry-run                Print resolved config and exit before copying/starting
   --run-root PATH          Use a fixed /tmp run root instead of auto-generating one
   --in-place, --no-copy    Launch from the current repo; runtime still uses run-root
@@ -204,6 +292,147 @@ normalize_server_runner() {
   esac
 }
 
+normalize_capacity_probe_mode() {
+  CAPACITY_PROBE_MODE="${CAPACITY_PROBE_MODE,,}"
+  case "$CAPACITY_PROBE_MODE" in
+    ""|auto|default)
+      CAPACITY_PROBE_MODE="auto"
+      ;;
+    1|true|yes|y|on|enable|enabled|force|refresh|retest|probe)
+      CAPACITY_PROBE_MODE="force"
+      ;;
+    0|false|no|n|off|disable|disabled|never|skip)
+      CAPACITY_PROBE_MODE="never"
+      ;;
+    *)
+      die "capacity probe mode must be auto, force, or never: $CAPACITY_PROBE_MODE"
+      ;;
+  esac
+}
+
+normalize_cloud_drive_storage_root() {
+  if [[ -z "$CLOUD_DRIVE_STORAGE_ROOT" ]]; then
+    return 0
+  fi
+  local normalized
+  if ! normalized="$(PYTHONPATH="$SOURCE_ROOT" python3 - "$CLOUD_DRIVE_STORAGE_ROOT" "$SOURCE_ROOT" <<'PY'
+import sys
+
+from services.storage.paths import validate_storage_root
+
+raw_root = str(sys.argv[1] or "").strip()
+base_dir = str(sys.argv[2] or "").strip()
+try:
+    print(str(validate_storage_root(raw_root, base_dir=base_dir, create=False)))
+except ValueError as exc:
+    print(str(exc), file=sys.stderr)
+    raise SystemExit(2)
+PY
+)"; then
+    die "cloud drive storage root is unsafe or invalid: $CLOUD_DRIVE_STORAGE_ROOT"
+  fi
+  CLOUD_DRIVE_STORAGE_ROOT="$normalized"
+}
+
+normalize_cloud_drive_capacity_limit() {
+  if [[ -z "$CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB" ]]; then
+    return 0
+  fi
+  local normalized
+  if ! normalized="$(python3 - "$CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB" <<'PY'
+import math
+import re
+import sys
+
+raw_value = str(sys.argv[1] or "").strip().lower()
+if not raw_value:
+    print("")
+    raise SystemExit(0)
+if raw_value in {"default", "auto"}:
+    print("")
+    raise SystemExit(0)
+if raw_value in {"-1", "none", "unlimited", "disk"}:
+    print("-1")
+    raise SystemExit(0)
+
+match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([kmgt]?i?b?|mb|gb|tb)?", raw_value)
+if not match:
+    print("cloud drive max size must be MB, -1, or a size like 1024M/10G/1.5TB", file=sys.stderr)
+    raise SystemExit(2)
+
+amount = float(match.group(1))
+unit = (match.group(2) or "mb").lower()
+unit_multipliers = {
+    "": 1024 ** 2,
+    "b": 1,
+    "k": 1024,
+    "kb": 1024,
+    "kib": 1024,
+    "m": 1024 ** 2,
+    "mb": 1024 ** 2,
+    "mib": 1024 ** 2,
+    "g": 1024 ** 3,
+    "gb": 1024 ** 3,
+    "gib": 1024 ** 3,
+    "t": 1024 ** 4,
+    "tb": 1024 ** 4,
+    "tib": 1024 ** 4,
+}
+if unit not in unit_multipliers:
+    print(f"unknown cloud drive max size unit: {unit}", file=sys.stderr)
+    raise SystemExit(2)
+limit_mb = int(math.ceil((amount * unit_multipliers[unit]) / (1024 ** 2)))
+if limit_mb < 0:
+    print("cloud drive max size must be -1 or non-negative", file=sys.stderr)
+    raise SystemExit(2)
+print(str(limit_mb))
+PY
+)"; then
+    die "invalid cloud drive max size: $CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB"
+  fi
+  CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB="$normalized"
+}
+
+normalize_cloud_drive_options() {
+  normalize_cloud_drive_storage_root
+  normalize_cloud_drive_capacity_limit
+}
+
+maybe_run_capacity_probe_for_gunicorn_defaults() {
+  if [[ "$SERVER_RUNNER" != "gunicorn" ]]; then
+    return 0
+  fi
+
+  normalize_capacity_probe_mode
+  load_local_capacity_defaults
+
+  if [[ "$CAPACITY_PROBE_MODE" == "force" ]]; then
+    if [[ "$DRY_RUN" == "1" ]]; then
+      say "[dev-tmp] capacity probe: dry-run requested refresh, but dry-run does not run probes"
+      return 0
+    fi
+    run_capacity_probe_for_defaults
+    return 0
+  fi
+
+  if ! gunicorn_capacity_auto_requested; then
+    return 0
+  fi
+
+  if [[ "$CAPACITY_PROBE_MODE" == "never" ]]; then
+    say "[dev-tmp] capacity probe: disabled; resolving auto with conservative hardware fallback"
+    return 0
+  fi
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    say "[dev-tmp] capacity probe: no local defaults found; dry-run resolves auto with hardware fallback"
+    return 0
+  fi
+
+  say "[dev-tmp] capacity probe: no local defaults found; auto will run one isolated probe now"
+  run_capacity_probe_for_defaults
+}
+
 resolve_auto_gunicorn_settings() {
   if [[ "$SERVER_RUNNER" != "gunicorn" ]]; then
     return 0
@@ -228,24 +457,28 @@ def auto_workers():
     if cpu <= 2 or (mem_mb and mem_mb < 2048):
         return 1
     if cpu >= 16 and (not mem_mb or mem_mb >= 16384):
-        return 3
+        return 5
+    if cpu >= 8 and (not mem_mb or mem_mb >= 8192):
+        return 4
     return 2
 
 def auto_threads():
     if mem_mb and mem_mb < 2048:
-        return 6
+        return 4
     if cpu <= 2 or (mem_mb and mem_mb < 4096):
-        return 8
+        return 6
     if cpu <= 4:
-        return 10
-    if cpu >= 8 and (not mem_mb or mem_mb >= 16384):
-        return 16
-    return 12
+        return 6
+    # This app has substantial SQLite, PointsChain, and governance write
+    # serialization. Prefer more worker processes with fewer threads over a
+    # single process with a large thread pile; it uses more cores for CPU-bound
+    # Python work without multiplying per-process DB writer pressure.
+    return 6
 
 workers = auto_workers() if raw_workers in {"", "auto", "dynamic"} else int(raw_workers)
 threads = auto_threads() if raw_threads in {"", "auto", "dynamic"} else int(raw_threads)
-workers = max(1, min(8, workers))
-threads = max(2, min(64, threads))
+workers = max(1, min(6, workers))
+threads = max(2, min(16, threads))
 print(f"{workers} {threads}")
 PY
 )"
@@ -291,6 +524,8 @@ normalize_runtime_options() {
   normalize_token_feature_selection "$DEV_TOKEN_FEATURES" || die "invalid generated dev token feature selection: $DEV_TOKEN_FEATURES"
   DEV_TOKEN_FEATURES="$NORMALIZED_DEV_TOKEN_FEATURES"
   normalize_server_runner
+  normalize_cloud_drive_options
+  maybe_run_capacity_probe_for_gunicorn_defaults
   resolve_auto_gunicorn_settings
   normalize_port_conflict_action
   normalize_yes_no_value "$IN_PLACE" "in-place"
@@ -353,9 +588,13 @@ print_resolved_config() {
   fi
   say "  security_enabled:    $SECURITY_SETTINGS_ENABLED"
   say "  server_mode:         $SERVER_MODE"
+  say "  cloud_drive_root:    ${CLOUD_DRIVE_STORAGE_ROOT:-<runtime/storage>}"
+  say "  cloud_drive_max_mb:  ${CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB:-<default disk 95%>}"
   say "  server_runner:       $SERVER_RUNNER"
   if [[ "$SERVER_RUNNER" == "gunicorn" ]]; then
-    say "  gunicorn:            workers=$GUNICORN_WORKERS threads=$GUNICORN_THREADS timeout=$GUNICORN_TIMEOUT backlog=$GUNICORN_BACKLOG"
+    say "  gunicorn:            workers=$GUNICORN_WORKERS threads=$GUNICORN_THREADS timeout=$GUNICORN_TIMEOUT backlog=$GUNICORN_BACKLOG max_requests=$GUNICORN_MAX_REQUESTS jitter=$GUNICORN_MAX_REQUESTS_JITTER"
+    say "  capacity_defaults:   $CAPACITY_DEFAULTS_FILE"
+    say "  capacity_probe:      $CAPACITY_PROBE_MODE"
   fi
   if [[ -n "$EXTRA_ACCOUNTS" ]]; then
     say "  extra_accounts:      <configured>"
@@ -418,6 +657,24 @@ prompt_yes_no() {
         ;;
     esac
   done
+}
+
+run_capacity_probe_for_defaults() {
+  local continue_after_failure=1
+  say "[dev-tmp] capacity probe: starting isolated pre-deploy probe"
+  say "[dev-tmp] capacity probe: defaults file $CAPACITY_DEFAULTS_FILE"
+  if "$PYTHON_BIN" "$SOURCE_ROOT/scripts/testing/predeploy_capacity_probe.py" \
+      --capacity-defaults-file "$CAPACITY_DEFAULTS_FILE"; then
+    load_local_capacity_defaults force
+    say "[dev-tmp] capacity probe: loaded workers=$GUNICORN_WORKERS threads=$GUNICORN_THREADS max_requests=$GUNICORN_MAX_REQUESTS jitter=$GUNICORN_MAX_REQUESTS_JITTER"
+    return 0
+  fi
+  say "[dev-tmp] capacity probe failed."
+  if [[ "$CLI_MODE" == "1" ]]; then
+    die "capacity probe failed"
+  fi
+  prompt_yes_no "Continue startup without new capacity defaults" 1 continue_after_failure
+  [[ "$continue_after_failure" == "1" ]] || die "capacity probe failed"
 }
 
 prompt_feature_settings() {
@@ -984,6 +1241,7 @@ prompt_server_runner() {
   local default_choice="1"
   local answer
   local customize=0
+  local run_capacity_probe=0
 
   normalize_server_runner
   if [[ "$SERVER_RUNNER" == "flask" ]]; then
@@ -1016,6 +1274,24 @@ prompt_server_runner() {
     esac
   done
 
+  normalize_capacity_probe_mode
+  if [[ "$CAPACITY_PROBE_MODE" == "force" ]]; then
+    run_capacity_probe_for_defaults
+  elif [[ -f "$CAPACITY_DEFAULTS_FILE" ]]; then
+    prompt_yes_no "Retest local capacity before launch (existing .hackme_capacity_defaults.env will be reused if no)" 0 run_capacity_probe
+    if [[ "$run_capacity_probe" == "1" ]]; then
+      CAPACITY_PROBE_MODE="force"
+      run_capacity_probe_for_defaults
+    fi
+  elif gunicorn_capacity_auto_requested && [[ "$CAPACITY_PROBE_MODE" != "never" ]]; then
+    prompt_yes_no "No local capacity result found. Run capacity probe for auto settings now" 1 run_capacity_probe
+    if [[ "$run_capacity_probe" == "1" ]]; then
+      run_capacity_probe_for_defaults
+    else
+      CAPACITY_PROBE_MODE="never"
+    fi
+  fi
+
   prompt_yes_no "Customize gunicorn worker/thread settings" 0 customize
   if [[ "$customize" == "1" ]]; then
     prompt_value "Gunicorn workers" "$GUNICORN_WORKERS" GUNICORN_WORKERS
@@ -1043,6 +1319,8 @@ prompt_runtime_config() {
   if [[ "$RUNTIME_IN_SOURCE" != "1" ]]; then
     prompt_value "Tmp workspace/run root" "$default_run_root" RUN_ROOT
   fi
+  prompt_value "Cloud drive actual storage root (blank = runtime/storage)" "$CLOUD_DRIVE_STORAGE_ROOT" CLOUD_DRIVE_STORAGE_ROOT
+  prompt_value "Cloud drive max occupancy (MB or 10G; blank = disk 95%, -1 = disk 95%)" "$CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB" CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB
   prompt_value "Host" "$HOST" HOST
   prompt_value "Port" "$PORT" PORT
   prompt_server_runner
@@ -1079,9 +1357,9 @@ prompt_runtime_config() {
 copy_repo() {
   mkdir -p "$COPY_ROOT"
   # The tmp runtime only needs files required to run, develop, smoke-test, and
-  # validate release gates. Copy from an allowlist so reference repos/deploy
-  # examples/git metadata and future large non-runtime artifacts never inflate
-  # isolated workspaces. Keep docs because RC/operational gates assert release
+  # validate release gates. Copy from an allowlist so reference repos/deploy examples/git
+  # metadata and future large non-runtime artifacts never inflate isolated
+  # workspaces. Keep docs because RC/operational gates assert release
   # scope and runbook files from the copied runtime.
   local copy_items=(
     "server.py"
@@ -1176,6 +1454,60 @@ resolve_python() {
   fi
   PIP_DISABLE_PIP_VERSION_CHECK=1 "$PYTHON_BIN" -m pip install --upgrade pip
   PIP_DISABLE_PIP_VERSION_CHECK=1 "$PYTHON_BIN" -m pip install -r "$COPY_ROOT/requirements.txt"
+}
+
+migrate_legacy_runtime_storage_to_cloud_drive_root() {
+  local legacy_root="$RUNTIME_ROOT/storage"
+  if [[ -z "$CLOUD_DRIVE_STORAGE_ROOT" ]]; then
+    return 0
+  fi
+  if [[ ! -d "$legacy_root" ]]; then
+    return 0
+  fi
+  if [[ "$(cd "$legacy_root" && pwd -P)" == "$(cd "$EFFECTIVE_STORAGE_ROOT" && pwd -P)" ]]; then
+    return 0
+  fi
+  "$PYTHON_BIN" - "$legacy_root" "$EFFECTIVE_STORAGE_ROOT" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1]).resolve()
+destination = Path(sys.argv[2]).resolve()
+copied = 0
+skipped_existing = 0
+skipped_special = 0
+
+if not source.exists() or not source.is_dir():
+    raise SystemExit(0)
+destination.mkdir(parents=True, exist_ok=True)
+for item in source.rglob("*"):
+    try:
+        relative = item.relative_to(source)
+    except ValueError:
+        continue
+    target = destination / relative
+    if item.is_dir():
+        target.mkdir(parents=True, exist_ok=True)
+        continue
+    if item.is_symlink() or not item.is_file():
+        skipped_special += 1
+        continue
+    if target.exists():
+        skipped_existing += 1
+        continue
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(item, target)
+    copied += 1
+
+if copied or skipped_existing or skipped_special:
+    print(
+        "[dev-tmp] storage migration: "
+        f"copied={copied} skipped_existing={skipped_existing} "
+        f"skipped_special={skipped_special} source={source} destination={destination}",
+        flush=True,
+    )
+PY
 }
 
 wait_for_server_url() {
@@ -1289,6 +1621,7 @@ if not addresses:
 for family, socktype, proto, _canonname, sockaddr in addresses:
     try:
         with socket.socket(family, socktype, proto) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(sockaddr)
     except OSError:
         raise SystemExit(1)
@@ -1594,6 +1927,30 @@ while [[ $# -gt 0 ]]; do
       GUNICORN_MAX_REQUESTS_JITTER="${2:?missing gunicorn max requests jitter}"
       shift 2
       ;;
+    --capacity-probe|--retest-capacity|--refresh-capacity)
+      CAPACITY_PROBE_MODE=force
+      shift
+      ;;
+    --no-capacity-probe)
+      CAPACITY_PROBE_MODE=never
+      shift
+      ;;
+    --capacity-defaults-file)
+      CAPACITY_DEFAULTS_FILE="${2:?missing capacity defaults file}"
+      shift 2
+      ;;
+    --cloud-drive-root|--cloud-drive-storage-root)
+      CLOUD_DRIVE_STORAGE_ROOT="${2:?missing cloud drive storage root}"
+      shift 2
+      ;;
+    --cloud-drive-max-mb|--cloud-drive-global-capacity-limit-mb)
+      CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB="${2:?missing cloud drive capacity limit MB}"
+      shift 2
+      ;;
+    --cloud-drive-max-size|--cloud-drive-capacity|--cloud-drive-max-usage)
+      CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB="${2:?missing cloud drive max size}"
+      shift 2
+      ;;
     --dry-run)
       DRY_RUN=1
       shift
@@ -1657,6 +2014,9 @@ if [[ -n "$FEATURE_BUNDLES" && -z "${HACKME_DEV_FEATURE_MODE:-}" && "$FEATURE_MO
   FEATURE_MODE="bundles"
 fi
 
+normalize_capacity_probe_mode
+load_local_capacity_defaults
+
 if [[ "$CLI_MODE" != "1" ]]; then
   prompt_runtime_config
 fi
@@ -1679,7 +2039,10 @@ else
   COPY_ROOT="$RUN_ROOT/hackme_web"
   RUNTIME_ROOT="$COPY_ROOT/runtime"
 fi
+EFFECTIVE_STORAGE_ROOT="${CLOUD_DRIVE_STORAGE_ROOT:-$RUNTIME_ROOT/storage}"
 LOG_CAPTURE="$RUNTIME_ROOT/logs/server_direct.out"
+GUNICORN_ACCESS_LOG="$RUNTIME_ROOT/logs/gunicorn_access.log"
+GUNICORN_ERROR_LOG="$RUNTIME_ROOT/logs/gunicorn_error.log"
 PID_FILE="$RUNTIME_ROOT/server.pid"
 
 if [[ "$RUNTIME_IN_SOURCE" == "1" ]]; then
@@ -1696,10 +2059,11 @@ mkdir -p \
   "$RUNTIME_ROOT/logs" \
   "$RUNTIME_ROOT/chats" \
   "$RUNTIME_ROOT/anchors" \
-  "$RUNTIME_ROOT/storage" \
+  "$EFFECTIVE_STORAGE_ROOT" \
   "$RUNTIME_ROOT/reports"
 
 resolve_python
+migrate_legacy_runtime_storage_to_cloud_drive_root
 if [[ "$PYTHON_BIN" != "python3" ]]; then
   say "[dev-tmp] python:    $PYTHON_BIN"
 else
@@ -1717,13 +2081,16 @@ export HTML_LEARNING_DB_DIR="$RUNTIME_ROOT/database"
 export HTML_LEARNING_LOG_DIR="$RUNTIME_ROOT/logs"
 export HTML_LEARNING_CHAT_DIR="$RUNTIME_ROOT/chats"
 export HTML_LEARNING_ANCHOR_DIR="$RUNTIME_ROOT/anchors"
-export HTML_LEARNING_STORAGE_DIR="$RUNTIME_ROOT/storage"
+export HTML_LEARNING_STORAGE_DIR="$EFFECTIVE_STORAGE_ROOT"
 export HTML_LEARNING_REPORTS_DIR="$RUNTIME_ROOT/reports"
 export HTML_LEARNING_HOST="$HOST"
 export HTML_LEARNING_PORT="$PORT"
 export HTML_LEARNING_ROOT_PASSWORD="$ROOT_PASSWORD"
 export HTML_LEARNING_MANAGER_PASSWORD="$MANAGER_PASSWORD"
 export HTML_LEARNING_TEST_PASSWORD="$TEST_PASSWORD"
+export HTML_LEARNING_ARGON2_TIME_COST="${HTML_LEARNING_ARGON2_TIME_COST:-1}"
+export HTML_LEARNING_ARGON2_MEMORY_COST="${HTML_LEARNING_ARGON2_MEMORY_COST:-8192}"
+export HTML_LEARNING_ARGON2_PARALLELISM="${HTML_LEARNING_ARGON2_PARALLELISM:-1}"
 export HACKME_DEV_FEATURE_MODE="$FEATURE_MODE"
 export HACKME_DEV_FEATURES="$FEATURE_LIST"
 export HACKME_DEV_FEATURE_BUNDLES="$FEATURE_BUNDLES"
@@ -1747,6 +2114,12 @@ export HACKME_DEV_SERVER_RUNNER="$SERVER_RUNNER"
 export HACKME_DEV_GUNICORN_WORKERS="$GUNICORN_WORKERS"
 export HACKME_DEV_GUNICORN_THREADS="$GUNICORN_THREADS"
 export HACKME_DEV_GUNICORN_TIMEOUT="$GUNICORN_TIMEOUT"
+export HACKME_DEV_GUNICORN_MAX_REQUESTS="$GUNICORN_MAX_REQUESTS"
+export HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER="$GUNICORN_MAX_REQUESTS_JITTER"
+export HACKME_DEV_CAPACITY_PROBE="$CAPACITY_PROBE_MODE"
+export HACKME_DEV_CAPACITY_DEFAULTS_FILE="$CAPACITY_DEFAULTS_FILE"
+export HACKME_DEV_CLOUD_DRIVE_STORAGE_ROOT="$CLOUD_DRIVE_STORAGE_ROOT"
+export HACKME_DEV_CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB="$CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB"
 if [[ "$SERVER_RUNNER" == "flask" ]]; then
   export HACKME_ALLOW_DIRECT_SERVER=1
 fi
@@ -1795,6 +2168,8 @@ from services.security.access_controls import (
     hash_internal_test_token,
     maintenance_bypass_expires_at,
 )
+from services.storage.global_capacity import parse_global_capacity_limit_mb
+from services.storage.paths import validate_storage_root
 try:
     from services.platform.settings_metadata import setting_detail
 except Exception:
@@ -1949,6 +2324,7 @@ enabled_security_settings = {
 }
 feature_updates.update(enabled_security_settings if security_enabled else relaxed_security_settings)
 feature_updates.update({
+    "server_timezone": os.environ.get("HACKME_DEV_SERVER_TIMEZONE") or os.environ.get("TZ") or "Asia/Taipei",
     # Dev default: assume root has the Windows-portable ComfyUI bundle
     # mounted under WSL at /mnt/d/share/ComfyUI_windows_portable and uses
     # run_in_linux.sh as the entrypoint. Switch to local mode so the dev
@@ -1957,6 +2333,18 @@ feature_updates.update({
     "comfyui_base_dir": "/mnt/d/share/ComfyUI_windows_portable",
     "comfyui_local_start_script": "run_in_linux.sh",
 })
+cloud_drive_setting_updates = {}
+cloud_drive_storage_root = str(os.environ.get("HACKME_DEV_CLOUD_DRIVE_STORAGE_ROOT", "") or "").strip()
+if cloud_drive_storage_root:
+    cloud_drive_setting_updates["cloud_drive_storage_root"] = str(
+        validate_storage_root(cloud_drive_storage_root, base_dir=server.BASE_DIR, create=True)
+    )
+cloud_drive_capacity_limit = str(os.environ.get("HACKME_DEV_CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB", "") or "").strip()
+if cloud_drive_capacity_limit:
+    cloud_drive_setting_updates["cloud_drive_global_capacity_limit_mb"] = parse_global_capacity_limit_mb(
+        cloud_drive_capacity_limit
+    )
+feature_updates.update(cloud_drive_setting_updates)
 server.save_settings(feature_updates)
 
 
@@ -2159,9 +2547,10 @@ try:
     for key, value in (
         ("trading.enabled", "true"),
         ("trading.borrowing_enabled", "true"),
-        ("trading.margin_liquidation_enabled", "false"),
-        ("trading.bot_auto_scan_enabled", "false"),
-        ("trading.bot_audit_enabled", "false"),
+        ("trading.margin_liquidation_enabled", "true"),
+        ("trading.bot_auto_scan_enabled", "true"),
+        ("trading.bot_audit_enabled", "true"),
+        ("trading.background_worker_dev_ready_enabled", "true"),
         ("trading.price_degrade_pause_market_orders", "false"),
         ("trading.price_degrade_pause_bots", "false"),
         ("trading.price_degrade_pause_borrowing", "false"),
@@ -2336,6 +2725,10 @@ if [[ "$FOREGROUND" == "1" ]]; then
     say "[dev-tmp] repo copy: $COPY_ROOT"
   fi
   say "[dev-tmp] runtime:   $RUNTIME_ROOT"
+  say "[dev-tmp] storage:   $EFFECTIVE_STORAGE_ROOT"
+  if [[ -n "$CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB" ]]; then
+    say "[dev-tmp] storage cap: ${CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB} MB"
+  fi
   say "[dev-tmp] mode:      foreground $SERVER_RUNNER"
   if [[ "$SERVER_RUNNER" == "flask" ]]; then
     say "[dev-tmp] warning:   Flask/Werkzeug direct server is debug-only; use gunicorn for uploads/HLS/load."
@@ -2375,8 +2768,8 @@ if [[ "$SERVER_RUNNER" == "gunicorn" ]]; then
     --max-requests-jitter "$GUNICORN_MAX_REQUESTS_JITTER" \
     --certfile "$RUNTIME_ROOT/cert.pem" \
     --keyfile "$RUNTIME_ROOT/key.pem" \
-    --access-logfile - \
-    --error-logfile - >"$LOG_CAPTURE" 2>&1 < /dev/null &
+    --access-logfile "$GUNICORN_ACCESS_LOG" \
+    --error-logfile "$GUNICORN_ERROR_LOG" >"$LOG_CAPTURE" 2>&1 < /dev/null &
 else
   say "[dev-tmp] warning:   Flask/Werkzeug direct server is debug-only; use gunicorn for uploads/HLS/load."
   setsid "$PYTHON_BIN" server.py >"$LOG_CAPTURE" 2>&1 < /dev/null &
@@ -2394,6 +2787,10 @@ else
   say "[dev-tmp] repo copy: $COPY_ROOT"
 fi
 say "[dev-tmp] runtime:   $RUNTIME_ROOT"
+say "[dev-tmp] storage:   $EFFECTIVE_STORAGE_ROOT"
+if [[ -n "$CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB" ]]; then
+  say "[dev-tmp] storage cap: ${CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB} MB"
+fi
 say "[dev-tmp] pid:       $SERVER_PID"
 say "[dev-tmp] runner:    $SERVER_RUNNER"
 if [[ -n "$SERVER_URL" ]]; then

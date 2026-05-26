@@ -83,36 +83,79 @@ class Stats:
         self._lock = threading.Lock()
         self.latencies: dict[str, list[float]] = defaultdict(list)
         self.statuses: dict[str, Counter] = defaultdict(Counter)
+        self.classes: dict[str, Counter] = defaultdict(Counter)
         self.errors: list[dict[str, Any]] = []
         self.error_buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self.samples: list[dict[str, Any]] = []
         self.bytes_received = 0
 
-    def record(self, name: str, *, status: int = 0, elapsed_ms: float = 0.0, ok: bool = False, error: str = "", bytes_received: int = 0) -> None:
+    def record(self, name: str, *, status: int = 0, elapsed_ms: float = 0.0, ok: bool = False, error: str = "", body_sample: str = "", bytes_received: int = 0) -> None:
+        body = str(body_sample or error or "")
+        sample_class = self._sample_class(status=status, ok=ok, body=body)
         error_sample = {
             "op": name,
             "status": status,
             "elapsed_ms": round(float(elapsed_ms), 3),
             "error": str(error or "")[:400],
+            "class": sample_class,
         }
         with self._lock:
             self.latencies[name].append(float(elapsed_ms))
             self.statuses[name][str(status)] += 1
+            self.classes[name][sample_class] += 1
             self.bytes_received += int(bytes_received or 0)
             if error or not ok:
                 self.errors.append(error_sample)
-            bucket = self._error_bucket(status=status, ok=ok, error=error)
+            bucket = self._error_bucket(status=status, ok=ok, body=body, sample_class=sample_class)
             if bucket and len(self.error_buckets[bucket]) < 20:
                 self.error_buckets[bucket].append(error_sample)
 
     @staticmethod
-    def _error_bucket(*, status: int, ok: bool, error: str) -> str:
+    def _sample_class(*, status: int, ok: bool, body: str) -> str:
+        status = int(status or 0)
+        if status == 503:
+            lowered = str(body or "").lower()
+            parsed: dict[str, Any] = {}
+            try:
+                parsed_obj = json.loads(body) if body else {}
+                parsed = parsed_obj if isinstance(parsed_obj, dict) else {}
+            except Exception:
+                parsed = {}
+            code = str(parsed.get("code") or parsed.get("error") or "").strip().lower()
+            if code == "server_busy" or "server_busy" in lowered:
+                return "server_busy_503"
+            if (
+                parsed.get("feature")
+                or parsed.get("feature_label")
+                or parsed.get("feature_description")
+                or '"feature"' in lowered
+                or '"feature_label"' in lowered
+                or '"feature_description"' in lowered
+                or "feature_" in lowered
+                or "此功能目前已由 root 關閉" in body
+            ):
+                return "feature_disabled_503"
+            if code.endswith("_disabled") or code in {"maintenance_mode", "points_chain_disabled", "trading_disabled"}:
+                return "application_limited_503"
+            if ok:
+                return "expected_503"
+            return "unexpected_503"
+        if status == 0:
+            return "transport_error"
+        if status >= 500:
+            return "http_5xx"
+        if ok:
+            return "ok"
+        return "unexpected_status"
+
+    @staticmethod
+    def _error_bucket(*, status: int, ok: bool, body: str, sample_class: str) -> str:
         if int(status or 0) == 503:
-            return "server_busy_503_samples"
+            return f"{sample_class}_samples"
         if int(status or 0) >= 500:
             return "http_5xx_samples"
         if int(status or 0) == 0:
-            lowered = str(error or "").lower()
+            lowered = str(body or "").lower()
             if "timeout" in lowered:
                 return "timeout_samples"
             if any(marker in lowered for marker in ("connection", "reset", "refused", "remote disconnected")):
@@ -140,12 +183,18 @@ class Stats:
             total += count
             all_latencies.extend(values)
             status_counter = self.statuses.get(name, Counter())
+            class_counter = self.classes.get(name, Counter())
+            op_server_busy = int(class_counter.get("server_busy_503", 0))
+            op_feature_disabled = int(class_counter.get("feature_disabled_503", 0))
+            op_application_limited = int(class_counter.get("application_limited_503", 0))
+            op_expected_503 = int(class_counter.get("expected_503", 0))
+            op_unexpected_503 = int(class_counter.get("unexpected_503", 0))
             op_failed = sum(
                 count_value
                 for status, count_value in status_counter.items()
-                if status == "0" or status.startswith("5")
+                if status == "0" or (status.startswith("5") and status != "503")
             )
-            op_server_busy = int(status_counter.get("503", 0))
+            op_failed += op_server_busy + op_unexpected_503
             op_hard_failed = sum(
                 count_value
                 for status, count_value in status_counter.items()
@@ -165,6 +214,10 @@ class Stats:
                 "transport_or_5xx_failures": op_failed,
                 "hard_failures_excluding_503": op_hard_failed,
                 "server_busy_503": op_server_busy,
+                "feature_disabled_503": op_feature_disabled,
+                "application_limited_503": op_application_limited,
+                "expected_503": op_expected_503,
+                "unexpected_503": op_unexpected_503,
             }
         all_latencies = sorted(all_latencies)
         return {
@@ -210,8 +263,9 @@ class Client:
             self.csrf = ""
         return bool(self.csrf)
 
-    def login(self) -> dict[str, Any]:
+    def login(self, *, name: str = "login", expected: set[int] | None = None) -> dict[str, Any]:
         started = time.perf_counter()
+        expected = expected or {200}
         try:
             self.refresh_csrf()
             res = self.session.post(
@@ -221,9 +275,9 @@ class Client:
                 timeout=self.timeout,
             )
             self.refresh_csrf()
-            return self.capture("login", res, started=started, expected={200})
+            return self.capture(name, res, started=started, expected=expected)
         except Exception as exc:
-            return {"ok": False, "status": 0, "error": f"{exc.__class__.__name__}: {exc}", "elapsed_ms": (time.perf_counter() - started) * 1000}
+            return {"op": name, "ok": False, "status": 0, "error": f"{exc.__class__.__name__}: {exc}", "elapsed_ms": (time.perf_counter() - started) * 1000}
 
     def clone_auth_from(self, other: "Client") -> None:
         self.session.cookies.update(other.session.cookies)
@@ -244,6 +298,7 @@ class Client:
             "elapsed_ms": elapsed_ms,
             "bytes": len(res.content or b""),
             "error": "" if res.status_code in expected else body_sample,
+            "body_sample": body_sample,
         }
 
     def request(
@@ -539,7 +594,7 @@ def run_operation(name: str, client: Client, seed: dict[str, Any], budget: Opera
             name,
             "POST",
             "/api/cloud-drive/remote-download/tasks",
-            json={"url": "magnet:?xt=urn:btih:" + "a" * 40 + "&tr=http://127.0.0.1/announce", "download_mode": "bt"},
+            json={"url": "http://127.0.0.1/blocked.torrent", "download_mode": "bt"},
             expected={400, 403, 404, 409, 429},
         )
     if name == "trading_markets":
@@ -580,7 +635,7 @@ def run_operation(name: str, client: Client, seed: dict[str, Any], budget: Opera
         if not budget.claim("bad_login"):
             return client.request("version", "GET", "/api/version", expected={200})
         temp = Client(client.base_url, f"bad-{unique}", "wrong", timeout=client.timeout)
-        return temp.login()
+        return temp.login(name="bad_login", expected={401, 403, 429})
     return client.request("version", "GET", "/api/version", expected={200})
 
 
@@ -632,6 +687,18 @@ def build_weighted_ops() -> list[tuple[str, int]]:
     ]
 
 
+def resolve_session_pool_size(*, requested: int, session_mode: str, account_count: int, concurrency: int, logical_users: int) -> tuple[int, str]:
+    requested = int(requested or 0)
+    if requested > 0:
+        return requested, "explicit"
+    concurrency = max(1, int(concurrency or 1))
+    logical_users = max(1, int(logical_users or 1))
+    account_count = max(1, int(account_count or 1))
+    if str(session_mode or "clone") == "login":
+        return max(1, min(account_count, concurrency, logical_users)), "auto_login_account_capped"
+    return max(1, min(256, max(concurrency, min(logical_users, 256)))), "auto_clone"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
@@ -641,7 +708,7 @@ def main() -> int:
     parser.add_argument("--logical-users", type=int, default=10000)
     parser.add_argument("--ops", type=int, default=10000)
     parser.add_argument("--concurrency", type=int, default=512)
-    parser.add_argument("--session-pool", type=int, default=256)
+    parser.add_argument("--session-pool", type=int, default=0, help="Authenticated client pool size. 0=auto; login mode caps to account count to avoid polluting live QA with login-rate-limit noise.")
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--qos-interval", type=float, default=1.0)
     parser.add_argument("--resource-interval", type=float, default=1.0)
@@ -678,6 +745,14 @@ def main() -> int:
         accounts.append((username.strip(), password.strip()))
     if not accounts:
         accounts = [("test", args.test_password)]
+    requested_session_pool = int(args.session_pool or 0)
+    session_pool, session_pool_mode = resolve_session_pool_size(
+        requested=requested_session_pool,
+        session_mode=args.session_mode,
+        account_count=len(accounts),
+        concurrency=args.concurrency,
+        logical_users=args.logical_users,
+    )
 
     seed_client = Client(args.base_url, accounts[0][0], accounts[0][1], timeout=args.timeout)
     seed_login = seed_client.login()
@@ -700,8 +775,8 @@ def main() -> int:
             client.csrf = ""
         return client
 
-    with ThreadPoolExecutor(max_workers=min(max(1, args.session_pool), 128)) as pool:
-        for client in pool.map(make_client, range(max(1, int(args.session_pool)))):
+    with ThreadPoolExecutor(max_workers=min(max(1, session_pool), 128)) as pool:
+        for client in pool.map(make_client, range(max(1, int(session_pool)))):
             if client.csrf:
                 clients.append(client)
     login_elapsed_seconds = time.perf_counter() - login_started
@@ -763,6 +838,7 @@ def main() -> int:
             elapsed_ms=float(result.get("elapsed_ms") or 0.0),
             ok=bool(result.get("ok")),
             error=str(result.get("error") or ""),
+            body_sample=str(result.get("body_sample") or ""),
             bytes_received=int(result.get("bytes") or 0),
         )
 
@@ -818,7 +894,9 @@ def main() -> int:
         "logical_users": int(args.logical_users),
         "total_ops_requested": total_ops,
         "concurrency": concurrency,
-        "session_pool_requested": int(args.session_pool),
+        "session_pool_requested": requested_session_pool,
+        "session_pool_resolved": int(session_pool),
+        "session_pool_mode": session_pool_mode,
         "session_pool_created": len(clients),
         "session_mode": args.session_mode,
         "allow_server_busy": bool(args.allow_server_busy),

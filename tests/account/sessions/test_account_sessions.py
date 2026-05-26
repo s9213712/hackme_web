@@ -20,6 +20,7 @@ def _build_app(
     enforce_password_strength=None,
     count_role=None,
     system_settings=None,
+    points_service=None,
 ):
     app = Flask(__name__)
     app.testing = True
@@ -69,6 +70,7 @@ def _build_app(
         "normalize_text": lambda value: value.strip() if isinstance(value, str) else "",
         "parse_birthdate": lambda value: value,
         "parse_positive_int": lambda value, default=None, **kwargs: int(value) if value is not None else default,
+        "points_service": points_service,
         "revoke_user_sessions": revoke_user_sessions or (lambda *args, **kwargs: None),
         "require_csrf": lambda fn: fn,
         "require_csrf_safe": lambda fn: fn,
@@ -671,6 +673,122 @@ def test_admin_users_list_hides_deleted_accounts_by_default(tmp_path):
     usernames = [item["username"] for item in body["users"]]
     assert "active_user" in usernames
     assert "deleted_user" not in usernames
+
+
+def test_admin_users_list_includes_official_hot_wallet_live_balance(tmp_path):
+    db_path = tmp_path / "admin-users-hot-wallet-balance.db"
+    hot_address = "pc0" + ("a" * 48)
+
+    class FakePointsService:
+        def ensure_schema(self, _conn):
+            return None
+
+        def _wallet_identity_balances_for_user(self, _conn, user_id):
+            if int(user_id) != 2:
+                return {"balances": {}}
+            return {
+                "balances": {
+                    hot_address: {
+                        "balance": 1234,
+                        "frozen": 56,
+                        "pending_outgoing": 7,
+                    }
+                }
+            }
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT,
+            base_level TEXT,
+            effective_level TEXT,
+            trust_score INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            reputation INTEGER DEFAULT 0,
+            violation_score INTEGER DEFAULT 0,
+            sanction_status TEXT,
+            sanction_until TEXT,
+            level_updated_at TEXT,
+            level_updated_by TEXT,
+            level_update_reason TEXT,
+            password_strength_score INTEGER DEFAULT 0,
+            avatar_file_id INTEGER,
+            avatar_crop_json TEXT,
+            blocked_until TEXT,
+            violation_count INTEGER DEFAULT 0
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE points_wallet_identities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            address TEXT NOT NULL UNIQUE,
+            wallet_type TEXT NOT NULL,
+            custody_mode TEXT NOT NULL,
+            key_algorithm TEXT NOT NULL,
+            public_key_jwk_json TEXT NOT NULL DEFAULT '{}',
+            public_key_hash TEXT NOT NULL,
+            server_private_key_stored INTEGER NOT NULL DEFAULT 0,
+            is_primary INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            label TEXT NOT NULL DEFAULT '',
+            backup_confirmed_at TEXT,
+            imported_at TEXT,
+            revoked_at TEXT,
+            wallet_scope TEXT NOT NULL DEFAULT 'user',
+            spend_capability TEXT NOT NULL DEFAULT 'enabled',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username, status, role, member_level, base_level, effective_level) VALUES (1, 'root', 'active', 'super_admin', 'normal', 'normal', 'normal')")
+    conn.execute("INSERT INTO users (id, username, status, role, member_level, base_level, effective_level) VALUES (2, 'alice', 'active', 'user', 'trusted', 'trusted', 'trusted')")
+    conn.execute(
+        """
+        INSERT INTO points_wallet_identities (
+            user_id, address, wallet_type, custody_mode, key_algorithm, public_key_hash,
+            is_primary, status, label, backup_confirmed_at, created_at, updated_at
+        ) VALUES (2, ?, 'official_hot', 'server_hot', 'SYSTEM_SIMULATED_V1', 'hot-hash', 1, 'active', '官方熱錢包', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+        """,
+        (hot_address,),
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "status": "active"}}
+    client = _build_app(str(db_path), actor_box, enable_foreign_keys=True, points_service=FakePointsService()).test_client()
+
+    res = client.get("/api/admin/users")
+    body = res.get_json()
+    alice = next(row for row in body["users"] if row["username"] == "alice")
+
+    assert res.status_code == 200
+    assert alice["official_hot_wallet_address"] == hot_address
+    assert alice["official_hot_wallet_balance"] == 1234
+    assert alice["official_hot_wallet_frozen"] == 56
+    assert alice["official_hot_wallet_pending_outgoing"] == 7
+    assert alice["official_hot_wallets"][0]["points_balance"] == 1234
 
 
 def test_admin_users_list_paginates_and_sorts_by_id(tmp_path):

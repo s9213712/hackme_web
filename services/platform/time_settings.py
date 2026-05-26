@@ -1,4 +1,5 @@
 import re
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -63,6 +64,8 @@ def server_time_payload(settings=None, *, now=None):
     local_time = now_utc.astimezone(zone)
     offset = local_time.utcoffset()
     offset_minutes = int((offset.total_seconds() if offset else 0) // 60)
+    system_local_time = datetime.now().astimezone()
+    system_tz = system_local_time.tzname() or (time.tzname[0] if time.tzname else "")
     return {
         "timezone": timezone_name,
         "timezone_valid": True,
@@ -72,4 +75,6 @@ def server_time_payload(settings=None, *, now=None):
         "utc_offset_minutes": offset_minutes,
         "utc_offset_label": _offset_label(offset_minutes),
         "time_source": "system_clock",
+        "system_timezone": system_tz,
+        "system_time_local": system_local_time.isoformat(timespec="seconds"),
     }

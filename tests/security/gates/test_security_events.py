@@ -399,3 +399,22 @@ def test_rate_limit_block_records_security_event(tmp_path):
     assert row[0] == "rate_limit"
     assert row[1] == "10.0.0.9"
     assert "limit=1" in row[2]
+
+
+def test_capacity_probe_unlimited_disables_security_rate_limits(monkeypatch):
+    original_buckets = dict(security_events._RATE_LIMIT_BUCKETS)
+    original_user_buckets = dict(security_events._USER_RATE_LIMIT_BUCKETS)
+    try:
+        monkeypatch.setenv("HACKME_CAPACITY_PROBE_UNLIMITED", "1")
+        security_events._RATE_LIMIT_BUCKETS.clear()
+        security_events._USER_RATE_LIMIT_BUCKETS.clear()
+
+        assert security_events.is_rate_limited("10.0.0.10", max_req=1, window_sec=60)[0] is False
+        assert security_events.is_rate_limited("10.0.0.10", max_req=1, window_sec=60)[0] is False
+        assert security_events.check_user_rate_limit(123, "chat_send", max_req=1, window_sec=60)[0] is False
+        assert security_events.check_user_rate_limit(123, "chat_send", max_req=1, window_sec=60)[0] is False
+    finally:
+        security_events._RATE_LIMIT_BUCKETS.clear()
+        security_events._RATE_LIMIT_BUCKETS.update(original_buckets)
+        security_events._USER_RATE_LIMIT_BUCKETS.clear()
+        security_events._USER_RATE_LIMIT_BUCKETS.update(original_user_buckets)

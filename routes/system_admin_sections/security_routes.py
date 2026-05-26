@@ -9,13 +9,17 @@ import threading
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 from flask import request
 
+from services.server.backpressure import backpressure_status
+from services.server.domain_databases import DOMAIN_DATABASES
 from services.system.ci_status import playwright_ci_status
 
 
 _LAST_CPU_SAMPLE = None
+_LAST_PROCESS_CPU_SAMPLE = None
 _RESOURCE_USAGE_CACHE = {"expires_at": 0.0, "value": None}
 _RESOURCE_USAGE_CACHE_LOCK = threading.Lock()
 
@@ -44,6 +48,17 @@ def _safe_percent(value):
     if parsed < 0:
         return None
     return round(max(0.0, min(100.0, parsed)), 1)
+
+
+def _safe_process_percent(value):
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if parsed < 0:
+        return None
+    cores = os.cpu_count() or 1
+    return round(max(0.0, min(float(cores) * 100.0, parsed)), 1)
 
 
 def _read_proc_cpu_times():
@@ -119,6 +134,183 @@ def _ram_usage_snapshot():
     }
 
 
+def _read_process_cpu_seconds():
+    try:
+        raw = Path("/proc/self/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        rest = raw.rsplit(")", 1)[1].strip().split()
+        utime_ticks = int(rest[11])
+        stime_ticks = int(rest[12])
+        ticks_per_second = os.sysconf(os.sysconf_names.get("SC_CLK_TCK", "SC_CLK_TCK")) or 100
+        return (utime_ticks + stime_ticks) / float(ticks_per_second)
+    except Exception:
+        return None
+
+
+def _read_process_memory_status():
+    status = {}
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                parts = value.strip().split()
+                if not parts:
+                    continue
+                if key in {"VmRSS", "VmSize", "VmHWM"}:
+                    try:
+                        status[key] = int(parts[0]) * 1024
+                    except ValueError:
+                        pass
+                elif key == "Threads":
+                    try:
+                        status[key] = int(parts[0])
+                    except ValueError:
+                        pass
+    except OSError:
+        pass
+    return status
+
+
+def _process_usage_snapshot():
+    global _LAST_PROCESS_CPU_SAMPLE
+    pid = os.getpid()
+    now = time.monotonic()
+    cpu_seconds = _read_process_cpu_seconds()
+    cpu_percent = None
+    if cpu_seconds is not None:
+        previous = _LAST_PROCESS_CPU_SAMPLE
+        if previous and int(previous.get("pid") or 0) == pid:
+            elapsed = max(0.0, now - float(previous.get("monotonic") or now))
+            cpu_delta = max(0.0, cpu_seconds - float(previous.get("cpu_seconds") or cpu_seconds))
+            if elapsed > 0:
+                cpu_percent = (cpu_delta / elapsed) * 100.0
+        _LAST_PROCESS_CPU_SAMPLE = {
+            "pid": pid,
+            "monotonic": now,
+            "cpu_seconds": cpu_seconds,
+        }
+    memory = _read_process_memory_status()
+    return {
+        "label": "Process",
+        "pid": pid,
+        "cpu_percent": _safe_process_percent(cpu_percent),
+        "rss_bytes": int(memory.get("VmRSS") or 0) or None,
+        "vms_bytes": int(memory.get("VmSize") or 0) or None,
+        "peak_rss_bytes": int(memory.get("VmHWM") or 0) or None,
+        "threads": int(memory.get("Threads") or 0) or None,
+    }
+
+
+def _process_socket_count(pid):
+    try:
+        fd_dir = Path(f"/proc/{int(pid)}/fd")
+        return sum(1 for item in fd_dir.iterdir() if os.readlink(item).startswith("socket:"))
+    except Exception:
+        return None
+
+
+def _environment_identity_payload():
+    return {
+        "platform": platform.platform(),
+        "python_version": sys.version.split()[0],
+        "pid": os.getpid(),
+    }
+
+
+def _classify_related_process(comm, args, *, base="", current_pid=0, parent_pid=0, pid=0, ppid=0):
+    comm_lower = str(comm or "").lower()
+    args_text = str(args or "")
+    args_lower = args_text.lower()
+    base_lower = str(base or "").lower()
+    if comm_lower in {"ffmpeg", "ffprobe"}:
+        if any(token in args_lower for token in ("hls", "playlist.m3u8", ".m3u8", ".m4s", "media_derivatives", "hackme_stream")):
+            return "HLS decode / ffmpeg"
+        return "ffmpeg"
+    if comm_lower == "aria2c" or "aria2c" in args_lower:
+        return "aria2 download"
+    if "hls_prepare_worker.py" in args_lower:
+        return "HLS prepare worker"
+    if "remote_download_worker.py" in args_lower:
+        return "remote download worker"
+    if "background_engine" in args_lower or "trading/background" in args_lower:
+        return "trading engine worker"
+    if "gunicorn" in args_lower and "server:app" in args_lower:
+        return "web worker / trading engine"
+    if "server.py" in args_lower and (not base_lower or base_lower in args_lower):
+        return "main server / trading engine"
+    if int(pid or 0) == int(current_pid or 0):
+        return "current web worker"
+    if int(pid or 0) == int(parent_pid or 0):
+        return "gunicorn master"
+    if int(ppid or 0) in {int(current_pid or 0), int(parent_pid or 0)}:
+        return comm or "child process"
+    if base_lower and base_lower in args_lower and comm_lower in {"python", "python3", "node", "yt-dlp"}:
+        return comm or "project process"
+    if "hackme_web" in args_lower and comm_lower in {"python", "python3", "node", "yt-dlp"}:
+        return comm or "project process"
+    return ""
+
+
+def _related_processes_snapshot(base_dir=None, limit=32):
+    cmd = ["ps", "-eo", "pid=,ppid=,comm=,pcpu=,rss=,args="]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1.5, check=False)
+    except Exception:
+        return []
+    if proc.returncode != 0:
+        return []
+    base = str(base_dir or "").strip()
+    current_pid = os.getpid()
+    parent_pid = os.getppid()
+    related = []
+    for line in (proc.stdout or "").splitlines():
+        parts = line.strip().split(None, 5)
+        if len(parts) < 6:
+            continue
+        try:
+            pid = int(parts[0])
+            ppid = int(parts[1])
+            cpu = float(parts[3])
+            rss_bytes = int(float(parts[4])) * 1024
+        except Exception:
+            continue
+        comm = parts[2]
+        args = parts[5]
+        role = _classify_related_process(
+            comm,
+            args,
+            base=base,
+            current_pid=current_pid,
+            parent_pid=parent_pid,
+            pid=pid,
+            ppid=ppid,
+        )
+        if not role:
+            continue
+        command = str(args or "").strip()
+        command_limit = 4000
+        related.append({
+            "pid": pid,
+            "ppid": ppid,
+            "name": role,
+            "process_name": comm,
+            "cpu_percent": _safe_process_percent(cpu),
+            "rss_bytes": rss_bytes,
+            "socket_count": _process_socket_count(pid),
+            "network": "",
+            "network_available": False,
+            "args": command[:command_limit],
+            "command": command[:command_limit],
+            "command_truncated": len(command) > command_limit,
+        })
+    related.sort(key=lambda item: (-(item.get("cpu_percent") or 0), -int(item.get("rss_bytes") or 0), int(item.get("pid") or 0)))
+    return related[: max(1, min(100, int(limit or 32)))]
+
+
 def _gpu_usage_snapshot():
     nvidia_smi = shutil.which("nvidia-smi")
     empty = {
@@ -181,7 +373,7 @@ def _resource_board_refresh_seconds(settings=None):
     return max(1, min(300, value))
 
 
-def system_resource_usage_snapshot(ttl_seconds=None):
+def system_resource_usage_snapshot(ttl_seconds=None, *, base_dir=None):
     try:
         requested_ttl = float(ttl_seconds) if ttl_seconds is not None else _RESOURCE_USAGE_CACHE_TTL_SECONDS
     except Exception:
@@ -203,6 +395,8 @@ def system_resource_usage_snapshot(ttl_seconds=None):
             "sampled_at": datetime.now().replace(microsecond=0).isoformat(),
             "cpu": _cpu_usage_snapshot(),
             "ram": _ram_usage_snapshot(),
+            "process": _process_usage_snapshot(),
+            "processes": _related_processes_snapshot(base_dir=base_dir),
             "gpu": gpu["gpu"],
             "vram": gpu["vram"],
         }
@@ -212,10 +406,126 @@ def system_resource_usage_snapshot(ttl_seconds=None):
         return snapshot
 
 
+def _safe_path_size(path: Path) -> int:
+    try:
+        if path.is_file():
+            return max(0, int(path.stat().st_size))
+    except OSError:
+        pass
+    return 0
+
+
+def _sqlite_file_size_detail(path: Path) -> dict:
+    db_bytes = _safe_path_size(path)
+    wal_bytes = _safe_path_size(Path(str(path) + "-wal"))
+    shm_bytes = _safe_path_size(Path(str(path) + "-shm"))
+    return {
+        "database_bytes": db_bytes,
+        "wal_bytes": wal_bytes,
+        "shm_bytes": shm_bytes,
+        "total_bytes": db_bytes + wal_bytes + shm_bytes,
+        "exists": db_bytes > 0,
+    }
+
+
+def _database_usage_snapshot(*, db_path, db_dir, additional_db_paths, base_dir, public_relative_path, integrity_check=None, audit_hash_check=None):
+    candidates = {"main": db_path}
+    for label, path in (additional_db_paths or {}).items():
+        if path:
+            candidates[str(label)] = path
+    root = Path(db_dir or Path(db_path).parent)
+    for label, info in DOMAIN_DATABASES.items():
+        filename = str(info.get("filename") or "").strip()
+        if filename:
+            candidates.setdefault(label, root / filename)
+    try:
+        for path in root.glob("*.db"):
+            label = path.stem.replace("-", "_")
+            candidates.setdefault(label, path)
+    except OSError:
+        pass
+
+    seen = set()
+    files = []
+    for label, raw_path in candidates.items():
+        path = Path(raw_path)
+        try:
+            key = str(path.resolve())
+        except OSError:
+            key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        detail = _sqlite_file_size_detail(path)
+        if not detail["exists"] and detail["wal_bytes"] <= 0 and detail["shm_bytes"] <= 0:
+            continue
+        detail.update({
+            "label": label,
+            "path": public_relative_path(str(path), base_dir),
+        })
+        files.append(detail)
+
+    total_bytes = sum(int(item.get("total_bytes") or 0) for item in files)
+    main_total = 0
+    main_path = str(Path(db_path))
+    for item in files:
+        if item.get("label") == "main" or item.get("path") == public_relative_path(main_path, base_dir):
+            main_total = int(item.get("total_bytes") or 0)
+            break
+    return {
+        "db_dir": public_relative_path(str(root), base_dir),
+        "total_bytes": total_bytes,
+        "main_database_total_bytes": main_total,
+        "file_count": len(files),
+        "sidecar_bytes": sum(int(item.get("wal_bytes") or 0) + int(item.get("shm_bytes") or 0) for item in files),
+        "integrity_check": integrity_check or {},
+        "audit_hash_check": audit_hash_check or {},
+        "files": files,
+    }
+
+
+def _safe_integrity_summary(summary_fn, fallback):
+    try:
+        result = summary_fn() if callable(summary_fn) else None
+        if isinstance(result, dict):
+            return result
+    except Exception as exc:
+        fallback = dict(fallback or {})
+        fallback["error"] = exc.__class__.__name__
+        fallback["details"] = str(exc)[:200]
+    return dict(fallback or {})
+
+
+def _transfer_usage_snapshot(app) -> dict:
+    try:
+        status = backpressure_status(app)
+    except Exception:
+        status = {}
+    traffic = status.get("traffic") or {}
+    totals = traffic.get("totals") or {}
+    cumulative = traffic.get("cumulative") or {}
+    return {
+        "pid": status.get("pid") or os.getpid(),
+        "process_local": bool(status.get("process_local", True)),
+        "window_seconds": int(traffic.get("window_seconds") or 0),
+        "recent_window_seconds": int(traffic.get("recent_window_seconds") or 0),
+        "upload_bytes_per_second": int(traffic.get("upload_bytes_per_sec") or 0),
+        "download_bytes_per_second": int(traffic.get("download_bytes_per_sec") or 0),
+        "window_upload_bytes": int(totals.get("upload_bytes") or 0),
+        "window_download_bytes": int(totals.get("download_bytes") or 0),
+        "cumulative_upload_bytes": int(cumulative.get("upload_bytes") or 0),
+        "cumulative_download_bytes": int(cumulative.get("download_bytes") or 0),
+        "cumulative_requests": int(cumulative.get("requests") or 0),
+        "started_at": cumulative.get("started_at"),
+    }
+
+
 def register_system_admin_security_routes(app, ctx):
     BASE_DIR = ctx["BASE_DIR"]
     CHAT_DIR = ctx["CHAT_DIR"]
+    DB_DIR = ctx.get("DB_DIR") or os.path.dirname(ctx["DB_PATH"])
     DB_PATH = ctx["DB_PATH"]
+    ADDITIONAL_DB_PATHS = ctx.get("ADDITIONAL_DB_PATHS") or {}
     LOG_DIR = ctx["LOG_DIR"]
     ANCHOR_DIR = ctx["ANCHOR_DIR"]
     SERVER_LOG_PATH = ctx["SERVER_LOG_PATH"]
@@ -251,6 +561,7 @@ def register_system_admin_security_routes(app, ctx):
     require_super_admin_actor = ctx["require_super_admin_actor"]
 
     dir_stats = ctx["dir_stats"]
+    safe_count = ctx["safe_count"]
     health_counts = ctx["health_counts"]
     db_integrity_summary = ctx["db_integrity_summary"]
     readiness_summary = ctx["readiness_summary"]
@@ -306,6 +617,7 @@ def register_system_admin_security_routes(app, ctx):
         capacity_conn = get_db()
         try:
             storage_capacity = audit_storage_capacity(capacity_conn, STORAGE_DIR)
+            storage_catalog_files, _storage_catalog_error = safe_count(capacity_conn, "storage_files", optional=True)
         finally:
             capacity_conn.close()
         readiness = readiness_summary()
@@ -340,8 +652,9 @@ def register_system_admin_security_routes(app, ctx):
                 "log_bytes": log_stats["bytes"],
                 "anchor_files": anchor_stats["files"],
                 "anchor_bytes": anchor_stats["bytes"],
-                "storage_files": storage_stats["files"],
-                "storage_bytes": storage_stats["bytes"],
+                "storage_files": storage_catalog_files or storage_stats["files"],
+                "storage_bytes": int(storage_capacity.get("cloud_used_bytes") or storage_stats["bytes"] or 0),
+                "storage_dir": public_relative_path(storage_stats["path"], BASE_DIR),
                 "capacity_audit": storage_capacity,
             },
             "readiness": readiness,
@@ -360,17 +673,26 @@ def register_system_admin_security_routes(app, ctx):
         settings = get_system_settings()
         refresh_seconds = _resource_board_refresh_seconds(settings)
         db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+        database_usage = _database_usage_snapshot(
+            db_path=DB_PATH,
+            db_dir=DB_DIR,
+            additional_db_paths=ADDITIONAL_DB_PATHS,
+            base_dir=BASE_DIR,
+            public_relative_path=public_relative_path,
+            integrity_check=_safe_integrity_summary(db_integrity_summary, {"ok": None, "details": "database integrity unavailable"}),
+            audit_hash_check=_safe_integrity_summary(audit_integrity_summary, {"enabled": None, "ok": None, "details": "audit hash unavailable"}),
+        )
+        transfer_usage = _transfer_usage_snapshot(app)
         log_files = [name for name in os.listdir(LOG_DIR) if os.path.isfile(os.path.join(LOG_DIR, name))] if os.path.isdir(LOG_DIR) else []
         chat_files = [name for name in os.listdir(CHAT_DIR) if os.path.isfile(os.path.join(CHAT_DIR, name))] if os.path.isdir(CHAT_DIR) else []
         anchor_files = [name for name in os.listdir(ANCHOR_DIR) if os.path.isfile(os.path.join(ANCHOR_DIR, name))] if os.path.isdir(ANCHOR_DIR) else []
         return json_resp({
             "ok": True,
             "environment": {
-                "platform": platform.platform(),
-                "python_version": sys.version.split()[0],
-                "pid": os.getpid(),
+                **_environment_identity_payload(),
                 "base_dir": ".",
                 "database_path": public_relative_path(DB_PATH, BASE_DIR),
+                "database_dir": public_relative_path(DB_DIR, BASE_DIR),
                 "log_dir": public_relative_path(LOG_DIR, BASE_DIR),
                 "chat_dir": public_relative_path(CHAT_DIR, BASE_DIR),
                 "anchor_dir": public_relative_path(ANCHOR_DIR, BASE_DIR),
@@ -380,7 +702,9 @@ def register_system_admin_security_routes(app, ctx):
                 "anchor_files": len(anchor_files),
             },
             "resource_refresh_seconds": refresh_seconds,
-            "resource_usage": system_resource_usage_snapshot(ttl_seconds=refresh_seconds),
+            "resource_usage": system_resource_usage_snapshot(ttl_seconds=refresh_seconds, base_dir=BASE_DIR),
+            "database_usage": database_usage,
+            "transfer_usage": transfer_usage,
         })
 
     @app.route("/api/admin/environment/resources", methods=["GET"])
@@ -396,8 +720,19 @@ def register_system_admin_security_routes(app, ctx):
         refresh_seconds = _resource_board_refresh_seconds(settings)
         return json_resp({
             "ok": True,
+            "environment": _environment_identity_payload(),
             "resource_refresh_seconds": refresh_seconds,
-            "resource_usage": system_resource_usage_snapshot(ttl_seconds=refresh_seconds),
+            "resource_usage": system_resource_usage_snapshot(ttl_seconds=refresh_seconds, base_dir=BASE_DIR),
+            "database_usage": _database_usage_snapshot(
+                db_path=DB_PATH,
+                db_dir=DB_DIR,
+                additional_db_paths=ADDITIONAL_DB_PATHS,
+                base_dir=BASE_DIR,
+                public_relative_path=public_relative_path,
+                integrity_check=_safe_integrity_summary(db_integrity_summary, {"ok": None, "details": "database integrity unavailable"}),
+                audit_hash_check=_safe_integrity_summary(audit_integrity_summary, {"enabled": None, "ok": None, "details": "audit hash unavailable"}),
+            ),
+            "transfer_usage": _transfer_usage_snapshot(app),
         })
 
     @app.route("/api/admin/health/readiness", methods=["GET"])
@@ -464,34 +799,43 @@ def register_system_admin_security_routes(app, ctx):
             limit_int = 200
         result = get_server_output(limit=limit_int) or {"lines": [], "max_lines": 0}
         # When the in-process runtime buffer is empty (e.g. immediately after
-        # gunicorn boot, or after a runtime reset) fall back to tailing the
-        # gunicorn_error.log on disk so the operator can still see what
-        # happened during boot.
+        # gunicorn boot, or after a runtime reset) fall back to tailing the log
+        # files used by the current runner so the operator still sees activity.
         lines = result.get("lines") or []
         if not lines:
-            log_path = os.path.join(LOG_DIR, "gunicorn_error.log")
-            if os.path.isfile(log_path):
+            log_candidates = [
+                ("gunicorn_error.log", os.path.join(LOG_DIR, "gunicorn_error.log")),
+                ("server_direct.out", os.path.join(LOG_DIR, "server_direct.out")),
+                ("server.log", SERVER_LOG_PATH),
+            ]
+            for source_name, log_path in log_candidates:
+                if not os.path.isfile(log_path):
+                    continue
                 try:
                     with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
                         tail = fh.readlines()[-limit_int:]
+                    if not tail:
+                        continue
                     parsed_lines = []
                     for raw in tail:
                         text = raw.rstrip("\n")
-                        # gunicorn format: "[ts] [pid] [LEVEL] message"
                         stream = "info"
                         m = re.search(r"\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]", text)
                         if m:
                             stream = m.group(1).lower()
-                        elif " ERROR " in text or " Traceback" in text:
+                        elif " ERROR " in text or " Traceback" in text or "Traceback (most recent call last)" in text:
                             stream = "error"
+                        elif " WARNING " in text or " WARNING]" in text:
+                            stream = "warning"
                         parsed_lines.append({"stream": stream, "line": text})
                     result = {
                         "lines": parsed_lines,
                         "max_lines": result.get("max_lines") or 0,
-                        "source": "gunicorn_error.log",
+                        "source": source_name,
                     }
+                    break
                 except OSError:
-                    pass
+                    continue
         return json_resp({"ok": True, "server_output": result})
 
     @app.route("/api/root/security-tests", methods=["GET"])
@@ -868,117 +1212,18 @@ def register_system_admin_security_routes(app, ctx):
         actor, error = require_root_actor()
         if error:
             return error
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
-        branch = validate_git_branch_name((data or {}).get("branch"))
-        confirm = str((data or {}).get("confirm") or "").strip()
-        if not branch:
-            return json_resp({"ok": False, "msg": "請選擇合法的更新分支"}), 400
-        if confirm != "APPLY_UNVERIFIED_UPDATE":
-            return json_resp({"ok": False, "msg": "請輸入 APPLY_UNVERIFIED_UPDATE 確認此次更新未經驗證"}), 400
-        preview = git_update_preview(branch, fetch=True)
-        if not preview.get("ok"):
-            return json_resp({"ok": False, "msg": preview.get("msg") or "更新預覽失敗", "preview": preview}), 400
-        state = preview.get("state") or {}
-        stash_applied = False
-        stash_result = None
-        if state.get("dirty"):
-            stash_result = run_git_command(
-                ["stash", "push", "--include-untracked", "-m", "auto-stash before server update"],
-                timeout=30,
-            )
-            if not stash_result["ok"]:
-                return json_resp({
-                    "ok": False,
-                    "msg": "工作目錄有未提交變更，且自動暫存失敗，請先手動處理後再更新。",
-                    "dirty_files": state.get("dirty_files") or [],
-                    "stash_error": git_short_text(stash_result),
-                    "preview": preview,
-                }), 409
-            stash_applied = True
-        recovery_points = prepare_server_update_recovery_points(actor, branch)
-        if not recovery_points.get("ok"):
-            if stash_applied:
-                restore = run_git_command(["stash", "pop"], timeout=30)
-                if not restore.get("ok"):
-                    run_git_command(["stash", "drop"], timeout=15)
-            audit(
-                "SERVER_UPDATE_PREPARE_FAILED",
-                get_client_ip(),
-                user=actor["username"],
-                success=False,
-                ua=get_ua(),
-                detail=json.dumps({"branch": branch, "msg": recovery_points.get("msg"), "recovery": recovery_points}, ensure_ascii=False, sort_keys=True),
-            )
-            return json_resp({
-                "ok": False,
-                "msg": recovery_points.get("msg") or "更新前保護點建立失敗，已中止更新",
-                "preview": preview,
-                "recovery": recovery_points,
-            }), 500
-        before_commit = state.get("current_commit") or ""
-        merge_result = run_git_command(["merge", "--ff-only", f"origin/{branch}"], timeout=120)
-        stash_pop_result = None
-        if stash_applied:
-            stash_pop_result = run_git_command(["stash", "pop"], timeout=30)
-            if not stash_pop_result.get("ok"):
-                run_git_command(["stash", "drop"], timeout=15)
-        after_state = current_git_state(fetch=False)
-        integrity_result = None
-        restart_result = None
-        if merge_result["ok"]:
-            integrity_result = rebuild_integrity_baseline_after_update(actor, branch, preview)
-            restart_result = schedule_server_restart(reason=f"server update from origin/{branch}", delay_seconds=1.25)
-            notify_root(
-                "server_update_unverified",
-                "伺服器已套用未驗證更新",
-                f"已從 origin/{branch} 套用更新，更新前已建立 snapshot 與 PointsChain backup，Integrity Guard baseline 已依本次更新檔案重建，系統將自動重啟。此更新尚未經本機測試驗證，請執行 smoke test、權限測試並確認沒有其他 pending findings。",
-                link="/server",
-            )
-        detail = {
-            "branch": branch,
-            "before_commit": before_commit,
-            "after_commit": (after_state or {}).get("current_commit"),
-            "success": bool(merge_result["ok"]),
-            "merge_output": git_short_text(merge_result, limit=4000),
-            "stash_applied": stash_applied,
-            "stash_pop_ok": bool(stash_pop_result.get("ok")) if stash_pop_result else None,
-            "recovery": recovery_points,
-            "restart": restart_result,
-            "warning": SERVER_UPDATE_WARNING,
-        }
         audit(
-            "SERVER_UPDATE_APPLIED",
+            "SERVER_UPDATE_APPLY_DISABLED",
             get_client_ip(),
             user=actor["username"],
-            success=bool(merge_result["ok"]),
+            success=False,
             ua=get_ua(),
-            detail=json.dumps(detail, ensure_ascii=False, sort_keys=True),
+            detail=json.dumps({"reason": "online_server_update_disabled"}, ensure_ascii=False, sort_keys=True),
         )
-        if not merge_result["ok"]:
-            return json_resp({
-                "ok": False,
-                "msg": "Git 更新套用失敗。通常是目標分支無法 fast-forward，請改用乾淨部署或手動合併。",
-                "preview": preview,
-                "merge": merge_result,
-                "recovery": recovery_points,
-                "warning": SERVER_UPDATE_WARNING,
-            }), 409
         return json_resp({
-            "ok": True,
-            "msg": "伺服器更新已套用；已建立更新前 snapshot 與 PointsChain 備份，伺服器將自動重啟。重啟後請自行執行測試與 debug。",
-            "preview": preview,
-            "merge": merge_result,
-            "state": after_state,
-            "integrity": integrity_result,
-            "recovery": recovery_points,
-            "restart": restart_result,
-            "release_summary": read_update_summary(),
-            "warning": SERVER_UPDATE_WARNING,
-            "restart_required": True,
-        })
+            "ok": False,
+            "msg": "線上套用 GitHub 更新已停用；請在部署流程更新程式碼、完成檢查後再重啟。",
+        }), 410
 
     @app.route("/api/admin/security-center/profiles", methods=["GET", "POST"])
     @require_csrf_safe

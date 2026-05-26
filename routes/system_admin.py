@@ -233,7 +233,18 @@ def register_system_admin_routes(app, deps):
     )
     GIT_REPO_DIR = deps.get("GIT_REPO_DIR") or BASE_DIR
     CHAT_DIR = deps["CHAT_DIR"]
+    DB_DIR = deps.get("DB_DIR") or os.path.dirname(deps["DB_PATH"])
     DB_PATH = deps["DB_PATH"]
+    ADDITIONAL_DB_PATHS = {
+        "auth": deps.get("AUTH_DB_PATH"),
+        "audit": deps.get("AUDIT_DB_PATH"),
+        "control": deps.get("CONTROL_DB_PATH"),
+        "storage_catalog": deps.get("STORAGE_CATALOG_DB_PATH"),
+        "points_chain": deps.get("POINTS_CHAIN_DB_PATH"),
+        "trading": deps.get("TRADING_DB_PATH"),
+        "jobs": deps.get("JOBS_DB_PATH"),
+        "chess_engine": deps.get("CHESS_ENGINE_DB_PATH"),
+    }
     LOG_DIR = deps["LOG_DIR"]
     SERVER_LOG_PATH = deps["SERVER_LOG_PATH"]
     STORAGE_DIR = deps.get("STORAGE_DIR")
@@ -461,7 +472,7 @@ def register_system_admin_routes(app, deps):
         msg = "目前執行中的副本不含 Git 更新資訊"
         detail = git_short_text(result) or "not a git repository"
         if GIT_REPO_DIR != BASE_DIR:
-            msg = "GitHub 更新中心指定的 repo 無法讀取"
+            msg = "GitHub 版本檢查指定的 repo 無法讀取"
         return {
             "ok": False,
             "msg": msg,
@@ -562,8 +573,7 @@ def register_system_admin_routes(app, deps):
             "diff_stat": stat["stdout"] if stat["ok"] else git_short_text(stat),
             "release_summary": read_update_summary_from_ref(remote_ref),
             "warning": SERVER_UPDATE_WARNING,
-            "requires_confirmation": "APPLY_UNVERIFIED_UPDATE",
-            "strategy": "git fetch + git diff preview + git merge --ff-only",
+            "strategy": "git fetch + git diff preview only",
         }
 
     def rebuild_integrity_baseline_after_update(actor, branch, preview):
@@ -611,25 +621,27 @@ def register_system_admin_routes(app, deps):
                 "msg": "更新前 snapshot 建立失敗，已中止更新",
                 "snapshot": {"ok": False, "snapshot_id": snapshot.snapshot_id, "status": snapshot.status, "error": snapshot.error},
             }
-        backup = points_service.create_ledger_backup(reason=f"server_update_pre_apply:{branch}", kind="pre_server_update")
-        if not backup.get("ok"):
+        verification = points_service.verify_chain()
+        if verification.get("ok") is not True:
             return {
                 "ok": False,
-                "msg": "更新前 PointsChain 備份驗證失敗，已中止更新",
+                "msg": "更新前 PointsChain 驗證失敗，已中止更新",
                 "snapshot": {"ok": True, "snapshot_id": snapshot.snapshot_id, "status": snapshot.status},
-                "points_backup": backup,
+                "points_verification": verification,
             }
         return {
             "ok": True,
             "snapshot": {"ok": True, "snapshot_id": snapshot.snapshot_id, "status": snapshot.status},
-            "points_backup": backup,
+            "points_verification": verification,
+            "points_backup_policy": "disabled_append_only_chain",
         }
 
     def cloud_drive_storage_payload(settings):
         configured = str(settings.get("cloud_drive_storage_root") or "").strip()
         current = os.path.abspath(STORAGE_DIR) if STORAGE_DIR else ""
         effective = configured or current
-        capacity = resolve_global_capacity_limit(storage_disk_usage(effective or current or "."), settings=settings)
+        disk = storage_disk_usage(effective or current or ".")
+        capacity = resolve_global_capacity_limit(disk, settings=settings)
         restart_required = False
         if configured and current:
             try:
@@ -641,6 +653,7 @@ def register_system_admin_routes(app, deps):
             "current_root": current,
             "effective_next_root": effective,
             "restart_required": restart_required,
+            "disk": disk,
             "global_capacity": capacity,
         }
 
@@ -942,21 +955,31 @@ def register_system_admin_routes(app, deps):
         except Exception as exc:
             return 0, str(exc)
 
-    def dir_stats(path, suffix=None):
+    def dir_stats(path, suffix=None, recursive=False):
         if not path or not os.path.isdir(path):
             return {"exists": False, "files": 0, "bytes": 0, "path": path}
         files = []
-        for name in os.listdir(path):
-            full = os.path.join(path, name)
-            if not os.path.isfile(full):
-                continue
-            if suffix and not name.endswith(suffix):
-                continue
-            files.append(full)
+        if recursive:
+            for root, _dirs, names in os.walk(path):
+                for name in names:
+                    full = os.path.join(root, name)
+                    if not os.path.isfile(full):
+                        continue
+                    if suffix and not name.endswith(suffix):
+                        continue
+                    files.append(full)
+        else:
+            for name in os.listdir(path):
+                full = os.path.join(path, name)
+                if not os.path.isfile(full):
+                    continue
+                if suffix and not name.endswith(suffix):
+                    continue
+                files.append(full)
         return {
             "exists": True,
             "files": len(files),
-            "bytes": sum(os.path.getsize(path) for path in files),
+            "bytes": sum(os.path.getsize(item) for item in files),
             "path": path,
         }
 
@@ -1273,7 +1296,9 @@ def register_system_admin_routes(app, deps):
         "CONFIRM_APPROVE": CONFIRM_APPROVE,
         "CURRENT_SCHEMA_VERSION": CURRENT_SCHEMA_VERSION,
         "CURRENT_SERVER_BIND_STATE": CURRENT_SERVER_BIND_STATE,
+        "DB_DIR": DB_DIR,
         "DB_PATH": DB_PATH,
+        "ADDITIONAL_DB_PATHS": ADDITIONAL_DB_PATHS,
         "GIT_REPO_DIR": GIT_REPO_DIR,
         "LOG_DIR": LOG_DIR,
         "REPORTS_DIR": REPORTS_DIR,
@@ -1329,6 +1354,7 @@ def register_system_admin_routes(app, deps):
         "rebuild_integrity_baseline_after_update": rebuild_integrity_baseline_after_update,
         "repair_audit_chain": repair_audit_chain,
         "repair_violation_chains": repair_violation_chains,
+        "safe_count": safe_count,
         "require_csrf": require_csrf,
         "require_csrf_safe": require_csrf_safe,
         "require_root_actor": require_root_actor,

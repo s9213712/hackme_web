@@ -225,6 +225,27 @@ def test_account_security_locks_user_after_repeated_bad_passwords(tmp_path):
     assert row[1]
 
 
+def test_login_cookie_lifetime_uses_session_ttl_setting(tmp_path):
+    db_path = tmp_path / "login-cookie-ttl.db"
+    _seed_db(db_path)
+    client = _build_app(
+        str(db_path),
+        {
+            "max_login_failures": 3,
+            "block_duration_minutes": 10,
+            "session_ttl_hours": 168,
+        },
+    ).test_client()
+
+    response = client.post("/api/login", json={"username": "alice", "password": "correct"})
+
+    assert response.status_code == 200
+    set_cookie = "\n".join(response.headers.getlist("Set-Cookie"))
+    assert "session_token=token-alice" in set_cookie
+    assert "csrf_token=csrf" in set_cookie
+    assert "Max-Age=604800" in set_cookie
+
+
 def test_internal_test_mode_requires_root_issued_token_for_the_bound_non_root_login(tmp_path):
     db_path = tmp_path / "internal-test.db"
     _seed_db(db_path)
