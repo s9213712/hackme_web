@@ -1,3 +1,4 @@
+import sqlite3
 import threading
 from datetime import datetime
 
@@ -402,6 +403,32 @@ def get_member_level_rule(conn, level):
     if row:
         return serialize_member_level_rule(row)
     return dict(DEFAULT_MEMBER_LEVEL_RULES[normalized])
+
+
+def get_member_level_rule_readonly(conn, level):
+    normalized = level if level in DEFAULT_MEMBER_LEVEL_RULES else "normal"
+    try:
+        row = conn.execute("SELECT * FROM member_level_rules WHERE level=?", (normalized,)).fetchone()
+    except sqlite3.OperationalError as exc:
+        message = str(exc).lower()
+        if "no such table" not in message and "no such column" not in message:
+            raise
+        row = None
+    if not row:
+        return dict(DEFAULT_MEMBER_LEVEL_RULES[normalized])
+
+    data = dict(row)
+    rule = dict(DEFAULT_MEMBER_LEVEL_RULES[normalized])
+    for key in BOOL_FIELDS:
+        if key in data:
+            rule[key] = bool(data.get(key))
+    for key in INT_FIELDS:
+        if key in data:
+            rule[key] = int(data.get(key) or 0)
+    for key, value in data.items():
+        if key not in rule:
+            rule[key] = value
+    return rule
 
 
 def get_user_level_fields(user):

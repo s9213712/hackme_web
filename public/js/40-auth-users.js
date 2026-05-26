@@ -70,13 +70,18 @@ async function doLogin() {
     const me = await meRes.json();
     if (me.ok) setAuthState(me, true);
     else setAuthState({ username: user, role: "user", role_label: "一般用戶", nickname: "-" }, true);
-    if (json.birthday_gift?.created) {
-      const amount = Number(json.birthday_gift.amount || 500);
-      const message = `生日禮金 ${Number.isFinite(amount) ? amount : 500} 點已入帳`;
+    if (json.birthday_gift?.created || json.birthday_gift?.storage_quota_gift?.created) {
+      const amount = Number(json.birthday_gift.amount || 1000);
+      const storageGift = json.birthday_gift?.storage_quota_gift ? "，1GB 雲端硬碟 30 日已入帳" : "";
+      const message = `生日禮金 ${Number.isFinite(amount) ? amount : 1000} 點已入帳${storageGift}`;
+      if (typeof showAppToast === "function") showAppToast(message, true);
+      else flash($("li-msg"), message, true);
+    } else if (json.signup_bonus?.created) {
+      const message = "註冊禮已入帳官方熱錢包";
       if (typeof showAppToast === "function") showAppToast(message, true);
       else flash($("li-msg"), message, true);
     } else if (json.wallet_onboarding?.required) {
-      const message = "請到積分系統完成 PointsChain 錢包設定以領取註冊禮。";
+      const message = "請到積分系統完成 PointsChain 錢包設定。";
       if (typeof showAppToast === "function") showAppToast(message, true);
       else flash($("li-msg"), message, true);
     }
@@ -308,7 +313,7 @@ const USER_APPEARANCE_THEME_PALETTES = {
 };
 let editingUserOriginalAppearance = {};
 let userAppearanceResetPending = false;
-const AVATAR_CROPPER_MIN_ZOOM = 1;
+const AVATAR_CROPPER_MIN_ZOOM = 0.5;
 const AVATAR_CROPPER_MAX_ZOOM = 6;
 const avatarCropState = {
   bound: false,
@@ -386,7 +391,11 @@ function avatarCropStageMetrics() {
   const width = Math.max(0, rect.width || 0);
   const height = Math.max(0, rect.height || 0);
   if (!width || !height) return null;
-  const cropSize = Math.max(132, Math.min(width, height) * 0.82);
+  const minDimension = Math.min(width, height);
+  const cropSize = Math.min(
+    Math.max(96, minDimension - 18),
+    Math.max(160, minDimension * 0.9)
+  );
   return {
     width,
     height,
@@ -394,6 +403,17 @@ function avatarCropStageMetrics() {
     cropLeft: (width - cropSize) / 2,
     cropTop: (height - cropSize) / 2,
   };
+}
+
+function avatarCropMinimumZoom(metrics) {
+  if (!metrics || !avatarCropState.naturalWidth || !avatarCropState.naturalHeight || !avatarCropState.baseScale) {
+    return AVATAR_CROPPER_MIN_ZOOM;
+  }
+  const minScale = Math.max(
+    metrics.cropSize / avatarCropState.naturalWidth,
+    metrics.cropSize / avatarCropState.naturalHeight
+  );
+  return clampAvatarValue(minScale / avatarCropState.baseScale, AVATAR_CROPPER_MIN_ZOOM, 1);
 }
 
 function clampAvatarCropOffsets(metrics = avatarCropStageMetrics()) {
@@ -436,7 +456,14 @@ function renderAvatarCropper() {
     metrics.width / avatarCropState.naturalWidth,
     metrics.height / avatarCropState.naturalHeight
   );
-  avatarCropState.zoom = clampAvatarValue(Number(avatarCropState.zoom) || 1, AVATAR_CROPPER_MIN_ZOOM, AVATAR_CROPPER_MAX_ZOOM);
+  const minZoom = avatarCropMinimumZoom(metrics);
+  if (els.zoom) {
+    els.zoom.min = minZoom.toFixed(2);
+  }
+  avatarCropState.zoom = clampAvatarValue(Number(avatarCropState.zoom) || 1, minZoom, AVATAR_CROPPER_MAX_ZOOM);
+  if (els.zoom && Number(els.zoom.value || 1) < minZoom) {
+    els.zoom.value = minZoom.toFixed(2);
+  }
   clampAvatarCropOffsets(metrics);
   const scale = avatarCropState.baseScale * avatarCropState.zoom;
   const imageWidth = avatarCropState.naturalWidth * scale;
@@ -535,7 +562,11 @@ function bindAvatarCropperUi() {
   }
   if (els.zoom) {
     els.zoom.addEventListener("input", () => {
-      avatarCropState.zoom = clampAvatarValue(parseFloat(els.zoom.value || "1") || 1, AVATAR_CROPPER_MIN_ZOOM, AVATAR_CROPPER_MAX_ZOOM);
+      avatarCropState.zoom = clampAvatarValue(
+        parseFloat(els.zoom.value || "1") || 1,
+        avatarCropMinimumZoom(avatarCropStageMetrics()),
+        AVATAR_CROPPER_MAX_ZOOM
+      );
       renderAvatarCropper();
     });
   }
@@ -766,7 +797,7 @@ function resetUserAppearanceEditorToGlobal() {
   setUserEditMsg("已切回全站預設外觀；按視窗底部的「儲存」後才會寫入帳號。", true);
 }
 
-  async function saveUserAppearanceSettings() {
+async function saveUserAppearanceSettings() {
   if (!userAppearanceEditorVisible()) return { ok: true, changed: false };
   if (!userAppearanceFeatureEnabled()) {
     return { ok: false, msg: "此功能目前已由 root 關閉：允許使用者覆寫個人外觀" };
@@ -798,6 +829,59 @@ function resetUserAppearanceEditorToGlobal() {
     clearUserAppearanceConfig();
   }
   return { ok: true, changed: true, reset: !userAppearanceSignature(editingUserOriginalAppearance) };
+}
+
+function selectedUserDisplayTimezone() {
+  if (typeof normalizeUserDisplayTimezone === "function") {
+    return normalizeUserDisplayTimezone($("edit-user-display-timezone")?.value || "auto");
+  }
+  return $("edit-user-display-timezone")?.value || "auto";
+}
+
+function setUserDisplayTimezoneEditorValue(value) {
+  const timezone = typeof normalizeUserDisplayTimezone === "function"
+    ? normalizeUserDisplayTimezone(value)
+    : (value || "auto");
+  const accountField = $("edit-user-display-timezone");
+  if (accountField) accountField.value = timezone;
+  const profileField = $("profile-edit-display-timezone");
+  if (profileField) profileField.value = timezone;
+  if (typeof setUserDisplayTimezone === "function") setUserDisplayTimezone(timezone);
+}
+
+function updateUserPreferencesEditorVisibility() {
+  const section = $("edit-user-preferences-section");
+  if (!section) return;
+  section.style.display = editingUserIsSelf ? "" : "none";
+  if (editingUserIsSelf) section.open = true;
+}
+
+async function saveUserDisplayTimezoneSetting(nextTimezone) {
+  if (!editingUserIsSelf) return { ok: true, changed: false };
+  const timezone = typeof normalizeUserDisplayTimezone === "function"
+    ? normalizeUserDisplayTimezone(nextTimezone)
+    : (nextTimezone || "auto");
+  const original = typeof normalizeUserDisplayTimezone === "function"
+    ? normalizeUserDisplayTimezone(editingUserOriginal.display_timezone || "auto")
+    : (editingUserOriginal.display_timezone || "auto");
+  if (timezone === original) return { ok: true, changed: false };
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/users/me/profile", {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ display_timezone: timezone }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) return { ok: false, msg: json.msg || "顯示時區儲存失敗" };
+  const savedTimezone = json.profile?.display_timezone || timezone;
+  editingUserOriginal.display_timezone = savedTimezone;
+  setUserDisplayTimezoneEditorValue(savedTimezone);
+  if (typeof profilePanelCache !== "undefined" && profilePanelCache) {
+    profilePanelCache.display_timezone = savedTimezone;
+  }
+  return { ok: true, changed: true, timezone: savedTimezone };
 }
 
 function renderCaptchaChallenge(captcha) {
@@ -1216,7 +1300,8 @@ async function editUser(userId) {
     base_level: source.base_level || source.member_level || "normal",
     effective_level: source.effective_level || source.base_level || source.member_level || "normal",
     sanction_status: source.sanction_status || "none",
-    sanction_until: source.sanction_until || ""
+    sanction_until: source.sanction_until || "",
+    display_timezone: source.display_timezone || (editingUserIsSelf && typeof getUserDisplayTimezone === "function" ? getUserDisplayTimezone() : "auto"),
   };
 
   editingUserId = userId;
@@ -1230,6 +1315,7 @@ async function editUser(userId) {
   editingUserOriginal.base_level = current.base_level;
   editingUserOriginal.sanction_status = current.sanction_status;
   editingUserOriginal.sanction_until = current.sanction_until;
+  editingUserOriginal.display_timezone = current.display_timezone || "auto";
   editingUserOriginalAppearance = detailRes?.appearance_settings || {};
   userAppearanceResetPending = false;
 
@@ -1264,14 +1350,24 @@ async function editUser(userId) {
   if (roleField) roleField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
   if (statusField) statusField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
   if (currentPwField) currentPwField.style.display = editingUserIsSelf ? "" : "none";
+  updateUserPreferencesEditorVisibility();
+  if (editingUserIsSelf) setUserDisplayTimezoneEditorValue(current.display_timezone || "auto");
   updateUserAppearanceEditorVisibility();
   populateUserAppearanceEditor(editingUserOriginalAppearance);
   const memberFields = $("edit-user-member-level-fields");
   if (memberFields) memberFields.style.display = editingUserIsSelf || currentUser !== "root" ? "none" : "";
+  const governanceDispositionFields = $("edit-user-governance-disposition-fields");
+  if (governanceDispositionFields) {
+    governanceDispositionFields.style.display = editingUserIsSelf || !["manager", "super_admin"].includes(currentRole) ? "none" : "";
+  }
   setUserEditField("edit-user-base-level", current.base_level);
   setUserEditField("edit-user-sanction-status", current.sanction_status);
   setUserEditField("edit-user-sanction-until", current.sanction_until ? current.sanction_until.slice(0, 16) : "");
   setUserEditField("edit-user-level-reason", "");
+  setUserEditField("edit-user-restriction-features", "");
+  setUserEditField("edit-user-fine-amount", "");
+  setUserEditField("edit-user-fine-due-hours", "72");
+  setUserEditField("edit-user-governance-disposition-reason", "");
   const cancelBtn = $("user-edit-cancel");
   if (cancelBtn) cancelBtn.style.display = forcedPasswordChangeMode ? "none" : "";
   setUserEditField("edit-user-current-pw", "");
@@ -1356,13 +1452,23 @@ async function submitEditUser() {
   const sanctionStatus = $("edit-user-sanction-status")?.value || "none";
   const sanctionUntil = $("edit-user-sanction-until")?.value || "";
   const levelReason = $("edit-user-level-reason")?.value.trim() || "";
+  const restrictionFeaturesRaw = $("edit-user-restriction-features")?.value.trim() || "";
+  const fineAmountRaw = $("edit-user-fine-amount")?.value || "";
+  const fineDueHoursRaw = $("edit-user-fine-due-hours")?.value || "";
+  const governanceDispositionReason = $("edit-user-governance-disposition-reason")?.value.trim() || "";
   const currentPassword = $("edit-user-current-pw")?.value || "";
   const nextPasswordValue = $("edit-user-pw")?.value || "";
   const passwordConfirm = $("edit-user-pw-confirm")?.value || "";
   const avatarFile = selectedUserAvatarFile();
+  const displayTimezone = selectedUserDisplayTimezone();
   const appearanceChanged = editingUserIsSelf && (
     userAppearanceResetPending ||
     userAppearanceSignature(collectUserAppearanceSettingsFromEditor()) !== userAppearanceSignature(editingUserOriginalAppearance)
+  );
+  const timezoneChanged = editingUserIsSelf && displayTimezone !== (
+    typeof normalizeUserDisplayTimezone === "function"
+      ? normalizeUserDisplayTimezone(editingUserOriginal.display_timezone || "auto")
+      : (editingUserOriginal.display_timezone || "auto")
   );
 
   if (nickname !== editingUserOriginal.nickname) payload.nickname = nickname;
@@ -1379,6 +1485,21 @@ async function submitEditUser() {
     if (sanctionUntil !== normalizedOriginalUntil) payload.sanction_until = sanctionUntil ? new Date(sanctionUntil).toISOString() : "";
     if (payload.base_level || payload.sanction_status || Object.prototype.hasOwnProperty.call(payload, "sanction_until")) {
       payload.level_update_reason = levelReason || "root manual member level update";
+    }
+  }
+  if (!editingUserIsSelf && ["manager", "super_admin"].includes(currentRole)) {
+    const restrictionFeatures = restrictionFeaturesRaw
+      ? restrictionFeaturesRaw.split(",").map((item) => item.trim()).filter(Boolean)
+      : [];
+    const fineAmount = parseInt(fineAmountRaw, 10) || 0;
+    const fineDueHours = parseInt(fineDueHoursRaw, 10) || 72;
+    if (restrictionFeatures.length) payload.restriction_features = restrictionFeatures;
+    if (fineAmount > 0) {
+      payload.fine_amount_points = fineAmount;
+      payload.fine_due_hours = fineDueHours;
+    }
+    if ((restrictionFeatures.length || fineAmount > 0) && governanceDispositionReason) {
+      payload.governance_disposition_reason = governanceDispositionReason;
     }
   }
 
@@ -1406,7 +1527,7 @@ async function submitEditUser() {
     return;
   }
 
-  if (!Object.keys(payload).length && !avatarFile && !appearanceChanged) {
+  if (!Object.keys(payload).length && !avatarFile && !appearanceChanged && !timezoneChanged) {
     setUserEditMsg("未變更任何欄位", false);
     return;
   }
@@ -1438,6 +1559,14 @@ async function submitEditUser() {
     const appearanceJson = await saveUserAppearanceSettings();
     if (!appearanceJson.ok) {
       setUserEditMsg(appearanceJson.msg || "個人外觀儲存失敗", false);
+      return;
+    }
+  }
+
+  if (timezoneChanged) {
+    const timezoneJson = await saveUserDisplayTimezoneSetting(displayTimezone);
+    if (!timezoneJson.ok) {
+      setUserEditMsg(timezoneJson.msg || "顯示時區儲存失敗", false);
       return;
     }
   }

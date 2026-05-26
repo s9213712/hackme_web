@@ -19,12 +19,13 @@ def _role_rank(role):
     return {"user": 1, "manager": 2, "super_admin": 3}.get(role or "user", 1)
 
 
-def _build_app(db_path, actor_box):
+def _build_app(db_path, actor_box, *, connection_factory=None):
     app = Flask(__name__)
     app.testing = True
 
     def get_db():
-        conn = sqlite3.connect(db_path)
+        kwargs = {"factory": connection_factory} if connection_factory is not None else {}
+        conn = sqlite3.connect(db_path, **kwargs)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
@@ -105,6 +106,47 @@ def _seed_db(path):
     conn.close()
 
 
+def _seed_admin_creation_db(path):
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            role TEXT NOT NULL DEFAULT 'user',
+            status TEXT NOT NULL DEFAULT 'active',
+            member_level TEXT NOT NULL DEFAULT 'normal',
+            base_level TEXT NOT NULL DEFAULT 'normal',
+            effective_level TEXT NOT NULL DEFAULT 'normal',
+            avatar_file_id TEXT,
+            password_strength_score INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00',
+            updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE user_passwords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("INSERT INTO users (username, role, status) VALUES ('root', 'super_admin', 'active')")
+    conn.commit()
+    conn.close()
+
+
 def _accept_friendship(path, user_id, friend_user_id, requested_by=None):
     a, b = sorted([int(user_id), int(friend_user_id)])
     conn = sqlite3.connect(path)
@@ -124,6 +166,32 @@ def _accept_friendship(path, user_id, friend_user_id, requested_by=None):
         conn.close()
 
 
+def _assert_public_friend_target(target):
+    assert {
+        "id",
+        "username",
+        "role",
+        "role_label",
+        "is_official",
+        "member_level",
+        "avatar_file_id",
+        "display_name",
+    } >= set(target.keys())
+    for private_key in (
+        "status",
+        "created_at",
+        "updated_at",
+        "nickname",
+        "real_name",
+        "id_number",
+        "phone",
+        "password_strength_score",
+        "failed_login_count",
+        "locked_until",
+    ):
+        assert private_key not in target
+
+
 def test_profile_api_returns_random_friend_code_only_to_owner(tmp_path):
     db_path = tmp_path / "profile.db"
     _seed_db(db_path)
@@ -132,7 +200,14 @@ def test_profile_api_returns_random_friend_code_only_to_owner(tmp_path):
 
     own = client.get("/api/users/me/profile")
     code = own.get_json()["profile"]["friend_code"]
-    updated = client.put("/api/users/me/profile", json={"display_name": "Alice A.", "bio": "hello"})
+    updated = client.put("/api/users/me/profile", json={
+        "display_name": "Alice A.",
+        "bio": "hello",
+        "display_timezone": "Asia/Taipei",
+        "profile_template": "creator",
+        "profile_accent": "ocean",
+        "profile_density": "compact",
+    })
 
     actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
     public = client.get("/api/users/3/profile")
@@ -142,7 +217,28 @@ def test_profile_api_returns_random_friend_code_only_to_owner(tmp_path):
     assert len(code) >= 8
     assert updated.status_code == 200
     assert updated.get_json()["profile"]["display_name"] == "Alice A."
+    assert updated.get_json()["profile"]["display_timezone"] == "Asia/Taipei"
+    assert updated.get_json()["profile"]["profile_template"] == "creator"
+    assert updated.get_json()["profile"]["profile_accent"] == "ocean"
+    assert updated.get_json()["profile"]["profile_density"] == "compact"
+    assert public.get_json()["profile"]["profile_template"] == "creator"
     assert "friend_code" not in public.get_json()["profile"]
+    assert "display_timezone" not in public.get_json()["profile"]
+
+
+def test_profile_timezone_rejects_invalid_iana_name(tmp_path):
+    db_path = tmp_path / "profile-timezone.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    bad = client.put("/api/users/me/profile", json={"display_timezone": "Mars/Base"})
+    good = client.put("/api/users/me/profile", json={"display_timezone": "auto"})
+
+    assert bad.status_code == 400
+    assert "顯示時區" in bad.get_json()["msg"]
+    assert good.status_code == 200
+    assert good.get_json()["profile"]["display_timezone"] == "auto"
 
 
 def test_profile_and_target_options_accept_sqlite_row_actor(tmp_path):
@@ -184,12 +280,36 @@ def test_friend_request_accept_and_friend_code_direct_add(tmp_path):
     added_by_code = client.post("/api/friends/add-by-code", json={"friend_code": alice_code})
 
     assert requested.status_code == 200
+    _assert_public_friend_target(requested.get_json()["request"]["target"])
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        request_note = conn.execute(
+            "SELECT user_id, type, title, body, is_read FROM notifications WHERE user_id=4 AND type='friend_request'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert request_note is not None
+    assert request_note["is_read"] == 0
+    assert "alice" in request_note["body"]
     assert accepted.status_code == 200
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        accepted_note = conn.execute(
+            "SELECT user_id, type, title, body, is_read FROM notifications WHERE user_id=3 AND type='friend_request_accepted'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert accepted_note is not None
+    assert accepted_note["is_read"] == 0
+    assert "bob" in accepted_note["body"]
     assert friends.status_code == 200
     assert friends.get_json()["friends"][0]["other_username"] == "alice"
     assert removed.status_code == 200
     assert added_by_code.status_code == 200
     assert added_by_code.get_json()["request"]["status"] == "accepted"
+    _assert_public_friend_target(added_by_code.get_json()["request"]["target"])
 
 
 def test_profile_follow_counts_and_follow_unfollow_api(tmp_path):
@@ -208,12 +328,27 @@ def test_profile_follow_counts_and_follow_unfollow_api(tmp_path):
     bob_after = client.get("/api/users/4/profile")
 
     assert follow.status_code == 200
+    _assert_public_friend_target(follow.get_json()["follow"]["target"])
     assert bob_profile.get_json()["profile"]["follow_status"] == "following"
     assert bob_profile.get_json()["profile"]["follower_count"] == 1
     assert own_profile.get_json()["profile"]["follower_count"] == 1
     assert unfollow.status_code == 200
     assert bob_after.get_json()["profile"]["follow_status"] == "not_following"
     assert bob_after.get_json()["profile"]["follower_count"] == 0
+
+
+def test_block_user_response_uses_public_target_payload(tmp_path):
+    db_path = tmp_path / "profile-block.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    blocked = client.post("/api/friends/4/block")
+
+    assert blocked.status_code == 200
+    payload = blocked.get_json()
+    assert payload["block"]["status"] == "blocked"
+    _assert_public_friend_target(payload["block"]["target"])
 
 
 def test_target_options_are_friends_only_for_personal_context_and_all_users_for_official_context(tmp_path):
@@ -244,3 +379,48 @@ def test_target_options_are_friends_only_for_personal_context_and_all_users_for_
     assert {row["username"] for row in official_users} >= {"alice", "bob", "manager"}
     assert official_users[0]["username"] in {"alice", "bob"}
     assert official_users[0]["is_friend"] is True
+
+
+def test_admin_create_user_duplicate_race_returns_conflict(tmp_path):
+    db_path = tmp_path / "admin-create-race.db"
+    _seed_admin_creation_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+
+    class RaceConnection(sqlite3.Connection):
+        injected = False
+
+        def execute(self, sql, parameters=(), /):
+            if (
+                not RaceConnection.injected
+                and str(sql).lstrip().upper().startswith("INSERT INTO USERS")
+                and parameters
+                and parameters[0] == "raceuser"
+            ):
+                RaceConnection.injected = True
+                other = sqlite3.connect(db_path)
+                try:
+                    other.execute(
+                        "INSERT INTO users (username, role, status, member_level, base_level, effective_level) "
+                        "VALUES ('raceuser', 'user', 'active', 'normal', 'normal', 'normal')"
+                    )
+                    other.commit()
+                finally:
+                    other.close()
+            return super().execute(sql, parameters)
+
+    client = _build_app(str(db_path), actor_box, connection_factory=RaceConnection).test_client()
+    response = client.post(
+        "/api/admin/users",
+        json={
+            "username": "raceuser",
+            "password": "pw",
+            "password_confirm": "pw",
+            "nickname": "Race",
+            "role": "user",
+            "status": "active",
+            "member_level": "normal",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["msg"] == "帳號已存在"

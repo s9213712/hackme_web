@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from services.users.profiles import ensure_user_profile_schema, get_or_create_profile
+from services.system.notifications import create_notification, notifications_enabled
+
+from services.users.profiles import ensure_user_profile_schema, get_or_create_profile, profile_style_for_payload
 
 
 FRIEND_STATUSES = {"pending", "accepted", "rejected", "blocked"}
@@ -44,6 +46,57 @@ def _value(record, key, default=None):
     except Exception:
         return default
     return default if value is None else value
+
+
+def _username(record):
+    return str(_value(record, "username", "") or "").strip()
+
+
+def _create_friend_notification(conn, *, user_id, note_type, title, body, request_id=None):
+    if not notifications_enabled(default=True):
+        return False
+    try:
+        return create_notification(
+            conn,
+            user_id=int(user_id),
+            type=note_type,
+            title=title,
+            body=body,
+            link="#profile:friends",
+            severity="info",
+            audience="user",
+            source_module="friends",
+            source_ref=str(request_id or "") or None,
+        )
+    except Exception:
+        return False
+
+
+def _notify_friend_request_created(conn, *, actor, target, request_id):
+    actor_name = _username(actor) or "有使用者"
+    return _create_friend_notification(
+        conn,
+        user_id=int(target["id"]),
+        note_type="friend_request",
+        title="新的好友申請",
+        body=f"{actor_name} 想加你為好友，請到個人面板的好友頁處理。",
+        request_id=request_id,
+    )
+
+
+def _notify_friend_request_reviewed(conn, *, actor, row, accepted):
+    requester_id = int(row["requested_by"] or 0)
+    if requester_id <= 0 or requester_id == int(actor["id"]):
+        return False
+    actor_name = _username(actor) or "對方"
+    return _create_friend_notification(
+        conn,
+        user_id=requester_id,
+        note_type="friend_request_accepted" if accepted else "friend_request_rejected",
+        title="好友申請已接受" if accepted else "好友申請已拒絕",
+        body=f"{actor_name} 已接受你的好友申請。" if accepted else f"{actor_name} 已拒絕你的好友申請。",
+        request_id=row["id"],
+    )
 
 
 def _table_columns(conn, table):
@@ -138,6 +191,14 @@ def _user_payload(row, profile=None):
         "avatar_file_id": user.get("avatar_file_id") or "",
         "display_name": profile.get("display_name") or username,
     }
+
+
+def _public_target_payload(conn, target):
+    target = _dict(target)
+    if not target:
+        return {}
+    profile = get_or_create_profile(conn, target["id"])
+    return _user_payload(target, profile)
 
 
 def find_active_user(conn, *, user_id=None, username=None):
@@ -417,6 +478,8 @@ def get_profile_payload(conn, *, target_user_id, viewer=None):
     privileged = is_privileged_actor(viewer)
     visibility = profile.get("profile_visibility") or "public"
     show_private = owner or privileged or visibility == "public" or (visibility == "members" and viewer_id)
+    if visibility == "friends":
+        show_private = owner or privileged or relation["status"] == "accepted"
     public_fields = {
         "bio": profile.get("bio") or "",
         "signature": profile.get("signature") or "",
@@ -433,6 +496,10 @@ def get_profile_payload(conn, *, target_user_id, viewer=None):
         **_user_payload(target, profile),
         **public_fields,
         "profile_visibility": visibility,
+        "profile_template": profile.get("profile_template") or "classic",
+        "profile_accent": profile.get("profile_accent") or "default",
+        "profile_density": profile.get("profile_density") or "comfortable",
+        "profile_style": profile_style_for_payload(profile),
         "friend_status": relation["status"],
         "friend_request_id": relation.get("request_id"),
         "friend_count": friend_count(conn, target["id"]),
@@ -451,6 +518,7 @@ def get_profile_payload(conn, *, target_user_id, viewer=None):
     if owner:
         payload["friend_code"] = profile.get("friend_code") or ""
         payload["friend_code_rotated_at"] = profile.get("friend_code_rotated_at") or ""
+        payload["display_timezone"] = profile.get("display_timezone") or "auto"
     return payload
 
 
@@ -542,11 +610,12 @@ def create_friend_request(conn, actor, *, target_user_id=None, username=None):
         return None, "不能加自己為好友", 400
     user_a, user_b = normalized_pair(actor["id"], target["id"])
     existing = get_friend_row(conn, actor["id"], target["id"])
+    public_target = _public_target_payload(conn, target)
     now = _now()
     if existing:
         status = existing["status"]
         if status == "accepted":
-            return {"status": "accepted", "target": target}, "已經是好友", 200
+            return {"status": "accepted", "target": public_target}, "已經是好友", 200
         if status == "blocked":
             return None, "無法送出好友申請", 403
         if status == "pending":
@@ -555,18 +624,21 @@ def create_friend_request(conn, actor, *, target_user_id=None, username=None):
                     "UPDATE user_friends SET status='accepted', updated_at=? WHERE id=?",
                     (now, existing["id"]),
                 )
-                return {"status": "accepted", "target": target, "request_id": existing["id"]}, "已加入好友", 200
-            return {"status": "pending", "target": target, "request_id": existing["id"]}, "好友邀請已存在", 200
+                _notify_friend_request_reviewed(conn, actor=actor, row=existing, accepted=True)
+                return {"status": "accepted", "target": public_target, "request_id": existing["id"]}, "已加入好友", 200
+            return {"status": "pending", "target": public_target, "request_id": existing["id"]}, "好友邀請已存在", 200
         conn.execute(
             "UPDATE user_friends SET status='pending', requested_by=?, updated_at=? WHERE id=?",
             (actor["id"], now, existing["id"]),
         )
-        return {"status": "pending", "target": target, "request_id": existing["id"]}, "好友邀請已送出", 200
+        _notify_friend_request_created(conn, actor=actor, target=target, request_id=existing["id"])
+        return {"status": "pending", "target": public_target, "request_id": existing["id"]}, "好友邀請已送出", 200
     cur = conn.execute(
         "INSERT INTO user_friends (user_id, friend_user_id, status, requested_by, created_at, updated_at) VALUES (?, ?, 'pending', ?, ?, ?)",
         (user_a, user_b, actor["id"], now, now),
     )
-    return {"status": "pending", "target": target, "request_id": cur.lastrowid}, "好友邀請已送出", 200
+    _notify_friend_request_created(conn, actor=actor, target=target, request_id=cur.lastrowid)
+    return {"status": "pending", "target": public_target, "request_id": cur.lastrowid}, "好友邀請已送出", 200
 
 
 def accept_friend_by_code(conn, actor, *, friend_code):
@@ -590,22 +662,25 @@ def accept_friend_by_code(conn, actor, *, friend_code):
         return None, "不能加自己為好友", 400
     user_a, user_b = normalized_pair(actor["id"], target["id"])
     existing = get_friend_row(conn, actor["id"], target["id"])
+    public_target = _public_target_payload(conn, target)
     now = _now()
     if existing:
         if existing["status"] == "accepted":
-            return {"status": "accepted", "target": target, "request_id": existing["id"]}, "已經是好友", 200
+            return {"status": "accepted", "target": public_target, "request_id": existing["id"]}, "已經是好友", 200
         if existing["status"] == "blocked":
             return None, "無法建立好友關係", 403
         conn.execute(
             "UPDATE user_friends SET status='accepted', requested_by=?, updated_at=? WHERE id=?",
             (actor["id"], now, existing["id"]),
         )
-        return {"status": "accepted", "target": target, "request_id": existing["id"]}, "已加入好友", 200
+        if int(existing["requested_by"] or 0) != int(actor["id"]):
+            _notify_friend_request_reviewed(conn, actor=actor, row=existing, accepted=True)
+        return {"status": "accepted", "target": public_target, "request_id": existing["id"]}, "已加入好友", 200
     cur = conn.execute(
         "INSERT INTO user_friends (user_id, friend_user_id, status, requested_by, created_at, updated_at) VALUES (?, ?, 'accepted', ?, ?, ?)",
         (user_a, user_b, actor["id"], now, now),
     )
-    return {"status": "accepted", "target": target, "request_id": cur.lastrowid}, "已加入好友", 200
+    return {"status": "accepted", "target": public_target, "request_id": cur.lastrowid}, "已加入好友", 200
 
 
 def review_friend_request(conn, actor, *, request_id, decision):
@@ -624,6 +699,7 @@ def review_friend_request(conn, actor, *, request_id, decision):
         "UPDATE user_friends SET status=?, updated_at=? WHERE id=?",
         (status, _now(), int(request_id)),
     )
+    _notify_friend_request_reviewed(conn, actor=actor, row=row, accepted=(decision == "accept"))
     return {"status": status, "request_id": int(request_id)}, "已加入好友" if decision == "accept" else "已拒絕好友邀請", 200
 
 
@@ -651,11 +727,12 @@ def block_user(conn, actor, *, target_user_id):
         return None, "不能封鎖自己", 400
     user_a, user_b = normalized_pair(actor["id"], target["id"])
     existing = get_friend_row(conn, actor["id"], target["id"])
+    public_target = _public_target_payload(conn, target)
     now = _now()
     if existing:
         if existing["status"] == "blocked":
             if int(existing.get("requested_by") or 0) == int(actor["id"]):
-                return {"status": "blocked", "target": target, "request_id": existing["id"]}, "已封鎖使用者", 200
+                return {"status": "blocked", "target": public_target, "request_id": existing["id"]}, "已封鎖使用者", 200
             return None, "對方已封鎖你，無法變更封鎖狀態", 403
         conn.execute(
             "UPDATE user_friends SET status='blocked', requested_by=?, updated_at=? WHERE id=?",
@@ -676,7 +753,7 @@ def block_user(conn, actor, *, target_user_id):
         """,
         (int(actor["id"]), int(target["id"]), int(target["id"]), int(actor["id"])),
     )
-    return {"status": "blocked", "target": target, "request_id": request_id}, "已封鎖使用者", 200
+    return {"status": "blocked", "target": public_target, "request_id": request_id}, "已封鎖使用者", 200
 
 
 def unblock_user(conn, actor, *, target_user_id):
@@ -708,6 +785,7 @@ def follow_user(conn, actor, *, target_user_id):
         return None, "不能追蹤自己", 400
     if is_blocked_relationship(conn, actor["id"], target["id"]):
         return None, "你與對方目前有封鎖關係，不能追蹤", 403
+    public_target = _public_target_payload(conn, target)
     now = _now()
     conn.execute(
         """
@@ -716,7 +794,7 @@ def follow_user(conn, actor, *, target_user_id):
         """,
         (int(actor["id"]), int(target["id"]), now),
     )
-    return {"status": "following", "target": target}, "已追蹤", 200
+    return {"status": "following", "target": public_target}, "已追蹤", 200
 
 
 def unfollow_user(conn, actor, *, target_user_id):

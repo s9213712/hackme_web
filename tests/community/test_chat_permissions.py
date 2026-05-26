@@ -24,7 +24,7 @@ def _parse_positive_int(value, default=None, min_value=None, max_value=None):
     return parsed
 
 
-def _build_app(db_path, actor_box, rate_limit=None):
+def _build_app(db_path, actor_box, rate_limit=None, audit_events=None, get_db_override=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -39,12 +39,16 @@ def _build_app(db_path, actor_box, rate_limit=None):
     def passthrough(fn):
         return fn
 
+    def record_audit(*args, **kwargs):
+        if audit_events is not None:
+            audit_events.append({"args": args, "kwargs": kwargs})
+
     register_chat_routes(app, {
         "CHAT_MESSAGE_MAX_LEN": 500,
         "OFFICIAL_CHAT_ROOM_NAME": "大廳",
         "add_violation": lambda *args, **kwargs: ("warn", "noop", 0),
         "append_chat_record": lambda *args, **kwargs: True,
-        "audit": lambda *args, **kwargs: None,
+        "audit": record_audit,
         "check_user_rate_limit": rate_limit or (lambda *args, **kwargs: (False, {"limit": 20})),
         "db_get_user_from_token": lambda *args, **kwargs: None,
         "db_get_user_role": lambda *args, **kwargs: "user",
@@ -53,7 +57,7 @@ def _build_app(db_path, actor_box, rate_limit=None):
         "ensure_user_official_room_membership": lambda *args, **kwargs: None,
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: actor_box["actor"],
-        "get_db": get_db,
+        "get_db": get_db_override or get_db,
         "get_request_csrf_token": lambda: "csrf",
         "json_resp": json_resp,
         "normalize_text": lambda value: value.strip() if isinstance(value, str) else "",
@@ -282,6 +286,122 @@ def test_group_chat_create_invite_password_join_and_export(tmp_path):
     assert payload["messages"][0]["content"] == "hello group"
 
 
+def test_official_chat_message_does_not_fan_out_notifications(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box).test_client()
+
+    sent = client.post("/api/chat/rooms/1/messages", json={"content": "hello lobby"})
+
+    assert sent.status_code == 200
+    conn = sqlite3.connect(db_path)
+    try:
+        has_notifications = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='notifications'"
+        ).fetchone()
+        if has_notifications:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM notifications WHERE type='chat_group_message'"
+            ).fetchone()[0]
+            assert count == 0
+    finally:
+        conn.close()
+
+
+def test_chat_room_create_failure_returns_error_code(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("DROP TABLE chat_rooms")
+        conn.commit()
+    finally:
+        conn.close()
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box).test_client()
+
+    created = client.post("/api/chat/rooms", json={"name": "broken room"})
+
+    assert created.status_code == 500
+    payload = created.get_json()
+    assert payload["ok"] is False
+    assert payload["error"] == "chat_room_create_failed"
+    assert "建立聊天室失敗" in payload["msg"]
+
+
+def test_chat_room_create_retries_transient_sqlite_lock(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    state = {"raised": False}
+
+    class LockOnceConnection:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, parameters=()):
+            if "INSERT INTO chat_rooms" in str(sql) and not state["raised"]:
+                state["raised"] = True
+                raise sqlite3.OperationalError("database is locked")
+            return self._conn.execute(sql, parameters)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return LockOnceConnection(conn)
+
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box, get_db_override=get_db).test_client()
+
+    created = client.post("/api/chat/rooms", json={"name": "retry room"})
+
+    assert created.status_code == 200
+    assert created.get_json()["ok"] is True
+    assert state["raised"] is True
+    conn = sqlite3.connect(db_path)
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM chat_rooms WHERE name='retry room'").fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 1
+
+
+def test_chat_room_create_persistent_sqlite_lock_returns_server_busy(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+
+    class AlwaysLockedConnection:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, parameters=()):
+            if str(sql).strip().lower().startswith("begin immediate"):
+                raise sqlite3.OperationalError("database is locked")
+            return self._conn.execute(sql, parameters)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return AlwaysLockedConnection(conn)
+
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box, get_db_override=get_db).test_client()
+
+    created = client.post("/api/chat/rooms", json={"name": "busy room"})
+
+    assert created.status_code == 503
+    payload = created.get_json()
+    assert payload["ok"] is False
+    assert payload["error"] == "server_busy"
+    assert payload["code"] == "server_busy"
+
+
 def test_chat_message_strips_html_before_storage(tmp_path):
     db_path = tmp_path / "chat.db"
     _seed_chat_db(db_path)
@@ -302,6 +422,25 @@ def test_chat_message_strips_html_before_storage(tmp_path):
     assert "<script" not in content.lower()
     assert "<img" not in content.lower()
     assert "hello" in content
+
+
+def test_chat_message_accepts_shared_video_link_with_fragment(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box).test_client()
+    share_url = "https://example.test/shared/videos/abc_DEF-123#vk=share-key_456"
+
+    sent = client.post(
+        "/api/chat/rooms/1/messages",
+        json={"content": f"這支可以看：{share_url}"},
+    )
+    messages = client.get("/api/chat/rooms/1/messages")
+
+    assert sent.status_code == 200
+    assert sent.get_json()["ok"] is True
+    rendered = [m for m in messages.get_json()["messages"] if m["id"] == sent.get_json()["message_id"]][0]
+    assert rendered["content"] == f"這支可以看：{share_url}"
 
 
 def test_chat_room_password_join_is_rate_limited(tmp_path):
@@ -888,6 +1027,23 @@ def test_friend_request_accept_and_remove(tmp_path):
     assert accepted.status_code == 200
     assert friends.get_json()["friends"][0]["other_username"] == "alice"
     assert removed.status_code == 200
+
+
+def test_successful_chat_actions_are_marked_successful_in_audit(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user"}}
+    audit_events = []
+    client = _build_app(str(db_path), actor_box, audit_events=audit_events).test_client()
+
+    room_created = client.post("/api/chat/rooms", json={"name": "qa audit room"})
+    friend_created = client.post("/api/chat/friends/requests", json={"username": "bob"})
+
+    assert room_created.status_code == 200
+    assert friend_created.status_code == 200
+    by_action = {event["args"][0]: event for event in audit_events}
+    assert by_action["CHAT_ROOM_CREATED"]["kwargs"]["success"] is True
+    assert by_action["CHAT_FRIEND_REQUESTED"]["kwargs"]["success"] is True
 
 
 def test_audit_safe_escapes_log_injection_chars():

@@ -202,7 +202,7 @@ function renderUsers() {
     if (u.is_friend) relationBadges.push('<span class="profile-official-badge">好友</span>');
     if (u.is_official) relationBadges.push('<span class="profile-official-badge">官方/管理者</span>');
     if (relationBadges.length) usernameCell.insertAdjacentHTML("beforeend", `<div class="user-target-badges">${relationBadges.join("")}</div>`);
-    if ((currentRole === "manager" || currentRole === "super_admin") && u.official_hot_wallet_address) {
+    if ((currentRole === "manager" || currentRole === "super_admin") && u.username !== "root" && u.official_hot_wallet_address) {
       const walletLine = document.createElement("div");
       walletLine.className = "user-official-hot-wallet-line";
       walletLine.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
@@ -210,7 +210,15 @@ function renderUsers() {
       walletLine.style.color = "var(--muted)";
       walletLine.style.marginTop = ".2rem";
       walletLine.style.wordBreak = "break-all";
-      walletLine.textContent = `官方熱錢包：${u.official_hot_wallet_address}`;
+      const hotBalance = Number(u.official_hot_wallet_balance || 0);
+      const hotFrozen = Number(u.official_hot_wallet_frozen || 0);
+      const hotPending = Number(u.official_hot_wallet_pending_outgoing || 0);
+      const hotDeposit = String(u.official_hot_wallet_deposit_address || "").trim();
+      const hotParts = [`站內託管錢包：${u.official_hot_wallet_address}`, `餘額 ${hotBalance} 點`];
+      if (hotFrozen) hotParts.push(`凍結 ${hotFrozen} 點`);
+      if (hotPending) hotParts.push(`待出金 ${hotPending} 點`);
+      if (hotDeposit) hotParts.push(`橋接 pc1：${hotDeposit}`);
+      walletLine.textContent = hotParts.join(" · ");
       usernameCell.appendChild(walletLine);
     }
     tr.appendChild(usernameCell);

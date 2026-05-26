@@ -1,6 +1,7 @@
 import json
 import re
 import sqlite3
+import uuid
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import request, send_file
@@ -8,6 +9,12 @@ from flask import request, send_file
 from services.users.member_levels import apply_member_level_change, ensure_member_level_user_columns
 from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema, resolve_file_storage_path, store_cloud_upload
 from services.governance.sanction_notices import record_admin_sanction_notice
+from services.governance.violation_fines import (
+    FEATURE_LABELS,
+    create_user_feature_restriction,
+    create_violation_fine,
+    ensure_violation_fine_schema,
+)
 from services.users.recovery import (
     ensure_account_recovery_schema,
     get_password_reset_review_request,
@@ -31,9 +38,11 @@ from services.users.friends import (
 from services.users.profiles import (
     ensure_user_profile_schema,
     get_profile_appearance,
+    get_profile_display_timezone,
     rotate_friend_code,
     update_profile,
 )
+from services.points_chain.wallet_identity import create_official_hot_wallet
 
 
 def register_user_routes(app, deps):
@@ -481,6 +490,63 @@ def register_user_routes(app, deps):
     def _row_snapshot(row):
         return {key: row[key] for key in row.keys()} if row else {}
 
+    def _governance_feature_list_from_payload(data, *field_names):
+        raw = None
+        found = False
+        for name in field_names:
+            if name in data:
+                raw = data.get(name)
+                found = True
+                break
+        if not found or raw in (None, ""):
+            return [], []
+        if isinstance(raw, str):
+            items = [item.strip() for item in raw.split(",")]
+        elif isinstance(raw, (list, tuple, set)):
+            items = list(raw)
+        else:
+            return [], ["restriction_features"]
+        features = []
+        invalid = []
+        for item in items:
+            key = str(item or "").strip().lower().replace("-", "_")
+            if not key:
+                continue
+            if key not in FEATURE_LABELS:
+                invalid.append(str(item)[:60])
+                continue
+            if key not in features:
+                features.append(key)
+        return features, invalid
+
+    def _optional_positive_points(data, *field_names, max_value=100000):
+        for name in field_names:
+            if name not in data:
+                continue
+            raw = data.get(name)
+            if raw in (None, ""):
+                return None, None
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                return None, f"{name} 格式錯誤"
+            if value <= 0 or value > max_value:
+                return None, f"{name} 需介於 1 到 {max_value}"
+            return value, None
+        return None, None
+
+    def _optional_positive_hours(data, field_name, default=72, max_value=24 * 30):
+        raw = data.get(field_name, default)
+        if raw in (None, ""):
+            return default, None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return default, f"{field_name} 格式錯誤"
+        if value <= 0 or value > max_value:
+            return default, f"{field_name} 需介於 1 到 {max_value}"
+        return value, None
+
     def _sanction_label(data, target):
         parts = []
         if "role" in data:
@@ -495,6 +561,13 @@ def register_user_routes(app, deps):
             next_level = normalize_text(data.get("base_level") or data.get("member_level"))
             if next_level:
                 parts.append(f"會員等級 {target['base_level'] or target['member_level'] or '-'} -> {next_level}")
+        features, _invalid = _governance_feature_list_from_payload(data, "restriction_features", "immediate_restriction_features")
+        if features:
+            labels = "、".join(FEATURE_LABELS.get(key, key) for key in features)
+            parts.append(f"限制功能：{labels}")
+        fine_amount, _fine_err = _optional_positive_points(data, "fine_amount_points", "fine_points", "violation_fine_points")
+        if fine_amount:
+            parts.append(f"罰款 {fine_amount} 點")
         return "；".join(parts) or "會員管理處分"
 
     def _is_punitive_member_update(data, target):
@@ -1062,12 +1135,32 @@ def register_user_routes(app, deps):
                     auth_conn.close()
                 friend_ids = accepted_friend_ids(conn, actor["id"])
                 official_hot_by_user = {}
+                deposit_address_by_user = {}
                 if points_service is not None:
                     try:
                         points_service.ensure_schema(conn)
-                        page_user_ids = [int(row["id"]) for row in rows]
-                        if page_user_ids:
-                            placeholders = ",".join("?" for _ in page_user_ids)
+                        member_wallet_user_ids = [
+                            int(row["id"]) for row in rows
+                            if str(row["username"] or "") != "root" and int(row["id"] or 0) > 0
+                        ]
+                        for row in rows:
+                            uid = int(row["id"])
+                            status = str(row["status"] or "active")
+                            if uid <= 0 or str(row["username"] or "") == "root" or status in {"deleted", "rejected"}:
+                                continue
+                            try:
+                                create_official_hot_wallet(conn, user_id=uid, chain_secret=getattr(points_service, "chain_secret", ""))
+                            except Exception:
+                                pass
+                            if hasattr(points_service, "ensure_user_deposit_address"):
+                                try:
+                                    deposit = points_service.ensure_user_deposit_address(conn, uid)
+                                    if deposit:
+                                        deposit_address_by_user[uid] = str(deposit.get("address") if isinstance(deposit, dict) else deposit["address"])
+                                except Exception:
+                                    pass
+                        if member_wallet_user_ids:
+                            placeholders = ",".join("?" for _ in member_wallet_user_ids)
                             wallet_rows = conn.execute(
                                 f"""
                                 SELECT user_id, address, status
@@ -1078,20 +1171,47 @@ def register_user_routes(app, deps):
                                   AND user_id IN ({placeholders})
                                 ORDER BY user_id ASC, is_primary DESC, id ASC
                                 """,
-                                tuple(page_user_ids),
+                                tuple(member_wallet_user_ids),
                             ).fetchall()
+                            if _table_exists(conn, "points_chain_deposit_addresses"):
+                                deposit_rows = conn.execute(
+                                    f"""
+                                    SELECT user_id, address
+                                    FROM points_chain_deposit_addresses
+                                    WHERE status='active'
+                                      AND user_id IN ({placeholders})
+                                    ORDER BY user_id ASC, id ASC
+                                    """,
+                                    tuple(member_wallet_user_ids),
+                                ).fetchall()
+                            else:
+                                deposit_rows = []
                         else:
                             wallet_rows = []
+                            deposit_rows = []
+                        for deposit_row in deposit_rows:
+                            uid = int(deposit_row["user_id"] or 0)
+                            if uid > 0 and uid not in deposit_address_by_user:
+                                deposit_address_by_user[uid] = str(deposit_row["address"] or "")
                         for wallet_row in wallet_rows:
                             uid = int(wallet_row["user_id"] or 0)
                             if uid <= 0:
                                 continue
+                            try:
+                                balance_state = points_service._wallet_identity_balances_for_user(conn, uid)
+                                balance = (balance_state.get("balances") or {}).get(str(wallet_row["address"] or "").strip().lower(), {})
+                            except Exception:
+                                balance = {}
                             official_hot_by_user.setdefault(uid, []).append({
                                 "address": wallet_row["address"],
                                 "status": wallet_row["status"],
+                                "points_balance": int(balance.get("balance") or 0),
+                                "points_frozen": int(balance.get("frozen") or 0),
+                                "pending_outgoing_points": int(balance.get("pending_outgoing") or 0),
                             })
-                    except sqlite3.Error:
+                    except Exception:
                         official_hot_by_user = {}
+                        deposit_address_by_user = {}
                 data = []
                 for r in rows:
                     item = user_public_payload(r, include_sensitive=False)
@@ -1100,6 +1220,10 @@ def register_user_routes(app, deps):
                     official_hot_wallets = official_hot_by_user.get(int(r["id"]), [])
                     item["official_hot_wallets"] = official_hot_wallets
                     item["official_hot_wallet_address"] = official_hot_wallets[0]["address"] if official_hot_wallets else ""
+                    item["official_hot_wallet_deposit_address"] = deposit_address_by_user.get(int(r["id"]), "")
+                    item["official_hot_wallet_balance"] = official_hot_wallets[0]["points_balance"] if official_hot_wallets else 0
+                    item["official_hot_wallet_frozen"] = official_hot_wallets[0]["points_frozen"] if official_hot_wallets else 0
+                    item["official_hot_wallet_pending_outgoing"] = official_hot_wallets[0]["pending_outgoing_points"] if official_hot_wallets else 0
                     session_info = sessions_by_user.get(int(r["id"]), {})
                     item["is_online"] = bool(session_info.get("is_online"))
                     item["online_status"] = "online" if item["is_online"] else "offline"
@@ -1227,6 +1351,11 @@ def register_user_routes(app, deps):
             audit("ADMIN_CREATE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"target={username}, role={role}")
             return json_resp({"ok":True,"msg":"帳號已建立"})
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()
+            if "users.username" in str(exc):
+                return json_resp({"ok":False,"msg":"帳號已存在"}), 409
+            raise
         finally:
             conn.close()
 
@@ -1261,6 +1390,7 @@ def register_user_routes(app, deps):
                 "user": user_public_payload(target, include_sensitive=include_sensitive)
             }
             if is_self:
+                payload["user"]["display_timezone"] = get_profile_display_timezone(conn, user_id)
                 payload["appearance_settings"] = get_profile_appearance(conn, user_id)
             return json_resp(payload)
         finally:
@@ -1559,8 +1689,55 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
             if not isinstance(data, dict):
                 return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
+            governance_restriction_features, invalid_governance_features = _governance_feature_list_from_payload(
+                data,
+                "restriction_features",
+                "immediate_restriction_features",
+            )
+            if invalid_governance_features:
+                return json_resp({"ok":False,"msg":"不支援的功能限制：" + "、".join(invalid_governance_features[:5])}), 400
+            governance_fine_amount, governance_fine_error = _optional_positive_points(
+                data,
+                "fine_amount_points",
+                "fine_points",
+                "violation_fine_points",
+            )
+            if governance_fine_error:
+                return json_resp({"ok":False,"msg":governance_fine_error}), 400
+            governance_fine_due_hours, governance_due_error = _optional_positive_hours(
+                data,
+                "fine_due_hours",
+                default=72,
+                max_value=24 * 30,
+            )
+            if governance_due_error:
+                return json_resp({"ok":False,"msg":governance_due_error}), 400
+            governance_disposition_requested = bool(governance_restriction_features or governance_fine_amount)
+            if governance_disposition_requested:
+                if not is_feature_enabled("feature_member_governance_enabled"):
+                    return json_resp({"ok":False,"msg":"會員治理功能目前已關閉"}), 503
+                if is_self:
+                    return json_resp({"ok":False,"msg":"不可對自己建立會員治理處分"}), 403
+                if target["username"] == "root":
+                    return json_resp({"ok":False,"msg":"不可對 root 建立會員治理處分"}), 403
+                if role_rank(actor_role) < role_rank("manager"):
+                    return json_resp({"ok":False,"msg":"只有管理者以上可建立會員治理處分"}), 403
+                if actor_role == "manager" and target["role"] != "user":
+                    return json_resp({"ok":False,"msg":"管理員只能對一般用戶建立會員治理處分"}), 403
             if request.method == "PUT" and not is_self and role_rank(actor_role) < role_rank("super_admin"):
-                allowed_manager_keys = {"member_level", "base_level", "level_update_reason", "reason"}
+                allowed_manager_keys = {
+                    "member_level",
+                    "base_level",
+                    "level_update_reason",
+                    "reason",
+                    "restriction_features",
+                    "immediate_restriction_features",
+                    "fine_amount_points",
+                    "fine_points",
+                    "violation_fine_points",
+                    "fine_due_hours",
+                    "governance_disposition_reason",
+                }
                 if set(data.keys()) - allowed_manager_keys:
                     return json_resp({"ok":False,"msg":"管理員只能調整一般用戶會員等級；角色、狀態與個資需 root"}), 403
 
@@ -1568,6 +1745,7 @@ def register_user_routes(app, deps):
             level_changed = False
             previous_target = _row_snapshot(target)
             governance_notice_needed = False
+            governance_action_results = []
             updates = []
             params = []
             if "nickname" in data:
@@ -1706,7 +1884,52 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"不允許變更帳號名稱"}), 400
 
             pw_payload = "password" in data and isinstance(data["password"], str) and data["password"]
-            if not updates and not pw_payload and not level_changed:
+            if governance_disposition_requested:
+                ensure_violation_fine_schema(conn)
+                source_ref = "member_governance:" + uuid.uuid4().hex
+                governance_reason = normalize_text(
+                    data.get("governance_disposition_reason")
+                    or data.get("level_update_reason")
+                    or data.get("reason")
+                    or "會員治理處分"
+                )[:500] or "會員治理處分"
+                for feature_key in governance_restriction_features:
+                    restriction = create_user_feature_restriction(
+                        conn,
+                        user_id=target["id"],
+                        feature_key=feature_key,
+                        source_type="member_governance",
+                        source_ref=source_ref,
+                        reason=governance_reason,
+                        created_by=actor["username"],
+                        metadata={
+                            "actor_role": actor_role,
+                            "target_role": target["role"],
+                            "source": "admin_user_update",
+                        },
+                    )
+                    governance_action_results.append({"type": "feature_restriction", "restriction": restriction})
+                if governance_fine_amount:
+                    fine, created = create_violation_fine(
+                        conn,
+                        user_id=target["id"],
+                        username=target["username"],
+                        amount_points=governance_fine_amount,
+                        reason=governance_reason,
+                        created_by=actor["username"],
+                        due_hours=governance_fine_due_hours,
+                        restriction_features=governance_restriction_features or None,
+                        policy_key="member_governance",
+                        metadata={
+                            "source": "admin_user_update",
+                            "source_ref": source_ref,
+                            "actor_role": actor_role,
+                        },
+                    )
+                    governance_action_results.append({"type": "violation_fine", "fine": fine, "created": created})
+                governance_notice_needed = True
+
+            if not updates and not pw_payload and not level_changed and not governance_action_results:
                 return json_resp({"ok":False,"msg":"未提供可更新欄位"}), 400
 
             if pw_payload and not updates:
@@ -1743,7 +1966,10 @@ def register_user_routes(app, deps):
                 delete_csrf_tokens_for_username(target["username"])
             audit("ADMIN_UPDATE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"target_id={user_id},self={is_self}")
-            return json_resp({"ok":True,"msg":"帳號已更新"})
+            payload = {"ok":True,"msg":"帳號已更新"}
+            if governance_action_results:
+                payload["governance_actions"] = governance_action_results
+            return json_resp(payload)
         finally:
             if conn is not None:
                 conn.close()

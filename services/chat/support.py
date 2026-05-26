@@ -142,6 +142,12 @@ def ensure_official_chat_room(conn):
 
 def ensure_user_official_room_membership(conn, user_id):
     room_id = ensure_official_chat_room(conn)
+    existing = conn.execute(
+        "SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=? LIMIT 1",
+        (room_id, user_id)
+    ).fetchone()
+    if existing:
+        return room_id
     conn.execute(
         "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at) VALUES (?, ?, ?)",
         (room_id, user_id, datetime.now().isoformat())

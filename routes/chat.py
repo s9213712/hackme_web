@@ -3,9 +3,12 @@ import json
 import re
 import secrets
 import sqlite3
+import time
+import threading
 from datetime import datetime, timedelta
-from flask import Response, request
+from flask import Response, current_app, request
 
+from services.core.sqlite_hardening import is_sqlite_lock_error
 from services.storage.cloud_drive import attach_existing_file, can_download_file, can_remove_context_attachment, ensure_cloud_drive_attachment_schema
 from services.system.notifications import create_notification, create_notification_if_enabled, ensure_notifications_schema
 from services.security.permissions import require_member_action
@@ -30,6 +33,10 @@ CHAT_STICKERS = {
     "sad": {"label": "難過", "glyph": "🥲"},
 }
 CHAT_HTML_TAG_RE = re.compile(r"<\s*/?\s*[A-Za-z][^>]*>")
+CHAT_WRITE_RETRY_ATTEMPTS = 3
+CHAT_WRITE_RETRY_BASE_SLEEP_SECONDS = 0.08
+_CHAT_SCHEMA_LOCK = threading.Lock()
+_CHAT_SCHEMA_READY_PATHS = set()
 
 
 def actor_value(actor, key, default=None):
@@ -103,97 +110,124 @@ def _table_columns(conn, table):
         return set()
 
 
+def _connection_path(conn):
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        return str(row["file"] if hasattr(row, "keys") else row[2])
+    except Exception:
+        return ""
+
+
+def _is_duplicate_column_error(exc):
+    return isinstance(exc, sqlite3.OperationalError) and "duplicate column name" in str(exc).lower()
+
+
+def _add_column_if_missing(conn, table, columns, name, ddl):
+    if name in columns:
+        return
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+    except sqlite3.OperationalError as exc:
+        if not _is_duplicate_column_error(exc):
+            raise
+    columns.add(name)
+
+
 def ensure_chat_feature_schema(conn):
-    room_cols = _table_columns(conn, "chat_rooms")
-    room_additions = (
-        ("join_password_hash", "TEXT"),
-        ("join_password_required", "INTEGER NOT NULL DEFAULT 0"),
-        ("allow_anonymous", "INTEGER NOT NULL DEFAULT 0"),
-    )
-    for name, ddl in room_additions:
-        if name not in room_cols:
-            conn.execute(f"ALTER TABLE chat_rooms ADD COLUMN {name} {ddl}")
-    member_cols = _table_columns(conn, "chat_room_members")
-    if "anonymous_enabled" not in member_cols:
-        conn.execute("ALTER TABLE chat_room_members ADD COLUMN anonymous_enabled INTEGER NOT NULL DEFAULT 0")
-    cols = _table_columns(conn, "chat_messages")
-    additions = (
-        ("message_type", "TEXT NOT NULL DEFAULT 'text'"),
-        ("sticker_key", "TEXT"),
-        ("is_revoked", "INTEGER NOT NULL DEFAULT 0"),
-        ("revoked_at", "TEXT"),
-        ("revoked_by", "INTEGER"),
-        ("edited_at", "TEXT"),
-        ("edited_by", "INTEGER"),
-        ("edit_count", "INTEGER NOT NULL DEFAULT 0"),
-        ("original_content", "TEXT"),
-    )
-    for name, ddl in additions:
-        if name not in cols:
-            conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {name} {ddl}")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS chat_message_reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            message_id INTEGER NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
-            room_id INTEGER NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
-            reporter_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            reported_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            reason TEXT NOT NULL,
-            content_snapshot TEXT,
-            message_created_at TEXT,
-            message_edited_at TEXT,
-            status TEXT NOT NULL DEFAULT 'pending',
-            reviewed_by TEXT,
-            reviewed_at TEXT,
-            review_note TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(message_id, reporter_user_id)
+    db_path = _connection_path(conn)
+    if db_path and db_path in _CHAT_SCHEMA_READY_PATHS:
+        return
+    with _CHAT_SCHEMA_LOCK:
+        if db_path and db_path in _CHAT_SCHEMA_READY_PATHS:
+            return
+        room_cols = _table_columns(conn, "chat_rooms")
+        room_additions = (
+            ("join_password_hash", "TEXT"),
+            ("join_password_required", "INTEGER NOT NULL DEFAULT 0"),
+            ("allow_anonymous", "INTEGER NOT NULL DEFAULT 0"),
         )
-        """
-    )
-    report_cols = _table_columns(conn, "chat_message_reports")
-    report_additions = (
-        ("content_snapshot", "TEXT"),
-        ("message_created_at", "TEXT"),
-        ("message_edited_at", "TEXT"),
-    )
-    for name, ddl in report_additions:
-        if name not in report_cols:
-            conn.execute(f"ALTER TABLE chat_message_reports ADD COLUMN {name} {ddl}")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS user_friends (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            friend_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            status TEXT NOT NULL DEFAULT 'pending',
-            requested_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(user_id, friend_user_id),
-            CHECK (user_id <> friend_user_id),
-            CHECK (status IN ('pending', 'accepted', 'rejected', 'blocked'))
+        for name, ddl in room_additions:
+            _add_column_if_missing(conn, "chat_rooms", room_cols, name, ddl)
+        member_cols = _table_columns(conn, "chat_room_members")
+        _add_column_if_missing(conn, "chat_room_members", member_cols, "anonymous_enabled", "INTEGER NOT NULL DEFAULT 0")
+        cols = _table_columns(conn, "chat_messages")
+        additions = (
+            ("message_type", "TEXT NOT NULL DEFAULT 'text'"),
+            ("sticker_key", "TEXT"),
+            ("is_revoked", "INTEGER NOT NULL DEFAULT 0"),
+            ("revoked_at", "TEXT"),
+            ("revoked_by", "INTEGER"),
+            ("edited_at", "TEXT"),
+            ("edited_by", "INTEGER"),
+            ("edit_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("original_content", "TEXT"),
         )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_friends_user_status ON user_friends(user_id, status)")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS chat_room_invites (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            room_id INTEGER NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
-            inviter_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            invitee_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(room_id, invitee_user_id),
-            CHECK (status IN ('pending', 'accepted', 'rejected'))
+        for name, ddl in additions:
+            _add_column_if_missing(conn, "chat_messages", cols, name, ddl)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_message_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+                room_id INTEGER NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+                reporter_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                reported_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                reason TEXT NOT NULL,
+                content_snapshot TEXT,
+                message_created_at TEXT,
+                message_edited_at TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                reviewed_by TEXT,
+                reviewed_at TEXT,
+                review_note TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(message_id, reporter_user_id)
+            )
+            """
         )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_room_invites_invitee ON chat_room_invites(invitee_user_id, status)")
+        report_cols = _table_columns(conn, "chat_message_reports")
+        report_additions = (
+            ("content_snapshot", "TEXT"),
+            ("message_created_at", "TEXT"),
+            ("message_edited_at", "TEXT"),
+        )
+        for name, ddl in report_additions:
+            _add_column_if_missing(conn, "chat_message_reports", report_cols, name, ddl)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_friends (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                friend_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'pending',
+                requested_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, friend_user_id),
+                CHECK (user_id <> friend_user_id),
+                CHECK (status IN ('pending', 'accepted', 'rejected', 'blocked'))
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_friends_user_status ON user_friends(user_id, status)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_room_invites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                room_id INTEGER NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+                inviter_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                invitee_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(room_id, invitee_user_id),
+                CHECK (status IN ('pending', 'accepted', 'rejected'))
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_room_invites_invitee ON chat_room_invites(invitee_user_id, status)")
+        if db_path:
+            _CHAT_SCHEMA_READY_PATHS.add(db_path)
 
 
 def hash_chat_room_password(password):
@@ -588,151 +622,186 @@ def register_chat_routes(app, deps):
         if len(join_password) > 128:
             return json_resp({"ok":False,"msg":"聊天室密碼最多 128 字元"}), 400
 
-        conn = get_db()
         room_id = None
         invite_username = None
         detail = None
+        target_row = None
         is_private_room = False
-        try:
-            conn.execute("BEGIN")
-            ensure_chat_feature_schema(conn)
-            target_row = None
-            if target_user:
-                ok, msg, status = require_member_action(actor, "chat_dm_create", conn=conn)
-                if not ok:
-                    return json_resp({"ok":False,"msg":msg}), status
-                user_status_filter = "AND status='active'" if "status" in _table_columns(conn, "users") else ""
-                target_row = conn.execute(
-                    f"SELECT id, username FROM users WHERE username=? {user_status_filter}",
-                    (target_user,)
-                ).fetchone()
-                if not target_row:
-                    return json_resp({"ok":False,"msg":"找不到指定對象帳號"}), 404
-                allowed, deny_msg = assert_can_target_user(conn, actor, target_row["id"], context="pm")
-                if not allowed:
-                    return json_resp({"ok":False,"msg":deny_msg}), 403
-
-                # Check if a private 1on1 room already exists between these two users
-                existing = conn.execute(
-                    """SELECT cr.id, cr.name FROM chat_rooms cr
-                       INNER JOIN chat_room_members m1 ON m1.room_id = cr.id AND m1.user_id = ?
-                       INNER JOIN chat_room_members m2 ON m2.room_id = cr.id AND m2.user_id = ?
-                       WHERE cr.is_private = 1 AND COALESCE(cr.is_active, 1)=1
-                       LIMIT 1""",
-                    (urow_id, target_row["id"])
-                ).fetchone()
-                if existing:
-                    conn.commit()
-                    return json_resp({
-                        "ok": True,
-                        "msg": "已找到私訊聊天室",
-                        "room": {
-                            "id": existing["id"],
-                            "name": existing["name"],
-                            "owner_user_id": urow_id,
-                            "owner_username": actor["username"],
-                            "target_username": target_row["username"],
-                            "is_private": 1
-                        }
-                    })
-
-                # Auto-generate consistent room name (alphabetically sorted)
-                usernames = sorted([actor["username"], target_row["username"]])
-                name = f"PM: {usernames[0]} | {usernames[1]}"
-                is_private_room = True
-                allow_anonymous = False
-                anonymous_enabled = False
-            elif not name:
-                return json_resp({"ok":False,"msg":"聊天室名稱不可為空"}), 400
-
-            if not is_private_room and len(name) > 48:
-                return json_resp({"ok":False,"msg":"聊天室名稱最多 48 字元"}), 400
-            if target_user == actor["username"]:
-                return json_resp({"ok":False,"msg":"不能指定自己為對象"}), 400
-            if not allow_anonymous:
-                anonymous_enabled = False
-
-            password_hash = None if is_private_room else hash_chat_room_password(join_password)
-            cur = conn.execute(
-                "INSERT INTO chat_rooms (name, owner_user_id, is_private, join_password_hash, join_password_required, allow_anonymous, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (name, urow_id, 1 if is_private_room else 0, password_hash, 1 if password_hash else 0, 1 if allow_anonymous and not is_private_room else 0, datetime.now().isoformat())
-            )
-            room_id = cur.lastrowid
-            now = datetime.now().isoformat()
-            conn.execute(
-                "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at, anonymous_enabled) VALUES (?, ?, ?, ?)",
-                (room_id, urow_id, now, 1 if anonymous_enabled and allow_anonymous and not is_private_room else 0)
-            )
-            if target_row:
-                conn.execute(
-                    "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at, anonymous_enabled) VALUES (?, ?, ?, 0)",
-                    (room_id, target_row["id"], now)
-                )
-            added_usernames = []
-            forbidden_usernames = []
-            if invite_usernames and not is_private_room:
-                user_status_filter = "AND status='active'" if "status" in _table_columns(conn, "users") else ""
-                placeholders = ",".join("?" for _ in invite_usernames)
-                invite_rows = conn.execute(
-                    f"SELECT id, username FROM users WHERE username IN ({placeholders}) {user_status_filter}",
-                    tuple(invite_usernames),
-                ).fetchall()
-                invite_map = {str(row["username"]): row for row in invite_rows}
-                for username in invite_usernames:
-                    user_row = invite_map.get(username)
-                    if not user_row:
-                        continue
-                    allowed, _deny_msg = assert_can_target_user(conn, actor, user_row["id"], context="private_group")
+        for attempt in range(CHAT_WRITE_RETRY_ATTEMPTS):
+            conn = get_db()
+            try:
+                # Acquire the write lock before validation performs additional DB work.
+                # Under concurrent uploads/HLS/trading writes, retry the whole
+                # transaction so a transient SQLite lock does not leak as a 500.
+                conn.execute("BEGIN IMMEDIATE")
+                ensure_chat_feature_schema(conn)
+                target_row = None
+                if target_user:
+                    ok, msg, status = require_member_action(actor, "chat_dm_create", conn=conn)
+                    if not ok:
+                        return json_resp({"ok":False,"msg":msg}), status
+                    user_status_filter = "AND status='active'" if "status" in _table_columns(conn, "users") else ""
+                    target_row = conn.execute(
+                        f"SELECT id, username FROM users WHERE username=? {user_status_filter}",
+                        (target_user,)
+                    ).fetchone()
+                    if not target_row:
+                        return json_resp({"ok":False,"msg":"找不到指定對象帳號"}), 404
+                    allowed, deny_msg = assert_can_target_user(conn, actor, target_row["id"], context="pm")
                     if not allowed:
-                        forbidden_usernames.append(user_row["username"])
-                        continue
+                        return json_resp({"ok":False,"msg":deny_msg}), 403
+
+                    # Check if a private 1on1 room already exists between these two users
+                    existing = conn.execute(
+                        """SELECT cr.id, cr.name FROM chat_rooms cr
+                           INNER JOIN chat_room_members m1 ON m1.room_id = cr.id AND m1.user_id = ?
+                           INNER JOIN chat_room_members m2 ON m2.room_id = cr.id AND m2.user_id = ?
+                           WHERE cr.is_private = 1 AND COALESCE(cr.is_active, 1)=1
+                           LIMIT 1""",
+                        (urow_id, target_row["id"])
+                    ).fetchone()
+                    if existing:
+                        conn.commit()
+                        return json_resp({
+                            "ok": True,
+                            "msg": "已找到私訊聊天室",
+                            "room": {
+                                "id": existing["id"],
+                                "name": existing["name"],
+                                "owner_user_id": urow_id,
+                                "owner_username": actor["username"],
+                                "target_username": target_row["username"],
+                                "is_private": 1
+                            }
+                        })
+
+                    # Auto-generate consistent room name (alphabetically sorted)
+                    usernames = sorted([actor["username"], target_row["username"]])
+                    name = f"PM: {usernames[0]} | {usernames[1]}"
+                    is_private_room = True
+                    allow_anonymous = False
+                    anonymous_enabled = False
+                elif not name:
+                    return json_resp({"ok":False,"msg":"聊天室名稱不可為空"}), 400
+
+                if not is_private_room and len(name) > 48:
+                    return json_resp({"ok":False,"msg":"聊天室名稱最多 48 字元"}), 400
+                if target_user == actor["username"]:
+                    return json_resp({"ok":False,"msg":"不能指定自己為對象"}), 400
+                if not allow_anonymous:
+                    anonymous_enabled = False
+
+                password_hash = None if is_private_room else hash_chat_room_password(join_password)
+                cur = conn.execute(
+                    "INSERT INTO chat_rooms (name, owner_user_id, is_private, join_password_hash, join_password_required, allow_anonymous, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (name, urow_id, 1 if is_private_room else 0, password_hash, 1 if password_hash else 0, 1 if allow_anonymous and not is_private_room else 0, datetime.now().isoformat())
+                )
+                room_id = cur.lastrowid
+                now = datetime.now().isoformat()
+                conn.execute(
+                    "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at, anonymous_enabled) VALUES (?, ?, ?, ?)",
+                    (room_id, urow_id, now, 1 if anonymous_enabled and allow_anonymous and not is_private_room else 0)
+                )
+                if target_row:
                     conn.execute(
                         "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at, anonymous_enabled) VALUES (?, ?, ?, 0)",
-                        (room_id, user_row["id"], now),
+                        (room_id, target_row["id"], now)
                     )
-                    added_usernames.append(user_row["username"])
-                    try:
-                        ensure_notifications_schema(conn)
-                        create_notification(
-                            conn,
-                            user_id=user_row["id"],
-                            type="chat_room_added",
-                            title="你已加入聊天室",
-                            body=f"{actor['username']} 將你加入聊天室「{name}」。",
-                            link="/chat",
+                added_usernames = []
+                forbidden_usernames = []
+                if invite_usernames and not is_private_room:
+                    user_status_filter = "AND status='active'" if "status" in _table_columns(conn, "users") else ""
+                    placeholders = ",".join("?" for _ in invite_usernames)
+                    invite_rows = conn.execute(
+                        f"SELECT id, username FROM users WHERE username IN ({placeholders}) {user_status_filter}",
+                        tuple(invite_usernames),
+                    ).fetchall()
+                    invite_map = {str(row["username"]): row for row in invite_rows}
+                    for username in invite_usernames:
+                        user_row = invite_map.get(username)
+                        if not user_row:
+                            continue
+                        allowed, _deny_msg = assert_can_target_user(conn, actor, user_row["id"], context="private_group")
+                        if not allowed:
+                            forbidden_usernames.append(user_row["username"])
+                            continue
+                        conn.execute(
+                            "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at, anonymous_enabled) VALUES (?, ?, ?, 0)",
+                            (room_id, user_row["id"], now),
                         )
-                    except Exception:
-                        pass
-            if forbidden_usernames:
-                conn.rollback()
+                        added_usernames.append(user_row["username"])
+                        try:
+                            ensure_notifications_schema(conn)
+                            create_notification(
+                                conn,
+                                user_id=user_row["id"],
+                                type="chat_room_added",
+                                title="你已加入聊天室",
+                                body=f"{actor['username']} 將你加入聊天室「{name}」。",
+                                link="/chat",
+                            )
+                        except Exception:
+                            pass
+                if forbidden_usernames:
+                    conn.rollback()
+                    return json_resp({
+                        "ok": False,
+                        "msg": "只能邀請已成為好友的使用者",
+                        "forbidden": forbidden_usernames,
+                    }), 403
+                conn.commit()
+                # Escape user-controlled fields (room name, usernames) to prevent
+                # log injection — see _audit_safe / issue #179.
+                safe_invited = ",".join(_audit_safe(u, max_len=80) for u in added_usernames)
+                safe_forbidden = ",".join(_audit_safe(u, max_len=80) for u in forbidden_usernames)
+                detail = (
+                    f"room_id={room_id}, name={_audit_safe(name)}, "
+                    f"is_private={is_private_room}, invited={safe_invited}, forbidden={safe_forbidden}"
+                )
+                if target_row:
+                    detail += f", target={_audit_safe(target_row['username'], max_len=80)}"
+                break
+            except Exception as exc:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                if is_sqlite_lock_error(exc):
+                    current_app.logger.warning(
+                        "chat_room_create_db_busy user_id=%s username=%s attempt=%s/%s error=%s",
+                        urow_id,
+                        actor_value(actor, "username", ""),
+                        attempt + 1,
+                        CHAT_WRITE_RETRY_ATTEMPTS,
+                        exc,
+                    )
+                    if attempt < CHAT_WRITE_RETRY_ATTEMPTS - 1:
+                        time.sleep(CHAT_WRITE_RETRY_BASE_SLEEP_SECONDS * (attempt + 1))
+                        continue
+                    return json_resp({
+                        "ok": False,
+                        "error": "server_busy",
+                        "code": "server_busy",
+                        "msg": "聊天室資料庫暫時繁忙，請稍後重試。",
+                        "retry_after": 2,
+                    }), 503
+                current_app.logger.exception(
+                    "chat_room_create_failed user_id=%s username=%s error=%s",
+                    urow_id,
+                    actor_value(actor, "username", ""),
+                    exc,
+                )
                 return json_resp({
                     "ok": False,
-                    "msg": "只能邀請已成為好友的使用者",
-                    "forbidden": forbidden_usernames,
-                }), 403
-            conn.commit()
-            # Escape user-controlled fields (room name, usernames) to prevent
-            # log injection — see _audit_safe / issue #179.
-            safe_invited = ",".join(_audit_safe(u, max_len=80) for u in added_usernames)
-            safe_forbidden = ",".join(_audit_safe(u, max_len=80) for u in forbidden_usernames)
-            detail = (
-                f"room_id={room_id}, name={_audit_safe(name)}, "
-                f"is_private={is_private_room}, invited={safe_invited}, forbidden={safe_forbidden}"
-            )
-            if target_row:
-                detail += f", target={_audit_safe(target_row['username'], max_len=80)}"
-        except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            return json_resp({"ok":False,"msg":"建立聊天室失敗"}), 500
-        finally:
-            conn.close()
+                    "error": "chat_room_create_failed",
+                    "msg": "建立聊天室失敗，請稍後重試或檢查聊天室名稱與邀請名單。",
+                }), 500
+            finally:
+                conn.close()
 
         if detail:
             try:
-                audit("CHAT_ROOM_CREATED", ip, user=actor["username"], detail=detail)
+                audit("CHAT_ROOM_CREATED", ip, user=actor["username"], success=True, detail=detail)
             except Exception:
                 pass
         invite_username = target_row["username"] if target_row else None
@@ -814,7 +883,7 @@ def register_chat_routes(app, deps):
                     (datetime.now().isoformat(), pending_invite["id"]),
                 )
             conn.commit()
-            audit("CHAT_ROOM_JOIN", get_client_ip(), user=actor["username"], detail=f"room_id={room_id}")
+            audit("CHAT_ROOM_JOIN", get_client_ip(), user=actor["username"], success=True, detail=f"room_id={room_id}")
             return json_resp({"ok":True,"msg":"已加入聊天室","room":{"id":room["id"],"name":room["name"],"allow_anonymous":bool(room["allow_anonymous"]),"anonymous_enabled":anonymous_enabled}})
         finally:
             conn.close()
@@ -852,6 +921,7 @@ def register_chat_routes(app, deps):
                 "CHAT_ROOM_DELETED",
                 get_client_ip(),
                 user=actor["username"],
+                success=True,
                 detail=f"room_id={room_id},name={room['name']},owner={room['owner_username'] or '-'}",
             )
             return json_resp({"ok":True,"msg":"聊天室已刪除"})
@@ -939,6 +1009,7 @@ def register_chat_routes(app, deps):
             audit(
                 "CHAT_ROOM_INVITE", get_client_ip(),
                 user=actor["username"],
+                success=bool(invited),
                 detail=f"room_id={room_id},invited={safe_invited_csv},missing={safe_missing_csv},forbidden={safe_forbidden_csv}",
             )
             if forbidden and not invited:
@@ -1012,7 +1083,7 @@ def register_chat_routes(app, deps):
                 },
                 "messages": [export_message_payload(row) for row in rows],
             }
-            audit("CHAT_ROOM_EXPORTED", get_client_ip(), user=actor["username"], detail=f"room_id={room_id},messages={len(rows)}")
+            audit("CHAT_ROOM_EXPORTED", get_client_ip(), user=actor["username"], success=True, detail=f"room_id={room_id},messages={len(rows)}")
             body = json.dumps(payload, ensure_ascii=False, indent=2)
             filename = f"chat_room_{room_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             return Response(body, mimetype="application/json; charset=utf-8", headers={"Content-Disposition": f"attachment; filename={filename}"})
@@ -1226,40 +1297,38 @@ def register_chat_routes(app, deps):
             conn.commit()
             transcript_synced = append_chat_record(room_id, message_id, actor["username"], content, created_at)
             if not transcript_synced:
-                audit("CHAT_TRANSCRIPT_WRITE_FAILED", get_client_ip(), user=actor["username"], detail=f"room_id={room_id},message_id={message_id}")
-            notify_conn = get_db()
-            try:
-                notification_type = "chat_private_message" if int(room["is_private"] or 0) else "chat_group_message"
-                title = "收到私訊" if notification_type == "chat_private_message" else "群聊有新訊息"
-                if is_official_chat_room(room):
-                    body = f"「{room['name']}」有新訊息。"
-                else:
+                audit("CHAT_TRANSCRIPT_WRITE_FAILED", get_client_ip(), user=actor["username"], success=False, detail=f"room_id={room_id},message_id={message_id}")
+            if not is_official_chat_room(room):
+                notify_conn = get_db()
+                try:
+                    notification_type = "chat_private_message" if int(room["is_private"] or 0) else "chat_group_message"
+                    title = "收到私訊" if notification_type == "chat_private_message" else "群聊有新訊息"
                     body = (
                         f"{actor['username']} 傳送了一則私訊。"
                         if notification_type == "chat_private_message"
                         else f"{actor['username']} 在「{room['name']}」傳送了新訊息。"
                     )
-                member_rows = notify_conn.execute(
-                    "SELECT user_id FROM chat_room_members WHERE room_id=? AND user_id<>?",
-                    (room_id, actor["id"]),
-                ).fetchall()
-                for member_row in member_rows:
-                    create_notification_if_enabled(
-                        notify_conn,
-                        user_id=member_row["user_id"],
-                        type=notification_type,
-                        title=title,
-                        body=body,
-                        link=f"/chat?room_id={room_id}",
-                    )
-                notify_conn.commit()
-            except Exception:
-                try:
-                    notify_conn.rollback()
+                    member_rows = notify_conn.execute(
+                        "SELECT user_id FROM chat_room_members WHERE room_id=? AND user_id<>?",
+                        (room_id, actor["id"]),
+                    ).fetchall()
+                    for member_row in member_rows:
+                        create_notification_if_enabled(
+                            notify_conn,
+                            user_id=member_row["user_id"],
+                            type=notification_type,
+                            title=title,
+                            body=body,
+                            link=f"/chat?room_id={room_id}",
+                        )
+                    notify_conn.commit()
                 except Exception:
-                    pass
-            finally:
-                notify_conn.close()
+                    try:
+                        notify_conn.rollback()
+                    except Exception:
+                        pass
+                finally:
+                    notify_conn.close()
             return json_resp({"ok":True,"msg":"訊息已送出","message_id":message_id,"transcript_synced":transcript_synced})
         finally:
             conn.close()
@@ -1320,7 +1389,7 @@ def register_chat_routes(app, deps):
                 conn.commit()
             except sqlite3.IntegrityError:
                 return json_resp({"ok":False,"msg":"你已檢舉過這則訊息"}), 409
-            audit("CHAT_MESSAGE_REPORTED", get_client_ip(), user=actor["username"],
+            audit("CHAT_MESSAGE_REPORTED", get_client_ip(), user=actor["username"], success=True,
                   detail=f"message_id={message_id},reported={msg['sender_username']},reason={reason}")
             return json_resp({"ok":True,"msg":"檢舉已送出，等待超級管理員審核"})
         finally:
@@ -1403,6 +1472,7 @@ def register_chat_routes(app, deps):
                 "CHAT_MESSAGE_EDITED",
                 get_client_ip(),
                 user=actor["username"],
+                success=True,
                 detail=f"message_id={message_id},room_id={msg['room_id']},edit_count={int(msg['edit_count'] or 0) + 1}",
             )
             return json_resp({"ok":True,"msg":"訊息已更新","edited_at":edited_at})
@@ -1460,6 +1530,7 @@ def register_chat_routes(app, deps):
                     "CHAT_MESSAGE_RECALLED",
                     get_client_ip(),
                     user=actor["username"],
+                    success=True,
                     detail=f"message_id={message_id},room_id={msg['room_id']}",
                 )
                 return json_resp({"ok":True,"msg":"訊息已收回"})
@@ -1473,6 +1544,7 @@ def register_chat_routes(app, deps):
                 "CHAT_MESSAGE_DELETED",
                 get_client_ip(),
                 user=actor["username"],
+                success=True,
                 detail=f"message_id={message_id},room_id={msg['room_id']},target={msg['sender_username'] or '-'}",
             )
             return json_resp({"ok":True,"msg":"訊息已刪除"})
@@ -1515,7 +1587,7 @@ def register_chat_routes(app, deps):
             if status < 400:
                 conn.commit()
                 target = (result or {}).get("target") or {}
-                audit("CHAT_FRIEND_REQUESTED", get_client_ip(), user=actor["username"], detail=f"target={target.get('username')}")
+                audit("CHAT_FRIEND_REQUESTED", get_client_ip(), user=actor["username"], success=True, detail=f"target={target.get('username')}")
                 return json_resp({"ok":True,"msg":msg,"request":result})
             return json_resp({"ok":False,"msg":msg}), status
         finally:
@@ -1533,7 +1605,7 @@ def register_chat_routes(app, deps):
             result, msg, status = review_friend_request(conn, actor, request_id=request_id, decision=decision)
             if status < 400:
                 conn.commit()
-                audit("CHAT_FRIEND_REVIEWED", get_client_ip(), user=actor["username"], detail=f"request_id={request_id},decision={decision}")
+                audit("CHAT_FRIEND_REVIEWED", get_client_ip(), user=actor["username"], success=True, detail=f"request_id={request_id},decision={decision}")
                 return json_resp({"ok":True,"msg":msg,"request":result})
             return json_resp({"ok":False,"msg":msg}), status
         finally:
@@ -1551,7 +1623,7 @@ def register_chat_routes(app, deps):
             ok, msg, status = remove_friend(conn, actor, friend_user_id=friend_user_id)
             if ok:
                 conn.commit()
-                audit("CHAT_FRIEND_REMOVED", get_client_ip(), user=actor["username"], detail=f"friend_user_id={friend_user_id}")
+                audit("CHAT_FRIEND_REMOVED", get_client_ip(), user=actor["username"], success=True, detail=f"friend_user_id={friend_user_id}")
                 return json_resp({"ok":True,"msg":msg})
             return json_resp({"ok":False,"msg":msg}), status
         finally:
@@ -1570,7 +1642,7 @@ def register_chat_routes(app, deps):
             if status < 400:
                 conn.commit()
                 target = (result or {}).get("target") or {}
-                audit("CHAT_FRIEND_BLOCKED", get_client_ip(), user=actor["username"], detail=f"target_user_id={target.get('id')}")
+                audit("CHAT_FRIEND_BLOCKED", get_client_ip(), user=actor["username"], success=True, detail=f"target_user_id={target.get('id')}")
                 return json_resp({"ok":True,"msg":msg,"block":result})
             return json_resp({"ok":False,"msg":msg}), status
         finally:
@@ -1588,7 +1660,7 @@ def register_chat_routes(app, deps):
             ok, msg, status = unblock_user(conn, actor, target_user_id=target_user_id)
             if ok:
                 conn.commit()
-                audit("CHAT_FRIEND_UNBLOCKED", get_client_ip(), user=actor["username"], detail=f"target_user_id={target_user_id}")
+                audit("CHAT_FRIEND_UNBLOCKED", get_client_ip(), user=actor["username"], success=True, detail=f"target_user_id={target_user_id}")
                 return json_resp({"ok":True,"msg":msg})
             return json_resp({"ok":False,"msg":msg}), status
         finally:
@@ -1600,7 +1672,7 @@ def register_chat_routes(app, deps):
         user = db_get_user_from_token(tok) if tok else None
         if not user: return json_resp({"ok":False,"msg":"未授權"}), 401
         if user != "root":
-            audit("AUDIT_FORBIDDEN", get_client_ip(), user, detail="non-root attempted audit access")
+            audit("AUDIT_FORBIDDEN", get_client_ip(), user, success=False, detail="non-root attempted audit access")
             return json_resp({"ok":False,"msg":"只有 root 可檢視審計紀錄"}), 403
 
         auth_conn = get_auth_db()

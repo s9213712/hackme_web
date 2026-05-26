@@ -139,13 +139,20 @@ async function loadChatRooms() {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
-    const json = await res.json();
-    if (!json.ok) {
+    const raw = await res.text();
+    const json = (() => {
+      try { return raw ? JSON.parse(raw) : {}; } catch (_err) { return {}; }
+    })();
+    if (!res.ok || !json.ok) {
+      const fallback = (raw || "").split("\n")[0].trim();
+      setChatMsg("chat-room-warn", `${res.ok ? "讀取聊天室失敗" : "讀取聊天室失敗（" + res.status + "）"} ${json.msg || fallback || "請稍後再試"}`, false);
       return;
     }
     chatRooms = Array.isArray(json.rooms) ? json.rooms : [];
     renderChatRooms();
-    loadChatFriends().catch(() => {});
+    loadChatFriends().catch((err) => {
+      setChatMsg("chat-room-warn", `好友清單讀取失敗：${err?.message || "請稍後再試"}`, false);
+    });
     if (selectedChatRoomId) {
       const exists = chatRooms.some((r) => r.id === selectedChatRoomId);
       if (!exists) {
@@ -166,7 +173,9 @@ async function loadChatRooms() {
       if (attachments) attachments.innerHTML = "";
       syncChatSharedAttachmentPanel([]);
     }
-  } catch (_) {}
+  } catch (err) {
+    setChatMsg("chat-room-warn", `讀取聊天室失敗：${err?.message || "請稍後再試"}`, false);
+  }
 }
 
 function renderChatFriends(data) {
@@ -616,6 +625,30 @@ async function sendChatSticker(stickerKey) {
     return;
   }
   setChatMsg("chat-room-warn", json.msg || "表情包發送失敗", false);
+}
+
+function insertChatSticker(stickerKey) {
+  const glyph = CHAT_STICKER_LABELS[stickerKey];
+  if (!glyph) {
+    setChatMsg("chat-room-warn", "不支援的表情符號", false);
+    return;
+  }
+  const input = $("chat-message-input");
+  if (!input) return;
+  const current = input.value || "";
+  const start = Number.isFinite(input.selectionStart) ? input.selectionStart : current.length;
+  const end = Number.isFinite(input.selectionEnd) ? input.selectionEnd : start;
+  const next = `${current.slice(0, start)}${glyph}${current.slice(end)}`;
+  if (next.length > Number(input.maxLength || 500)) {
+    setChatMsg("chat-room-warn", "訊息過長，無法再加入表情符號", false);
+    input.focus();
+    return;
+  }
+  input.value = next;
+  const cursor = start + glyph.length;
+  input.setSelectionRange?.(cursor, cursor);
+  input.focus();
+  setChatMsg("chat-room-warn", "已插入表情符號，編輯完成後再送出", true);
 }
 
 async function openPmWithUser(targetUsername) {

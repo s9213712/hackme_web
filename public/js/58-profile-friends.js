@@ -5,9 +5,52 @@ let profilePanelCache = null;
 let currentProfileViewedUserId = null;
 let currentProfileIsViewingSelf = true;
 let profileFriendsLoaded = false;
+let profileQuickCustomizeOpen = false;
 const targetOptionCache = new Map();
-const PROFILE_AVATAR_CROPPER_MIN_ZOOM = 1;
+const PROFILE_AVATAR_CROPPER_MIN_ZOOM = 0.5;
 const PROFILE_AVATAR_CROPPER_MAX_ZOOM = 6;
+const PROFILE_TEMPLATE_KEYS = ["classic", "creator", "compact", "showcase", "gallery", "neon"];
+const PROFILE_ACCENT_KEYS = ["default", "ocean", "sunrise", "forest", "mono", "violet", "ruby"];
+const PROFILE_DENSITY_KEYS = ["comfortable", "compact"];
+const PROFILE_STYLE_FIELD_MAP = {
+  "profile-edit-banner": "banner",
+  "profile-edit-background-tone": "background_tone",
+  "profile-edit-avatar-frame": "avatar_frame",
+  "profile-edit-avatar-size": "avatar_size",
+  "profile-edit-name-font": "name_font",
+  "profile-edit-name-size": "name_size",
+  "profile-edit-sticker": "sticker",
+  "profile-edit-decoration": "decoration",
+};
+const PROFILE_STYLE_DEFAULTS = {
+  banner: "none",
+  background_tone: "standard",
+  avatar_frame: "soft_ring",
+  avatar_size: "xl",
+  name_font: "system",
+  name_size: "large",
+  sticker: "none",
+  decoration: "minimal",
+};
+const PROFILE_STYLE_ALLOWED = {
+  banner: ["none", "aurora", "neon_grid", "paper", "night_sky", "terminal"],
+  background_tone: ["soft", "standard", "bold"],
+  avatar_frame: ["none", "soft_ring", "neon", "pixel", "botanical", "crown"],
+  avatar_size: ["large", "xl", "hero"],
+  name_font: ["system", "rounded", "serif", "mono", "display"],
+  name_size: ["normal", "large", "hero"],
+  sticker: ["none", "sparkles", "star", "heart", "music", "game", "code", "crown"],
+  decoration: ["none", "minimal", "badges", "ribbon", "constellation"],
+};
+const PROFILE_STICKER_SYMBOLS = {
+  sparkles: "✦ ✧",
+  star: "★",
+  heart: "♥",
+  music: "♪",
+  game: "GAME",
+  code: "</>",
+  crown: "♛",
+};
 let profileAvatarCloudFiles = [];
 let profileAvatarCloudFilesLoadedAt = 0;
 const profileAvatarCropState = {
@@ -136,7 +179,11 @@ function profileAvatarStageMetrics() {
   const width = Math.max(0, rect.width || 0);
   const height = Math.max(0, rect.height || 0);
   if (!width || !height) return null;
-  const cropSize = Math.max(132, Math.min(width, height) * 0.82);
+  const minDimension = Math.min(width, height);
+  const cropSize = Math.min(
+    Math.max(96, minDimension - 18),
+    Math.max(160, minDimension * 0.9)
+  );
   return {
     width,
     height,
@@ -144,6 +191,17 @@ function profileAvatarStageMetrics() {
     cropLeft: (width - cropSize) / 2,
     cropTop: (height - cropSize) / 2,
   };
+}
+
+function profileAvatarMinimumZoom(metrics) {
+  if (!metrics || !profileAvatarCropState.naturalWidth || !profileAvatarCropState.naturalHeight || !profileAvatarCropState.baseScale) {
+    return PROFILE_AVATAR_CROPPER_MIN_ZOOM;
+  }
+  const minScale = Math.max(
+    metrics.cropSize / profileAvatarCropState.naturalWidth,
+    metrics.cropSize / profileAvatarCropState.naturalHeight
+  );
+  return profileAvatarClamp(minScale / profileAvatarCropState.baseScale, PROFILE_AVATAR_CROPPER_MIN_ZOOM, 1);
 }
 
 function clampProfileAvatarOffsets(metrics = profileAvatarStageMetrics()) {
@@ -191,7 +249,14 @@ function renderProfileAvatarCropper() {
     metrics.width / profileAvatarCropState.naturalWidth,
     metrics.height / profileAvatarCropState.naturalHeight
   );
-  profileAvatarCropState.zoom = profileAvatarClamp(Number(profileAvatarCropState.zoom) || 1, PROFILE_AVATAR_CROPPER_MIN_ZOOM, PROFILE_AVATAR_CROPPER_MAX_ZOOM);
+  const minZoom = profileAvatarMinimumZoom(metrics);
+  if (els.zoom) {
+    els.zoom.min = minZoom.toFixed(2);
+  }
+  profileAvatarCropState.zoom = profileAvatarClamp(Number(profileAvatarCropState.zoom) || 1, minZoom, PROFILE_AVATAR_CROPPER_MAX_ZOOM);
+  if (els.zoom && Number(els.zoom.value || 1) < minZoom) {
+    els.zoom.value = minZoom.toFixed(2);
+  }
   clampProfileAvatarOffsets(metrics);
   const scale = profileAvatarCropState.baseScale * profileAvatarCropState.zoom;
   const imageWidth = profileAvatarCropState.naturalWidth * scale;
@@ -479,16 +544,201 @@ function renderProfileAvatar(targetId, profile, { editable = true } = {}) {
   if (!el) return;
   el.innerHTML = userAvatarInnerMarkup(profile?.id, profile?.username || "", profile?.avatar_file_id || "");
   if (targetId === "profile-home-avatar") {
-    el.title = editable ? "點擊上傳或更換頭像" : "個人頭像";
-    el.setAttribute("aria-label", editable ? "上傳或更換頭像" : "個人頭像");
+    el.title = editable ? "點擊上傳或更換頭像" : "點擊放大預覽頭像";
+    el.setAttribute("aria-label", editable ? "上傳或更換頭像" : "放大預覽頭像");
     el.classList.toggle("profile-avatar-upload-button", !!editable);
+    el.classList.toggle("profile-avatar-preview-button", !editable);
   }
   bindAvatarFallbacks(el);
+}
+
+function ensureProfileAvatarPreviewOverlay() {
+  let overlay = $("profile-avatar-preview-overlay");
+  if (overlay) return overlay;
+  overlay = document.createElement("div");
+  overlay.id = "profile-avatar-preview-overlay";
+  overlay.className = "user-edit-overlay profile-avatar-preview-overlay";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-labelledby", "profile-avatar-preview-title");
+  overlay.innerHTML = `
+    <div class="user-edit-modal profile-avatar-preview-modal">
+      <div class="drive-card-heading compact-heading">
+        <div>
+          <div class="mini-title" id="profile-avatar-preview-title">頭像預覽</div>
+          <div class="drive-card-sub" id="profile-avatar-preview-subtitle"></div>
+        </div>
+        <button type="button" class="btn btn-sm" id="profile-avatar-preview-close">關閉</button>
+      </div>
+      <div class="profile-avatar-preview-frame" id="profile-avatar-preview-frame"></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  $("profile-avatar-preview-close")?.addEventListener("click", closeProfileAvatarPreview);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) closeProfileAvatarPreview();
+  });
+  return overlay;
+}
+
+function openProfileAvatarPreview(profile = profilePanelCache) {
+  if (!profile || currentProfileIsViewingSelf) return;
+  const overlay = ensureProfileAvatarPreviewOverlay();
+  const title = profile.display_name || profile.username || "使用者";
+  const subtitle = $("profile-avatar-preview-subtitle");
+  const frame = $("profile-avatar-preview-frame");
+  if (subtitle) subtitle.textContent = `@${profile.username || "-"}`;
+  if (frame) {
+    const url = avatarUrlForUser(profile.id, profile.avatar_file_id || "");
+    frame.innerHTML = url
+      ? `<img src="${sanitize(url)}" alt="${sanitize(title)} 的頭像" />`
+      : `<div class="profile-avatar-preview-fallback">${sanitize(avatarInitial(profile.username || title))}</div>`;
+    bindAvatarFallbacks(frame);
+  }
+  overlay.classList.add("show");
+  document.body.classList.add("modal-open");
+}
+
+function closeProfileAvatarPreview() {
+  const overlay = $("profile-avatar-preview-overlay");
+  if (!overlay) return;
+  overlay.classList.remove("show");
+  document.body.classList.remove("modal-open");
+}
+
+function profileChoice(value, allowed, fallback) {
+  const normalized = String(value || fallback || "").trim().toLowerCase();
+  return Array.isArray(allowed) && allowed.includes(normalized) ? normalized : fallback;
+}
+
+function profileStyleFromProfile(profile = {}) {
+  const raw = profile?.profile_style && typeof profile.profile_style === "object" ? profile.profile_style : {};
+  const style = {};
+  Object.entries(PROFILE_STYLE_DEFAULTS).forEach(([key, fallback]) => {
+    style[key] = profileChoice(raw[key], PROFILE_STYLE_ALLOWED[key], fallback);
+  });
+  return style;
+}
+
+function collectProfileStyleFromForm() {
+  const style = {};
+  Object.entries(PROFILE_STYLE_FIELD_MAP).forEach(([id, key]) => {
+    style[key] = profileChoice($(id)?.value, PROFILE_STYLE_ALLOWED[key], PROFILE_STYLE_DEFAULTS[key]);
+  });
+  return style;
+}
+
+function draftProfileFromAppearanceForm() {
+  const base = profilePanelCache && typeof profilePanelCache === "object" ? { ...profilePanelCache } : {};
+  return {
+    ...base,
+    profile_template: profileChoice($("profile-edit-template")?.value, PROFILE_TEMPLATE_KEYS, "classic"),
+    profile_accent: profileChoice($("profile-edit-accent")?.value, PROFILE_ACCENT_KEYS, "default"),
+    profile_density: profileChoice($("profile-edit-density")?.value, PROFILE_DENSITY_KEYS, "comfortable"),
+    profile_style: collectProfileStyleFromForm(),
+  };
+}
+
+function previewProfileAppearanceFromForm() {
+  if (!currentProfileIsViewingSelf) return;
+  renderProfileHome(draftProfileFromAppearanceForm());
+  const quick = $("profile-quick-customize-card");
+  if (quick) quick.open = true;
+  profileQuickCustomizeOpen = true;
+  if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
+}
+
+function setProfileQuickCustomizeOpen(open, { focus = false } = {}) {
+  const quick = $("profile-quick-customize-card");
+  profileQuickCustomizeOpen = !!open && currentProfileIsViewingSelf;
+  if (!quick) return;
+  quick.hidden = !currentProfileIsViewingSelf;
+  quick.open = profileQuickCustomizeOpen;
+  if (focus && profileQuickCustomizeOpen) {
+    requestAnimationFrame(() => quick.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+  }
+}
+
+function updateProfileTabVisibility() {
+  const selfOnlyTabs = new Set(["edit", "friends"]);
+  document.querySelectorAll("[data-profile-tab]").forEach((btn) => {
+    const tab = btn.dataset.profileTab || "home";
+    const hidden = selfOnlyTabs.has(tab) && !currentProfileIsViewingSelf;
+    btn.hidden = hidden;
+    btn.style.display = hidden ? "none" : "";
+    btn.setAttribute("aria-hidden", hidden ? "true" : "false");
+    btn.tabIndex = hidden ? -1 : 0;
+    if (tab === "home") {
+      btn.textContent = currentProfileIsViewingSelf ? "我的主頁" : "使用者主頁";
+    }
+  });
+  if (!currentProfileIsViewingSelf && selfOnlyTabs.has(currentProfileTab)) {
+    currentProfileTab = "home";
+  }
+  if (!currentProfileIsViewingSelf) {
+    ["home", "edit", "friends"].forEach((key) => {
+      const pane = $("profile-pane-" + key);
+      if (pane) pane.classList.toggle("active", key === "home");
+    });
+  }
+  setProfileQuickCustomizeOpen(profileQuickCustomizeOpen);
+}
+
+function applyProfilePresentation(profile) {
+  const home = $("profile-pane-home");
+  const summary = home?.querySelector(".profile-summary");
+  if (!home || !summary) return;
+  const template = profileChoice(profile?.profile_template, PROFILE_TEMPLATE_KEYS, "classic");
+  const accent = profileChoice(profile?.profile_accent, PROFILE_ACCENT_KEYS, "default");
+  const density = profileChoice(profile?.profile_density, PROFILE_DENSITY_KEYS, "comfortable");
+  const style = profileStyleFromProfile(profile || {});
+  const classes = [
+    ...PROFILE_TEMPLATE_KEYS.map((key) => `profile-template-${key}`),
+    ...PROFILE_ACCENT_KEYS.map((key) => `profile-accent-${key}`),
+    ...PROFILE_DENSITY_KEYS.map((key) => `profile-density-${key}`),
+    ...PROFILE_STYLE_ALLOWED.banner.map((key) => `profile-banner-${key}`),
+    ...PROFILE_STYLE_ALLOWED.background_tone.map((key) => `profile-bg-tone-${key}`),
+    ...PROFILE_STYLE_ALLOWED.decoration.map((key) => `profile-decoration-${key}`),
+  ];
+  home.classList.remove(...classes);
+  summary.classList.remove(...classes);
+  const nextClasses = [
+    `profile-template-${template}`,
+    `profile-accent-${accent}`,
+    `profile-density-${density}`,
+    `profile-banner-${style.banner}`,
+    `profile-bg-tone-${style.background_tone}`,
+    `profile-decoration-${style.decoration}`,
+  ];
+  home.classList.add(...nextClasses);
+  summary.classList.add(...nextClasses);
+  const avatar = $("profile-home-avatar");
+  if (avatar) {
+    avatar.classList.remove(
+      ...PROFILE_STYLE_ALLOWED.avatar_frame.map((key) => `profile-avatar-frame-${key}`),
+      ...PROFILE_STYLE_ALLOWED.avatar_size.map((key) => `profile-avatar-size-${key}`)
+    );
+    avatar.classList.add(`profile-avatar-frame-${style.avatar_frame}`, `profile-avatar-size-${style.avatar_size}`);
+  }
+  const name = $("profile-home-name");
+  if (name) {
+    name.classList.remove(
+      ...PROFILE_STYLE_ALLOWED.name_font.map((key) => `profile-name-font-${key}`),
+      ...PROFILE_STYLE_ALLOWED.name_size.map((key) => `profile-name-size-${key}`)
+    );
+    name.classList.add(`profile-name-font-${style.name_font}`, `profile-name-size-${style.name_size}`);
+  }
+  const decoration = $("profile-home-decoration");
+  if (decoration) decoration.textContent = style.decoration === "badges" ? "● ● ●" : style.decoration === "ribbon" ? "PROFILE" : style.decoration === "constellation" ? "✦ ─ ✦" : "";
+  const stickers = $("profile-home-stickers");
+  if (stickers) stickers.textContent = PROFILE_STICKER_SYMBOLS[style.sticker] || "";
 }
 
 function renderProfileHome(profile) {
   currentProfileIsViewingSelf = String(profile?.id || "") === String(currentUserId || "");
   currentProfileViewedUserId = profile?.id || currentUserId || null;
+  updateProfileTabVisibility();
+  applyProfilePresentation(profile || {});
   renderProfileAvatar("profile-home-avatar", profile, { editable: currentProfileIsViewingSelf });
   const name = profile?.display_name || profile?.username || "-";
   const nameEl = $("profile-home-name");
@@ -519,7 +769,10 @@ function renderProfileHome(profile) {
   if (actionRow) {
     const targetId = Number(profile?.id || 0);
     if (!targetId || currentProfileIsViewingSelf) {
-      actionRow.innerHTML = `<button class="btn btn-primary" type="button" data-profile-edit-self>編輯主頁</button>`;
+      actionRow.innerHTML = `
+        <button class="btn btn-primary" type="button" data-profile-customize-self>快速設定</button>
+        <button class="btn" type="button" data-profile-edit-self>編輯資料</button>
+      `;
     } else {
       const actions = [];
       if (profile?.can_request_friend) actions.push(`<button class="btn" type="button" data-profile-request-viewed="${targetId}">加好友</button>`);
@@ -533,6 +786,7 @@ function renderProfileHome(profile) {
 }
 
 function fillProfileEdit(profile) {
+  const style = profileStyleFromProfile(profile || {});
   const fields = {
     "profile-edit-display-name": profile?.display_name || "",
     "profile-edit-location": profile?.location || "",
@@ -540,12 +794,27 @@ function fillProfileEdit(profile) {
     "profile-edit-bio": profile?.bio || "",
     "profile-edit-signature": profile?.signature || "",
     "profile-edit-visibility": profile?.profile_visibility || "public",
+    "profile-edit-display-timezone": profile?.display_timezone || "auto",
+    "profile-edit-template": profile?.profile_template || "classic",
+    "profile-edit-accent": profile?.profile_accent || "default",
+    "profile-edit-density": profile?.profile_density || "comfortable",
+    "profile-edit-banner": style.banner,
+    "profile-edit-background-tone": style.background_tone,
+    "profile-edit-avatar-frame": style.avatar_frame,
+    "profile-edit-avatar-size": style.avatar_size,
+    "profile-edit-name-font": style.name_font,
+    "profile-edit-name-size": style.name_size,
+    "profile-edit-sticker": style.sticker,
+    "profile-edit-decoration": style.decoration,
     "profile-friend-code": profile?.friend_code || "",
   };
   Object.entries(fields).forEach(([id, value]) => {
     const el = $(id);
     if (el) el.value = value;
   });
+  if (typeof setUserDisplayTimezone === "function") {
+    setUserDisplayTimezone(profile?.display_timezone || "auto");
+  }
 }
 
 async function loadMyProfile({ quiet = false } = {}) {
@@ -588,6 +857,11 @@ async function saveMyProfile() {
     bio: $("profile-edit-bio")?.value || "",
     signature: $("profile-edit-signature")?.value || "",
     profile_visibility: $("profile-edit-visibility")?.value || "public",
+    display_timezone: $("profile-edit-display-timezone")?.value || "auto",
+    profile_template: $("profile-edit-template")?.value || "classic",
+    profile_accent: $("profile-edit-accent")?.value || "default",
+    profile_density: $("profile-edit-density")?.value || "comfortable",
+    profile_style: collectProfileStyleFromForm(),
   };
   try {
     const json = await profileReadJson(API + "/users/me/profile", {
@@ -596,6 +870,9 @@ async function saveMyProfile() {
       body: JSON.stringify(payload),
     });
     profilePanelCache = json.profile || {};
+    if (typeof setUserDisplayTimezone === "function") {
+      setUserDisplayTimezone(profilePanelCache.display_timezone || payload.display_timezone || "auto");
+    }
     renderProfileHome(profilePanelCache);
     fillProfileEdit(profilePanelCache);
     profileSetMsg(json.msg || "個人資料已更新");
@@ -912,12 +1189,21 @@ async function copyProfileFriendCode(event) {
 }
 
 function switchProfileTab(tab = "home") {
-  const next = ["home", "edit", "friends"].includes(tab) ? tab : "home";
+  const quickCustomize = tab === "appearance";
+  if (quickCustomize) {
+    currentProfileViewedUserId = currentUserId || null;
+    currentProfileIsViewingSelf = true;
+  }
+  const requested = quickCustomize ? "home" : (["home", "edit", "friends"].includes(tab) ? tab : "home");
+  const next = !currentProfileIsViewingSelf && ["edit", "friends"].includes(requested) ? "home" : requested;
+  profileQuickCustomizeOpen = quickCustomize && next === "home" && currentProfileIsViewingSelf;
   currentProfileTab = next;
   if (next !== "home") {
     currentProfileViewedUserId = currentUserId || null;
     currentProfileIsViewingSelf = true;
+    profileQuickCustomizeOpen = false;
   }
+  updateProfileTabVisibility();
   document.querySelectorAll("[data-profile-tab]").forEach((btn) => {
     const active = btn.dataset.profileTab === next;
     btn.classList.toggle("btn-primary", active);
@@ -935,6 +1221,7 @@ function switchProfileTab(tab = "home") {
       loadMyProfile();
     }
   }
+  setProfileQuickCustomizeOpen(profileQuickCustomizeOpen, { focus: quickCustomize });
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
 }
 
@@ -996,7 +1283,11 @@ function bindProfileAvatarUploaderControls() {
   }
   if (els.zoom) {
     els.zoom.addEventListener("input", () => {
-      profileAvatarCropState.zoom = profileAvatarClamp(parseFloat(els.zoom.value || "1") || 1, PROFILE_AVATAR_CROPPER_MIN_ZOOM, PROFILE_AVATAR_CROPPER_MAX_ZOOM);
+      profileAvatarCropState.zoom = profileAvatarClamp(
+        parseFloat(els.zoom.value || "1") || 1,
+        profileAvatarMinimumZoom(profileAvatarStageMetrics()),
+        PROFILE_AVATAR_CROPPER_MAX_ZOOM
+      );
       renderProfileAvatarCropper();
     });
   }
@@ -1039,6 +1330,26 @@ function bindProfileFriendsControls() {
   if (refresh) refresh.addEventListener("click", loadProfilePanel);
   const save = $("profile-save-btn");
   if (save) save.addEventListener("click", saveMyProfile);
+  const appearanceSave = $("profile-appearance-save-btn");
+  if (appearanceSave) appearanceSave.addEventListener("click", saveMyProfile);
+  const quickCustomize = $("profile-quick-customize-card");
+  if (quickCustomize) {
+    quickCustomize.addEventListener("toggle", () => {
+      profileQuickCustomizeOpen = quickCustomize.open && currentProfileIsViewingSelf;
+      if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
+    });
+  }
+  [
+    "profile-edit-template",
+    "profile-edit-accent",
+    "profile-edit-density",
+    ...Object.keys(PROFILE_STYLE_FIELD_MAP),
+  ].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("change", previewProfileAppearanceFromForm);
+    el.addEventListener("input", previewProfileAppearanceFromForm);
+  });
   const account = $("profile-edit-account-btn");
   if (account) account.addEventListener("click", () => {
     if (currentUserId && typeof editUser === "function") editUser(currentUserId);
@@ -1054,6 +1365,7 @@ function bindProfileFriendsControls() {
   const avatarButton = $("profile-home-avatar");
   if (avatarButton) avatarButton.addEventListener("click", () => {
     if (currentProfileIsViewingSelf) openProfileAvatarUploader({ pickFile: true });
+    else openProfileAvatarPreview(profilePanelCache);
   });
   bindProfileAvatarUploaderControls();
   const sidebarCard = $("sidebar-user-card");
@@ -1082,6 +1394,11 @@ function bindProfileFriendsControls() {
     const editSelf = event.target.closest("[data-profile-edit-self]");
     if (editSelf) {
       switchProfileTab("edit");
+      return;
+    }
+    const customizeSelf = event.target.closest("[data-profile-customize-self]");
+    if (customizeSelf) {
+      switchProfileTab("appearance");
       return;
     }
     const requestViewed = event.target.closest("[data-profile-request-viewed]");

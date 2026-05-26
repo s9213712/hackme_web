@@ -1,5 +1,6 @@
 import math
 import re
+import threading
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -14,6 +15,13 @@ def register_community_routes(app, deps):
     COMMUNITY_POST_AUTO_HIDE_ACTIVE_USER_RATIO = 0.10
     BOARD_VISIBILITIES = {"public", "unlisted", "private"}
     THREAD_POST_TYPES = {"normal", "announcement", "question", "howto", "review", "nsfw"}
+    DEFAULT_FORUM_BOARD_TITLES = (
+        "遊戲專區",
+        "二次元專區",
+        "ComfyUI專區",
+        "程式設計區",
+        "AI新知區",
+    )
     audit = deps["audit"]
     check_user_rate_limit = deps["check_user_rate_limit"]
     get_client_ip = deps["get_client_ip"]
@@ -29,6 +37,155 @@ def register_community_routes(app, deps):
     add_violation = deps.get("add_violation")
     detect_chat_violation = deps.get("detect_chat_violation")
     points_service = deps.get("points_service")
+    community_schema_lock = threading.RLock()
+    community_schema_ready_keys = set()
+
+    def _schema_row_value(row, key, index=None, default=None):
+        try:
+            return row[key]
+        except Exception:
+            if index is not None:
+                try:
+                    return row[index]
+                except Exception:
+                    return default
+            return default
+
+    def _community_schema_db_key(conn):
+        try:
+            rows = conn.execute("PRAGMA database_list").fetchall()
+            for row in rows:
+                name = _schema_row_value(row, "name", 1, "")
+                if name == "main":
+                    filename = _schema_row_value(row, "file", 2, "")
+                    return filename or f"memory:{id(conn)}"
+        except Exception:
+            pass
+        return f"connection:{id(conn)}"
+
+    def _community_table_columns(conn, table_name):
+        try:
+            return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+        except Exception:
+            return set()
+
+    def _community_schema_is_current(conn):
+        required = {
+            "announcements": {
+                "id",
+                "title",
+                "content",
+                "author_user_id",
+                "author_username",
+                "is_pinned",
+                "is_active",
+                "created_at",
+                "updated_at",
+            },
+            "forum_categories": {"id", "name", "description", "sort_order", "is_active", "created_at", "updated_at"},
+            "forum_boards": {
+                "id",
+                "category_id",
+                "slug",
+                "title",
+                "description",
+                "rules",
+                "visibility",
+                "sort_order",
+                "is_active",
+                "last_activity_at",
+                "owner_user_id",
+                "owner_username",
+                "status",
+                "review_note",
+                "reviewed_by",
+                "reviewed_at",
+                "created_at",
+                "updated_at",
+            },
+            "forum_threads": {
+                "id",
+                "board_id",
+                "title",
+                "content",
+                "status",
+                "review_note",
+                "reviewed_by",
+                "reviewed_at",
+                "post_type",
+                "is_sticky",
+                "is_locked",
+                "is_curated",
+                "view_count",
+                "edited_at",
+                "edited_by",
+                "is_deleted",
+                "deleted_at",
+                "deleted_by",
+                "delete_reason",
+                "author_user_id",
+                "author_username",
+                "created_at",
+                "updated_at",
+            },
+            "forum_posts": {
+                "id",
+                "thread_id",
+                "content",
+                "author_user_id",
+                "author_username",
+                "is_pinned",
+                "is_hidden",
+                "hidden_reason",
+                "edited_at",
+                "edited_by",
+                "is_deleted",
+                "deleted_at",
+                "deleted_by",
+                "delete_reason",
+                "created_at",
+                "updated_at",
+            },
+            "board_moderators": {
+                "id",
+                "board_id",
+                "user_id",
+                "username",
+                "can_review_threads",
+                "can_pin_posts",
+                "can_pin_threads",
+                "can_lock_threads",
+                "can_edit_posts",
+                "can_delete_posts",
+                "can_reward_authors",
+                "can_penalize_posts",
+                "created_by",
+                "created_at",
+                "updated_at",
+            },
+            "forum_post_reactions": {"id", "post_id", "user_id", "value"},
+            "forum_thread_reactions": {"id", "thread_id", "user_id", "value"},
+            "forum_post_reports": {"id", "post_id", "thread_id", "reason", "status"},
+            "forum_thread_views": {"id", "thread_id", "viewer_key", "viewed_at"},
+        }
+        for table_name, columns in required.items():
+            if not columns.issubset(_community_table_columns(conn, table_name)):
+                return False
+        try:
+            row = conn.execute(
+                "SELECT id FROM forum_categories WHERE name=?",
+                ("一般討論",),
+            ).fetchone()
+            if row is None:
+                return False
+            placeholders = ",".join("?" for _ in DEFAULT_FORUM_BOARD_TITLES)
+            default_count = conn.execute(
+                f"SELECT COUNT(*) AS c FROM forum_boards WHERE title IN ({placeholders})",
+                DEFAULT_FORUM_BOARD_TITLES,
+            ).fetchone()
+            return int(_schema_row_value(default_count, "c", 0, 0) or 0) >= len(DEFAULT_FORUM_BOARD_TITLES)
+        except Exception:
+            return False
 
     def require_csrf_by_method(fn):
         safe = require_csrf_safe(fn)
@@ -137,9 +294,22 @@ def register_community_routes(app, deps):
         return decorated
 
     def ensure_community_schema(conn):
-        # Guard executescript so AttributeError (missing method on wrapper) can't cause 500 (L-2)
-        try:
-            conn.executescript("""
+        schema_key = _community_schema_db_key(conn)
+        if schema_key in community_schema_ready_keys:
+            return
+        if _community_schema_is_current(conn):
+            community_schema_ready_keys.add(schema_key)
+            return
+        with community_schema_lock:
+            if schema_key in community_schema_ready_keys:
+                return
+            if _community_schema_is_current(conn):
+                community_schema_ready_keys.add(schema_key)
+                return
+
+            # Guard executescript so AttributeError (missing method on wrapper) can't cause 500 (L-2)
+            try:
+                conn.executescript("""
         CREATE TABLE IF NOT EXISTS announcements (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             title            TEXT NOT NULL,
@@ -305,94 +475,96 @@ def register_community_routes(app, deps):
         CREATE INDEX IF NOT EXISTS idx_forum_post_reports_status ON forum_post_reports(status, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_thread_views_thread ON forum_thread_views(thread_id, viewed_at);
         """)
-        except Exception:
-            return  # Guard: if executescript fails (wrapper doesn't support it), skip schema init
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(announcements)").fetchall()}
-        if "is_pinned" not in cols:
-            conn.execute("ALTER TABLE announcements ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(forum_boards)").fetchall()}
-        if "category_id" not in cols:
-            conn.execute("ALTER TABLE forum_boards ADD COLUMN category_id INTEGER REFERENCES forum_categories(id) ON DELETE SET NULL")
-        for name, ddl in (
-            ("slug", "TEXT"),
-            ("visibility", "TEXT NOT NULL DEFAULT 'public'"),
-            ("sort_order", "INTEGER NOT NULL DEFAULT 100"),
-            ("is_active", "INTEGER NOT NULL DEFAULT 1"),
-            ("last_activity_at", "TEXT"),
-        ):
-            if name not in cols:
-                conn.execute(f"ALTER TABLE forum_boards ADD COLUMN {name} {ddl}")
-        if "rules" not in cols:
-            conn.execute("ALTER TABLE forum_boards ADD COLUMN rules TEXT")
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(forum_threads)").fetchall()}
-        if "status" not in cols:
-            conn.execute("ALTER TABLE forum_threads ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'")
-        if "review_note" not in cols:
-            conn.execute("ALTER TABLE forum_threads ADD COLUMN review_note TEXT")
-        if "reviewed_by" not in cols:
-            conn.execute("ALTER TABLE forum_threads ADD COLUMN reviewed_by TEXT")
-        if "reviewed_at" not in cols:
-            conn.execute("ALTER TABLE forum_threads ADD COLUMN reviewed_at TEXT")
-        for name, ddl in (
-            ("post_type", "TEXT NOT NULL DEFAULT 'normal'"),
-            ("is_sticky", "INTEGER NOT NULL DEFAULT 0"),
-            ("is_locked", "INTEGER NOT NULL DEFAULT 0"),
-            ("is_curated", "INTEGER NOT NULL DEFAULT 0"),
-            ("view_count", "INTEGER NOT NULL DEFAULT 0"),
-            ("edited_at", "TEXT"),
-            ("edited_by", "TEXT"),
-            ("is_deleted", "INTEGER NOT NULL DEFAULT 0"),
-            ("deleted_at", "TEXT"),
-            ("deleted_by", "TEXT"),
-            ("delete_reason", "TEXT"),
-        ):
-            if name not in cols:
-                conn.execute(f"ALTER TABLE forum_threads ADD COLUMN {name} {ddl}")
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(forum_posts)").fetchall()}
-        for name, ddl in (
-            ("is_pinned", "INTEGER NOT NULL DEFAULT 0"),
-            ("is_hidden", "INTEGER NOT NULL DEFAULT 0"),
-            ("hidden_reason", "TEXT"),
-            ("edited_at", "TEXT"),
-            ("edited_by", "TEXT"),
-            ("is_deleted", "INTEGER NOT NULL DEFAULT 0"),
-            ("deleted_at", "TEXT"),
-            ("deleted_by", "TEXT"),
-            ("delete_reason", "TEXT"),
-        ):
-            if name not in cols:
-                conn.execute(f"ALTER TABLE forum_posts ADD COLUMN {name} {ddl}")
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(board_moderators)").fetchall()}
-        for name, ddl in (
-            ("can_review_threads", "INTEGER NOT NULL DEFAULT 1"),
-            ("can_pin_posts", "INTEGER NOT NULL DEFAULT 1"),
-            ("can_pin_threads", "INTEGER NOT NULL DEFAULT 1"),
-            ("can_lock_threads", "INTEGER NOT NULL DEFAULT 1"),
-            ("can_edit_posts", "INTEGER NOT NULL DEFAULT 1"),
-            ("can_delete_posts", "INTEGER NOT NULL DEFAULT 1"),
-            ("can_reward_authors", "INTEGER NOT NULL DEFAULT 1"),
-            ("can_penalize_posts", "INTEGER NOT NULL DEFAULT 1"),
-            ("created_by", "TEXT NOT NULL DEFAULT 'system'"),
-            ("created_at", "TEXT"),
-            ("updated_at", "TEXT"),
-        ):
-            if name not in cols:
-                conn.execute(f"ALTER TABLE board_moderators ADD COLUMN {name} {ddl}")
-        default_category_id = ensure_default_forum_category(conn)
-        conn.execute(
-            "UPDATE forum_boards SET category_id=? WHERE category_id IS NULL",
-            (default_category_id,)
-        )
-        conn.execute(
-            "UPDATE forum_boards SET last_activity_at=COALESCE(last_activity_at, updated_at, created_at) "
-            "WHERE last_activity_at IS NULL"
-        )
-        for row in conn.execute("SELECT id, title FROM forum_boards WHERE slug IS NULL OR slug=''").fetchall():
+            except Exception:
+                return  # Guard: if executescript fails (wrapper doesn't support it), skip schema init
+            cols = {row["name"] for row in conn.execute("PRAGMA table_info(announcements)").fetchall()}
+            if "is_pinned" not in cols:
+                conn.execute("ALTER TABLE announcements ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+            cols = {row["name"] for row in conn.execute("PRAGMA table_info(forum_boards)").fetchall()}
+            if "category_id" not in cols:
+                conn.execute("ALTER TABLE forum_boards ADD COLUMN category_id INTEGER REFERENCES forum_categories(id) ON DELETE SET NULL")
+            for name, ddl in (
+                ("slug", "TEXT"),
+                ("visibility", "TEXT NOT NULL DEFAULT 'public'"),
+                ("sort_order", "INTEGER NOT NULL DEFAULT 100"),
+                ("is_active", "INTEGER NOT NULL DEFAULT 1"),
+                ("last_activity_at", "TEXT"),
+            ):
+                if name not in cols:
+                    conn.execute(f"ALTER TABLE forum_boards ADD COLUMN {name} {ddl}")
+            if "rules" not in cols:
+                conn.execute("ALTER TABLE forum_boards ADD COLUMN rules TEXT")
+            cols = {row["name"] for row in conn.execute("PRAGMA table_info(forum_threads)").fetchall()}
+            if "status" not in cols:
+                conn.execute("ALTER TABLE forum_threads ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'")
+            if "review_note" not in cols:
+                conn.execute("ALTER TABLE forum_threads ADD COLUMN review_note TEXT")
+            if "reviewed_by" not in cols:
+                conn.execute("ALTER TABLE forum_threads ADD COLUMN reviewed_by TEXT")
+            if "reviewed_at" not in cols:
+                conn.execute("ALTER TABLE forum_threads ADD COLUMN reviewed_at TEXT")
+            for name, ddl in (
+                ("post_type", "TEXT NOT NULL DEFAULT 'normal'"),
+                ("is_sticky", "INTEGER NOT NULL DEFAULT 0"),
+                ("is_locked", "INTEGER NOT NULL DEFAULT 0"),
+                ("is_curated", "INTEGER NOT NULL DEFAULT 0"),
+                ("view_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("edited_at", "TEXT"),
+                ("edited_by", "TEXT"),
+                ("is_deleted", "INTEGER NOT NULL DEFAULT 0"),
+                ("deleted_at", "TEXT"),
+                ("deleted_by", "TEXT"),
+                ("delete_reason", "TEXT"),
+            ):
+                if name not in cols:
+                    conn.execute(f"ALTER TABLE forum_threads ADD COLUMN {name} {ddl}")
+            cols = {row["name"] for row in conn.execute("PRAGMA table_info(forum_posts)").fetchall()}
+            for name, ddl in (
+                ("is_pinned", "INTEGER NOT NULL DEFAULT 0"),
+                ("is_hidden", "INTEGER NOT NULL DEFAULT 0"),
+                ("hidden_reason", "TEXT"),
+                ("edited_at", "TEXT"),
+                ("edited_by", "TEXT"),
+                ("is_deleted", "INTEGER NOT NULL DEFAULT 0"),
+                ("deleted_at", "TEXT"),
+                ("deleted_by", "TEXT"),
+                ("delete_reason", "TEXT"),
+            ):
+                if name not in cols:
+                    conn.execute(f"ALTER TABLE forum_posts ADD COLUMN {name} {ddl}")
+            cols = {row["name"] for row in conn.execute("PRAGMA table_info(board_moderators)").fetchall()}
+            for name, ddl in (
+                ("can_review_threads", "INTEGER NOT NULL DEFAULT 1"),
+                ("can_pin_posts", "INTEGER NOT NULL DEFAULT 1"),
+                ("can_pin_threads", "INTEGER NOT NULL DEFAULT 1"),
+                ("can_lock_threads", "INTEGER NOT NULL DEFAULT 1"),
+                ("can_edit_posts", "INTEGER NOT NULL DEFAULT 1"),
+                ("can_delete_posts", "INTEGER NOT NULL DEFAULT 1"),
+                ("can_reward_authors", "INTEGER NOT NULL DEFAULT 1"),
+                ("can_penalize_posts", "INTEGER NOT NULL DEFAULT 1"),
+                ("created_by", "TEXT NOT NULL DEFAULT 'system'"),
+                ("created_at", "TEXT"),
+                ("updated_at", "TEXT"),
+            ):
+                if name not in cols:
+                    conn.execute(f"ALTER TABLE board_moderators ADD COLUMN {name} {ddl}")
+            default_category_id = ensure_default_forum_category(conn)
             conn.execute(
-                "UPDATE forum_boards SET slug=? WHERE id=?",
-                (make_board_slug(row["title"], row["id"]), row["id"])
+                "UPDATE forum_boards SET category_id=? WHERE category_id IS NULL",
+                (default_category_id,)
             )
-        ensure_default_forum_boards(conn, default_category_id)
+            conn.execute(
+                "UPDATE forum_boards SET last_activity_at=COALESCE(last_activity_at, updated_at, created_at) "
+                "WHERE last_activity_at IS NULL"
+            )
+            for row in conn.execute("SELECT id, title FROM forum_boards WHERE slug IS NULL OR slug=''").fetchall():
+                conn.execute(
+                    "UPDATE forum_boards SET slug=? WHERE id=?",
+                    (make_board_slug(row["title"], row["id"]), row["id"])
+                )
+            ensure_default_forum_boards(conn, default_category_id)
+            conn.commit()
+            community_schema_ready_keys.add(schema_key)
 
     def ensure_default_forum_category(conn):
         now = datetime.now().isoformat()
@@ -452,14 +624,14 @@ def register_community_routes(app, deps):
         if not moderator:
             return
         now = datetime.now().isoformat()
-        defaults = (
+        default_details = (
             ("遊戲專區", "遊戲討論、攻略、組隊與實測心得。", "禁止外掛、詐騙、洗版與人身攻擊。", 10),
             ("二次元專區", "動漫、漫畫、角色創作與作品交流。", "尊重創作者與分級規範，禁止盜版與騷擾。", 20),
             ("ComfyUI專區", "ComfyUI 工作流、模型、節點與生成參數交流。", "分享工作流時請標註來源與使用限制。", 30),
             ("程式設計區", "程式設計、除錯、架構與工具鏈討論。", "提問請附環境、錯誤訊息與可重現步驟。", 40),
             ("AI新知區", "AI 研究、產品、模型與產業消息討論。", "請標註消息來源，避免未證實傳言。", 50),
         )
-        for title, description, rules, sort_order in defaults:
+        for title, description, rules, sort_order in default_details:
             row = conn.execute("SELECT id FROM forum_boards WHERE title=?", (title,)).fetchone()
             if row:
                 ensure_board_moderator(conn, row["id"], moderator["id"], moderator["username"])
@@ -683,6 +855,18 @@ def register_community_routes(app, deps):
     def normalize_thread_post_type(value):
         post_type = normalize_text(value) or "normal"
         return post_type if post_type in THREAD_POST_TYPES else None
+
+    def normalize_payload_bool(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = normalize_text(value).lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off", ""}:
+            return False
+        return bool(value)
 
     def actor_effective_level(actor):
         return actor_value(actor, "effective_level") or actor_value(actor, "base_level") or actor_value(actor, "member_level") or "normal"
@@ -1383,6 +1567,7 @@ def register_community_routes(app, deps):
                     item["user_reaction"] = reaction_counts["user_reaction"] or 0
                     item["reply_count"] = reply_count or 0
                     threads.append(item)
+                can_post_without_review = not thread_requires_review(actor, manageable)
                 return json_resp({
                     "ok": True,
                     "board": board_payload(board),
@@ -1391,7 +1576,9 @@ def register_community_routes(app, deps):
                     "page": page,
                     "limit": limit,
                     "query": q,
-                    "can_post_directly": manageable,
+                    "can_post_directly": can_post_without_review,
+                    "can_post_without_review": can_post_without_review,
+                    "requires_thread_review": not can_post_without_review,
                     "can_moderate": manageable,
                 })
 
@@ -2265,7 +2452,13 @@ def register_community_routes(app, deps):
             data = request.get_json(force=True)
         except Exception:
             return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
-        locked = 1 if bool(data.get("locked")) else 0
+        if "locked" in data:
+            locked_value = data.get("locked")
+        elif "is_locked" in data:
+            locked_value = data.get("is_locked")
+        else:
+            return json_resp({"ok": False, "msg": "請指定 locked 狀態"}), 400
+        locked = 1 if normalize_payload_bool(locked_value) else 0
         conn = get_db()
         try:
             ensure_community_schema(conn)
@@ -2283,7 +2476,7 @@ def register_community_routes(app, deps):
             conn.commit()
             audit("COMMUNITY_THREAD_LOCK", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"thread_id={thread_id}, locked={locked}")
-            return json_resp({"ok": True, "msg": "主題狀態已更新"})
+            return json_resp({"ok": True, "msg": "主題狀態已更新", "locked": bool(locked), "is_locked": bool(locked)})
         finally:
             conn.close()
 

@@ -141,6 +141,34 @@ def test_normal_user_can_interact(tmp_path):
         conn.close()
 
 
+def test_permission_check_is_read_only_while_users_table_is_write_locked(tmp_path):
+    db_path = tmp_path / "levels.db"
+    setup = _conn(db_path)
+    try:
+        _insert_user(setup, 2, "normal", "normal")
+    finally:
+        setup.close()
+
+    reader = sqlite3.connect(db_path, timeout=0.1)
+    reader.row_factory = sqlite3.Row
+    locker = sqlite3.connect(db_path, timeout=0.1)
+    try:
+        locker.execute("BEGIN IMMEDIATE")
+        ok, msg, status = require_member_action(
+            {"id": 2, "username": "normal", "role": "user", "status": "active", "member_level": "normal"},
+            "community_reply",
+            conn=reader,
+        )
+        row = reader.execute("SELECT level_updated_at FROM users WHERE id=2").fetchone()
+    finally:
+        locker.rollback()
+        locker.close()
+        reader.close()
+
+    assert (ok, msg, status) == (True, "", 200)
+    assert row["level_updated_at"] is None
+
+
 def test_trusted_attachment_and_rate_limit(tmp_path):
     conn = _conn(tmp_path / "levels.db")
     try:

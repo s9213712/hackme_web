@@ -20,6 +20,7 @@ BUG_REPORT_REWARD_POINTS = {
     "critical": 10,
 }
 BUG_REPORT_SEVERITIES = set(BUG_REPORT_REWARD_POINTS)
+BUG_REPORT_REVIEW_REWARD_MAX_POINTS = 1_000_000
 
 
 def _clean_text(value, limit):
@@ -28,6 +29,20 @@ def _clean_text(value, limit):
     # Strip null bytes, trim, then HTML-escape to prevent XSS (Bug: XSS test)
     cleaned = html.escape(value.replace("\x00", "").strip(), quote=True)
     return cleaned[:limit]
+
+
+def _parse_review_reward_points(value, default):
+    if value is None or value == "":
+        value = default
+    try:
+        amount = int(value)
+    except Exception as exc:
+        raise ValueError("獎勵點數必須是整數") from exc
+    if amount < 0:
+        raise ValueError("獎勵點數不可小於 0")
+    if amount > BUG_REPORT_REVIEW_REWARD_MAX_POINTS:
+        raise ValueError(f"獎勵點數不可超過 {BUG_REPORT_REVIEW_REWARD_MAX_POINTS:,}")
+    return amount
 
 
 def _actor_value(actor, key, default=None):
@@ -127,11 +142,11 @@ def register_bug_report_routes(app, deps):
                 return item
         return None
 
-    def _award_reviewed_bug_report(actor, payload, review_note=""):
+    def _award_reviewed_bug_report(actor, payload, reward_points, review_note=""):
         if not points_service:
             raise RuntimeError("points service unavailable")
         reporter_id = payload.get("reporter", {}).get("id")
-        reward = int(payload.get("reward_points") or 0)
+        reward = int(reward_points or 0)
         if not reporter_id or reward <= 0:
             raise ValueError("bug report has no reward target")
         return points_service.rc1_facade().grant_reward(
@@ -147,6 +162,8 @@ def register_bug_report_routes(app, deps):
                 "bug_report_id": payload["id"],
                 "severity": payload.get("severity"),
                 "reviewed_reward": True,
+                "review_reward_points": reward,
+                "suggested_reward_points": payload.get("suggested_reward_points") or payload.get("reward_points"),
             },
             actor=actor,
         )
@@ -216,13 +233,26 @@ def register_bug_report_routes(app, deps):
                     "status": item.get("status"),
                     "severity": item.get("severity"),
                     "title": item.get("title"),
+                    "description": item.get("description"),
                     "feature": item.get("feature"),
                     "device": item.get("device"),
                     "page": item.get("page"),
+                    "steps": item.get("steps"),
+                    "expected": item.get("expected"),
+                    "actual": item.get("actual"),
                     "created_at": item.get("created_at"),
+                    "reviewed_at": item.get("reviewed_at"),
+                    "reviewed_by": item.get("reviewed_by"),
+                    "review_note": item.get("review_note"),
+                    "ledger_uuid": item.get("ledger_uuid"),
                     "reward_points": item.get("reward_points"),
+                    "suggested_reward_points": item.get("suggested_reward_points") or item.get("reward_points"),
                     "reward_status": item.get("reward_status", "pending_review"),
                     "reporter": item.get("reporter", {}).get("username"),
+                    "reporter_id": item.get("reporter", {}).get("id"),
+                    "reporter_role": item.get("reporter", {}).get("role"),
+                    "request_ip": item.get("request", {}).get("ip"),
+                    "user_agent": item.get("request", {}).get("user_agent"),
                     "file": str(path.relative_to(reports_dir.parent)),
                 })
             return json_resp({"ok": True, "reports": reports})
@@ -238,7 +268,7 @@ def register_bug_report_routes(app, deps):
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
         if not _is_root(actor):
-            return json_resp({"ok": False, "msg": "只有 root 可審核 bug 回報"}, 403)
+            return json_resp({"ok": False, "msg": "只有 root 可審核 bug 回報"}), 403
         try:
             data = request.get_json(silent=True) or {}
         except Exception:
@@ -258,11 +288,24 @@ def register_bug_report_routes(app, deps):
         payload["review_note"] = review_note
         ledger = None
         if decision == "approve":
-            result = _award_reviewed_bug_report(dict(actor), payload, review_note=review_note)
-            ledger = result.get("ledger")
+            suggested_reward = int(payload.get("suggested_reward_points") or payload.get("reward_points") or 0)
+            if "reward_points" not in data:
+                return json_resp({"ok": False, "msg": "核准 bug 回報時必須由 root 手動設定獎勵點數，0 代表核准但不發獎勵"}), 400
+            try:
+                reward_points = _parse_review_reward_points(data.get("reward_points"), None)
+            except ValueError as exc:
+                return json_resp({"ok": False, "msg": str(exc)}), 400
+            payload.setdefault("suggested_reward_points", suggested_reward)
+            payload["reward_points"] = reward_points
             payload["status"] = "approved"
-            payload["reward_status"] = "awarded"
-            payload["ledger_uuid"] = ledger.get("ledger_uuid") if ledger else None
+            if reward_points > 0:
+                result = _award_reviewed_bug_report(dict(actor), payload, reward_points, review_note=review_note)
+                ledger = result.get("ledger")
+                payload["reward_status"] = "awarded"
+                payload["ledger_uuid"] = ledger.get("ledger_uuid") if ledger else None
+            else:
+                payload["reward_status"] = "waived"
+                payload["ledger_uuid"] = None
         else:
             payload["status"] = "rejected"
             payload["reward_status"] = "rejected"

@@ -24,6 +24,9 @@ def test_inactivity_timeout_message_uses_configured_duration():
     assert "showLoginScreen();" in auth
     assert "if (!res.ok && !immediate)" in auth
     assert "已超過 3 分鐘未操作" not in core
+    assert 'label.textContent = currentUser && inactivityLogoutMs <= 0 ? "閒置登出：停用"' in core
+    assert 's.session_idle_timeout_minutes ?? ""' in (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    assert 'session_idle_timeout_minutes: parseInt($("s-session-idle-timeout")?.value || "0", 10) || 0' in (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     assert "function setInactivitySuspendState(reason, active, labelText = \"系統工作進行中\")" in core
     assert "閒置登出：${currentInactivitySuspendLabel()}，暫停" in core
     assert '$("li-msg") || $("settings-msg")' not in core

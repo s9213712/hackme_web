@@ -64,7 +64,10 @@ def _seed_community_db(db_path):
             username TEXT NOT NULL,
             role TEXT NOT NULL,
             avatar_file_id TEXT,
-            avatar_crop_json TEXT
+            avatar_crop_json TEXT,
+            reputation INTEGER NOT NULL DEFAULT 0,
+            violation_count INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT
         );
         """
     )
@@ -181,6 +184,24 @@ def test_community_routes_accept_sqlite_row_actor(tmp_path):
     assert announcements.status_code == 200
     assert categories.status_code == 200
     assert boards.status_code == 200
+
+
+def test_boards_list_skips_schema_writes_when_schema_is_current(tmp_path):
+    db_path = tmp_path / "community.db"
+    _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    locker = sqlite3.connect(db_path)
+    try:
+        locker.execute("BEGIN IMMEDIATE")
+        response = client.get("/api/community/boards")
+    finally:
+        locker.rollback()
+        locker.close()
+
+    assert response.status_code == 200
+    assert response.get_json()["boards"]
 
 
 def test_forum_board_schema_backfills_slug_and_visibility(tmp_path):
@@ -598,6 +619,13 @@ def test_newbie_thread_requires_review_but_normal_thread_is_approved(tmp_path):
     )
     assert newbie.status_code == 200
     assert newbie.get_json()["status"] == "pending"
+    listing = client.get(f"/api/community/boards/{board_id}/threads")
+    assert listing.status_code == 200
+    listing_data = listing.get_json()
+    assert listing_data["can_post_directly"] is False
+    assert listing_data["can_post_without_review"] is False
+    assert listing_data["requires_thread_review"] is True
+    assert listing_data["can_moderate"] is False
 
     actor_box["actor"] = {"id": 4, "username": "bob", "role": "user", "member_level": "normal"}
     normal = client.post(
@@ -606,6 +634,13 @@ def test_newbie_thread_requires_review_but_normal_thread_is_approved(tmp_path):
     )
     assert normal.status_code == 200
     assert normal.get_json()["status"] == "approved"
+    listing = client.get(f"/api/community/boards/{board_id}/threads")
+    assert listing.status_code == 200
+    listing_data = listing.get_json()
+    assert listing_data["can_post_directly"] is True
+    assert listing_data["can_post_without_review"] is True
+    assert listing_data["requires_thread_review"] is False
+    assert listing_data["can_moderate"] is False
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -670,6 +705,35 @@ def test_manager_can_assign_board_moderator_with_scoped_permissions(tmp_path):
     assert lock.status_code == 200
     assert delete.status_code == 200
     assert _post_row(db_path, ids["post"])["is_deleted"] == 1
+
+
+def test_thread_lock_accepts_is_locked_alias_and_blocks_member_replies(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    locked = client.post(f"/api/community/threads/{ids['thread']}/lock", json={"is_locked": True})
+    assert locked.status_code == 200
+    assert locked.get_json()["is_locked"] is True
+    assert _thread_row(db_path, ids["thread"])["is_locked"] == 1
+
+    before_posts = _count(db_path, "forum_posts")
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    blocked_reply = client.post(
+        f"/api/community/threads/{ids['thread']}/posts",
+        json={"content": "should not be accepted while locked"},
+    )
+    assert blocked_reply.status_code == 403
+    assert blocked_reply.get_json()["ok"] is False
+    assert "鎖定" in blocked_reply.get_json()["msg"]
+    assert _count(db_path, "forum_posts") == before_posts
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
+    unlocked = client.post(f"/api/community/threads/{ids['thread']}/lock", json={"locked": "false"})
+    assert unlocked.status_code == 200
+    assert unlocked.get_json()["is_locked"] is False
+    assert _thread_row(db_path, ids["thread"])["is_locked"] == 0
 
 
 def test_manager_can_edit_announcement(tmp_path):

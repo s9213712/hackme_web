@@ -17,7 +17,7 @@ def test_chat_room_delete_ui_is_wired():
     # bumping the ?v=… string for browser caching doesn't tip these
     # tests over. The behavior under test is "the file is referenced",
     # not "the file is referenced at exactly version X".
-    assert "/js/20-chat.js?v=20260429-official-chat-protect" in index_html
+    assert re.search(r"/js/20-chat\.js\?v=", index_html)
     assert re.search(r"/js/00-core\.js\?v=", index_html)
     assert re.search(r"/js/90-bootstrap\.js\?v=", index_html)
     assert re.search(r"/styles\.css\?v=", index_html)
@@ -33,10 +33,18 @@ def test_chat_room_delete_ui_is_wired():
     assert "chat-room-row" in core_js
     assert "chat-room-delete-btn" in core_js
     assert "deleteChatRoom(r.id)" in core_js
+    assert "讀取聊天室失敗" in chat_js
+    assert "好友清單讀取失敗" in chat_js
+    assert "loadChatFriends().catch(() => {})" not in chat_js
     assert "data-recall-message" in core_js
     assert "data-edit-message" in core_js
     assert "chat-edited-label" in core_js
     assert "chat-sticker" in core_js
+    assert "function renderChatMessageContent(content)" in core_js
+    assert "function chatSafeMessageHref(rawUrl)" in core_js
+    assert "/shared/videos/" in core_js
+    assert 'class="chat-inline-link"' in core_js
+    assert 'rel="noopener noreferrer"' in core_js
     assert "chat-message-image-preview" in core_js
     assert "function canRemoveContextAttachment(ref)" in core_js
     assert "const removeButton = canRemoveContextAttachment(file)" in core_js
@@ -49,6 +57,9 @@ def test_chat_room_delete_ui_is_wired():
     assert "async function editChatMessage(messageId)" in chat_js
     assert 'method: "PUT"' in chat_js
     assert "async function sendChatSticker(stickerKey)" in chat_js
+    assert "function insertChatSticker(stickerKey)" in chat_js
+    assert "insertChatSticker(btn.dataset.chatSticker || \"\")" in (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
+    assert "sendChatSticker(btn.dataset.chatSticker || \"\")" not in (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     assert "async function addChatFriend()" in chat_js
     assert "async function loadChatFriends()" in chat_js
     assert 'smile: "🙂"' in chat_js
@@ -64,6 +75,9 @@ def test_chat_room_delete_ui_is_wired():
     assert "attachment_file_ids" in chat_js
     assert "function openChatAttachmentPicker()" in drive_js
     assert "async function uploadPendingChatAttachment()" in drive_js
+    assert "let chatAttachmentUploadInFlight = false;" in drive_js
+    assert "chatAttachmentUploadFingerprint === fingerprint" in drive_js
+    assert "if (input) input.disabled = true;" in drive_js
     assert "async function addExistingChatFileToPending(fileId)" in drive_js
     assert "if (!selectedFileId) return;" in drive_js
     assert 'apiFetch(API + `/chat/rooms/${encodeURIComponent(roomId)}`' in chat_js
@@ -74,7 +88,10 @@ def test_chat_room_delete_ui_is_wired():
     assert ".chat-sticker-bar .chat-sticker-btn" in css
     assert ".chat-friend-panel" in css
     assert ".chat-message-attachments" in css
+    assert ".chat-message-content" in css
+    assert ".chat-inline-link" in css
     assert ".chat-message-image-preview" in css
     assert ".chat-composer-tools" in css
     assert '"glyph": "🙂"' in chat_route
     assert '"glyph": "🥲"' in chat_route
+    assert 'conn.execute("BEGIN IMMEDIATE")' in chat_route

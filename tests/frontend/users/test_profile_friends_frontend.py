@@ -15,7 +15,7 @@ def test_profile_friends_panel_is_wired_as_user_module():
     chat_pos = index_html.index('id="tab-module-chat"')
     profile_pos = index_html.index('id="tab-module-profile"')
     announcements_pos = index_html.index('id="tab-module-announcements"')
-    assert chat_pos < profile_pos < announcements_pos
+    assert announcements_pos < chat_pos < profile_pos
     assert 'id="sidebar-user-card" role="button" tabindex="0"' in index_html
     assert 'id="module-profile"' in index_html
     assert 'data-profile-tab="home"' in index_html
@@ -24,9 +24,19 @@ def test_profile_friends_panel_is_wired_as_user_module():
     assert 'id="s-module-profile-min-role"' in index_html
     assert 'id="profile-avatar-cloud-file"' in index_html
     assert 'id="profile-avatar-cloud-use"' in index_html
-    assert 'id="profile-avatar-crop-zoom" min="1" max="6"' in index_html
+    assert 'id="profile-avatar-crop-zoom" min="0.5" max="6"' in index_html
+    assert 'id="profile-edit-display-timezone"' in index_html
+    assert 'id="profile-quick-customize-card"' in index_html
+    assert 'id="profile-appearance-save-btn"' in index_html
+    assert 'id="profile-edit-template"' in index_html
+    assert 'id="profile-edit-accent"' in index_html
+    assert 'id="profile-edit-density"' in index_html
+    assert 'id="edit-user-display-timezone"' in index_html
+    assert 'id="edit-user-preferences-section"' in index_html
+    assert "跟隨瀏覽器" in index_html
     assert "/js/58-profile-friends.js" in index_html
     assert 'tabId: "tab-module-profile"' in core_js
+    assert 'action: "profile:appearance"' in core_js
     assert 'action: "profile:friends"' in core_js
     assert 'switchModuleTab("profile")' in core_js
     assert 'currentModuleTab === "profile"' in core_js
@@ -56,6 +66,36 @@ def test_profile_friends_panel_is_wired_as_user_module():
     assert "cloud_file_id" in profile_js
     assert "/cloud-drive/files?user_id=" in profile_js
     assert "/preview/content" in profile_js
+    assert "display_timezone" in profile_js
+    assert "profile_template" in profile_js
+    assert "profile_accent" in profile_js
+    assert "profile_density" in profile_js
+    assert "profile_style: collectProfileStyleFromForm()" in profile_js
+    assert "function previewProfileAppearanceFromForm()" in profile_js
+    assert "function applyProfilePresentation(profile)" in profile_js
+    assert "setUserDisplayTimezone" in profile_js
+    auth_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
+    assert "saveUserDisplayTimezoneSetting" in auth_js
+    assert 'API + "/users/me/profile"' in auth_js
+    assert "selectedUserDisplayTimezone" in auth_js
+    assert "openProfileAvatarPreview(profilePanelCache)" in profile_js
+    assert "function updateProfileTabVisibility()" in profile_js
+    assert 'btn.hidden = hidden;' in profile_js
+    assert 'btn.style.display = hidden ? "none" : "";' in profile_js
+    assert '!currentProfileIsViewingSelf && ["edit", "friends"].includes(requested)' in profile_js
+    assert '.profile-tabs [hidden]' in css
+    assert "const PROFILE_AVATAR_CROPPER_MIN_ZOOM = 0.5" in profile_js
+    assert "function profileAvatarMinimumZoom(metrics)" in profile_js
+    assert "profile-avatar-preview-overlay" in profile_js
     assert '.profile-friend-columns' in css
     assert '.profile-avatar-cloud-row' in css
+    assert ".profile-avatar-preview-frame" in css
+    assert ".profile-summary.profile-template-creator" in css
+    assert ".profile-summary.profile-template-gallery" in css
+    assert ".profile-summary.profile-accent-ocean" in css
+    assert ".profile-summary.profile-accent-violet" in css
+    assert ".profile-quick-customize" in css
     assert '.sidebar-user-card:hover' in css
+    assert "USER_DISPLAY_TIMEZONE_STORAGE_KEY" in core_js
+    assert "function getUserDisplayTimezone" in core_js
+    assert "timeZone: displayTimezone" in core_js

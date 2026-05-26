@@ -133,16 +133,82 @@ def test_bug_report_does_not_award_points_until_root_review(tmp_path):
     assert calls == []
 
     actor_box["actor"] = {"id": 1, "username": "root", "role": "super_admin"}
-    review = client.post(f"/api/admin/bug-reports/{res.get_json()['report_id']}/review", json={"decision": "approve", "review_note": "valid"})
+    review = client.post(
+        f"/api/admin/bug-reports/{res.get_json()['report_id']}/review",
+        json={"decision": "approve", "review_note": "valid", "reward_points": 4},
+    )
 
     assert review.status_code == 200
     body = review.get_json()
     assert body["report"]["reward_status"] == "awarded"
+    assert body["report"]["reward_points"] == 4
+    assert body["report"]["suggested_reward_points"] == 10
     assert body["report"]["ledger_uuid"] == "ledger-bug-1"
     assert calls[0]["user_id"] == 3
-    assert calls[0]["amount"] == 10
+    assert calls[0]["amount"] == 4
     assert calls[0]["action_type"] == "valid_bug_report_critical"
     assert calls[0]["reference_type"] == "bug_report"
+
+
+def test_root_can_approve_bug_report_with_zero_reward(tmp_path):
+    reports_dir = tmp_path / "reports"
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "effective_level": "normal"}}
+    calls = []
+
+    class FakePointsService:
+        def rc1_facade(self):
+            return self
+
+        def grant_reward(self, **kwargs):
+            calls.append(kwargs)
+            return {"ok": True, "ledger": {"ledger_uuid": "ledger-bug-zero"}}
+
+    client = _build_app(reports_dir, actor_box, points_service=FakePointsService()).test_client()
+    res = client.post("/api/bug-reports", json={"severity": "high", "title": "ui bug", "description": "details"})
+    assert res.status_code == 200
+
+    actor_box["actor"] = {"id": 1, "username": "root", "role": "super_admin"}
+    review = client.post(
+        f"/api/admin/bug-reports/{res.get_json()['report_id']}/review",
+        json={"decision": "approve", "review_note": "valid but no reward", "reward_points": 0},
+    )
+
+    assert review.status_code == 200
+    body = review.get_json()
+    assert body["report"]["status"] == "approved"
+    assert body["report"]["reward_status"] == "waived"
+    assert body["report"]["reward_points"] == 0
+    assert body["report"]["suggested_reward_points"] == 5
+    assert body["ledger"] is None
+    assert calls == []
+
+
+def test_root_approve_bug_report_requires_explicit_reward_points(tmp_path):
+    reports_dir = tmp_path / "reports"
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "effective_level": "normal"}}
+    calls = []
+
+    class FakePointsService:
+        def rc1_facade(self):
+            return self
+
+        def grant_reward(self, **kwargs):
+            calls.append(kwargs)
+            return {"ok": True, "ledger": {"ledger_uuid": "ledger-should-not-run"}}
+
+    client = _build_app(reports_dir, actor_box, points_service=FakePointsService()).test_client()
+    res = client.post("/api/bug-reports", json={"severity": "critical", "title": "critical bug", "description": "details"})
+    assert res.status_code == 200
+
+    actor_box["actor"] = {"id": 1, "username": "root", "role": "super_admin"}
+    review = client.post(
+        f"/api/admin/bug-reports/{res.get_json()['report_id']}/review",
+        json={"decision": "approve", "review_note": "valid"},
+    )
+
+    assert review.status_code == 400
+    assert "必須由 root 手動設定獎勵點數" in review.get_json()["msg"]
+    assert calls == []
 
 
 def test_bug_report_rate_limit_and_duplicate_detection(tmp_path):

@@ -1,6 +1,7 @@
 import json
 import secrets
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 APPEARANCE_COLOR_KEYS = (
@@ -21,6 +22,40 @@ APPEARANCE_FONT_FAMILIES = {"system", "rounded", "serif", "mono"}
 APPEARANCE_BACKGROUND_STYLES = {"flat", "aurora", "grid"}
 APPEARANCE_PANEL_STYLES = {"glass", "matte", "solid"}
 APPEARANCE_SIDEBAR_WIDTHS = {"compact", "standard", "wide"}
+PROFILE_TEMPLATES = {"classic", "creator", "compact", "showcase", "gallery", "neon"}
+PROFILE_ACCENTS = {"default", "ocean", "sunrise", "forest", "mono", "violet", "ruby"}
+PROFILE_DENSITIES = {"comfortable", "compact"}
+PROFILE_BANNERS = {"none", "aurora", "neon_grid", "paper", "night_sky", "terminal"}
+PROFILE_AVATAR_FRAMES = {"none", "soft_ring", "neon", "pixel", "botanical", "crown"}
+PROFILE_AVATAR_SIZES = {"large", "xl", "hero"}
+PROFILE_NAME_FONTS = {"system", "rounded", "serif", "mono", "display"}
+PROFILE_NAME_SIZES = {"normal", "large", "hero"}
+PROFILE_STICKERS = {"none", "sparkles", "star", "heart", "music", "game", "code", "crown"}
+PROFILE_DECORATIONS = {"none", "minimal", "badges", "ribbon", "constellation"}
+PROFILE_BACKGROUND_TONES = {"soft", "standard", "bold"}
+PROFILE_STYLE_DEFAULTS = {
+    "banner": "none",
+    "avatar_frame": "soft_ring",
+    "avatar_size": "xl",
+    "name_font": "system",
+    "name_size": "large",
+    "sticker": "none",
+    "decoration": "minimal",
+    "background_tone": "standard",
+}
+DISPLAY_TIMEZONE_AUTO = "auto"
+COMMON_DISPLAY_TIMEZONES = (
+    DISPLAY_TIMEZONE_AUTO,
+    "UTC",
+    "Asia/Taipei",
+    "Asia/Tokyo",
+    "Asia/Seoul",
+    "Asia/Hong_Kong",
+    "Asia/Shanghai",
+    "America/Los_Angeles",
+    "America/New_York",
+    "Europe/London",
+)
 
 
 def ensure_user_profile_schema(conn):
@@ -38,6 +73,11 @@ def ensure_user_profile_schema(conn):
             custom_title TEXT,
             custom_title_status TEXT NOT NULL DEFAULT 'none',
             profile_visibility TEXT NOT NULL DEFAULT 'public',
+            display_timezone TEXT NOT NULL DEFAULT 'auto',
+            profile_template TEXT NOT NULL DEFAULT 'classic',
+            profile_accent TEXT NOT NULL DEFAULT 'default',
+            profile_density TEXT NOT NULL DEFAULT 'comfortable',
+            profile_style_json TEXT NOT NULL DEFAULT '{}',
             appearance_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -51,6 +91,16 @@ def ensure_user_profile_schema(conn):
         conn.execute("ALTER TABLE user_profiles ADD COLUMN friend_code TEXT")
     if "friend_code_rotated_at" not in columns:
         conn.execute("ALTER TABLE user_profiles ADD COLUMN friend_code_rotated_at TEXT")
+    if "display_timezone" not in columns:
+        conn.execute("ALTER TABLE user_profiles ADD COLUMN display_timezone TEXT NOT NULL DEFAULT 'auto'")
+    if "profile_template" not in columns:
+        conn.execute("ALTER TABLE user_profiles ADD COLUMN profile_template TEXT NOT NULL DEFAULT 'classic'")
+    if "profile_accent" not in columns:
+        conn.execute("ALTER TABLE user_profiles ADD COLUMN profile_accent TEXT NOT NULL DEFAULT 'default'")
+    if "profile_density" not in columns:
+        conn.execute("ALTER TABLE user_profiles ADD COLUMN profile_density TEXT NOT NULL DEFAULT 'comfortable'")
+    if "profile_style_json" not in columns:
+        conn.execute("ALTER TABLE user_profiles ADD COLUMN profile_style_json TEXT NOT NULL DEFAULT '{}'")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profiles_friend_code ON user_profiles(friend_code) WHERE friend_code IS NOT NULL AND friend_code<>''")
 
 
@@ -64,7 +114,92 @@ def _clean(value, max_len):
 
 def _visibility(value):
     value = str(value or "public").strip().lower()
-    return value if value in {"public", "members", "private"} else "public"
+    return value if value in {"public", "members", "friends", "private"} else "public"
+
+
+def _profile_template(value):
+    value = str(value or "classic").strip().lower()
+    return value if value in PROFILE_TEMPLATES else "classic"
+
+
+def _profile_accent(value):
+    value = str(value or "default").strip().lower()
+    return value if value in PROFILE_ACCENTS else "default"
+
+
+def _profile_density(value):
+    value = str(value or "comfortable").strip().lower()
+    return value if value in PROFILE_DENSITIES else "comfortable"
+
+
+def _choice(value, allowed, fallback):
+    value = str(value or fallback).strip().lower()
+    return value if value in allowed else fallback
+
+
+def sanitize_profile_style(data):
+    data = data if isinstance(data, dict) else {}
+    nested = data.get("profile_style")
+    if isinstance(nested, dict):
+        data = {**data, **nested}
+    return {
+        "banner": _choice(data.get("banner"), PROFILE_BANNERS, PROFILE_STYLE_DEFAULTS["banner"]),
+        "avatar_frame": _choice(data.get("avatar_frame"), PROFILE_AVATAR_FRAMES, PROFILE_STYLE_DEFAULTS["avatar_frame"]),
+        "avatar_size": _choice(data.get("avatar_size"), PROFILE_AVATAR_SIZES, PROFILE_STYLE_DEFAULTS["avatar_size"]),
+        "name_font": _choice(data.get("name_font"), PROFILE_NAME_FONTS, PROFILE_STYLE_DEFAULTS["name_font"]),
+        "name_size": _choice(data.get("name_size"), PROFILE_NAME_SIZES, PROFILE_STYLE_DEFAULTS["name_size"]),
+        "sticker": _choice(data.get("sticker"), PROFILE_STICKERS, PROFILE_STYLE_DEFAULTS["sticker"]),
+        "decoration": _choice(data.get("decoration"), PROFILE_DECORATIONS, PROFILE_STYLE_DEFAULTS["decoration"]),
+        "background_tone": _choice(data.get("background_tone"), PROFILE_BACKGROUND_TONES, PROFILE_STYLE_DEFAULTS["background_tone"]),
+    }
+
+
+def _profile_style_from_row(profile):
+    raw = (profile or {}).get("profile_style_json") or "{}"
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        parsed = {}
+    return sanitize_profile_style(parsed)
+
+
+def profile_style_for_payload(profile):
+    return _profile_style_from_row(profile)
+
+
+def _profile_style_from_update(profile, data):
+    existing = _profile_style_from_row(profile)
+    nested = data.get("profile_style") if isinstance(data, dict) else None
+    if isinstance(nested, dict):
+        return sanitize_profile_style({**existing, **nested})
+    aliases = {
+        "profile_banner": "banner",
+        "profile_avatar_frame": "avatar_frame",
+        "profile_avatar_size": "avatar_size",
+        "profile_name_font": "name_font",
+        "profile_name_size": "name_size",
+        "profile_sticker": "sticker",
+        "profile_decoration": "decoration",
+        "profile_background_tone": "background_tone",
+    }
+    merged = dict(existing)
+    for source_key, style_key in aliases.items():
+        if source_key in data:
+            merged[style_key] = data.get(source_key)
+    return sanitize_profile_style(merged)
+
+
+def normalize_display_timezone(value):
+    value = str(value or DISPLAY_TIMEZONE_AUTO).strip()
+    if not value or value.lower() in {"auto", "browser", "local"}:
+        return DISPLAY_TIMEZONE_AUTO
+    if len(value) > 80 or any(ch.isspace() for ch in value):
+        return None
+    try:
+        ZoneInfo(value)
+    except ZoneInfoNotFoundError:
+        return None
+    return value
 
 
 def _clean_color(value):
@@ -185,6 +320,11 @@ def get_profile_appearance(conn, user_id):
     return sanitize_appearance_settings(parsed)
 
 
+def get_profile_display_timezone(conn, user_id):
+    profile = get_or_create_profile(conn, user_id)
+    return normalize_display_timezone(profile.get("display_timezone")) or DISPLAY_TIMEZONE_AUTO
+
+
 def update_profile_appearance(conn, *, actor, data):
     ensure_user_profile_schema(conn)
     get_or_create_profile(conn, actor["id"])
@@ -220,10 +360,22 @@ def get_or_create_profile(conn, user_id):
     code = _generate_friend_code(conn)
     conn.execute(
         """
-        INSERT INTO user_profiles (user_id, display_name, bio, signature, location, website, friend_code, friend_code_rotated_at, profile_visibility, appearance_json, created_at, updated_at)
-        VALUES (?, '', '', '', '', '', ?, ?, 'public', '{}', ?, ?)
+        INSERT INTO user_profiles (
+            user_id, display_name, bio, signature, location, website,
+            friend_code, friend_code_rotated_at, profile_visibility,
+            display_timezone, profile_template, profile_accent, profile_density,
+            profile_style_json, appearance_json, created_at, updated_at
+        )
+        VALUES (?, '', '', '', '', '', ?, ?, 'public', 'auto', 'classic', 'default', 'comfortable', ?, '{}', ?, ?)
         """,
-        (int(user_id), code, now, now, now),
+        (
+            int(user_id),
+            code,
+            now,
+            json.dumps(PROFILE_STYLE_DEFAULTS, ensure_ascii=False, sort_keys=True),
+            now,
+            now,
+        ),
     )
     return dict(conn.execute("SELECT * FROM user_profiles WHERE user_id=?", (int(user_id),)).fetchone())
 
@@ -238,14 +390,23 @@ def update_profile(conn, *, actor, data):
         "location": _clean(data.get("location", profile.get("location")), 80),
         "website": _clean(data.get("website", profile.get("website")), 200),
         "profile_visibility": _visibility(data.get("profile_visibility", profile.get("profile_visibility"))),
+        "display_timezone": normalize_display_timezone(data.get("display_timezone", profile.get("display_timezone") or DISPLAY_TIMEZONE_AUTO)),
+        "profile_template": _profile_template(data.get("profile_template", profile.get("profile_template"))),
+        "profile_accent": _profile_accent(data.get("profile_accent", profile.get("profile_accent"))),
+        "profile_density": _profile_density(data.get("profile_density", profile.get("profile_density"))),
+        "profile_style": _profile_style_from_update(profile, data),
     }
     if updates["website"] and not (updates["website"].startswith("https://") or updates["website"].startswith("http://")):
         return None, "website 必須以 http:// 或 https:// 開頭"
+    if updates["display_timezone"] is None:
+        return None, "顯示時區必須是 auto 或有效的 IANA 時區名稱"
     updates["updated_at"] = _now()
     conn.execute(
         """
         UPDATE user_profiles
-        SET display_name=?, bio=?, signature=?, location=?, website=?, profile_visibility=?, updated_at=?
+        SET display_name=?, bio=?, signature=?, location=?, website=?,
+            profile_visibility=?, display_timezone=?, profile_template=?,
+            profile_accent=?, profile_density=?, profile_style_json=?, updated_at=?
         WHERE user_id=?
         """,
         (
@@ -255,6 +416,11 @@ def update_profile(conn, *, actor, data):
             updates["location"],
             updates["website"],
             updates["profile_visibility"],
+            updates["display_timezone"],
+            updates["profile_template"],
+            updates["profile_accent"],
+            updates["profile_density"],
+            json.dumps(updates["profile_style"], ensure_ascii=False, sort_keys=True),
             updates["updated_at"],
             int(actor["id"]),
         ),
@@ -274,7 +440,10 @@ def get_public_profile(conn, *, username, viewer=None):
         SELECT u.id, u.username, u.role, {member_level_expr}, {effective_level_expr}, {created_at_expr},
                p.display_name, p.bio, p.signature, p.location, p.website,
                p.friend_code, p.friend_code_rotated_at,
-               p.custom_title, p.custom_title_status, p.profile_visibility, p.updated_at AS profile_updated_at
+               p.custom_title, p.custom_title_status, p.profile_visibility,
+               p.profile_template, p.profile_accent, p.profile_density,
+               p.profile_style_json,
+               p.updated_at AS profile_updated_at
         FROM users u
         LEFT JOIN user_profiles p ON p.user_id=u.id
         WHERE u.username=? {deleted_filter}
@@ -284,6 +453,10 @@ def get_public_profile(conn, *, username, viewer=None):
     if not row:
         return None
     data = dict(row)
+    data["profile_template"] = _profile_template(data.get("profile_template"))
+    data["profile_accent"] = _profile_accent(data.get("profile_accent"))
+    data["profile_density"] = _profile_density(data.get("profile_density"))
+    data["profile_style"] = _profile_style_from_row(data)
     visibility = data.get("profile_visibility") or "public"
     is_owner = viewer and int(viewer.get("id") or -1) == int(data["id"])
     is_member = bool(viewer)
@@ -293,6 +466,11 @@ def get_public_profile(conn, *, username, viewer=None):
         data["location"] = ""
         data["website"] = ""
     if visibility == "members" and not is_member:
+        data["bio"] = ""
+        data["signature"] = ""
+        data["location"] = ""
+        data["website"] = ""
+    if visibility == "friends" and not is_owner:
         data["bio"] = ""
         data["signature"] = ""
         data["location"] = ""

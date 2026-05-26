@@ -66,10 +66,34 @@ _STATE = {
     "session_last_seen_refresh_jitter_seconds": SESSION_LAST_SEEN_REFRESH_JITTER_SECONDS,
     "tester_token_user_lookup": None,
     "get_runtime_server_mode": None,
+    "get_system_settings": None,
 }
 
-_hasher = argon2.PasswordHasher(time_cost=3, memory_cost=65536,
-                                parallelism=4, hash_len=32, salt_len=16)
+_ARGON2_TIME_COST = _env_int(
+    "HTML_LEARNING_ARGON2_TIME_COST",
+    3,
+    minimum=1,
+    maximum=10,
+)
+_ARGON2_MEMORY_COST = _env_int(
+    "HTML_LEARNING_ARGON2_MEMORY_COST",
+    65536,
+    minimum=1024,
+    maximum=1048576,
+)
+_ARGON2_PARALLELISM = _env_int(
+    "HTML_LEARNING_ARGON2_PARALLELISM",
+    min(4, os.cpu_count() or 1),
+    minimum=1,
+    maximum=16,
+)
+_hasher = argon2.PasswordHasher(
+    time_cost=_ARGON2_TIME_COST,
+    memory_cost=_ARGON2_MEMORY_COST,
+    parallelism=_ARGON2_PARALLELISM,
+    hash_len=32,
+    salt_len=16,
+)
 
 
 _ARGON2_VERIFY_CONCURRENCY = _env_int(
@@ -110,6 +134,7 @@ def configure_auth_service(
     session_last_seen_refresh_jitter_seconds=SESSION_LAST_SEEN_REFRESH_JITTER_SECONDS,
     tester_token_user_lookup=None,
     get_runtime_server_mode=None,
+    get_system_settings=None,
 ):
     _STATE.update({
         "get_db": get_db,
@@ -125,6 +150,7 @@ def configure_auth_service(
         "session_last_seen_refresh_jitter_seconds": session_last_seen_refresh_jitter_seconds,
         "tester_token_user_lookup": tester_token_user_lookup,
         "get_runtime_server_mode": get_runtime_server_mode,
+        "get_system_settings": get_system_settings,
     })
     with _SESSION_COLUMNS_LOCK:
         _SESSION_COLUMNS_CACHE["columns"] = None
@@ -375,7 +401,7 @@ def verify_password(h, p):
 def make_token(username):
     payload = json.dumps({
         "user": username,
-        "exp": (datetime.now() + timedelta(seconds=_STATE["session_ttl"])).isoformat(),
+        "exp": (datetime.now() + timedelta(seconds=effective_session_ttl_seconds())).isoformat(),
         "nonce": secrets.token_hex(8),
     }, ensure_ascii=False)
     return _STATE["fernet"].encrypt(payload.encode()).decode()
@@ -420,6 +446,67 @@ def _current_security_epoch(conn):
         return 0
 
 
+def _positive_int(value, fallback, *, minimum=1):
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = int(fallback)
+    return max(int(minimum), parsed)
+
+
+def _runtime_setting_value(key, *, conn=None):
+    if conn is not None:
+        try:
+            row = conn.execute("SELECT value FROM system_settings WHERE key=?", (key,)).fetchone()
+            if row is not None:
+                return row["value"]
+        except Exception:
+            pass
+    provider = _STATE.get("get_system_settings")
+    if callable(provider):
+        try:
+            settings = provider() or {}
+        except Exception:
+            settings = {}
+        if isinstance(settings, dict) and key in settings:
+            return settings.get(key)
+    return None
+
+
+def effective_session_ttl_seconds(*, conn=None):
+    fallback = _positive_int(_STATE.get("session_ttl"), SESSION_TTL, minimum=60)
+    hours = _runtime_setting_value("session_ttl_hours", conn=conn)
+    if hours is None:
+        return fallback
+    return _positive_int(hours, max(1, fallback // 3600), minimum=1) * 3600
+
+
+def effective_csrf_token_ttl_seconds(*, conn=None):
+    fallback = _positive_int(_STATE.get("csrf_token_ttl"), CSRF_TOKEN_TTL, minimum=60)
+    return max(fallback, effective_session_ttl_seconds(conn=conn))
+
+
+def effective_session_idle_timeout_seconds(*, conn=None):
+    fallback = _positive_int(_STATE.get("session_idle_timeout"), SESSION_IDLE_TIMEOUT, minimum=30)
+    minutes = _runtime_setting_value("session_idle_timeout_minutes", conn=conn)
+    if minutes is None:
+        return fallback
+    try:
+        minutes_value = int(minutes)
+    except Exception:
+        return fallback
+    if minutes_value <= 0:
+        return 0
+    return _positive_int(minutes_value, max(1, fallback // 60), minimum=1) * 60
+
+
+def _parse_datetime(value):
+    try:
+        return datetime.fromisoformat(str(value or ""))
+    except Exception:
+        return None
+
+
 def timing_delay():
     time.sleep(MIN_DELAY + random.uniform(0, MAX_DELAY - MIN_DELAY))
 
@@ -429,7 +516,7 @@ def make_csrf_token():
 
 
 def store_csrf_token(token, username):
-    expires = (datetime.now() + timedelta(seconds=_STATE["csrf_token_ttl"])).isoformat()
+    expires = (datetime.now() + timedelta(seconds=effective_csrf_token_ttl_seconds())).isoformat()
     now = datetime.now().isoformat()
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     def _write(conn):
@@ -548,7 +635,7 @@ def _rotate_authenticated_csrf(response, csrf_tok, username):
     resp.set_cookie(
         "csrf_token",
         new_csrf,
-        max_age=int(_STATE.get("csrf_token_ttl") or CSRF_TOKEN_TTL),
+        max_age=effective_csrf_token_ttl_seconds(),
         httponly=False,
         samesite=current_app.config.get("SESSION_COOKIE_SAMESITE", "Lax"),
         secure=bool(current_app.config.get("SESSION_COOKIE_SECURE", False)),
@@ -694,7 +781,7 @@ def _normalize_session_allowed_features(allowed_features):
 
 def db_save_session(user_id, token, ip, ua, *, auth_scope="", allowed_features=None):
     now = datetime.now().isoformat()
-    expires = (datetime.now() + timedelta(seconds=_STATE["session_ttl"])).isoformat()
+    expires = (datetime.now() + timedelta(seconds=effective_session_ttl_seconds())).isoformat()
     def _write(conn):
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
         session_epoch = _current_security_epoch(conn)
@@ -717,6 +804,9 @@ def db_save_session(user_id, token, ip, ua, *, auth_scope="", allowed_features=N
         else:
             cols_sql = ["user_id", "token_hash", "ip_address", "user_agent", "expires_at", "last_seen"]
             values = [user_id, _hash_token(token), ip, ua, expires, now]
+        if "created_at" in cols:
+            cols_sql.append("created_at")
+            values.append(now)
         cols_sql.extend(optional_cols)
         values.extend(optional_values)
         placeholders = ", ".join("?" for _ in values)
@@ -776,14 +866,17 @@ def db_get_user_from_token(token):
         session_epoch_expr = "s.session_epoch" if "session_epoch" in session_cols else "0"
         auth_scope_expr = "s.auth_scope" if "auth_scope" in session_cols else "''"
         allowed_features_expr = "s.allowed_features_json" if "allowed_features_json" in session_cols else "'[]'"
+        created_at_expr = "s.created_at" if "created_at" in session_cols else "s.expires_at"
+        expires_at_expr = "s.expires_at" if "expires_at" in session_cols else "''"
         row = auth_conn.execute(
             f"SELECT s.id, s.user_id, s.last_seen, s.ip_address, s.user_agent, "
+            f"{created_at_expr} AS created_at, {expires_at_expr} AS expires_at, "
             f"COALESCE({session_epoch_expr}, 0) AS session_epoch, "
             f"COALESCE({auth_scope_expr}, '') AS auth_scope, "
             f"COALESCE({allowed_features_expr}, '[]') AS allowed_features_json "
             "FROM sessions s "
-            "WHERE s.token_hash=? AND s.expires_at>? AND COALESCE(s.is_revoked, 0)=0",
-            (_hash_token(token), now_iso)
+            "WHERE s.token_hash=? AND COALESCE(s.is_revoked, 0)=0",
+            (_hash_token(token),)
         ).fetchone()
         if not row:
             return None
@@ -798,8 +891,31 @@ def db_get_user_from_token(token):
             username = user_row["username"]
             current_epoch = _current_security_epoch(main_conn)
             strict_ip_binding = _read_bool_setting(main_conn, "session_strict_ip_binding", default=False)
+            session_ttl_seconds = effective_session_ttl_seconds(conn=main_conn)
+            session_idle_timeout_seconds = effective_session_idle_timeout_seconds(conn=main_conn)
         finally:
             main_conn.close()
+        created_at = _parse_datetime(row["created_at"]) or _parse_datetime(row["expires_at"]) or now
+        effective_expires_at = created_at + timedelta(seconds=session_ttl_seconds)
+        stored_expires_at = _parse_datetime(row["expires_at"])
+        if now >= effective_expires_at:
+            try:
+                _auth_write(lambda conn: conn.execute(
+                    "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
+                    (now_iso, row["id"])
+                ))
+            except sqlite3.OperationalError:
+                pass
+            record_security_event("session_revoked", "-", target_user=username, detail="session_ttl_expired")
+            return None
+        if stored_expires_at is not None and stored_expires_at < effective_expires_at:
+            try:
+                _auth_write(lambda conn: conn.execute(
+                    "UPDATE sessions SET expires_at=? WHERE id=?",
+                    (effective_expires_at.isoformat(), row["id"])
+                ))
+            except sqlite3.OperationalError:
+                pass
         if int(row["session_epoch"] or 0) < current_epoch:
             try:
                 _auth_write(lambda conn: conn.execute(
@@ -848,7 +964,7 @@ def db_get_user_from_token(token):
                 idle_seconds = (now - datetime.fromisoformat(last_seen)).total_seconds()
             except Exception:
                 idle_seconds = 0
-            if idle_seconds > int(_STATE["session_idle_timeout"]):
+            if session_idle_timeout_seconds > 0 and idle_seconds > session_idle_timeout_seconds:
                 try:
                     _auth_write(lambda conn: conn.execute(
                         "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
