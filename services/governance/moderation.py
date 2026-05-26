@@ -98,9 +98,34 @@ def ensure_moderation_proposals_schema(conn):
         conn.execute("ALTER TABLE moderation_proposals ADD COLUMN required_root_approval INTEGER NOT NULL DEFAULT 0")
     if "required_manager_approvals" not in proposal_cols:
         conn.execute("ALTER TABLE moderation_proposals ADD COLUMN required_manager_approvals INTEGER NOT NULL DEFAULT 1")
+    if "action_payload_json" not in proposal_cols:
+        conn.execute("ALTER TABLE moderation_proposals ADD COLUMN action_payload_json TEXT NOT NULL DEFAULT '{}'")
+    if "is_emergency" not in proposal_cols:
+        conn.execute("ALTER TABLE moderation_proposals ADD COLUMN is_emergency INTEGER NOT NULL DEFAULT 0")
+    if "emergency_applied_at" not in proposal_cols:
+        conn.execute("ALTER TABLE moderation_proposals ADD COLUMN emergency_applied_at TEXT")
+    if "emergency_reverted_at" not in proposal_cols:
+        conn.execute("ALTER TABLE moderation_proposals ADD COLUMN emergency_reverted_at TEXT")
+    if "emergency_revert_reason" not in proposal_cols:
+        conn.execute("ALTER TABLE moderation_proposals ADD COLUMN emergency_revert_reason TEXT")
+    if "emergency_previous_state_json" not in proposal_cols:
+        conn.execute("ALTER TABLE moderation_proposals ADD COLUMN emergency_previous_state_json TEXT NOT NULL DEFAULT '{}'")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_moderation_proposals_status ON moderation_proposals(status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_moderation_proposals_target ON moderation_proposals(target_user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_moderation_proposals_emergency ON moderation_proposals(is_emergency, status, emergency_applied_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_moderation_votes_proposal ON moderation_votes(proposal_id)")
+
+
+def _json_loads(value, fallback):
+    try:
+        parsed = json.loads(value or "")
+        return parsed if isinstance(parsed, type(fallback)) else fallback
+    except Exception:
+        return fallback
+
+
+def _json_dumps(value):
+    return json.dumps(value or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def proposal_row_to_dict(row):
@@ -109,6 +134,12 @@ def proposal_row_to_dict(row):
     data = dict(row)
     for key in ("required_votes", "approve_count", "reject_count"):
         data[key] = int(data.get(key) or 0)
+    try:
+        data["is_emergency"] = bool(int(data.get("is_emergency") or 0))
+    except Exception:
+        data["is_emergency"] = str(data.get("is_emergency") or "").strip().lower() in {"1", "true", "yes"}
+    data["action_payload"] = _json_loads(data.get("action_payload_json"), {})
+    data["emergency_previous_state"] = _json_loads(data.get("emergency_previous_state_json"), {})
     data.update(proposal_policy_from_row(data))
     return data
 
@@ -134,6 +165,9 @@ def create_moderation_proposal(
     risk_level=None,
     required_root_approval=None,
     required_manager_approvals=None,
+    action_payload=None,
+    is_emergency=False,
+    emergency_previous_state=None,
 ):
     ensure_moderation_proposals_schema(conn)
     ok, msg = validate_action_payload(action_type, action_value)
@@ -158,8 +192,9 @@ def create_moderation_proposal(
     cur = conn.execute(
         "INSERT INTO moderation_proposals "
         "(target_user_id, action_type, action_value, proposed_by_user_id, reason, status, required_votes, "
-        "approve_count, reject_count, expires_at, created_at, updated_at, risk_level, required_root_approval, required_manager_approvals) "
-        "VALUES (?, ?, ?, ?, ?, 'pending', ?, 0, 0, ?, ?, ?, ?, ?, ?)",
+        "approve_count, reject_count, expires_at, created_at, updated_at, risk_level, required_root_approval, required_manager_approvals, "
+        "action_payload_json, is_emergency, emergency_previous_state_json) "
+        "VALUES (?, ?, ?, ?, ?, 'pending', ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             int(target_user_id),
             action_type,
@@ -173,6 +208,9 @@ def create_moderation_proposal(
             risk_level,
             1 if required_root_approval else 0,
             required_manager_approvals,
+            _json_dumps(action_payload),
+            1 if is_emergency else 0,
+            _json_dumps(emergency_previous_state),
         ),
     )
     row = conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (cur.lastrowid,)).fetchone()

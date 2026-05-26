@@ -43,7 +43,7 @@ def run_step(name: str, cmd: list[str], *, timeout: int = 300) -> dict:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run RC1.1 operational integrity checks.")
     parser.add_argument("--out", default=str(DEFAULT_OUT))
-    parser.add_argument("--skip-drill", action="store_true", help="Skip isolated restore drill.")
+    parser.add_argument("--skip-drill", action="store_true", help="Skip isolated snapshot-boundary drill.")
     return parser
 
 
@@ -80,7 +80,7 @@ def main() -> int:
     if not args.skip_drill:
         steps.append(
             run_step(
-                "isolated_restore_drill",
+                "isolated_snapshot_boundary_drill",
                 [
                     sys.executable,
                     "scripts/ops/rc1_restore_drill.py",
@@ -107,7 +107,8 @@ def main() -> int:
         "release_candidate": "PointsChain RC1.1 Operational Integrity",
         "generated_at": utc_now(),
         "ok": ok,
-        "restore_drill": "pass" if next((s for s in steps if s["name"] == "isolated_restore_drill"), {}).get("ok") else ("skipped" if args.skip_drill else "fail"),
+        "restore_drill": "pass" if next((s for s in steps if s["name"] == "isolated_snapshot_boundary_drill"), {}).get("ok") else ("skipped" if args.skip_drill else "fail"),
+        "snapshot_boundary_drill": "pass" if next((s for s in steps if s["name"] == "isolated_snapshot_boundary_drill"), {}).get("ok") else ("skipped" if args.skip_drill else "fail"),
         "anchor_export": "covered_by_operational_tests",
         "scope_expansion": "blocked",
         "steps": steps,

@@ -10,7 +10,7 @@ def _role_rank(role):
     return {"user": 0, "manager": 3, "super_admin": 4}.get(role or "user", 0)
 
 
-def _build_app(db_path, actor_box, revoked, *, audit_enabled=False, audit_result=(True, None, "ok"), activation_log=None):
+def _build_app(db_path, actor_box, revoked, *, audit_enabled=False, audit_result=(True, None, "ok"), activation_log=None, violation_log=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -39,7 +39,7 @@ def _build_app(db_path, actor_box, revoked, *, audit_enabled=False, audit_result
         "require_csrf_safe": passthrough,
         "revoke_user_sessions": lambda user_id: revoked.append(user_id),
         "role_rank": _role_rank,
-        "secure_add_violation": lambda *args, **kwargs: None,
+        "secure_add_violation": lambda *args, **kwargs: (violation_log.append(args) if violation_log is not None else None),
         "verify_audit_integrity": lambda: audit_result,
         "verify_violation_integrity": lambda user_id: (True, None, "ok"),
     })
@@ -231,6 +231,147 @@ def test_high_risk_governance_requires_root_and_two_managers(tmp_path):
     assert revoked == [4]
 
 
+def test_restrict_governance_selects_features_and_executes_restrictions(tmp_path):
+    db_path = tmp_path / "moderation-restrict.db"
+    _seed_users(db_path)
+    revoked = []
+    actor_box = {"actor": {"id": 2, "username": "admin1", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box, revoked).test_client()
+
+    create = client.post(
+        "/api/admin/moderation/proposals",
+        json={
+            "target_user_id": 4,
+            "action_type": "restrict",
+            "restriction_features": ["cloud_upload", "trading_order"],
+            "duration_hours": 12,
+            "reason": "大量上傳與交易濫用",
+        },
+    )
+    assert create.status_code == 200, create.get_json()
+    proposal = create.get_json()["proposal"]
+    assert proposal["action_payload"]["restriction_features"] == ["cloud_upload", "trading_order"]
+
+    actor_box["actor"] = {"id": 3, "username": "admin2", "role": "manager"}
+    vote = client.post(f"/api/admin/moderation/proposals/{proposal['id']}/vote", json={"vote": "approve"})
+    assert vote.status_code == 200
+    execute = client.post(f"/api/admin/moderation/proposals/{proposal['id']}/execute")
+    assert execute.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        """
+        SELECT feature_key, source_type, source_ref, expires_at
+        FROM user_feature_restrictions
+        WHERE user_id=4
+        ORDER BY feature_key
+        """
+    ).fetchall()
+    conn.close()
+    assert [row[0] for row in rows] == ["cloud_upload", "trading_order"]
+    assert all(row[1] == "member_governance" for row in rows)
+    assert all(row[2] == f"moderation_proposal:{proposal['id']}" for row in rows)
+    assert all(row[3] for row in rows)
+    assert revoked == [4]
+
+
+def test_mute_governance_requires_duration_and_limits_speech_features(tmp_path):
+    db_path = tmp_path / "moderation-mute.db"
+    _seed_users(db_path)
+    revoked = []
+    actor_box = {"actor": {"id": 2, "username": "admin1", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box, revoked).test_client()
+
+    missing_duration = client.post(
+        "/api/admin/moderation/proposals",
+        json={"target_user_id": 4, "action_type": "mute", "reason": "洗頻"},
+    )
+    assert missing_duration.status_code == 400
+    assert "期限" in missing_duration.get_json()["msg"]
+
+    create = client.post(
+        "/api/admin/moderation/proposals",
+        json={"target_user_id": 4, "action_type": "mute", "duration_hours": 6, "reason": "洗頻"},
+    )
+    assert create.status_code == 200, create.get_json()
+    proposal = create.get_json()["proposal"]
+    assert proposal["action_payload"]["duration_hours"] == 6
+
+    actor_box["actor"] = {"id": 3, "username": "admin2", "role": "manager"}
+    vote = client.post(f"/api/admin/moderation/proposals/{proposal['id']}/vote", json={"vote": "approve"})
+    assert vote.status_code == 200
+    execute = client.post(f"/api/admin/moderation/proposals/{proposal['id']}/execute")
+    assert execute.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        "SELECT feature_key, expires_at FROM user_feature_restrictions WHERE user_id=4 ORDER BY feature_key"
+    ).fetchall()
+    user_status = conn.execute("SELECT status FROM users WHERE id=4").fetchone()[0]
+    conn.close()
+    assert [row[0] for row in rows] == ["chat_dm", "chat_send", "community_comment", "community_post"]
+    assert all(row[1] for row in rows)
+    assert user_status == "active"
+    assert revoked == [4]
+
+
+def test_emergency_governance_applies_then_reverts_if_not_approved(tmp_path):
+    db_path = tmp_path / "moderation-emergency.db"
+    _seed_users(db_path)
+    revoked = []
+    violation_log = []
+    actor_box = {"actor": {"id": 2, "username": "admin1", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box, revoked, violation_log=violation_log).test_client()
+
+    create = client.post(
+        "/api/admin/moderation/proposals",
+        json={
+            "target_user_id": 4,
+            "action_type": "restrict",
+            "restriction_features": ["wallet_transfer"],
+            "duration_hours": 24,
+            "emergency_execute": True,
+            "reason": "疑似盜號出金",
+            "ttl_hours": 72,
+        },
+    )
+    assert create.status_code == 200, create.get_json()
+    proposal = create.get_json()["proposal"]
+    assert proposal["is_emergency"] is True
+    assert proposal["status"] == "pending"
+    assert proposal["emergency_applied_at"]
+    assert proposal["expires_at"]
+
+    conn = sqlite3.connect(db_path)
+    active = conn.execute(
+        "SELECT status, source_type FROM user_feature_restrictions WHERE user_id=4 AND feature_key='wallet_transfer'"
+    ).fetchone()
+    conn.execute("UPDATE moderation_proposals SET expires_at='2000-01-01T00:00:00' WHERE id=?", (proposal["id"],))
+    conn.commit()
+    conn.close()
+    assert active == ("active", "member_governance_emergency")
+    assert revoked == [4]
+
+    list_res = client.get("/api/admin/moderation/proposals?status=expired")
+    assert list_res.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    released = conn.execute(
+        "SELECT status, released_at FROM user_feature_restrictions WHERE user_id=4 AND feature_key='wallet_transfer'"
+    ).fetchone()
+    final = conn.execute(
+        "SELECT status, emergency_reverted_at, emergency_revert_reason FROM moderation_proposals WHERE id=?",
+        (proposal["id"],),
+    ).fetchone()
+    conn.close()
+    assert released[0] == "released"
+    assert released[1]
+    assert final[0] == "expired"
+    assert final[1]
+    assert final[2] == "emergency_not_approved_in_time"
+    assert violation_log and violation_log[0][0] == 2
+
+
 def test_admin_audit_reports_broken_chain_without_auto_lockdown(tmp_path):
     db_path = tmp_path / "moderation.db"
     _seed_users(db_path)
@@ -288,7 +429,7 @@ def test_root_override_is_blocked(tmp_path):
 
     create = client.post(
         "/api/admin/moderation/proposals",
-        json={"target_user_id": 4, "action_type": "restrict", "reason": "洗版"},
+        json={"target_user_id": 4, "action_type": "restrict", "restriction_features": ["community_post"], "reason": "洗版"},
     )
     proposal_id = create.get_json()["proposal"]["id"]
 

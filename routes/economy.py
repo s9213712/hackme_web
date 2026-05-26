@@ -8,7 +8,6 @@ from flask import Response, request
 
 from services.points_chain import (
     DISPLAY_CURRENCY,
-    award_signup_bonus_after_wallet_onboarding,
     bind_self_custody_wallet,
     create_multisig_wallet,
     create_official_hot_wallet,
@@ -16,6 +15,7 @@ from services.points_chain import (
     delete_primary_cold_wallet,
     ensure_system_wallets,
     list_wallet_identities,
+    system_account_wallet_onboarding_status,
     wallet_onboarding_status,
 )
 from services.governance.sanction_notices import record_admin_sanction_notice
@@ -49,6 +49,9 @@ def register_economy_routes(app, deps):
         if not actor:
             return None, json_resp({"ok": False, "msg": "未登入"}, 401)
         return actor, None
+
+    def is_root_actor(actor):
+        return actor_value(actor, "username") == "root"
 
     def manager_or_403():
         actor, err = actor_or_401()
@@ -97,6 +100,44 @@ def register_economy_routes(app, deps):
     def active_user_wallet_rows(conn, user_id):
         return list_wallet_identities(conn, int(user_id))
 
+    def maybe_award_initial_grants_for_actor(actor):
+        if not points_service or actor_value(actor, "username") == "root":
+            return None
+        try:
+            return points_service.award_initial_grants_after_wallet_onboarding(
+                user_id=actor["id"],
+                actor={"id": actor["id"], "username": actor["username"], "role": actor["role"]},
+            )
+        except Exception as exc:
+            audit(
+                "POINTS_WALLET_INITIAL_GRANT_AUTO_FAILED",
+                get_client_ip(),
+                user=actor_value(actor, "username"),
+                success=False,
+                ua=get_ua(),
+                detail=str(exc),
+            )
+            return {"created_count": 0, "error": str(exc)}
+
+    def maybe_award_signup_bonus_for_actor(actor):
+        if not points_service or actor_value(actor, "username") == "root":
+            return None
+        try:
+            return points_service.award_signup_bonus(
+                user_id=actor["id"],
+                actor={"id": actor["id"], "username": actor["username"], "role": actor["role"]},
+            )
+        except Exception as exc:
+            audit(
+                "POINTS_WALLET_SIGNUP_BONUS_AUTO_FAILED",
+                get_client_ip(),
+                user=actor_value(actor, "username"),
+                success=False,
+                ua=get_ua(),
+                detail=str(exc),
+            )
+            return {"created": False, "error": str(exc)}
+
     def _stable_spend_key(*, user_id, item_key, quantity):
         payload = json.dumps(
             {
@@ -116,6 +157,16 @@ def register_economy_routes(app, deps):
         if "insufficient balance" in msg:
             status = 409
             return json_resp({"ok": False, "msg": "點數不足，無法扣除；本次交易未寫入帳本", "code": "insufficient_balance"}), status
+        if "pc0 official hot wallets are internal ledger addresses" in msg or "external or cold-chain deposits must use a platform deposit address" in msg:
+            return json_resp({
+                "ok": False,
+                "msg": "pc0 站內託管錢包是官方託管的站內帳本地址，不是鏈上可收款地址；入金請使用平台入金地址，提領請使用提領橋流程",
+                "code": "pc0_internal_address_not_chain_reachable",
+                "guidance": {
+                    "deposit": "外部或冷錢包先轉入平台控制的鏈上入金地址，確認後由站內帳本 credit 到 pc0 站內託管錢包。",
+                    "withdrawal": "從 pc0 站內託管錢包提領時，先鎖定站內餘額，再由平台提領金庫送出鏈上交易。",
+                },
+            }), status
         return json_resp({"ok": False, "msg": msg}), status
 
     def restriction_guard(actor, feature_key):
@@ -222,7 +273,50 @@ def register_economy_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
-        return json_resp({"ok": True, "wallet": points_service.get_wallet(actor["id"])})
+        if is_root_actor(actor):
+            return json_resp({
+                "ok": True,
+                "wallet": {
+                    "system_account": True,
+                    "active_wallet_address": "",
+                    "deposit_address": "",
+                    "deposit_addresses": [],
+                    "points_balance": 0,
+                    "points_frozen": 0,
+                    "wallet_identity_balances": {},
+                    "msg": "root 管理官方/系統錢包，不使用會員官方熱錢包。",
+                },
+                "initial_grants": None,
+            })
+        wallet = points_service.get_wallet(actor["id"])
+        initial_grants = maybe_award_initial_grants_for_actor(actor)
+        if initial_grants and int(initial_grants.get("created_count") or 0) > 0:
+            wallet = points_service.get_wallet(actor["id"])
+        return json_resp({"ok": True, "wallet": wallet, "initial_grants": initial_grants})
+
+    @app.route("/api/points/deposit-address", methods=["GET"])
+    @require_csrf_safe
+    def points_deposit_address():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        if is_root_actor(actor):
+            return json_resp({
+                "ok": True,
+                "deposit_address": "",
+                "deposit_addresses": [],
+                "model": "system_account_no_member_deposit_address",
+                "official_hot_wallet_address": "",
+                "msg": "root 管理官方/系統錢包，不使用會員入金地址。",
+            })
+        wallet = points_service.get_wallet(actor["id"])
+        return json_resp({
+            "ok": True,
+            "deposit_address": wallet.get("deposit_address") or "",
+            "deposit_addresses": wallet.get("deposit_addresses") or [],
+            "model": wallet.get("deposit_model") or "external_or_cold_chain_to_platform_deposit_address_then_internal_pc0_credit",
+            "official_hot_wallet_address": wallet.get("active_wallet_address") or "",
+        })
 
     @app.route("/api/points/wallet/onboarding", methods=["GET"])
     @require_csrf_safe
@@ -235,9 +329,29 @@ def register_economy_routes(app, deps):
         conn = points_service.get_db()
         try:
             points_service.ensure_schema(conn)
-            status = wallet_onboarding_status(conn, points_service=points_service, user_id=actor["id"])
+            if not is_root_actor(actor):
+                create_official_hot_wallet(
+                    conn,
+                    user_id=actor["id"],
+                    chain_secret=getattr(points_service, "chain_secret", ""),
+                )
+                try:
+                    points_service.ensure_user_deposit_address(conn, actor["id"])
+                except Exception:
+                    pass
             conn.commit()
-            return json_resp({"ok": True, "onboarding": status})
+        finally:
+            conn.close()
+        initial_grants = maybe_award_initial_grants_for_actor(actor)
+        signup_bonus = maybe_award_signup_bonus_for_actor(actor)
+        conn = points_service.get_db()
+        try:
+            points_service.ensure_schema(conn)
+            status = wallet_onboarding_status(conn, points_service=points_service, user_id=actor["id"])
+            if is_root_actor(actor):
+                status = system_account_wallet_onboarding_status(status)
+            conn.commit()
+            return json_resp({"ok": True, "onboarding": status, "initial_grants": initial_grants, "signup_bonus": signup_bonus})
         finally:
             conn.close()
 
@@ -255,13 +369,19 @@ def register_economy_routes(app, deps):
         mode = str(data.get("mode") or "").strip().lower()
         if mode not in {"official_hot", "self_custody_cold", "imported_cold", "multisig"}:
             return json_resp({"ok": False, "msg": "wallet mode 不支援"}, 400)
+        if is_root_actor(actor):
+            return json_resp({
+                "ok": False,
+                "msg": "root 管理官方/系統錢包，不建立會員官方熱錢包或會員冷錢包；請使用官方錢包管理。",
+                "code": "system_account_no_member_wallet",
+            }, 403)
         conn = points_service.get_db()
         try:
             points_service.ensure_schema(conn)
             before_wallets = active_user_wallet_rows(conn, actor["id"])
             before_wallet_ids = {int(row["id"]) for row in before_wallets}
             before_wallet_addresses = {str(row["address"] or "").strip().lower() for row in before_wallets}
-            wallet_count_before = len(before_wallet_ids)
+            wallet_count_before = points_service.wallet_creation_chargeable_wallet_count(conn, actor["id"])
             if mode == "official_hot":
                 identity = create_official_hot_wallet(
                     conn,
@@ -287,7 +407,7 @@ def register_economy_routes(app, deps):
                     signer_addresses=data.get("signer_addresses") or [],
                     label=data.get("label") or "",
                 )
-            created_new_wallet = bool(identity and int(identity.get("id") or 0) not in before_wallet_ids)
+            created_new_wallet = bool(mode != "official_hot" and identity and int(identity.get("id") or 0) not in before_wallet_ids)
             creation_fee = {"charged": False, "amount_points": 0}
             if created_new_wallet and wallet_count_before > 0:
                 fee_source = str(data.get("fee_source_wallet_address") or "").strip().lower()
@@ -330,11 +450,7 @@ def register_economy_routes(app, deps):
                 audit("POINTS_WALLET_ONBOARDING_INITIAL_GRANT_FAILED", get_client_ip(), user=actor_value(actor, "username"), success=False, ua=get_ua(), detail=str(exc))
                 initial_grants = {"created_count": 0, "error": str(exc)}
             try:
-                bonus = award_signup_bonus_after_wallet_onboarding(
-                    points_service=points_service,
-                    user_id=actor["id"],
-                    actor={"id": actor["id"], "username": actor["username"], "role": actor["role"]},
-                )
+                bonus = maybe_award_signup_bonus_for_actor(actor)
             except Exception as exc:
                 audit("POINTS_WALLET_ONBOARDING_BONUS_FAILED", get_client_ip(), user=actor_value(actor, "username"), success=False, ua=get_ua(), detail=str(exc))
                 bonus = {"created": False, "error": str(exc)}
@@ -410,6 +526,45 @@ def register_economy_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/root/points/deposits/confirm", methods=["POST"])
+    @require_csrf
+    def root_points_confirm_deposit():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.confirm_deposit_to_hot_wallet(
+                actor=actor,
+                user_id=data.get("user_id"),
+                source_address=data.get("source_address") or "",
+                destination_address=data.get("destination_address") or "",
+                amount_points=data.get("amount_points"),
+                chain_tx_hash=data.get("chain_tx_hash") or "",
+                chain=data.get("chain") or "points_chain_sim",
+                confirmations=data.get("confirmations") or 20,
+                required_confirmations=data.get("required_confirmations") or 20,
+                risk_status=data.get("risk_status") or "accepted",
+                metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
+            )
+            audit(
+                "POINTS_DEPOSIT_BRIDGE_CONFIRMED",
+                get_client_ip(),
+                user=actor_value(actor, "username"),
+                success=True,
+                ua=get_ua(),
+                detail=f"user_id={data.get('user_id')}, amount={data.get('amount_points')}",
+            )
+            return json_resp(result)
+        except PermissionError as exc:
+            return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/points/ledger", methods=["GET"])
     @require_csrf_safe
     def points_ledger():
@@ -466,6 +621,15 @@ def register_economy_routes(app, deps):
         result = points_service.explorer_block(block_ref)
         if not result:
             return json_resp({"ok": False, "msg": "找不到區塊"}), 404
+        return json_resp({"ok": True, "result": result})
+
+    @app.route("/api/points/explorer/bridge/<path:bridge_ref>", methods=["GET"])
+    def points_explorer_bridge(bridge_ref):
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        result = points_service.explorer_bridge_event(bridge_ref)
+        if not result:
+            return json_resp({"ok": False, "msg": "找不到橋接事件"}), 404
         return json_resp({"ok": True, "result": result})
 
     @app.route("/api/points/explorer/fee-estimate", methods=["GET"])
@@ -1725,7 +1889,10 @@ def register_economy_routes(app, deps):
         return json_resp({
             "ok": True,
             "recovery": points_service.safe_mode_status(),
-            "backups": points_service.list_ledger_backups(limit=100),
+            "backups": [],
+            "restore_disabled": True,
+            "recovery_policy": "branch_governance_forensic_only",
+            "msg": "PointsChain 不提供 ledger backup 還原；異常處理須透過 safe mode、forensic bundle、分支與緊急治理保留事件軌跡。",
         })
 
     @app.route("/api/root/points/chain/recovery/auto-handle", methods=["POST"])
@@ -1768,47 +1935,24 @@ def register_economy_routes(app, deps):
                     "verification": verification,
                     "recovery": recovery,
                 })
-            plan = recovery.get("restore_plan") if isinstance(recovery, dict) else {}
-            if not isinstance(plan, dict):
-                plan = {}
-            backup_id = str(plan.get("recommended_backup_id") or "")
-            if not recovery.get("safe_mode") or not backup_id:
-                audit(
-                    "POINTS_CHAIN_AUTO_HANDLE_MANUAL_REQUIRED",
-                    get_client_ip(),
-                    user=actor["username"],
-                    success=False,
-                    ua=get_ua(),
-                    detail=f"safe_mode={bool(recovery.get('safe_mode'))}, backup_id={backup_id or '-'}",
-                )
-                return json_resp({
-                    "ok": False,
-                    "action": "manual_required",
-                    "msg": "PointsChain 異常，但目前沒有可自動套用的健康備份，請檢查 forensic bundle 後手動處理",
-                    "verification": verification,
-                    "recovery": recovery,
-                    "backups": points_service.list_ledger_backups(limit=100),
-                }, 409)
-            result = points_service.restore_from_backup(
-                actor=actor,
-                backup_id=backup_id,
-                confirm="RESTORE POINTSCHAIN",
-            )
             audit(
-                "POINTS_CHAIN_AUTO_HANDLE_RESTORE",
+                "POINTS_CHAIN_AUTO_HANDLE_GOVERNANCE_REQUIRED",
                 get_client_ip(),
                 user=actor["username"],
-                success=bool(result.get("ok")),
+                success=False,
                 ua=get_ua(),
-                detail=f"backup_id={backup_id}, verification_ok={bool((result.get('verification') or {}).get('ok'))}",
+                detail=f"safe_mode={bool(recovery.get('safe_mode'))}, backup_restore_disabled=true",
             )
             return json_resp({
-                "ok": True,
-                "action": "restored_from_backup",
-                "msg": "已使用建議備份恢復 PointsChain，wallet 已由 ledger 重建",
-                "initial_verification": verification,
-                **result,
-            })
+                "ok": False,
+                "action": "branch_governance_required",
+                "msg": "PointsChain 異常已停止自動覆寫還原；請檢查 forensic bundle，必要時建立 recovery branch 或發起緊急治理修正交易。",
+                "verification": verification,
+                "recovery": recovery,
+                "restore_disabled": True,
+                "recovery_policy": "branch_governance_forensic_only",
+                "backups": [],
+            }, 409)
         except Exception as exc:
             audit(
                 "POINTS_CHAIN_AUTO_HANDLE_FAILED",
@@ -1828,12 +1972,19 @@ def register_economy_routes(app, deps):
             return err
         if not points_chain_enabled():
             return points_chain_disabled_response()
-        try:
-            result = points_service.create_ledger_backup(reason="root_manual", kind="manual")
-            audit("POINTS_CHAIN_BACKUP", get_client_ip(), user=actor["username"], success=bool(result.get("ok")), ua=get_ua(), detail=result.get("backup_id"))
-            return json_resp(result)
-        except Exception as exc:
-            return service_error(exc)
+        audit(
+            "POINTS_CHAIN_BACKUP_DISABLED",
+            get_client_ip(),
+            user=actor["username"],
+            success=False,
+            ua=get_ua(),
+            detail="ledger backup/restore disabled; use branch/governance recovery",
+        )
+        return json_resp({
+            "ok": False,
+            "disabled": True,
+            "msg": "PointsChain 不允許建立可還原的 ledger backup；請使用全站 snapshot 做伺服器災難備援，鏈異常則用分支、safe mode、forensic bundle 與緊急治理處理。",
+        }, 410)
 
     @app.route("/api/root/points/chain/recovery/approve", methods=["POST"])
     @require_csrf
@@ -1843,26 +1994,20 @@ def register_economy_routes(app, deps):
             return err
         if not points_chain_enabled():
             return points_chain_disabled_response()
-        data, err = parse_json_body()
-        if err:
-            return err
-        try:
-            result = points_service.restore_from_backup(
-                actor=actor,
-                backup_id=str(data.get("backup_id") or ""),
-                confirm=str(data.get("confirm") or ""),
-            )
-            audit(
-                "POINTS_CHAIN_RECOVERY_APPLY",
-                get_client_ip(),
-                user=actor["username"],
-                success=bool(result.get("ok")),
-                ua=get_ua(),
-                detail=f"backup_id={data.get('backup_id')},verification_ok={bool((result.get('verification') or {}).get('ok'))}",
-            )
-            return json_resp(result)
-        except Exception as exc:
-            return service_error(exc)
+        audit(
+            "POINTS_CHAIN_RECOVERY_RESTORE_DISABLED",
+            get_client_ip(),
+            user=actor["username"],
+            success=False,
+            ua=get_ua(),
+            detail="backup restore rejected; append-only chain recovery must use branches/governance",
+        )
+        return json_resp({
+            "ok": False,
+            "disabled": True,
+            "msg": "備份還原會覆寫 append-only ledger，已停用。請透過 recovery branch、緊急治理、疑義交易與補正交易保留完整事件軌跡。",
+            "recovery_policy": "branch_governance_forensic_only",
+        }, 410)
 
     @app.route("/api/root/points/report", methods=["GET"])
     @require_csrf_safe
@@ -1873,6 +2018,16 @@ def register_economy_routes(app, deps):
         if not points_chain_enabled():
             return points_chain_disabled_response()
         return json_resp({"ok": True, "report": points_service.root_report()})
+
+    @app.route("/api/root/points/financial-invariants", methods=["GET"])
+    @require_csrf_safe
+    def root_points_financial_invariants():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        return json_resp({"ok": True, "financial_invariants": points_service.financial_invariant_report()})
 
     @app.route("/api/root/points/audit", methods=["GET"])
     @require_csrf_safe

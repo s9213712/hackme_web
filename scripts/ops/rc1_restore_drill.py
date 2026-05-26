@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Run an isolated RC1.1 backup/restore drill.
+"""Run an isolated RC1.1 snapshot-boundary drill.
 
 The drill builds a synthetic runtime under /tmp (or a caller supplied workdir),
-creates PointsChain data, snapshots it, dirties the runtime, restores the
-snapshot, and verifies the restored chain and file/runtime state. It is designed
-to prove restore mechanics without touching a live deployment database.
+creates PointsChain data, snapshots the non-ledger runtime, dirties ordinary
+runtime state, restores the snapshot, and verifies the restored file/runtime
+state. PointsChain ledger backup/restore is deliberately checked as disabled:
+ledger recovery must use safe mode, forensic bundles, branches, emergency
+governance, and append-only corrections rather than backup overwrite.
 """
 
 from __future__ import annotations
@@ -139,7 +141,8 @@ def run_drill(workdir: Path, *, keep_workdir: bool = False) -> dict:
     storage = runtime / "storage"
     chats = runtime / "chats"
     points_backups = runtime / "database" / "points_chain_backups"
-    for path in (storage, chats, points_backups):
+    points_forensics = points_backups / "forensics"
+    for path in (storage, chats, points_forensics):
         path.mkdir(parents=True, exist_ok=True)
     init_base_db(db_path)
     runtime_secret_files = write_runtime_secrets(runtime)
@@ -165,7 +168,7 @@ def run_drill(workdir: Path, *, keep_workdir: bool = False) -> dict:
         runtime_base_dir=runtime,
         storage_root=storage,
         audit=lambda *args, **kwargs: audit_events.append({"args": args, "kwargs": kwargs}),
-        file_roots=[storage, chats, points_backups],
+        file_roots=[storage, chats, points_forensics],
         config_files=[],
         runtime_secret_files=runtime_secret_files,
     )
@@ -183,7 +186,14 @@ def run_drill(workdir: Path, *, keep_workdir: bool = False) -> dict:
 
     actor = {"id": 1, "username": "root", "role": "super_admin"}
     genesis = points_service.bootstrap_admin_initial_grants(actor=actor, seal_genesis=True, require_wallet=False)
-    ledger_backup = points_service.create_ledger_backup(reason="rc1_1_restore_drill_baseline", kind="restore_drill")
+    ledger_backup = points_service.create_ledger_backup(reason="rc1_1_snapshot_boundary_drill", kind="restore_drill")
+    try:
+        points_service.restore_from_backup(actor=actor, backup_id="legacy", confirm="RESTORE POINTSCHAIN")
+        backup_restore_rejected = False
+        backup_restore_error = ""
+    except PermissionError as exc:
+        backup_restore_rejected = "backup restore is disabled" in str(exc)
+        backup_restore_error = str(exc)
     baseline_verify = points_service.verify_chain()
     baseline_counts = {
         "posts": count_rows(db_path, "posts"),
@@ -194,7 +204,7 @@ def run_drill(workdir: Path, *, keep_workdir: bool = False) -> dict:
     snapshot = snapshot_service.create_snapshot(
         snapshot_type="manual",
         actor=actor,
-        notes="RC1.1 restore drill baseline",
+        notes="RC1.1 snapshot-boundary drill baseline",
     )
 
     conn = get_db()
@@ -205,12 +215,6 @@ def run_drill(workdir: Path, *, keep_workdir: bool = False) -> dict:
         conn.close()
     (storage / "dirty_asset.txt").write_text("dirty", encoding="utf-8")
     (chats / "dirty_room.txt").write_text("dirty", encoding="utf-8")
-    dirty_ledger = points_service.award_birthday_gift(
-        user_id=3,
-        birthday_year=2099,
-        birthday_date="2099-01-01",
-        actor=actor,
-    )
     dirty_counts = {
         "posts": count_rows(db_path, "posts"),
         "ledger": count_rows(db_path, "points_ledger"),
@@ -221,7 +225,7 @@ def run_drill(workdir: Path, *, keep_workdir: bool = False) -> dict:
     restore = snapshot_service.restore_snapshot(
         snapshot_id=snapshot.snapshot_id,
         actor=actor,
-        reason="RC1.1 isolated restore drill",
+        reason="RC1.1 isolated snapshot-boundary drill",
     )
     restored_verify = points_service.verify_chain()
     restored_counts = {
@@ -233,7 +237,8 @@ def run_drill(workdir: Path, *, keep_workdir: bool = False) -> dict:
     restored_post_title = table_value(db_path, "SELECT title FROM posts WHERE id=2")
     invariants = {
         "snapshot_created": bool(snapshot.ok),
-        "ledger_backup_verified": bool((ledger_backup.get("verification") or {}).get("ok")),
+        "points_chain_backup_disabled": bool(ledger_backup.get("disabled")) and not bool(ledger_backup.get("created")),
+        "points_chain_backup_restore_rejected": backup_restore_rejected,
         "baseline_chain_verify": bool(baseline_verify.get("ok")),
         "restore_ok": bool(restore.get("ok")),
         "restored_chain_verify": bool(restored_verify.get("ok")),
@@ -242,8 +247,8 @@ def run_drill(workdir: Path, *, keep_workdir: bool = False) -> dict:
         "dirty_chat_removed": not (chats / "dirty_room.txt").exists(),
         "baseline_storage_restored": (storage / "baseline_asset.txt").read_text(encoding="utf-8") == "asset-v1",
         "baseline_chat_restored": (chats / "baseline_room.txt").read_text(encoding="utf-8") == "chat-v1",
-        "ledger_count_restored": restored_counts["ledger"] == baseline_counts["ledger"],
-        "block_count_restored": restored_counts["blocks"] == baseline_counts["blocks"],
+        "ledger_not_mutated_during_drill": dirty_counts["ledger"] == baseline_counts["ledger"] == restored_counts["ledger"],
+        "block_not_mutated_during_drill": dirty_counts["blocks"] == baseline_counts["blocks"] == restored_counts["blocks"],
     }
     ok = all(invariants.values())
     return {
@@ -253,13 +258,14 @@ def run_drill(workdir: Path, *, keep_workdir: bool = False) -> dict:
         "finished_at": utc_now(),
         "workdir": str(workdir) if keep_workdir else "",
         "snapshot_id": snapshot.snapshot_id if snapshot else "",
-        "ledger_backup_id": ledger_backup.get("backup_id"),
+        "ledger_backup_disabled": ledger_backup,
+        "backup_restore_error": backup_restore_error,
         "genesis": {
             "created_count": genesis.get("created_count"),
             "deferred_count": genesis.get("deferred_count"),
             "sealed": bool(genesis.get("sealed")),
         },
-        "dirty_ledger_uuid": (dirty_ledger.get("ledger") or {}).get("ledger_uuid"),
+        "ledger_restore_exercised": False,
         "counts": {
             "baseline": baseline_counts,
             "dirty": dirty_counts,
@@ -279,7 +285,7 @@ def default_out_path(out_dir: Path) -> Path:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run an isolated RC1.1 restore drill.")
+    parser = argparse.ArgumentParser(description="Run an isolated RC1.1 snapshot-boundary drill.")
     parser.add_argument("--out", default="", help="Output JSON path. Defaults to artifacts/ops/restore_drill_<timestamp>.json.")
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     parser.add_argument("--workdir", default="", help="Optional workdir. Defaults to a temporary directory.")
@@ -312,7 +318,8 @@ def main() -> int:
         "ok": payload["ok"],
         "out": str(out),
         "snapshot_id": payload.get("snapshot_id"),
-        "ledger_backup_id": payload.get("ledger_backup_id"),
+        "ledger_backup_disabled": bool((payload.get("ledger_backup_disabled") or {}).get("disabled")),
+        "ledger_restore_exercised": bool(payload.get("ledger_restore_exercised")),
         "invariants": payload.get("invariants"),
     }, ensure_ascii=False, indent=2))
     return 0 if payload["ok"] else 1

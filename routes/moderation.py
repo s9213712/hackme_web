@@ -2,7 +2,7 @@ import json
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import request
 
 from services.governance.records import (
@@ -10,10 +10,13 @@ from services.governance.records import (
     record_moderation_action,
 )
 from services.governance.violation_fines import (
+    FEATURE_LABELS,
+    create_user_feature_restriction,
     create_violation_fine,
     list_violation_fine_appeals,
     list_violation_fines,
     normalize_restriction_features,
+    release_feature_restrictions_for_source,
     review_violation_fine_appeal,
     waive_violation_fine,
 )
@@ -142,6 +145,183 @@ def register_moderation_routes(app, deps):
             return actor_value(target, "username") != "root"
         return role_rank(actor_role(target)) < role_rank(actor_role(actor))
 
+    GOVERNANCE_MUTE_FEATURES = ("chat_send", "chat_dm", "community_post", "community_comment")
+    GOVERNANCE_EMERGENCY_ACTION_TYPES = {"mute", "restrict", "suspend", "force_password_reset"}
+    GOVERNANCE_MAX_DURATION_HOURS = 24 * 365
+
+    def _bool_from_payload(value):
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _parse_governance_duration_hours(value, *, required=False):
+        if value in (None, ""):
+            if required:
+                raise ValueError("請設定處分期限")
+            return None
+        try:
+            hours = int(value)
+        except Exception as exc:
+            raise ValueError("處分期限格式錯誤") from exc
+        if hours < 1 or hours > GOVERNANCE_MAX_DURATION_HOURS:
+            raise ValueError(f"處分期限需介於 1 到 {GOVERNANCE_MAX_DURATION_HOURS} 小時")
+        return hours
+
+    def _expires_at_from_hours(hours):
+        if hours is None:
+            return None
+        return (datetime.now() + timedelta(hours=int(hours))).replace(microsecond=0).isoformat()
+
+    def _parse_governance_features(value, *, required=False):
+        if isinstance(value, str):
+            raw = [item.strip() for item in value.split(",")]
+        elif isinstance(value, (list, tuple, set)):
+            raw = list(value)
+        else:
+            raw = []
+        features = []
+        invalid = []
+        for item in raw:
+            key = str(item or "").strip().lower().replace("-", "_")
+            if not key:
+                continue
+            if key not in FEATURE_LABELS:
+                invalid.append(key)
+                continue
+            if key not in features:
+                features.append(key)
+        if invalid:
+            raise ValueError("不支援的功能限制：" + ", ".join(invalid))
+        if required and not features:
+            raise ValueError("限制功能提案必須選擇至少一個功能")
+        return features
+
+    def _governance_previous_state(target):
+        if not target:
+            return {}
+        keys = (
+            "id",
+            "username",
+            "role",
+            "status",
+            "member_level",
+            "base_level",
+            "effective_level",
+            "sanction_status",
+            "sanction_until",
+            "blocked_until",
+            "violation_count",
+        )
+        return {key: target[key] for key in keys if key in target.keys()}
+
+    def _governance_action_payload_from_request(data, action_type):
+        payload = {}
+        duration_required = action_type == "mute"
+        duration_hours = _parse_governance_duration_hours(data.get("duration_hours"), required=duration_required)
+        expires_at = _expires_at_from_hours(duration_hours)
+        if duration_hours is not None:
+            payload["duration_hours"] = duration_hours
+            payload["expires_at"] = expires_at
+        if action_type == "mute":
+            payload["mute_features"] = list(GOVERNANCE_MUTE_FEATURES)
+        if action_type == "restrict":
+            features = _parse_governance_features(data.get("restriction_features"), required=True)
+            payload["restriction_features"] = features
+            payload["restriction_feature_labels"] = [FEATURE_LABELS.get(key, key) for key in features]
+        return payload
+
+    def _proposal_action_payload(proposal):
+        payload = proposal.get("action_payload") if isinstance(proposal, dict) else None
+        if isinstance(payload, dict):
+            return payload
+        try:
+            return json.loads(proposal.get("action_payload_json") or "{}") if proposal else {}
+        except Exception:
+            return {}
+
+    def _feature_source_for_proposal(proposal):
+        source_type = "member_governance_emergency" if proposal.get("is_emergency") else "member_governance"
+        return source_type, f"moderation_proposal:{proposal.get('id')}"
+
+    def _release_emergency_proposal(conn, proposal, *, reason):
+        target_id = int(proposal.get("target_user_id") or 0)
+        if not target_id:
+            return False
+        source_type, source_ref = "member_governance_emergency", f"moderation_proposal:{proposal.get('id')}"
+        release_feature_restrictions_for_source(
+            conn,
+            user_id=target_id,
+            source_type=source_type,
+            source_ref=source_ref,
+            release_reason=reason,
+        )
+        snapshot = proposal.get("emergency_previous_state") if isinstance(proposal.get("emergency_previous_state"), dict) else {}
+        if snapshot:
+            restore_cols = []
+            values = []
+            for key in ("status", "member_level", "base_level", "effective_level", "sanction_status", "sanction_until", "blocked_until"):
+                if key in snapshot:
+                    restore_cols.append(f"{key}=?")
+                    values.append(snapshot.get(key))
+            if restore_cols:
+                restore_cols.append("updated_at=?")
+                values.append(datetime.now().isoformat())
+                values.append(target_id)
+                conn.execute(f"UPDATE users SET {', '.join(restore_cols)} WHERE id=?", tuple(values))
+        proposer = conn.execute(
+            "SELECT id, username, role FROM users WHERE id=?",
+            (int(proposal.get("proposed_by_user_id") or 0),),
+        ).fetchone()
+        if proposer:
+            secure_add_violation(
+                proposer["id"],
+                proposer["username"],
+                proposer["role"],
+                1,
+                f"緊急治理提案 #{proposal.get('id')} 未於期限內通過或遭否決，系統已解除緊急處分。",
+                "system",
+                "member_governance",
+            )
+        now = datetime.now().isoformat()
+        conn.execute(
+            """
+            UPDATE moderation_proposals
+            SET emergency_reverted_at=?, emergency_revert_reason=?, status=CASE WHEN status='pending' THEN 'expired' ELSE status END, updated_at=?
+            WHERE id=?
+            """,
+            (now, reason[:300], now, int(proposal.get("id"))),
+        )
+        return True
+
+    def reconcile_emergency_moderation_proposals(conn):
+        ensure_moderation_proposals_schema(conn)
+        now = datetime.now().isoformat()
+        conn.execute(
+            """
+            UPDATE moderation_proposals
+            SET status='expired', updated_at=?
+            WHERE is_emergency=1
+              AND status='pending'
+              AND expires_at<=?
+            """,
+            (now, now),
+        )
+        rows = conn.execute(
+            """
+            SELECT * FROM moderation_proposals
+            WHERE is_emergency=1
+              AND emergency_applied_at IS NOT NULL
+              AND emergency_reverted_at IS NULL
+              AND status IN ('expired', 'rejected')
+            """
+        ).fetchall()
+        changed = []
+        for row in rows:
+            proposal = proposal_row_to_dict(row)
+            if _release_emergency_proposal(conn, proposal, reason="emergency_not_approved_in_time"):
+                changed.append(proposal.get("id"))
+        return changed
+
     def proposal_payload(conn, row):
         proposal = proposal_row_to_dict(row)
         if not proposal:
@@ -162,7 +342,7 @@ def register_moderation_routes(app, deps):
 
     def execute_proposal_action(conn, proposal, actor):
         target = conn.execute(
-            "SELECT id, username, role, status, member_level FROM users WHERE id=?",
+            "SELECT * FROM users WHERE id=?",
             (proposal["target_user_id"],),
         ).fetchone()
         if not target:
@@ -174,8 +354,10 @@ def register_moderation_routes(app, deps):
 
         action_type = proposal["action_type"]
         action_value = proposal["action_value"]
+        action_payload = _proposal_action_payload(proposal)
         now = datetime.now().isoformat()
         revoke_target_sessions = False
+        source_type, source_ref = _feature_source_for_proposal(proposal)
         if action_type == "warn":
             secure_add_violation(
                 target["id"],
@@ -187,27 +369,64 @@ def register_moderation_routes(app, deps):
                 actor["username"],
             )
         elif action_type == "mute":
-            conn.execute("UPDATE users SET status='muted', updated_at=? WHERE id=?", (now, target["id"]))
+            expires_at = action_payload.get("expires_at") or action_value
+            for feature_key in action_payload.get("mute_features") or list(GOVERNANCE_MUTE_FEATURES):
+                create_user_feature_restriction(
+                    conn,
+                    user_id=target["id"],
+                    feature_key=feature_key,
+                    source_type=source_type,
+                    source_ref=source_ref,
+                    reason=proposal["reason"],
+                    created_by=actor["username"],
+                    expires_at=expires_at,
+                    metadata={
+                        "proposal_id": proposal.get("id"),
+                        "action_type": action_type,
+                        "is_emergency": bool(proposal.get("is_emergency")),
+                    },
+                )
             revoke_target_sessions = True
         elif action_type == "restrict":
-            apply_member_level_change(
-                conn,
-                target["id"],
-                actor=actor["username"],
-                source="vote" if actor["username"] != "root" else "root",
-                sanction_status="restricted",
-                sanction_until=proposal.get("action_value") if proposal.get("action_value") else None,
-                reason=proposal["reason"],
-            )
+            expires_at = action_payload.get("expires_at") or proposal.get("action_value")
+            features = action_payload.get("restriction_features") or []
+            if features:
+                for feature_key in features:
+                    create_user_feature_restriction(
+                        conn,
+                        user_id=target["id"],
+                        feature_key=feature_key,
+                        source_type=source_type,
+                        source_ref=source_ref,
+                        reason=proposal["reason"],
+                        created_by=actor["username"],
+                        expires_at=expires_at,
+                        metadata={
+                            "proposal_id": proposal.get("id"),
+                            "action_type": action_type,
+                            "is_emergency": bool(proposal.get("is_emergency")),
+                        },
+                    )
+            else:
+                apply_member_level_change(
+                    conn,
+                    target["id"],
+                    actor=actor["username"],
+                    source="vote" if actor["username"] != "root" else "root",
+                    sanction_status="restricted",
+                    sanction_until=expires_at,
+                    reason=proposal["reason"],
+                )
             revoke_target_sessions = True
         elif action_type == "suspend":
+            suspend_until = action_payload.get("expires_at") or proposal.get("action_value") or None
             apply_member_level_change(
                 conn,
                 target["id"],
                 actor=actor["username"],
                 source="vote" if actor["username"] != "root" else "root",
                 sanction_status="suspended",
-                sanction_until=proposal.get("action_value") if proposal.get("action_value") else None,
+                sanction_until=suspend_until,
                 reason=proposal["reason"],
             )
             revoke_target_sessions = True
@@ -387,6 +606,8 @@ def register_moderation_routes(app, deps):
         try:
             ensure_moderation_proposals_schema(conn)
             if request.method == "GET":
+                reconcile_emergency_moderation_proposals(conn)
+                conn.commit()
                 status_filter = normalize_text(request.args.get("status")) or ""
                 params = []
                 where = "1=1"
@@ -408,7 +629,7 @@ def register_moderation_routes(app, deps):
             target_user_id = data.get("target_user_id")
             action_type = normalize_text(data.get("action_type"))
             action_value = cast_action_value(data.get("action_value"))
-            target = conn.execute("SELECT id, username, role FROM users WHERE id=?", (target_user_id,)).fetchone()
+            target = conn.execute("SELECT * FROM users WHERE id=?", (target_user_id,)).fetchone()
             if not target:
                 return json_resp({"ok":False,"msg":"找不到目標帳號"}), 404
             if int(target["id"]) == int(actor["id"]):
@@ -417,7 +638,17 @@ def register_moderation_routes(app, deps):
                 return json_resp({"ok":False,"msg":"不可對 root 建立治理提案"}), 403
             if not can_govern_target(actor, target):
                 return json_resp({"ok":False,"msg":"不可對同級或更高權限帳號建立治理提案"}), 403
+            try:
+                action_payload = _governance_action_payload_from_request(data, action_type)
+            except ValueError as exc:
+                return json_resp({"ok":False,"msg":str(exc)}), 400
+            if action_type in {"mute", "restrict", "suspend"} and action_payload.get("expires_at"):
+                action_value = action_payload["expires_at"]
+            emergency_execute = _bool_from_payload(data.get("emergency_execute"))
+            if emergency_execute and action_type not in GOVERNANCE_EMERGENCY_ACTION_TYPES:
+                return json_resp({"ok":False,"msg":"此治理動作不支援緊急執行"}), 400
             policy = governance_policy_for_action(action_type, target["role"])
+            ttl_hours = 1 if emergency_execute else data.get("ttl_hours", 72)
             proposal, err = create_moderation_proposal(
                 conn,
                 target_user_id=target["id"],
@@ -429,14 +660,31 @@ def register_moderation_routes(app, deps):
                 risk_level=policy["risk_level"],
                 required_root_approval=policy["required_root_approval"],
                 required_manager_approvals=policy["required_manager_approvals"],
-                ttl_hours=data.get("ttl_hours", 72),
+                ttl_hours=ttl_hours,
+                action_payload=action_payload,
+                is_emergency=emergency_execute,
+                emergency_previous_state=_governance_previous_state(target) if emergency_execute else {},
             )
             if err:
                 return json_resp({"ok":False,"msg":err}), 400
+            if emergency_execute:
+                emergency_proposal = proposal_row_to_dict(conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal["id"],)).fetchone())
+                target_after_apply, apply_err, revoke_target_sessions = execute_proposal_action(conn, emergency_proposal, actor)
+                if apply_err:
+                    conn.rollback()
+                    return json_resp({"ok":False,"msg":apply_err}), 400
+                now = datetime.now().isoformat()
+                conn.execute(
+                    "UPDATE moderation_proposals SET emergency_applied_at=?, updated_at=? WHERE id=?",
+                    (now, now, proposal["id"]),
+                )
+                if revoke_target_sessions and target_after_apply:
+                    revoke_user_sessions(target_after_apply["id"])
             conn.commit()
             audit("MODERATION_PROPOSAL_CREATED", get_client_ip(), user=actor["username"], success=True,
-                  detail=f"proposal_id={proposal['id']},target={target['username']},action={action_type},risk={proposal.get('risk_level')}")
-            return json_resp({"ok":True,"msg":"治理提案已建立","proposal":proposal_payload(conn, conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal["id"],)).fetchone())})
+                  detail=f"proposal_id={proposal['id']},target={target['username']},action={action_type},risk={proposal.get('risk_level')},emergency={emergency_execute}")
+            msg = "治理提案已建立；緊急處分已先行套用，1 小時內未通過會自動解除並記提案者違規。" if emergency_execute else "治理提案已建立"
+            return json_resp({"ok":True,"msg":msg,"proposal":proposal_payload(conn, conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal["id"],)).fetchone())})
         finally:
             conn.close()
 
@@ -450,6 +698,8 @@ def register_moderation_routes(app, deps):
         conn = get_db()
         try:
             ensure_moderation_proposals_schema(conn)
+            reconcile_emergency_moderation_proposals(conn)
+            conn.commit()
             row = conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal_id,)).fetchone()
             if not row:
                 return json_resp({"ok":False,"msg":"找不到治理提案"}), 404
@@ -496,6 +746,8 @@ def register_moderation_routes(app, deps):
             except Exception:
                 return json_resp({"ok":False,"msg":"同一管理員不可重複投票"}), 409
             proposal = refresh_proposal_vote_counts(conn, proposal_id)
+            reconcile_emergency_moderation_proposals(conn)
+            proposal = proposal_row_to_dict(conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal_id,)).fetchone())
             conn.commit()
             audit("MODERATION_PROPOSAL_VOTED", get_client_ip(), user=actor["username"], success=True,
                   detail=f"proposal_id={proposal_id},vote={vote},status={proposal['status']}")
@@ -518,6 +770,8 @@ def register_moderation_routes(app, deps):
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
             proposal = refresh_proposal_vote_counts(conn, proposal_id)
+            reconcile_emergency_moderation_proposals(conn)
+            proposal = proposal_row_to_dict(conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal_id,)).fetchone())
             if not proposal:
                 conn.rollback()
                 return json_resp({"ok":False,"msg":"找不到治理提案"}), 404
@@ -531,6 +785,15 @@ def register_moderation_routes(app, deps):
                 conn.rollback()
                 return json_resp({"ok":False,"msg":"治理對象不可執行自己的提案"}), 403
             now = datetime.now().isoformat()
+            if proposal.get("is_emergency") and proposal.get("emergency_applied_at") and not proposal.get("emergency_reverted_at"):
+                conn.execute(
+                    "UPDATE moderation_proposals SET status='executed', executed_at=?, updated_at=? WHERE id=?",
+                    (now, now, proposal_id),
+                )
+                conn.commit()
+                audit("MODERATION_PROPOSAL_EXECUTED", get_client_ip(), user=actor["username"], success=True,
+                      detail=f"proposal_id={proposal_id},target={proposal.get('target_user_id')},action={proposal['action_type']},emergency_already_applied=1")
+                return json_resp({"ok":True,"msg":"緊急治理提案已確認執行","proposal_id":proposal_id})
             conn.execute("UPDATE moderation_proposals SET status='executing', updated_at=? WHERE id=?", (now, proposal_id))
             conn.commit()
             target, err, revoke_target_sessions = execute_proposal_action(conn, proposal, actor)

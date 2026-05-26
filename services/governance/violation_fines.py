@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import uuid
 from datetime import datetime, timedelta
 
@@ -216,6 +217,108 @@ def serialize_violation_fine(row):
         "destination": "burn",
     }
     return data
+
+
+def _active_restriction_rows(conn, *, user_id, feature_key=None, now=None):
+    now_text = (now or _now()).isoformat() if not isinstance(now, str) else now
+    where = (
+        "WHERE user_id=? AND status='active' "
+        "AND (expires_at IS NULL OR expires_at='' OR expires_at>?)"
+    )
+    params = [int(user_id), now_text]
+    feature = normalize_feature_key(feature_key)
+    if feature:
+        where += " AND feature_key=?"
+        params.append(feature)
+    try:
+        return conn.execute(
+            f"SELECT * FROM user_feature_restrictions {where} ORDER BY id DESC",
+            tuple(params),
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
+        raise
+
+
+def _effective_overdue_fine_restrictions(conn, *, user_id, feature_key=None, now=None):
+    """Read-only restrictions implied by payable overdue fines."""
+
+    feature = normalize_feature_key(feature_key)
+    now_dt = now or _now()
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM violation_fines
+            WHERE user_id=? AND status IN ('pending', 'overdue')
+            ORDER BY id DESC
+            """,
+            (int(user_id),),
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
+        raise
+    restrictions = []
+    for row in rows:
+        fine = serialize_violation_fine(row)
+        if not fine:
+            continue
+        due_at = _parse_dt(fine.get("due_at"))
+        if fine.get("status") != "overdue" and not (due_at and due_at <= now_dt):
+            continue
+        for restricted_feature in fine.get("restriction_features") or []:
+            if feature and restricted_feature != feature:
+                continue
+            restrictions.append(
+                {
+                    "id": None,
+                    "restriction_uuid": f"effective:{fine['fine_uuid']}:{restricted_feature}",
+                    "user_id": int(user_id),
+                    "feature_key": restricted_feature,
+                    "feature_label": FEATURE_LABELS.get(restricted_feature, restricted_feature),
+                    "status": "active",
+                    "source_type": "violation_fine",
+                    "source_ref": fine["fine_uuid"],
+                    "reason": f"違規罰款逾期未繳：{fine.get('reason') or ''}",
+                    "starts_at": fine.get("due_at") or "",
+                    "expires_at": None,
+                    "created_by": "system",
+                    "created_at": fine.get("updated_at") or fine.get("created_at") or "",
+                    "released_at": None,
+                    "release_reason": None,
+                    "metadata": {"fine_uuid": fine["fine_uuid"], "effective_read_only": True},
+                }
+            )
+    return restrictions
+
+
+def effective_feature_restrictions(conn, *, user_id, feature_key=None):
+    # Hot-path permission checks must not write or refresh derived fine state:
+    # under concurrent traffic those writes can turn unrelated user actions into
+    # SQLite lock failures. Governance/listing paths still materialize state via
+    # active_feature_restrictions().
+    seen = set()
+    restrictions = []
+    now_dt = _now()
+    for row in _active_restriction_rows(conn, user_id=user_id, feature_key=feature_key, now=now_dt):
+        restriction = serialize_feature_restriction(row)
+        if not restriction:
+            continue
+        key = (restriction.get("feature_key"), restriction.get("source_type"), restriction.get("source_ref"))
+        seen.add(key)
+        restrictions.append(restriction)
+    for restriction in _effective_overdue_fine_restrictions(
+        conn,
+        user_id=user_id,
+        feature_key=feature_key,
+        now=now_dt,
+    ):
+        key = (restriction.get("feature_key"), restriction.get("source_type"), restriction.get("source_ref"))
+        if key in seen:
+            continue
+        restrictions.append(restriction)
+    return restrictions
 
 
 def _calculate_overdue_interest_points(row, now_dt):
@@ -506,13 +609,7 @@ def active_feature_restrictions(conn, *, user_id, feature_key=None):
         """,
         (now, int(user_id), now),
     )
-    where = "WHERE user_id=? AND status='active'"
-    params = [int(user_id)]
-    feature = normalize_feature_key(feature_key)
-    if feature:
-        where += " AND feature_key=?"
-        params.append(feature)
-    rows = conn.execute(f"SELECT * FROM user_feature_restrictions {where} ORDER BY id DESC", tuple(params)).fetchall()
+    rows = _active_restriction_rows(conn, user_id=user_id, feature_key=feature_key, now=now)
     return [serialize_feature_restriction(row) for row in rows]
 
 
@@ -520,7 +617,7 @@ def assert_user_feature_allowed(conn, *, user_id, feature_key):
     feature = normalize_feature_key(feature_key)
     if not feature:
         return True, "", []
-    rows = active_feature_restrictions(conn, user_id=int(user_id), feature_key=feature)
+    rows = effective_feature_restrictions(conn, user_id=int(user_id), feature_key=feature)
     if not rows:
         return True, "", []
     labels = ", ".join(FEATURE_LABELS.get(row["feature_key"], row["feature_key"]) for row in rows)

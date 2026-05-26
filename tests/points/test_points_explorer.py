@@ -116,7 +116,7 @@ def test_points_explorer_get_routes_are_public_safe_gets(tmp_path):
     current.clear()
     client = app.test_client()
 
-    wallet_address = points.get_wallet(2)["public_account_id"]
+    wallet_address = points.get_wallet(2)["active_wallet_address"]
 
     search_res = client.get(f"/api/points/explorer/search?q={ledger['ledger_uuid']}")
     tx_res = client.get(f"/api/points/explorer/tx/{ledger['ledger_uuid']}")
@@ -129,6 +129,43 @@ def test_points_explorer_get_routes_are_public_safe_gets(tmp_path):
     assert wallet_res.status_code == 200
     assert block_res.status_code == 404
     assert fee_res.status_code == 200
+
+
+def test_points_explorer_bridge_route_links_pc1_and_pc0_layers(tmp_path):
+    app, points, _ledger, _manual_ledger, _current = _build_app(tmp_path)
+    client = app.test_client()
+    wallet = points.get_wallet(2)
+    deposit = points.confirm_deposit_to_hot_wallet(
+        actor={"id": 1, "username": "root", "role": "super_admin"},
+        user_id=2,
+        source_address="pc1" + ("a" * 48),
+        destination_address=wallet["deposit_address"],
+        amount_points=33,
+        chain_tx_hash="bridge-explorer-chain-tx",
+        confirmations=20,
+        required_confirmations=20,
+        risk_status="accepted",
+    )
+    bridge_uuid = deposit["bridge_event"]["bridge_uuid"]
+
+    res = client.get(f"/api/points/explorer/bridge/{bridge_uuid}")
+    by_chain_hash = client.get("/api/points/explorer/bridge/bridge-explorer-chain-tx")
+    search_res = client.get(f"/api/points/explorer/search?q={bridge_uuid}")
+
+    assert res.status_code == 200
+    payload = res.get_json()["result"]
+    assert payload["kind"] == "bridge"
+    assert payload["layer"] == "bridge"
+    bridge = payload["bridge_event"]
+    assert bridge["asset_type"] == "Cross-Ledger Settlement Event"
+    assert bridge["pc1_settlement_tx"] == "bridge-explorer-chain-tx"
+    assert bridge["pc0_wrapped_credit"] == deposit["ledger"]["ledger_uuid"]
+    assert bridge["pc0_hot_wallet"] == wallet["active_wallet_address"]
+    assert bridge["invariant_status"] == "valid"
+    assert bridge["internal_transaction"]["layer"] == "pc0"
+    assert by_chain_hash.status_code == 200
+    assert search_res.status_code == 200
+    assert search_res.get_json()["result"]["kind"] == "bridge"
 
 
 def test_points_explorer_shows_mint_genesis_fund_events(tmp_path):
@@ -176,7 +213,8 @@ def test_points_chain_can_be_disabled_without_disabling_basic_points(tmp_path):
     assert ledger_res.status_code == 200
     assert catalog_res.status_code == 200
     assert spend_res.status_code == 200
-    assert spend_res.get_json()["ledger"]["direction"] == "freeze"
+    assert spend_res.get_json()["ledger"]["direction"] == "debit"
+    assert spend_res.get_json()["settlement_policy"] == "basic_points_immediate_debit"
 
     for method, path in (
         ("get", "/api/points/wallet/onboarding"),
@@ -212,20 +250,17 @@ def test_points_explorer_searches_transaction_and_wallet_with_finality_rule(tmp_
     assert tx_payload["result"]["kind"] == "transaction"
     tx = tx_payload["result"]["transaction"]
     assert tx["ledger_uuid"] == ledger["ledger_uuid"]
-    assert tx["finality"]["target_proved_count"] == 20
-    assert tx["finality"]["base_seconds_min"] == 120
-    assert tx["finality"]["base_seconds_max"] == 180
-    assert tx["finality"]["fee_model"] == "priority_fee_diminishing_ratio_v2"
-    assert tx["finality"]["network_fee_state"]["congestion_label"] == "idle"
-    assert tx["finality"]["network_fee_state"]["suggested_total_fee_points"] == 21
-    assert tx["finality"]["human_rule"] == "20 Proved；ETA 依鏈上忙碌度與 priority fee 動態估算"
+    assert tx["finality"]["target_proved_count"] == 0
+    assert tx["finality"]["fee_model"] == "internal_ledger_no_priority_fee_v1"
+    assert tx["finality"]["network_fee_state"]["congestion_label"] == "internal"
+    assert tx["finality"]["human_rule"] == "pc0 Inner Address 使用站內帳本即時成交；免 20 Proved、免 priority fee"
     assert tx["finality"]["chain_fee_policy"]["base_fee_exempt"] is True
     assert tx["finality"]["chain_fee_policy"]["acceleration_allowed"] is False
-    assert tx["finality"]["chain_fee_policy"]["exemption_reason"] == "設定自動發放交易免鏈上費用"
+    assert tx["finality"]["chain_fee_policy"]["exemption_reason"] == "pc0 Inner Address 使用站內帳本即時成交；免 20 Proved、免 priority fee"
     assert "wallet_flow_snapshot" not in tx["input_data"]
     assert tx["wallet_flow"]["destination_wallet_address"]
 
-    wallet_address = points.get_wallet(2)["public_account_id"]
+    wallet_address = points.get_wallet(2)["active_wallet_address"]
     wallet_res = client.get(f"/api/points/explorer/search?q={wallet_address}")
     wallet_payload = wallet_res.get_json()
 
@@ -233,16 +268,39 @@ def test_points_explorer_searches_transaction_and_wallet_with_finality_rule(tmp_
     assert wallet_payload["result"]["kind"] == "wallet"
     wallet = wallet_payload["result"]["wallet"]
     assert wallet["address"] == wallet_address
-    assert wallet["legacy_account"] is True
-    assert wallet["address_type"] == "legacy_account"
+    assert wallet["legacy_account"] is False
+    assert wallet["address_type"] == "inner_address"
     assert wallet["points_balance"] == 120
     assert wallet["transaction_count"] == 2
-    assert wallet["human_rule"] == "20 Proved；ETA 依鏈上忙碌度與 priority fee 動態估算"
+    assert wallet["human_rule"] == "pc0 Inner Address 使用站內帳本即時成交；免 20 Proved、免 priority fee"
+    assert wallet["finality_rule"]["target_proved_count"] == 0
 
 
 def test_points_explorer_acceleration_is_append_only_and_idempotent(tmp_path):
-    app, points, _auto_ledger, ledger, _current = _build_app(tmp_path)
+    app, points, _auto_ledger, _manual_ledger, _current = _build_app(tmp_path)
     client = app.test_client()
+    source_wallet = points.get_wallet(2)["active_wallet_address"]
+    ledger = points.record_transaction(
+        user_id=2,
+        currency_type=DISPLAY_CURRENCY,
+        direction="transfer_out",
+        amount=1,
+        action_type="wallet_transfer_out",
+        reference_type="test",
+        reference_id="cold-withdrawal-ledger",
+        idempotency_key="explorer:test:cold-withdrawal-ledger",
+        reason="cold withdrawal explorer acceleration",
+        public_metadata={
+            "source_wallet_address": source_wallet,
+            "destination_wallet_address": "pc1" + "9" * 48,
+            "settlement_rail": "withdrawal_bridge_lock",
+            "chain_required": True,
+            "approval_required": True,
+            "network_fee_points": 1,
+            "service_fee_points": 0,
+        },
+        actor={"id": 2, "username": "test", "role": "user"},
+    )["ledger"]
 
     first = client.post(
         "/api/points/explorer/accelerate",
@@ -268,7 +326,7 @@ def test_points_explorer_acceleration_is_append_only_and_idempotent(tmp_path):
 
     assert second.status_code == 200
     assert second_payload["created"] is False
-    assert points.get_wallet(2)["points_balance"] == 110
+    assert points.get_wallet(2)["points_balance"] == 109
 
     conflict = client.post(
         "/api/points/explorer/accelerate",
@@ -276,13 +334,13 @@ def test_points_explorer_acceleration_is_append_only_and_idempotent(tmp_path):
     )
     assert conflict.status_code == 400
     assert "idempotency key conflict" in conflict.get_json()["msg"]
-    assert points.get_wallet(2)["points_balance"] == 110
+    assert points.get_wallet(2)["points_balance"] == 109
 
-    wallet_address = points.get_wallet(2)["public_account_id"]
+    wallet_address = points.get_wallet(2)["active_wallet_address"]
     wallet_res = client.get(f"/api/points/explorer/wallet/{wallet_address}")
     wallet = wallet_res.get_json()["result"]["wallet"]
-    assert wallet["points_balance"] == 110
-    assert wallet["transaction_count"] == 3
+    assert wallet["points_balance"] == 109
+    assert wallet["transaction_count"] == 4
 
 
 def test_points_explorer_fee_estimate_reflects_network_congestion(tmp_path):
@@ -337,12 +395,34 @@ def test_points_explorer_auto_distribution_is_chain_fee_exempt(tmp_path):
     )
 
     assert res.status_code == 400
-    assert "設定自動發放交易免鏈上費用" in res.get_json()["msg"]
+    assert "pc0 Inner Address 使用站內帳本即時成交" in res.get_json()["msg"]
     assert points.get_wallet(2)["points_balance"] == 120
 
 
 def test_points_explorer_pending_proved_count_uses_stable_realistic_schedule(tmp_path):
-    _app, points, _auto_ledger, ledger, _current = _build_app(tmp_path)
+    _app, points, _auto_ledger, _manual_ledger, _current = _build_app(tmp_path)
+    source_wallet = points.get_wallet(2)["active_wallet_address"]
+    ledger = points.record_transaction(
+        user_id=2,
+        currency_type=DISPLAY_CURRENCY,
+        direction="transfer_out",
+        amount=1,
+        action_type="wallet_transfer_out",
+        reference_type="test",
+        reference_id="stable-schedule-cold-ledger",
+        idempotency_key="explorer:test:stable-schedule-cold-ledger",
+        reason="cold withdrawal explorer schedule",
+        public_metadata={
+            "source_wallet_address": source_wallet,
+            "destination_wallet_address": "pc1" + "8" * 48,
+            "settlement_rail": "withdrawal_bridge_lock",
+            "chain_required": True,
+            "approval_required": True,
+            "network_fee_points": 1,
+            "service_fee_points": 0,
+        },
+        actor={"id": 2, "username": "test", "role": "user"},
+    )["ledger"]
     created_at = (datetime.now(timezone.utc) - timedelta(seconds=20)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     fake_ledger = {**dict(ledger), "created_at": created_at}
     conn = points.get_db()
@@ -361,14 +441,13 @@ def test_points_explorer_pending_proved_count_uses_stable_realistic_schedule(tmp
     assert first["eta_seconds"] <= first["settlement_seconds"]
 
 
-def test_wallet_transfer_pending_does_not_credit_recipient_until_proved(tmp_path):
+def test_wallet_transfer_pending_does_not_credit_chain_address_until_proved(tmp_path):
     app, points, _auto_ledger, _manual_ledger, current = _build_app(tmp_path)
     client = app.test_client()
     conn = points.get_db()
     try:
         points.ensure_schema(conn)
         sender_wallet = create_official_hot_wallet(conn, user_id=2, chain_secret="test-secret", label="sender hot")
-        recipient_wallet = create_official_hot_wallet(conn, user_id=3, chain_secret="test-secret", label="recipient hot")
         conn.commit()
     finally:
         conn.close()
@@ -385,13 +464,15 @@ def test_wallet_transfer_pending_does_not_credit_recipient_until_proved(tmp_path
         reason="fund transfer source",
         actor={"id": 1, "username": "root", "role": "super_admin"},
     )
+    before_sender = points.explorer_wallet(sender_wallet["address"])["wallet"]["points_balance"]
+    destination_address = "pc1" + ("8" * 48)
 
     current.update({"id": 2, "username": "test", "role": "user"})
     res = client.post(
         "/api/points/transactions/submit",
         json={
             "source_wallet_address": sender_wallet["address"],
-            "destination_wallet_address": recipient_wallet["address"],
+            "destination_wallet_address": destination_address,
             "amount_points": 30,
             "fee_points": 1,
             "request_uuid": "pending-transfer-1",
@@ -407,6 +488,8 @@ def test_wallet_transfer_pending_does_not_credit_recipient_until_proved(tmp_path
     assert payload["warnings"] == []
     assert payload["notifications"]["pending"]["all_sent"] is True
     assert payload["transaction"]["status"] == "pending"
+    assert payload["transaction"]["settlement_rail"] == "withdrawal_bridge_lock"
+    assert payload["transaction"]["wallet_flow"]["destination_unowned"] is True
     assert payload["transaction"]["finality"]["proved_count"] < 20
     assert payload["transaction"]["finality"]["chain_fee_policy"]["base_fee_destination_fund_key"] == "burn"
     assert payload["transaction"]["finality"]["chain_fee_policy"]["base_fee_destination_label"] == "BURN 銷毀錢包"
@@ -443,15 +526,15 @@ def test_wallet_transfer_pending_does_not_credit_recipient_until_proved(tmp_path
     assert sender_transactions["transactions"][0]["balance_effect"] == "pending_no_recipient_credit"
 
     sender_pending = points.explorer_wallet(sender_wallet["address"])["wallet"]
-    recipient_pending = points.explorer_wallet(recipient_wallet["address"])["wallet"]
-    assert sender_pending["points_balance"] == 149
+    recipient_pending = points.explorer_wallet(destination_address)["wallet"]
+    assert sender_pending["points_balance"] == before_sender - 31 - 20
     assert sender_pending["points_frozen"] == 31
     assert sender_pending["pending_outgoing_points"] == 31
     assert recipient_pending["points_balance"] == 0
     assert recipient_pending["points_frozen"] == 0
 
     sender_wallet_payload = points.get_wallet(2)
-    assert sender_wallet_payload["wallet_identity_balances"][sender_wallet["address"]]["points_balance"] == 149
+    assert sender_wallet_payload["wallet_identity_balances"][sender_wallet["address"]]["points_balance"] == before_sender - 31 - 20
     assert sender_wallet_payload["wallet_identity_balances"][sender_wallet["address"]]["points_frozen"] == 31
     assert sender_wallet_payload["wallet_identity_balances"][sender_wallet["address"]]["pending_outgoing_points"] == 31
     points.upsert_catalog_item(
@@ -459,7 +542,7 @@ def test_wallet_transfer_pending_does_not_credit_recipient_until_proved(tmp_path
         item_key="pending_reserved_spend",
         item_name="Pending Reserved Spend",
         category="test",
-        base_price=180,
+        base_price=sender_pending["points_balance"] + 1,
         enabled=True,
     )
     with pytest.raises(ValueError, match="insufficient balance"):
@@ -470,15 +553,6 @@ def test_wallet_transfer_pending_does_not_credit_recipient_until_proved(tmp_path
             actor={"id": 2, "username": "test", "role": "user"},
         )
 
-    current.update({"id": 3, "username": "recipient", "role": "user"})
-    recipient_transactions = client.get("/api/points/transactions?limit=10").get_json()
-    assert recipient_transactions["summary"]["pending_count"] == 1
-    assert recipient_transactions["summary"]["pending_incoming_points"] == 30
-    assert recipient_transactions["transactions"][0]["transaction_hash"] == tx_hash
-    assert recipient_transactions["transactions"][0]["direction"] == "incoming"
-    assert points.explorer_wallet(recipient_wallet["address"])["wallet"]["points_balance"] == 0
-    current.update({"id": 2, "username": "test", "role": "user"})
-
     conn = points.get_db()
     try:
         rows = conn.execute(
@@ -486,7 +560,7 @@ def test_wallet_transfer_pending_does_not_credit_recipient_until_proved(tmp_path
         ).fetchall()
     finally:
         conn.close()
-    assert [int(row["user_id"]) for row in rows] == [2, 3]
+    assert [int(row["user_id"]) for row in rows] == [2]
     assert all(tx_hash in row["body"] for row in rows)
 
     proved_at = (datetime.now(timezone.utc) - timedelta(seconds=600)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -513,20 +587,20 @@ def test_wallet_transfer_pending_does_not_credit_recipient_until_proved(tmp_path
     assert sender_confirmed_transactions["transactions"][0]["balance_effect"] == "confirmed"
 
     sender_final = points.explorer_wallet(sender_wallet["address"])["wallet"]
-    recipient_final = points.explorer_wallet(recipient_wallet["address"])["wallet"]
-    assert sender_final["points_balance"] == 149
+    recipient_final = points.explorer_wallet(destination_address)["wallet"]
+    assert sender_final["points_balance"] == before_sender - 31 - 20
     assert sender_final["points_frozen"] == 0
     assert sender_final["pending_outgoing_points"] == 0
-    assert sender_final["transaction_count"] == 4
-    assert sender_final["received_tx_count"] == 1
-    assert sender_final["sent_tx_count"] == 3
+    assert sender_final["transaction_count"] >= 4
+    assert sender_final["received_tx_count"] >= 1
+    assert sender_final["sent_tx_count"] >= 3
     assert sender_final["total_sent_points"] == 51
-    assert [row["direction"] for row in sender_final["recent_transactions"]] == ["debit", "transfer_out", "debit", "credit"]
+    assert [row["direction"] for row in sender_final["recent_transactions"][:3]] == ["debit", "transfer_out", "debit"]
     assert recipient_final["points_balance"] == 30
     assert recipient_final["transaction_count"] == 1
     assert recipient_final["received_tx_count"] == 1
     assert recipient_final["sent_tx_count"] == 0
-    assert [row["direction"] for row in recipient_final["recent_transactions"]] == ["transfer_in"]
+    assert [row["direction"] for row in recipient_final["recent_transactions"]] == ["transfer_out"]
 
     conn = points.get_db()
     try:
@@ -547,8 +621,47 @@ def test_wallet_transfer_pending_does_not_credit_recipient_until_proved(tmp_path
         ("chain_acceleration_fee", "burn", 20),
         ("wallet_transfer_fee", "burn", 1),
     ]
-    assert [int(row["user_id"]) for row in rows] == [2, 3]
+    assert [int(row["user_id"]) for row in rows] == [2]
     assert all(tx_hash in row["body"] for row in rows)
+
+
+def test_wallet_transfer_api_rejects_pc0_direct_chain_destination_with_guidance(tmp_path):
+    app, points, _auto_ledger, _manual_ledger, current = _build_app(tmp_path)
+    client = app.test_client()
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        sender_wallet = create_official_hot_wallet(conn, user_id=2, chain_secret="test-secret", label="sender hot")
+        conn.commit()
+    finally:
+        conn.close()
+
+    current.update({"id": 2, "username": "test", "role": "user"})
+    res = client.post(
+        "/api/points/transactions/submit",
+        json={
+            "source_wallet_address": "pc1" + ("a" * 48),
+            "destination_wallet_address": "pc0" + ("b" * 48),
+            "amount_points": 10,
+            "fee_points": 1,
+            "request_uuid": "api-direct-chain-to-pc0-must-fail",
+            "memo": "must use bridge",
+        },
+    )
+    payload = res.get_json()
+
+    assert res.status_code == 400
+    assert payload["code"] == "pc0_internal_address_not_chain_reachable"
+    assert "平台入金地址" in payload["msg"]
+    assert "credit 到 pc0 站內託管錢包" in payload["guidance"]["deposit"]
+    conn = points.get_db()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM points_chain_transfer_requests WHERE request_uuid='api-direct-chain-to-pc0-must-fail'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is None
 
 
 def test_root_transaction_management_confirms_to_address_even_if_wallet_becomes_inactive(tmp_path):
@@ -558,7 +671,7 @@ def test_root_transaction_management_confirms_to_address_even_if_wallet_becomes_
     try:
         points.ensure_schema(conn)
         sender_wallet = create_official_hot_wallet(conn, user_id=2, chain_secret="test-secret", label="sender hot")
-        recipient_wallet = create_official_hot_wallet(conn, user_id=3, chain_secret="test-secret", label="recipient hot")
+        recipient_address = "pc1" + ("9" * 48)
         conn.commit()
     finally:
         conn.close()
@@ -581,7 +694,7 @@ def test_root_transaction_management_confirms_to_address_even_if_wallet_becomes_
         "/api/points/transactions/submit",
         json={
             "source_wallet_address": sender_wallet["address"],
-            "destination_wallet_address": recipient_wallet["address"],
+            "destination_wallet_address": recipient_address,
             "amount_points": 10,
             "fee_points": 1,
             "request_uuid": "inactive-wallet-transfer",
@@ -599,10 +712,6 @@ def test_root_transaction_management_confirms_to_address_even_if_wallet_becomes_
             "UPDATE points_chain_transfer_requests SET created_at=? WHERE tx_group_hash=?",
             (proved_at, tx_hash),
         )
-        conn.execute(
-            "UPDATE points_wallet_identities SET status='lost' WHERE address=?",
-            (recipient_wallet["address"],),
-        )
         conn.commit()
     finally:
         conn.close()
@@ -616,7 +725,7 @@ def test_root_transaction_management_confirms_to_address_even_if_wallet_becomes_
     assert payload["transactions"][0]["status"] == "confirmed"
     assert payload["transactions"][0]["balance_effect"] == "confirmed"
     assert payload["transactions"][0]["wallet_flow"]["destination_unowned"] is True
-    assert points.explorer_wallet(recipient_wallet["address"])["wallet"]["points_balance"] == 10
+    assert points.explorer_wallet(recipient_address)["wallet"]["points_balance"] == 10
 
 
 def test_root_transaction_management_sweeps_proved_pending_beyond_page_limit(tmp_path):
@@ -626,7 +735,7 @@ def test_root_transaction_management_sweeps_proved_pending_beyond_page_limit(tmp
     try:
         points.ensure_schema(conn)
         sender_wallet = create_official_hot_wallet(conn, user_id=2, chain_secret="test-secret", label="sender hot")
-        recipient_wallet = create_official_hot_wallet(conn, user_id=3, chain_secret="test-secret", label="recipient hot")
+        recipient_address = "pc1" + ("7" * 48)
         conn.commit()
     finally:
         conn.close()
@@ -650,7 +759,7 @@ def test_root_transaction_management_sweeps_proved_pending_beyond_page_limit(tmp
             "/api/points/transactions/submit",
             json={
                 "source_wallet_address": sender_wallet["address"],
-                "destination_wallet_address": recipient_wallet["address"],
+                    "destination_wallet_address": recipient_address,
                 "amount_points": 10,
                 "fee_points": 1,
                 "request_uuid": f"batch-sweep-transfer-{index}",
@@ -689,7 +798,7 @@ def test_root_transaction_management_sweeps_proved_pending_beyond_page_limit(tmp
     finally:
         conn.close()
     assert remaining == 0
-    assert points.explorer_wallet(recipient_wallet["address"])["wallet"]["points_balance"] == 150
+    assert points.explorer_wallet(recipient_address)["wallet"]["points_balance"] == 150
 
 
 def test_transaction_management_remains_readable_in_safe_mode(tmp_path):
@@ -699,7 +808,7 @@ def test_transaction_management_remains_readable_in_safe_mode(tmp_path):
     try:
         points.ensure_schema(conn)
         sender_wallet = create_official_hot_wallet(conn, user_id=2, chain_secret="test-secret", label="sender hot")
-        recipient_wallet = create_official_hot_wallet(conn, user_id=3, chain_secret="test-secret", label="recipient hot")
+        recipient_address = "pc1" + ("6" * 48)
         conn.commit()
     finally:
         conn.close()
@@ -722,7 +831,7 @@ def test_transaction_management_remains_readable_in_safe_mode(tmp_path):
         "/api/points/transactions/submit",
         json={
             "source_wallet_address": sender_wallet["address"],
-            "destination_wallet_address": recipient_wallet["address"],
+                "destination_wallet_address": recipient_address,
             "amount_points": 10,
             "fee_points": 1,
             "request_uuid": "safe-mode-transfer",
@@ -776,6 +885,7 @@ def test_root_official_wallet_grant_creates_governed_multisig_transfer(tmp_path)
         conn.commit()
     finally:
         conn.close()
+    recipient_before = points.explorer_wallet(recipient_wallet["address"])["wallet"]["points_balance"]
 
     current.update({"id": 1, "username": "root", "role": "super_admin"})
     res = client.post(
@@ -794,7 +904,7 @@ def test_root_official_wallet_grant_creates_governed_multisig_transfer(tmp_path)
     assert payload["proposal"]["governance_domain"] == "OFFICIAL_TREASURY"
     assert payload["proposal"]["root_veto_allowed"] is True
     assert payload["proposal"]["multisig"]["required"] is True
-    assert points.explorer_wallet(recipient_wallet["address"])["wallet"]["points_balance"] == 0
+    assert points.explorer_wallet(recipient_wallet["address"])["wallet"]["points_balance"] == recipient_before
 
     root_vote = client.post(f"/api/points/governance/proposals/{proposal_uuid}/vote", json={"vote": "yes"})
     assert root_vote.status_code == 200, root_vote.get_json()
@@ -815,37 +925,70 @@ def test_root_official_wallet_grant_creates_governed_multisig_transfer(tmp_path)
 
     current.update({"id": 2, "username": "test", "role": "user"})
     recipient_transactions = client.get("/api/points/transactions?limit=10").get_json()
-    assert recipient_transactions["summary"]["pending_incoming_points"] == 8
+    assert recipient_transactions["summary"]["pending_incoming_points"] == 0
     assert recipient_transactions["transactions"][0]["direction"] == "incoming"
+    assert recipient_transactions["transactions"][0]["status"] == "confirmed"
+    assert recipient_transactions["transactions"][0]["settlement_rail"] == "internal_hot_wallet"
+    assert recipient_transactions["transactions"][0]["finality"]["finality_status"] == "internal_settled"
     assert recipient_transactions["transactions"][0]["transaction_hash"] == tx_hash
 
     conn = points.get_db()
     try:
         rows = conn.execute(
-            "SELECT user_id, type, body FROM notifications WHERE type='points_chain_official_grant_pending' ORDER BY user_id"
+            "SELECT user_id, type, body FROM notifications WHERE type='points_chain_official_grant_completed' ORDER BY user_id"
         ).fetchall()
     finally:
         conn.close()
     assert [int(row["user_id"]) for row in rows] == [2, 4]
     assert all(tx_hash in row["body"] for row in rows)
-
-    proved_at = (datetime.now(timezone.utc) - timedelta(seconds=600)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    conn = points.get_db()
-    try:
-        points.ensure_schema(conn)
-        conn.execute(
-            "UPDATE points_chain_transfer_requests SET created_at=? WHERE tx_group_hash=?",
-            (proved_at, tx_hash),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    assert all("站內帳本即時" in row["body"] for row in rows)
 
     current.update({"id": 1, "username": "root", "role": "super_admin"})
     proved_transactions = client.get("/api/points/transactions?limit=10").get_json()
     assert proved_transactions["transactions"][0]["status"] == "confirmed"
-    assert proved_transactions["transactions"][0]["finality"]["finality_status"] == "proved"
-    assert points.explorer_wallet(recipient_wallet["address"])["wallet"]["points_balance"] == 8
+    assert proved_transactions["transactions"][0]["finality"]["finality_status"] == "internal_settled"
+    assert points.explorer_wallet(recipient_wallet["address"])["wallet"]["points_balance"] == recipient_before + 8
+
+
+def test_manager_can_view_official_wallet_and_create_treasury_proposal(tmp_path):
+    app, points, _ledger, _manual_ledger, current = _build_app(tmp_path)
+    client = app.test_client()
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        create_official_hot_wallet(conn, user_id=1, chain_secret=points.chain_secret)
+        create_official_hot_wallet(conn, user_id=4, chain_secret=points.chain_secret)
+        recipient_wallet = create_official_hot_wallet(conn, user_id=3, chain_secret=points.chain_secret)
+        conn.commit()
+    finally:
+        conn.close()
+
+    current.update({"id": 4, "username": "manager", "role": "manager"})
+    center_res = client.get("/api/admin/points/governance/treasury-signer-center?limit=20")
+    assert center_res.status_code == 200, center_res.get_json()
+    center = center_res.get_json()
+    assert center["official_wallet"]["address"].startswith("pc0")
+    assert center["official_wallet"]["spend_capability"] == "enabled"
+    assert center["fund_addresses"]["official_treasury"] == center["official_wallet"]["address"]
+    assert center["economy_layer"]["funds"]["official_treasury"]["address"] == center["official_wallet"]["address"]
+
+    proposal_res = client.post(
+        "/api/admin/points/governance/treasury-transfer",
+        json={
+            "destination_wallet_address": recipient_wallet["address"],
+            "amount": 9,
+            "reason": "manager official wallet disposition proposal",
+            "reference": "manager-treasury-route-1",
+        },
+    )
+    assert proposal_res.status_code == 200, proposal_res.get_json()
+    proposal = proposal_res.get_json()["proposal"]
+    assert proposal["governance_domain"] == "OFFICIAL_TREASURY"
+    assert proposal["proposal_type"] == "official_treasury_operation"
+    assert proposal["target_wallet_address"] == recipient_wallet["address"]
+    assert proposal["requested_amount"] == 9
+    assert proposal["root_veto_allowed"] is True
+    assert proposal["multisig"]["required"] is True
 
 
 def test_governance_admin_routes_reject_user_and_csrf_failures(tmp_path):

@@ -14,7 +14,18 @@ import re
 from .schema import canonical_json, sha256_text, utc_now
 
 
-WALLET_ADDRESS_RE = re.compile(r"^pc1[a-f0-9]{48}$")
+COLD_WALLET_ADDRESS_RE = re.compile(r"^pc1[a-f0-9]{48}$")
+INTERNAL_WALLET_ADDRESS_RE = re.compile(r"^pc0[a-f0-9]{48}$")
+WALLET_ADDRESS_RE = re.compile(r"^pc[01][a-f0-9]{48}$")
+MINT_WALLET_ADDRESS = "mint" + ("0" * 60)
+BURN_WALLET_ADDRESS = "0" * 64
+LEGACY_PC0_BURN_WALLET_ADDRESS = "pc0" + ("0" * 48)
+SYSTEM_WALLET_ADDRESS_RE = re.compile(
+    rf"^(?:{re.escape(MINT_WALLET_ADDRESS)}|{re.escape(BURN_WALLET_ADDRESS)})$"
+)
+POINTS_CHAIN_ADDRESS_RE = re.compile(
+    rf"^(?:pc[01][a-f0-9]{{48}}|{re.escape(MINT_WALLET_ADDRESS)}|{re.escape(BURN_WALLET_ADDRESS)})$"
+)
 WALLET_IDENTITY_TYPES = {"official_hot", "self_custody_cold", "imported_cold", "multisig", "user_multisig_preview", "official_treasury_multisig", "mint", "burn"}
 USER_WALLET_IDENTITY_TYPES = {"official_hot", "self_custody_cold", "imported_cold", "multisig", "user_multisig_preview"}
 SYSTEM_WALLET_IDENTITY_TYPES = {"mint", "burn"}
@@ -23,7 +34,6 @@ WALLET_SCOPES = {"user", "official_treasury", "system_reserve", "exchange_fund"}
 WALLET_SPEND_CAPABILITIES = {"enabled", "receive_only", "disabled"}
 WALLET_IDENTITY_STATUSES = {"pending_backup", "active", "revoked", "lost", "disabled"}
 WALLET_KEY_ALGORITHMS = {"ECDSA_P256_SHA256", "MULTISIG_POLICY_V1", "SYSTEM_SIMULATED_V1"}
-BURN_WALLET_ADDRESS = "pc1" + ("0" * 48)
 ADDRESS_DISPUTE_SIGNATURE_PURPOSES = {"address_dispute_open", "address_dispute_reply"}
 
 
@@ -219,6 +229,10 @@ def address_from_hash(value):
     return "pc1" + sha256_text(value)[:48]
 
 
+def internal_address_from_hash(value):
+    return "pc0" + sha256_text(value)[:48]
+
+
 def normalize_wallet_address(address):
     address = str(address or "").strip().lower()
     if not WALLET_ADDRESS_RE.fullmatch(address):
@@ -226,8 +240,36 @@ def normalize_wallet_address(address):
     return address
 
 
+def normalize_points_chain_address(address):
+    address = str(address or "").strip().lower()
+    if not POINTS_CHAIN_ADDRESS_RE.fullmatch(address):
+        raise ValueError("PointsChain address format is invalid")
+    return address
+
+
+def is_pc0_internal_address(address):
+    return bool(INTERNAL_WALLET_ADDRESS_RE.fullmatch(str(address or "").strip().lower()))
+
+
+def has_pc0_prefix(address):
+    return str(address or "").strip().lower().startswith("pc0")
+
+
+def is_pc1_chain_address(address):
+    return bool(COLD_WALLET_ADDRESS_RE.fullmatch(str(address or "").strip().lower()))
+
+
+def is_system_special_address(address):
+    return bool(SYSTEM_WALLET_ADDRESS_RE.fullmatch(str(address or "").strip().lower()))
+
+
+def is_burn_wallet_address(address):
+    normalized = str(address or "").strip().lower()
+    return normalized in {BURN_WALLET_ADDRESS, LEGACY_PC0_BURN_WALLET_ADDRESS}
+
+
 def official_hot_wallet_address(chain_secret, user_id):
-    return address_from_hash(f"official_hot:{int(user_id)}:{chain_secret or ''}")
+    return internal_address_from_hash(f"official_hot:{int(user_id)}:{chain_secret or ''}")
 
 
 def system_wallet_address(chain_secret, wallet_type):
@@ -236,7 +278,7 @@ def system_wallet_address(chain_secret, wallet_type):
         raise ValueError("system wallet type must be mint or burn")
     if wallet_type == "burn":
         return BURN_WALLET_ADDRESS
-    return address_from_hash(f"system:{wallet_type}:{chain_secret or ''}")
+    return MINT_WALLET_ADDRESS
 
 
 def multisig_policy_hash(*, threshold, signer_addresses):
@@ -320,12 +362,12 @@ def wallet_service_fee_payload(
     reference_id="",
     chain_branch="main",
     proposal_id="",
-    action_type="points_service_fee_reserve",
+    action_type="points_service_fee_payment",
     payload_hash="",
     signer_key_id="",
 ):
     return {
-        "action": str(action_type or "points_service_fee_reserve").strip() or "points_service_fee_reserve",
+        "action": str(action_type or "points_service_fee_payment").strip() or "points_service_fee_payment",
         "amount_points": int(amount_points),
         "chain_branch": str(chain_branch or "main").strip() or "main",
         "item_key": str(item_key or "").strip(),
@@ -485,7 +527,7 @@ def verify_wallet_service_fee_signature(
     signature,
     chain_branch="main",
     proposal_id="",
-    action_type="points_service_fee_reserve",
+    action_type="points_service_fee_payment",
     payload_hash="",
     signer_key_id="",
 ):
@@ -806,7 +848,12 @@ def ensure_system_wallets(conn, *, chain_secret):
                         address,
                         sha256_text(address),
                         "Mint wallet" if wallet_type == "mint" else "Burn wallet",
-                        canonical_json({"system_wallet": wallet_type, "financial_source_of_truth": "points_ledger"}),
+                        canonical_json({
+                            "system_wallet": wallet_type,
+                            "address_namespace": "system_special",
+                            "not_official_hot_wallet": True,
+                            "financial_source_of_truth": "points_economy_events",
+                        }),
                         now,
                         row["id"],
                     ),
@@ -832,7 +879,12 @@ def ensure_system_wallets(conn, *, chain_secret):
                 sha256_text(address),
                 "Mint wallet" if wallet_type == "mint" else "Burn wallet",
                 now,
-                canonical_json({"system_wallet": wallet_type, "financial_source_of_truth": "points_ledger"}),
+                canonical_json({
+                    "system_wallet": wallet_type,
+                    "address_namespace": "system_special",
+                    "not_official_hot_wallet": True,
+                    "financial_source_of_truth": "points_economy_events",
+                }),
                 now,
                 now,
             ),
@@ -842,7 +894,7 @@ def ensure_system_wallets(conn, *, chain_secret):
     return created
 
 
-def create_official_hot_wallet(conn, *, user_id, chain_secret, label="官方熱錢包"):
+def create_official_hot_wallet(conn, *, user_id, chain_secret, label="站內託管錢包"):
     ensure_wallet_identity_schema(conn)
     existing = conn.execute(
         """
@@ -873,7 +925,7 @@ def create_official_hot_wallet(conn, *, user_id, chain_secret, label="官方熱�
             address,
             sha256_text(address),
             0 if primary else 1,
-            str(label or "官方熱錢包")[:120],
+            str(label or "站內託管錢包")[:120],
             now,
             canonical_json({"server_managed": True, "private_key_exportable": False}),
             now,
@@ -1263,10 +1315,16 @@ def wallet_onboarding_status(conn, *, points_service, user_id):
     except Exception as exc:
         warnings.append({"code": "wallet_creation_fee_quote_failed", "message": str(exc)[:240]})
         wallet_creation_fee = {}
+    try:
+        deposit_addresses = points_service._active_deposit_addresses_for_user(conn, user_id) if points_service else []
+    except Exception as exc:
+        warnings.append({"code": "deposit_address_status_failed", "message": str(exc)[:240]})
+        deposit_addresses = []
     initial_grant_required = bool(initial_grant.get("required")) if isinstance(initial_grant, dict) else False
+    wallet_required = not bool(primary_payload)
     return {
-        "required": not bool(primary_payload) or not bonus_granted or initial_grant_required,
-        "wallet_required": not bool(primary_payload),
+        "required": wallet_required or initial_grant_required,
+        "wallet_required": wallet_required,
         "signup_bonus_required": not bonus_granted,
         "signup_bonus_granted": bonus_granted,
         "initial_grant_required": initial_grant_required,
@@ -1274,6 +1332,8 @@ def wallet_onboarding_status(conn, *, points_service, user_id):
         "wallet": primary_payload,
         "wallets": wallets,
         "wallet_creation_fee": wallet_creation_fee,
+        "deposit_addresses": deposit_addresses,
+        "deposit_address": deposit_addresses[0]["address"] if deposit_addresses else "",
         "warnings": warnings,
         "system_wallets": system_wallets,
         "allowed_modes": ["official_hot", "self_custody_cold", "imported_cold"],
@@ -1286,19 +1346,60 @@ def wallet_onboarding_status(conn, *, points_service, user_id):
             "server_accepts_private_key": False,
             "client_key_algorithm": "ECDSA_P256_SHA256",
             "address_prefix": "pc1",
+            "official_hot_wallet_prefix": "pc0",
+            "pc0_custody_model": "official_custodial_internal_ledger",
         },
     }
+
+
+def system_account_wallet_onboarding_status(payload):
+    """Hide member wallet onboarding fields for system/root accounts."""
+    data = dict(payload or {})
+    data.update({
+        "required": False,
+        "wallet_required": False,
+        "signup_bonus_required": False,
+        "signup_bonus_granted": False,
+        "initial_grant_required": False,
+        "initial_grant": {
+            "required": False,
+            "granted": False,
+            "amount": 0,
+            "grant": "",
+            "ledger_uuid": "",
+            "ledger_hash": "",
+            "active_wallet_address": "",
+            "deferred_until_wallet": False,
+        },
+        "wallet": None,
+        "wallets": [],
+        "wallet_creation_fee": {
+            "amount_points": 0,
+            "chargeable_wallet_types": [],
+            "item_key": "system_account_no_member_wallet",
+            "reference_type": "system_account",
+        },
+        "deposit_address": "",
+        "deposit_addresses": [],
+        "allowed_modes": [],
+        "system_account": True,
+        "system_account_note": "root manages official/system wallets; it does not use a member official hot wallet.",
+    })
+    return data
 
 
 def award_signup_bonus_after_wallet_onboarding(*, points_service, user_id, actor=None):
     conn = points_service.get_db()
     try:
         points_service.ensure_schema(conn)
-        primary = get_primary_wallet_identity(conn, user_id)
-        if not primary or primary["status"] != "active":
-            raise ValueError("wallet onboarding is not complete")
+        create_official_hot_wallet(conn, user_id=int(user_id), chain_secret=getattr(points_service, "chain_secret", ""))
+        try:
+            points_service.ensure_user_deposit_address(conn, int(user_id))
+        except Exception:
+            pass
         if signup_bonus_granted(conn, user_id):
             return {"created": False, "already_granted": True, "ledger": None}
+        conn.commit()
     finally:
         conn.close()
     return points_service.award_signup_bonus(user_id=user_id, actor=actor)

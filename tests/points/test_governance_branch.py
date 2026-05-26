@@ -14,7 +14,6 @@ from services.points_chain import (
     address_from_public_key,
     bind_self_custody_wallet,
     create_official_hot_wallet,
-    delete_cold_wallet,
     ensure_points_economy_schema,
     wallet_binding_payload,
     wallet_service_fee_payload,
@@ -110,6 +109,31 @@ def _actor(user_id, username, role="user", **extra):
     actor = {"id": user_id, "username": username, "role": role}
     actor.update(extra)
     return actor
+
+
+def test_transaction_dispute_schema_add_column_race_is_idempotent(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        service._ensure_transaction_dispute_schema(conn)
+        conn.commit()
+        real_table_columns = points_service_module.table_columns
+        db_path = points_service_module._connection_path(conn)
+        service._transaction_dispute_schema_ready_paths.discard(db_path)
+
+        def stale_table_columns(target_conn, table_name):
+            cols = set(real_table_columns(target_conn, table_name))
+            if table_name == "points_chain_transaction_disputes":
+                cols.discard("reply_nonce")
+            return cols
+
+        monkeypatch.setattr(points_service_module, "table_columns", stale_table_columns)
+        service._ensure_transaction_dispute_schema(conn)
+        conn.commit()
+        assert "reply_nonce" in real_table_columns(conn, "points_chain_transaction_disputes")
+    finally:
+        conn.close()
 
 
 def _rate_field(prefix):
@@ -496,6 +520,20 @@ def test_root_scam_address_label_requires_multi_user_vote_before_execute(tmp_pat
     assert service.verify_governance_audit()["ok"] is True
 
 
+def test_public_governance_quorum_scales_with_eligible_voter_population(tmp_path):
+    service = _service(tmp_path, user_count=100)
+    created = service.create_address_risk_proposal(
+        actor=_actor(1, "root", "super_admin"),
+        wallet_address="pc1" + ("9" * 48),
+        reason="fraud evidence from explorer tx hash",
+        evidence=["tx-hash-scale-quorum"],
+    )
+
+    assert created["proposal"]["eligible_voter_count"] == 100
+    assert created["proposal"]["quorum_count"] == 30
+    assert created["proposal"][_rate_field("quorum")] == 3000
+
+
 def test_manager_can_cancel_unexecuted_governance_proposal_with_audit(tmp_path):
     service = _service(tmp_path, user_count=10)
     root = _actor(1, "root", "super_admin")
@@ -718,8 +756,8 @@ def test_official_treasury_requires_multisig_after_governance_passes(tmp_path):
     center = service.official_treasury_signer_center(actor=manager)
     assert center["official_wallet"]["wallet_type"] == "official_treasury_multisig"
     assert center["policy"]["wallet_scope"] == "official_treasury"
-    assert center["fund_addresses"]["official_treasury"].startswith("pc1")
-    assert center["fund_addresses"]["exchange_fund"].startswith("pc1")
+    assert center["fund_addresses"]["official_treasury"].startswith("pc0")
+    assert center["fund_addresses"]["exchange_fund"].startswith("pc0")
     assert center["signable"][0]["proposal_uuid"] == proposal_uuid
     two = service.sign_governance_multisig(actor=manager, proposal_uuid=proposal_uuid, signer_wallet_address=manager_wallet["address"])
     assert two["multisig"]["ready"] is True
@@ -795,24 +833,50 @@ def test_official_treasury_signer_center_reports_service_fee_income(tmp_path):
             """
             SELECT transaction_type, destination_fund_key, amount
             FROM points_economy_events
-            WHERE transaction_type IN ('service_fee_batch_debit', 'video_tip_platform_fee')
+            WHERE transaction_type IN ('service_fee_internal_debit:post_pin_24h', 'video_tip_platform_fee')
             ORDER BY id ASC
             """
         ).fetchall()
     finally:
         conn.close()
     assert [(row["transaction_type"], row["destination_fund_key"], int(row["amount"])) for row in events] == [
-        ("service_fee_batch_debit", "official_treasury", 100),
+        ("service_fee_internal_debit:post_pin_24h", "official_treasury", 100),
         ("video_tip_platform_fee", "official_treasury", 5),
     ]
 
     center = service.official_treasury_signer_center(actor=manager)
     analysis = center["treasury_analysis"]
-    assert analysis["settlement_policy"]["actual_chain_transfer_destination_fund_key"] == "official_treasury"
-    assert analysis["summary"]["settled_service_fee_points"] == 100
-    assert any(item["transaction_type"] == "service_fee_batch_debit" for item in analysis["income_categories"])
+    assert analysis["settlement_policy"]["service_fee_ledger_action"] == "service_fee_internal_debit"
+    assert analysis["settlement_policy"]["service_fee_destination_fund_key"] == "official_treasury"
+    assert analysis["summary"]["service_fee_revenue_points"] == 100
+    assert analysis["flow_summary"]["total_inflow_points"] >= 105
+    assert any(item["category_key"] == "service_fee_internal_debit:post_pin_24h" for item in analysis["flow_summary"]["categories"])
+    assert any(item["category_key"] == "video_tip_platform_fee" for item in analysis["flow_summary"]["categories"])
+    assert any(item["category_key"] == "post_pin_24h" and item["inflow_points"] == 100 for item in analysis["service_fee_flow_categories"])
+    assert "next_service_fee_settlement_remaining_points" not in analysis["summary"]
+    assert "pending_service_fee_points" not in analysis["summary"]
+    assert any(item["transaction_type"] == "service_fee_internal_debit:post_pin_24h" for item in analysis["income_categories"])
     assert any(item["item_key"] == "post_pin_24h" for item in analysis["service_fee_items"])
-    assert any(item["item_key"] == "video_publish_basic" for item in analysis["pricing_fit"])
+    assert "pricing_fit" not in analysis
+    assert analysis["period"]["kind"] == "calendar_month"
+    bridge = center["economy_layer"]["legacy_bridge"]
+    assert bridge["member_internal_circulating_points"] == 50
+    assert bridge["member_internal_available_points"] == 50
+    assert bridge["total_internal_circulating_points"] == 50
+
+
+def test_mint_bootstrap_allocation_is_not_treasury_income(tmp_path):
+    service = _service(tmp_path, user_count=5)
+    manager = _actor(2, "user2", "manager")
+
+    center = service.official_treasury_signer_center(actor=manager)
+    analysis = center["treasury_analysis"]
+
+    assert analysis["summary"]["income_total_points"] == 0
+    assert analysis["summary"]["non_operating_mint_allocation_points"] == 10_000_000
+    assert not any(item["transaction_type"] == "treasury_allocation" for item in analysis["income_categories"])
+    assert any(item["transaction_type"] == "treasury_allocation" for item in analysis["non_operating_mint_categories"])
+    assert any(item["transaction_type"] == "treasury_allocation" for item in analysis["recent_non_operating_mint_events"])
 
 
 def test_mint_request_requires_idempotency_caps_multisig_and_explorer_event(tmp_path):
@@ -849,7 +913,7 @@ def test_mint_request_requires_idempotency_caps_multisig_and_explorer_event(tmp_
     proposal_uuid = created["proposal"]["proposal_uuid"]
     assert created["proposal"]["action_type"] == "MINT_REQUEST"
     assert created["proposal"]["root_veto_allowed"] is True
-    assert created["proposal"]["target_wallet_address"].startswith("pc1")
+    assert created["proposal"]["target_wallet_address"].startswith("pc0")
     with pytest.raises(ValueError, match="idempotency"):
         service.create_mint_request_proposal(
             actor=manager,
@@ -1357,7 +1421,8 @@ def test_recovery_branch_replays_parent_without_stolen_tx_and_isolates_old_asset
     victim = _actor(3, "user3", "user", effective_level="trusted")
     attacker = _actor(4, "user4")
     victim_wallet = _official_hot_wallet(service, 3)
-    attacker_wallet = _official_hot_wallet(service, 4)
+    attacker_wallet, _attacker_key = _self_custody_wallet(service, 4)
+    attacker_sink_wallet, _sink_key = _self_custody_wallet(service, 5)
 
     grant = _official_treasury_grant_via_governance(
         service,
@@ -1394,10 +1459,10 @@ def test_recovery_branch_replays_parent_without_stolen_tx_and_isolates_old_asset
             actor=victim,
             source_wallet_address=victim_wallet["address"],
             destination_wallet_address=attacker_wallet["address"],
-            amount_points=60,
+            amount_points=61,
             fee_points=1,
             request_uuid="double-spend-different-request-main-branch",
-            memo="second pending transaction must respect frozen pending balance",
+            memo="second settled transaction must respect available balance",
         )
     _force_request_proved(service, stolen["transaction_hash"])
     confirmed_stolen = service.explorer_transaction(stolen["transaction_hash"])["transaction"]
@@ -1440,12 +1505,14 @@ def test_recovery_branch_replays_parent_without_stolen_tx_and_isolates_old_asset
             memo="replay old stolen transfer",
         )
     with pytest.raises(ValueError, match="insufficient balance"):
-        service.submit_wallet_transaction(
+        _signed_wallet_transfer(
+            service,
             actor=attacker,
-            source_wallet_address=attacker_wallet["address"],
-            destination_wallet_address=victim_wallet["address"],
-            amount_points=1,
-            fee_points=0,
+            source_wallet=attacker_wallet,
+            source_key=_attacker_key,
+            destination_wallet_address=attacker_sink_wallet["address"],
+            amount=1,
+            fee=0,
             request_uuid="attacker-spends-old-branch-assets",
         )
 
@@ -1478,8 +1545,8 @@ def test_recovery_branch_compensation_preserves_later_normal_transactions_and_tr
     normal_sender = _actor(5, "user5")
     normal_receiver = _actor(6, "user6")
     victim_wallet = _official_hot_wallet(service, 3)
-    attacker_wallet = _official_hot_wallet(service, 4)
-    innocent_wallet = _official_hot_wallet(service, 7)
+    attacker_wallet, _attacker_key = _self_custody_wallet(service, 4)
+    innocent_wallet, _innocent_key = _self_custody_wallet(service, 7)
     normal_sender_wallet = _official_hot_wallet(service, 5)
     normal_receiver_wallet = _official_hot_wallet(service, 6)
 
@@ -1531,12 +1598,14 @@ def test_recovery_branch_compensation_preserves_later_normal_transactions_and_tr
     _force_request_proved(service, normal_after_theft["transaction_hash"])
     service.explorer_transaction(normal_after_theft["transaction_hash"])
 
-    tainted_spend = service.submit_wallet_transaction(
+    tainted_spend = _signed_wallet_transfer(
+        service,
         actor=attacker,
-        source_wallet_address=attacker_wallet["address"],
+        source_wallet=attacker_wallet,
+        source_key=_attacker_key,
         destination_wallet_address=innocent_wallet["address"],
-        amount_points=30,
-        fee_points=1,
+        amount=30,
+        fee=1,
         request_uuid="delayed-branch-tainted-spend-after-theft",
         memo="attacker tries to spend funds that only exist because of the theft",
     )
@@ -1571,7 +1640,7 @@ def test_recovery_branch_compensation_preserves_later_normal_transactions_and_tr
     assert victim_after["points_balance"] == 100
     assert attacker_after["points_balance"] == 0
     assert innocent_after["points_balance"] == 30
-    assert normal_sender_after["points_balance"] == 22
+    assert normal_sender_after["points_balance"] == 23
     assert normal_receiver_after["points_balance"] == 7
 
 
@@ -1678,13 +1747,13 @@ def test_recovery_branch_tainted_remainder_returns_only_unused_attacker_balance_
     assert theft_a["transaction_hash"] not in seed["excluded_refs"]
     assert theft_b["transaction_hash"] not in seed["excluded_refs"]
     tainted = seed["tainted_remainder_return"]
-    assert tainted["return_amount"] == 29
+    assert tainted["return_amount"] == 30
     assert tainted["distribution"] == [
         {
             "claim_id": "claim-a",
             "wallet_address": victim_a_wallet["address"],
             "claim_amount_points": 40,
-            "allocated_points": 19,
+            "allocated_points": 20,
         },
         {
             "claim_id": "claim-b",
@@ -1694,8 +1763,8 @@ def test_recovery_branch_tainted_remainder_returns_only_unused_attacker_balance_
         },
     ]
     assert seed["compensation"]["required_total"] == 0
-    assert service.explorer_wallet(victim_a_wallet["address"])["wallet"]["points_balance"] == 78
-    assert service.explorer_wallet(victim_b_wallet["address"])["wallet"]["points_balance"] == 89
+    assert service.explorer_wallet(victim_a_wallet["address"])["wallet"]["points_balance"] == 80
+    assert service.explorer_wallet(victim_b_wallet["address"])["wallet"]["points_balance"] == 90
     assert service.explorer_wallet(attacker_wallet["address"])["wallet"]["points_balance"] == 5
     assert service.explorer_wallet(innocent_wallet["address"])["wallet"]["points_balance"] == 30
 
@@ -1705,7 +1774,7 @@ def test_transaction_dispute_review_can_create_recovery_governance_proposal(tmp_
     victim = _actor(3, "user3", "user", effective_level="trusted")
     manager = _actor(2, "user2", "manager")
     victim_wallet, victim_key = _self_custody_wallet(service, 3)
-    attacker_wallet = _official_hot_wallet(service, 4)
+    attacker_wallet, _attacker_key = _self_custody_wallet(service, 4)
     grant = _official_treasury_grant_via_governance(
         service,
         destination_wallet_address=victim_wallet["address"],
@@ -1784,7 +1853,7 @@ def test_transaction_dispute_cancel_releases_provisional_freeze(tmp_path):
     victim = _actor(3, "user3", "user", effective_level="trusted")
     root = _actor(1, "root", "super_admin")
     victim_wallet, victim_key = _self_custody_wallet(service, 3)
-    attacker_wallet = _official_hot_wallet(service, 4)
+    attacker_wallet, _attacker_key = _self_custody_wallet(service, 4)
     grant = _official_treasury_grant_via_governance(
         service,
         destination_wallet_address=victim_wallet["address"],
@@ -1843,7 +1912,7 @@ def test_address_signed_dispute_hides_reporter_identity_and_freezes_to_for_one_h
     victim = _actor(3, "user3", "user", effective_level="trusted")
     attacker = _actor(4, "user4", "user", effective_level="trusted")
     victim_wallet, victim_key = _self_custody_wallet(service, 3)
-    attacker_wallet = _official_hot_wallet(service, 4)
+    attacker_wallet, _attacker_key = _self_custody_wallet(service, 4)
     grant = _official_treasury_grant_via_governance(
         service,
         destination_wallet_address=victim_wallet["address"],
@@ -2643,7 +2712,7 @@ def test_address_dispute_escalation_extends_freeze_and_expired_vote_releases(tmp
     victim = _actor(3, "user3", "user", effective_level="trusted")
     root = _actor(1, "root", "super_admin")
     victim_wallet, victim_key = _self_custody_wallet(service, 3)
-    attacker_wallet = _official_hot_wallet(service, 4)
+    attacker_wallet, _attacker_key = _self_custody_wallet(service, 4)
     grant = _official_treasury_grant_via_governance(
         service,
         destination_wallet_address=victim_wallet["address"],
@@ -2701,7 +2770,7 @@ def test_address_dispute_escalation_extends_freeze_and_expired_vote_releases(tmp
     assert service.explorer_wallet(attacker_wallet["address"])["wallet"]["governance_freeze"] is None
 
 
-def test_tainted_spot_position_trace_survives_deleted_wallet_and_blocks_sell(tmp_path):
+def test_tainted_cold_wallet_funds_cannot_bypass_pc0_only_trading(tmp_path):
     service = _service(tmp_path, user_count=10)
     trading = _trading_service(service)
     conn = service.get_db()
@@ -2737,31 +2806,15 @@ def test_tainted_spot_position_trace_survives_deleted_wallet_and_blocks_sell(tmp
     _force_request_proved(service, transfer["transaction_hash"])
     service.explorer_transaction(transfer["transaction_hash"])
 
-    buy = trading.place_order(
-        actor=attacker,
-        market_symbol="BTC/POINTS",
-        side="buy",
-        order_type="market",
-        quantity="0.02",
-        source_wallet_address=attacker_wallet["address"],
-    )
-    assert buy["executed"] is True
-    assert buy["order"]["chain_frozen_points"] > 0
-
-    conn = service.get_db()
-    try:
-        service.ensure_schema(conn)
-        deleted = delete_cold_wallet(
-            conn,
-            user_id=4,
-            address=attacker_wallet["address"],
-            reason="attacker deletes cold wallet after tainted spot buy",
+    with pytest.raises(ValueError, match="交易所僅支援 pc0"):
+        trading.place_order(
+            actor=attacker,
+            market_symbol="BTC/POINTS",
+            side="buy",
+            order_type="market",
+            quantity="0.02",
+            source_wallet_address=attacker_wallet["address"],
         )
-        replacement_wallet = create_official_hot_wallet(conn, user_id=4, chain_secret=service.chain_secret)
-        conn.commit()
-    finally:
-        conn.close()
-    assert deleted["address"] == attacker_wallet["address"]
 
     dispute = _address_signed_dispute(
         service,
@@ -2784,29 +2837,17 @@ def test_tainted_spot_position_trace_survives_deleted_wallet_and_blocks_sell(tmp
     )
 
     assert reviewed["provisional_freeze"]["wallet_address"] == attacker_wallet["address"]
-    assert reviewed["taint_exposure"]["summary"]["spot_position_count"] == 1
-    assert reviewed["taint_exposure"]["spot_positions"][0]["source_wallet_address"] == attacker_wallet["address"]
-    assert reviewed["proposal"]["payload"]["product_exposure"]["summary"]["spot_position_count"] == 1
+    assert reviewed["taint_exposure"]["summary"]["spot_position_count"] == 0
+    assert reviewed["proposal"]["payload"]["product_exposure"]["summary"]["spot_position_count"] == 0
 
     conn = service.get_db()
     try:
-        position = conn.execute(
-            "SELECT * FROM trading_spot_positions WHERE user_id=4 AND market_symbol='BTC/POINTS'"
-        ).fetchone()
-        funding_sources = json.loads(position["funding_sources_json"])
+        position_count = conn.execute(
+            "SELECT COUNT(*) FROM trading_spot_positions WHERE user_id=4 AND market_symbol='BTC/POINTS'"
+        ).fetchone()[0]
     finally:
         conn.close()
-    assert funding_sources[0]["wallet_address"] == attacker_wallet["address"]
-
-    with pytest.raises(PermissionError, match="spot position is linked to a provisional frozen funding wallet"):
-        trading.place_order(
-            actor=attacker,
-            market_symbol="BTC/POINTS",
-            side="sell",
-            order_type="market",
-            quantity="0.02",
-            source_wallet_address=replacement_wallet["address"],
-        )
+    assert position_count == 0
 
 
 def test_recovery_branch_can_strictly_exclude_tainted_descendants(tmp_path):
@@ -2879,7 +2920,7 @@ def test_cold_wallet_signatures_are_branch_action_and_signer_bound(tmp_path):
     service = _service(tmp_path, user_count=10)
     victim = _actor(3, "user3", "user", effective_level="trusted")
     victim_wallet, victim_key = _self_custody_wallet(service, 3)
-    destination = _official_hot_wallet(service, 4)
+    destination, _destination_key = _self_custody_wallet(service, 4)
 
     grant = _official_treasury_grant_via_governance(
         service,
@@ -2954,7 +2995,7 @@ def test_cold_wallet_signatures_are_branch_action_and_signer_bound(tmp_path):
         )
 
 
-def test_service_fee_reserve_is_branch_scoped_and_old_branch_charge_cannot_settle(tmp_path):
+def test_service_fee_charge_is_branch_scoped_and_old_branch_charge_cannot_replay(tmp_path):
     service = _service(tmp_path, user_count=10)
     user = _actor(3, "user3", "user", effective_level="trusted")
     source = _official_hot_wallet(service, 3)
@@ -2967,7 +3008,7 @@ def test_service_fee_reserve_is_branch_scoped_and_old_branch_charge_cannot_settl
     _force_request_proved(service, grant["transaction_hash"])
     service.explorer_transaction(grant["transaction_hash"])
 
-    reserve = service.spend_points(
+    charge = service.spend_points(
         user_id=3,
         item_key="comfyui_txt2img_basic",
         source_wallet_address=source["address"],
@@ -2975,8 +3016,9 @@ def test_service_fee_reserve_is_branch_scoped_and_old_branch_charge_cannot_settl
         idempotency_key="service-fee-old-branch-idem",
         actor=user,
     )
-    assert reserve["charge"]["chain_branch"] == "main"
-    assert reserve["charge"]["status"] == "reserved"
+    assert charge["charge"]["chain_branch"] == "main"
+    assert charge["charge"]["status"] == "settled"
+    assert charge["settlement_policy"] == "internal_hot_wallet_immediate_debit"
 
     branch = _activate_recovery_branch(service, incident_tx_hash="service-fee-branch-incident", excluded_tx_hashes=[])
     with pytest.raises(ValueError, match="non-canonical branch"):
@@ -2988,7 +3030,7 @@ def test_service_fee_reserve_is_branch_scoped_and_old_branch_charge_cannot_settl
             idempotency_key="service-fee-old-branch-idem",
             actor=user,
         )
-    new_reserve = service.spend_points(
+    new_charge = service.spend_points(
         user_id=3,
         item_key="comfyui_txt2img_basic",
         source_wallet_address=source["address"],
@@ -2996,7 +3038,8 @@ def test_service_fee_reserve_is_branch_scoped_and_old_branch_charge_cannot_settl
         idempotency_key="service-fee-new-branch-idem",
         actor=user,
     )
-    assert new_reserve["charge"]["chain_branch"] == branch["branch_uuid"]
+    assert new_charge["charge"]["chain_branch"] == branch["branch_uuid"]
+    assert new_charge["charge"]["status"] == "settled"
 
 
 def test_official_funds_are_branch_scoped_after_recovery_branch(tmp_path):
@@ -3030,7 +3073,7 @@ def test_official_funds_are_branch_scoped_after_recovery_branch(tmp_path):
     assert strict_after["funds"]["exchange_fund"]["balance"] == strict_before["funds"]["exchange_fund"]["balance"]
 
 
-def test_transactions_list_marks_insufficient_official_source_transfer_failed(tmp_path):
+def test_transactions_list_marks_pc0_official_source_transfer_confirmed(tmp_path):
     service = _service(tmp_path, user_count=10)
     root = _actor(1, "root", "super_admin")
     destination = _official_hot_wallet(service, 3)
@@ -3041,49 +3084,17 @@ def test_transactions_list_marks_insufficient_official_source_transfer_failed(tm
         request_uuid="list-official-source-insufficient",
     )
 
-    conn = service.get_db()
-    try:
-        service.ensure_schema(conn)
-        pending_request_uuid = conn.execute(
-            "SELECT request_uuid FROM points_chain_transfer_requests WHERE tx_group_hash=?",
-            (pending["transaction_hash"],),
-        ).fetchone()["request_uuid"]
-        branch = service._canonical_branch_uuid(conn)
-        stats = economy_layer_report(
-            conn,
-            chain_secret=service.chain_secret,
-            actor={"role": "system", "id": None},
-            chain_branch=branch,
-        )
-        treasury_balance = int(stats["funds"]["official_treasury"]["balance"])
-        append_economy_event(
-            conn,
-            chain_secret=service.chain_secret,
-            event_type="qa_treasury_drain",
-            transaction_type="qa_treasury_drain",
-            source_fund_key="official_treasury",
-            destination_fund_key="burn",
-            amount=treasury_balance - 1,
-            idempotency_key="qa_treasury_drain_before_list_finalization",
-            metadata={"fixture": True},
-            actor=root,
-            chain_branch=branch,
-        )
-        conn.execute(
-            "UPDATE points_chain_transfer_requests SET created_at='2026-01-01T00:00:00Z' WHERE request_uuid=?",
-            (pending_request_uuid,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    pending_request_uuid = pending["transaction"]["input_data"]["request_uuid"]
 
     listed = service.list_wallet_transactions(user_id=1, actor=root, limit=100)
     target = next(item for item in listed["transactions"] if item["request_uuid"] == pending_request_uuid)
-    assert target["status"] == "failed_source_fund_insufficient"
-    assert listed["summary"]["finalization_error_count"] == 1
-    assert listed["warnings"][0]["code"] == "transfer_finalization_failed"
-    assert service.explorer_wallet(destination["address"])["wallet"]["points_balance"] == 0
-    assert service.explorer_transaction(pending["transaction_hash"])["transaction"]["status"] == "failed_source_fund_insufficient"
+    assert target["status"] == "confirmed"
+    assert target["settlement_rail"] == "internal_hot_wallet"
+    assert target["network_fee_points"] == 0
+    assert listed["summary"]["finalization_error_count"] == 0
+    assert listed.get("warnings", []) == []
+    assert service.explorer_wallet(destination["address"])["wallet"]["points_balance"] == 25
+    assert service.explorer_transaction(pending["transaction_hash"])["transaction"]["status"] == "confirmed"
 
 
 def test_multiple_recovery_forks_preserve_canonical_ledger_and_do_not_zero_funds(tmp_path):
@@ -3184,7 +3195,7 @@ def test_multiple_recovery_forks_preserve_canonical_ledger_and_do_not_zero_funds
             service.explorer_transaction(normal["transaction_hash"])
             old_request_uuids.append("multi-fork-normal-transfer-1")
             old_tx_hashes.append(normal["transaction_hash"])
-            expected_normal[normal_a_wallet["address"]] -= 8
+            expected_normal[normal_a_wallet["address"]] -= 7
             expected_normal[normal_b_wallet["address"]] += 7
         if round_index == 3:
             normal = service.submit_wallet_transaction(
@@ -3199,7 +3210,7 @@ def test_multiple_recovery_forks_preserve_canonical_ledger_and_do_not_zero_funds
             service.explorer_transaction(normal["transaction_hash"])
             old_request_uuids.append("multi-fork-normal-transfer-2")
             old_tx_hashes.append(normal["transaction_hash"])
-            expected_normal[normal_b_wallet["address"]] -= 3
+            expected_normal[normal_b_wallet["address"]] -= 2
             expected_normal[normal_a_wallet["address"]] += 2
 
         victim_index = round_index - 1
@@ -3226,7 +3237,6 @@ def test_multiple_recovery_forks_preserve_canonical_ledger_and_do_not_zero_funds
         )
         assert branch["parent_branch_uuid"] == active_branch
         active_branch = branch["branch_uuid"]
-        expected_victim_balances[victim_index] -= 1
         assert_chain_invariants(active_branch, previous_branches=previous_branches)
         previous_branches.append(active_branch)
 
@@ -3302,7 +3312,7 @@ def test_acceleration_cannot_bypass_pending_freeze_or_cross_branch(tmp_path):
     service = _service(tmp_path, user_count=10)
     victim = _actor(3, "user3", "user", effective_level="trusted")
     victim_wallet = _official_hot_wallet(service, 3)
-    destination = _official_hot_wallet(service, 4)
+    destination, _destination_key = _self_custody_wallet(service, 4)
     grant = _official_treasury_grant_via_governance(
         service,
         destination_wallet_address=victim_wallet["address"],
@@ -3342,8 +3352,8 @@ def test_acceleration_cannot_bypass_pending_freeze_or_cross_branch(tmp_path):
 def test_acceleration_does_not_bypass_finality(tmp_path):
     service = _service(tmp_path, user_count=10)
     victim = _actor(3, "user3", "user", effective_level="trusted")
-    victim_wallet = _official_hot_wallet(service, 3)
-    destination = _official_hot_wallet(service, 4)
+    victim_wallet, victim_key = _self_custody_wallet(service, 3)
+    destination, _destination_key = _self_custody_wallet(service, 4)
     grant = _official_treasury_grant_via_governance(
         service,
         destination_wallet_address=victim_wallet["address"],
@@ -3353,12 +3363,14 @@ def test_acceleration_does_not_bypass_finality(tmp_path):
     _force_request_proved(service, grant["transaction_hash"])
     service.explorer_transaction(grant["transaction_hash"])
 
-    pending = service.submit_wallet_transaction(
+    pending = _signed_wallet_transfer(
+        service,
         actor=victim,
-        source_wallet_address=victim_wallet["address"],
+        source_wallet=victim_wallet,
+        source_key=victim_key,
         destination_wallet_address=destination["address"],
-        amount_points=10,
-        fee_points=1,
+        amount=10,
+        fee=1,
         request_uuid="acceleration-finality-pending",
     )
     accelerated = service.accelerate_explorer_transaction(
@@ -3410,16 +3422,18 @@ def test_concurrent_wallet_transfers_cannot_double_spend(tmp_path):
     assert [kind for kind, _payload in results].count("ok") == 1
     assert any("insufficient balance" in payload for kind, payload in results if kind == "err")
     wallet = service.explorer_wallet(victim_wallet["address"])["wallet"]
-    assert wallet["points_balance"] == 39
-    assert wallet["pending_outgoing_points"] == 61
+    destination_wallet = service.explorer_wallet(destination["address"])["wallet"]
+    assert wallet["points_balance"] == 40
+    assert wallet["pending_outgoing_points"] == 0
+    assert destination_wallet["points_balance"] == 60
 
 
-def test_branch_backup_restore_preserves_canonical_pointer_and_governance_audit(tmp_path):
+def test_branch_recovery_safe_mode_does_not_offer_backup_restore(tmp_path):
     service = _service(tmp_path, user_count=10)
     root = _actor(1, "root", "super_admin")
     branch = _activate_recovery_branch(service, incident_tx_hash="restore-branch-incident", excluded_tx_hashes=[])
     backup = service.create_ledger_backup(reason="branch restore consistency", kind="manual")
-    assert backup["ok"] is True
+    assert backup["disabled"] is True
 
     conn = service.get_db()
     try:
@@ -3433,12 +3447,14 @@ def test_branch_backup_restore_preserves_canonical_pointer_and_governance_audit(
     finally:
         conn.close()
 
-    restored = service.restore_from_backup(actor=root, backup_id=backup["backup_id"], confirm="RESTORE POINTSCHAIN")
-    assert restored["ok"] is True
+    with pytest.raises(PermissionError, match="backup restore is disabled"):
+        service.restore_from_backup(actor=root, backup_id="legacy", confirm="RESTORE POINTSCHAIN")
     report = service.root_report()
     canonical = [item for item in report["governance"]["branches"] if item["is_canonical"]]
     assert len(canonical) == 1
     assert canonical[0]["branch_uuid"] == branch["branch_uuid"]
+    assert report["recovery"]["restore_plan"]["mode"] == "branch_governance_recovery"
+    assert report["recovery"]["restore_plan"]["backup_restore_disabled"] is True
     assert service.verify_governance_audit()["ok"] is True
 
 

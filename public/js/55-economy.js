@@ -8,10 +8,12 @@ let economyAutoRefreshTimer = null;
 let economyAutoRefreshBusy = false;
 let economyColdWalletDraft = null;
 let economyColdWalletBindCandidate = null;
+let economyColdWalletSigningSessions = new Map();
 let economyWalletOnboardingState = {};
 let economyCurrentChainBranch = "main";
 let economyCatalogCache = [];
 let economyExplorerLastQuery = "";
+let economyExplorerActiveLayer = "pc1";
 let economyExplorerCountdownTimer = null;
 let economyFundAddressCache = {};
 let economyGovernanceProposalCache = new Map();
@@ -25,7 +27,47 @@ let economyExpandedGovernanceProposalUuids = new Set();
 let economyOfficialHotWalletLabels = {};
 const ECONOMY_PAGE_STORAGE_KEY = "hackme_web:economy:active_page";
 const ECONOMY_SPEND_WALLET_STORAGE_KEY = "hackme_web:economy:default_spend_wallet";
-const ECONOMY_COLD_BACKUP_PREFIX = "pcw1.p256";
+const ECONOMY_FAVORITE_ADDRESS_STORAGE_KEY = "hackme_web:economy:favorite_addresses";
+const ECONOMY_COLD_WALLET_FILE_FORMAT = "hackme-pcw1-encrypted-wallet";
+const ECONOMY_COLD_WALLET_FILE_VERSION = 1;
+const ECONOMY_COLD_WALLET_KDF_ITERATIONS = 600000;
+const ECONOMY_COLD_UNLOCK_MNEMONIC_PREFIX = "pcp1";
+const ECONOMY_COLD_UNLOCK_MNEMONIC_WORD_COUNT = 12;
+const ECONOMY_COLD_UNLOCK_QUIZ_COUNT = 4;
+const ECONOMY_EXPLORER_LAYERS = {
+  pc1: {
+    title: "PC1 Canonical Settlement Layer",
+    shortTitle: "Settlement Explorer",
+    assetType: "Canonical Reserve Asset",
+    description: "只看 canonical reserve、冷鏈交易、封塊、鏈上 fee、mint/burn 與治理結算。",
+    placeholder: "pc1... / cold tx hash / block hash / block height",
+  },
+  pc0: {
+    title: "PC0 Operational Wrapped Layer",
+    shortTitle: "Operational Explorer",
+    assetType: "Wrapped Operational Representation",
+    description: "站內託管錢包、交易所、機器人、遊戲與服務付款等高速 operational 記帳；不是 PC1 原生資產。",
+    placeholder: "pc0... / internal ledger uuid / app tx hash",
+  },
+  bridge: {
+    title: "Bridge Cross-Ledger Settlement Layer",
+    shortTitle: "Bridge Explorer",
+    assetType: "Cross-Ledger Settlement Event",
+    description: "查 lock/mint、burn/unlock、deposit credit 等跨帳本事件與 reserve/wrapped linkage。",
+    placeholder: "bridge uuid / chain tx hash / internal ledger uuid",
+  },
+  audit: {
+    title: "Audit & Reserve Invariants",
+    shortTitle: "Audit Explorer",
+    assetType: "Reserve / Liability Audit",
+    description: "查 reserve、wrapped liabilities、pending settlement、bridge invariant 與 PC0/PC1 boundary。",
+    placeholder: "Audit 分頁可直接按查詢載入 invariant",
+  },
+};
+const ECONOMY_COLD_WALLET_SIGNING_SESSION_MS = 10 * 60 * 1000;
+const ECONOMY_COLD_UNLOCK_WORDS = `
+able acid actor adapt adult agent ahead alarm album alert alley allow angle apple arena armor aroma arrow asset audio audit avoid badge basic beach began berry birth black blend bonus brave bread brick bring brush build cable canal candy carry cedar chair charm chart chase cheap cheer chess civic clean clerk clock cloud coast comic coral craft crisp crown dance delta diary donor draft dream drink early earth elbow entry equal error event extra faith fancy field final flame flash floor focus force forum frame fresh front frost fruit garden ghost giant glass grace grain grape green grid group guard guest happy harbor heart heavy hinge honey honor hotel house human image index inner input ivory jewel joint judge juice jumbo karma kayak laser laugh layer lemon level light logic lunar magic major maple march match media melon mercy metal meter micro mimic model money month motor music never night noble north ocean olive orbit order outer panel paper party patch patio peach pearl phase photo piano piece pilot pixel plant plaza point polar promo proof pulse quiet quota radio rapid ratio raven ready relay renew reply river robot rough royal scale scene scope score scout share shell shift shine shirt skill slate smart smile solar solid sound space spark speed spice sport staff stage stone store storm story sugar sunny super sword table tango thank theme tiger token topic tower trade trail train trust union urban valid value video vivid voice wallet water wheel white wisdom world yacht young zebra zero zone
+`.trim().split(/\s+/);
 const ECONOMY_GOV_RATE_UNIT_SUFFIX = "b" + "ps";
 const ECONOMY_ADDRESS_DISPUTE_MIN_STATEMENT_CHARS = 12;
 
@@ -35,6 +77,10 @@ function economyPageStorageKey() {
 
 function economySpendWalletStorageKey() {
   return typeof accountScopedStorageKey === "function" ? accountScopedStorageKey(ECONOMY_SPEND_WALLET_STORAGE_KEY) : ECONOMY_SPEND_WALLET_STORAGE_KEY;
+}
+
+function economyFavoriteAddressStorageKey() {
+  return typeof accountScopedStorageKey === "function" ? accountScopedStorageKey(ECONOMY_FAVORITE_ADDRESS_STORAGE_KEY) : ECONOMY_FAVORITE_ADDRESS_STORAGE_KEY;
 }
 
 function readEconomyActivePage() {
@@ -73,6 +119,61 @@ function writeEconomySpendWalletAddress(address) {
 
 function writeEconomyDefaultSpendWalletAddress(address) {
   writeEconomySpendWalletAddress(address);
+}
+
+function economyNormalizeAddress(address) {
+  return String(address || "").trim().toLowerCase();
+}
+
+function economyIsPc0Address(address) {
+  return economyNormalizeAddress(address).startsWith("pc0");
+}
+
+function readEconomyFavoriteAddresses() {
+  try {
+    const raw = localStorage.getItem(economyFavoriteAddressStorageKey()) || "[]";
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set();
+    return parsed.map((item) => {
+      const address = economyNormalizeAddress(typeof item === "string" ? item : item?.address);
+      const label = String(typeof item === "string" ? "" : item?.label || "").trim().slice(0, 80);
+      if (!address || seen.has(address)) return null;
+      seen.add(address);
+      return { address, label };
+    }).filter(Boolean).slice(0, 60);
+  } catch (_) {
+    return [];
+  }
+}
+
+function writeEconomyFavoriteAddresses(items) {
+  try {
+    localStorage.setItem(economyFavoriteAddressStorageKey(), JSON.stringify((items || []).slice(0, 60)));
+  } catch (_) {}
+}
+
+function economyFavoriteAddressLabel(item) {
+  const label = String(item?.label || "").trim();
+  const address = economyNormalizeAddress(item?.address);
+  return label ? `${label} · ${shortEconomyWalletAddress(address)}` : shortEconomyWalletAddress(address);
+}
+
+function upsertEconomyFavoriteAddress(address, label = "") {
+  const normalized = economyNormalizeAddress(address);
+  if (!normalized) throw new Error("請先輸入常用地址");
+  const nextLabel = String(label || "").trim().slice(0, 80);
+  const items = readEconomyFavoriteAddresses().filter((item) => item.address !== normalized);
+  items.unshift({ address: normalized, label: nextLabel });
+  writeEconomyFavoriteAddresses(items);
+  return items;
+}
+
+function removeEconomyFavoriteAddress(address) {
+  const normalized = economyNormalizeAddress(address);
+  const items = readEconomyFavoriteAddresses().filter((item) => item.address !== normalized);
+  writeEconomyFavoriteAddresses(items);
+  return items;
 }
 
 let economyActivePage = readEconomyActivePage();
@@ -180,7 +281,7 @@ function economyGovernanceMsg(text, ok = true) {
 }
 
 function economyTransactionMsg(text, ok = true) {
-  economyInlineMsg("economy-transactions-msg", text, ok, "交易管理");
+  economyInlineMsg("economy-transactions-msg", text, ok, "鏈上交易");
 }
 
 function economyTransferMsg(text, ok = true) {
@@ -235,25 +336,72 @@ function economyPromptAddressDisputeStatement({ promptText, cancelText, shortTex
 function economyWarningSuffix(json) {
   const warnings = Array.isArray(json?.warnings) ? json.warnings.filter(Boolean) : [];
   if (!warnings.length) return "";
-  if (warnings.includes("notification_delivery_failed")) return "；部分通知送出失敗，請到交易管理確認交易狀態。";
+  if (warnings.includes("notification_delivery_failed")) return "；部分通知送出失敗，請到鏈上交易確認交易狀態。";
   return `；警告：${warnings.map((item) => String(item)).join("、")}`;
+}
+
+async function copyEconomyText(text, successText = "地址已複製", options = {}) {
+  const value = String(text || "").trim();
+  const contentLabel = String(options.contentLabel || "地址").trim() || "內容";
+  if (!value) {
+    economyWalletMsg("沒有可複製的內容", false);
+    return false;
+  }
+  try {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      economyWalletMsg(successText, true);
+      if (typeof showAppToast === "function") showAppToast(`錢包管理：${successText}`, true, { duration: 3600 });
+      return true;
+    }
+  } catch (_) {}
+  if (typeof showCopyFallbackDialog === "function") {
+    showCopyFallbackDialog(value, `複製${contentLabel}`);
+    const fallbackText = `請在彈出視窗手動複製${contentLabel}`;
+    economyWalletMsg(fallbackText, true);
+    if (typeof showAppToast === "function") showAppToast(`錢包管理：${fallbackText}`, true, { duration: 5200 });
+    return false;
+  }
+  window.prompt(`請手動複製${contentLabel}`, value);
+  const manualText = `請手動複製${contentLabel}`;
+  economyWalletMsg(manualText, true);
+  if (typeof showAppToast === "function") showAppToast(`錢包管理：${manualText}`, true, { duration: 5200 });
+  return false;
 }
 
 function destroyEconomyColdWalletSecrets({ hideGenerated = true } = {}) {
   economyColdWalletDraft = null;
   economyColdWalletBindCandidate = null;
-  ["economy-wallet-generated-address", "economy-wallet-generated-private-key", "economy-wallet-private-key"].forEach((id) => {
+  [
+    "economy-wallet-generated-address",
+    "economy-wallet-generated-file-name",
+    "economy-wallet-generated-trade-password",
+    "economy-wallet-private-key",
+    "economy-wallet-file-password",
+  ].forEach((id) => {
     const el = $(id);
     if (el && "value" in el) el.value = "";
   });
+  const fileInput = $("economy-wallet-file-input");
+  if (fileInput && "value" in fileInput) fileInput.value = "";
   const confirmed = $("economy-wallet-private-key-confirmed");
   if (confirmed) confirmed.checked = false;
   const selectionStatus = $("economy-wallet-generated-selection-status");
   if (selectionStatus) selectionStatus.textContent = "尚未選用";
+  resetEconomyColdWalletMnemonicQuiz();
+  const downloadBtn = $("economy-wallet-download-file-btn");
+  if (downloadBtn) downloadBtn.disabled = false;
+  const copyBtn = $("economy-wallet-copy-trade-password-btn");
+  if (copyBtn) copyBtn.disabled = false;
+  const quizBtn = $("economy-wallet-start-mnemonic-quiz-btn");
+  if (quizBtn) {
+    quizBtn.disabled = true;
+    quizBtn.textContent = "確認已保存，隱藏助記詞並開始考試";
+  }
   const useBtn = $("economy-wallet-use-generated-cold-btn");
   if (useBtn) {
-    useBtn.disabled = false;
-    useBtn.textContent = "選用此冷錢包";
+    useBtn.disabled = true;
+    useBtn.textContent = "先完成記憶詞考試";
   }
   const panel = $("economy-wallet-generated-panel");
   if (panel && hideGenerated) panel.style.display = "none";
@@ -265,6 +413,157 @@ function economyBase64UrlFromBytes(bytes) {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+function economyBytesFromBase64Url(value) {
+  const text = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+  const padded = text + "=".repeat((4 - (text.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function economyNormalizeColdWalletUnlockSecret(secret) {
+  const raw = String(secret || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.startsWith(`${ECONOMY_COLD_UNLOCK_MNEMONIC_PREFIX} `)) {
+    const words = raw.slice(ECONOMY_COLD_UNLOCK_MNEMONIC_PREFIX.length).trim().split(/[\s-]+/).filter(Boolean);
+    return `${ECONOMY_COLD_UNLOCK_MNEMONIC_PREFIX} ${words.join(" ")}`;
+  }
+  if (raw.startsWith(`${ECONOMY_COLD_UNLOCK_MNEMONIC_PREFIX}-`)) {
+    const words = raw.slice(ECONOMY_COLD_UNLOCK_MNEMONIC_PREFIX.length + 1).trim().split(/[\s-]+/).filter(Boolean);
+    return `${ECONOMY_COLD_UNLOCK_MNEMONIC_PREFIX} ${words.join(" ")}`;
+  }
+  return raw.split(/\s+/).join(" ");
+}
+
+function economyMnemonicWordsFromDigest(digest) {
+  const bytes = new Uint8Array(digest);
+  const words = [];
+  for (let index = 0; index < ECONOMY_COLD_UNLOCK_MNEMONIC_WORD_COUNT; index += 1) {
+    words.push(ECONOMY_COLD_UNLOCK_WORDS[bytes[index] % ECONOMY_COLD_UNLOCK_WORDS.length]);
+  }
+  return words;
+}
+
+function economyColdUnlockMnemonicFromWords(words) {
+  return `${ECONOMY_COLD_UNLOCK_MNEMONIC_PREFIX} ${(words || []).join(" ")}`.trim();
+}
+
+function economyColdWalletMnemonicWords(secret) {
+  const normalized = economyNormalizeColdWalletUnlockSecret(secret);
+  if (!normalized.startsWith(`${ECONOMY_COLD_UNLOCK_MNEMONIC_PREFIX} `)) return [];
+  return normalized.slice(ECONOMY_COLD_UNLOCK_MNEMONIC_PREFIX.length).trim().split(/\s+/).filter(Boolean);
+}
+
+function economyBuildColdWalletMnemonicQuiz(words) {
+  const list = Array.isArray(words) ? words : [];
+  if (list.length < ECONOMY_COLD_UNLOCK_QUIZ_COUNT) return [];
+  const selected = [];
+  const used = new Set();
+  const random = new Uint8Array(list.length);
+  crypto.getRandomValues(random);
+  for (const value of random) {
+    const index = value % list.length;
+    if (used.has(index)) continue;
+    used.add(index);
+    selected.push({ index, word: list[index] });
+    if (selected.length >= ECONOMY_COLD_UNLOCK_QUIZ_COUNT) break;
+  }
+  for (let index = 0; selected.length < ECONOMY_COLD_UNLOCK_QUIZ_COUNT && index < list.length; index += 1) {
+    if (!used.has(index)) selected.push({ index, word: list[index] });
+  }
+  return selected.sort((a, b) => a.index - b.index);
+}
+
+function renderEconomyColdWalletMnemonicQuiz() {
+  const box = $("economy-wallet-mnemonic-quiz");
+  const prompts = $("economy-wallet-mnemonic-quiz-prompts");
+  const status = $("economy-wallet-mnemonic-quiz-status");
+  if (!box || !prompts) return;
+  const quiz = economyColdWalletDraft?.mnemonicQuiz || [];
+  if (!quiz.length) {
+    box.style.display = "none";
+    prompts.innerHTML = "";
+    if (status) status.textContent = "";
+    return;
+  }
+  box.style.display = "";
+  prompts.innerHTML = quiz.map((item) => `
+    <label class="field">
+      第 ${Number(item.index) + 1} 詞
+      <input type="text" data-cold-wallet-mnemonic-index="${Number(item.index)}" autocomplete="off" spellcheck="false" placeholder="輸入第 ${Number(item.index) + 1} 詞" />
+    </label>
+  `).join("");
+  if (status) status.textContent = "通過記憶詞考試後，才可選用並綁定此冷錢包。";
+}
+
+function startEconomyColdWalletMnemonicQuiz() {
+  if (!economyColdWalletDraft?.mnemonicQuiz?.length) {
+    economyWalletMsg("目前沒有可考試的冷錢包解鎖助記詞；請先建立冷錢包。", false);
+    return;
+  }
+  const secretInput = $("economy-wallet-generated-trade-password");
+  if (secretInput) {
+    secretInput.value = "";
+    secretInput.type = "password";
+    secretInput.placeholder = "已隱藏；考試失敗需重新建立冷錢包";
+  }
+  const copyBtn = $("economy-wallet-copy-trade-password-btn");
+  if (copyBtn) copyBtn.disabled = true;
+  const quizBtn = $("economy-wallet-start-mnemonic-quiz-btn");
+  if (quizBtn) {
+    quizBtn.disabled = true;
+    quizBtn.textContent = "記憶詞已隱藏";
+  }
+  renderEconomyColdWalletMnemonicQuiz();
+  economyWalletMsg("解鎖助記詞已隱藏；請依記憶填回答案。若答錯，本次冷錢包草稿會作廢並需重建。");
+}
+
+function resetEconomyColdWalletMnemonicQuiz() {
+  const box = $("economy-wallet-mnemonic-quiz");
+  const prompts = $("economy-wallet-mnemonic-quiz-prompts");
+  const status = $("economy-wallet-mnemonic-quiz-status");
+  if (box) box.style.display = "none";
+  if (prompts) prompts.innerHTML = "";
+  if (status) status.textContent = "";
+}
+
+function economyGeneratedColdWalletReadyForSelection() {
+  return Boolean(economyColdWalletDraft?.quizPassed);
+}
+
+function syncEconomyGeneratedColdWalletSelectionButton() {
+  const useBtn = $("economy-wallet-use-generated-cold-btn");
+  if (!useBtn) return;
+  const ready = economyGeneratedColdWalletReadyForSelection();
+  useBtn.disabled = !ready;
+  useBtn.textContent = ready ? "選用此冷錢包" : "先完成記憶詞考試";
+}
+
+function checkEconomyColdWalletMnemonicQuiz() {
+  if (!economyColdWalletDraft?.mnemonicQuiz?.length) {
+    economyWalletMsg("目前沒有可驗證的冷錢包解鎖助記詞", false);
+    return;
+  }
+  const inputs = Array.from(document.querySelectorAll("[data-cold-wallet-mnemonic-index]"));
+  const answers = new Map(inputs.map((input) => [
+    Number(input.getAttribute("data-cold-wallet-mnemonic-index")),
+    String(input.value || "").trim().toLowerCase(),
+  ]));
+  const wrong = economyColdWalletDraft.mnemonicQuiz.filter((item) => answers.get(Number(item.index)) !== String(item.word || "").toLowerCase());
+  if (wrong.length) {
+    const first = wrong[0];
+    destroyEconomyColdWalletSecrets();
+    economyWalletMsg(`記憶詞考試未通過：第 ${Number(first.index) + 1} 詞不一致。本次冷錢包草稿已作廢，請重新建立冷錢包並重新保存助記詞。`, false);
+    return;
+  }
+  economyColdWalletDraft.quizPassed = true;
+  syncEconomyGeneratedColdWalletSelectionButton();
+  const status = $("economy-wallet-mnemonic-quiz-status");
+  if (status) status.textContent = "記憶詞考試已通過，可以選用此冷錢包。";
+  economyWalletMsg("記憶詞考試已通過；請確認錢包檔與解鎖助記詞已分開離線保存。");
+}
+
 function economyCanonicalPublicJwk(jwk) {
   return {
     crv: String(jwk?.crv || ""),
@@ -274,51 +573,169 @@ function economyCanonicalPublicJwk(jwk) {
   };
 }
 
-function economyCompactColdWalletBackup(privateJwk) {
-  const jwk = privateJwk || {};
-  const x = String(jwk.x || "").trim();
-  const y = String(jwk.y || "").trim();
-  const d = String(jwk.d || "").trim();
-  if (!x || !y || !d) throw new Error("冷錢包備份碼格式不完整");
-  return `${ECONOMY_COLD_BACKUP_PREFIX}.${x}.${y}.${d}`;
+async function economyDerivedColdWalletTradePassword(privateJwk, address) {
+  const material = [
+    "hackme-pcw1-trade-password-v1",
+    String(address || "").trim().toLowerCase(),
+    String(privateJwk?.crv || ""),
+    String(privateJwk?.x || ""),
+    String(privateJwk?.y || ""),
+    String(privateJwk?.d || ""),
+  ].join("|");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
+  return economyColdUnlockMnemonicFromWords(economyMnemonicWordsFromDigest(digest));
 }
 
-function economyParseColdWalletBackup(raw) {
-  const text = String(raw || "").trim();
-  if (!text) throw new Error("請貼上冷錢包備份碼");
-  if (text.startsWith(`${ECONOMY_COLD_BACKUP_PREFIX}.`)) {
-    const parts = text.split(".");
-    if (parts.length !== 5 || parts[0] !== "pcw1" || parts[1] !== "p256" || !parts[2] || !parts[3] || !parts[4]) {
-      throw new Error("冷錢包備份碼格式不正確");
-    }
-    return {
-      kty: "EC",
-      crv: "P-256",
-      x: parts[2],
-      y: parts[3],
-      d: parts[4],
-      ext: true,
-      key_ops: ["sign"],
-    };
-  }
-  let jwk = null;
-  try {
-    jwk = JSON.parse(text);
-  } catch (_) {
-    throw new Error("請貼上 pcw1 私鑰備份碼或舊版 JWK JSON");
-  }
-  if (!jwk?.d || !jwk?.x || !jwk?.y) throw new Error("請貼上含 x、y、d 欄位的冷錢包備份資料");
+async function economyDeriveColdWalletFileKey(password, salt, iterations = ECONOMY_COLD_WALLET_KDF_ITERATIONS) {
+  const passphrase = economyNormalizeColdWalletUnlockSecret(password);
+  if (!passphrase) throw new Error("請輸入冷錢包解鎖助記詞");
+  const baseKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(passphrase),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      salt,
+      iterations: Math.max(120000, Math.floor(Number(iterations || ECONOMY_COLD_WALLET_KDF_ITERATIONS))),
+    },
+    baseKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+function economyIsEncryptedColdWalletFilePayload(payload) {
+  return payload
+    && payload.format === ECONOMY_COLD_WALLET_FILE_FORMAT
+    && Number(payload.version || 0) === ECONOMY_COLD_WALLET_FILE_VERSION
+    && payload.kdf
+    && payload.cipher
+    && payload.address;
+}
+
+async function economyEncryptColdWalletFile({ privateJwk, publicJwk, address, password }) {
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await economyDeriveColdWalletFileKey(password, salt);
+  const plaintext = {
+    address,
+    public_key_jwk: economyCanonicalPublicJwk(publicJwk),
+    private_key_jwk: privateJwk,
+    created_at: new Date().toISOString(),
+  };
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(JSON.stringify(plaintext))
+  );
   return {
-    ...jwk,
-    kty: jwk.kty || "EC",
-    crv: jwk.crv || "P-256",
-    ext: jwk.ext !== false,
-    key_ops: Array.isArray(jwk.key_ops) && jwk.key_ops.length ? jwk.key_ops : ["sign"],
+    format: ECONOMY_COLD_WALLET_FILE_FORMAT,
+    version: ECONOMY_COLD_WALLET_FILE_VERSION,
+    address,
+    public_key_jwk: economyCanonicalPublicJwk(publicJwk),
+    algorithm: {
+      curve: "P-256",
+      signature: "ECDSA_SHA256",
+    },
+    kdf: {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      iterations: ECONOMY_COLD_WALLET_KDF_ITERATIONS,
+      salt: economyBase64UrlFromBytes(salt),
+    },
+    cipher: {
+      name: "AES-GCM",
+      iv: economyBase64UrlFromBytes(iv),
+      ciphertext: economyBase64UrlFromBytes(ciphertext),
+    },
+    created_at: plaintext.created_at,
   };
 }
 
-async function economyLoadColdWalletBackup(raw, { imported = true } = {}) {
-  const privateJwk = economyParseColdWalletBackup(raw);
+async function economyDecryptColdWalletFilePayload(payload, password) {
+  if (!economyIsEncryptedColdWalletFilePayload(payload)) {
+    throw new Error("冷錢包檔格式不正確");
+  }
+  const salt = economyBytesFromBase64Url(payload.kdf?.salt || "");
+  const iv = economyBytesFromBase64Url(payload.cipher?.iv || "");
+  const ciphertext = economyBytesFromBase64Url(payload.cipher?.ciphertext || "");
+  const key = await economyDeriveColdWalletFileKey(password, salt, payload.kdf?.iterations);
+  let decoded = null;
+  try {
+    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+    decoded = JSON.parse(new TextDecoder().decode(plaintext));
+  } catch (_) {
+    throw new Error("冷錢包解鎖助記詞錯誤或冷錢包檔已損毀");
+  }
+  const privateJwk = decoded?.private_key_jwk;
+  if (!privateJwk?.d || !privateJwk?.x || !privateJwk?.y) throw new Error("冷錢包檔缺少私鑰資料");
+  const publicJwk = economyCanonicalPublicJwk(privateJwk);
+  const { address } = await economyWalletAddressFromPublicJwk(publicJwk);
+  if (String(address || "").trim().toLowerCase() !== String(payload.address || "").trim().toLowerCase()) {
+    throw new Error("冷錢包檔地址與私鑰不一致");
+  }
+  return privateJwk;
+}
+
+function economyColdWalletFileName(address) {
+  const suffix = String(address || "").trim().toLowerCase().slice(-12) || Date.now();
+  return `hackme-cold-wallet-${suffix}.pcw1.json`;
+}
+
+function economyDownloadTextFile(filename, text, mimeType = "application/json") {
+  const blob = new Blob([text], { type: `${mimeType};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function economyDownloadDraftColdWalletFile() {
+  if (!economyColdWalletDraft?.walletFile || !economyColdWalletDraft?.walletFileName) {
+    economyWalletMsg("目前沒有可下載的冷錢包檔", false);
+    if (typeof showAppToast === "function") showAppToast("錢包管理：目前沒有可下載的冷錢包檔", false, { duration: 4200 });
+    return;
+  }
+  economyDownloadTextFile(economyColdWalletDraft.walletFileName, JSON.stringify(economyColdWalletDraft.walletFile, null, 2));
+  economyWalletMsg("已準備下載冷錢包檔；請與冷錢包解鎖助記詞分開離線保存。");
+  if (typeof showAppToast === "function") showAppToast("錢包管理：已準備下載冷錢包檔", true, { duration: 4200 });
+}
+
+async function economyCopyDraftTradePassword() {
+  const password = economyColdWalletDraft?.tradePassword || $("economy-wallet-generated-trade-password")?.value || "";
+  await copyEconomyText(password, "冷錢包解鎖助記詞已複製；請離線保存", { contentLabel: "冷錢包解鎖助記詞" });
+}
+
+async function economyReadTextFile(file) {
+  if (!file) throw new Error("請選擇冷錢包檔");
+  if (typeof file.text === "function") return file.text();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("讀取冷錢包檔失敗"));
+    reader.readAsText(file);
+  });
+}
+
+async function economyLoadEncryptedColdWalletFile(raw, password, { imported = true } = {}) {
+  let payload = null;
+  try {
+    payload = JSON.parse(String(raw || "").trim());
+  } catch (_) {
+    throw new Error("冷錢包檔不是有效 JSON");
+  }
+  const privateJwk = await economyDecryptColdWalletFilePayload(payload, password);
   const publicJwk = economyCanonicalPublicJwk(privateJwk);
   const { address } = await economyWalletAddressFromPublicJwk(publicJwk);
   const privateKey = await crypto.subtle.importKey(
@@ -383,9 +800,9 @@ function economyWalletTransferPayload({ source, destination, amount, fee, memo, 
   });
 }
 
-function economyWalletServiceFeePayload({ source, itemKey, quantity, amount, requestUuid, referenceType, referenceId, chainBranch = "", actionType = "points_service_fee_reserve", proposalId = "", payloadHash = "", signerKeyId = "" }) {
+function economyWalletServiceFeePayload({ source, itemKey, quantity, amount, requestUuid, referenceType, referenceId, chainBranch = "", actionType = "points_service_fee_payment", proposalId = "", payloadHash = "", signerKeyId = "" }) {
   return JSON.stringify({
-    action: String(actionType || "points_service_fee_reserve").trim() || "points_service_fee_reserve",
+    action: String(actionType || "points_service_fee_payment").trim() || "points_service_fee_payment",
     amount_points: Number(amount),
     chain_branch: String(chainBranch || economyCurrentChainBranch || "main").trim() || "main",
     item_key: String(itemKey || "").trim(),
@@ -437,18 +854,14 @@ function economyNormalizeEvidenceInput(raw) {
 
 async function economyBuildAddressDisputeProof({ purpose, signerAddress, txHash, from, to, amount, statement, evidence, chainBranch, runtimeMode }) {
   if (!window.crypto?.subtle) throw new Error("此瀏覽器不支援 WebCrypto，無法本機簽署地址證明");
-  const raw = window.prompt("請貼上目標地址的冷錢包備份碼在本機簽署地址證明；私鑰不會送到伺服器。", "");
-  if (raw === null) {
-    const err = new Error("已取消地址證明簽署，疑義案件未送出");
-    err.cancelled = true;
-    throw err;
-  }
   let loaded = null;
   try {
-    loaded = await economyLoadColdWalletBackup(raw, { imported: true });
-    if (String(loaded.address || "").trim().toLowerCase() !== String(signerAddress || "").trim().toLowerCase()) {
-      throw new Error("備份碼地址與本次需證明的地址不一致");
-    }
+    loaded = await economyPromptColdWalletForSigning({
+      expectedAddress: signerAddress,
+      purposeLabel: "地址證明",
+      cancelMessage: "已取消地址證明簽署，疑義案件未送出",
+      mismatchMessage: "冷錢包檔地址與本次需證明的地址不一致",
+    });
     const statementHash = await economySha256Hex(String(statement || ""));
     const evidenceHash = await economySha256Hex(JSON.stringify(economyNormalizeEvidenceInput(evidence)));
     const nonce = window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
@@ -512,27 +925,167 @@ function economyWalletRequiresSignature(wallet) {
   return mode === "self_custody" || ["self_custody_cold", "imported_cold"].includes(type);
 }
 
+function economyColdWalletSigningSessionKey(address) {
+  return String(address || "").trim().toLowerCase();
+}
+
+function economyForgetColdWalletSigningSession(address = "") {
+  if (!address) {
+    economyColdWalletSigningSessions = new Map();
+    return;
+  }
+  economyColdWalletSigningSessions.delete(economyColdWalletSigningSessionKey(address));
+}
+
+function economyRememberColdWalletSigningSession(loaded, unlockSecret) {
+  const address = economyColdWalletSigningSessionKey(loaded?.address || "");
+  const words = economyColdWalletMnemonicWords(unlockSecret);
+  if (!address || !loaded?.privateKey || !loaded?.publicJwk || words.length < ECONOMY_COLD_UNLOCK_QUIZ_COUNT) return;
+  economyColdWalletSigningSessions.set(address, {
+    address,
+    privateKey: loaded.privateKey,
+    publicJwk: economyCanonicalPublicJwk(loaded.publicJwk),
+    mnemonicWords: words,
+    expiresAt: Date.now() + ECONOMY_COLD_WALLET_SIGNING_SESSION_MS,
+  });
+}
+
+function economyColdWalletSigningSession(address) {
+  const key = economyColdWalletSigningSessionKey(address);
+  const session = economyColdWalletSigningSessions.get(key);
+  if (!session) return null;
+  if (Number(session.expiresAt || 0) <= Date.now()) {
+    economyColdWalletSigningSessions.delete(key);
+    return null;
+  }
+  return session;
+}
+
+async function economyVerifyColdWalletSigningSession(session, { purposeLabel = "", cancelMessage = "" } = {}) {
+  const quiz = economyBuildColdWalletMnemonicQuiz(session?.mnemonicWords || []);
+  if (!quiz.length) {
+    economyForgetColdWalletSigningSession(session?.address || "");
+    return false;
+  }
+  const promptText = [
+    `本機已暫時解鎖此冷錢包；簽署${purposeLabel || "交易"}前只需回答隨機助記詞挑戰。`,
+    `請依序輸入：${quiz.map((item) => `第 ${Number(item.index) + 1} 詞`).join("、")}。`,
+    "不需要輸入完整解鎖助記詞；答案只在本機比對，不會送到伺服器。",
+  ].join("\n");
+  const raw = window.prompt(promptText, "");
+  if (raw === null) throw economyColdWalletSigningCancelled(cancelMessage);
+  const answers = String(raw || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const ok = quiz.every((item, index) => answers[index] === String(item.word || "").toLowerCase());
+  if (!ok) {
+    economyForgetColdWalletSigningSession(session?.address || "");
+    throw new Error("冷錢包隨機助記詞挑戰未通過；本機暫存解鎖已清除，請重新選擇錢包檔後再試。");
+  }
+  session.expiresAt = Date.now() + ECONOMY_COLD_WALLET_SIGNING_SESSION_MS;
+  return true;
+}
+
 function economyWalletSupportsAccountBoundDisputeProof(wallet) {
   return String(wallet?.wallet_type || "") === "official_hot"
     && String(wallet?.custody_mode || "") === "server_hot";
+}
+
+function economyColdWalletSigningCancelled(cancelMessage) {
+  const err = new Error(cancelMessage || "已取消冷錢包簽署");
+  err.cancelled = true;
+  return err;
+}
+
+async function economyPickColdWalletFileForSigning({ cancelMessage = "" } = {}) {
+  if (window.showOpenFilePicker && window.isSecureContext) {
+    try {
+      const handles = await window.showOpenFilePicker({
+        multiple: false,
+        types: [{
+          description: "Hackme 冷錢包檔",
+          accept: { "application/json": [".pcw1.json", ".json"] },
+        }],
+      });
+      const file = await handles?.[0]?.getFile();
+      if (file) return file;
+    } catch (_) {
+      throw economyColdWalletSigningCancelled(cancelMessage);
+    }
+    throw economyColdWalletSigningCancelled(cancelMessage);
+  }
+  return new Promise((resolve, reject) => {
+    const input = $("economy-wallet-signing-file-input") || document.createElement("input");
+    const created = !input.id;
+    let settled = false;
+    if (created) {
+      input.type = "file";
+      input.accept = ".pcw1.json,application/json,.json";
+      input.style.display = "none";
+      document.body.appendChild(input);
+    }
+    const cleanup = () => {
+      input.removeEventListener("change", onChange);
+      input.removeEventListener("cancel", onCancel);
+      if (created) input.remove();
+    };
+    const finish = (file) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (file) resolve(file);
+      else reject(economyColdWalletSigningCancelled(cancelMessage));
+    };
+    function onChange() {
+      finish(input.files?.[0] || null);
+    }
+    function onCancel() {
+      finish(null);
+    }
+    input.addEventListener("change", onChange, { once: true });
+    input.addEventListener("cancel", onCancel, { once: true });
+    input.value = "";
+    input.click();
+  });
+}
+
+async function economyPromptColdWalletForSigning({ expectedAddress, purposeLabel, cancelMessage, mismatchMessage }) {
+  const normalizedExpected = String(expectedAddress || "").trim().toLowerCase();
+  const session = economyColdWalletSigningSession(normalizedExpected);
+  if (session) {
+    await economyVerifyColdWalletSigningSession(session, { purposeLabel, cancelMessage });
+    return {
+      address: session.address,
+      privateKey: session.privateKey,
+      publicJwk: economyCanonicalPublicJwk(session.publicJwk),
+      imported: true,
+      fromSession: true,
+    };
+  }
+  let loaded = null;
+  const file = await economyPickColdWalletFileForSigning({ cancelMessage });
+  const password = window.prompt(`首次解鎖或本機簽署會話逾期時，需輸入完整冷錢包解鎖助記詞以本機解密錢包檔；之後同一頁面短時間內簽署${purposeLabel || "交易"}只會隨機詢問幾個詞。助記詞不會送到伺服器。`, "");
+  if (password === null) {
+    throw economyColdWalletSigningCancelled(cancelMessage);
+  }
+  loaded = await economyLoadEncryptedColdWalletFile(await economyReadTextFile(file), password, { imported: true });
+  if (normalizedExpected && String(loaded?.address || "").trim().toLowerCase() !== normalizedExpected) {
+    throw new Error(mismatchMessage || "冷錢包檔地址與本次付款錢包不一致");
+  }
+  economyRememberColdWalletSigningSession(loaded, password);
+  return loaded;
 }
 
 async function economyBuildTransferSignature({ source, destination, amount, fee, memo, requestUuid }) {
   const wallet = economyWalletByAddress(source);
   if (!economyWalletRequiresSignature(wallet)) return "";
   if (!window.crypto?.subtle) throw new Error("此瀏覽器不支援 WebCrypto，無法簽署冷錢包交易");
-  const raw = window.prompt("請貼上本次付款錢包私鑰備份碼以本機簽署交易；只在可信裝置使用，不會送到伺服器。", "");
-  if (raw === null) {
-    const err = new Error("已取消冷錢包簽署，交易未送出");
-    err.cancelled = true;
-    throw err;
-  }
   let loaded = null;
   try {
-    loaded = await economyLoadColdWalletBackup(raw, { imported: true });
-    if (String(loaded.address || "").trim().toLowerCase() !== String(source || "").trim().toLowerCase()) {
-      throw new Error("私鑰備份碼地址與付款錢包不一致，交易未送出");
-    }
+    loaded = await economyPromptColdWalletForSigning({
+      expectedAddress: source,
+      purposeLabel: "交易",
+      cancelMessage: "已取消冷錢包簽署，交易未送出",
+      mismatchMessage: "冷錢包檔地址與付款錢包不一致，交易未送出",
+    });
     const payload = economyWalletTransferPayload({ source, destination, amount, fee, memo, requestUuid });
     return economySignWalletBinding(loaded.privateKey, payload);
   } finally {
@@ -547,18 +1100,14 @@ async function economyBuildGovernanceMultisigSignature({ signer, destination, am
     || ["self_custody_cold", "imported_cold"].includes(String(walletType || "").trim());
   if (!needsSignature) return "";
   if (!window.crypto?.subtle) throw new Error("此瀏覽器不支援 WebCrypto，無法簽署官方多簽");
-  const raw = window.prompt("請貼上本次官方多簽 signer 錢包私鑰備份碼以本機簽署；只在可信裝置使用，不會送到伺服器。", "");
-  if (raw === null) {
-    const err = new Error("已取消官方多簽簽署，提案尚未授權");
-    err.cancelled = true;
-    throw err;
-  }
   let loaded = null;
   try {
-    loaded = await economyLoadColdWalletBackup(raw, { imported: true });
-    if (String(loaded.address || "").trim().toLowerCase() !== String(signer || "").trim().toLowerCase()) {
-      throw new Error("私鑰備份碼地址與 signer 錢包不一致，多簽未送出");
-    }
+    loaded = await economyPromptColdWalletForSigning({
+      expectedAddress: signer,
+      purposeLabel: "官方多簽",
+      cancelMessage: "已取消官方多簽簽署，提案尚未授權",
+      mismatchMessage: "冷錢包檔地址與 signer 錢包不一致，多簽未送出",
+    });
     const payload = economyWalletTransferPayload({
       source: signer,
       destination: destination || signer,
@@ -581,18 +1130,14 @@ async function economyBuildServiceFeeSignature({ source, itemKey, quantity, amou
   const wallet = economyWalletByAddress(source);
   if (!economyWalletRequiresSignature(wallet)) return "";
   if (!window.crypto?.subtle) throw new Error("此瀏覽器不支援 WebCrypto，無法簽署冷錢包服務費");
-  const raw = window.prompt("請貼上本次付款錢包私鑰備份碼以本機簽署服務費；只在可信裝置使用，不會送到伺服器。", "");
-  if (raw === null) {
-    const err = new Error("已取消冷錢包簽署，服務費未送出");
-    err.cancelled = true;
-    throw err;
-  }
   let loaded = null;
   try {
-    loaded = await economyLoadColdWalletBackup(raw, { imported: true });
-    if (String(loaded.address || "").trim().toLowerCase() !== String(source || "").trim().toLowerCase()) {
-      throw new Error("私鑰備份碼地址與付款錢包不一致，服務費未送出");
-    }
+    loaded = await economyPromptColdWalletForSigning({
+      expectedAddress: source,
+      purposeLabel: "服務費",
+      cancelMessage: "已取消冷錢包簽署，服務費未送出",
+      mismatchMessage: "冷錢包檔地址與付款錢包不一致，服務費未送出",
+    });
     const payload = economyWalletServiceFeePayload({ source, itemKey, quantity, amount, requestUuid, referenceType, referenceId });
     return economySignWalletBinding(loaded.privateKey, payload);
   } finally {
@@ -648,11 +1193,12 @@ function formatEconomyLedgerAction(actionType) {
     wallet_transfer_out: "鏈上轉帳",
     wallet_transfer_in: "鏈上轉帳入帳",
     wallet_transfer_fee: "鏈上手續費",
-    service_fee_batch_unfreeze: "站內服務費批次解凍",
-    service_fee_batch_debit: "站內服務費批次扣款",
+    service_fee_batch_unfreeze: "舊版站內服務費批次解凍",
+    service_fee_batch_debit: "舊版站內服務費批次扣款",
   };
   if (labels[action]) return labels[action];
-  if (action.startsWith("service_fee_reserve:")) return "站內服務費凍結";
+  if (action.startsWith("service_fee_reserve:")) return "舊版站內服務費凍結";
+  if (action.startsWith("service_fee_internal_debit:")) return "站內服務費即時扣款";
   if (action.startsWith("compensation:")) return `補償交易：${formatEconomyLedgerAction(action.slice("compensation:".length))}`;
   if (action.startsWith("rollback:")) return `Rollback：${formatEconomyLedgerAction(action.slice("rollback:".length))}`;
   return action || "-";
@@ -743,20 +1289,14 @@ function economyChainEnabled() {
 }
 
 function canManageEconomyPoints() {
-  return currentUser === "root" && economyChainEnabled();
-}
-
-function economyPositionsAvailable() {
-  return economyChainEnabled() && (!siteConfig || siteConfig.feature_trading_enabled !== false);
+  return economyChainEnabled() && economyGovernanceCanManage();
 }
 
 function setEconomyActivePage(page, options = {}) {
   const rootMode = currentUser === "root";
   const chainFeatureOn = economyChainEnabled();
   const chainAllowed = canManageEconomyPoints();
-  const positionsAvailable = false;
-  const rootTradingAllowed = false;
-  const requestedPage = ["chain", "transactions", "explorer", "governance", "positions", "funding-pools", "all-positions"].includes(page) ? page : "balance";
+  const requestedPage = ["chain", "transactions", "explorer", "governance"].includes(page) ? page : "balance";
   const nextPage =
     requestedPage === "chain" && chainAllowed
       ? "chain"
@@ -766,13 +1306,7 @@ function setEconomyActivePage(page, options = {}) {
         ? "explorer"
       : requestedPage === "governance" && chainFeatureOn
         ? "governance"
-      : requestedPage === "funding-pools" && rootTradingAllowed
-        ? "funding-pools"
-        : requestedPage === "all-positions" && rootTradingAllowed
-          ? "all-positions"
-      : requestedPage === "positions" && positionsAvailable
-        ? "positions"
-        : "balance";
+      : "balance";
   economyActivePage = nextPage;
   if (options.persist !== false) {
     try {
@@ -781,30 +1315,21 @@ function setEconomyActivePage(page, options = {}) {
   }
   const balancePage = $("economy-balance-page");
   const transactionsPage = $("economy-transactions-page");
-  const positionsPage = $("economy-positions-page");
   const explorerPage = $("economy-explorer-page");
   const governancePage = $("economy-governance-page");
-  const fundingPoolsPage = $("economy-funding-pools-page");
-  const allPositionsPage = $("economy-all-positions-page");
   const chainPage = $("economy-chain-page");
   if (balancePage) balancePage.classList.toggle("active", nextPage === "balance");
   if (transactionsPage) transactionsPage.classList.toggle("active", nextPage === "transactions");
   if (explorerPage) explorerPage.classList.toggle("active", nextPage === "explorer");
   if (governancePage) governancePage.classList.toggle("active", nextPage === "governance");
-  if (positionsPage) positionsPage.classList.toggle("active", positionsAvailable && nextPage === "positions");
-  if (fundingPoolsPage) fundingPoolsPage.classList.toggle("active", rootTradingAllowed && nextPage === "funding-pools");
-  if (allPositionsPage) allPositionsPage.classList.toggle("active", rootTradingAllowed && nextPage === "all-positions");
   if (chainPage) chainPage.classList.toggle("active", chainAllowed && nextPage === "chain");
   const balanceTab = $("tab-economy-balance");
   const transactionsTab = $("tab-economy-transactions");
   const explorerTab = $("tab-economy-explorer");
   const governanceTab = $("tab-economy-governance");
-  const positionsTab = $("tab-economy-positions");
-  const fundingPoolsTab = $("tab-economy-funding-pools");
-  const allPositionsTab = $("tab-economy-all-positions");
   const chainTab = $("tab-economy-chain");
   if (balanceTab) {
-    balanceTab.textContent = rootMode ? "錢包管理" : "積分餘額";
+    balanceTab.textContent = rootMode ? "官方錢包管理" : "積分餘額";
     balanceTab.classList.toggle("active", nextPage === "balance");
     balanceTab.setAttribute("aria-selected", nextPage === "balance" ? "true" : "false");
   }
@@ -823,40 +1348,19 @@ function setEconomyActivePage(page, options = {}) {
     governanceTab.classList.toggle("active", nextPage === "governance");
     governanceTab.setAttribute("aria-selected", nextPage === "governance" ? "true" : "false");
   }
-  if (fundingPoolsTab) {
-    fundingPoolsTab.style.display = "none";
-    fundingPoolsTab.classList.toggle("active", rootTradingAllowed && nextPage === "funding-pools");
-    fundingPoolsTab.setAttribute("aria-selected", rootTradingAllowed && nextPage === "funding-pools" ? "true" : "false");
-  }
-  if (allPositionsTab) {
-    allPositionsTab.style.display = "none";
-    allPositionsTab.classList.toggle("active", rootTradingAllowed && nextPage === "all-positions");
-    allPositionsTab.setAttribute("aria-selected", rootTradingAllowed && nextPage === "all-positions" ? "true" : "false");
-  }
-  if (positionsTab) {
-    positionsTab.style.display = "none";
-    positionsTab.classList.toggle("active", positionsAvailable && nextPage === "positions");
-    positionsTab.setAttribute("aria-selected", positionsAvailable && nextPage === "positions" ? "true" : "false");
-  }
   if (chainTab) {
     chainTab.style.display = chainAllowed ? "" : "none";
-    chainTab.textContent = rootMode ? "積分私有鏈" : "積分管理";
+    chainTab.textContent = rootMode ? "積分私有鏈" : "官方錢包管理";
     chainTab.classList.toggle("active", chainAllowed && nextPage === "chain");
     chainTab.setAttribute("aria-selected", chainAllowed && nextPage === "chain" ? "true" : "false");
   }
   const title = $("economy-page-title");
   if (title) {
-    if (nextPage === "positions") title.textContent = "倉位管理";
-    else if (nextPage === "transactions") title.textContent = "交易管理";
+    if (nextPage === "transactions") title.textContent = "鏈上交易";
     else if (nextPage === "explorer") title.textContent = "鏈上瀏覽器";
     else if (nextPage === "governance") title.textContent = "公共投票與疑義事件";
-    else if (nextPage === "funding-pools") title.textContent = "資金池管理";
-    else if (nextPage === "all-positions") title.textContent = "全用戶倉位管理";
-    else if (!rootMode) title.textContent = nextPage === "chain" ? "積分管理" : "積分錢包";
-    else title.textContent = nextPage === "chain" ? "積分私有鏈" : "錢包管理";
-  }
-  if (options.loadRootTrading !== false && rootTradingAllowed && ["funding-pools", "all-positions"].includes(nextPage)) {
-    loadEconomyRootTradingReadOnly({ refreshSnapshot: true });
+    else if (!rootMode) title.textContent = nextPage === "chain" ? "官方錢包管理" : "積分錢包";
+    else title.textContent = nextPage === "chain" ? "積分私有鏈" : "官方錢包管理";
   }
   if (nextPage === "governance") {
     loadEconomyGovernance({ silent: true });
@@ -867,17 +1371,36 @@ function setEconomyActivePage(page, options = {}) {
 function syncEconomySubpages(rootMode) {
   if (!canManageEconomyPoints() && economyActivePage === "chain") economyActivePage = "balance";
   if (!economyChainEnabled() && ["transactions", "explorer", "governance", "chain"].includes(economyActivePage)) economyActivePage = "balance";
-  if (!economyPositionsAvailable() && economyActivePage === "positions") economyActivePage = "balance";
-  if ((!rootMode || !economyPositionsAvailable()) && ["funding-pools", "all-positions"].includes(economyActivePage)) economyActivePage = "balance";
-  setEconomyActivePage(economyActivePage, { persist: false, loadRootTrading: false });
+  if (["positions", "funding-pools", "all-positions"].includes(economyActivePage)) economyActivePage = "balance";
+  setEconomyActivePage(economyActivePage, { persist: false });
+}
+
+function relocateEconomyOfficialWalletCard(rootMode) {
+  const card = $("economy-root-wallet-management-card");
+  if (!card) return;
+  const balancePage = $("economy-balance-page");
+  const chainPage = $("economy-chain-page");
+  if (rootMode) {
+    const pricingCard = $("economy-root-pricing-settings-card");
+    const ledgerCard = $("economy-user-ledger-card");
+    if (balancePage && card.parentElement !== balancePage) {
+      balancePage.insertBefore(card, pricingCard || ledgerCard || null);
+    }
+    return;
+  }
+  if (economyGovernanceCanManage() && chainPage && card.parentElement !== chainPage) {
+    const managerCard = $("economy-manager-points-management-card");
+    chainPage.insertBefore(card, managerCard || chainPage.firstChild);
+  }
 }
 
 function setEconomyRootLayout(rootMode) {
   const chainFeatureOn = economyChainEnabled();
   const rootWalletManagementCard = $("economy-root-wallet-management-card");
-  if (rootWalletManagementCard) rootWalletManagementCard.style.display = rootMode && chainFeatureOn ? "" : "none";
-  const rootVirtualCard = $("economy-root-virtual-card");
-  if (rootVirtualCard) rootVirtualCard.style.display = rootMode && economyPositionsAvailable() ? "" : "none";
+  relocateEconomyOfficialWalletCard(rootMode);
+  if (rootWalletManagementCard) rootWalletManagementCard.style.display = economyGovernanceCanManage() && chainFeatureOn ? "" : "none";
+  const pricingSettingsCard = $("economy-root-pricing-settings-card");
+  if (pricingSettingsCard) pricingSettingsCard.style.display = rootMode ? "" : "none";
 }
 
 function updateEconomyBlockCountdown() {
@@ -967,7 +1490,7 @@ function renderEconomyWallet(wallet) {
 
 function formatEconomyWalletIdentityType(type) {
   const labels = {
-    official_hot: "官方熱錢包",
+    official_hot: "站內託管錢包",
     self_custody_cold: "自管冷錢包",
     imported_cold: "匯入冷錢包",
     multisig: "多簽錢包",
@@ -986,24 +1509,22 @@ function renderEconomyWalletOnboarding(onboarding) {
   const rootMode = currentUser === "root";
   const chainFeatureOn = economyChainEnabled();
   const createCard = $("economy-wallet-create-card");
-  const transferCard = $("economy-wallet-transfer-card");
+  const actionPanel = $("economy-wallet-action-panel");
   if (!chainFeatureOn) {
     card.style.display = "none";
     if (createCard) createCard.style.display = "none";
-    if (transferCard) transferCard.style.display = "none";
+    if (actionPanel) actionPanel.style.display = "none";
     return;
   }
   card.style.display = rootMode ? "none" : "";
   if (createCard) createCard.style.display = rootMode ? "none" : "";
   if (rootMode) {
     if (createCard) createCard.style.display = "none";
-    if (transferCard) transferCard.style.display = "none";
+    if (actionPanel) actionPanel.style.display = "none";
     return;
   }
   const wallet = onboarding?.wallet || null;
-  const initialGrant = onboarding?.initial_grant && typeof onboarding.initial_grant === "object" ? onboarding.initial_grant : {};
   const onboardingWarnings = Array.isArray(onboarding?.warnings) ? onboarding.warnings : [];
-  renderEconomyTransferWalletOptions(onboarding);
   renderEconomyWalletCreationFeeOptions(onboarding);
   renderEconomyWalletIdentityList(onboarding);
   const actions = $("economy-wallet-onboarding-actions");
@@ -1013,8 +1534,8 @@ function renderEconomyWalletOnboarding(onboarding) {
   if (boundActions) boundActions.style.display = "none";
   if ($("economy-wallet-onboarding-status")) {
     $("economy-wallet-onboarding-status").textContent = wallet
-      ? "已綁定模擬鏈錢包；伺服器未保存用戶冷錢包備份碼。"
-      : "尚未綁定模擬鏈錢包；完成後才發放註冊禮。";
+      ? "已綁定模擬鏈錢包；伺服器未保存用戶冷錢包檔或冷錢包解鎖助記詞。"
+      : "尚未建立官方熱錢包；按更新即可建立站內託管錢包。";
   }
   if ($("economy-wallet-count")) $("economy-wallet-count").textContent = String(visibleWallets.length || 0);
   if ($("economy-wallet-primary-note")) {
@@ -1027,26 +1548,6 @@ function renderEconomyWalletOnboarding(onboarding) {
     $("economy-wallet-identity-address").title = wallet?.address || "";
   }
   if ($("economy-wallet-identity-status")) $("economy-wallet-identity-status").textContent = wallet?.status || "-";
-  if ($("economy-wallet-initial-grant")) {
-    const amount = Number(initialGrant.amount || 0);
-    $("economy-wallet-initial-grant").textContent = !initialGrant.action_type
-      ? "不適用"
-      : initialGrant.granted
-        ? "已入帳"
-        : `${formatEconomyPointsValue(amount)} 點待匯入`;
-  }
-  if ($("economy-wallet-initial-grant-note")) {
-    $("economy-wallet-initial-grant-note").textContent = !initialGrant.action_type
-      ? "此帳號無初始配點"
-      : initialGrant.granted
-        ? `tx ${shortEconomyWalletAddress(initialGrant.ledger_hash || initialGrant.ledger_uuid || "")}`
-        : initialGrant.deferred_until_wallet
-          ? "綁定錢包後由官方基金匯入"
-          : "等待鏈上入帳";
-  }
-  if ($("economy-wallet-signup-bonus")) {
-    $("economy-wallet-signup-bonus").textContent = onboarding?.signup_bonus_granted ? "已領取" : "待領取";
-  }
   if (onboardingWarnings.length) {
     const labels = onboardingWarnings.map((item) => item?.code || item?.message || String(item)).filter(Boolean);
     economyWalletMsg(`錢包資料部分讀取失敗：${labels.join("、")}`, false);
@@ -1093,6 +1594,84 @@ function economySpendableWallets(onboarding = {}) {
     });
 }
 
+function economyWalletCanSpend(wallet) {
+  const status = String(wallet?.status || "");
+  const mode = String(wallet?.custody_mode || "");
+  const type = String(wallet?.wallet_type || "");
+  const spend = String(wallet?.spend_capability || "enabled");
+  return status === "active" && spend === "enabled" && mode !== "system" && mode !== "multisig" && !["mint", "burn", "user_multisig_preview"].includes(type);
+}
+
+function economyTransferFavoriteAllowed(address, { source = "", rail = "" } = {}) {
+  const normalized = economyNormalizeAddress(address);
+  const normalizedSource = economyNormalizeAddress(source);
+  if (!normalized || normalized === normalizedSource) return false;
+  const sourcePc0 = economyIsPc0Address(normalizedSource);
+  const destinationPc0 = economyIsPc0Address(normalized);
+  if (!sourcePc0 && destinationPc0) return false;
+  if (sourcePc0 && rail === "internal_pc0") return destinationPc0;
+  if (sourcePc0 && rail === "external_cold") return !destinationPc0;
+  return !destinationPc0;
+}
+
+function economyFavoriteAddressOptionsHtml({ source = "", rail = "" } = {}) {
+  const favorites = readEconomyFavoriteAddresses().filter((item) => economyTransferFavoriteAllowed(item.address, { source, rail }));
+  if (!favorites.length) return `<option value="">沒有符合此模式的常用地址</option>`;
+  return `<option value="">選擇常用地址</option>` + favorites.map((item) => {
+    return `<option value="${sanitize(item.address)}">${sanitize(economyFavoriteAddressLabel(item))}</option>`;
+  }).join("");
+}
+
+function economyActiveDepositAddress() {
+  return String(economyWalletOnboardingState?.deposit_address || "").trim().toLowerCase();
+}
+
+function economyWalletActionPanel() {
+  return $("economy-wallet-action-panel");
+}
+
+function economyWalletActionContent() {
+  return $("economy-wallet-action-content");
+}
+
+function economyTransferRailFromInputs() {
+  return String($("economy-transfer-rail")?.value || "").trim();
+}
+
+function economySyncTransferRailFields() {
+  const source = economyNormalizeAddress($("economy-transfer-source-wallet")?.value);
+  const destination = economyNormalizeAddress($("economy-transfer-destination-wallet")?.value);
+  const sourcePc0 = economyIsPc0Address(source);
+  const railSelect = $("economy-transfer-rail");
+  const rail = sourcePc0 ? economyTransferRailFromInputs() || "internal_pc0" : "cold_chain";
+  const feeInput = $("economy-transfer-fee");
+  const feeEstimate = $("economy-transfer-fee-estimate");
+  const destinationInput = $("economy-transfer-destination-wallet");
+  const favoriteSelect = $("economy-transfer-favorite-address");
+  if (railSelect) railSelect.value = rail;
+  if (destinationInput) {
+    destinationInput.placeholder = sourcePc0 && rail === "internal_pc0" ? "pc0..." : "pc1... / 外部地址";
+  }
+  if (feeInput) {
+    const noNetworkFee = sourcePc0 && rail === "internal_pc0";
+    feeInput.disabled = noNetworkFee;
+    feeInput.value = noNetworkFee ? "0" : String(Math.max(1, Number(feeInput.value || 1)));
+    if (feeEstimate) {
+      feeEstimate.textContent = noNetworkFee
+        ? "pc0 站內互轉不收鏈上 fee、不等待 Proved。"
+        : "預估 Proved 時間讀取中...";
+    }
+  }
+  if (favoriteSelect) favoriteSelect.innerHTML = economyFavoriteAddressOptionsHtml({ source, rail });
+  if (source && destination && !sourcePc0 && economyIsPc0Address(destination)) {
+    economyTransferMsg("pc1 冷錢包不能直接轉到 pc0 站內地址；請改用熱錢包轉入顯示的 pc1 入金地址。", false);
+  }
+  if (sourcePc0 && rail === "external_cold" && destination && economyIsPc0Address(destination)) {
+    economyTransferMsg("外部 / 冷錢包橋接模式不能填 pc0；要站內互轉請切回 pc0 站內地址。", false);
+  }
+  if (!feeInput?.disabled) scheduleEconomyTransferFeeEstimate();
+}
+
 function economyWalletCreationFeeQuote(onboarding = economyWalletOnboardingState) {
   const quote = onboarding?.wallet_creation_fee;
   return quote && typeof quote === "object" ? quote : {};
@@ -1108,9 +1687,9 @@ function renderEconomyWalletCreationFeeOptions(onboarding = {}) {
   const wallets = economySpendableWallets(onboarding);
   if (amount <= 0) {
     panel.style.display = "none";
-    select.innerHTML = `<option value="">第一個錢包免費</option>`;
+    select.innerHTML = `<option value="">第一個冷錢包免費</option>`;
     select.disabled = true;
-    if (note) note.textContent = "第一個錢包免費；第二個以上依數量指數加價，收入進官方 Treasury。";
+    if (note) note.textContent = "第一個冷錢包免費；第二個以上依數量指數加價，收入進官方 Treasury。";
     return;
   }
   panel.style.display = "";
@@ -1137,7 +1716,7 @@ async function economyWalletCreationFeePayload(mode) {
   const itemKey = String(quote.item_key || "wallet_creation_fee");
   const referenceType = String(quote.reference_type || "wallet_identity");
   const referenceId = String(quote.reference_id || `wallet_identity:create:${String(mode || "wallet")}:${quote.next_wallet_number || ""}`);
-  economyWalletMsg("等待付款錢包本機簽署建立費；私鑰備份碼不會送到伺服器。");
+  economyWalletMsg("等待付款錢包本機簽署建立費；錢包檔與冷錢包解鎖助記詞不會送到伺服器。");
   const signature = await economyBuildServiceFeeSignature({
     source,
     itemKey,
@@ -1155,23 +1734,6 @@ async function economyWalletCreationFeePayload(mode) {
   };
 }
 
-function renderEconomyTransferWalletOptions(onboarding = {}) {
-  const card = $("economy-wallet-transfer-card");
-  const select = $("economy-transfer-source-wallet");
-  if (!card || !select) return;
-  const wallets = economySpendableWallets(onboarding);
-  card.style.display = wallets.length ? "" : "none";
-  if (!wallets.length) {
-    select.innerHTML = `<option value="">尚無可用錢包</option>`;
-    return;
-  }
-  const previous = select.value;
-  select.innerHTML = wallets.map((wallet) => {
-    return `<option value="${sanitize(wallet.address)}">${sanitize(economyWalletOptionLabel(wallet))}</option>`;
-  }).join("");
-  if (previous && wallets.some((wallet) => wallet.address === previous)) select.value = previous;
-}
-
 function renderEconomyWalletIdentityList(onboarding = {}) {
   const list = $("economy-wallet-identity-list");
   if (!list) return;
@@ -1180,12 +1742,13 @@ function renderEconomyWalletIdentityList(onboarding = {}) {
     list.innerHTML = `<div class="drive-empty">尚無錢包</div>`;
     return;
   }
-  list.innerHTML = wallets.map((wallet) => {
+  const walletRows = wallets.map((wallet) => {
     const address = String(wallet.address || "").trim().toLowerCase();
     const risk = wallet.risk_label && typeof wallet.risk_label === "object" ? wallet.risk_label : null;
     const freeze = wallet.governance_freeze && typeof wallet.governance_freeze === "object" ? wallet.governance_freeze : null;
     const walletType = String(wallet.wallet_type || "");
     const coldWallet = ["self_custody_cold", "imported_cold"].includes(walletType);
+    const canSpend = economyWalletCanSpend(wallet);
     const defaultWallet = readEconomyDefaultSpendWalletAddress();
     const isDefaultSpend = address && address === String(defaultWallet || "").trim().toLowerCase();
     const riskLine = risk
@@ -1209,7 +1772,8 @@ function renderEconomyWalletIdentityList(onboarding = {}) {
           <button class="economy-ledger-hash economy-explorer-address" type="button" data-explorer-query="${sanitize(wallet.address || "")}">${sanitize(wallet.address || "-")}</button>
         </div>
         <div class="drive-file-actions">
-          <button class="btn btn-sm" type="button" data-wallet-transfer-to="${sanitize(address)}">交易</button>
+          <button class="btn btn-sm" type="button" data-wallet-receive="${sanitize(address)}">轉入</button>
+          <button class="btn btn-sm" type="button" data-wallet-send="${sanitize(address)}"${canSpend ? "" : " disabled"}>轉出</button>
           <button class="btn btn-sm" type="button" data-wallet-default="${sanitize(address)}"${capability === "enabled" ? "" : " disabled"}>${isDefaultSpend ? "已預設" : "設為預設"}</button>
           ${coldWallet ? `<button class="btn btn-sm" type="button" data-wallet-secret-check="${sanitize(address)}">密鑰驗證</button>` : ""}
           ${coldWallet ? `<button class="btn btn-danger btn-sm" type="button" data-wallet-delete-cold="${sanitize(address)}">刪除</button>` : ""}
@@ -1217,6 +1781,7 @@ function renderEconomyWalletIdentityList(onboarding = {}) {
       </div>
     `;
   }).join("");
+  list.innerHTML = walletRows;
   list.querySelectorAll("[data-explorer-query]").forEach((btn) => {
     if (btn.dataset.explorerBound === "1") return;
     btn.dataset.explorerBound = "1";
@@ -1238,10 +1803,15 @@ function renderEconomyWalletIdentityList(onboarding = {}) {
       chainBranch: btn.dataset.disputeBranch || "",
     }));
   });
-  list.querySelectorAll("[data-wallet-transfer-to]").forEach((btn) => {
+  list.querySelectorAll("[data-wallet-receive]").forEach((btn) => {
     if (btn.dataset.walletActionBound === "1") return;
     btn.dataset.walletActionBound = "1";
-    btn.addEventListener("click", () => openEconomyWalletTransferTo(btn.dataset.walletTransferTo || ""));
+    btn.addEventListener("click", () => openEconomyWalletReceive(btn.dataset.walletReceive || ""));
+  });
+  list.querySelectorAll("[data-wallet-send]").forEach((btn) => {
+    if (btn.dataset.walletActionBound === "1") return;
+    btn.dataset.walletActionBound = "1";
+    btn.addEventListener("click", () => openEconomyWalletSend(btn.dataset.walletSend || ""));
   });
   list.querySelectorAll("[data-wallet-default]").forEach((btn) => {
     if (btn.dataset.walletActionBound === "1") return;
@@ -1265,7 +1835,7 @@ function economyTransactionDirectionLabel(direction) {
   if (value === "incoming") return "轉入";
   if (value === "outgoing") return "轉出";
   if (value === "self") return "錢包間轉帳";
-  if (value === "official_outgoing") return "官方撥款";
+  if (value === "official_outgoing") return "官方 Treasury 支出";
   if (value === "official_fund_transfer") return "官方基金調撥";
   if (value === "observed") return "鏈上交易";
   return "交易";
@@ -1279,6 +1849,29 @@ function economyTransactionStatusLabel(status) {
   return value || "-";
 }
 
+function economyTransactionFinalityIsInternal(finality = {}) {
+  return String(finality.finality_status || "") === "internal_settled"
+    || String(finality.finality_simulation || "") === "internal_hot_wallet_ledger_v1"
+    || Number(finality.target_proved_count ?? 20) === 0;
+}
+
+function economyTransactionProvedText(finality = {}) {
+  if (economyTransactionFinalityIsInternal(finality)) return "免 Proved";
+  const target = Number(finality.target_proved_count ?? 20);
+  const proved = Math.max(0, Math.min(target, Number(finality.proved_count ?? 0)));
+  return `${proved}/${target} Proved`;
+}
+
+function economyTransactionAmountText(tx = {}) {
+  const amount = Number(tx.amount_points || tx.amount || 0);
+  const fee = Number(tx.fee_points || 0);
+  if (tx.direction === "incoming") return `+${formatEconomyPointsValue(amount)}`;
+  if (tx.direction === "official_outgoing") return `Treasury 支出 ${formatEconomyPointsValue(amount + fee)}`;
+  if (tx.direction === "official_fund_transfer") return `基金調撥 ${formatEconomyPointsValue(amount + fee)}`;
+  if (tx.direction === "outgoing") return `-${formatEconomyPointsValue(amount + fee)}`;
+  return formatEconomyPointsValue(amount);
+}
+
 function renderEconomyTransferLastResult(txHash, transaction = {}) {
   const wrap = $("economy-transfer-last-result");
   if (!wrap) return;
@@ -1288,10 +1881,12 @@ function renderEconomyTransferLastResult(txHash, transaction = {}) {
   }
   const finality = transaction.finality && typeof transaction.finality === "object" ? transaction.finality : {};
   const eta = economyExplorerSecondsText(finality.eta_seconds || finality.settlement_seconds || 0);
+  const provedText = economyTransactionProvedText(finality);
+  const etaText = economyTransactionFinalityIsInternal(finality) ? "即時" : eta;
   wrap.innerHTML = `
     <span>Transaction Hash</span>
     <button class="economy-ledger-hash economy-explorer-address" type="button" data-explorer-query="${sanitize(txHash)}">${sanitize(txHash)}</button>
-    <span>${Number(finality.proved_count || 0)}/${Number(finality.target_proved_count || 20)} Proved · ETA ${sanitize(eta)} · ${sanitize(economyTransactionStatusLabel(transaction.status || "pending"))}</span>
+    <span>${sanitize(provedText)} · ETA ${sanitize(etaText)} · ${sanitize(economyTransactionStatusLabel(transaction.status || "pending"))}</span>
   `;
   wrap.querySelectorAll("[data-explorer-query]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1341,7 +1936,7 @@ function renderEconomyTransactions(payload = {}) {
   setEconomyText("economy-transactions-finalized-count", `本次成交 ${Number(summary.finalized_count || 0)}`);
   renderEconomyRootList(rows, "economy-transactions-list", "尚無轉帳交易", (tx) => {
     const finality = tx.finality && typeof tx.finality === "object" ? tx.finality : {};
-    const proved = `${Number(finality.proved_count || 0)}/${Number(finality.target_proved_count || 20)} Proved`;
+    const proved = economyTransactionProvedText(finality);
     const status = economyTransactionStatusLabel(tx.status);
     const pendingNote = String(tx.status || "") === "pending"
       ? " · Pending 不會讓收款錢包入帳"
@@ -1350,25 +1945,24 @@ function renderEconomyTransactions(payload = {}) {
       ? " · 未綁定地址"
       : "";
     const direction = economyTransactionDirectionLabel(tx.direction);
-    const amountText = tx.direction === "incoming"
-      ? `+${formatEconomyPointsValue(tx.amount_points)}`
-      : tx.direction === "outgoing" || tx.direction === "official_outgoing" || tx.direction === "official_fund_transfer"
-        ? `-${formatEconomyPointsValue(Number(tx.amount_points || 0) + Number(tx.fee_points || 0))}`
-        : formatEconomyPointsValue(tx.amount_points);
+    const amountText = economyTransactionAmountText(tx);
+    const flowSource = tx.source_wallet_address || tx.wallet_flow?.source_wallet_address || "";
+    const flowDestination = tx.destination_wallet_address || tx.wallet_flow?.destination_wallet_address || "";
+    const displayedFee = tx.fee_points ?? tx.network_fee_points ?? tx.wallet_flow?.network_fee_points ?? 0;
     return `
       <div class="drive-file-row">
         <div>
           <strong>${sanitize(direction)} · ${sanitize(status)} · ${sanitize(proved)} · ${sanitize(amountText)} 點</strong>
           <div class="drive-card-sub">${sanitize(tx.created_at || "")}${pendingNote}${unownedNote}</div>
-          <div class="drive-card-sub">From ${sanitize(formatEconomyWalletAddressWithManagerLabel(tx.source_wallet_address || ""))} → To ${sanitize(formatEconomyWalletAddressWithManagerLabel(tx.destination_wallet_address || ""))} · Fee ${formatEconomyPointsValue(tx.fee_points || 0)} 點</div>
+          <div class="drive-card-sub">From ${sanitize(formatEconomyWalletAddressWithManagerLabel(flowSource))} → To ${sanitize(formatEconomyWalletAddressWithManagerLabel(flowDestination))} · Fee ${formatEconomyPointsValue(displayedFee)} 點</div>
           <button class="economy-ledger-hash economy-explorer-address" type="button" data-explorer-query="${sanitize(tx.transaction_hash || tx.tx_group_hash || "")}">${sanitize(tx.transaction_hash || tx.tx_group_hash || "-")}</button>
         </div>
         <div class="drive-file-actions">
           <button class="btn btn-sm" type="button" data-explorer-query="${sanitize(tx.transaction_hash || tx.tx_group_hash || "")}">查看</button>
           <button class="btn btn-sm" type="button"
             data-dispute-tx="${sanitize(tx.transaction_hash || tx.tx_group_hash || "")}"
-            data-dispute-from="${sanitize(tx.source_wallet_address || tx.wallet_flow?.source_wallet_address || "")}"
-            data-dispute-to="${sanitize(tx.destination_wallet_address || tx.wallet_flow?.destination_wallet_address || "")}"
+            data-dispute-from="${sanitize(flowSource)}"
+            data-dispute-to="${sanitize(flowDestination)}"
             data-dispute-amount="${sanitize(String(tx.amount_points || tx.amount || 0))}"
             data-dispute-branch="${sanitize(tx.chain_branch || tx.wallet_flow?.chain_branch || economyCurrentChainBranch || "main")}">疑義交易</button>
         </div>
@@ -1388,7 +1982,7 @@ async function loadEconomyTransactions() {
     renderEconomyTransactions(json);
     return json;
   } catch (err) {
-    economyNotifyFailure(err, { msgFn: economyTransactionMsg, label: "交易管理", fallback: "交易紀錄讀取失敗" });
+    economyNotifyFailure(err, { msgFn: economyTransactionMsg, label: "鏈上交易", fallback: "鏈上交易紀錄讀取失敗" });
     renderEconomyTransactions({ transactions: [], summary: {} });
     return null;
   }
@@ -1405,12 +1999,12 @@ async function createEconomyTransactionDispute(input = {}) {
   if (currentUser === "root") {
     economyNotifyFailure(new Error("root 帳號不使用匿名地址疑義流程；官方錢包或官方地址事故請改走官方治理、內部帳務治理或緊急安全治理。"), {
       msgFn: economyTransactionMsg,
-      label: "交易管理",
+      label: "鏈上交易",
       fallback: "疑義交易申報失敗",
     });
     return;
   }
-  const fromAddress = String(data.from || prompt("From 地址（冷錢包需用此地址備份碼本機簽署；官方熱錢包使用登入帳號綁定證明）", "") || "").trim().toLowerCase();
+  const fromAddress = String(data.from || prompt("From 地址（冷錢包需用錢包檔與冷錢包解鎖助記詞本機簽署；站內託管錢包使用登入帳號綁定證明）", "") || "").trim().toLowerCase();
   const toAddress = String(data.to || prompt("To 地址（系統會先短期限制此地址轉出）", "") || "").trim().toLowerCase();
   const amount = Math.max(0, Math.floor(Number(data.amount || prompt("交易點數", "0") || 0)));
   const chainBranch = String(data.chainBranch || economyCurrentChainBranch || "main").trim() || "main";
@@ -1434,7 +2028,7 @@ async function createEconomyTransactionDispute(input = {}) {
     if (!accountBoundProof && fromWallet && !hasLocalSignaturePath) {
       economyNotifyFailure(new Error("此 From 錢包沒有可用的本機簽章能力，不能用地址證明疑義流程申報。"), {
         msgFn: economyTransactionMsg,
-        label: "交易管理",
+        label: "鏈上交易",
         fallback: "疑義交易申報失敗",
       });
       return;
@@ -1445,9 +2039,9 @@ async function createEconomyTransactionDispute(input = {}) {
       signature_runtime_mode: economyAddressDisputeRuntimeMode(),
     };
     if (accountBoundProof) {
-      economyTransactionMsg("From 是目前登入帳號綁定的官方熱錢包，使用帳號持有狀態建立疑義，不要求私鑰。");
+      economyTransactionMsg("From 是目前登入帳號綁定的站內託管錢包，使用帳號持有狀態建立疑義，不要求私鑰。");
     } else {
-      economyTransactionMsg("等待 From 地址本機簽署疑義交易；私鑰不會送到伺服器。若此地址是他人的官方熱錢包，只有該帳號可直接申報。");
+      economyTransactionMsg("等待 From 地址本機簽署疑義交易；私鑰不會送到伺服器。若此地址是他人的站內託管錢包，只有該帳號可直接申報。");
       proof = await economyBuildAddressDisputeProof({
         purpose: "address_dispute_open",
         signerAddress: fromAddress,
@@ -1482,13 +2076,13 @@ async function createEconomyTransactionDispute(input = {}) {
     });
     economyNotifySuccess(`疑義交易已送出：${json.dispute?.dispute_uuid || ""}；To 地址已短期限制轉出，此申報只建立 case，不代表一定補償或 rollback。`, {
       msgFn: economyTransactionMsg,
-      label: "交易管理",
+      label: "鏈上交易",
     });
     await loadEconomyTransactionDisputes({ silent: true });
   } catch (err) {
     economyNotifyFailure(err, {
       msgFn: economyTransactionMsg,
-      label: "交易管理",
+      label: "鏈上交易",
       fallback: "疑義交易申報失敗",
     });
   }
@@ -1615,9 +2209,9 @@ async function replyEconomyTransactionDispute(input = {}) {
       signature_runtime_mode: runtimeMode,
     };
     if (accountBoundProof) {
-      economyGovernanceMsg("To 是目前登入帳號綁定的官方熱錢包，使用帳號持有狀態回覆，不要求私鑰。");
+      economyGovernanceMsg("To 是目前登入帳號綁定的站內託管錢包，使用帳號持有狀態回覆，不要求私鑰。");
     } else {
-      economyGovernanceMsg("等待 To 地址本機簽署回覆；私鑰不會送到伺服器。若此地址是他人的官方熱錢包，只有該帳號可直接回覆。");
+      economyGovernanceMsg("等待 To 地址本機簽署回覆；私鑰不會送到伺服器。若此地址是他人的站內託管錢包，只有該帳號可直接回覆。");
       proof = await economyBuildAddressDisputeProof({
         purpose: "address_dispute_reply",
         signerAddress: toAddress,
@@ -1772,8 +2366,24 @@ async function submitEconomyWalletTransfer() {
   const source = String($("economy-transfer-source-wallet")?.value || "").trim();
   const destination = String($("economy-transfer-destination-wallet")?.value || "").trim();
   const amount = Math.floor(Number($("economy-transfer-amount")?.value || 0));
-  const fee = Math.floor(Number($("economy-transfer-fee")?.value || 0));
+  let fee = Math.floor(Number($("economy-transfer-fee")?.value || 0));
   const memo = String($("economy-transfer-memo")?.value || "").trim();
+  const sourcePc0 = economyIsPc0Address(source);
+  const destinationPc0 = economyIsPc0Address(destination);
+  const rail = economyTransferRailFromInputs() || (sourcePc0 ? "internal_pc0" : "cold_chain");
+  if (!sourcePc0 && destinationPc0) {
+    economyTransferMsg("pc1 冷錢包不能直接轉到 pc0 站內地址；請使用對方熱錢包轉入畫面列出的 pc1 橋接入金地址。", false);
+    return;
+  }
+  if (sourcePc0 && rail === "internal_pc0" && !destinationPc0) {
+    economyTransferMsg("站內 pc0 互轉模式只能填 pc0 地址；若要提領到外部 / 冷錢包，請切換轉出模式。", false);
+    return;
+  }
+  if (sourcePc0 && rail === "external_cold" && destinationPc0) {
+    economyTransferMsg("外部 / 冷錢包轉出模式不能填 pc0 地址；站內互轉請切回 pc0 站內地址。", false);
+    return;
+  }
+  if (sourcePc0 && rail === "internal_pc0") fee = 0;
   if (!source || !destination || !Number.isFinite(amount) || amount <= 0 || !Number.isFinite(fee) || fee < 0) {
     economyTransferMsg("請確認 From、To、Value 與 Transaction Fee", false);
     return;
@@ -1785,7 +2395,12 @@ async function submitEconomyWalletTransfer() {
       btn.disabled = true;
       btn.textContent = "簽署中...";
     }
-    economyTransferMsg("等待冷錢包本機簽署，請確認私鑰備份碼只在可信裝置使用。");
+    const sourceWallet = economyWalletByAddress(source);
+    economyTransferMsg(economyWalletRequiresSignature(sourceWallet)
+      ? "等待冷錢包本機簽署，請確認錢包檔與冷錢包解鎖助記詞只在可信裝置使用。"
+      : sourcePc0 && rail === "internal_pc0"
+        ? "正在送出 pc0 站內互轉；不收鏈上 fee、不等待 Proved。"
+        : "正在送出轉出請求。");
     const signature = await economyBuildTransferSignature({ source, destination, amount, fee, memo, requestUuid });
     if (btn) btn.textContent = "送單中...";
     const json = await fetchEconomyJson("/points/transactions/submit", {
@@ -1802,11 +2417,17 @@ async function submitEconomyWalletTransfer() {
     });
     const txHash = json.transaction_hash || json.tx_group_hash || json.transaction?.transaction_hash || "";
     const finality = json.transaction?.finality || {};
+    const tx = json.transaction || {};
     const eta = economyExplorerSecondsText(finality.eta_seconds || finality.settlement_seconds || 0);
     const warningSuffix = economyWarningSuffix(json);
-    const successMessage = txHash
-      ? `交易已送出：${txHash}，等待 20/20 Proved，ETA ${eta}；成交前收款方不會入帳。`
-      : `交易已送出，等待 20/20 Proved，ETA ${eta}；成交前收款方不會入帳。`;
+    const immediate = tx.chain_required === false
+      || tx.chain_required === 0
+      || ["internal_hot_wallet", "internal_system_burn", "deposit_bridge_credit", "withdrawal_bridge_refund"].includes(String(tx.settlement_rail || ""));
+    const successMessage = immediate
+      ? (txHash ? `pc0 站內互轉已完成：${txHash}。` : "pc0 站內互轉已完成。")
+      : txHash
+        ? `交易已送出：${txHash}，等待 20/20 Proved，ETA ${eta}；成交前收款方不會入帳。`
+        : `交易已送出，等待 20/20 Proved，ETA ${eta}；成交前收款方不會入帳。`;
     const visibleMessage = `${successMessage}${warningSuffix}`;
     economyTransferMsg(visibleMessage, !warningSuffix);
     renderEconomyTransferLastResult(txHash, json.transaction || {});
@@ -1839,8 +2460,6 @@ async function postEconomyWalletOnboarding(payload) {
   });
   renderEconomyWalletOnboarding(json.onboarding || {});
   const createdMessages = [];
-  if (Number(json.initial_grants?.created_count || 0) > 0) createdMessages.push("初始配點已入帳");
-  if (json.signup_bonus?.created) createdMessages.push("註冊禮已入帳");
   if (json.creation_fee?.charged) createdMessages.push(`建立費 ${formatEconomyPointsValue(json.creation_fee.amount_points || 0)} 點已入官方 Treasury`);
   economyWalletMsg(createdMessages.length ? `錢包已綁定，${createdMessages.join("，")}。` : "錢包已綁定。");
   await loadEconomyDashboard();
@@ -1852,25 +2471,218 @@ async function useOfficialHotWallet() {
     await postEconomyWalletOnboarding({ mode: "official_hot", ...feePayload });
     destroyEconomyColdWalletSecrets();
   } catch (err) {
-    economyWalletMsg(err.message || "官方熱錢包建立失敗", false);
+    economyWalletMsg(err.message || "站內託管錢包建立失敗", false);
   }
 }
 
-function openEconomyWalletTransferTo(address) {
-  const target = String(address || "").trim().toLowerCase();
-  if (!target) {
-    economyWalletMsg("找不到目標錢包地址", false);
+function openEconomyWalletReceive(address) {
+  const wallet = economyWalletByAddress(address);
+  const target = economyNormalizeAddress(wallet?.address || address);
+  const panel = economyWalletActionPanel();
+  const content = economyWalletActionContent();
+  if (!target || !panel || !content) {
+    economyWalletMsg("找不到錢包地址", false);
     return;
   }
-  if ($("economy-transfer-destination-wallet")) $("economy-transfer-destination-wallet").value = target;
-  const source = $("economy-transfer-source-wallet");
-  const defaultWallet = readEconomyDefaultSpendWalletAddress();
-  if (source && defaultWallet && Array.from(source.options || []).some((option) => option.value === defaultWallet)) {
-    source.value = defaultWallet;
-  }
+  const pc0 = economyIsPc0Address(target);
+  const depositAddress = economyActiveDepositAddress();
+  panel.style.display = "";
+  if ($("economy-transfer-last-result")) $("economy-transfer-last-result").innerHTML = "";
+  const receiveBody = pc0
+    ? `
+      <div class="settings-option-grid">
+        <div class="field">
+          <label>站內 pc0 收款地址</label>
+          <input type="text" value="${sanitize(target)}" readonly autocomplete="off" />
+          <small class="drive-card-sub">站內會員互轉可以使用此 pc0 地址，立即入帳且不收鏈上 fee。</small>
+          <button class="btn btn-sm" type="button" data-wallet-copy-address="${sanitize(target)}">複製 pc0 地址</button>
+        </div>
+        <div class="field">
+          <label>此 pc0 綁定的橋接 pc1 入金地址</label>
+          <input type="text" value="${sanitize(depositAddress || "尚未建立")}" readonly autocomplete="off" />
+          <small class="drive-card-sub">冷錢包或外部地址不能直接轉到 pc0；此 pc0 只能透過這個 pc1 橋接地址入金，確認後系統 credit 到 pc0 站內託管錢包。</small>
+          ${depositAddress ? `<button class="btn btn-sm" type="button" data-wallet-copy-address="${sanitize(depositAddress)}">複製 pc1 入金地址</button>` : ""}
+        </div>
+      </div>
+    `
+    : `
+      <div class="settings-option-grid">
+        <div class="field">
+          <label>冷錢包收款地址</label>
+          <input type="text" value="${sanitize(target)}" readonly autocomplete="off" />
+          <small class="drive-card-sub">此為 pc1 冷錢包地址，可供一般鏈上轉入；站內 pc0 互轉請使用對方 pc0 站內地址。</small>
+          <button class="btn btn-sm" type="button" data-wallet-copy-address="${sanitize(target)}">複製地址</button>
+        </div>
+      </div>
+    `;
+  content.innerHTML = `
+    <div class="drive-card">
+      <div class="drive-card-heading">
+        <div>
+          <div class="drive-card-title">轉入 ${sanitize(shortEconomyWalletAddress(target))}</div>
+          <div class="drive-card-sub">${pc0 ? "站內託管錢包：pc0 只供站內辨識；冷錢包入金請使用 pc1 入金地址。" : "冷錢包：顯示原始 pc1 地址供鏈上收款。"}</div>
+        </div>
+      </div>
+      ${receiveBody}
+    </div>
+  `;
+  bindEconomyWalletActionPanelEvents();
   setEconomyActivePage("balance");
-  $("economy-wallet-transfer-card")?.scrollIntoView({ block: "start", behavior: "smooth" });
-  economyTransferMsg(`To 已帶入 ${shortEconomyWalletAddress(target)}，請選 From、Value 與 Fee 後送出。`);
+  panel.scrollIntoView({ block: "start", behavior: "smooth" });
+  economyTransferMsg(pc0 ? "已顯示 pc0 站內地址與 pc1 入金地址。" : "已顯示冷錢包收款地址。");
+}
+
+function openEconomyWalletSend(address) {
+  const wallet = economyWalletByAddress(address);
+  const source = economyNormalizeAddress(wallet?.address || address);
+  const panel = economyWalletActionPanel();
+  const content = economyWalletActionContent();
+  if (!source || !panel || !content) {
+    economyWalletMsg("找不到轉出錢包", false);
+    return;
+  }
+  if (!economyWalletCanSpend(wallet)) {
+    economyWalletMsg("此錢包目前不能轉出", false);
+    return;
+  }
+  const sourcePc0 = economyIsPc0Address(source);
+  const railOptions = sourcePc0
+    ? `<select id="economy-transfer-rail">
+        <option value="internal_pc0">站內 pc0 地址</option>
+        <option value="external_cold">外部 / 冷錢包地址</option>
+      </select>`
+    : `<input type="text" id="economy-transfer-rail" value="cold_chain" readonly />`;
+  const railNote = sourcePc0
+    ? "站內 pc0 轉出可選內部互轉或提領到外部 / 冷錢包；內部互轉不收鏈上 fee。"
+    : "冷錢包轉出是一般鏈上轉帳；目的地不能是 pc0 站內地址，入金 pc0 請用對方熱錢包顯示的 pc1 入金地址。";
+  panel.style.display = "";
+  if ($("economy-transfer-last-result")) $("economy-transfer-last-result").innerHTML = "";
+  content.innerHTML = `
+    <div class="drive-card">
+      <div class="drive-card-heading">
+        <div>
+          <div class="drive-card-title">轉出 ${sanitize(shortEconomyWalletAddress(source))}</div>
+          <div class="drive-card-sub">${sanitize(railNote)}</div>
+        </div>
+      </div>
+      <div class="settings-option-grid">
+        <div class="field">
+          <label>From</label>
+          <input type="text" id="economy-transfer-source-wallet" value="${sanitize(source)}" readonly autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>轉出模式</label>
+          ${railOptions}
+        </div>
+        <div class="field">
+          <label>常用地址</label>
+          <select id="economy-transfer-favorite-address">${economyFavoriteAddressOptionsHtml({ source, rail: sourcePc0 ? "internal_pc0" : "cold_chain" })}</select>
+          <small class="drive-card-sub">常用地址會依目前模式過濾；pc1 → pc0 不會列出也不能送出。</small>
+        </div>
+        <div class="field">
+          <label>To</label>
+          <input type="text" id="economy-transfer-destination-wallet" placeholder="${sourcePc0 ? "pc0..." : "pc1... / 外部地址"}" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>常用地址名稱</label>
+          <input type="text" id="economy-transfer-favorite-label" maxlength="80" placeholder="可留空" autocomplete="off" />
+          <button class="btn btn-sm" id="economy-transfer-save-favorite-btn" type="button">加入常用</button>
+          <button class="btn btn-sm" id="economy-transfer-remove-favorite-btn" type="button">移除選取常用</button>
+        </div>
+        <div class="field"><label>Value</label><input type="number" id="economy-transfer-amount" min="1" value="1" /></div>
+        <div class="field"><label>Transaction Fee</label><input type="number" id="economy-transfer-fee" min="0" value="${sourcePc0 ? "0" : "1"}" /><small id="economy-transfer-fee-estimate" class="drive-card-sub">預估 Proved 時間讀取中...</small></div>
+        <div class="field"><label>Input Data</label><input type="text" id="economy-transfer-memo" maxlength="180" placeholder="可留空" /></div>
+        <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-transfer-submit-btn" type="button">送出交易</button></div>
+      </div>
+    </div>
+  `;
+  bindEconomyWalletActionPanelEvents();
+  economySyncTransferRailFields();
+  setEconomyActivePage("balance");
+  panel.scrollIntoView({ block: "start", behavior: "smooth" });
+  economyTransferMsg("請輸入目的地與金額後送出。");
+}
+
+function bindEconomyWalletActionPanelEvents() {
+  const panel = economyWalletActionPanel();
+  if (!panel) return;
+  panel.querySelectorAll("[data-wallet-copy-address]").forEach((btn) => {
+    if (btn.dataset.walletActionBound === "1") return;
+    btn.dataset.walletActionBound = "1";
+    btn.addEventListener("click", () => copyEconomyText(btn.dataset.walletCopyAddress || "", "地址已複製"));
+  });
+  const rail = $("economy-transfer-rail");
+  if (rail && rail.dataset.walletActionBound !== "1") {
+    rail.dataset.walletActionBound = "1";
+    rail.addEventListener("change", economySyncTransferRailFields);
+  }
+  const destination = $("economy-transfer-destination-wallet");
+  if (destination && destination.dataset.walletActionBound !== "1") {
+    destination.dataset.walletActionBound = "1";
+    destination.addEventListener("input", economySyncTransferRailFields);
+    destination.addEventListener("change", economySyncTransferRailFields);
+  }
+  const favoriteSelect = $("economy-transfer-favorite-address");
+  if (favoriteSelect && favoriteSelect.dataset.walletActionBound !== "1") {
+    favoriteSelect.dataset.walletActionBound = "1";
+    favoriteSelect.addEventListener("change", () => {
+      const value = economyNormalizeAddress(favoriteSelect.value);
+      if (value && $("economy-transfer-destination-wallet")) {
+        $("economy-transfer-destination-wallet").value = value;
+        economySyncTransferRailFields();
+      }
+    });
+  }
+  const saveFavorite = $("economy-transfer-save-favorite-btn");
+  if (saveFavorite && saveFavorite.dataset.walletActionBound !== "1") {
+    saveFavorite.dataset.walletActionBound = "1";
+    saveFavorite.addEventListener("click", () => {
+      try {
+        const source = economyNormalizeAddress($("economy-transfer-source-wallet")?.value);
+        const railValue = economyTransferRailFromInputs();
+        const address = economyNormalizeAddress($("economy-transfer-destination-wallet")?.value);
+        if (!economyTransferFavoriteAllowed(address, { source, rail: railValue })) {
+          economyTransferMsg("此地址不符合目前轉出模式，不能加入常用。", false);
+          return;
+        }
+        upsertEconomyFavoriteAddress(address, $("economy-transfer-favorite-label")?.value || "");
+        if (favoriteSelect) {
+          favoriteSelect.innerHTML = economyFavoriteAddressOptionsHtml({ source, rail: railValue });
+          favoriteSelect.value = address;
+        }
+        economyTransferMsg(`已加入常用地址：${shortEconomyWalletAddress(address)}`);
+      } catch (err) {
+        economyTransferMsg(err.message || "加入常用地址失敗", false);
+      }
+    });
+  }
+  const removeFavorite = $("economy-transfer-remove-favorite-btn");
+  if (removeFavorite && removeFavorite.dataset.walletActionBound !== "1") {
+    removeFavorite.dataset.walletActionBound = "1";
+    removeFavorite.addEventListener("click", () => {
+      const source = economyNormalizeAddress($("economy-transfer-source-wallet")?.value);
+      const railValue = economyTransferRailFromInputs();
+      const selected = economyNormalizeAddress(favoriteSelect?.value);
+      if (!selected) {
+        economyTransferMsg("請先選擇要移除的常用地址", false);
+        return;
+      }
+      removeEconomyFavoriteAddress(selected);
+      if (favoriteSelect) favoriteSelect.innerHTML = economyFavoriteAddressOptionsHtml({ source, rail: railValue });
+      economyTransferMsg(`已移除常用地址：${shortEconomyWalletAddress(selected)}`);
+    });
+  }
+  const submitBtn = $("economy-transfer-submit-btn");
+  if (submitBtn && submitBtn.dataset.walletActionBound !== "1") {
+    submitBtn.dataset.walletActionBound = "1";
+    submitBtn.addEventListener("click", submitEconomyWalletTransfer);
+  }
+  const feeInput = $("economy-transfer-fee");
+  if (feeInput && feeInput.dataset.economyEstimateBound !== "1") {
+    feeInput.dataset.economyEstimateBound = "1";
+    feeInput.addEventListener("input", scheduleEconomyTransferFeeEstimate);
+    feeInput.addEventListener("change", scheduleEconomyTransferFeeEstimate);
+  }
 }
 
 function setEconomyDefaultWalletFromCard(address) {
@@ -1890,19 +2702,19 @@ async function verifyEconomyColdWalletBackupForAddress(address) {
     economyWalletMsg("找不到要驗證的冷錢包地址", false);
     return;
   }
-  const raw = window.prompt("本站不保存冷錢包私鑰，無法用帳密重新顯示；請貼上你保存的私鑰備份碼，本機驗證是否對應此地址。", "");
-  if (raw === null) {
-    economyWalletMsg("已取消冷錢包密鑰驗證。", false);
-    return;
-  }
+  let loaded = null;
   try {
-    const loaded = await economyLoadColdWalletBackup(raw, { imported: true });
-    if (String(loaded.address || "").trim().toLowerCase() !== target) {
-      throw new Error("備份碼地址與此冷錢包不一致");
-    }
-    economyWalletMsg(`備份碼可控制此地址：${shortEconomyWalletAddress(target)}。私鑰未送到伺服器，也不會被保存。`);
+    loaded = await economyPromptColdWalletForSigning({
+      expectedAddress: target,
+      purposeLabel: "密鑰驗證",
+      cancelMessage: "已取消冷錢包密鑰驗證。",
+      mismatchMessage: "冷錢包檔地址與此冷錢包不一致",
+    });
+    economyWalletMsg(`錢包檔可控制此地址：${shortEconomyWalletAddress(target)}。私鑰只在瀏覽器本機解密，不會送到伺服器。`);
   } catch (err) {
     economyWalletMsg(err.message || "冷錢包密鑰驗證失敗", false);
+  } finally {
+    loaded = null;
   }
 }
 
@@ -1913,14 +2725,15 @@ async function deleteEconomyColdWallet(addressOverride = "") {
       economyWalletMsg("請先選擇要刪除的冷錢包", false);
       return;
     }
-    if (!confirm("刪除冷錢包不會刪除帳本，但之後必須提供該備份碼才能恢復同一地址。確定刪除？")) return;
+    if (!confirm("刪除冷錢包不會刪除帳本，但之後必須提供該錢包檔與冷錢包解鎖助記詞才能恢復同一地址。確定刪除？")) return;
     const json = await fetchEconomyJson("/points/wallet/onboarding", {
       method: "DELETE",
       body: JSON.stringify({ address, reason: "user_deleted_cold_wallet" }),
     });
     renderEconomyWalletOnboarding(json.onboarding || {});
+    economyForgetColdWalletSigningSession(address);
     destroyEconomyColdWalletSecrets();
-    economyWalletMsg("冷錢包已移除，且不再列入帳戶總額；若要恢復同一地址，請貼上該備份碼並匯入。");
+    economyWalletMsg("冷錢包已移除，且不再列入帳戶總額；若要恢復同一地址，請匯入錢包檔並輸入冷錢包解鎖助記詞。");
     await loadEconomyDashboard();
   } catch (err) {
     economyWalletMsg(err.message || "冷錢包刪除失敗", false);
@@ -1941,18 +2754,32 @@ async function createColdWalletDraft() {
     const privateJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
     const publicJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
     const { address } = await economyWalletAddressFromPublicJwk(publicJwk);
-    const backupCode = economyCompactColdWalletBackup(privateJwk);
+    const tradePassword = await economyDerivedColdWalletTradePassword(privateJwk, address);
+    const mnemonicWords = economyColdWalletMnemonicWords(tradePassword);
+    const mnemonicQuiz = economyBuildColdWalletMnemonicQuiz(mnemonicWords);
+    const walletFile = await economyEncryptColdWalletFile({ privateJwk, publicJwk, address, password: tradePassword });
+    const walletFileName = economyColdWalletFileName(address);
+    privateJwk.d = "";
     destroyEconomyColdWalletSecrets({ hideGenerated: false });
-    economyColdWalletDraft = { address };
+    economyColdWalletDraft = { address, walletFile, walletFileName, tradePassword, mnemonicWords, mnemonicQuiz, quizPassed: false };
     if ($("economy-wallet-generated-panel")) $("economy-wallet-generated-panel").style.display = "";
     if ($("economy-wallet-generated-address")) $("economy-wallet-generated-address").value = address;
-    if ($("economy-wallet-generated-private-key")) $("economy-wallet-generated-private-key").value = backupCode;
-    if ($("economy-wallet-generated-selection-status")) $("economy-wallet-generated-selection-status").textContent = "尚未選用";
-    if ($("economy-wallet-use-generated-cold-btn")) {
-      $("economy-wallet-use-generated-cold-btn").disabled = false;
-      $("economy-wallet-use-generated-cold-btn").textContent = "選用此冷錢包";
+    if ($("economy-wallet-generated-file-name")) $("economy-wallet-generated-file-name").value = walletFileName;
+    const tradePasswordInput = $("economy-wallet-generated-trade-password");
+    if (tradePasswordInput) {
+      tradePasswordInput.type = "text";
+      tradePasswordInput.value = tradePassword;
+      tradePasswordInput.placeholder = "只顯示一次，請離線保存";
     }
-    economyWalletMsg("冷錢包只建立草稿，尚未匯入或綁定；要用此地址時請按選用此冷錢包。");
+    if ($("economy-wallet-generated-selection-status")) $("economy-wallet-generated-selection-status").textContent = "尚未選用";
+    resetEconomyColdWalletMnemonicQuiz();
+    const quizBtn = $("economy-wallet-start-mnemonic-quiz-btn");
+    if (quizBtn) {
+      quizBtn.disabled = false;
+      quizBtn.textContent = "確認已保存，隱藏助記詞並開始考試";
+    }
+    syncEconomyGeneratedColdWalletSelectionButton();
+    economyWalletMsg("冷錢包只建立草稿，尚未匯入或綁定；請先下載錢包檔、離線保存冷錢包解鎖助記詞，再按確認隱藏助記詞進行考試。");
   } catch (err) {
     economyWalletMsg(err.message || "冷錢包建立失敗", false);
   }
@@ -1963,13 +2790,20 @@ async function selectGeneratedColdWalletForImport() {
     economyWalletMsg("目前沒有新建冷錢包草稿", false);
     return;
   }
+  if (!economyGeneratedColdWalletReadyForSelection()) {
+    economyWalletMsg("請先通過記憶詞考試，再選用此冷錢包。", false);
+    return;
+  }
   try {
-    const raw = $("economy-wallet-generated-private-key")?.value || "";
-    economyColdWalletBindCandidate = await economyLoadColdWalletBackup(raw, { imported: false });
+    const raw = JSON.stringify(economyColdWalletDraft.walletFile || {});
+    economyColdWalletBindCandidate = await economyLoadEncryptedColdWalletFile(raw, economyColdWalletDraft.tradePassword, { imported: false });
     if (String(economyColdWalletBindCandidate.address || "").toLowerCase() !== String(economyColdWalletDraft.address || "").toLowerCase()) {
-      throw new Error("冷錢包備份碼與草稿地址不一致");
+      throw new Error("冷錢包檔與草稿地址不一致");
     }
+    economyRememberColdWalletSigningSession(economyColdWalletBindCandidate, economyColdWalletDraft.tradePassword);
     if ($("economy-wallet-private-key")) $("economy-wallet-private-key").value = "";
+    if ($("economy-wallet-file-input")) $("economy-wallet-file-input").value = "";
+    if ($("economy-wallet-file-password")) $("economy-wallet-file-password").value = "";
     if ($("economy-wallet-private-key-confirmed")) $("economy-wallet-private-key-confirmed").checked = false;
     if ($("economy-wallet-generated-selection-status")) {
       $("economy-wallet-generated-selection-status").textContent = `已選用 ${shortEconomyWalletAddress(economyColdWalletDraft.address)}`;
@@ -1979,7 +2813,7 @@ async function selectGeneratedColdWalletForImport() {
       $("economy-wallet-use-generated-cold-btn").disabled = true;
     }
     $("economy-wallet-private-key-confirmed")?.focus();
-    economyWalletMsg(`已選用此冷錢包 ${shortEconomyWalletAddress(economyColdWalletDraft.address)}；確認已保存備份碼後才會綁定。`);
+    economyWalletMsg(`已選用此冷錢包 ${shortEconomyWalletAddress(economyColdWalletDraft.address)}；確認已保存錢包檔與冷錢包解鎖助記詞後才會綁定。`);
   } catch (err) {
     economyColdWalletBindCandidate = null;
     if ($("economy-wallet-generated-selection-status")) $("economy-wallet-generated-selection-status").textContent = "選用失敗";
@@ -1987,23 +2821,26 @@ async function selectGeneratedColdWalletForImport() {
   }
 }
 
-async function importColdWalletFromText() {
+async function importColdWalletFromInputs() {
   if (!window.crypto?.subtle) {
     economyWalletMsg("此瀏覽器不支援 WebCrypto，無法匯入冷錢包", false);
     return;
   }
   try {
-    const raw = $("economy-wallet-private-key")?.value || "";
-    if (!String(raw || "").trim()) {
-      economyWalletMsg("請先貼上冷錢包備份碼，再按確認並綁定。", false);
-      $("economy-wallet-private-key")?.focus();
+    economyColdWalletBindCandidate = null;
+    const file = $("economy-wallet-file-input")?.files?.[0] || null;
+    const password = $("economy-wallet-file-password")?.value || "";
+    if (file) {
+      economyColdWalletBindCandidate = await economyLoadEncryptedColdWalletFile(await economyReadTextFile(file), password, { imported: true });
+    } else {
+      economyWalletMsg("請先選擇冷錢包檔並輸入冷錢包解鎖助記詞。", false);
+      $("economy-wallet-file-input")?.focus();
       return;
     }
-    economyColdWalletBindCandidate = null;
-    economyColdWalletBindCandidate = await economyLoadColdWalletBackup(raw, { imported: true });
+    economyRememberColdWalletSigningSession(economyColdWalletBindCandidate, password);
     if ($("economy-wallet-private-key-confirmed")) $("economy-wallet-private-key-confirmed").checked = false;
-    if ($("economy-wallet-generated-selection-status")) $("economy-wallet-generated-selection-status").textContent = "已改用匯入備份碼";
-    economyWalletMsg("冷錢包已匯入瀏覽器。確認已保存備份碼後即可綁定。");
+    if ($("economy-wallet-generated-selection-status")) $("economy-wallet-generated-selection-status").textContent = "已改用匯入錢包檔";
+    economyWalletMsg("冷錢包已在瀏覽器本機解密。確認已保存錢包檔與冷錢包解鎖助記詞後即可綁定。");
   } catch (err) {
     economyWalletMsg(err.message || "冷錢包匯入失敗", false);
   }
@@ -2014,29 +2851,28 @@ async function startColdWalletImport() {
   if (createCard && "open" in createCard) createCard.open = true;
   economyColdWalletBindCandidate = null;
   if ($("economy-wallet-private-key-confirmed")) $("economy-wallet-private-key-confirmed").checked = false;
-  const field = $("economy-wallet-private-key");
-  if (field && !String(field.value || "").trim()) {
-    field.focus();
-    economyWalletMsg("請貼上要匯入或恢復的冷錢包備份碼；確認保存後再綁定。");
+  const file = $("economy-wallet-file-input")?.files?.[0] || null;
+  if (!file) {
+    $("economy-wallet-file-input")?.focus();
+    economyWalletMsg("請選擇要匯入或恢復的冷錢包檔並輸入冷錢包解鎖助記詞。");
     return;
   }
-  await importColdWalletFromText();
+  await importColdWalletFromInputs();
 }
 
 async function confirmColdWalletBinding() {
   let scrubSecrets = false;
   try {
     if (!$("economy-wallet-private-key-confirmed")?.checked) {
-      economyWalletMsg("請先確認已保存備份碼", false);
+      economyWalletMsg("請先確認已保存錢包檔與冷錢包解鎖助記詞", false);
       return;
     }
-    const raw = String($("economy-wallet-private-key")?.value || "").trim();
-    if (raw) {
-      economyColdWalletBindCandidate = null;
-      economyColdWalletBindCandidate = await economyLoadColdWalletBackup(raw, { imported: true });
+    const file = $("economy-wallet-file-input")?.files?.[0] || null;
+    if (file) {
+      await importColdWalletFromInputs();
     }
     if (!economyColdWalletBindCandidate) {
-      economyWalletMsg("請先匯入備份碼或選用新冷錢包", false);
+      economyWalletMsg("請先匯入錢包檔或選用新冷錢包", false);
       return;
     }
     const walletType = economyColdWalletBindCandidate.imported ? "imported_cold" : "self_custody_cold";
@@ -2195,14 +3031,12 @@ function formatEconomyVerificationSummary(verification) {
 
 function formatEconomyRecoveryResult(result) {
   const safe = result && typeof result === "object" ? result : {};
-  const rebuild = safe.wallet_rebuild && typeof safe.wallet_rebuild === "object" ? safe.wallet_rebuild : {};
   const verification = safe.verification && typeof safe.verification === "object" ? safe.verification : {};
   const counts = verification.counts && typeof verification.counts === "object" ? verification.counts : {};
   if (safe.ok !== true) return safe.msg || "PointsChain 恢復失敗";
   return [
-    "PointsChain 已恢復並完成驗證",
-    `備份：${safe.backup_id || "-"}`,
-    `錢包重建：${Number(rebuild.wallets_rebuilt || 0)} 個`,
+    "PointsChain 已完成異常處理檢查",
+    "備份還原：停用",
     `ledger：${Number(counts.ledger_entries || 0)} 筆`,
     `封塊：${Number(counts.sealed_blocks || 0)} 個`,
     `safe mode：${(safe.recovery || {}).safe_mode ? "仍啟用" : "已解除"}`,
@@ -2226,6 +3060,21 @@ function economyFormulaCard(label, value, tone = "") {
 
 function economyFormulaOperator(symbol) {
   return `<div class="economy-formula-operator" aria-hidden="true">${sanitize(symbol)}</div>`;
+}
+
+function economyFormulaSection(title, subtitle, cardsHtml, tone = "") {
+  const toneClass = tone ? ` ${tone}` : "";
+  return `
+    <section class="economy-formula-section${toneClass}">
+      <div class="economy-formula-section-head">
+        <strong>${sanitize(title)}</strong>
+        <span>${sanitize(subtitle)}</span>
+      </div>
+      <div class="economy-formula-section-grid">
+        ${cardsHtml}
+      </div>
+    </section>
+  `;
 }
 
 function renderEconomyLayerSummary(report) {
@@ -2259,7 +3108,6 @@ function renderEconomyLayerSummary(report) {
     exchange_fund: fundAddress("exchange_fund"),
     burn: fundAddress("burn"),
   };
-  syncGovernanceTreasuryDestination();
   setEconomyText("economy-layer-health", String(health.status || "-").toUpperCase());
   setEconomyText("economy-layer-health-detail", `原因 ${Array.isArray(health.reasons) ? health.reasons.join(", ") : "ok"}`);
   setEconomyText("economy-layer-max-supply", formatEconomyPointsValue(supply.max_supply || 0));
@@ -2292,39 +3140,111 @@ function renderEconomyLayerSummary(report) {
   if (formulaEl) {
     const burned = Number(bridge.burned_total ?? supply.burned_total ?? 0);
     const official = Number(bridge.official_treasury_balance ?? fund("official_treasury").balance ?? 0);
-    const outside = Number(
-      bridge.economy_external_circulating_points
-        ?? supply.external_supply
-        ?? supply.circulating_supply
-        ?? bridge.total_legacy_outstanding_points
+    const memberInternal = Number(
+      bridge.member_internal_circulating_points
+        ?? bridge.legacy_outstanding_points
         ?? 0
     );
+    const memberAvailable = Number(bridge.member_internal_available_points ?? 0);
+    const memberFrozen = Number(bridge.member_internal_frozen_points ?? 0);
+    const rootInternal = Number(bridge.root_internal_circulating_points ?? bridge.root_outstanding_points ?? 0);
+    const offWallet = Number(
+      bridge.off_wallet_economy_external_points
+        ?? supply.external_supply
+        ?? supply.circulating_supply
+        ?? 0
+    );
+    const ledgerEconomyGap = Number(bridge.ledger_vs_economy_external_gap_points ?? 0);
+    const externalBreakdown = bridge.economy_external_balance_breakdown && typeof bridge.economy_external_balance_breakdown === "object"
+      ? bridge.economy_external_balance_breakdown
+      : {};
+    const exchangeReceivable = Number(externalBreakdown.exchange_principal_receivable_points ?? 0);
+    const withheldContra = Number(bridge.exchange_margin_settlement_withheld_contra_points ?? 0);
+    const bridgeFlow = bridge.bridge_flow_totals && typeof bridge.bridge_flow_totals === "object"
+      ? bridge.bridge_flow_totals
+      : {};
+    const pc0BridgeOut = Number(bridgeFlow.hot_to_cold_confirmed_points ?? bridgeFlow.economy_hot_to_external_points ?? 0);
+    const bridgeDepositIn = Number(bridgeFlow.deposit_credited_points ?? bridgeFlow.economy_external_to_hot_points ?? 0);
+    const hotToColdNetworkFee = Number(bridgeFlow.hot_to_cold_network_fee_points ?? 0);
+    const depositNetworkFee = Number(bridgeFlow.deposit_network_fee_points ?? 0);
+    const fundExternalOut = Number(bridgeFlow.economy_fund_to_external_points ?? 0);
+    const flowGap = Number(bridgeFlow.economy_flow_reconciliation_gap_points ?? 0);
+    const unexplainedFlowGap = Math.abs(flowGap) > exchangeReceivable
+      ? flowGap - Math.sign(flowGap || 1) * exchangeReceivable
+      : 0;
     const mintRemaining = Number(bridge.mint_remaining ?? supply.mint_remaining ?? 0);
     const exchange = Number(bridge.exchange_fund_balance ?? fund("exchange_fund").balance ?? 0);
     const promo = Number(bridge.promo_fund_balance ?? fund("promo_fund").balance ?? 0);
-    const total = Number(bridge.actual_supply_equation_total ?? (burned + official + outside + mintRemaining + exchange + promo));
+    const total = Number(bridge.bridged_supply_equation_total ?? (burned + official + memberInternal + rootInternal + offWallet + mintRemaining + exchange + promo));
     const maxSupply = Number(bridge.max_supply ?? supply.max_supply ?? 0);
-    const gap = Number(bridge.actual_supply_equation_gap_points ?? (total - maxSupply));
-    const gapTone = gap === 0 ? "total" : "warning";
+    const gap = Number(bridge.bridged_supply_equation_gap_points ?? (total - maxSupply));
+    const formulaBalanced = gap === 0;
+    const gapTone = formulaBalanced ? "total" : "warning";
+    const offWalletDetail = ledgerEconomyGap
+      ? `${formatEconomyPointsValue(offWallet)} · PC1 Reserve 對帳差 ${formatEconomyPointsValue(ledgerEconomyGap)}`
+      : formatEconomyPointsValue(offWallet);
+    const bridgeFlowParts = [
+      `PC0 → PC1 已結算出金 ${formatEconomyPointsValue(pc0BridgeOut)}`,
+      `PC1 → PC0 已入帳橋接 ${formatEconomyPointsValue(bridgeDepositIn)}`,
+    ];
+    if (hotToColdNetworkFee) bridgeFlowParts.push(`PC0 → PC1 鏈費 ${formatEconomyPointsValue(hotToColdNetworkFee)}`);
+    if (depositNetworkFee) bridgeFlowParts.push(`PC1 → PC0 鏈費 ${formatEconomyPointsValue(depositNetworkFee)}`);
+    if (fundExternalOut) bridgeFlowParts.push(`官方基金外部撥出 ${formatEconomyPointsValue(fundExternalOut)}`);
+    if (exchangeReceivable) bridgeFlowParts.push(`交易所應收本金 ${formatEconomyPointsValue(exchangeReceivable)}`);
+    if (withheldContra) bridgeFlowParts.push(`扣留式費用對帳 ${formatEconomyPointsValue(withheldContra)}`);
+    if (unexplainedFlowGap) bridgeFlowParts.push(`未分類橋接流量差 ${formatEconomyPointsValue(unexplainedFlowGap)}`);
+    const bridgeFlowDetail = bridgeFlowParts.join(" / ");
+    const wrappedOperationalTotal = official + memberInternal + rootInternal + exchange + promo;
+    const canonicalActive = Number(bridge.active_supply ?? supply.active_supply ?? 0);
+    const canonicalMinted = Number(bridge.minted_total ?? supply.minted_total ?? 0);
+    const bridgeTone = ledgerEconomyGap || unexplainedFlowGap ? "warning" : "";
     formulaEl.innerHTML = `
-      <div class="economy-supply-title">閉環公式</div>
-      <div class="economy-supply-equation-ui">
-        ${economyFormulaCard("總上限", formatEconomyPointsValue(maxSupply), "total")}
-        ${economyFormulaOperator("=")}
-        ${economyFormulaCard("已 burn", formatEconomyPointsValue(burned))}
-        ${economyFormulaOperator("+")}
-        ${economyFormulaCard("官方錢包", formatEconomyPointsValue(official))}
-        ${economyFormulaOperator("+")}
-        ${economyFormulaCard("鏈上在外流通", formatEconomyPointsValue(outside))}
-        ${economyFormulaOperator("+")}
-        ${economyFormulaCard("未發放 mint 量", formatEconomyPointsValue(mintRemaining))}
-        ${economyFormulaOperator("+")}
-        ${economyFormulaCard("交易所基金", formatEconomyPointsValue(exchange))}
-        ${economyFormulaOperator("+")}
-        ${economyFormulaCard("PROMO 基金", formatEconomyPointsValue(promo))}
-        ${economyFormulaOperator("=")}
-        ${economyFormulaCard("公式總和", formatEconomyPointsValue(total), gapTone)}
-        ${economyFormulaCard("差額", `${formatEconomyPointsValue(gap)} · ${gap === 0 ? "閉環正常" : "需查帳"}`, gapTone)}
+      <div class="economy-supply-title">多帳本結算控制平面</div>
+      <div class="drive-card-sub economy-supply-note">
+        PC1 canonical reserve、PC0 wrapped operational liabilities、Bridge settlement 與 pending isolation 分層對帳；pending settlement 不與 finalized supply 混算。
+      </div>
+      <div class="economy-supply-equation-ui economy-supply-layer-grid">
+        ${economyFormulaSection(
+          "PC1 Canonical Reserve",
+          "Settlement ledger / reserve truth",
+          `
+            ${economyFormulaCard("總上限", formatEconomyPointsValue(maxSupply), "total")}
+            ${economyFormulaCard("Active Supply", formatEconomyPointsValue(canonicalActive))}
+            ${economyFormulaCard("已 Mint", formatEconomyPointsValue(canonicalMinted))}
+            ${economyFormulaCard("系統 burn sink", formatEconomyPointsValue(burned))}
+            ${economyFormulaCard("Mint Authority 未發放", formatEconomyPointsValue(mintRemaining))}
+          `,
+        )}
+        ${economyFormulaSection(
+          "PC0 Wrapped Operational Supply",
+          "站內可用餘額、官方營運錢包與基金 liabilities",
+          `
+            ${economyFormulaCard("官方 Treasury", formatEconomyPointsValue(official))}
+            ${economyFormulaCard("用戶 PC0 站內流通", `${formatEconomyPointsValue(memberInternal)} · 可用 ${formatEconomyPointsValue(memberAvailable)} / 凍結 ${formatEconomyPointsValue(memberFrozen)}`)}
+            ${economyFormulaCard("root/其他 PC0 站內餘額", formatEconomyPointsValue(rootInternal))}
+            ${economyFormulaCard("交易所基金", formatEconomyPointsValue(exchange))}
+            ${economyFormulaCard("PROMO 基金", formatEconomyPointsValue(promo))}
+            ${economyFormulaCard("Wrapped liabilities 小計", formatEconomyPointsValue(wrappedOperationalTotal), "total")}
+          `,
+        )}
+        ${economyFormulaSection(
+          "Bridge Settlement / Pending Isolation",
+          "PC1 ↔ PC0 cross-ledger settlement，不與站內 finalized liability 混為同一層",
+          `
+            ${economyFormulaCard("External Circulation", offWalletDetail, bridgeTone)}
+            ${economyFormulaCard("Bridge finalized flow", bridgeFlowDetail, bridgeTone)}
+          `,
+          bridgeTone,
+        )}
+        ${economyFormulaSection(
+          "Financial Reconciliation",
+          "多帳本 finalized supply equation",
+          `
+            ${economyFormulaCard("公式總和", formatEconomyPointsValue(total), gapTone)}
+            ${economyFormulaCard("差額", `${formatEconomyPointsValue(gap)} · ${formulaBalanced ? "Settlement invariant 正常" : "需查帳"}`, gapTone)}
+          `,
+          gapTone,
+        )}
       </div>
     `;
   }
@@ -2332,127 +3252,6 @@ function renderEconomyLayerSummary(report) {
   setEconomyText("economy-layer-replay-hash", `derived cache · ${shortEconomyWalletAddress(replay.wallet_root_hash || "")}`);
   setEconomyText("economy-layer-snapshot-height", formatEconomyPointsValue(snapshot.snapshot_height ?? replay.height ?? 0));
   setEconomyText("economy-layer-derived-verify", `${derivedVerify.ok === true ? "verify ok" : "verify failed"} · ${shortEconomyWalletAddress(snapshot.wallet_root_hash || replay.wallet_root_hash || "")}`);
-}
-
-function renderEconomyRootFundingPools(payload) {
-  const safe = payload && typeof payload === "object" ? payload : {};
-  const reserve = safe.reserve_pool && typeof safe.reserve_pool === "object" ? safe.reserve_pool : {};
-  const funding = safe.funding_pool && typeof safe.funding_pool === "object" ? safe.funding_pool : {};
-  const lending = safe.lending_summary && typeof safe.lending_summary === "object" ? safe.lending_summary : {};
-  const margin = safe.open_margin_summary && typeof safe.open_margin_summary === "object" ? safe.open_margin_summary : {};
-  const fees = safe.fee_summary && typeof safe.fee_summary === "object" ? safe.fee_summary : {};
-  const chainExchange = safe.pointschain_exchange_fund && typeof safe.pointschain_exchange_fund === "object" ? safe.pointschain_exchange_fund : {};
-  const reserveBalance = Number(reserve.balance_points || 0);
-  const chainExchangeBalance = Number(chainExchange.balance_points ?? reserveBalance);
-  const reserveDiff = reserveBalance - chainExchangeBalance;
-  setEconomyText("economy-root-reserve-balance", formatEconomyPointsValue(reserve.balance_points || 0));
-  setEconomyText(
-    "economy-root-reserve-updated",
-    `更新 ${reserve.updated_at || "-"} · PointsChain EXCHANGE ${formatEconomyPointsValue(chainExchangeBalance)}${reserveDiff ? ` · 差額 ${formatEconomyPointsValue(reserveDiff)}` : " · 已對齊"}`,
-  );
-  setEconomyText("economy-root-funding-available", formatEconomyPointsValue(funding.available_points || 0));
-  setEconomyText("economy-root-funding-outstanding", `貸出 ${formatEconomyPointsValue(funding.outstanding_principal_points || 0)}`);
-  setEconomyText("economy-root-funding-utilization", formatEconomyPercentValue(funding.utilization_percent || 0));
-  setEconomyText("economy-root-funding-apr", `APR ${formatEconomyPercentValue(funding.effective_interest_apr_percent || 0)} · ${funding.borrowed_asset_symbol || "POINTS"}`);
-  const retainedIncome = Number(lending.fee_retained_points || 0) + Number(lending.interest_retained_points || 0);
-  setEconomyText("economy-root-pool-income", formatEconomyPointsValue(retainedIncome));
-  setEconomyText(
-    "economy-root-pool-income-detail",
-    `fee ${formatEconomyPointsValue(lending.fee_retained_points || fees.total_fee_points || 0)} / interest ${formatEconomyPointsValue(lending.interest_retained_points || 0)}`,
-  );
-  renderEconomyRootList([
-    {
-      title: "借貸池",
-      value: `可用 ${formatEconomyPointsValue(funding.available_points || 0)} · 貸出 ${formatEconomyPointsValue(funding.outstanding_principal_points || 0)}`,
-      detail: `容量 ${formatEconomyPointsValue(funding.capacity_points || 0)} · 使用率 ${formatEconomyPercentValue(funding.utilization_percent || 0)}`,
-    },
-    {
-      title: "本金與回收",
-      value: `貸出 ${formatEconomyPointsValue(lending.lent_out_points || 0)} · 回收 ${formatEconomyPointsValue(lending.repaid_points || 0)}`,
-      detail: `開放倉位 ${formatEconomyPointsValue(margin.open_margin_positions || 0)} · 本金 ${formatEconomyPointsValue(margin.open_principal_points || 0)}`,
-    },
-    {
-      title: "利息與 carry",
-      value: `應收 ${formatEconomyPointsValue(margin.open_interest_due_points || 0)} · 已保留 ${formatEconomyPointsValue(lending.interest_retained_points || 0)}`,
-      detail: `micropoints carry ${formatEconomyPointsValue(margin.interest_carry_micropoints || 0)} · 最近事件 ${lending.latest_reserve_event_at || "-"}`,
-    },
-  ], "economy-root-lending-pool-list", "尚無借貸池資料", (row) => `
-    <div class="drive-file-row">
-      <div>
-        <strong>${sanitize(row.title)}</strong>
-        <div class="drive-card-sub">${sanitize(row.value)}</div>
-        <div class="drive-card-sub">${sanitize(row.detail)}</div>
-      </div>
-    </div>
-  `);
-  renderEconomyRootList(safe.reserve_events || [], "economy-root-reserve-events-list", "尚無資金池事件", (row) => {
-    const delta = Number(row.delta_points || 0);
-    const signed = delta >= 0 ? `+${formatEconomyPointsValue(delta)}` : `-${formatEconomyPointsValue(Math.abs(delta))}`;
-    return `
-      <div class="drive-file-row">
-        <div>
-          <strong>${sanitize(row.event_type || "-")} · ${sanitize(signed)} 點</strong>
-          <div class="drive-card-sub">${sanitize(row.created_at || "")} · balance ${sanitize(formatEconomyPointsValue(row.balance_after || 0))}</div>
-          <div class="drive-card-sub">${sanitize(row.reason || "-")} · source ${sanitize(row.source_username || row.source_user_id || "-")}</div>
-        </div>
-      </div>
-    `;
-  });
-}
-
-function renderEconomyRootAllPositions(payload) {
-  const safe = payload && typeof payload === "object" ? payload : {};
-  const summary = safe.summary && typeof safe.summary === "object" ? safe.summary : {};
-  setEconomyText("economy-root-position-spot-count", formatEconomyPointsValue(summary.spot_position_count || 0));
-  setEconomyText("economy-root-position-margin-count", formatEconomyPointsValue(summary.margin_position_count || 0));
-  setEconomyText("economy-root-position-margin-detail", `開倉 ${formatEconomyPointsValue(summary.margin_position_count || 0)}`);
-  setEconomyText("economy-root-position-orders", formatEconomyPointsValue(summary.open_order_count || 0));
-  setEconomyText("economy-root-position-orders-detail", `凍結 ${formatEconomyPointsValue(summary.frozen_order_points || 0)}`);
-  setEconomyText("economy-root-position-bots", formatEconomyPointsValue(summary.total_bot_count || 0));
-  setEconomyText("economy-root-position-bots-detail", `啟用 ${formatEconomyPointsValue(summary.total_enabled_bot_count || 0)} · 網格 ${formatEconomyPointsValue(summary.grid_bot_count || 0)}`);
-  renderEconomyRootList(safe.spot_positions || [], "economy-root-spot-position-list", "尚無現貨倉位", (row) => `
-    <div class="drive-file-row">
-      <div>
-        <strong>${sanitize(row.username || `user:${row.user_id || "-"}`)} · ${sanitize(economyDisplayMarketSymbol(row.market_symbol))}</strong>
-        <div class="drive-card-sub">數量 ${sanitize(formatEconomyQuantityValue(row.quantity))} · 鎖定 ${sanitize(formatEconomyQuantityValue(row.locked_quantity))}</div>
-        <div class="drive-card-sub">均價 ${sanitize(formatEconomyPointsValue(row.avg_cost_points || 0))} · TP ${sanitize(row.take_profit_percent ?? "-")}% · SL ${sanitize(row.stop_loss_percent ?? "-")}%</div>
-      </div>
-    </div>
-  `);
-  renderEconomyRootList(safe.margin_positions || [], "economy-root-margin-position-list", "尚無借貸倉位", (row) => `
-    <div class="drive-file-row">
-      <div>
-        <strong>${sanitize(row.username || `user:${row.user_id || "-"}`)} · ${sanitize(economyDisplayMarketSymbol(row.market_symbol))} · ${sanitize(row.position_type || "-")}</strong>
-        <div class="drive-card-sub">數量 ${sanitize(formatEconomyQuantityValue(row.quantity))} · 入場 ${sanitize(formatEconomyPointsValue(row.entry_price_points || 0))}</div>
-        <div class="drive-card-sub">本金 ${sanitize(formatEconomyPointsValue(row.principal_points || 0))} · 擔保 ${sanitize(formatEconomyPointsValue(row.collateral_points || 0))} · 利息 ${sanitize(formatEconomyPointsValue(row.interest_due_points || 0))}</div>
-        <div class="economy-ledger-hash">${sanitize(row.position_uuid || "")}</div>
-      </div>
-    </div>
-  `);
-  const botRows = [
-    ...(Array.isArray(safe.bots) ? safe.bots.map((row) => ({ ...row, family: "bot" })) : []),
-    ...(Array.isArray(safe.grid_bots) ? safe.grid_bots.map((row) => ({ ...row, family: "grid" })) : []),
-  ];
-  renderEconomyRootList(botRows, "economy-root-bot-position-list", "尚無交易機器人", (row) => {
-    const isGrid = row.family === "grid";
-    const status = row.enabled ? "啟用" : "暫停";
-    const subtitle = isGrid
-      ? `格數 ${formatEconomyPointsValue(row.grid_count || 0)} · 每格 ${formatEconomyPointsValue(row.order_amount_points || 0)} 點 · 掛單 ${formatEconomyPointsValue(row.open_grid_orders || 0)}`
-      : `${sanitize(row.side || "-")} ${sanitize(row.order_type || "-")} · 執行 ${formatEconomyPointsValue(row.run_count || 0)} / ${formatEconomyPointsValue(row.max_runs || 0)}`;
-    const timing = isGrid
-      ? `掃描 ${sanitize(row.last_scan_at || "-")} · 成交 ${formatEconomyPointsValue(row.total_trades || 0)} · 利潤 ${formatEconomyPointsValue(row.total_profit_points || 0)}`
-      : `觸發 ${sanitize(row.trigger_type || "-")} ${sanitize(row.trigger_price_points ?? "-")} · 最近 ${sanitize(row.last_run_at || "-")}`;
-    return `
-      <div class="drive-file-row">
-        <div>
-          <strong>${sanitize(row.username || `user:${row.user_id || "-"}`)} · ${sanitize(row.name || row.bot_uuid || "-")} · ${sanitize(isGrid ? "網格" : row.bot_type || "bot")} · ${sanitize(status)}</strong>
-          <div class="drive-card-sub">${sanitize(economyDisplayMarketSymbol(row.market_symbol))} · ${subtitle}</div>
-          <div class="drive-card-sub">${timing}</div>
-          ${row.last_error ? `<div class="drive-card-sub negative">錯誤 ${sanitize(row.last_error)}</div>` : ""}
-        </div>
-      </div>
-    `;
-  });
 }
 
 function economyGovernanceIncidentRows(governance = {}) {
@@ -2687,7 +3486,7 @@ function renderEconomyRootReport(report) {
   renderEconomyRootList(safeReport.unsealed_transactions, "economy-unsealed-transaction-list", "目前沒有未封交易", (row) => {
     const hash = row.transaction_hash || row.ledger_hash || row.ledger_uuid || "";
     const finality = row.finality && typeof row.finality === "object" ? row.finality : {};
-    const proved = `${Number(finality.proved_count || 0)}/${Number(finality.target_proved_count || 20)} Proved`;
+    const proved = economyTransactionProvedText(finality);
     const status = finality.finality_status || row.status || "unsealed";
     return `
       <div class="drive-file-row">
@@ -2720,7 +3519,6 @@ function renderEconomyRootReport(report) {
 function renderEconomyRecovery(recovery, backups) {
   const safe = recovery && typeof recovery === "object" ? recovery : {};
   const plan = safe.restore_plan && typeof safe.restore_plan === "object" ? safe.restore_plan : {};
-  const rows = Array.isArray(backups) ? backups : [];
   const status = $("economy-recovery-status");
   if (status) {
     status.textContent = safe.safe_mode
@@ -2728,31 +3526,12 @@ function renderEconomyRecovery(recovery, backups) {
       : "safe mode：未啟用";
     status.style.color = safe.safe_mode ? "#ffb74d" : "var(--muted)";
   }
-  const select = $("economy-recovery-backup-id");
-  if (select) {
-    const recommended = plan.recommended_backup_id || "";
-    select.innerHTML = rows.length
-      ? rows.map((backup) => {
-          const label = `${backup.backup_id} · height ${backup.chain_height || 0} · ${backup.created_at || ""}`;
-          return `<option value="${sanitize(backup.backup_id || "")}" ${backup.backup_id === recommended ? "selected" : ""}>${sanitize(label)}</option>`;
-        }).join("")
-      : `<option value="">尚無可用備份</option>`;
-  }
   renderEconomyRootList([plan], "economy-restore-plan-list", "目前沒有恢復方案", (item) => `
     <div class="drive-file-row">
       <div>
-        <strong>建議備份：${sanitize(item.recommended_backup_id || "無")}</strong>
-        <div class="drive-card-sub">目前 height ${Number(item.current_chain_height || 0)} → 備份 height ${Number(item.backup_chain_height || 0)}；wallet 來源：${sanitize(item.wallet_rebuild_source || "-")}</div>
-        <div class="drive-card-sub">可能遺失交易：${Number((item.lost_ledger_range || {}).count || 0)} 筆（${sanitize((item.lost_ledger_range || {}).from_id || "-")} - ${sanitize((item.lost_ledger_range || {}).to_id || "-")}）</div>
-      </div>
-    </div>
-  `);
-  renderEconomyRootList(rows.slice(0, 12), "economy-backup-list", "尚無 ledger backup", (backup) => `
-    <div class="drive-file-row">
-      <div>
-        <strong>${sanitize(backup.kind || "backup")} · height ${Number(backup.chain_height || 0)} · ${backup.verified ? "已驗證" : "驗證失敗"}</strong>
-        <div class="drive-card-sub">${sanitize(backup.created_at || "")} · ledger ${Number(backup.ledger_row_count || 0)} · wallet snapshot ${Number(backup.wallet_count || 0)}</div>
-        <div class="economy-ledger-hash">${sanitize(backup.latest_block_hash || backup.backup_id || "")}</div>
+        <strong>${sanitize(item.mode === "branch_governance_recovery" ? "分支 / 緊急治理恢復" : "鏈異常處理")}</strong>
+        <div class="drive-card-sub">目前 height ${Number(item.current_chain_height || 0)}；備份還原：已停用；wallet 來源：${sanitize(item.wallet_rebuild_source || "append-only ledger replay")}</div>
+        <div class="drive-card-sub">下一步：${(Array.isArray(item.next_steps) ? item.next_steps : ["verify_chain", "review_forensic_bundle", "branch_or_governance_correction"]).map((step) => sanitize(step)).join(" / ")}</div>
       </div>
     </div>
   `);
@@ -2797,7 +3576,7 @@ async function loadEconomyDashboard() {
       } else {
         stopEconomyBlockCountdown();
         renderEconomyTransactions({ transactions: [], summary: {} });
-        setEconomyChainStatus("基本積分模式：PointsChain 私有鏈已停用，錢包地址、Explorer、交易管理與封塊不會載入。");
+        setEconomyChainStatus("基本積分模式：PointsChain 私有鏈已停用，錢包地址、Explorer、鏈上交易與封塊不會載入。");
       }
     } else {
       stopEconomyBlockCountdown();
@@ -2822,14 +3601,15 @@ async function loadEconomyDashboard() {
     const rootCard = $("economy-root-card");
     if (rootCard) rootCard.style.display = currentUser === "root" ? "" : "none";
     const rootReportOk = rootMode && chainFeatureOn ? await loadEconomyRootReport() : true;
-    const shouldLoadRootTrading = rootMode && chainFeatureOn && ["funding-pools", "all-positions"].includes(economyActivePage);
-    const rootTradingOk = shouldLoadRootTrading
-      ? await loadEconomyRootTradingReadOnly({ refreshSnapshot: true, silent: true })
-      : true;
+    if (chainFeatureOn && economyGovernanceCanManage()) {
+      await loadEconomyTreasurySignerCenter({ silent: true });
+    } else {
+      renderEconomyTreasurySignerCenter(null);
+    }
     if (typeof loadTradingDashboard === "function") {
       await loadTradingDashboard();
     }
-    if (rootReportOk !== false && rootTradingOk !== false) {
+    if (rootReportOk !== false) {
       economySetMsg(chainFeatureOn ? "" : "基本積分模式：PointsChain 私有鏈已停用；帳本與服務扣點仍可使用。");
     }
     if (chainFeatureOn) {
@@ -2866,54 +3646,6 @@ async function loadEconomyRootReport() {
   }
 }
 
-async function refreshEconomyRootTradingSnapshots(reason = "root_economy_manual_refresh") {
-  if (currentUser !== "root") return { ok: false, skipped: true };
-  return fetchEconomyJson("/root/trading/sitewide/refresh", {
-    method: "POST",
-    body: JSON.stringify({ reason }),
-  });
-}
-
-async function loadEconomyRootTradingReadOnly(options = {}) {
-  if (currentUser !== "root" || !economyPositionsAvailable()) return true;
-  const refreshSnapshot = !!(options && options.refreshSnapshot);
-  const silent = !!(options && options.silent);
-  try {
-    if (refreshSnapshot) {
-      await refreshEconomyRootTradingSnapshots(
-        economyActivePage === "all-positions"
-          ? "root_all_positions_open_or_refresh"
-          : "root_funding_pools_open_or_refresh",
-      );
-    }
-    const [pools, positions] = await Promise.all([
-      fetchEconomyJson("/root/trading/sitewide/pools", { allowMissingSnapshot: true }),
-      fetchEconomyJson("/root/trading/sitewide/user-positions", { allowMissingSnapshot: true }),
-    ]);
-    if (pools?.snapshot?.missing || positions?.snapshot?.missing) {
-      renderEconomyRootFundingPools({});
-      renderEconomyRootAllPositions({});
-      const queued = typeof enqueueTradingSnapshotRefreshOnce === "function"
-        ? await enqueueTradingSnapshotRefreshOnce("economy_trading_readonly_missing_snapshot")
-        : { ok: false, msg: "背景刷新 helper 尚未載入" };
-      economySetMsg(
-        queued?.ok
-          ? "交易資金池與全用戶倉位快照正在建立；已排入背景刷新，完成後重新整理即可查看。"
-          : `交易資金池與全用戶倉位快照尚未建立；排程失敗：${queued?.msg || "請確認背景 worker"}`,
-        queued?.ok !== false,
-      );
-      return true;
-    }
-    renderEconomyRootFundingPools(pools.pools || {});
-    renderEconomyRootAllPositions(positions.positions || {});
-    if (refreshSnapshot && !silent) economySetMsg("交易資金池與全用戶倉位快照已更新。");
-    return true;
-  } catch (err) {
-    economySetMsg(err.message || "root 交易資金池與倉位資料讀取失敗", false);
-    return false;
-  }
-}
-
 async function spendEconomyItem(itemKey) {
   if (!itemKey) return;
   const item = economyCatalogCache.find((entry) => String(entry.item_key || "") === String(itemKey));
@@ -2937,7 +3669,10 @@ async function spendEconomyItem(itemKey) {
   const referenceType = "price_catalog";
   const referenceId = `catalog:${itemKey}`;
   try {
-    if (chainFeatureOn) economySetMsg("等待冷錢包本機簽署服務費，請確認私鑰備份碼只在可信裝置使用。");
+    if (chainFeatureOn && sourceWallet && !String(sourceWallet).startsWith("pc0")) {
+      economySetMsg("冷錢包直接服務付款已停用；請先入金到 pc0 站內託管錢包後再支付。", false);
+      return;
+    }
     const signature = chainFeatureOn
       ? await economyBuildServiceFeeSignature({
           source: sourceWallet,
@@ -2963,13 +3698,11 @@ async function spendEconomyItem(itemKey) {
     await loadEconomyDashboard();
     const charge = json.charge || {};
     const settlement = json.settlement || {};
-    const threshold = Number(json.batch_threshold_points || settlement.threshold_points || 0);
-    const reserved = Number(settlement.reserved_total_points || 0);
     const msg = settlement.created
-      ? `服務費已凍結並批次結算：${formatEconomyPointsValue(settlement.settled_amount_points || amount)} 點 · batch ${shortEconomyWalletAddress(settlement.batch_uuid || "")}`
+      ? `服務費已由站內託管錢包即時結算：${formatEconomyPointsValue(settlement.settled_amount_points || amount)} 點`
       : chainFeatureOn
-        ? `服務費已凍結：${formatEconomyPointsValue(charge.amount_points || amount)} 點 · 累積 ${formatEconomyPointsValue(reserved)}/${formatEconomyPointsValue(threshold)} 點後批次鏈上扣款`
-        : `服務費已凍結：${formatEconomyPointsValue(charge.amount_points || amount)} 點 · 基本積分模式下累積 ${formatEconomyPointsValue(reserved)}/${formatEconomyPointsValue(threshold)} 點後批次扣款`;
+        ? `服務費已由站內託管錢包即時扣款：${formatEconomyPointsValue(charge.amount_points || amount)} 點`
+        : `服務費已由基本積分帳本即時扣款：${formatEconomyPointsValue(charge.amount_points || amount)} 點`;
     economySetMsg(msg);
   } catch (err) {
     economyNotifyFailure(err, {
@@ -3065,7 +3798,7 @@ function economyProposalUuidsForDispute(row = {}) {
 }
 
 function setEconomyGovernanceCategory(category) {
-  const next = ["all", "dispute", "public", "emergency", "treasury", "mint", "policy"].includes(String(category || ""))
+  const next = ["all", "dispute", "emergency", "treasury", "mint", "policy"].includes(String(category || ""))
     ? String(category || "")
     : "all";
   economyGovernanceCategory = next;
@@ -3202,8 +3935,8 @@ function economyRenderGovernanceProposalCard(proposal = {}, { nested = false } =
   const expanded = proposalUuid && economyExpandedGovernanceProposalUuids.has(proposalUuid);
   const multisig = proposal.multisig && typeof proposal.multisig === "object" ? proposal.multisig : {};
   const multisigText = multisig.required
-    ? `multisig ${Number(multisig.signature_count || 0)}/${Number(multisig.threshold || 0)} · weight ${Number(multisig.signature_weight || 0)}/${Number(multisig.threshold_weight || 0)}${multisig.ready ? " ready" : ""}`
-    : "multisig not required";
+    ? `多簽 ${Number(multisig.signature_count || 0)}/${Number(multisig.threshold || 0)} · 權重 ${Number(multisig.signature_weight || 0)}/${Number(multisig.threshold_weight || 0)}${multisig.ready ? " · 可執行" : ""}`
+    : "不需要多簽";
   const signerAddress = economyGovernanceSignerAddress(proposal);
   const signerMeta = Array.isArray(multisig.policy?.signers)
     ? multisig.policy.signers.find((item) => String(item.wallet_address || "").trim().toLowerCase() === signerAddress)
@@ -3292,119 +4025,168 @@ function parseEconomyGovernanceClaims(value) {
   }
 }
 
-function syncGovernanceTreasuryDestination() {
-  const action = String($("economy-governance-treasury-action")?.value || "").trim().toUpperCase();
-  const input = $("economy-governance-treasury-destination");
-  if (!input) return;
-  if (action === "EXCHANGE_FUND_REPLENISH") {
-    const address = economyFundAddressCache.exchange_fund || "";
-    if (address && address !== "-") input.value = address;
-    input.readOnly = true;
-    input.placeholder = "EXCHANGE Fund system address";
-  } else {
-    input.readOnly = false;
-    input.placeholder = "pc1...";
-  }
+function economySignedPointsValue(value) {
+  const amount = Number(value || 0);
+  return `${amount > 0 ? "+" : ""}${formatEconomyPointsValue(amount)}`;
+}
+
+function economyTreasuryFlowStatusLabel(flow, analysis) {
+  const status = String(flow?.status || analysis?.status || "unknown").toLowerCase();
+  if (status === "green") return "收支平衡";
+  if (status === "yellow") return "需留意支出";
+  if (status === "red") return "資金不足";
+  return "待確認";
+}
+
+function economyFlowMeterHtml({ inflow = 0, outflow = 0, net = 0, leftLabel = "流出", rightLabel = "流入" } = {}) {
+  const maxValue = Math.max(1, Number(inflow || 0), Number(outflow || 0), Math.abs(Number(net || 0)));
+  const inWidth = Math.min(100, Math.round((Number(inflow || 0) / maxValue) * 100));
+  const outWidth = Math.min(100, Math.round((Number(outflow || 0) / maxValue) * 100));
+  const netClass = Number(net || 0) >= 0 ? "finance-flow-net-positive" : "finance-flow-net-negative";
+  return `
+    <div class="finance-flow-meter-bar" aria-label="${sanitize(leftLabel)}與${sanitize(rightLabel)}比較">
+      <div class="finance-flow-meter-side out"><div class="finance-flow-meter-fill" style="width:${outWidth}%"></div></div>
+      <div class="finance-flow-meter-side in"><div class="finance-flow-meter-fill" style="width:${inWidth}%"></div></div>
+    </div>
+    <div class="finance-flow-meter-labels">
+      <span>${sanitize(leftLabel)} ${formatEconomyPointsValue(outflow)}</span>
+      <strong class="${netClass}">淨額 ${economySignedPointsValue(net)}</strong>
+      <span>${sanitize(rightLabel)} ${formatEconomyPointsValue(inflow)}</span>
+    </div>
+  `;
+}
+
+function economyTreasuryFlowRow(row, maxAbs = 1) {
+  const inflow = Number(row?.inflow_points || row?.amount_points || 0);
+  const outflow = Number(row?.outflow_points || 0);
+  const net = Number(row?.net_points ?? (inflow - outflow));
+  const direction = net < 0 || String(row?.direction || "") === "outflow" ? "outflow" : (String(row?.direction || "") === "pending" ? "pending" : "inflow");
+  const amountText = direction === "outflow"
+    ? `-${formatEconomyPointsValue(outflow || Math.abs(net))}`
+    : economySignedPointsValue(inflow || net);
+  const meta = [
+    row?.category_key || row?.transaction_type || row?.item_key || "",
+    `${Number(row?.event_count ?? row?.count ?? row?.charge_count ?? 0)} 筆`,
+    row?.latest_at || row?.last_activity_at || "",
+    row?.ledger_only ? "legacy ledger 補列" : "",
+    row?.reserved_points ? `待處理 ${formatEconomyPointsValue(row.reserved_points)} 點` : "",
+    row?.cancelled_points ? `取消 ${formatEconomyPointsValue(row.cancelled_points)} 點` : "",
+  ].filter(Boolean).join(" · ");
+  return `
+    <div class="finance-flow-tile economy-flow-row-${sanitize(direction)}" data-flow-direction="${sanitize(direction)}">
+      <strong>${sanitize(row?.label || row?.item_name || row?.transaction_type || row?.item_key || "-")}</strong>
+      <b>${sanitize(amountText)} 點</b>
+      <small>${sanitize(meta || "-")}</small>
+    </div>
+  `;
+}
+
+function renderEconomyTreasuryFlowList(id, title, subtitle, rows, emptyText) {
+  const list = $(id);
+  if (!list) return;
+  const items = Array.isArray(rows) ? rows : [];
+  const maxAbs = items.reduce((max, row) => Math.max(max, Math.abs(Number(row?.net_points || row?.amount_points || 0)), Number(row?.inflow_points || 0), Number(row?.outflow_points || 0)), 1);
+  list.innerHTML = `
+    <div class="finance-flow-list-heading">
+      <div>
+        <strong>${sanitize(title)}</strong>
+        <small>${sanitize(subtitle || "")}</small>
+      </div>
+    </div>
+    ${items.length ? items.slice(0, 20).map((row) => economyTreasuryFlowRow(row, maxAbs)).join("") : `<div class="drive-empty">${sanitize(emptyText)}</div>`}
+  `;
 }
 
 function renderEconomyTreasuryAnalysis(payload) {
   const analysis = payload && typeof payload === "object" ? payload : {};
   const summary = analysis.summary && typeof analysis.summary === "object" ? analysis.summary : {};
+  const flow = analysis.flow_summary && typeof analysis.flow_summary === "object" ? analysis.flow_summary : {};
   const settlement = analysis.settlement_policy && typeof analysis.settlement_policy === "object" ? analysis.settlement_policy : {};
-  setEconomyText("economy-treasury-analysis-updated-at", analysis.generated_at ? `最後更新 ${analysis.generated_at}` : "等待即時資料");
+  const period = analysis.period && typeof analysis.period === "object" ? analysis.period : {};
+  const periodText = period.label ? `本月 ${period.label}` : "本月";
+  const inflow = Number(flow.total_inflow_points ?? summary.income_total_points ?? 0);
+  const outflow = Number(flow.total_outflow_points ?? summary.expense_total_points ?? 0);
+  const net = Number(flow.net_flow_points ?? summary.net_points ?? (inflow - outflow));
+  const balance = Number(flow.current_balance_points ?? summary.official_wallet_balance_points ?? 0);
+  const mintAllocation = Number(summary.non_operating_mint_allocation_points || 0);
+  setEconomyText("economy-treasury-analysis-updated-at", analysis.generated_at ? `${periodText} · 最後更新 ${analysis.generated_at}` : "等待即時資料");
+  const categories = Array.isArray(flow.categories) ? flow.categories : [];
   const summaryEl = $("economy-treasury-analysis-summary");
   if (summaryEl) {
-    const tone = analysis.status === "red" ? "bad" : (analysis.status === "yellow" ? "warn" : "good");
-    summaryEl.innerHTML = [
-      economyFormulaCard("收支狀態", String(analysis.status || "unknown").toUpperCase(), tone),
-      economyFormulaCard("官方錢包", `${formatEconomyPointsValue(summary.official_wallet_balance_points || 0)} 點`),
-      economyFormulaCard("收入 / 支出", `${formatEconomyPointsValue(summary.income_total_points || 0)} / ${formatEconomyPointsValue(summary.expense_total_points || 0)} 點`),
-      economyFormulaCard("站內服務待結算", `${formatEconomyPointsValue(summary.pending_service_fee_points || 0)} 點`),
-      economyFormulaCard("已批次結算", `${formatEconomyPointsValue(summary.settled_service_fee_points || 0)} 點`),
-      economyFormulaCard("下一次批次差額", `${formatEconomyPointsValue(summary.next_service_fee_settlement_remaining_points || 0)} 點`),
-    ].join("");
-  }
-  const serviceList = $("economy-treasury-service-fee-list");
-  if (serviceList) {
-    const items = Array.isArray(analysis.service_fee_items) ? analysis.service_fee_items : [];
-    const recent = Array.isArray(analysis.recent_service_fee_settlements) ? analysis.recent_service_fee_settlements : [];
-    const rows = [`
-      <div class="drive-file-row">
+    summaryEl.innerHTML = `
+      <div class="finance-flow-panel-head">
         <div>
-          <strong>站內服務費結算</strong>
-          <div class="drive-card-sub">策略 ${sanitize(settlement.service_fee_layer || "-")} · 滿 ${formatEconomyPointsValue(settlement.threshold_points || 0)} 點批次 ${sanitize(settlement.actual_chain_transfer_action || "-")} → ${sanitize(settlement.actual_chain_transfer_destination_fund_key || "-")}</div>
-          <div class="drive-card-sub">${sanitize(settlement.note || "")}</div>
+          <strong>官方財庫本月收支</strong>
+          <small>類似健康度的站內錢包流量檢視：左側流出、右側流入，中間看淨額。</small>
         </div>
+        <span>${sanitize(economyTreasuryFlowStatusLabel(flow, analysis))}</span>
       </div>
-    `];
-    rows.push(...items.slice(0, 12).map((item) => `
-      <div class="drive-file-row">
-        <div>
-          <strong>${sanitize(item.item_name || item.item_key || "-")}</strong>
-          <div class="drive-card-sub">${sanitize(item.item_key || "")} · 已結算 ${formatEconomyPointsValue(item.settled_points || 0)} 點 · 待結算 ${formatEconomyPointsValue(item.reserved_points || 0)} 點 · ${Number(item.charge_count || 0)} 筆</div>
-          <div class="drive-card-sub">最近活動 ${sanitize(item.last_activity_at || "-")}</div>
-        </div>
+      <div class="finance-flow-meter">
+        ${economyFlowMeterHtml({ inflow, outflow, net, leftLabel: "官方錢包流出", rightLabel: "官方錢包流入" })}
       </div>
-    `));
-    if (recent.length) {
-      rows.push(`
-        <div class="drive-file-row">
-          <div>
-            <strong>最近實際鏈上批次轉帳</strong>
-            <div class="drive-card-sub">${recent.slice(0, 4).map((row) => `${formatEconomyPointsValue(row.amount_points || 0)} 點 · ${shortEconomyWalletAddress(row.ledger_uuid || "")} · ${row.created_at || "-"}`).join("<br>")}</div>
-          </div>
-        </div>
-      `);
-    }
-    serviceList.innerHTML = rows.join("") || `<div class="drive-empty">尚無站內服務費資料。</div>`;
-  }
-  const renderCategoryList = (id, title, rows, emptyText) => {
-    const list = $(id);
-    if (!list) return;
-    const items = Array.isArray(rows) ? rows : [];
-    list.innerHTML = items.length
-      ? `<div class="drive-file-row"><div><strong>${sanitize(title)}</strong><div class="drive-card-sub">依官方 Treasury fund ledger 分類。</div></div></div>` + items.slice(0, 12).map((item) => `
-          <div class="drive-file-row">
-            <div>
-              <strong>${sanitize(item.label || item.transaction_type || "-")} · ${formatEconomyPointsValue(item.amount_points || 0)} 點</strong>
-              <div class="drive-card-sub">${sanitize(item.transaction_type || "-")} · ${Number(item.count || 0)} 筆 · ${sanitize(item.latest_at || "-")}${item.ledger_only ? " · legacy ledger 補列" : ""}</div>
-            </div>
-          </div>
-        `).join("")
-      : `<div class="drive-empty">${sanitize(emptyText)}</div>`;
-  };
-  renderCategoryList("economy-treasury-income-list", "官方 Treasury 收入", analysis.income_categories, "目前沒有可見官方 Treasury 收入。");
-  renderCategoryList("economy-treasury-expense-list", "官方 Treasury 支出", analysis.expense_categories, "目前沒有可見官方 Treasury 支出。");
-  const pricingList = $("economy-treasury-pricing-fit-list");
-  if (pricingList) {
-    const fit = Array.isArray(analysis.pricing_fit) ? analysis.pricing_fit : [];
-    const manager = analysis.perspectives?.manager || {};
-    pricingList.innerHTML = `
-      <div class="drive-file-row">
-        <div>
-          <strong>服務費定價擬合</strong>
-          <div class="drive-card-sub">${sanitize(manager.summary || "以低額高頻服務費、投幣抽成、曝光型功能費支撐官方 Treasury；支出仍走治理與多簽。")}</div>
-        </div>
+      <div class="economy-flow-summary">
+        <div><span>流入總額</span><strong>${formatEconomyPointsValue(inflow)} 點</strong><small>服務費、投幣抽成與治理收入</small></div>
+        <div><span>流出總額</span><strong>${formatEconomyPointsValue(outflow)} 點</strong><small>撥款、補助與事故賠付</small></div>
+        <div><span>收支淨額</span><strong>${economySignedPointsValue(net)} 點</strong><small>${sanitize(periodText)}淨流量</small></div>
+        <div><span>官方錢包餘額</span><strong>${formatEconomyPointsValue(balance)} 點</strong><small>${sanitize(economyTreasuryFlowStatusLabel(flow, analysis))}</small></div>
       </div>
-      ${fit.slice(0, 10).map((item) => {
-        const delta = item.delta_points === null || item.delta_points === undefined ? "尚未建立" : `${Number(item.delta_points || 0) >= 0 ? "+" : ""}${Number(item.delta_points || 0)} 點`;
-        return `<div class="drive-file-row">
-          <div>
-            <strong>${sanitize(item.item_name || item.item_key || "-")} · 建議 ${formatEconomyPointsValue(item.recommended_points || 0)} 點</strong>
-            <div class="drive-card-sub">${sanitize(item.item_key || "")} · 目前 ${item.current_points === null || item.current_points === undefined ? "未設定" : `${formatEconomyPointsValue(item.current_points)} 點`} · 差額 ${sanitize(delta)}</div>
-            <div class="drive-card-sub">${sanitize(item.rationale || "")}</div>
-          </div>
-        </div>`;
-      }).join("")}
+      <div class="economy-flow-note">官方錢包收支由 fund ledger / pc0 站內帳本 replay；pc0 服務費收入、影音投幣抽成會列入官方 Treasury，鏈上交易 fee 與加速費仍進 BURN，不算官方收益。Mint 發行撥補${mintAllocation ? ` ${formatEconomyPointsValue(mintAllocation)} 點` : ""}只列為供給/撥補，不列入營運收入。</div>
     `;
   }
+  const recent = Array.isArray(analysis.recent_service_fee_revenue_ledgers)
+    ? analysis.recent_service_fee_revenue_ledgers
+    : (Array.isArray(analysis.recent_service_fee_settlements) ? analysis.recent_service_fee_settlements : []);
+  const serviceList = $("economy-treasury-service-fee-list");
+  if (serviceList) {
+    serviceList.innerHTML = `
+      <div class="economy-flow-list-heading">
+        <div>
+          <strong>${sanitize(periodText)}站內服務費收入規則</strong>
+          <small>策略 ${sanitize(settlement.service_fee_layer || "-")} · ${sanitize(settlement.service_fee_ledger_action || "-")} → ${sanitize(settlement.service_fee_destination_fund_key || "-")}</small>
+        </div>
+      </div>
+      <div class="economy-flow-note">${sanitize(settlement.note || "")} 計費單價請到系統管理「伺服器設定 > 計費」或各功能右上快速設定調整。</div>
+      ${recent.length ? recent.slice(0, 4).map((row) => economyTreasuryFlowRow({
+        label: "最近服務費收入帳本",
+        category_key: shortEconomyWalletAddress(row.ledger_uuid || ""),
+        direction: "inflow",
+        inflow_points: Number(row.amount_points || 0),
+        net_points: Number(row.amount_points || 0),
+        event_count: Number(row.charge_count || 0),
+        latest_at: row.created_at || "",
+      }, Math.max(1, ...recent.map((item) => Number(item.amount_points || 0))))).join("") : `<div class="drive-empty">尚無站內服務費資料。</div>`}
+    `;
+  }
+  const inflowRows = categories.filter((row) => Number(row?.inflow_points || 0) > 0 || String(row?.direction || "") === "inflow");
+  const outflowRows = categories.filter((row) => Number(row?.outflow_points || 0) > 0 || String(row?.direction || "") === "outflow");
+  const serviceRows = Array.isArray(analysis.service_fee_flow_categories) ? analysis.service_fee_flow_categories : [];
+  renderEconomyTreasuryFlowList("economy-treasury-income-list", "官方錢包流入", "依官方 Treasury fund ledger 分類。", inflowRows, "目前沒有可見官方 Treasury 流入。");
+  renderEconomyTreasuryFlowList("economy-treasury-expense-list", "官方錢包流出", "依官方 Treasury fund ledger 分類。", outflowRows, "目前沒有可見官方 Treasury 流出。");
+  renderEconomyTreasuryFlowList("economy-treasury-monthly-feature-list", "積分類型 / 各功能服務費收入", "只統計已入帳至官方 Treasury 的 pc0 站內服務費；這裡是看板，不提供定價調整。", serviceRows, "本月尚無站內服務費收入。");
+}
+
+function economyTreasurySignerRoleLabel(role) {
+  const value = String(role || "").trim();
+  if (value === "super_admin") return "最高管理者";
+  if (value === "manager") return "管理者";
+  return value || "-";
+}
+
+function economyTreasurySignerWeightLabel(weight) {
+  return `簽署權重 ${Number(weight || 0)}`;
 }
 
 function renderEconomyTreasurySignerCenter(payload = null) {
   const card = $("economy-treasury-signer-center-card");
-  if (!card) return;
-  if (!economyGovernanceCanManage()) {
-    card.style.display = "none";
+  const managerCard = $("economy-manager-points-management-card");
+  const canManage = economyGovernanceCanManage();
+  const managerMode = canManage && currentUser !== "root";
+  relocateEconomyOfficialWalletCard(currentUser === "root");
+  if (managerCard) managerCard.style.display = managerMode ? "" : "none";
+  if (!card && !managerCard) return;
+  if (!canManage) {
+    if (card) card.style.display = "none";
+    if (managerCard) managerCard.style.display = "none";
     return;
   }
   const data = payload && typeof payload === "object" ? payload : {};
@@ -3415,20 +4197,29 @@ function renderEconomyTreasurySignerCenter(payload = null) {
       ...economyFundAddressCache,
       ...Object.fromEntries(Object.entries(fundAddresses).map(([key, value]) => [key, String(value || "").trim()])),
     };
-    syncGovernanceTreasuryDestination();
   }
   const policy = data.policy && typeof data.policy === "object" ? data.policy : {};
+  if (data.economy_layer && typeof data.economy_layer === "object") {
+    renderEconomyLayerSummary({ stats: { economy_layer: data.economy_layer } });
+  }
   const signers = Array.isArray(policy.signers) ? policy.signers : [];
   const proposals = Array.isArray(data.pending_proposals) ? data.pending_proposals : [];
   const signable = Array.isArray(data.signable) ? data.signable : [];
-  card.style.display = "";
-  setEconomyText("economy-treasury-signer-center-status", data.policy_error ? `多簽政策異常：${data.policy_error}` : "官方財庫由 manager+ signer threshold 共同控制；root 只在官方財庫案具 veto。");
+  if (card) card.style.display = "";
+  setEconomyText("economy-treasury-signer-center-status", data.policy_error ? `多簽政策異常：${data.policy_error}` : "官方財庫收支、餘額 replay 與待簽治理集中檢視；manager+ signer threshold 共同控制。");
   setEconomyText("economy-treasury-signer-official-balance", `${formatEconomyPointsValue(wallet.balance || 0)} 點`);
   setEconomyText("economy-treasury-signer-official-address", wallet.address || "-");
-  setEconomyText("economy-treasury-signer-threshold", `${Number(policy.threshold || 0)}/${Number(policy.signer_count || signers.length || 0)} · weight ${Number(policy.threshold_weight || 0)}/${Number(policy.total_weight || 0)}`);
-  setEconomyText("economy-treasury-signer-policy", `${sanitize(policy.wallet_type || "official_treasury_multisig")} · ${sanitize(policy.policy_version || "-")}`);
+  setEconomyText("economy-treasury-signer-threshold", `門檻 ${Number(policy.threshold || 0)}/${Number(policy.signer_count || signers.length || 0)} 位 · 權重 ${Number(policy.threshold_weight || 0)}/${Number(policy.total_weight || 0)}`);
+  setEconomyText("economy-treasury-signer-policy", `官方財庫收支分析 · 多簽規則 ${sanitize(policy.policy_version || "-")}`);
   setEconomyText("economy-treasury-signer-pending-count", `${signable.length} / ${proposals.length}`);
   setEconomyText("economy-treasury-signer-branch", `branch ${data.canonical_branch || "-"}`);
+  setEconomyText("economy-manager-points-status", data.policy_error ? `多簽政策異常：${data.policy_error}` : "官方財庫、治理簽署與疑義事件集中管理；私有鏈底層操作保留 root。");
+  setEconomyText("economy-manager-points-official-balance", `${formatEconomyPointsValue(wallet.balance || 0)} 點`);
+  setEconomyText("economy-manager-points-official-address", wallet.address || "-");
+  setEconomyText("economy-manager-points-threshold", `門檻 ${Number(policy.threshold || 0)}/${Number(policy.signer_count || signers.length || 0)} 位 · 權重 ${Number(policy.threshold_weight || 0)}/${Number(policy.total_weight || 0)}`);
+  setEconomyText("economy-manager-points-policy", `官方財庫收支 / 多簽規則 ${sanitize(policy.policy_version || "-")}`);
+  setEconomyText("economy-manager-points-pending-count", `${signable.length} / ${proposals.length}`);
+  setEconomyText("economy-manager-points-branch", `branch ${data.canonical_branch || "-"}`);
   renderEconomyTreasuryAnalysis(data.treasury_analysis || null);
   const signerList = $("economy-treasury-signer-list");
   if (signerList) {
@@ -3436,8 +4227,8 @@ function renderEconomyTreasurySignerCenter(payload = null) {
       ? signers.map((signer) => `
           <div class="drive-file-row">
             <div>
-              <strong>${sanitize(signer.role || "-")} · weight ${Number(signer.weight || 0)}</strong>
-              <div class="drive-card-sub">${sanitize(signer.wallet_type || "")} · ${sanitize(signer.custody_mode || "")} · ${sanitize(signer.device_id || "")}</div>
+              <strong>${sanitize(economyTreasurySignerRoleLabel(signer.role))} · ${sanitize(economyTreasurySignerWeightLabel(signer.weight))}</strong>
+              <div class="drive-card-sub">官方財庫簽署人 · ${sanitize(signer.custody_mode || "")} · ${sanitize(signer.device_id || "")}</div>
               <button class="economy-ledger-hash economy-explorer-address" type="button" data-explorer-query="${sanitize(signer.wallet_address || "")}">${sanitize(signer.wallet_address || "-")}</button>
             </div>
           </div>
@@ -3450,7 +4241,7 @@ function renderEconomyTreasurySignerCenter(payload = null) {
       ? signable.map((item) => `
           <div class="drive-file-row">
             <div>
-              <strong>${sanitize(economyGovernanceActionLabel(item.action_type))} · ${Number(item.signature_count || 0)}/${Number(item.threshold || 0)} · weight ${Number(item.signature_weight || 0)}/${Number(item.threshold_weight || 0)}</strong>
+              <strong>${sanitize(economyGovernanceActionLabel(item.action_type))} · 簽署 ${Number(item.signature_count || 0)}/${Number(item.threshold || 0)} · 權重 ${Number(item.signature_weight || 0)}/${Number(item.threshold_weight || 0)}</strong>
               <div class="drive-card-sub">timelock ${sanitize(item.timelock_until || "-")} · ${sanitize(shortEconomyWalletAddress(item.target_wallet_address || ""))} · ${formatEconomyPointsValue(item.requested_amount || 0)} 點</div>
               <div class="drive-card-sub">signing hash ${sanitize(item.signing_payload_hash || "-")} · payload ${sanitize(item.execution_payload_hash || "-")}</div>
               <div class="economy-ledger-hash">${sanitize(item.proposal_uuid || "")}</div>
@@ -3459,6 +4250,16 @@ function renderEconomyTreasurySignerCenter(payload = null) {
         `).join("")
       : `<div class="drive-empty">目前沒有需要你簽署的官方財庫提案。</div>`;
   }
+  renderEconomyRootList(signable, "economy-manager-points-pending-list", "目前沒有需要你簽署的官方財庫提案。", (item) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(economyGovernanceActionLabel(item.action_type))} · 簽署 ${Number(item.signature_count || 0)}/${Number(item.threshold || 0)} · 權重 ${Number(item.signature_weight || 0)}/${Number(item.threshold_weight || 0)}</strong>
+        <div class="drive-card-sub">timelock ${sanitize(item.timelock_until || "-")} · ${sanitize(shortEconomyWalletAddress(item.target_wallet_address || ""))} · ${formatEconomyPointsValue(item.requested_amount || 0)} 點</div>
+        <div class="economy-ledger-hash">${sanitize(item.proposal_uuid || "")}</div>
+      </div>
+    </div>
+  `);
+  if (!card) return;
   card.querySelectorAll("[data-explorer-query]").forEach((btn) => {
     if (btn.dataset.explorerBound === "1") return;
     btn.dataset.explorerBound = "1";
@@ -3483,10 +4284,16 @@ async function loadEconomyTreasurySignerCenter({ silent = false } = {}) {
     return true;
   } catch (err) {
     economyTreasurySignerCenterCache = null;
-    renderEconomyTreasurySignerCenter({ policy_error: err.message || "官方財庫多簽讀取失敗" });
-    if (!silent) economyGovernanceMsg(err.message || "官方財庫多簽讀取失敗", false);
+    renderEconomyTreasurySignerCenter({ policy_error: err.message || "官方財庫收支分析讀取失敗" });
+    if (!silent) economyGovernanceMsg(err.message || "官方財庫收支分析讀取失敗", false);
     return false;
   }
+}
+
+async function refreshEconomyOfficialWalletManagement() {
+  if (!economyChainEnabled() || !economyGovernanceCanManage()) return;
+  if (currentUser === "root") await loadEconomyRootReport();
+  await loadEconomyTreasurySignerCenter({ silent: false });
 }
 
 function renderEconomyGovernance(payload = {}) {
@@ -3502,23 +4309,12 @@ function renderEconomyGovernance(payload = {}) {
       : "未選取疑義交易案件；點選上方案件後，該案件的治理提案會直接展開在案件下方。";
   }
   const showCreateGroup = (category) => economyGovernanceCategory === "all" || economyGovernanceCategory === category;
-  const publicTools = $("economy-public-governance-create-details");
-  if (publicTools) publicTools.style.display = economyGovernanceCanProposePublic() && showCreateGroup("public") ? "" : "none";
-  const publicHint = $("economy-public-governance-hint");
-  if (publicHint) {
-    publicHint.textContent = economyGovernanceCanManage()
-      ? "manager+ 可直接建立公共治理提案；root 沒有公共案 veto。"
-      : "trusted 以上會員可送出公共提案；一般會員需先提升信任等級。一般用戶提案會進 REVIEW，需 manager+ sponsor 才開放投票。";
-  }
-  const treasuryTools = $("economy-governance-treasury-create-details");
-  if (treasuryTools) treasuryTools.style.display = economyGovernanceCanManage() && showCreateGroup("treasury") ? "" : "none";
   const mintTools = $("economy-governance-mint-create-details");
   if (mintTools) mintTools.style.display = economyGovernanceCanManage() && showCreateGroup("mint") ? "" : "none";
   const policyTools = $("economy-governance-policy-create-details");
   if (policyTools) policyTools.style.display = (economyGovernanceCanManage() || economyGovernanceCanProposePublic()) && showCreateGroup("policy") ? "" : "none";
   const emergencyTools = $("economy-governance-emergency-create-details");
   if (emergencyTools) emergencyTools.style.display = economyGovernanceCanManage() && showCreateGroup("emergency") ? "" : "none";
-  syncGovernanceTreasuryDestination();
   setEconomyText("economy-governance-proposal-count", String(proposals.length));
   const reviewCount = proposals.filter((item) => economyGovernanceStatusBucket(item) === "review").length;
   const votingCount = proposals.filter((item) => economyGovernanceStatusBucket(item) === "voting").length;
@@ -3557,35 +4353,16 @@ function renderEconomyGovernance(payload = {}) {
 async function loadEconomyGovernance({ silent = false } = {}) {
   if (!currentUser || !economyChainEnabled()) {
     renderEconomyGovernance({ proposals: [] });
-    renderEconomyTreasurySignerCenter(null);
     return false;
   }
   try {
     const json = await fetchEconomyJson("/points/governance/proposals?limit=50");
     renderEconomyGovernance(json);
-    if (economyGovernanceCanManage()) await loadEconomyTreasurySignerCenter({ silent: true });
-    else renderEconomyTreasurySignerCenter(null);
     if (!silent) economyGovernanceMsg("治理提案已更新。");
     return true;
   } catch (err) {
     if (!silent) economyNotifyFailure(err, { msgFn: economyGovernanceMsg, label: "治理提案", fallback: "治理提案讀取失敗" });
     return false;
-  }
-}
-
-async function createGovernanceAddressRiskProposal() {
-  const address = String($("economy-governance-scam-address")?.value || "").trim();
-  const reason = String($("economy-governance-scam-reason")?.value || "").trim();
-  const evidence = String($("economy-governance-scam-evidence")?.value || "").trim();
-  try {
-    const json = await fetchEconomyJson("/points/governance/address-risk", {
-      method: "POST",
-      body: JSON.stringify({ wallet_address: address, reason, evidence }),
-    });
-    economyNotifySuccess(`已建立詐騙地址標記提案：${json.proposal?.proposal_uuid || ""}`, { msgFn: economyGovernanceMsg, label: "治理提案" });
-    await loadEconomyGovernance({ silent: true });
-  } catch (err) {
-    economyNotifyFailure(err, { msgFn: economyGovernanceMsg, label: "治理提案", fallback: "詐騙地址標記提案失敗" });
   }
 }
 
@@ -3650,58 +4427,6 @@ async function createGovernanceEmergencyLockdownProposal() {
     await loadEconomyGovernance({ silent: true });
   } catch (err) {
     economyNotifyFailure(err, { msgFn: economyGovernanceMsg, label: "治理提案", fallback: "緊急鎖定提案失敗" });
-  }
-}
-
-async function createGovernanceWalletFreezeProposal() {
-  const address = String($("economy-governance-freeze-address")?.value || "").trim();
-  const action = String($("economy-governance-freeze-action")?.value || "freeze").trim();
-  const reason = String($("economy-governance-freeze-reason")?.value || "").trim();
-  const evidence = String($("economy-governance-freeze-evidence")?.value || "").trim();
-  try {
-    const json = await fetchEconomyJson("/points/governance/wallet-freeze", {
-      method: "POST",
-      body: JSON.stringify({ wallet_address: address, action, reason, evidence }),
-    });
-    economyNotifySuccess(`已建立${action === "unfreeze" ? "解凍" : "凍結"}提案：${json.proposal?.proposal_uuid || ""}`, { msgFn: economyGovernanceMsg, label: "治理提案" });
-    await loadEconomyGovernance({ silent: true });
-  } catch (err) {
-    economyNotifyFailure(err, { msgFn: economyGovernanceMsg, label: "治理提案", fallback: "錢包凍結治理提案失敗" });
-  }
-}
-
-async function createGovernanceTreasuryProposal() {
-  const actionType = String($("economy-governance-treasury-action")?.value || "TREASURY_TRANSFER").trim();
-  syncGovernanceTreasuryDestination();
-  if (actionType === "EXCHANGE_FUND_REPLENISH" && !String(economyFundAddressCache.exchange_fund || "").trim()) {
-    await loadEconomyTreasurySignerCenter({ silent: true });
-    syncGovernanceTreasuryDestination();
-  }
-  const destination = actionType === "EXCHANGE_FUND_REPLENISH"
-    ? String(economyFundAddressCache.exchange_fund || $("economy-governance-treasury-destination")?.value || "").trim()
-    : String($("economy-governance-treasury-destination")?.value || "").trim();
-  const amount = Math.floor(Number($("economy-governance-treasury-amount")?.value || 0));
-  const reason = String($("economy-governance-treasury-reason")?.value || "").trim();
-  if (!destination || !Number.isFinite(amount) || amount <= 0) {
-    economyGovernanceMsg("請確認官方財庫提案的 To 錢包地址與 Value", false);
-    return;
-  }
-  try {
-    const json = await fetchEconomyJson("/admin/points/governance/treasury-transfer", {
-      method: "POST",
-      body: JSON.stringify({
-        action_type: actionType,
-        destination_wallet_address: destination,
-        amount,
-        reason,
-        reference: economyRequestId("official_treasury_proposal"),
-      }),
-    });
-    const proposalUuid = json.proposal?.proposal_uuid || json.proposal_uuid || "";
-    economyNotifySuccess(`官方財庫提案已送出：${proposalUuid || actionType}；治理通過、timelock 與官方多簽簽合後才會執行。`, { msgFn: economyGovernanceMsg, label: "治理提案" });
-    await loadEconomyGovernance({ silent: true });
-  } catch (err) {
-    economyNotifyFailure(err, { msgFn: economyGovernanceMsg, label: "治理提案", fallback: "官方財庫提案送出失敗" });
   }
 }
 
@@ -3973,20 +4698,20 @@ async function sendEconomyRootOfficialGrant() {
       btn.disabled = true;
       btn.textContent = "送出中...";
     }
-    const json = await fetchEconomyJson("/root/points/official-wallet/grant", {
+    const json = await fetchEconomyJson("/admin/points/governance/treasury-transfer", {
       method: "POST",
       body: JSON.stringify({
         destination_wallet_address: destination,
         amount,
         reason,
-        request_uuid: economyRequestId("official_wallet_grant"),
+        reference: economyRequestId("official_wallet_grant"),
       }),
     });
     const proposalUuid = json.proposal?.proposal_uuid || json.proposal_uuid || "";
     const warningSuffix = economyWarningSuffix(json);
     const successMessage = proposalUuid
-      ? `官方 Treasury 撥款提案已送出：${proposalUuid}；需 manager+ 投票、root veto 檢查、timelock 與官方多簽簽合後才會送出鏈上交易。`
-      : "官方 Treasury 撥款提案已送出；需治理通過與官方多簽簽合後才會送出鏈上交易。";
+      ? `官方 Treasury 撥款提案已送出：${proposalUuid}；需 manager+ 投票、root veto 檢查、timelock 與官方多簽簽合後才會正式執行。`
+      : "官方 Treasury 撥款提案已送出；需治理通過與官方多簽簽合後才會正式執行。";
     const visibleMessage = `${successMessage}${warningSuffix}`;
     economyRootOfficialGrantMsg(visibleMessage, !warningSuffix);
     setEconomyActivePage("explorer");
@@ -4043,48 +4768,12 @@ async function verifyPointsChain() {
 
 async function createPointsChainBackup() {
   if (currentUser !== "root") return;
-  if (!economyChainEnabled()) {
-    economySetMsg("PointsChain 私有鏈已停用，無法建立鏈備份。", false);
-    return;
-  }
-  try {
-    const json = await fetchEconomyJson("/root/points/chain/backups", {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
-    economySetMsg(json.ok ? `已建立 ledger backup：${json.backup_id || ""}` : "建立備份失敗", !!json.ok);
-    await loadEconomyRootReport();
-  } catch (err) {
-    economySetMsg(err.message || "建立備份失敗", false);
-  }
+  economySetMsg("PointsChain ledger backup/restore 已停用；鏈異常請使用 safe mode、forensic bundle、分支與緊急治理。", false);
 }
 
 async function approvePointsChainRecovery() {
   if (currentUser !== "root") return;
-  if (!economyChainEnabled()) {
-    economySetMsg("PointsChain 私有鏈已停用，無法執行鏈恢復。", false);
-    return;
-  }
-  const backupId = $("economy-recovery-backup-id")?.value || "";
-  const confirmText = $("economy-recovery-confirm")?.value || "";
-  if (!backupId || confirmText !== "RESTORE POINTSCHAIN") {
-    economySetMsg("請選擇備份，並輸入確認字串 RESTORE POINTSCHAIN", false);
-    return;
-  }
-  if (!confirm("確認要用選定 ledger backup 恢復 PointsChain？wallet 會由 ledger 重建。")) return;
-  try {
-    const json = await fetchEconomyJson("/root/points/chain/recovery/approve", {
-      method: "POST",
-      body: JSON.stringify({ backup_id: backupId, confirm: confirmText }),
-    });
-    const resultMessage = formatEconomyRecoveryResult(json);
-    if ($("economy-recovery-confirm")) $("economy-recovery-confirm").value = "";
-    await loadEconomyDashboard();
-    economySetMsg(resultMessage, !!json.ok);
-    setEconomyChainStatus(formatEconomyVerificationSummary(json.verification || {}), (json.verification || {}).ok !== false);
-  } catch (err) {
-    economySetMsg(err.message || "恢復失敗", false);
-  }
+  economySetMsg("備份還原會覆寫 append-only ledger，已停用。請改用 recovery branch、疑義交易、緊急治理與補正交易。", false);
 }
 
 async function autoHandlePointsChainRecovery() {
@@ -4093,7 +4782,7 @@ async function autoHandlePointsChainRecovery() {
     economySetMsg("PointsChain 私有鏈已停用，無法處理鏈異常。", false);
     return;
   }
-  if (!confirm("系統會先驗證 PointsChain；若已進入 safe mode 且有建議健康備份，才會套用該備份並由 ledger 重建 wallet。此流程不會直接修改單筆餘額。是否繼續？")) return;
+  if (!confirm("系統會驗證 PointsChain 並產生 safe mode / forensic / 分支治理處理方案；不會套用備份還原或覆寫 ledger。是否繼續？")) return;
   const btn = $("economy-recovery-auto-handle-btn");
   const oldText = btn ? btn.textContent : "";
   try {
@@ -4101,8 +4790,8 @@ async function autoHandlePointsChainRecovery() {
       btn.disabled = true;
       btn.textContent = "處理中...";
     }
-    economySetMsg("正在驗證 PointsChain 並準備處理異常...");
-    economyRecoveryActionMsg("正在處理 PointsChain 異常...");
+    economySetMsg("正在驗證 PointsChain 並準備分支 / 緊急治理處理方案...");
+    economyRecoveryActionMsg("正在檢查 PointsChain 異常處理方案...");
     const json = await fetchEconomyJson("/root/points/chain/recovery/auto-handle", {
       method: "POST",
       body: JSON.stringify({ confirm: "AUTO HANDLE POINTSCHAIN" }),
@@ -4195,11 +4884,16 @@ function scheduleEconomyTransferFeeEstimate() {
 async function loadEconomyTransferFeeEstimate() {
   const target = $("economy-transfer-fee-estimate");
   if (!target) return;
+  const feeInput = $("economy-transfer-fee");
+  if (feeInput?.disabled) {
+    target.textContent = "pc0 站內互轉不收鏈上 fee、不等待 Proved。";
+    return;
+  }
   if (!economyChainEnabled()) {
     target.textContent = "PointsChain 私有鏈已停用";
     return;
   }
-  const fee = Math.max(0, Math.floor(Number($("economy-transfer-fee")?.value || 0)));
+  const fee = Math.max(0, Math.floor(Number(feeInput?.value || 0)));
   if (!Number.isFinite(fee)) {
     target.textContent = "請輸入鏈上費用以估算 Proved 時間";
     return;
@@ -4213,6 +4907,75 @@ async function loadEconomyTransferFeeEstimate() {
     target.textContent = `預估 Proved ${economyExplorerSecondsRangeText(estimate.estimated_seconds_min, estimate.estimated_seconds_max)} · 鏈上 ${label} · 建議費用 ${formatEconomyPointsValue(suggested)} 點`;
   } catch (err) {
     target.textContent = err.message || "預估 Proved 時間讀取失敗";
+  }
+}
+
+function economyExplorerLayerMeta(layer = economyExplorerActiveLayer) {
+  return ECONOMY_EXPLORER_LAYERS[layer] || ECONOMY_EXPLORER_LAYERS.pc1;
+}
+
+function economyExplorerInferLayerFromTransaction(tx = {}) {
+  if (tx.layer) return String(tx.layer);
+  const flow = tx.wallet_flow && typeof tx.wallet_flow === "object" ? tx.wallet_flow : {};
+  const rail = String(tx.settlement_rail || flow.settlement_rail || tx.input_data?.settlement_rail || "");
+  if (["internal_hot_wallet", "internal_system_burn", "deposit_bridge_credit", "withdrawal_bridge_lock", "withdrawal_bridge_refund"].includes(rail)) return "pc0";
+  if (rail.startsWith("deposit_bridge") || rail.startsWith("withdrawal_bridge")) return "bridge";
+  if (economyIsPc0Address(flow.source_wallet_address) || economyIsPc0Address(flow.destination_wallet_address)) return "pc0";
+  return "pc1";
+}
+
+function economyExplorerInferLayer(result = {}) {
+  if (result.layer) return String(result.layer);
+  if (result.kind === "bridge") return "bridge";
+  if (result.kind === "block") return "pc1";
+  if (result.kind === "transaction") return economyExplorerInferLayerFromTransaction(result.transaction || {});
+  if (result.kind === "wallet") {
+    const wallet = result.wallet || {};
+    if (wallet.layer) return String(wallet.layer);
+    if (economyIsPc0Address(wallet.address)) return "pc0";
+    return "pc1";
+  }
+  return economyExplorerActiveLayer || "pc1";
+}
+
+function economyExplorerLayerBanner(result = null) {
+  const layer = result ? economyExplorerInferLayer(result) : economyExplorerActiveLayer;
+  const meta = economyExplorerLayerMeta(layer);
+  const requestedMeta = economyExplorerLayerMeta(economyExplorerActiveLayer);
+  const mismatch = result && layer !== economyExplorerActiveLayer && economyExplorerActiveLayer !== "audit"
+    ? `<div class="drive-card-sub" style="margin-top:.35rem;color:#fbbf24;">目前結果屬於 ${sanitize(meta.shortTitle)}，不是目前選取的 ${sanitize(requestedMeta.shortTitle)}。Explorer 仍顯示結果以便追蹤 cross-reference。</div>`
+    : "";
+  const assetType = result?.asset_type || result?.transaction?.asset_type || result?.wallet?.asset_type || result?.bridge_event?.asset_type || meta.assetType;
+  return `
+    <div class="economy-explorer-layer-banner" data-layer="${sanitize(layer)}">
+      <div class="drive-card-title">${sanitize(meta.title)}</div>
+      <div class="drive-card-sub">Asset Type: ${sanitize(assetType)} · ${sanitize(meta.description)}</div>
+      ${mismatch}
+    </div>
+  `;
+}
+
+function setEconomyExplorerLayer(layer, { reset = true } = {}) {
+  const next = ECONOMY_EXPLORER_LAYERS[layer] ? layer : "pc1";
+  economyExplorerActiveLayer = next;
+  document.querySelectorAll("[data-economy-explorer-layer]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.economyExplorerLayer === next);
+    btn.setAttribute("aria-selected", btn.dataset.economyExplorerLayer === next ? "true" : "false");
+  });
+  const desc = $("economy-explorer-layer-description");
+  if (desc) desc.textContent = `${economyExplorerLayerMeta(next).title}：${economyExplorerLayerMeta(next).description}`;
+  const input = $("economy-explorer-query");
+  if (input) input.placeholder = economyExplorerLayerMeta(next).placeholder;
+  if (reset) {
+    stopEconomyExplorerCountdown();
+    const wrap = $("economy-explorer-result");
+    if (wrap) {
+      if (next === "audit") {
+        wrap.innerHTML = `${economyExplorerLayerBanner()}<div class="drive-empty">按查詢或重新查詢載入 reserve / liability invariant。</div>`;
+      } else {
+        wrap.innerHTML = `${economyExplorerLayerBanner()}<div class="drive-empty">輸入 ${sanitize(economyExplorerLayerMeta(next).shortTitle)} 查詢目標。</div>`;
+      }
+    }
   }
 }
 
@@ -4246,21 +5009,30 @@ function startEconomyExplorerCountdown() {
   }, 1000);
 }
 
+function economyExplorerIsInternalFinality(finality = {}) {
+  return String(finality.finality_status || "") === "internal_settled"
+    || String(finality.finality_simulation || "") === "internal_hot_wallet_ledger_v1"
+    || Number(finality.target_proved_count ?? 20) === 0;
+}
+
 function economyExplorerFinalityCard(finality = {}) {
-  const target = Number(finality.target_proved_count || 20);
-  const proved = Math.max(0, Math.min(target, Number(finality.proved_count || 0)));
-  const percent = target > 0 ? Math.round((proved / target) * 100) : 0;
+  const internalFinality = economyExplorerIsInternalFinality(finality);
+  const target = internalFinality ? 0 : Number(finality.target_proved_count || 20);
+  const proved = internalFinality ? 0 : Math.max(0, Math.min(target, Number(finality.proved_count || 0)));
+  const percent = internalFinality ? 100 : (target > 0 ? Math.round((proved / target) * 100) : 0);
   const feePolicy = finality.chain_fee_policy && typeof finality.chain_fee_policy === "object" ? finality.chain_fee_policy : {};
   const network = finality.network_fee_state && typeof finality.network_fee_state === "object" ? finality.network_fee_state : {};
-  const status = finality.finality_status === "failed"
+  const status = internalFinality
+    ? "已站內入帳"
+    : finality.finality_status === "failed"
     ? "未成交"
     : finality.finality_status === "sealed"
     ? "已封塊"
     : finality.finality_status === "proved"
       ? "已成交"
       : "等待 Proved";
-  const eta = economyExplorerSecondsText(finality.eta_seconds || 0);
-  const pending = String(finality.finality_status || "") === "pending";
+  const eta = internalFinality ? "即時" : economyExplorerSecondsText(finality.eta_seconds || 0);
+  const pending = !internalFinality && String(finality.finality_status || "") === "pending";
   const nextProofEta = pending
     ? ` · 下一個 Proved 約 <span data-finality-next-text>${sanitize(economyExplorerSecondsText(finality.next_proof_eta_seconds || 0))}</span>`
     : "";
@@ -4273,15 +5045,21 @@ function economyExplorerFinalityCard(finality = {}) {
   const feeNote = feePolicy.base_fee_exempt
     ? ` · ${feePolicy.exemption_reason || "設定自動發放交易免鏈上費用"}`
     : "";
-  const networkNote = network.congestion_label
+  const networkNote = !internalFinality && network.congestion_label
     ? ` · 鏈上 ${network.congestion_label} · 建議費用 ${formatEconomyPointsValue(network.suggested_total_fee_points || 0)} 點`
     : "";
+  const title = internalFinality ? `${status} · 免 Proved` : `${status} · ${proved}/${target} Proved`;
+  const humanRule = finality.human_rule || (
+    internalFinality
+      ? "pc0 Inner Address 使用站內帳本即時成交；免 20 Proved、免 priority fee"
+      : "20 Proved；ETA 依鏈上忙碌度與 priority fee 動態估算"
+  );
   return `
     <div class="economy-explorer-finality" data-finality-status="${sanitize(finality.finality_status || "")}" data-eta-seconds="${Number(finality.eta_seconds || 0)}" data-next-proof-eta-seconds="${Number(finality.next_proof_eta_seconds || 0)}">
       <div class="drive-card-heading">
         <div>
-          <div class="drive-card-title">${sanitize(status)} · ${proved}/${target} Proved</div>
-          <div class="drive-card-sub">${sanitize(finality.human_rule || "20 Proved；ETA 依鏈上忙碌度與 priority fee 動態估算")} · ETA <span data-finality-eta-text>${sanitize(eta)}</span>${nextProofEta}${sanitize(feeNote)}${sanitize(networkNote)}${sanitize(baseFee)}${sanitize(accelerated)}</div>
+          <div class="drive-card-title">${sanitize(title)}</div>
+          <div class="drive-card-sub">${sanitize(humanRule)} · ETA <span data-finality-eta-text>${sanitize(eta)}</span>${nextProofEta}${sanitize(feeNote)}${sanitize(networkNote)}${sanitize(baseFee)}${sanitize(accelerated)}</div>
         </div>
         <span class="economy-explorer-badge">${sanitize(finality.block_status || "unsealed")}</span>
       </div>
@@ -4309,8 +5087,14 @@ function economyExplorerFlowHtml(tx = {}) {
 function economyExplorerTxCard(tx = {}) {
   const block = tx.block || null;
   const finality = tx.finality || {};
+  const internalFinality = economyExplorerIsInternalFinality(finality);
+  const layer = economyExplorerInferLayerFromTransaction(tx);
+  const layerMeta = economyExplorerLayerMeta(layer);
+  const settlementRail = tx.settlement_rail || tx.wallet_flow?.settlement_rail || tx.input_data?.settlement_rail || "";
+  const assetType = tx.asset_type || layerMeta.assetType;
+  const refs = tx.cross_references && typeof tx.cross_references === "object" ? tx.cross_references : {};
   const feePolicy = finality.chain_fee_policy && typeof finality.chain_fee_policy === "object" ? finality.chain_fee_policy : {};
-  const pending = !["sealed", "proved"].includes(String(finality.finality_status || ""));
+  const pending = !internalFinality && !["sealed", "proved"].includes(String(finality.finality_status || ""));
   const canAccelerate = pending && feePolicy.acceleration_allowed !== false;
   const flow = tx.wallet_flow && typeof tx.wallet_flow === "object" ? tx.wallet_flow : {};
   const feeText = feePolicy.base_fee_exempt
@@ -4326,24 +5110,30 @@ function economyExplorerTxCard(tx = {}) {
       <div class="drive-card-heading">
         <div>
           <div class="drive-card-title">交易 ${sanitize(shortEconomyWalletAddress(tx.ledger_hash || tx.ledger_uuid || ""))}</div>
-          <div class="drive-card-sub">${sanitize(formatEconomyLedgerAction(tx.action_type))} · ${sanitize(tx.created_at || "")}</div>
+          <div class="drive-card-sub">${sanitize(layerMeta.shortTitle)} · ${sanitize(assetType)} · ${sanitize(formatEconomyLedgerAction(tx.action_type))} · ${sanitize(tx.created_at || "")}</div>
         </div>
         <strong>${sanitize(formatEconomyLedgerAmount(tx))}</strong>
       </div>
       <div class="economy-explorer-kv">
+        <span>Layer</span><code>${sanitize(layerMeta.title)}</code>
+        <span>Asset Type</span><code>${sanitize(assetType)}</code>
+        <span>Settlement Rail</span><code>${sanitize(settlementRail || "-")}</code>
         <span>Transaction Hash</span><code>${sanitize(tx.ledger_hash || "-")}</code>
-        <span>Status</span><code>${sanitize(finality.finality_status || tx.status || "-")} · ${Number(finality.proved_count || 0)}/${Number(finality.target_proved_count || 20)} Proved</code>
-        <span>Block</span>${block ? `<button type="button" data-explorer-query="${sanitize(String(block.block_number || ""))}">#${Number(block.block_number || 0)} · ${sanitize(shortEconomyWalletAddress(block.block_hash || ""))}</button>` : `<code>Pending / Unsealed</code>`}
+        <span>Status</span><code>${internalFinality ? "internal_settled · 免 Proved" : `${sanitize(finality.finality_status || tx.status || "-")} · ${Number(finality.proved_count || 0)}/${Number(finality.target_proved_count || 20)} Proved`}</code>
+        <span>Block</span>${internalFinality ? `<code>Internal Ledger</code>` : (block ? `<button type="button" data-explorer-query="${sanitize(String(block.block_number || ""))}">#${Number(block.block_number || 0)} · ${sanitize(shortEconomyWalletAddress(block.block_hash || ""))}</button>` : `<code>Pending / Unsealed</code>`)}
         <span>Timestamp</span><code>${sanitize(tx.created_at || "-")}</code>
         <span>From</span>${flow.source_wallet_address ? `<button type="button" data-explorer-query="${sanitize(flow.source_wallet_address)}">${sanitize(flow.source_wallet_address)}</button>` : `<code>-</code>`}
         <span>To</span>${flow.destination_wallet_address ? `<button type="button" data-explorer-query="${sanitize(flow.destination_wallet_address)}">${sanitize(flow.destination_wallet_address)}</button>` : `<code>-</code>`}
         <span>Value</span><code>${sanitize(formatEconomyLedgerAmount(tx))}</code>
         <span>Transaction Fee</span><code>${sanitize(feeText)}</code>
         ${finality.acceleration_fee_paid_points ? `<span>Acceleration</span><code>${formatEconomyPointsValue(finality.acceleration_fee_paid_points)} 點 → ${sanitize(finality.acceleration_fee_destination_label || "BURN 銷毀錢包")}</code>` : ""}
-        <span>Gas Price</span><code>${sanitize(gasPriceText)}</code>
+        <span>Gas Price</span><code>${sanitize(internalFinality ? "不適用" : gasPriceText)}</code>
         <span>Input Data</span><code>${sanitize(JSON.stringify(tx.input_data || {}))}</code>
         <span>Ledger UUID</span><button type="button" data-explorer-query="${sanitize(tx.ledger_uuid || "")}">${sanitize(tx.ledger_uuid || "-")}</button>
         <span>Previous</span><code>${sanitize(tx.previous_ledger_hash || "-")}</code>
+        ${refs.bridge_event_uuid ? `<span>Bridge Event</span><button type="button" data-explorer-query="${sanitize(refs.bridge_event_query || refs.bridge_event_uuid)}" data-explorer-layer-jump="bridge">${sanitize(refs.bridge_event_uuid)}</button>` : ""}
+        ${refs.pc1_settlement_tx ? `<span>PC1 Settlement TX</span><button type="button" data-explorer-query="${sanitize(refs.pc1_settlement_tx)}" data-explorer-layer-jump="pc1">${sanitize(refs.pc1_settlement_tx)}</button>` : ""}
+        ${refs.pc0_wrapped_credit ? `<span>PC0 Wrapped Event</span><button type="button" data-explorer-query="${sanitize(refs.pc0_wrapped_credit)}" data-explorer-layer-jump="pc0">${sanitize(refs.pc0_wrapped_credit)}</button>` : ""}
       </div>
       ${economyExplorerFlowHtml(tx)}
       ${economyExplorerFinalityCard(finality)}
@@ -4362,6 +5152,10 @@ function economyExplorerWalletCard(wallet = {}) {
   const addressType = String(wallet.address_type || "");
   const legacyAccount = Boolean(wallet.legacy_account) || addressType === "legacy_account";
   const systemFund = addressType === "system_fund" || Boolean(wallet.fund_key);
+  const innerAddress = addressType === "inner_address" || economyIsPc0Address(wallet.address);
+  const layer = wallet.layer || (innerAddress ? "pc0" : "pc1");
+  const layerMeta = economyExplorerLayerMeta(layer);
+  const assetType = wallet.asset_type || (innerAddress ? "Wrapped Operational Representation" : layerMeta.assetType);
   const risk = wallet.risk_label && typeof wallet.risk_label === "object" ? wallet.risk_label : null;
   const freeze = wallet.governance_freeze && typeof wallet.governance_freeze === "object" ? wallet.governance_freeze : null;
   const riskHtml = risk
@@ -4370,29 +5164,38 @@ function economyExplorerWalletCard(wallet = {}) {
   const freezeHtml = freeze
     ? `<div class="drive-card-sub" style="color:#ff4f6d;margin-top:.35rem;">${freeze.freeze_type === "provisional" ? "短期審核凍結" : "治理凍結"}：禁止轉出${freeze.expires_at ? ` · 到期 ${sanitize(freeze.expires_at)}` : ""} · ${sanitize(freeze.reason || "")}</div>`
     : "";
-  const titlePrefix = legacyAccount ? "Legacy 帳本身份" : (systemFund ? "系統基金錢包" : "錢包");
-  const identityLabel = legacyAccount ? "Legacy 帳本 ID" : "地址";
+  const titlePrefix = legacyAccount ? "Legacy 帳本身份" : (systemFund ? "系統基金錢包" : (innerAddress ? "Inner Address" : "錢包"));
+  const identityLabel = legacyAccount ? "Legacy 帳本 ID" : (innerAddress ? "Inner Address" : "地址");
   const typeText = legacyAccount
     ? "legacy_account · 舊帳本公開識別碼"
+    : innerAddress
+      ? `inner address · pc0 站內託管地址 · ${sanitize(wallet.wallet_type || "-")} · ${sanitize(wallet.status || "-")}`
     : `${sanitize(wallet.wallet_type || "-")} · ${sanitize(wallet.status || "-")}${wallet.fund_key ? ` · ${sanitize(wallet.fund_key)}` : ""}`;
+  const humanRule = wallet.human_rule || (
+    innerAddress
+      ? "pc0 Inner Address 使用站內帳本即時成交；免 20 Proved、免 priority fee"
+      : "20 Proved；ETA 依鏈上忙碌度與 priority fee 動態估算"
+  );
   return `
     <div class="drive-card economy-explorer-card">
       <div class="drive-card-heading">
         <div>
           <div class="drive-card-title">${sanitize(titlePrefix)} ${sanitize(shortEconomyWalletAddress(wallet.address || ""))}</div>
-          <div class="drive-card-sub">${typeText}</div>
+          <div class="drive-card-sub">${sanitize(layerMeta.shortTitle)} · ${sanitize(assetType)} · ${typeText}</div>
           ${riskHtml}
           ${freezeHtml}
         </div>
         <strong>${formatEconomyPointsValue(wallet.points_balance || 0)} 點</strong>
       </div>
       <div class="economy-explorer-kv">
+        <span>Layer</span><code>${sanitize(layerMeta.title)}</code>
+        <span>Asset Type</span><code>${sanitize(assetType)}</code>
         <span>${sanitize(identityLabel)}</span><code>${sanitize(wallet.address || "-")}</code>
         <span>金額凍結</span><code>${formatEconomyPointsValue(wallet.points_frozen || 0)} 點</code>
         <span>治理凍結</span><code>${freeze ? (freeze.freeze_type === "provisional" ? "短期禁止轉出" : "禁止轉出") : "無"}</code>
         <span>風險標記</span><code>${risk ? sanitize(risk.risk_level || risk.label || "risk") : "無"}</code>
         <span>交易數</span><code>${Number(wallet.transaction_count || 0)}</code>
-        <span>成交條件</span><code>${sanitize(wallet.human_rule || "20 Proved；ETA 依鏈上忙碌度與 priority fee 動態估算")}</code>
+        <span>成交條件</span><code>${sanitize(humanRule)}</code>
       </div>
       <div class="drive-file-list economy-explorer-tx-list">
         ${rows.length ? rows.map((tx) => `
@@ -4416,11 +5219,13 @@ function economyExplorerBlockCard(block = {}) {
       <div class="drive-card-heading">
         <div>
           <div class="drive-card-title">區塊 #${Number(block.block_number || 0)}</div>
-          <div class="drive-card-sub">${sanitize(block.seal_status || "-")} · ${sanitize(block.sealed_at || "")}</div>
+          <div class="drive-card-sub">PC1 Settlement · Canonical block · ${sanitize(block.seal_status || "-")} · ${sanitize(block.sealed_at || "")}</div>
         </div>
         <strong>${Number(block.ledger_count || 0)} tx</strong>
       </div>
       <div class="economy-explorer-kv">
+        <span>Layer</span><code>PC1 Canonical Settlement Layer</code>
+        <span>Asset Type</span><code>Canonical Settlement Block</code>
         <span>Block Hash</span><code>${sanitize(block.block_hash || "-")}</code>
         <span>Previous</span><code>${sanitize(block.previous_block_hash || "-")}</code>
         <span>Merkle Root</span><code>${sanitize(block.merkle_root || "-")}</code>
@@ -4441,6 +5246,74 @@ function economyExplorerBlockCard(block = {}) {
   `;
 }
 
+function economyExplorerBridgeCard(bridge = {}) {
+  const internalTx = bridge.internal_transaction || null;
+  const invariantOk = String(bridge.invariant_status || "") === "valid";
+  return `
+    <div class="drive-card economy-explorer-card">
+      <div class="drive-card-heading">
+        <div>
+          <div class="drive-card-title">Bridge Event ${sanitize(shortEconomyWalletAddress(bridge.bridge_uuid || ""))}</div>
+          <div class="drive-card-sub">Cross-Ledger Settlement Event · ${sanitize(bridge.bridge_type || "-")} · ${sanitize(bridge.status || "-")}</div>
+        </div>
+        <strong>${formatEconomyPointsValue(bridge.amount_points || 0)} 點</strong>
+      </div>
+      <div class="economy-explorer-kv">
+        <span>Layer</span><code>Bridge Cross-Ledger Settlement Layer</code>
+        <span>Asset Type</span><code>Cross-Ledger Settlement Event</code>
+        <span>Invariant Status</span><code>${invariantOk ? "valid" : "invalid"}</code>
+        <span>Bridge UUID</span><code>${sanitize(bridge.bridge_uuid || "-")}</code>
+        <span>PC1 Settlement TX</span><button type="button" data-explorer-query="${sanitize(bridge.pc1_settlement_tx || bridge.chain_tx_hash || "")}" data-explorer-layer-jump="pc1">${sanitize(bridge.pc1_settlement_tx || bridge.chain_tx_hash || "-")}</button>
+        <span>PC1 Deposit Address</span><button type="button" data-explorer-query="${sanitize(bridge.destination_address || "")}" data-explorer-layer-jump="pc1">${sanitize(bridge.destination_address || "-")}</button>
+        <span>PC0 Wrapped Credit</span>${bridge.pc0_wrapped_credit ? `<button type="button" data-explorer-query="${sanitize(bridge.pc0_wrapped_credit)}" data-explorer-layer-jump="pc0">${sanitize(bridge.pc0_wrapped_credit)}</button>` : `<code>-</code>`}
+        <span>PC0 Hot Wallet</span>${bridge.pc0_hot_wallet ? `<button type="button" data-explorer-query="${sanitize(bridge.pc0_hot_wallet)}" data-explorer-layer-jump="pc0">${sanitize(bridge.pc0_hot_wallet)}</button>` : `<code>-</code>`}
+        <span>Risk</span><code>${sanitize(bridge.risk_status || "-")}</code>
+        <span>Confirmations</span><code>${Number(bridge.confirmations || 0)}/${Number(bridge.required_confirmations || 0)}</code>
+        <span>Network Fee</span><code>${formatEconomyPointsValue(bridge.network_fee_points || 0)} 點</code>
+        <span>Created</span><code>${sanitize(bridge.created_at || "-")}</code>
+      </div>
+      ${internalTx ? `<div style="margin-top:.75rem;">${economyExplorerTxCard(internalTx)}</div>` : `<div class="drive-empty" style="margin-top:.75rem;">尚未產生 PC0 wrapped credit ledger</div>`}
+    </div>
+  `;
+}
+
+function economyExplorerAuditCard(report = {}) {
+  const invariants = Array.isArray(report.invariants) ? report.invariants : [];
+  const reserve = report.canonical_reserve || {};
+  const liabilities = report.wrapped_operational_liabilities || {};
+  const bridge = report.bridge_reconstruction || {};
+  const boundary = report.ledger_boundary || {};
+  return `
+    <div class="drive-card economy-explorer-card">
+      <div class="drive-card-heading">
+        <div>
+          <div class="drive-card-title">Reserve / Liability Audit</div>
+          <div class="drive-card-sub">${sanitize(report.model || "pc1_canonical_reserve_pc0_wrapped_operational_v1")} · ${sanitize(report.status || "-")}</div>
+        </div>
+        <strong>${report.ok ? "PASS" : "FAIL"}</strong>
+      </div>
+      <div class="economy-explorer-kv">
+        <span>PC1 Canonical Reserve</span><code>${formatEconomyPointsValue(reserve.canonical_locked_reserve_points || reserve.active_supply_points || 0)} 點</code>
+        <span>PC0 Wrapped Outstanding</span><code>${formatEconomyPointsValue(liabilities.wrapped_supply_points || liabilities.finalized_total_points || 0)} 點</code>
+        <span>Bridge External</span><code>${formatEconomyPointsValue(bridge.current_cold_chain_or_bridge_external_points || 0)} 點</code>
+        <span>Flow Gap</span><code>${formatEconomyPointsValue(bridge.flow_gap_points || 0)} 點</code>
+        <span>Boundary</span><code>${boundary.ok ? "clean" : "polluted"} · sealed pc0 ${Number(boundary.counts?.sealed_pc0_operational_ledgers || 0)}</code>
+        <span>Merkle Root</span><code>${sanitize(liabilities.liability_merkle?.merkle_root || "-")}</code>
+      </div>
+      <div class="drive-file-list economy-explorer-tx-list">
+        ${invariants.length ? invariants.map((item) => `
+          <div class="drive-file-row">
+            <div>
+              <strong>${item.pass ? "PASS" : "FAIL"} · ${sanitize(item.name || "-")}</strong>
+              <div class="drive-card-sub">${sanitize(JSON.stringify(item))}</div>
+            </div>
+          </div>
+        `).join("") : `<div class="drive-empty">沒有 invariant 資料</div>`}
+      </div>
+    </div>
+  `;
+}
+
 function bindEconomyExplorerResultEvents() {
   const root = $("economy-explorer-result");
   if (!root) return;
@@ -4449,6 +5322,8 @@ function bindEconomyExplorerResultEvents() {
     btn.dataset.explorerBound = "1";
     btn.addEventListener("click", () => {
       const query = btn.dataset.explorerQuery || "";
+      const layerJump = btn.dataset.explorerLayerJump || "";
+      if (layerJump) setEconomyExplorerLayer(layerJump, { reset: false });
       if ($("economy-explorer-query")) $("economy-explorer-query").value = query;
       searchEconomyExplorer(query);
     });
@@ -4472,12 +5347,14 @@ function renderEconomyExplorerResult(result) {
   if (!wrap) return;
   stopEconomyExplorerCountdown();
   if (!result) {
-    wrap.innerHTML = `<div class="drive-empty">查無鏈上資料</div>`;
+    wrap.innerHTML = `${economyExplorerLayerBanner()}<div class="drive-empty">查無分層帳本資料</div>`;
     return;
   }
-  if (result.kind === "transaction") wrap.innerHTML = economyExplorerTxCard(result.transaction || {});
-  else if (result.kind === "wallet") wrap.innerHTML = economyExplorerWalletCard(result.wallet || {});
-  else if (result.kind === "block") wrap.innerHTML = economyExplorerBlockCard(result.block || {});
+  if (result.kind === "transaction") wrap.innerHTML = economyExplorerLayerBanner(result) + economyExplorerTxCard(result.transaction || {});
+  else if (result.kind === "wallet") wrap.innerHTML = economyExplorerLayerBanner(result) + economyExplorerWalletCard(result.wallet || {});
+  else if (result.kind === "block") wrap.innerHTML = economyExplorerLayerBanner(result) + economyExplorerBlockCard(result.block || {});
+  else if (result.kind === "bridge") wrap.innerHTML = economyExplorerLayerBanner(result) + economyExplorerBridgeCard(result.bridge_event || {});
+  else if (result.kind === "audit") wrap.innerHTML = economyExplorerLayerBanner(result) + economyExplorerAuditCard(result.financial_invariants || {});
   else wrap.innerHTML = `<div class="drive-empty">不支援的查詢結果</div>`;
   bindEconomyExplorerResultEvents();
   startEconomyExplorerCountdown();
@@ -4490,8 +5367,19 @@ async function searchEconomyExplorer(query = null) {
   }
   const input = $("economy-explorer-query");
   const value = String(query ?? input?.value ?? "").trim();
+  if (!value && economyExplorerActiveLayer === "audit") {
+    try {
+      const json = await fetchEconomyJson("/root/points/financial-invariants");
+      renderEconomyExplorerResult({ kind: "audit", layer: "audit", asset_type: "Reserve / Liability Audit", financial_invariants: json.financial_invariants || {} });
+      economyExplorerMsg("已更新 Audit invariant");
+    } catch (err) {
+      renderEconomyExplorerResult(null);
+      economyExplorerMsg(err.message || "Audit 查詢失敗", false);
+    }
+    return;
+  }
   if (!value) {
-    economyExplorerMsg("請輸入交易 hash、Ledger UUID、錢包地址或區塊", false);
+    economyExplorerMsg("請輸入交易 hash、Ledger UUID、錢包地址、區塊或 bridge event", false);
     return;
   }
   economyExplorerLastQuery = value;
@@ -4503,12 +5391,14 @@ async function searchEconomyExplorer(query = null) {
       btn.disabled = true;
       btn.textContent = "查詢中...";
     }
-    const json = await fetchEconomyJson(`/points/explorer/search?q=${encodeURIComponent(value)}&limit=25`);
+    const json = economyExplorerActiveLayer === "bridge"
+      ? await fetchEconomyJson(`/points/explorer/bridge/${encodeURIComponent(value)}`)
+      : await fetchEconomyJson(`/points/explorer/search?q=${encodeURIComponent(value)}&limit=25`);
     renderEconomyExplorerResult(json.result);
-    economyExplorerMsg("已更新鏈上資料");
+    economyExplorerMsg("已更新分層帳本資料");
   } catch (err) {
     renderEconomyExplorerResult(null);
-    economyExplorerMsg(err.message || "鏈上查詢失敗", false);
+    economyExplorerMsg(err.message || "分層帳本查詢失敗", false);
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -4567,6 +5457,10 @@ function bindEconomyInlineEvents() {
     ["economy-wallet-download-btn", downloadEconomyWalletCsv],
     ["economy-wallet-official-hot-btn", useOfficialHotWallet],
     ["economy-wallet-create-cold-btn", createColdWalletDraft],
+    ["economy-wallet-download-file-btn", economyDownloadDraftColdWalletFile],
+    ["economy-wallet-copy-trade-password-btn", economyCopyDraftTradePassword],
+    ["economy-wallet-start-mnemonic-quiz-btn", startEconomyColdWalletMnemonicQuiz],
+    ["economy-wallet-mnemonic-check-btn", checkEconomyColdWalletMnemonicQuiz],
     ["economy-wallet-use-generated-cold-btn", selectGeneratedColdWalletForImport],
     ["economy-wallet-import-cold-btn", startColdWalletImport],
     ["economy-wallet-confirm-cold-btn", confirmColdWalletBinding],
@@ -4576,24 +5470,22 @@ function bindEconomyInlineEvents() {
     ["economy-explorer-search-btn", () => searchEconomyExplorer()],
     ["economy-explorer-refresh-btn", () => searchEconomyExplorer(economyExplorerLastQuery || $("economy-explorer-query")?.value || "")],
     ["economy-governance-refresh-btn", () => loadEconomyGovernance()],
-    ["economy-governance-scam-create-btn", createGovernanceAddressRiskProposal],
-    ["economy-governance-freeze-create-btn", createGovernanceWalletFreezeProposal],
     ["economy-governance-branch-create-btn", createGovernanceRecoveryBranchProposal],
     ["economy-governance-lockdown-create-btn", createGovernanceEmergencyLockdownProposal],
-    ["economy-governance-treasury-create-btn", createGovernanceTreasuryProposal],
     ["economy-governance-mint-create-btn", createGovernanceMintRequestProposal],
     ["economy-governance-policy-create-btn", createGovernancePolicyProposal],
     ["economy-treasury-analysis-refresh-btn", () => loadEconomyTreasurySignerCenter()],
-    ["economy-trading-export-btn", downloadEconomyTradingCsv],
+    ["economy-manager-points-open-wallets-btn", () => {
+      setEconomyActivePage("chain");
+      $("economy-root-wallet-management-card")?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    }],
+    ["economy-manager-points-open-governance-btn", () => setEconomyActivePage("governance")],
+    ["economy-manager-points-open-explorer-btn", () => setEconomyActivePage("explorer")],
     ["economy-ledger-export-btn", exportEconomyLedgerCsv],
-    ["economy-root-funding-refresh-btn", () => loadEconomyRootTradingReadOnly({ refreshSnapshot: true })],
-    ["economy-root-positions-refresh-btn", () => loadEconomyRootTradingReadOnly({ refreshSnapshot: true })],
-    ["economy-root-wallet-refresh-btn", loadEconomyRootReport],
+    ["economy-root-wallet-refresh-btn", refreshEconomyOfficialWalletManagement],
     ["economy-root-official-grant-btn", sendEconomyRootOfficialGrant],
     ["economy-root-report-btn", loadEconomyRootReport],
-    ["economy-backup-btn", createPointsChainBackup],
     ["economy-recovery-auto-handle-btn", autoHandlePointsChainRecovery],
-    ["economy-recovery-approve-btn", approvePointsChainRecovery],
     ["economy-seal-btn", sealPointsChainBlock],
     ["economy-verify-btn", verifyPointsChain],
   ];
@@ -4609,6 +5501,14 @@ function bindEconomyInlineEvents() {
     tab.dataset.economyPageBound = "1";
     tab.addEventListener("click", () => setEconomyActivePage(tab.dataset.economyPage || "balance"));
   });
+  document.querySelectorAll("[data-economy-explorer-layer]").forEach((btn) => {
+    if (btn.dataset.economyExplorerLayerBound === "1") return;
+    btn.dataset.economyExplorerLayerBound = "1";
+    btn.addEventListener("click", () => {
+      setEconomyExplorerLayer(btn.dataset.economyExplorerLayer || "pc1");
+    });
+  });
+  setEconomyExplorerLayer(economyExplorerActiveLayer, { reset: false });
   const explorerInput = $("economy-explorer-query");
   if (explorerInput && explorerInput.dataset.economyInlineBound !== "1") {
     explorerInput.dataset.economyInlineBound = "1";
@@ -4622,17 +5522,6 @@ function bindEconomyInlineEvents() {
     transferFeeInput.addEventListener("input", scheduleEconomyTransferFeeEstimate);
     transferFeeInput.addEventListener("change", scheduleEconomyTransferFeeEstimate);
     scheduleEconomyTransferFeeEstimate();
-  }
-  const treasuryAction = $("economy-governance-treasury-action");
-  if (treasuryAction && treasuryAction.dataset.economyTreasuryBound !== "1") {
-    treasuryAction.dataset.economyTreasuryBound = "1";
-    treasuryAction.addEventListener("change", () => {
-      syncGovernanceTreasuryDestination();
-      if (String(treasuryAction.value || "").trim().toUpperCase() === "EXCHANGE_FUND_REPLENISH" && !String(economyFundAddressCache.exchange_fund || "").trim()) {
-        loadEconomyTreasurySignerCenter({ silent: true });
-      }
-    });
-    syncGovernanceTreasuryDestination();
   }
   const governanceCategory = $("economy-governance-category-select");
   if (governanceCategory && governanceCategory.dataset.economyGovernanceCategoryBound !== "1") {

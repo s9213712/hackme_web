@@ -88,7 +88,7 @@ def _report_label(report_type: str) -> str:
         "permission": "permission/RBAC pentest",
         "functional": "functional smoke",
         "pentest": "security pentest",
-        "snapshot_restore": "snapshot/restore",
+        "snapshot_restore": "snapshot boundary",
         "points_chain_consistency": "points-chain consistency",
         "cloud_drive_quota_permission": "cloud-drive quota/permission",
     }

@@ -13,7 +13,12 @@ import argon2
 from flask import make_response, request, send_from_directory
 
 from services.points_chain import BIRTHDAY_GIFT_POINTS
-from services.points_chain.wallet_identity import wallet_onboarding_status
+from services.points_chain.wallet_identity import (
+    create_official_hot_wallet,
+    system_account_wallet_onboarding_status,
+    wallet_onboarding_status,
+)
+from services.storage.quota_purchases import grant_birthday_storage_quota
 from services.security.access_controls import verify_internal_test_token
 from services.server.request_guards import should_require_password_change_flag
 from services.users.recovery import (
@@ -28,7 +33,12 @@ from services.users.recovery import (
 from services.security.captcha import create_captcha_challenge, normalize_captcha_mode, verify_captcha_response
 from services.server.backpressure import backpressure_status
 from services.platform.time_settings import normalize_server_timezone, server_time_payload
-from services.users.profiles import clear_profile_appearance, get_profile_appearance, update_profile_appearance
+from services.users.profiles import (
+    clear_profile_appearance,
+    get_profile_appearance,
+    get_profile_display_timezone,
+    update_profile_appearance,
+)
 
 
 def register_public_routes(app, deps):
@@ -97,6 +107,25 @@ def register_public_routes(app, deps):
     verify_csrf_token = deps.get("verify_csrf_token", lambda token, username: False)
     verify_password = deps["verify_password"]
 
+    def current_session_ttl_seconds():
+        try:
+            settings = get_system_settings() or {}
+            hours = int(settings.get("session_ttl_hours") or 0)
+            if hours > 0:
+                return max(60, hours * 3600)
+        except Exception:
+            pass
+        try:
+            return max(60, int(SESSION_TTL or 0))
+        except Exception:
+            return 3600 * 4
+
+    def current_csrf_token_ttl_seconds():
+        try:
+            return max(int(CSRF_TOKEN_TTL or 0), current_session_ttl_seconds())
+        except Exception:
+            return current_session_ttl_seconds()
+
     def record_login_location(conn, user_id, username, ip, ua):
         ip_hash = hashlib.sha256((ip or "-").encode("utf-8")).hexdigest()
         previous = conn.execute(
@@ -143,12 +172,31 @@ def register_public_routes(app, deps):
                 actor={"id": user_row["id"], "username": user_row["username"], "role": user_row["role"]},
             )
             ledger = result.get("ledger") or {}
+            storage_quota_gift = None
+            try:
+                quota_conn = get_db()
+                try:
+                    storage_quota_gift = grant_birthday_storage_quota(
+                        quota_conn,
+                        user_id=user_row["id"],
+                        birthday_year=today.year,
+                        ledger_uuid=ledger.get("ledger_uuid") or "",
+                    )
+                    quota_conn.commit()
+                except Exception:
+                    quota_conn.rollback()
+                    raise
+                finally:
+                    quota_conn.close()
+            except Exception as quota_exc:
+                audit("STORAGE_BIRTHDAY_QUOTA_GIFT_FAILED", ip, user_row["username"], ua=ua, success=False, detail=str(quota_exc))
             return {
                 "eligible": True,
                 "created": bool(result.get("created")),
                 "amount": int(ledger.get("amount") or BIRTHDAY_GIFT_POINTS),
                 "year": int(today.year),
                 "ledger_uuid": ledger.get("ledger_uuid") or "",
+                "storage_quota_gift": storage_quota_gift,
             }
         except Exception as exc:
             audit("POINTS_BIRTHDAY_GIFT_FAILED", ip, user_row["username"], ua=ua, success=False, detail=str(exc))
@@ -197,10 +245,20 @@ def register_public_routes(app, deps):
     def wallet_onboarding_payload(user_id):
         if not points_service:
             return None
+        app_conn = get_db()
+        try:
+            user_row = app_conn.execute("SELECT username FROM users WHERE id=?", (int(user_id),)).fetchone()
+            is_root_account = bool(user_row and user_row["username"] == "root")
+        except Exception:
+            is_root_account = False
+        finally:
+            app_conn.close()
         conn = points_service.get_db() if hasattr(points_service, "get_db") else get_db()
         try:
             points_service.ensure_schema(conn)
             payload = wallet_onboarding_status(conn, points_service=points_service, user_id=user_id)
+            if is_root_account:
+                payload = system_account_wallet_onboarding_status(payload)
             conn.commit()
             return payload
         except Exception as exc:
@@ -212,6 +270,48 @@ def register_public_routes(app, deps):
             return {"required": False, "error": "wallet_onboarding_status_failed"}
         finally:
             conn.close()
+
+    def maybe_award_signup_bonus_for_login(user_row):
+        if not points_service or not user_row or user_row["username"] == "root":
+            return None
+        conn = points_service.get_db() if hasattr(points_service, "get_db") else get_db()
+        try:
+            points_service.ensure_schema(conn)
+            create_official_hot_wallet(
+                conn,
+                user_id=int(user_row["id"]),
+                chain_secret=getattr(points_service, "chain_secret", ""),
+            )
+            try:
+                points_service.ensure_user_deposit_address(conn, int(user_row["id"]))
+            except Exception:
+                pass
+            if hasattr(points_service, "award_signup_bonus_locked"):
+                result = points_service.award_signup_bonus_locked(
+                    conn,
+                    user_id=int(user_row["id"]),
+                    actor={"id": int(user_row["id"]), "username": user_row["username"], "role": user_row["role"]},
+                )
+                conn.commit()
+                return result
+            conn.commit()
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            audit("POINTS_SIGNUP_BONUS_LOGIN_AUTO_FAILED", get_client_ip(), user=user_row["username"], ua=get_ua(), success=False, detail=str(exc))
+            return {"ok": False, "created": False, "error": str(exc)}
+        finally:
+            conn.close()
+        try:
+            return points_service.award_signup_bonus(
+                user_id=int(user_row["id"]),
+                actor={"id": int(user_row["id"]), "username": user_row["username"], "role": user_row["role"]},
+            )
+        except Exception as exc:
+            audit("POINTS_SIGNUP_BONUS_LOGIN_AUTO_FAILED", get_client_ip(), user=user_row["username"], ua=get_ua(), success=False, detail=str(exc))
+            return {"ok": False, "created": False, "error": str(exc)}
 
     def tester_token_login_allowed(conn, token, user_id):
         token = str(token or "").strip()
@@ -410,7 +510,7 @@ def register_public_routes(app, deps):
         if not csrf_cookie or not verify_csrf_token(csrf_cookie, csrf_owner):
             csrf_cookie = make_csrf_token()
             store_csrf_token(csrf_cookie, csrf_owner)
-            resp.set_cookie("csrf_token", csrf_cookie, max_age=CSRF_TOKEN_TTL,
+            resp.set_cookie("csrf_token", csrf_cookie, max_age=current_csrf_token_ttl_seconds(),
                             httponly=False, samesite=SESSION_COOKIE_SAMESITE,
                             secure=SESSION_COOKIE_SECURE)
         return resp
@@ -426,7 +526,7 @@ def register_public_routes(app, deps):
             token = make_csrf_token()
             store_csrf_token(token, owner)
         resp = json_resp({"ok":True,"csrf_token":token})
-        resp.set_cookie("csrf_token", token, max_age=CSRF_TOKEN_TTL,
+        resp.set_cookie("csrf_token", token, max_age=current_csrf_token_ttl_seconds(),
                         httponly=False, samesite=SESSION_COOKIE_SAMESITE,
                         secure=SESSION_COOKIE_SECURE)
         return resp
@@ -703,13 +803,43 @@ def register_public_routes(app, deps):
                 "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
                 (cur.lastrowid, hash_password(password), now)
             )
+            new_user_id = int(cur.lastrowid)
+            hot_wallet_address = ""
+            deposit_address = ""
+            signup_bonus = None
+            if points_service is not None:
+                points_service.ensure_schema(conn)
+                hot_wallet = create_official_hot_wallet(
+                    conn,
+                    user_id=new_user_id,
+                    chain_secret=getattr(points_service, "chain_secret", ""),
+                )
+                hot_wallet_address = str((hot_wallet or {}).get("address") or "")
+                try:
+                    deposit = points_service.ensure_user_deposit_address(conn, new_user_id)
+                    deposit_address = str((deposit or {}).get("address") or "")
+                except Exception:
+                    deposit_address = ""
+                if hasattr(points_service, "award_signup_bonus_locked"):
+                    signup_bonus = points_service.award_signup_bonus_locked(
+                        conn,
+                        user_id=new_user_id,
+                        actor={"id": new_user_id, "username": username, "role": "user"},
+                    )
             conn.commit()
             audit("REGISTER_PENDING", ip, username, ua=ua, success=True, detail="awaiting manager approval")
             return json_resp({
                 "ok": True,
-                "msg": "註冊申請已送出，需經管理員或最高管理者審核後才能登入；初次登入後請先完成 PointsChain 錢包設定以領取註冊禮。",
-                "wallet_onboarding_required": True,
-                "signup_bonus_deferred": True,
+                "msg": "註冊申請已送出，需經管理員或最高管理者審核後才能登入；站內託管錢包與註冊禮已建立，審核通過後可直接使用站內付款與交易所。",
+                "wallet_onboarding_required": False,
+                "signup_bonus_deferred": False,
+                "signup_bonus": {
+                    "created": bool((signup_bonus or {}).get("created")),
+                    "ledger_hash": ((signup_bonus or {}).get("ledger") or {}).get("ledger_hash", ""),
+                    "wallet_address": hot_wallet_address,
+                },
+                "official_hot_wallet_address": hot_wallet_address,
+                "deposit_address": deposit_address,
             })
         finally:
             conn.close()
@@ -827,6 +957,7 @@ def register_public_routes(app, deps):
                 if settings.get("require_email_verification") and not bool(user_row["email_verified"] or 0):
                     audit("LOGIN_EMAIL_UNVERIFIED", ip, username, ua=ua, success=False)
                     return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
+                signup_bonus = maybe_award_signup_bonus_for_login(user_row)
                 internal_test_auth_scope = ""
                 internal_test_allowed_features = []
                 if token_authz.get("ok"):
@@ -919,23 +1050,27 @@ def register_public_routes(app, deps):
 
                 audit("LOGIN_OK", ip, username, ua=ua, success=True)
                 login_msg = "恭喜登入成功"
-                if birthday_gift and birthday_gift.get("created"):
-                    login_msg = f"恭喜登入成功，生日禮金 {birthday_gift.get('amount', BIRTHDAY_GIFT_POINTS)} 點已入帳"
+                birthday_storage_created = bool(((birthday_gift or {}).get("storage_quota_gift") or {}).get("created"))
+                if birthday_gift and (birthday_gift.get("created") or birthday_storage_created):
+                    login_msg = f"恭喜登入成功，生日禮金 {birthday_gift.get('amount', BIRTHDAY_GIFT_POINTS)} 點與 1GB 雲端硬碟 30 日已入帳"
+                elif signup_bonus and signup_bonus.get("created"):
+                    login_msg = "恭喜登入成功，註冊禮已入帳官方熱錢包"
                 resp = json_resp({
                     "ok": True,
                     "msg": login_msg,
                     "birthday_gift": birthday_gift,
+                    "signup_bonus": signup_bonus,
                     "wallet_onboarding": wallet_onboarding_payload(user_row["id"]),
                     "must_change_password": should_require_password_change_flag(user_row["must_change_password"]),
                     "is_default_password": bool(user_row["is_default_password"] or 0),
                 })
-                resp.set_cookie("session_token", token, max_age=SESSION_TTL,
+                resp.set_cookie("session_token", token, max_age=current_session_ttl_seconds(),
                                 httponly=True, samesite=SESSION_COOKIE_SAMESITE,
                                 secure=SESSION_COOKIE_SECURE)
                 # Invalidate the public CSRF token and issue a fresh per-user token
                 new_csrf = make_csrf_token()
                 store_csrf_token(new_csrf, username)
-                resp.set_cookie("csrf_token", new_csrf, max_age=CSRF_TOKEN_TTL,
+                resp.set_cookie("csrf_token", new_csrf, max_age=current_csrf_token_ttl_seconds(),
                                 httponly=False, samesite=SESSION_COOKIE_SAMESITE,
                                 secure=SESSION_COOKIE_SECURE)
                 return resp
@@ -1230,11 +1365,12 @@ def register_public_routes(app, deps):
         try:
             avatar_row = conn.execute("SELECT avatar_file_id FROM users WHERE id=?", (ctx["id"],)).fetchone()
             appearance_settings = get_profile_appearance(conn, ctx["id"])
+            display_timezone = get_profile_display_timezone(conn, ctx["id"])
         finally:
             conn.close()
         override = settings.get("session_idle_timeout_minutes")
         if override is not None:
-            session_idle_timeout_minutes = max(1, int(override))
+            session_idle_timeout_minutes = max(0, int(override))
         elif get_member_level_rule and effective_level:
             conn = get_db()
             try:
@@ -1269,6 +1405,7 @@ def register_public_routes(app, deps):
             "avatar_file_id": ((avatar_row["avatar_file_id"] if avatar_row and "avatar_file_id" in avatar_row.keys() else dict(ctx).get("avatar_file_id")) or ""),
             "chat_violation_warned": dict(ctx).get("chat_violation_warned") or 0,
             "appearance_settings": appearance_settings,
+            "display_timezone": display_timezone,
             "auth_scope": dict(ctx).get("auth_scope") or dict(ctx).get("_auth_scope") or "",
             "allowed_features": list(dict(ctx).get("allowed_features") or dict(ctx).get("_allowed_features") or []),
             "wallet_onboarding": wallet_onboarding_payload(ctx["id"]),

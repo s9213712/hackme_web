@@ -19,6 +19,11 @@ from services.points_chain import (
     delete_primary_cold_wallet,
     ensure_system_wallets,
     ensure_wallet_identity_schema,
+    has_pc0_prefix,
+    MINT_WALLET_ADDRESS,
+    is_pc0_internal_address,
+    is_system_special_address,
+    system_account_wallet_onboarding_status,
     wallet_binding_payload,
     wallet_service_fee_payload,
     wallet_transaction_payload,
@@ -96,14 +101,20 @@ def test_system_mint_and_burn_wallets_are_identity_only(tmp_path):
     assert [item["wallet_type"] for item in wallets] == ["mint", "burn"]
     assert all(item["custody_mode"] == "system" for item in wallets)
     assert all(item["server_private_key_stored"] is False for item in wallets)
+    assert wallets[0]["address"] == MINT_WALLET_ADDRESS
     assert wallets[1]["address"] == BURN_WALLET_ADDRESS
-    assert BURN_WALLET_ADDRESS == "pc1" + ("0" * 48)
+    assert MINT_WALLET_ADDRESS == "mint" + ("0" * 60)
+    assert BURN_WALLET_ADDRESS == "0" * 64
+    assert is_system_special_address(MINT_WALLET_ADDRESS) is True
+    assert is_system_special_address(BURN_WALLET_ADDRESS) is True
+    assert is_pc0_internal_address(MINT_WALLET_ADDRESS) is False
+    assert is_pc0_internal_address(BURN_WALLET_ADDRESS) is False
 
     conn = points.get_db()
     try:
         conn.execute(
             "UPDATE points_wallet_identities SET address=?, public_key_hash=? WHERE wallet_type='burn'",
-            ("pc1" + ("b" * 48), "legacy-burn-hash"),
+            ("pc0" + ("0" * 48), "legacy-burn-hash"),
         )
         realigned = ensure_system_wallets(conn, chain_secret=points.chain_secret)
         conn.commit()
@@ -111,6 +122,35 @@ def test_system_mint_and_burn_wallets_are_identity_only(tmp_path):
         conn.close()
 
     assert realigned[1]["address"] == BURN_WALLET_ADDRESS
+
+
+def test_pc0_namespace_is_internal_only_and_cold_wallet_binding_rejects_it(tmp_path):
+    points = _points(tmp_path)
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_jwk = _public_jwk(private_key)
+    pc0_address = "pc0" + ("a" * 48)
+
+    assert is_pc0_internal_address(pc0_address) is True
+    assert is_pc0_internal_address("pc0u_future_role_address") is False
+    assert is_pc0_internal_address("pc0") is False
+    assert has_pc0_prefix("pc0u_future_role_address") is True
+    assert address_from_public_key(public_jwk).startswith("pc1")
+
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        with pytest.raises(ValueError, match="wallet address does not match public key"):
+            bind_self_custody_wallet(
+                conn,
+                user_id=1,
+                wallet_type="self_custody_cold",
+                public_key_jwk=public_jwk,
+                address=pc0_address,
+                signature="not-used",
+                backup_confirmed=True,
+            )
+    finally:
+        conn.close()
 
 
 def test_self_custody_wallet_rejects_private_key_material_and_awards_signup_after_binding(tmp_path):
@@ -168,13 +208,17 @@ def test_self_custody_wallet_rejects_private_key_material_and_awards_signup_afte
     )
     assert first_bonus["created"] is True
     assert second_bonus["already_granted"] is True
-    assert points.get_wallet(1)["points_balance"] == 100
     ledger = points.list_ledger(user_id=1, limit=1)[0]
+    hot_address = ledger["wallet_flow"]["destination_wallet_address"]
+    wallet_state = points.get_wallet(1)
     assert ledger["ledger_uuid"]
     assert ledger["wallet_flow"]["source_label"] == "PROMO 獎勵基金"
-    assert ledger["wallet_flow"]["destination_wallet_address"] == address
-    assert ledger["wallet_flow"]["target_wallet_address"] == address
+    assert hot_address.startswith("pc0")
+    assert hot_address != address
+    assert ledger["wallet_flow"]["target_wallet_address"] == hot_address
     assert ledger["wallet_flow"]["legacy_public_account_id"] == ledger["public_account_id"]
+    assert wallet_state["account_points_balance"] == 100
+    assert wallet_state["wallet_identity_balances"][hot_address]["points_balance"] == 100
     stats = points.economy_stats()["economy_layer"]
     assert stats["funds"]["promo_fund"]["balance"] == 4_999_900
     assert stats["supply"]["circulating_supply"] == 100
@@ -203,7 +247,7 @@ def test_self_custody_wallet_transfer_requires_private_key_signature(tmp_path):
             signature=bind_signature,
             backup_confirmed=True,
         )
-        destination = create_official_hot_wallet(conn, user_id=2, chain_secret=points.chain_secret)
+        destination_address = "pc1" + ("e" * 48)
         conn.commit()
     finally:
         conn.close()
@@ -223,7 +267,7 @@ def test_self_custody_wallet_transfer_requires_private_key_signature(tmp_path):
         points.submit_wallet_transaction(
             actor={"id": 1, "username": "alice", "role": "user"},
             source_wallet_address=wallet["address"],
-            destination_wallet_address=destination["address"],
+            destination_wallet_address=destination_address,
             amount_points=10,
             fee_points=1,
             request_uuid="self-custody-transfer-missing-signature",
@@ -233,7 +277,7 @@ def test_self_custody_wallet_transfer_requires_private_key_signature(tmp_path):
     tx_payload = wallet_transaction_payload(
         user_id=1,
         source_wallet_address=wallet["address"],
-        destination_wallet_address=destination["address"],
+        destination_wallet_address=destination_address,
         amount_points=10,
         fee_points=1,
         request_uuid="self-custody-transfer-signed",
@@ -244,7 +288,7 @@ def test_self_custody_wallet_transfer_requires_private_key_signature(tmp_path):
     result = points.submit_wallet_transaction(
         actor={"id": 1, "username": "alice", "role": "user"},
         source_wallet_address=wallet["address"],
-        destination_wallet_address=destination["address"],
+        destination_wallet_address=destination_address,
         amount_points=10,
         fee_points=1,
         request_uuid="self-custody-transfer-signed",
@@ -256,7 +300,7 @@ def test_self_custody_wallet_transfer_requires_private_key_signature(tmp_path):
     assert result["transaction"]["status"] == "pending"
 
 
-def test_self_custody_service_fee_reserve_requires_private_key_signature(tmp_path):
+def test_self_custody_service_fee_direct_payment_is_disabled_until_cold_chain_rail(tmp_path):
     points = _points(tmp_path)
     private_key = ec.generate_private_key(ec.SECP256R1())
     public_jwk = _public_jwk(private_key)
@@ -294,7 +338,7 @@ def test_self_custody_service_fee_reserve_requires_private_key_signature(tmp_pat
         actor={"id": 1, "username": "alice", "role": "user"},
     )
 
-    with pytest.raises(PermissionError, match="service fee signature required"):
+    with pytest.raises(ValueError, match="cold wallet direct service payment is disabled"):
         points.spend_points(
             user_id=1,
             item_key="comfyui_txt2img_basic",
@@ -316,22 +360,20 @@ def test_self_custody_service_fee_reserve_requires_private_key_signature(tmp_pat
         chain_branch="main",
         signer_key_id=wallet["public_key_hash"],
     )
-    result = points.spend_points(
-        user_id=1,
-        item_key="comfyui_txt2img_basic",
-        source_wallet_address=wallet["address"],
-        request_uuid="self-custody-service-fee-signed",
-        idempotency_key="self-custody-service-fee-signed",
-        signature=_signature(private_key, payload),
-        actor={"id": 1, "username": "alice", "role": "user"},
-    )
+    with pytest.raises(ValueError, match="cold wallet direct service payment is disabled"):
+        points.spend_points(
+            user_id=1,
+            item_key="comfyui_txt2img_basic",
+            source_wallet_address=wallet["address"],
+            request_uuid="self-custody-service-fee-signed",
+            idempotency_key="self-custody-service-fee-signed",
+            signature=_signature(private_key, payload),
+            actor={"id": 1, "username": "alice", "role": "user"},
+        )
 
     wallet_after = points.get_wallet(1)
-    assert result["created"] is True
-    assert result["ledger"]["direction"] == "freeze"
-    assert result["charge"]["status"] == "reserved"
-    assert wallet_after["wallet_identity_balances"][wallet["address"]]["points_balance"] == 45
-    assert wallet_after["wallet_identity_balances"][wallet["address"]]["points_frozen"] == 5
+    assert wallet_after["wallet_identity_balances"][wallet["address"]]["points_balance"] == 50
+    assert wallet_after["wallet_identity_balances"][wallet["address"]]["points_frozen"] == 0
 
 
 def test_official_hot_and_multisig_wallets_complete_onboarding_without_private_key(tmp_path):
@@ -359,6 +401,32 @@ def test_official_hot_and_multisig_wallets_complete_onboarding_without_private_k
     assert multisig["metadata"]["multisig_policy"]["threshold"] == 2
     assert status["wallet"]["address"] == official["address"]
     assert status["signup_bonus_granted"] is False
+    assert status["required"] is False
+
+
+def test_system_account_onboarding_status_hides_member_wallet_fields(tmp_path):
+    points = _points(tmp_path)
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        official = create_official_hot_wallet(conn, user_id=1, chain_secret=points.chain_secret)
+        status = wallet_onboarding_status(conn, points_service=points, user_id=1)
+        sanitized = system_account_wallet_onboarding_status(status)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert official["address"].startswith("pc0")
+    assert sanitized["required"] is False
+    assert sanitized["wallet_required"] is False
+    assert sanitized["signup_bonus_required"] is False
+    assert sanitized["wallet"] is None
+    assert sanitized["wallets"] == []
+    assert sanitized["deposit_address"] == ""
+    assert sanitized["deposit_addresses"] == []
+    assert sanitized["allowed_modes"] == []
+    assert sanitized["system_wallets"]
+    assert sanitized["system_account"] is True
 
 
 def test_multisig_can_be_second_wallet_without_replacing_primary(tmp_path):
@@ -383,7 +451,8 @@ def test_multisig_can_be_second_wallet_without_replacing_primary(tmp_path):
     assert multisig["is_primary"] is False
     assert len(status["wallets"]) == 2
     assert status["wallet"]["address"] == official["address"]
-    assert status["wallet_creation_fee"]["amount_points"] == 50
+    assert status["wallet_creation_fee"]["amount_points"] == 0
+    assert status["wallet_creation_fee"]["existing_chargeable_wallet_count"] == 0
     assert "multisig" not in status["allowed_modes"]
     assert status["multisig_policy"]["rc1_user_multisig"] == "receive_only"
 
@@ -409,13 +478,34 @@ def test_second_wallet_creation_fee_charges_official_treasury(tmp_path):
             actor={"username": "system", "role": "system"},
         )
         assert row["amount"] == 100
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_jwk = _public_jwk(private_key)
+        cold_address = address_from_public_key(public_jwk)
+        bind_self_custody_wallet(
+            conn,
+            user_id=1,
+            wallet_type="self_custody_cold",
+            public_key_jwk=public_jwk,
+            address=cold_address,
+            signature=_signature(
+                private_key,
+                wallet_binding_payload(
+                    user_id=1,
+                    wallet_type="self_custody_cold",
+                    address=cold_address,
+                    public_key_jwk=public_jwk,
+                ),
+            ),
+            backup_confirmed=True,
+            label="first free cold wallet",
+        )
         quote = points.wallet_creation_fee_quote(conn, 1)
         fee = points.charge_wallet_creation_fee_locked(
             conn,
             user_id=1,
             source_wallet_address=first["address"],
             request_uuid="create-wallet-fee-1",
-            wallet_count_before=1,
+            wallet_count_before=quote["existing_chargeable_wallet_count"],
             amount_points=quote["amount_points"],
             mode="self_custody_cold",
             actor={"id": 1, "username": "alice", "role": "user"},
@@ -518,7 +608,7 @@ def test_wallet_creation_fee_rejects_bad_quote_insufficient_balance_and_multisig
         points.submit_wallet_transaction(
             actor={"id": 1, "username": "alice", "role": "user"},
             source_wallet_address=multisig["address"],
-            destination_wallet_address=first["address"],
+            destination_wallet_address="pc1" + ("e" * 48),
             amount_points=1,
             fee_points=1,
             request_uuid="user-multisig-transfer-blocked",
@@ -650,7 +740,7 @@ def test_lost_cold_wallet_can_be_claimed_by_private_key_and_balance_follows_addr
     finally:
         conn.close()
 
-    assert status_after_delete["wallet"] is None
+    assert status_after_delete["wallet"]["address"].startswith("pc0")
     assert all(item["address"] != address for item in status_after_delete["wallets"])
     assert points.get_wallet(1)["points_balance"] == 0
     assert points.explorer_wallet(address)["wallet"]["points_balance"] == 77
@@ -704,18 +794,19 @@ def test_lost_cold_wallet_can_be_claimed_by_private_key_and_balance_follows_addr
     assert restored["user_id"] == 2
     assert restored["address"] == address
     assert restored["metadata"]["shared_private_key_control"] is True
-    assert status_user1["wallet"] is None
+    assert status_user1["wallet"]["address"].startswith("pc0")
     assert status_user2["wallet"]["address"] == address
     assert restored_again["user_id"] == 1
     assert restored_again["address"] == address
     assert restored_again["metadata"]["claimed_lost_wallet"] is True
-    assert status_user1_after_restore["wallet"]["address"] == address
-    assert points.get_wallet(1)["points_balance"] == 77
-    assert points.get_wallet(2)["points_balance"] == 77
+    assert status_user1_after_restore["wallet"]["address"].startswith("pc0")
+    assert points.get_wallet(1)["wallet_identity_balances"][address]["points_balance"] == 77
+    assert points.get_wallet(2)["wallet_identity_balances"][address]["points_balance"] == 77
+    shared_spend_destination = "pc1" + ("f" * 48)
     tx_payload = wallet_transaction_payload(
         user_id=2,
         source_wallet_address=address,
-        destination_wallet_address=BURN_WALLET_ADDRESS,
+        destination_wallet_address=shared_spend_destination,
         amount_points=5,
         fee_points=1,
         request_uuid="shared-key-holder-first-spend-wins",
@@ -726,7 +817,7 @@ def test_lost_cold_wallet_can_be_claimed_by_private_key_and_balance_follows_addr
     spend = points.submit_wallet_transaction(
         actor={"id": 2, "username": "bob", "role": "user"},
         source_wallet_address=address,
-        destination_wallet_address=BURN_WALLET_ADDRESS,
+        destination_wallet_address=shared_spend_destination,
         amount_points=5,
         fee_points=1,
         request_uuid="shared-key-holder-first-spend-wins",
@@ -816,8 +907,8 @@ def test_unowned_address_transfer_is_claimed_when_private_key_is_imported(tmp_pa
         conn.close()
 
     assert restored["address"] == destination
-    assert status_user2["wallet"]["address"] == destination
-    assert points.get_wallet(2)["points_balance"] == 15
+    assert status_user2["wallet"]["address"].startswith("pc0")
+    assert points.get_wallet(2)["wallet_identity_balances"][destination]["points_balance"] == 15
     user2_transactions = points.list_wallet_transactions(
         user_id=2,
         actor={"id": 2, "username": "bob", "role": "user"},
@@ -926,8 +1017,10 @@ def test_wallet_ledger_flow_snapshot_survives_cold_wallet_delete_switch_and_rest
     )
     assert bonus["created"] is True
     ledger_after_a = points.list_ledger(user_id=1, limit=1)[0]
-    assert ledger_after_a["wallet_flow"]["destination_wallet_address"] == address_a
-    assert points.get_wallet(1)["points_balance"] == 100
+    hot_address = ledger_after_a["wallet_flow"]["destination_wallet_address"]
+    assert hot_address.startswith("pc0")
+    assert hot_address != address_a
+    assert points.get_wallet(1)["account_points_balance"] == 100
 
     conn = points.get_db()
     try:
@@ -936,8 +1029,8 @@ def test_wallet_ledger_flow_snapshot_survives_cold_wallet_delete_switch_and_rest
         conn.commit()
     finally:
         conn.close()
-    assert points.get_wallet(1)["points_balance"] == 0
-    assert points.list_ledger(user_id=1, limit=1)[0]["wallet_flow"]["destination_wallet_address"] == address_a
+    assert points.get_wallet(1)["account_points_balance"] == 100
+    assert points.list_ledger(user_id=1, limit=1)[0]["wallet_flow"]["destination_wallet_address"] == hot_address
 
     conn = points.get_db()
     try:
@@ -954,21 +1047,24 @@ def test_wallet_ledger_flow_snapshot_survives_cold_wallet_delete_switch_and_rest
         conn.commit()
     finally:
         conn.close()
-    assert points.get_wallet(1)["points_balance"] == 0
-    assert points.list_ledger(user_id=1, limit=1)[0]["wallet_flow"]["destination_wallet_address"] == address_a
-    with pytest.raises(ValueError, match="insufficient balance"):
-        points.record_transaction(
-            user_id=1,
-            currency_type="points",
-            direction="debit",
-            amount=1,
-            action_type="spend:post_cost_standard",
-        )
+    assert points.get_wallet(1)["account_points_balance"] == 100
+    assert points.list_ledger(user_id=1, limit=1)[0]["wallet_flow"]["destination_wallet_address"] == hot_address
+    spend = points.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="debit",
+        amount=1,
+        action_type="spend:post_cost_standard",
+    )
+    assert spend["created"] is True
+    spend_ledger = points.list_ledger(user_id=1, limit=1)[0]
+    assert spend_ledger["action_type"] == "spend:post_cost_standard"
+    assert spend_ledger["wallet_flow"]["source_wallet_address"] == hot_address
 
     conn = points.get_db()
     try:
         points.ensure_schema(conn)
-        delete_primary_cold_wallet(conn, user_id=1, reason="switch back to A")
+        delete_cold_wallet(conn, user_id=1, address=address_b, reason="switch back to A")
         restore_payload = wallet_binding_payload(
             user_id=1,
             wallet_type="imported_cold",
@@ -989,7 +1085,9 @@ def test_wallet_ledger_flow_snapshot_survives_cold_wallet_delete_switch_and_rest
         conn.close()
 
     assert restored["address"] == address_a
-    assert points.get_wallet(1)["points_balance"] == 100
-    ledger_after_restore = points.list_ledger(user_id=1, limit=1)[0]
-    assert ledger_after_restore["wallet_flow"]["destination_wallet_address"] == address_a
-    assert ledger_after_restore["public_metadata"]["wallet_flow_snapshot"]["destination_wallet_address"] == address_a
+    wallet_after_restore = points.get_wallet(1)
+    assert wallet_after_restore["wallet_identity_balances"][address_a]["points_balance"] == 0
+    assert wallet_after_restore["wallet_identity_balances"][hot_address]["points_balance"] == 99
+    ledger_after_restore = next(row for row in points.list_ledger(user_id=1, limit=10) if row["action_type"] == "new_user_signup_bonus")
+    assert ledger_after_restore["wallet_flow"]["destination_wallet_address"] == hot_address
+    assert ledger_after_restore["public_metadata"]["wallet_flow_snapshot"]["destination_wallet_address"] == hot_address

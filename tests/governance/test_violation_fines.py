@@ -5,6 +5,7 @@ import pytest
 from services.governance import violations
 from services.governance.violation_fines import (
     active_feature_restrictions,
+    assert_user_feature_allowed,
     ensure_violation_fine_schema,
     list_violation_fines,
     mark_violation_fine_paid,
@@ -225,6 +226,33 @@ def test_restriction_only_applies_after_due_at(tmp_path):
         assert ok is True
         assert msg == ""
         assert status == 200
+    finally:
+        conn.close()
+
+
+def test_permission_check_blocks_overdue_fine_without_materializing_restrictions(tmp_path):
+    db_path = tmp_path / "violations.db"
+    audits = []
+    _seed_db(db_path)
+    _configure(str(db_path), audits)
+    for idx in range(3):
+        violations.add_violation(3, "alice", "user", points=1, reason=f"hot path {idx}", triggered_by="manager", actor_username="admin")
+
+    conn = _connect(db_path)
+    try:
+        fine = list_violation_fines(conn, user_id=3)[0][0]
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        conn.execute("UPDATE violation_fines SET status='pending', due_at=? WHERE fine_uuid=?", (past, fine["fine_uuid"]))
+        conn.execute("DELETE FROM user_feature_restrictions WHERE user_id=3")
+        conn.commit()
+
+        allowed, msg, restrictions = assert_user_feature_allowed(conn, user_id=3, feature_key="community_post")
+
+        assert allowed is False
+        assert "功能已暫停" in msg
+        assert restrictions[0]["source_ref"] == fine["fine_uuid"]
+        materialized_count = conn.execute("SELECT COUNT(*) AS c FROM user_feature_restrictions WHERE user_id=3").fetchone()["c"]
+        assert materialized_count == 0
     finally:
         conn.close()
 

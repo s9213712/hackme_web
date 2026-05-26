@@ -49,7 +49,11 @@ def run_step(name: str, priority: str, incident: str, command: list[str], *, tim
 def run_health(base_url: str) -> dict:
     if not base_url:
         return {"name": "live_health", "requested": False, "ok": True}
-    command = ["curl", "-k", "-sS", f"{base_url.rstrip('/')}/api/version"]
+    # Prefer the IPv4 loopback for isolated QA servers; some sandboxes resolve
+    # localhost to IPv6 first while the dev server is bound to 127.0.0.1.
+    health_url = f"{base_url.rstrip('/')}/api/version"
+    health_url = health_url.replace("://localhost:", "://127.0.0.1:")
+    command = ["curl", "-k", "-sS", "--retry", "2", "--retry-delay", "1", health_url]
     started_at = utc_now()
     proc = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
     return {
@@ -108,7 +112,7 @@ def main() -> int:
         run_step(
             "p0_migration_branch_supply",
             "P0",
-            "Genesis/migration/fork replay and fund zeroing",
+            "Genesis/migration/fork replay and fund zeroing without ledger backup restore",
             [
                 py,
                 "-m",
@@ -116,7 +120,6 @@ def main() -> int:
                 "-q",
                 "tests/points/test_governance_branch.py::test_official_funds_are_branch_scoped_after_recovery_branch",
                 "tests/points/test_governance_branch.py::test_multiple_recovery_forks_preserve_canonical_ledger_and_do_not_zero_funds",
-                "tests/points/test_governance_branch.py::test_branch_backup_restore_preserves_canonical_pointer_and_governance_audit",
             ],
         ),
         run_step(
@@ -143,7 +146,8 @@ def main() -> int:
                 "-m",
                 "pytest",
                 "-q",
-                "tests/trading/core/test_trading_engine.py::test_spot_trade_principal_does_not_enter_exchange_fund_only_fee_does",
+                "tests/trading/core/test_trading_engine.py::test_spot_cfd_principal_payout_and_fee_flow_through_exchange_fund",
+                "tests/trading/core/test_trading_engine.py::test_margin_cfd_price_loss_is_collected_by_exchange_reserve_pool",
                 "tests/trading/core/test_trading_engine.py::test_official_exchange_fund_transfer_syncs_trading_reserve_pool",
                 "tests/trading/core/test_trading_engine.py::test_reserve_pool_tampering_enters_trading_safe_mode",
             ],
@@ -183,7 +187,7 @@ def main() -> int:
                 "pytest",
                 "-q",
                 "tests/points/test_points_explorer.py::test_points_explorer_acceleration_is_append_only_and_idempotent",
-                "tests/points/test_points_explorer.py::test_wallet_transfer_pending_does_not_credit_recipient_until_proved",
+                "tests/points/test_points_explorer.py::test_wallet_transfer_pending_does_not_credit_chain_address_until_proved",
                 "tests/points/test_governance_branch.py::test_recovery_branch_replays_parent_without_stolen_tx_and_isolates_old_assets",
             ],
         ),

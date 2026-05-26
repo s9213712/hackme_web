@@ -42,7 +42,8 @@ def test_governance_frontend_has_status_tabs_and_inline_dispute_voting():
     assert 'id="economy-governance-public-count"' in index_html
     assert 'id="economy-governance-dispute-count"' in index_html
     assert index_html.index('id="economy-governance-card"') < index_html.index('id="economy-dispute-card"')
-    assert index_html.index('id="economy-governance-list"') < index_html.index('id="economy-public-governance-create-details"')
+    assert index_html.index('id="economy-governance-list"') < index_html.index('id="economy-governance-emergency-create-details"')
+    assert 'id="economy-public-governance-create-details"' not in index_html
     assert "let economyGovernanceStatusFilter" in economy_js
     assert "function updateEconomyGovernanceOverviewCounts" in economy_js
     assert "economy-governance-public-status" in economy_js
@@ -73,6 +74,10 @@ def test_admin_user_list_shows_official_hot_wallet_for_manager_only():
     assert "points_wallet_identities" in users_route
     assert "wallet_type='official_hot'" in users_route
     assert "custody_mode='server_hot'" in users_route
-    assert "官方熱錢包：" in users_js
+    assert "站內託管錢包：" in users_js
+    assert "橋接 pc1：" in users_js
+    assert "official_hot_wallet_deposit_address" in users_js
     assert "u.official_hot_wallet_address" in users_js
+    assert 'u.username !== "root"' in users_js
+    assert 'str(row["username"] or "") == "root"' in users_route
     assert "currentRole === \"manager\" || currentRole === \"super_admin\"" in users_js

@@ -78,6 +78,14 @@ def ensure_official_hot_wallet(page) -> str:
     return address
 
 
+def assert_system_account_has_no_member_hot_wallet(page) -> dict[str, Any]:
+    result = fetch_json(page, "POST", "/api/points/wallet/onboarding", {"mode": "official_hot"})
+    body = result.get("body") or {}
+    if result["status"] != 403 or body.get("code") != "system_account_no_member_wallet":
+        raise AssertionError(f"root system-account wallet guard failed: {result}")
+    return {"status": result["status"], "code": body.get("code"), "msg": body.get("msg", "")}
+
+
 def switch_to_economy_governance(page) -> None:
     page.evaluate(
         """() => {
@@ -138,9 +146,12 @@ def main() -> int:
         if root_login["status"] != 200 or admin_login["status"] != 200:
             raise AssertionError(f"login failed: {checks['login']}")
 
-        root_wallet = ensure_official_hot_wallet(root_page)
+        root_wallet_guard = assert_system_account_has_no_member_hot_wallet(root_page)
         admin_wallet = ensure_official_hot_wallet(admin_page)
-        checks["signer_wallets"] = {"root": root_wallet, "admin": admin_wallet}
+        checks["signer_wallets"] = {
+            "root_system_account_wallet_guard": root_wallet_guard,
+            "admin": admin_wallet,
+        }
 
         destination = test_address(f"frontend-treasury-dest-{time.time()}")
         proposal = fetch_json(
@@ -247,12 +258,23 @@ def main() -> int:
         checks["dispute_button_prompt"] = {"first_prompt": prompts[0], "message": dispute_msg}
         browser.close()
 
+    expected_browser_errors = [
+        item for item in browser_errors
+        if item.get("label") == "root"
+        and item.get("type") == "console"
+        and "status of 403" in str(item.get("text") or "")
+    ]
+    unexpected_browser_errors = [
+        item for item in browser_errors
+        if item not in expected_browser_errors
+    ]
     payload = {
-        "ok": not browser_errors,
+        "ok": not unexpected_browser_errors,
         "base_url": base_url,
         "checked_at": now_text(),
         "checks": checks,
-        "browser_errors": browser_errors[:50],
+        "browser_errors": unexpected_browser_errors[:50],
+        "expected_browser_errors": expected_browser_errors[:20],
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

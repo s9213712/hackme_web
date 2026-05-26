@@ -26,7 +26,7 @@ SIGNUP_BONUS_POINTS = 100
 ADMIN_INITIAL_POINTS = 1000
 USER_INITIAL_POINTS = 100
 ADMIN_WEEKLY_SALARY_POINTS = 250
-BIRTHDAY_GIFT_POINTS = 500
+BIRTHDAY_GIFT_POINTS = 1000
 POINTS_CHAIN_SCHEMA_VERSION = 1
 DEFAULT_BACKUP_INTERVAL_MINUTES = 60
 DEFAULT_BACKUP_KEEP_RECENT = 5
@@ -98,14 +98,19 @@ DEFAULT_RULES = (
 DEFAULT_PRICE_CATALOG = (
     ("post_cost_standard", "一般發文成本", "forum", "soft", 1, 0, 1, 10, 1, {"description": "防止洗版的基本回收"}),
     ("post_pin_24h", "文章置頂 24 小時", "forum", "soft", 100, 0, 50, 300, 1, {}),
-    ("cloud_storage_1gb_30d", "雲端容量 1GB / 7 天", "cloud_drive", "soft", 100, 0, 50, 500, 1, {"storage_bytes": 1024 ** 3, "duration_days": 7, "label": "雲端容量 1GB / 7 天"}),
+    ("cloud_storage_1gb_30d", "雲端容量 1GB / 30 天", "cloud_drive", "soft", 100, 0, 50, 500, 1, {"storage_bytes": 1024 ** 3, "duration_days": 30, "label": "雲端容量 1GB / 30 天"}),
     ("comfyui_txt2img_basic", "基礎生圖一次", "comfyui", "soft", 5, 1, 1, 25, 1, {}),
-    ("comfyui_txt2img_highres", "高解析生圖一次", "comfyui", INTERNAL_CURRENCY, 2, 1, 1, 20, 1, {}),
-    ("comfyui_batch_10", "批次生圖 10 張", "comfyui", INTERNAL_CURRENCY, 15, 1, 5, 80, 1, {}),
+    ("comfyui_txt2img_highres", "高解析生圖一次", "comfyui", INTERNAL_CURRENCY, 12, 1, 5, 60, 1, {}),
+    ("comfyui_batch_10", "批次生圖 10 張", "comfyui", INTERNAL_CURRENCY, 45, 1, 20, 200, 1, {}),
+    ("video_publish_basic", "影音發布處理費", "video", INTERNAL_CURRENCY, 2, 0, 1, 20, 1, {}),
+    ("video_boost_24h", "影音曝光加成 24 小時", "video", INTERNAL_CURRENCY, 80, 0, 30, 300, 1, {}),
     ("server_rental_cpu_1h", "CPU Server 1 小時", "server_rental", INTERNAL_CURRENCY, 5, 1, 2, 30, 1, {}),
     ("server_rental_gpu_1h", "GPU Server 1 小時", "server_rental", INTERNAL_CURRENCY, 50, 1, 20, 200, 1, {}),
+    ("game_entry_standard", "遊戲一般入場", "game", INTERNAL_CURRENCY, 1, 0, 1, 10, 1, {}),
     ("game_virtual_item_common", "普通虛寶", "game", "soft", 20, 0, 5, 100, 1, {}),
     ("game_virtual_item_premium", "高級虛寶", "game", INTERNAL_CURRENCY, 5, 0, 1, 50, 1, {}),
+    ("marketplace_listing_fee", "市集上架費", "marketplace", INTERNAL_CURRENCY, 3, 0, 1, 30, 1, {}),
+    ("ai_agent_task_basic", "AI Agent 基礎任務", "ai_task", INTERNAL_CURRENCY, 10, 1, 5, 100, 1, {}),
     ("username_change", "改名", "account", "soft", 200, 0, 100, 1000, 1, {}),
     ("profile_decoration", "個人頁裝飾", "account", "soft", 50, 0, 10, 250, 1, {}),
     ("violation_fine", "違規罰款繳納", "governance", INTERNAL_CURRENCY, 300, 0, 1, 100000, 1, {"destination": "burn", "description": "違規罰款由用戶授權付款，預設銷毀以避免官方靠處分獲利。"}),
@@ -566,6 +571,116 @@ def ensure_points_economy_schema(conn):
         conn.execute("ALTER TABLE points_chain_transfer_requests ADD COLUMN source_fund_key TEXT NOT NULL DEFAULT ''")
     if "destination_unowned" not in transfer_cols:
         conn.execute("ALTER TABLE points_chain_transfer_requests ADD COLUMN destination_unowned INTEGER NOT NULL DEFAULT 0 CHECK (destination_unowned IN (0, 1))")
+    transfer_column_defs = {
+        "settlement_rail": "TEXT NOT NULL DEFAULT 'cold_chain' CHECK (settlement_rail IN ('internal_hot_wallet','internal_system_burn','cold_chain','deposit_bridge_credit','withdrawal_bridge_lock','withdrawal_bridge_broadcast','withdrawal_bridge_confirm','withdrawal_bridge_refund'))",
+        "chain_required": "INTEGER NOT NULL DEFAULT 1 CHECK (chain_required IN (0,1))",
+        "approval_required": "INTEGER NOT NULL DEFAULT 1 CHECK (approval_required IN (0,1))",
+        "network_fee_points": "INTEGER NOT NULL DEFAULT 0 CHECK (network_fee_points >= 0)",
+        "service_fee_points": "INTEGER NOT NULL DEFAULT 0 CHECK (service_fee_points >= 0)",
+    }
+    transfer_cols = table_columns(conn, "points_chain_transfer_requests")
+    for column, ddl in transfer_column_defs.items():
+        if column not in transfer_cols:
+            conn.execute(f"ALTER TABLE points_chain_transfer_requests ADD COLUMN {column} {ddl}")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_chain_deposit_addresses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            chain TEXT NOT NULL DEFAULT 'points_chain_sim',
+            address TEXT NOT NULL UNIQUE,
+            vault_key TEXT NOT NULL DEFAULT 'default',
+            status TEXT NOT NULL DEFAULT 'active',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CHECK (status IN ('active', 'disabled', 'rotated'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_points_chain_deposit_one_active
+        ON points_chain_deposit_addresses(user_id, chain)
+        WHERE status='active'
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_chain_bridge_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bridge_uuid TEXT NOT NULL UNIQUE,
+            bridge_type TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            chain TEXT NOT NULL DEFAULT 'points_chain_sim',
+            chain_tx_hash TEXT NOT NULL,
+            source_address TEXT NOT NULL DEFAULT '',
+            destination_address TEXT NOT NULL DEFAULT '',
+            hot_wallet_address TEXT NOT NULL DEFAULT '',
+            amount_points INTEGER NOT NULL CHECK (amount_points > 0),
+            network_fee_points INTEGER NOT NULL DEFAULT 0 CHECK (network_fee_points >= 0),
+            confirmations INTEGER NOT NULL DEFAULT 0 CHECK (confirmations >= 0),
+            required_confirmations INTEGER NOT NULL DEFAULT 20 CHECK (required_confirmations > 0),
+            risk_status TEXT NOT NULL DEFAULT 'accepted',
+            status TEXT NOT NULL DEFAULT 'pending',
+            internal_ledger_uuid TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            confirmed_at TEXT,
+            credited_at TEXT,
+            refunded_at TEXT,
+            updated_at TEXT NOT NULL,
+            CHECK (bridge_type IN ('deposit', 'withdrawal')),
+            CHECK (risk_status IN ('accepted', 'review', 'blocked')),
+            CHECK (status IN ('pending', 'confirmed', 'credited', 'failed', 'refunded'))
+        )
+        """
+    )
+    bridge_cols = table_columns(conn, "points_chain_bridge_events")
+    bridge_column_defs = {
+        "bridge_uuid": "TEXT NOT NULL DEFAULT ''",
+        "bridge_type": "TEXT NOT NULL DEFAULT 'deposit'",
+        "chain": "TEXT NOT NULL DEFAULT 'points_chain_sim'",
+        "chain_tx_hash": "TEXT NOT NULL DEFAULT ''",
+        "source_address": "TEXT NOT NULL DEFAULT ''",
+        "destination_address": "TEXT NOT NULL DEFAULT ''",
+        "hot_wallet_address": "TEXT NOT NULL DEFAULT ''",
+        "amount_points": "INTEGER NOT NULL DEFAULT 1",
+        "network_fee_points": "INTEGER NOT NULL DEFAULT 0",
+        "confirmations": "INTEGER NOT NULL DEFAULT 0",
+        "required_confirmations": "INTEGER NOT NULL DEFAULT 20",
+        "risk_status": "TEXT NOT NULL DEFAULT 'accepted'",
+        "status": "TEXT NOT NULL DEFAULT 'pending'",
+        "internal_ledger_uuid": "TEXT NOT NULL DEFAULT ''",
+        "metadata_json": "TEXT NOT NULL DEFAULT '{}'",
+        "confirmed_at": "TEXT",
+        "credited_at": "TEXT",
+        "refunded_at": "TEXT",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    }
+    for column, ddl in bridge_column_defs.items():
+        if column not in bridge_cols:
+            conn.execute(f"ALTER TABLE points_chain_bridge_events ADD COLUMN {column} {ddl}")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_points_chain_bridge_uuid
+        ON points_chain_bridge_events(bridge_uuid)
+        WHERE bridge_uuid<>''
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_points_chain_bridge_chain_tx
+        ON points_chain_bridge_events(chain, chain_tx_hash)
+        WHERE chain_tx_hash<>''
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_points_chain_bridge_user
+        ON points_chain_bridge_events(user_id, bridge_type, status, created_at)
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS points_service_fee_charges (

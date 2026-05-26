@@ -11,7 +11,7 @@ import json
 import uuid
 
 from .schema import canonical_json, sha256_text, utc_now
-from .wallet_identity import BURN_WALLET_ADDRESS, address_from_hash, system_wallet_address
+from .wallet_identity import BURN_WALLET_ADDRESS, LEGACY_PC0_BURN_WALLET_ADDRESS, internal_address_from_hash, system_wallet_address
 
 
 ECONOMY_POLICY_VERSION = "phase1_sim_economy_v1"
@@ -24,6 +24,15 @@ EXCHANGE_PRINCIPAL_LENT_TYPES = {
     "margin_collateral_withdraw_principal_lent",
 }
 EXCHANGE_PRINCIPAL_REPAID_TYPES = {"margin_principal_repaid"}
+EXCHANGE_PRINCIPAL_RECEIVABLE_ADDRESS_PREFIX = "exchange_margin_receivable:"
+
+
+def exchange_principal_receivable_address(source_user_id):
+    try:
+        user_key = str(int(source_user_id))
+    except (TypeError, ValueError):
+        user_key = "unassigned"
+    return f"{EXCHANGE_PRINCIPAL_RECEIVABLE_ADDRESS_PREFIX}user:{user_key}"
 
 DEFAULT_ECONOMY_POLICY = {
     "policy_version": ECONOMY_POLICY_VERSION,
@@ -79,14 +88,14 @@ def economy_fund_address(chain_secret, fund_key):
         return system_wallet_address(chain_secret, fund_key)
     if fund_key not in ECONOMY_FUND_KEYS:
         raise ValueError("unsupported economy fund key")
-    return address_from_hash(f"economy_fund:{fund_key}:{chain_secret or ''}")
+    return internal_address_from_hash(f"economy_fund:{fund_key}:{chain_secret or ''}")
 
 
 def _is_burn_address(address, *, wallets=None):
     address = str(address or "").strip()
     if not address:
         return False
-    burn_addresses = {BURN_WALLET_ADDRESS}
+    burn_addresses = {BURN_WALLET_ADDRESS, LEGACY_PC0_BURN_WALLET_ADDRESS}
     if wallets and "burn" in wallets:
         burn_addresses.add(str(wallets["burn"]["address"] or "").strip())
     return address in burn_addresses
@@ -356,15 +365,23 @@ def ensure_economy_fund_wallets(conn, *, chain_secret):
     wallets = {}
     for fund_key in ("mint", "burn", "official_treasury", "promo_fund", "exchange_fund"):
         address = economy_fund_address(chain_secret, fund_key)
+        custody_mode = "system" if fund_key in {"mint", "burn"} else "server_hot"
+        metadata = {
+            "phase": "1A",
+            "financial_source_of_truth": "points_economy_events",
+            "address_namespace": "system_special" if fund_key in {"mint", "burn"} else "pc0_internal",
+            "owner_type": "system" if fund_key in {"mint", "burn"} else "platform",
+            "not_official_hot_wallet": fund_key in {"mint", "burn"},
+        }
         row = conn.execute("SELECT * FROM points_economy_fund_wallets WHERE fund_key=?", (fund_key,)).fetchone()
-        if row and row["address"] != address:
+        if row and (row["address"] != address or row["custody_mode"] != custody_mode):
             conn.execute(
                 """
                 UPDATE points_economy_fund_wallets
-                SET address=?, label=?, updated_at=?
+                SET address=?, label=?, custody_mode=?, metadata_json=?, updated_at=?
                 WHERE fund_key=?
                 """,
-                (address, DEFAULT_FUND_LABELS[fund_key], now, fund_key),
+                (address, DEFAULT_FUND_LABELS[fund_key], custody_mode, _json_dumps(metadata), now, fund_key),
             )
             row = conn.execute("SELECT * FROM points_economy_fund_wallets WHERE fund_key=?", (fund_key,)).fetchone()
         elif not row:
@@ -373,13 +390,14 @@ def ensure_economy_fund_wallets(conn, *, chain_secret):
                 INSERT INTO points_economy_fund_wallets (
                     fund_key, address, label, custody_mode, derived_cache,
                     metadata_json, created_at, updated_at
-                ) VALUES (?, ?, ?, 'system', 0, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, 0, ?, ?, ?)
                 """,
                 (
                     fund_key,
                     address,
                     DEFAULT_FUND_LABELS[fund_key],
-                    _json_dumps({"phase": "1A", "financial_source_of_truth": "points_economy_events"}),
+                    custody_mode,
+                    _json_dumps(metadata),
                     now,
                     now,
                 ),
@@ -674,6 +692,9 @@ def replay_economy_events(conn, *, policy=None, chain_secret, persist_cache=Fals
     active_supply = minted_total - burned_total
     if active_supply < 0:
         raise ValueError("economy replay would create negative active supply")
+    mint_remaining = int(policy["max_supply"]) - minted_total
+    balances["mint"]["balance"] = mint_remaining
+    balances["burn"]["balance"] = burned_total
     last_hash = rows[-1]["event_hash"] if rows else None
     fund_supply = sum(
         int(balances.get(key, {}).get("balance") or 0)
@@ -709,7 +730,7 @@ def replay_economy_events(conn, *, policy=None, chain_secret, persist_cache=Fals
         "max_supply": int(policy["max_supply"]),
         "reserved_locked": int(policy["reserved_locked"]),
         "releasable_supply": releasable_supply,
-        "mint_remaining": int(policy["max_supply"]) - minted_total,
+        "mint_remaining": mint_remaining,
         "releasable_remaining": releasable_supply - minted_total,
         "fund_supply": fund_supply,
         "circulating_supply": circulating_supply,
@@ -788,25 +809,54 @@ def economy_supply_equation_report(*, replay, circulation=None):
     promo_balance = _int_value((balances.get("promo_fund") or {}).get("balance"))
     official_balance = _int_value((balances.get("official_treasury") or {}).get("balance"))
     exchange_balance = _int_value((balances.get("exchange_fund") or {}).get("balance"))
+    exchange_settlement_withheld_contra = max(
+        0,
+        _int_value(circulation.get("exchange_margin_settlement_withheld_contra_points")),
+    )
+    exchange_bridge_balance = max(0, exchange_balance - exchange_settlement_withheld_contra)
     legacy_outstanding = _int_value(circulation.get("member_outstanding_points"))
+    member_available = _int_value(circulation.get("member_available_points"))
+    member_frozen = _int_value(circulation.get("member_frozen_points"))
     root_outstanding = _int_value(circulation.get("root_outstanding_points"))
     total_legacy_outstanding = legacy_outstanding + root_outstanding
     economy_circulating = _int_value(replay.get("circulating_supply"))
     economy_external_supply = _int_value(replay.get("external_supply"))
     if not economy_external_supply and economy_circulating:
         economy_external_supply = economy_circulating
-    off_wallet_external = max(0, economy_external_supply - total_legacy_outstanding)
+    residual_off_wallet_external = max(0, economy_external_supply - total_legacy_outstanding)
+    explicit_off_wallet_external = circulation.get("off_wallet_economy_external_points")
+    off_wallet_external = (
+        max(0, _int_value(explicit_off_wallet_external))
+        if explicit_off_wallet_external is not None
+        else residual_off_wallet_external
+    )
+    economy_pc0_member = _int_value(circulation.get("economy_pc0_member_internal_points"))
+    economy_pc0_root = _int_value(circulation.get("economy_pc0_root_internal_points"))
+    economy_pc0_unknown = _int_value(circulation.get("economy_pc0_unknown_internal_points"))
+    economy_pc0_internal = _int_value(circulation.get("economy_pc0_internal_points"))
+    if economy_pc0_internal <= 0:
+        economy_pc0_internal = economy_pc0_member + economy_pc0_root + economy_pc0_unknown
+    if economy_pc0_internal <= 0 and explicit_off_wallet_external is None:
+        economy_pc0_internal = max(0, economy_external_supply - off_wallet_external)
+    ledger_vs_economy_gap = circulation.get("ledger_vs_economy_external_gap_points")
+    if ledger_vs_economy_gap is None and explicit_off_wallet_external is not None:
+        ledger_vs_economy_gap = total_legacy_outstanding - (economy_pc0_member + economy_pc0_root)
+    ledger_vs_economy_gap = _int_value(ledger_vs_economy_gap)
+    bridge_flow_totals = circulation.get("bridge_flow_totals") if isinstance(circulation.get("bridge_flow_totals"), dict) else {}
     max_supply = _int_value(replay.get("max_supply"))
     burned_total = _int_value(replay.get("burned_total"))
     mint_remaining = _int_value(replay.get("mint_remaining"))
 
-    unfunded_legacy = max(0, total_legacy_outstanding - economy_external_supply)
+    if explicit_off_wallet_external is not None:
+        unfunded_legacy = max(0, ledger_vs_economy_gap)
+    else:
+        unfunded_legacy = max(0, total_legacy_outstanding - economy_external_supply)
     promo_after_required_debit = promo_balance - unfunded_legacy
     actual_total = burned_total + official_balance + exchange_balance + promo_balance + economy_external_supply + mint_remaining
     bridged_total = (
         burned_total
         + official_balance
-        + exchange_balance
+        + exchange_bridge_balance
         + promo_after_required_debit
         + total_legacy_outstanding
         + off_wallet_external
@@ -814,30 +864,62 @@ def economy_supply_equation_report(*, replay, circulation=None):
     )
     actual_gap = actual_total - max_supply
     bridged_gap = bridged_total - max_supply
+    formula_balanced = bridged_gap == 0
+    audit_balanced = formula_balanced and ledger_vs_economy_gap == 0
     status = "balanced"
     if unfunded_legacy > promo_balance:
         status = "blocker"
-    elif actual_gap != 0 or bridged_gap != 0:
+    elif actual_gap != 0 or bridged_gap != 0 or ledger_vs_economy_gap != 0:
         status = "legacy_gap"
 
     return {
         "phase": "1B_walletized_replay",
         "status": status,
         "legacy_outstanding_points": legacy_outstanding,
+        "member_internal_available_points": member_available,
+        "member_internal_frozen_points": member_frozen,
+        "member_internal_circulating_points": legacy_outstanding,
         "root_outstanding_points": root_outstanding,
+        "root_internal_circulating_points": root_outstanding,
         "total_legacy_outstanding_points": total_legacy_outstanding,
+        "total_internal_circulating_points": total_legacy_outstanding,
         "wallet_ledger_outstanding_points": total_legacy_outstanding,
         "economy_external_circulating_points": economy_external_supply,
         "off_wallet_economy_external_points": off_wallet_external,
+        "residual_off_wallet_economy_external_points": residual_off_wallet_external,
+        "economy_pc0_member_internal_points": economy_pc0_member,
+        "economy_pc0_root_internal_points": economy_pc0_root,
+        "economy_pc0_unknown_internal_points": economy_pc0_unknown,
+        "economy_pc0_internal_points": economy_pc0_internal,
+        "ledger_vs_economy_external_gap_points": ledger_vs_economy_gap,
+        "economy_external_balance_breakdown": circulation.get("economy_external_balance_breakdown") or {},
+        "bridge_flow_totals": bridge_flow_totals,
         "exchange_fund_receivable_principal_points": _int_value(replay.get("exchange_receivable_principal")),
         "exchange_fund_total_assets_points": _int_value(replay.get("exchange_total_assets")),
         "burned_total": burned_total,
+        "system_burn_sink_balance": burned_total,
+        "system_mint_unissued_balance": mint_remaining,
+        "pc0_platform_internal_fund_balance": official_balance + exchange_balance + promo_balance,
+        "holder_circulating_balance": economy_external_supply,
         "official_treasury_balance": official_balance,
         "exchange_fund_balance": exchange_balance,
+        "exchange_fund_reconciled_balance": exchange_bridge_balance,
+        "exchange_margin_settlement_withheld_contra_points": exchange_settlement_withheld_contra,
         "promo_fund_balance": promo_balance,
         "mint_remaining": mint_remaining,
         "max_supply": max_supply,
         "economy_circulating_supply": economy_circulating,
+        "holder_circulating_breakdown": {
+            "member_internal_circulating_points": legacy_outstanding,
+            "member_internal_available_points": member_available,
+            "member_internal_frozen_points": member_frozen,
+            "root_internal_circulating_points": root_outstanding,
+            "off_wallet_economy_external_points": off_wallet_external,
+            "residual_off_wallet_economy_external_points": residual_off_wallet_external,
+            "economy_pc0_internal_points": economy_pc0_internal,
+            "ledger_vs_economy_external_gap_points": ledger_vs_economy_gap,
+            "bridge_flow_totals": bridge_flow_totals,
+        },
         "unfunded_legacy_outstanding_points": unfunded_legacy,
         "promo_debit_required_points": unfunded_legacy,
         "promo_balance": promo_balance,
@@ -846,9 +928,11 @@ def economy_supply_equation_report(*, replay, circulation=None):
         "actual_supply_equation_gap_points": actual_gap,
         "bridged_supply_equation_total": bridged_total,
         "bridged_supply_equation_gap_points": bridged_gap,
-        "bridged_supply_equation_balanced": bridged_gap == 0,
-        "formula": "burned + official_treasury + economy_external_circulating + mint_remaining + exchange_fund + promo_fund = max_supply",
-        "note": "Closed-loop status is balanced when economy replay external supply plus fund balances equals active supply; wallet outstanding is an audit component, not the whole off-fund economy.",
+        "bridged_supply_equation_balanced": formula_balanced,
+        "formula_gap_balanced": formula_balanced,
+        "audit_reconciliation_balanced": audit_balanced,
+        "formula": "system_burn_sink + pc0_platform_funds + member_internal_circulating + root_internal_circulating + off_wallet_circulating + system_mint_unissued = max_supply",
+        "note": "pc0 is the platform-custodial internal ledger namespace. Mint and burn are system-special chain accounting addresses, not official pc0 wallets.",
     }
 
 

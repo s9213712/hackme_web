@@ -124,6 +124,18 @@ def random_unowned_address(rng: random.Random) -> str:
     return "pc1" + "".join(rng.choice("0123456789abcdef") for _ in range(48))
 
 
+def pick_other_client_address(
+    clients: list[dict[str, Any]],
+    sender: dict[str, Any],
+    *,
+    rng: random.Random,
+) -> str:
+    candidates = [item["address"] for item in clients if item.get("address") != sender.get("address")]
+    if not candidates:
+        return random_unowned_address(rng)
+    return rng.choice(candidates)
+
+
 def db_path(runtime_root: str) -> Path:
     root = Path(runtime_root)
     candidates = [
@@ -402,7 +414,8 @@ def ensure_official_hot_wallet(client: ProbeClient) -> str:
 
 
 def create_or_get_user(root: ProbeClient, username: str, password: str) -> dict[str, Any]:
-    users = root.request("GET", "/api/admin/users", expected={200})
+    search_path = f"/api/admin/users?q={username}&page_size=100"
+    users = root.request("GET", search_path, expected={200})
     for item in users.get("users") or []:
         if item.get("username") == username:
             return {"id": int(item["id"]), "username": username, "created": False}
@@ -421,7 +434,7 @@ def create_or_get_user(root: ProbeClient, username: str, password: str) -> dict[
     )
     if int(res.get("status") or 0) not in {200, 409}:
         raise RuntimeError(f"user create failed: {username}: {res}")
-    users = root.request("GET", "/api/admin/users", expected={200})
+    users = root.request("GET", search_path, expected={200})
     for item in users.get("users") or []:
         if item.get("username") == username:
             return {"id": int(item["id"]), "username": username, "created": int(res.get("status") or 0) == 200}
@@ -503,7 +516,7 @@ def main() -> int:
     root_login = root.login()
     if int(root_login.get("status") or 0) != 200:
         raise SystemExit(f"root login failed: {root_login}")
-    fee_market_samples.append(fee_market_snapshot(root, "baseline_before_pending_grants"))
+    fee_market_samples.append(fee_market_snapshot(root, "baseline_before_internal_grants"))
 
     users: list[dict[str, Any]] = []
     password = "StressQa123!"
@@ -545,28 +558,29 @@ def main() -> int:
             "ok": True,
             "status": 200,
             "expected": True,
-            "op": "official_grant_fixture_pending",
+            "op": "official_grant_fixture_internal",
             "transaction_hash": grant.get("transaction_hash"),
             "tx_group_hash": grant.get("transaction_hash"),
             "request_uuid": request_uuid,
+            "settlement_rail": grant.get("settlement_rail") or "internal_hot_wallet",
             "fixture": True,
         }
         grant_samples.append(res)
         samples.append(res)
-        after_pending = wallet_balance(item["client"])
-        item["balance_after_pending_grant"] = after_pending
+        after_grant = wallet_balance(item["client"])
+        item["balance_after_internal_grant"] = after_grant
         item["grant_hash"] = res.get("transaction_hash") or res.get("tx_group_hash")
-        if after_pending["balance"] >= item["balance_before_grant"]["balance"] + int(args.grant_points):
+        if after_grant["balance"] < item["balance_before_grant"]["balance"] + int(args.grant_points):
             findings.append({
                 "severity": "critical",
-                "title": "official grant credited before proved",
+                "title": "pc0 official grant did not credit immediately",
                 "user": item["user"]["username"],
                 "before": item["balance_before_grant"],
-                "after_pending": after_pending,
+                "after_grant": after_grant,
                 "transaction_hash": item.get("grant_hash"),
             })
 
-    fee_market_samples.append(fee_market_snapshot(root, "after_pending_official_grants"))
+    fee_market_samples.append(fee_market_snapshot(root, "after_internal_official_grants"))
     forced_grants = force_proved(database, prefix + "grant-")
     root_refresh = root.request("GET", "/api/points/transactions?limit=100", expected={200})
     samples.append({"op": "root_finalize_grants", **root_refresh})
@@ -590,7 +604,7 @@ def main() -> int:
         if idx % 5 == 0:
             destination = random_unowned_address(rng)
         else:
-            destination = clients[(idx * 7 + 3) % len(clients)]["address"]
+            destination = pick_other_client_address(clients, sender, rng=rng)
         amount = rng.randint(5, 45)
         fee = rng.randint(1, 30)
         transfer_tasks.append((sender, destination, amount, fee, prefix + f"tx-{idx:04d}", "stress transfer"))
@@ -652,7 +666,14 @@ def main() -> int:
         findings.append({"severity": "critical", "title": "wallet balance went negative after overspend burst", "wallet": rich["address"], "balance": rich_after_overspend})
 
     fee_market_samples.append(fee_market_snapshot(root, "after_pending_transfer_burst"))
-    pending_ok = [s for s in samples if s.get("op") in {"wallet_transfer", "duplicate_first", "overspend_transfer"} and int(s.get("status") or 0) == 200]
+    pending_ok = [
+        s
+        for s in samples
+        if s.get("op") in {"wallet_transfer", "duplicate_first", "overspend_transfer"}
+        and int(s.get("status") or 0) == 200
+        and str(((s.get("request") or {}).get("status")) or "").lower() == "pending"
+        and str(((s.get("request") or {}).get("settlement_rail")) or "").lower() != "internal_hot_wallet"
+    ]
     if pending_ok:
         target = pending_ok[0]
         owner = next((item for item in clients if item["user"]["username"] == target.get("sender_username")), clients[0])
@@ -670,6 +691,14 @@ def main() -> int:
         samples.append(accel)
         if int(accel.get("status") or 0) != 200:
             findings.append({"severity": "high", "title": "transaction owner could not accelerate pending transfer", "target": target, "response": accel})
+    else:
+        samples.append({
+            "op": "accelerate_pending_skipped",
+            "status": 200,
+            "ok": True,
+            "expected": True,
+            "reason": "no cold-chain pending transfer; pc0 internal transfers are immediately settled and cannot be accelerated",
+        })
 
     notification_checks = []
     for item in clients[:2]:
@@ -777,10 +806,10 @@ def main() -> int:
                 })
 
         baseline = fee_market_samples[0]
-        grant_pending = fee_market_samples[1]
+        internal_grants = fee_market_samples[1]
         transfer_pending = fee_market_samples[2]
-        assert_fee_market_monotonic(baseline, grant_pending, "pending grant")
-        assert_fee_market_monotonic(grant_pending, transfer_pending, "transfer burst")
+        assert_fee_market_monotonic(baseline, internal_grants, "internal grant")
+        assert_fee_market_monotonic(internal_grants, transfer_pending, "transfer burst")
         for snapshot in fee_market_samples:
             if snapshot["suggested_priority_fee_points"] > 0 and snapshot["suggested_fee_estimated_seconds_min"] >= snapshot["zero_fee_estimated_seconds_min"]:
                 findings.append({

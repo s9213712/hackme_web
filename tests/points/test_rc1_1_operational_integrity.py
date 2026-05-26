@@ -19,7 +19,7 @@ def _run(cmd):
     )
 
 
-def test_rc1_1_restore_drill_cli_proves_restore_invariants(tmp_path):
+def test_rc1_1_restore_drill_cli_proves_snapshot_boundary_invariants(tmp_path):
     out = tmp_path / "restore_drill.json"
     proc = _run([sys.executable, "scripts/ops/rc1_restore_drill.py", "--out", str(out)])
 
@@ -30,7 +30,9 @@ def test_rc1_1_restore_drill_cli_proves_restore_invariants(tmp_path):
     assert payload["baseline_verify"]["ok"] is True
     assert payload["restored_verify"]["ok"] is True
     assert all(payload["invariants"].values())
-    assert payload["counts"]["dirty"]["ledger"] > payload["counts"]["baseline"]["ledger"]
+    assert payload["ledger_backup_disabled"]["disabled"] is True
+    assert payload["ledger_restore_exercised"] is False
+    assert payload["counts"]["dirty"]["ledger"] == payload["counts"]["baseline"]["ledger"]
     assert payload["counts"]["restored"]["ledger"] == payload["counts"]["baseline"]["ledger"]
 
 

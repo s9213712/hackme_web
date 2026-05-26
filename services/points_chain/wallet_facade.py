@@ -78,6 +78,12 @@ class WalletServiceFacade:
 
         metadata = dict(public_metadata or {})
         metadata.setdefault("rc1_facade", "RewardDistributionFacade")
+        metadata.setdefault("source_fund_key", "promo_fund")
+        metadata.setdefault("settlement_rail", "internal_hot_wallet")
+        metadata.setdefault("chain_required", False)
+        metadata.setdefault("approval_required", False)
+        metadata.setdefault("network_fee_points", 0)
+        metadata.setdefault("service_fee_points", 0)
         return self.points_service.record_transaction(
             user_id=user_id,
             currency_type=currency_type,

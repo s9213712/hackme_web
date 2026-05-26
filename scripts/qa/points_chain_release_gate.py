@@ -59,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", default="", help="Optional live isolated server URL for Playwright probes.")
     parser.add_argument("--runtime-root", default="", help="Optional runtime root for live recovery drill probes.")
     parser.add_argument("--root-password", default="root", help="Root password for live UI probes.")
+    parser.add_argument("--capacity-probe", action="store_true", help="Run the isolated RC1 capacity probe as part of this gate.")
+    parser.add_argument(
+        "--capacity-probe-out",
+        default=str(ROOT / "artifacts" / "qa" / "predeploy_capacity_probe_rc1.json"),
+        help="JSON output path for --capacity-probe.",
+    )
     parser.add_argument("--skip-live", action="store_true", help="Skip live Playwright/API probes even if URLs are supplied.")
     return parser
 
@@ -143,7 +149,8 @@ def main() -> int:
             "tests/trading/core/test_trading_engine.py::test_exchange_order_rejects_user_multisig_receive_only_wallet_source",
             "tests/trading/core/test_trading_engine.py::test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position",
             "tests/trading/core/test_trading_engine.py::test_mixed_trial_and_real_points_buy_only_records_real_points_on_chain",
-            "tests/trading/core/test_trading_engine.py::test_spot_trade_principal_does_not_enter_exchange_fund_only_fee_does",
+            "tests/trading/core/test_trading_engine.py::test_spot_cfd_principal_payout_and_fee_flow_through_exchange_fund",
+            "tests/trading/core/test_trading_engine.py::test_margin_cfd_price_loss_is_collected_by_exchange_reserve_pool",
         ],
         timeout=180,
     ))
@@ -156,7 +163,7 @@ def main() -> int:
             "-q",
             "tests/video/api/test_video_tips.py::test_video_tip_debits_viewer_credits_uploader_and_is_idempotent",
             "tests/points/test_governance_branch.py::test_official_treasury_signer_center_reports_service_fee_income",
-            "tests/points/test_points_chain.py::test_spend_points_reserves_service_fee_then_batches_chain_debit",
+            "tests/points/test_points_chain.py::test_pc0_spend_points_debits_internal_hot_wallet_immediately",
         ],
         timeout=180,
     ))
@@ -178,6 +185,23 @@ def main() -> int:
         ],
         timeout=240,
     ))
+
+    capacity_results = {"requested": False, "steps": [], "report": ""}
+    if args.capacity_probe:
+        capacity_results["requested"] = True
+        capacity_out = Path(args.capacity_probe_out)
+        capacity_results["report"] = str(capacity_out)
+        capacity_results["steps"].append(run_step(
+            "predeploy_capacity_probe_rc1",
+            [
+                sys.executable,
+                "scripts/testing/predeploy_capacity_probe.py",
+                "--output",
+                str(capacity_out),
+                "--no-sync-defaults",
+            ],
+            timeout=1200,
+        ))
 
     live_results = {"requested": False, "steps": []}
     if not args.skip_live and args.base_url:
@@ -213,7 +237,7 @@ def main() -> int:
             timeout=240,
         ))
 
-    all_steps = [*steps, *live_results["steps"]]
+    all_steps = [*steps, *capacity_results["steps"], *live_results["steps"]]
     scanner_blockers = parse_scanner_blockers(scanner_json)
     ok = all(step["ok"] for step in all_steps) and scanner_blockers == 0
     payload = {
@@ -227,11 +251,13 @@ def main() -> int:
         "playwright": "pass" if live_results["steps"] and all(step["ok"] for step in live_results["steps"]) else ("skipped" if not live_results["requested"] else "fail"),
         "pentest": "not_run_by_this_gate",
         "stress": "covered_by_targeted_stress_or_external_gate",
+        "capacity": "pass" if capacity_results["steps"] and all(step["ok"] for step in capacity_results["steps"]) else ("skipped" if not capacity_results["requested"] else "fail"),
         "legacy_bypass_paths": scanner_blockers,
         "production_profile_guard": "pass" if next((s for s in steps if s["name"] == "feature_flag_and_production_guard_tests"), {}).get("ok") else "fail",
         "artifacts": {
             "scanner_json": str(scanner_json),
             "scanner_md": str(scanner_md),
+            "capacity_json": capacity_results["report"],
         },
         "steps": all_steps,
     }
@@ -240,6 +266,7 @@ def main() -> int:
         "release_candidate": payload["release_candidate"],
         "ok": payload["ok"],
         "scanner_blockers": payload["scanner_blockers"],
+        "capacity": payload["capacity"],
         "playwright": payload["playwright"],
         "production_profile_guard": payload["production_profile_guard"],
         "out": str(out),

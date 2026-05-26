@@ -9,6 +9,7 @@ from services.points_chain.economy_layer import (
     append_economy_incident,
     compute_economy_event_hash,
     economy_layer_report,
+    economy_supply_equation_report,
     rebuild_economy_derived_balances,
     replay_economy_events,
     verify_economy_derived_balances,
@@ -625,6 +626,61 @@ def test_exchange_principal_lent_is_external_supply_not_formula_gap(tmp_path):
     assert report["supply_equation"]["bridged_supply_equation_balanced"] is True
     assert report["health"]["status"] == "yellow"
     assert report["health"]["reasons"] == ["exchange_fund_liquidity_critical"]
+
+
+def test_supply_equation_uses_explicit_bridge_external_not_residual():
+    replay = {
+        "balances": {
+            "official_treasury": {"balance": 10},
+            "exchange_fund": {"balance": 20},
+            "promo_fund": {"balance": 20},
+        },
+        "circulating_supply": 150,
+        "external_supply": 150,
+        "max_supply": 1_000,
+        "burned_total": 0,
+        "mint_remaining": 800,
+        "exchange_receivable_principal": 0,
+        "exchange_total_assets": 20,
+    }
+    report = economy_supply_equation_report(
+        replay=replay,
+        circulation={
+            "member_outstanding_points": 100,
+            "root_outstanding_points": 0,
+            "member_available_points": 100,
+            "member_frozen_points": 0,
+            "economy_pc0_member_internal_points": 90,
+            "economy_pc0_root_internal_points": 0,
+            "off_wallet_economy_external_points": 60,
+            "ledger_vs_economy_external_gap_points": 10,
+            "bridge_flow_totals": {
+                "hot_to_cold_confirmed_points": 75,
+                "deposit_credited_points": 15,
+                "economy_external_flow_net_points": 60,
+                "economy_flow_reconciliation_gap_points": 0,
+            },
+            "economy_external_balance_breakdown": {
+                "pc0_member_points": 90,
+                "pc1_unbound_points": 60,
+                "cold_chain_or_bridge_external_points": 60,
+            },
+        },
+    )
+
+    assert report["off_wallet_economy_external_points"] == 60
+    assert report["residual_off_wallet_economy_external_points"] == 50
+    assert report["economy_pc0_member_internal_points"] == 90
+    assert report["ledger_vs_economy_external_gap_points"] == 10
+    assert report["bridge_flow_totals"]["hot_to_cold_confirmed_points"] == 75
+    assert report["holder_circulating_breakdown"]["bridge_flow_totals"]["deposit_credited_points"] == 15
+    assert report["unfunded_legacy_outstanding_points"] == 10
+    assert report["promo_balance_after_required_debit"] == 10
+    assert report["bridged_supply_equation_gap_points"] == 0
+    assert report["formula_gap_balanced"] is True
+    assert report["bridged_supply_equation_balanced"] is True
+    assert report["audit_reconciliation_balanced"] is False
+    assert report["status"] == "legacy_gap"
 
 
 def test_exchange_non_receivable_drain_stays_red(tmp_path):

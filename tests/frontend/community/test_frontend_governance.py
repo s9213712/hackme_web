@@ -28,6 +28,10 @@ def test_governance_target_uses_member_select():
     assert "<label>處理對象</label>" in index_html
     assert "<label>處理方式</label>" in index_html
     assert "<label>動作值</label>" in index_html
+    assert 'id="governance-duration-hours"' in index_html
+    assert 'id="governance-restriction-features"' in index_html
+    assert 'value="cloud_upload"' in index_html
+    assert 'id="governance-emergency-execute"' in index_html
     assert "<label>投票規則</label>" in index_html
     assert "<label>需要同意票數</label>" not in index_html
     assert "<label>投票期限（小時）</label>" in index_html
@@ -38,10 +42,16 @@ def test_governance_target_uses_member_select():
     assert 'id="governance-action-value-help"' in index_html
     assert "GOVERNANCE_ACTION_VALUE_HELP" in admin_js
     assert "GOVERNANCE_HIGH_RISK_ACTIONS" in admin_js
+    assert "GOVERNANCE_EMERGENCY_ACTIONS" in admin_js
+    assert "selectedGovernanceRestrictionFeatures" in admin_js
     assert "governancePolicySummary" in admin_js
     assert "會員規則讀取失敗或功能尚未啟用" in admin_js
     assert "會員規則僅 root 可讀取" not in admin_js
     assert "function updateGovernanceActionValueHelp" in admin_js
     assert "newbie / normal / restricted / suspended" in admin_js
+    assert "restriction_features: restrictionFeatures" in admin_js
+    assert "duration_hours: durationHoursRaw" in admin_js
+    assert "emergency_execute: emergency" in admin_js
+    assert "已先行套用" in admin_js
     assert "required_votes:" not in admin_js
     assert "root override" not in admin_js

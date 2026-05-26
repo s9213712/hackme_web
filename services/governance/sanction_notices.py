@@ -1,6 +1,12 @@
+import sqlite3
+import threading
 from datetime import datetime
 
+from services.core.sqlite_safe import table_columns as safe_table_columns
 from services.system.notifications import create_notification, ensure_notifications_schema
+
+_APPEAL_SCHEMA_LOCK = threading.Lock()
+_APPEAL_SCHEMA_READY_PATHS = set()
 
 
 def _value(row, key, default=None):
@@ -12,41 +18,72 @@ def _value(row, key, default=None):
         return row.get(key, default) if hasattr(row, "get") else default
 
 
+def _connection_path(conn):
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        return str(row["file"] if hasattr(row, "keys") else row[2])
+    except Exception:
+        return ""
+
+
+def _table_columns(conn, table_name):
+    try:
+        return safe_table_columns(conn, table_name)
+    except Exception:
+        return set()
+
+
+def _is_duplicate_column_error(exc):
+    return isinstance(exc, sqlite3.OperationalError) and "duplicate column name" in str(exc).lower()
+
+
 def ensure_admin_sanction_appeal_schema(conn):
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS admin_sanction_appeal_contexts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            violation_id INTEGER NOT NULL UNIQUE,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            pre_status TEXT,
-            pre_role TEXT,
-            pre_base_level TEXT,
-            pre_member_level TEXT,
-            pre_effective_level TEXT,
-            pre_sanction_status TEXT,
-            pre_sanction_until TEXT,
-            action_label TEXT NOT NULL,
-            reason TEXT NOT NULL,
-            actor_username TEXT NOT NULL,
-            points_ledger_uuid TEXT,
-            created_at TEXT NOT NULL
+    db_path = _connection_path(conn)
+    if db_path and db_path in _APPEAL_SCHEMA_READY_PATHS:
+        return
+    with _APPEAL_SCHEMA_LOCK:
+        if db_path and db_path in _APPEAL_SCHEMA_READY_PATHS:
+            return
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_sanction_appeal_contexts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                violation_id INTEGER NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                pre_status TEXT,
+                pre_role TEXT,
+                pre_base_level TEXT,
+                pre_member_level TEXT,
+                pre_effective_level TEXT,
+                pre_sanction_status TEXT,
+                pre_sanction_until TEXT,
+                action_label TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                actor_username TEXT NOT NULL,
+                points_ledger_uuid TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
         )
-        """
-    )
-    cols = {row["name"] for row in conn.execute("PRAGMA table_info(admin_sanction_appeal_contexts)").fetchall()}
-    if "points_ledger_uuid" not in cols:
-        conn.execute("ALTER TABLE admin_sanction_appeal_contexts ADD COLUMN points_ledger_uuid TEXT")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_sanction_context_user ON admin_sanction_appeal_contexts(user_id, created_at)")
-    conn.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS trg_admin_sanction_appeal_contexts_no_delete
-        BEFORE DELETE ON admin_sanction_appeal_contexts
-        BEGIN
-            SELECT RAISE(ABORT, 'sanction appeal contexts are immutable; mark withdrawn instead');
-        END;
-        """
-    )
+        cols = _table_columns(conn, "admin_sanction_appeal_contexts")
+        if "points_ledger_uuid" not in cols:
+            try:
+                conn.execute("ALTER TABLE admin_sanction_appeal_contexts ADD COLUMN points_ledger_uuid TEXT")
+            except sqlite3.OperationalError as exc:
+                if not _is_duplicate_column_error(exc):
+                    raise
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_sanction_context_user ON admin_sanction_appeal_contexts(user_id, created_at)")
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_admin_sanction_appeal_contexts_no_delete
+            BEFORE DELETE ON admin_sanction_appeal_contexts
+            BEGIN
+                SELECT RAISE(ABORT, 'sanction appeal contexts are immutable; mark withdrawn instead');
+            END;
+            """
+        )
+        if db_path:
+            _APPEAL_SCHEMA_READY_PATHS.add(db_path)
 
 
 def _next_governance_notice_violation_id(conn):

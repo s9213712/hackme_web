@@ -138,7 +138,10 @@ def main() -> int:
         page.select_option("#economy-governance-category-select", "mint")
         page.wait_for_timeout(250)
         check("mint_category_visible", page.locator("#economy-governance-mint-create-details").evaluate("el => getComputedStyle(el).display !== 'none'"))
-        check("public_category_hidden_when_mint_selected", page.locator("#economy-public-governance-create-details").evaluate("el => getComputedStyle(el).display === 'none'"))
+        if page.locator("#economy-public-governance-create-details").count():
+            check("public_category_hidden_when_mint_selected", page.locator("#economy-public-governance-create-details").evaluate("el => getComputedStyle(el).display === 'none'"))
+        else:
+            check("legacy_public_governance_create_removed", True, "public governance creation is no longer a standalone form")
 
         page.select_option("#economy-governance-category-select", "dispute")
         page.wait_for_timeout(250)
@@ -153,21 +156,28 @@ def main() -> int:
         page.wait_for_selector("#economy-governance-page.active", timeout=10000)
         page.select_option("#economy-governance-category-select", "treasury")
         page.wait_for_timeout(250)
-        page.eval_on_selector("#economy-governance-treasury-create-details", "el => el.open = true")
-        page.select_option("#economy-governance-treasury-action", "EXCHANGE_FUND_REPLENISH")
-        page.wait_for_function(
-            "() => { const el = document.querySelector('#economy-governance-treasury-destination'); return el && el.readOnly && el.value && el.value.startsWith('pc1'); }",
-            timeout=15000,
-        )
-        treasury_dest = page.eval_on_selector(
-            "#economy-governance-treasury-destination",
-            "el => ({value: el.value, readOnly: el.readOnly})",
-        )
-        check(
-            "exchange_replenish_address_locked",
-            bool(treasury_dest["readOnly"]) and str(treasury_dest["value"]).startswith("pc1"),
-            json.dumps(treasury_dest, ensure_ascii=False),
-        )
+        if page.locator("#economy-governance-treasury-create-details").count():
+            page.eval_on_selector("#economy-governance-treasury-create-details", "el => el.open = true")
+            page.select_option("#economy-governance-treasury-action", "EXCHANGE_FUND_REPLENISH")
+            page.wait_for_function(
+                "() => { const el = document.querySelector('#economy-governance-treasury-destination'); return el && el.readOnly && el.value && el.value.startsWith('pc0'); }",
+                timeout=15000,
+            )
+            treasury_dest = page.eval_on_selector(
+                "#economy-governance-treasury-destination",
+                "el => ({value: el.value, readOnly: el.readOnly})",
+            )
+            check(
+                "exchange_replenish_address_locked",
+                bool(treasury_dest["readOnly"]) and str(treasury_dest["value"]).startswith("pc0"),
+                json.dumps(treasury_dest, ensure_ascii=False),
+            )
+        else:
+            check(
+                "treasury_create_moved_to_official_wallet_management",
+                page.locator("#economy-manager-points-management-card").count() == 1,
+                "legacy treasury governance form removed; official wallet management card remains",
+            )
 
         page.click("#tab-economy-transactions")
         page.wait_for_selector("#economy-transactions-page.active", timeout=10000)

@@ -1,8 +1,19 @@
-"""Backup and recovery method slice for PointsLedgerService."""
+"""Forensic recovery method slice for PointsLedgerService.
+
+PointsChain deliberately does not support ledger backup restore. Recovery must
+preserve history through safe mode, forensic bundles, branches, governance, and
+ledger replay instead of overwriting the append-only ledger from a backup.
+"""
 
 from . import schema as _schema
 
 globals().update({name: value for name, value in _schema.__dict__.items() if not name.startswith("__")})
+
+POINTS_CHAIN_BACKUP_RESTORE_DISABLED_MSG = (
+    "PointsChain ledger backup/restore is disabled. Use safe mode, forensic "
+    "bundles, recovery branches, emergency governance, and append-only "
+    "correction transactions instead of overwriting ledger history."
+)
 
 def _backup_payload(self, conn):
     def rows(sql):
@@ -116,79 +127,17 @@ def _write_json_private(self, path, payload):
         pass
 
 def create_ledger_backup(self, *, reason="manual", kind="manual"):
-    conn = self.get_db()
-    try:
-        self.ensure_schema(conn)
-        result = self._create_ledger_backup(conn, reason=reason, kind=kind)
-        conn.commit()
-        return result
-    finally:
-        conn.close()
+    return {
+        "ok": False,
+        "created": False,
+        "disabled": True,
+        "msg": POINTS_CHAIN_BACKUP_RESTORE_DISABLED_MSG,
+        "reason": reason,
+        "kind": kind,
+    }
 
 def _create_ledger_backup(self, conn, *, reason="manual", kind="manual"):
-    root = self._backup_root()
-    created_at = utc_now()
-    summary = self._chain_head_summary(conn)
-    backup_id = f"pcb-{created_at.replace(':', '').replace('-', '').replace('Z', '')}-{uuid.uuid4().hex[:8]}"
-    backup_path = root / "backups" / backup_id
-    backup_path.mkdir(parents=True, exist_ok=False)
-    try:
-        os.chmod(backup_path, 0o700)
-    except Exception:
-        pass
-    payload = self._backup_payload(conn)
-    files_hash = sha256_text(canonical_json(payload))
-    manifest_core = {
-        "backup_id": backup_id,
-        "kind": kind,
-        "created_at": created_at,
-        "chain_height": summary["chain_height"],
-        "latest_block_hash": summary["latest_block_hash"],
-        "ledger_row_count": summary["ledger_row_count"],
-        "wallet_count": summary["wallet_count"],
-        "schema_version": POINTS_CHAIN_SCHEMA_VERSION,
-        "files_hash": files_hash,
-        "reason": reason,
-    }
-    manifest = {**manifest_core, "signature": self._sign_backup_manifest(manifest_core)}
-    self._write_json_private(backup_path / "data.json", payload)
-    self._write_json_private(backup_path / "manifest.json", manifest)
-    verification = self._verify_backup_payload(payload, manifest)
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO points_chain_backup_catalog (
-            backup_id, kind, created_at, chain_height, latest_block_hash,
-            ledger_row_count, wallet_count, schema_version, backup_path,
-            manifest_path, files_hash, signature, verified, verification_json, reason
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            backup_id,
-            kind,
-            created_at,
-            summary["chain_height"],
-            summary["latest_block_hash"],
-            summary["ledger_row_count"],
-            summary["wallet_count"],
-            POINTS_CHAIN_SCHEMA_VERSION,
-            str(backup_path),
-            str(backup_path / "manifest.json"),
-            files_hash,
-            manifest["signature"],
-            1 if verification["ok"] else 0,
-            _json_dumps(verification),
-            reason,
-        ),
-    )
-    self._audit_log(
-        conn,
-        "POINTS_LEDGER_BACKUP_CREATED",
-        "info" if verification["ok"] else "critical",
-        f"ledger backup {backup_id} created",
-        metadata={"backup_id": backup_id, "kind": kind, "verification": verification},
-    )
-    self._prune_ledger_backups(conn)
-    return {"ok": verification["ok"], "backup_id": backup_id, "manifest": manifest, "verification": verification}
+    raise RuntimeError(POINTS_CHAIN_BACKUP_RESTORE_DISABLED_MSG)
 
 def _load_backup_from_catalog(self, conn, backup_id):
     row = conn.execute("SELECT * FROM points_chain_backup_catalog WHERE backup_id=?", (str(backup_id or ""),)).fetchone()
@@ -200,36 +149,10 @@ def _load_backup_from_catalog(self, conn, backup_id):
     return row, payload, manifest
 
 def _healthy_backups(self, conn, *, limit=50):
-    rows = conn.execute(
-        """
-        SELECT * FROM points_chain_backup_catalog
-        WHERE verified=1
-        ORDER BY chain_height DESC, created_at DESC LIMIT ?
-        """,
-        (min(200, max(1, int(limit or 50))),),
-    ).fetchall()
-    healthy = []
-    for row in rows:
-        try:
-            _catalog, payload, manifest = self._load_backup_from_catalog(conn, row["backup_id"])
-            verification = self._verify_backup_payload(payload, manifest)
-            if verification["ok"]:
-                healthy.append(dict(row))
-        except Exception:
-            continue
-    return healthy
+    return []
 
 def list_ledger_backups(self, *, limit=100):
-    conn = self.get_db()
-    try:
-        self.ensure_schema(conn)
-        rows = conn.execute(
-            "SELECT * FROM points_chain_backup_catalog ORDER BY created_at DESC LIMIT ?",
-            (min(200, max(1, int(limit or 100))),),
-        ).fetchall()
-        return [{**dict(row), "verification": _json_loads(row["verification_json"], {})} for row in rows]
-    finally:
-        conn.close()
+    return []
 
 def _prune_ledger_backups(self, conn):
     rows = [dict(row) for row in conn.execute("SELECT * FROM points_chain_backup_catalog ORDER BY created_at DESC").fetchall()]
@@ -257,32 +180,15 @@ def _prune_ledger_backups(self, conn):
         conn.execute("DELETE FROM points_chain_backup_catalog WHERE backup_id=?", (row["backup_id"],))
 
 def _scheduled_backup_due(self, conn, interval_minutes=DEFAULT_BACKUP_INTERVAL_MINUTES):
-    last = conn.execute(
-        "SELECT created_at FROM points_chain_backup_catalog ORDER BY created_at DESC LIMIT 1"
-    ).fetchone()
-    if not last:
-        return True
-    parsed = parse_utc_timestamp(last["created_at"])
-    if not parsed:
-        return True
-    return (datetime.now(timezone.utc) - parsed).total_seconds() >= int(interval_minutes or DEFAULT_BACKUP_INTERVAL_MINUTES) * 60
+    return False
 
 def create_scheduled_backup_if_due(self):
-    conn = self.get_db()
-    try:
-        self.ensure_schema(conn)
-        ledger_count = int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0])
-        block_count = int(conn.execute("SELECT COUNT(*) FROM points_chain_blocks").fetchone()[0])
-        if ledger_count == 0 and block_count == 0:
-            return {"ok": True, "created": False, "msg": "空的鏈無排程備份"}
-        if not self._scheduled_backup_due(conn):
-            return {"ok": True, "created": False, "msg": "尚未到下一次備份時間"}
-        result = self._create_ledger_backup(conn, reason="scheduled_interval", kind="scheduled")
-        conn.commit()
-        result["created"] = True
-        return result
-    finally:
-        conn.close()
+    return {
+        "ok": True,
+        "created": False,
+        "disabled": True,
+        "msg": POINTS_CHAIN_BACKUP_RESTORE_DISABLED_MSG,
+    }
 
 def _create_forensic_bundle(self, conn, verification, reason):
     root = self._backup_root()
@@ -303,39 +209,38 @@ def _create_forensic_bundle(self, conn, verification, reason):
         "recent_blocks": [dict(row) for row in conn.execute("SELECT * FROM points_chain_blocks ORDER BY block_number DESC LIMIT 20").fetchall()],
         "recent_ledger": [dict(row) for row in conn.execute("SELECT * FROM points_ledger ORDER BY id DESC LIMIT 100").fetchall()],
         "audit_logs": [dict(row) for row in conn.execute("SELECT * FROM points_chain_audit_logs ORDER BY id DESC LIMIT 100").fetchall()],
-        "available_backups": [dict(row) for row in conn.execute("SELECT * FROM points_chain_backup_catalog ORDER BY created_at DESC LIMIT 50").fetchall()],
+        "available_backups": [],
+        "backup_restore_disabled": True,
     }
     self._write_json_private(bundle_path / "bundle.json", payload)
     return {"bundle_id": bundle_id, "path": str(bundle_path / "bundle.json"), "created_at": created_at}
 
-def _build_restore_plan(self, conn, verification, backup):
+def _build_restore_plan(self, conn, verification, backup=None):
     current = self._chain_head_summary(conn)
-    backup_height = int(backup.get("chain_height") or 0) if backup else 0
-    backup_latest_hash = backup.get("latest_block_hash") if backup else None
-    lost = []
-    if backup:
-        backup_row_count = int(backup.get("ledger_row_count") or 0)
-        rows = conn.execute(
-            "SELECT id, ledger_uuid, user_id, direction, amount, action_type, created_at FROM points_ledger WHERE id>? ORDER BY id ASC",
-            (backup_row_count,),
-        ).fetchall()
-        lost = [dict(row) for row in rows]
     return {
-        "mode": "root_confirmed_restore",
+        "mode": "branch_governance_recovery",
         "auto_apply": False,
-        "recommended_backup_id": backup.get("backup_id") if backup else None,
+        "backup_restore_disabled": True,
+        "recommended_backup_id": None,
         "current_chain_height": current["chain_height"],
         "current_latest_block_hash": current["latest_block_hash"],
-        "backup_chain_height": backup_height,
-        "backup_latest_block_hash": backup_latest_hash,
+        "backup_chain_height": None,
+        "backup_latest_block_hash": None,
         "lost_ledger_range": {
-            "from_id": lost[0]["id"] if lost else None,
-            "to_id": lost[-1]["id"] if lost else None,
-            "count": len(lost),
+            "from_id": None,
+            "to_id": None,
+            "count": 0,
         },
-        "lost_transactions": lost[:100],
-        "wallet_rebuild_source": "points_ledger",
+        "lost_transactions": [],
+        "wallet_rebuild_source": "disabled_backup_restore",
         "verification_errors": verification.get("errors", [])[:50],
+        "next_steps": [
+            "keep_safe_mode_enabled",
+            "review_forensic_bundle",
+            "open_recovery_branch_if_history_needs_correction",
+            "use_emergency_governance_for_corrective_entries",
+            "verify_chain_and_financial_invariants_after_resolution",
+        ],
     }
 
 def _enter_safe_mode(self, conn, verification, reason):
@@ -343,8 +248,7 @@ def _enter_safe_mode(self, conn, verification, reason):
     if row and int(row["safe_mode"] or 0):
         return self._safe_mode_status(conn)
     bundle = self._create_forensic_bundle(conn, verification, reason)
-    healthy = self._healthy_backups(conn, limit=50)
-    plan = self._build_restore_plan(conn, verification, healthy[0] if healthy else None)
+    plan = self._build_restore_plan(conn, verification)
     now = utc_now()
     conn.execute(
         """
@@ -366,7 +270,7 @@ def _enter_safe_mode(self, conn, verification, reason):
         conn,
         "POINTS_CHAIN_SAFE_MODE_ENTERED",
         "critical",
-        "PointsChain tamper detected; writers paused and restore plan prepared",
+        "PointsChain tamper detected; writers paused and branch/governance recovery plan prepared",
         metadata={"reason": reason, "forensic_bundle": bundle, "restore_plan": plan},
     )
     return self._safe_mode_status(conn)
