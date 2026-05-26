@@ -8045,6 +8045,37 @@ class PointsLedgerService:
             return {"has_identity": False, "primary_address": "", "balances": balances}
         for address in state["addresses"]:
             balances[address] = {"balance": 0, "frozen": 0, "pending_outgoing": 0}
+        if len(balances) == 1:
+            wallet = conn.execute(
+                """
+                SELECT soft_balance, hard_balance, soft_frozen, hard_frozen
+                FROM points_wallets
+                WHERE user_id=?
+                """,
+                (int(user_id),),
+            ).fetchone()
+            if wallet:
+                address = next(iter(balances))
+                balances[address]["balance"] = int(wallet["soft_balance"] or 0) + int(wallet["hard_balance"] or 0)
+                balances[address]["frozen"] = int(wallet["soft_frozen"] or 0) + int(wallet["hard_frozen"] or 0)
+                if include_pending:
+                    pending_by_address = self._pending_transfer_outgoing_by_address(
+                        conn,
+                        balances.keys(),
+                        exclude_request_uuid=exclude_request_uuid,
+                        branch_uuid=branch,
+                    )
+                    pending = int(pending_by_address.get(address) or 0)
+                    if pending > 0:
+                        balances[address]["balance"] -= pending
+                        balances[address]["frozen"] += pending
+                        balances[address]["pending_outgoing"] = pending
+                primary = state["primary"]
+                return {
+                    "has_identity": True,
+                    "primary_address": primary["address"] if primary else address,
+                    "balances": balances,
+                }
         rows = conn.execute(
             """
             SELECT * FROM points_ledger
