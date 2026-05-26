@@ -103,6 +103,24 @@ def margin_trade_records(service, conn, user_id, *, limit=50):
         "SELECT * FROM trading_margin_positions WHERE user_id=? ORDER BY id DESC LIMIT ?",
         (int(user_id), int(limit)),
     ).fetchall()
+    position_uuids = [str(row["position_uuid"] or "") for row in rows if row["position_uuid"]]
+    pending_by_position = {}
+    if position_uuids:
+        placeholders = ",".join("?" for _ in position_uuids)
+        for pending in conn.execute(
+            f"""
+            SELECT position_uuid, SUM(amount_points) AS amount_points,
+                   MAX(governance_proposal_uuid) AS governance_proposal_uuid
+            FROM trading_pending_profit
+            WHERE position_uuid IN ({placeholders}) AND status='pending'
+            GROUP BY position_uuid
+            """,
+            tuple(position_uuids),
+        ).fetchall():
+            pending_by_position[str(pending["position_uuid"] or "")] = {
+                "amount_points": int(pending["amount_points"] or 0),
+                "governance_proposal_uuid": str(pending["governance_proposal_uuid"] or ""),
+            }
     for row in rows:
         payload = service._margin_position_payload(row)
         label = payload["position_label"]
@@ -125,6 +143,10 @@ def margin_trade_records(service, conn, user_id, *, limit=50):
         })
         if row["closed_at"]:
             close_type = "margin_liquidation" if row["status"] == "liquidated" else "margin_close"
+            realized_pnl = int(row["realized_pnl_points"] or 0)
+            pending_profit = pending_by_position.get(str(row["position_uuid"] or ""), {})
+            pending_profit_points = int(pending_profit.get("amount_points") or 0)
+            paid_profit_points = max(0, realized_pnl) - pending_profit_points
             records.append({
                 "record_type": close_type,
                 "fill_uuid": f"{close_type}:{row['position_uuid']}",
@@ -139,7 +161,10 @@ def margin_trade_records(service, conn, user_id, *, limit=50):
                 ) if row["exit_price_points"] else 0,
                 "fee_points": int(row["close_fee_points"] or 0),
                 "interest_points": int(row["interest_points"] or 0),
-                "realized_pnl_points": int(row["realized_pnl_points"] or 0),
+                "realized_pnl_points": realized_pnl,
+                "paid_profit_points": max(0, paid_profit_points),
+                "pending_profit_points": pending_profit_points,
+                "governance_proposal_uuid": pending_profit.get("governance_proposal_uuid", ""),
                 "status": row["status"],
                 "created_at": row["closed_at"],
             })
@@ -152,7 +177,7 @@ def user_dashboard(service, *, user_id, source_wallet_address=None):
         service.ensure_schema(conn)
         service._ensure_trial_credit(conn, user_id)
         conn.commit()
-        tables, route_ctx = service._sql_tables()
+        tables, _route_ctx = service._sql_tables()
         positions_table = tables["positions"]
         orders_table = tables["orders"]
         state = service._state(conn)
@@ -187,17 +212,10 @@ def user_dashboard(service, *, user_id, source_wallet_address=None):
             service._futures_position_payload(row)
             for row in conn.execute("SELECT * FROM trading_futures_positions WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
         ]
-        for row in conn.execute(
-            "SELECT * FROM trading_margin_positions WHERE user_id=? AND status='open' ORDER BY id ASC",
-            (int(user_id),),
-        ).fetchall():
-            service._accrue_margin_interest(conn, row, actor={"username": "system", "role": "system"})
-        conn.commit()
         margin_positions = [
             service._margin_position_payload_with_risk(conn, row, market=market_map.get(row["market_symbol"]))
             for row in conn.execute("SELECT * FROM trading_margin_positions WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
         ]
-        conn.commit()
         try:
             wallet_status = wallet_onboarding_status(conn, points_service=service.points_service, user_id=user_id)
             wallets = wallet_status.get("wallets") or []
@@ -298,6 +316,7 @@ def user_dashboard(service, *, user_id, source_wallet_address=None):
                 funding = service._funding_payload(conn, user_id, source_wallet_address=None)
             else:
                 raise
+        conn.commit()
         if wallet_selection_warning and isinstance(funding, dict):
             funding["wallet_selection_warning"] = wallet_selection_warning
         return {

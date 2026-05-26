@@ -807,6 +807,12 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                             "trial_used_points": trial_used,
                             "chain_spend_points": chain_spend,
                             "source_wallet_address": source_wallet_address,
+                            "destination_fund_key": "exchange_fund",
+                            "settlement_rail": "internal_hot_wallet",
+                            "chain_required": False,
+                            "approval_required": False,
+                            "network_fee_points": 0,
+                            "service_fee_points": fee,
                             "statement_spent_points": 0,
                             "statement_note": "spot buy principal is an asset swap, not cumulative spending",
                         },
@@ -895,17 +901,14 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                     market["symbol"],
                 ),
             )
-        reserve_delta = (
-            0
-            if funding_mode == "root_simulated"
-            else min(fee, max(0, total - trial_used if funding_mode != "root_simulated" else fee))
-        )
-        if funding_mode != "root_simulated" and reserve_delta:
+        reserve_delta = 0
+        if funding_mode != "root_simulated" and chain_spend:
+            reserve_delta += chain_spend
             service._reserve_delta(
                 conn,
-                delta=reserve_delta,
-                event_type="fee_retained",
-                reason="TRADING_FEE",
+                delta=chain_spend,
+                event_type="spot_cfd_principal_collected",
+                reason="TRADING_SPOT_CFD_PRINCIPAL",
                 actor=actor,
                 source_user_id=user_id,
                 order_id=order["id"],
@@ -1011,7 +1014,13 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                             "trial_repaid_points": trial_repaid,
                             "trial_profit_points": trial_profit,
                             "realized_pnl_points": net_pnl,
+                            "source_fund_key": "exchange_fund",
                             "destination_wallet_address": source_wallet_address,
+                            "settlement_rail": "internal_hot_wallet",
+                            "chain_required": False,
+                            "approval_required": False,
+                            "network_fee_points": 0,
+                            "service_fee_points": fee,
                             "statement_earned_points": max(0, net_pnl),
                             "statement_spent_points": max(0, -net_pnl),
                             "statement_note": "spot sell principal is an asset swap; cumulative income/expense uses realized net PnL",
@@ -1020,6 +1029,17 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                         ctx=route_ctx,
                     )["ledger_uuid"]
                 )
+                gross_payout = wallet_credit + fee
+                if gross_payout > 0:
+                    service._reserve_delta(
+                        conn,
+                        delta=-gross_payout,
+                        event_type="spot_cfd_gross_payout",
+                        reason="TRADING_SPOT_CFD_PAYOUT",
+                        actor=actor,
+                        source_user_id=user_id,
+                        order_id=order["id"],
+                    )
             if fee:
                 service._reserve_delta(
                     conn,
@@ -1054,7 +1074,12 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
             """,
             (quantity_units, next_avg_cost, buy_fee_micro, next_stop_loss_percent, next_take_profit_percent, _now_text(), user_id, market["symbol"]),
         )
-        reserve_delta = 0 if funding_mode == "root_simulated" else fee
+        if funding_mode == "root_simulated":
+            reserve_delta = 0
+        elif wallet_credit > 0:
+            reserve_delta = -wallet_credit
+        else:
+            reserve_delta = fee
     fill_uuid = str(uuid.uuid4())
     cur = conn.execute(
         """

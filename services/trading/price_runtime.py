@@ -1727,6 +1727,28 @@ def fetch_live_price_points(service, market_symbol, *, with_meta=False, settings
 def recent_price_window(service, market_symbol, *, lookback_seconds=60, since_time_text=None, interval="1m", conn=None):
     engine = _engine_module()
     lookback = max(60, int(lookback_seconds or 60))
+    settings = service._settings_payload(conn) if conn is not None else {}
+    raw_settings = settings.get("raw") if isinstance(settings.get("raw"), dict) else {}
+    configured_source = str(settings.get("price_source") or engine.DEFAULT_TRADING_PRICE_SOURCE).strip()
+    qa_live_price_enabled = str(
+        settings.get("qa_live_price_provider_enabled")
+        or settings.get("trading.qa_live_price_provider_enabled")
+        or raw_settings.get("trading.qa_live_price_provider_enabled")
+        or ""
+    ).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    qa_live_price_allowed = str(os.environ.get("HACKME_DEV_TRADING_ALLOW_QA_LIVE_PRICE_PROVIDER") or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    if conn is not None and configured_source == "test_live_price_provider" and qa_live_price_enabled and qa_live_price_allowed:
+        market = service._market(conn, market_symbol)
+        price = service._price_points_from_float(market["manual_price_points"], source="test_live_price_provider")
+        if price and float(price) > 0:
+            return {
+                "interval": interval,
+                "lookback_seconds": lookback,
+                "candle_count": 1,
+                "low_points": float(price),
+                "high_points": float(price),
+                "source": "test_live_price_provider",
+            }
     interval_seconds = 60 if interval == "1m" else 900
     limit = max(2, min(int(math.ceil(lookback / interval_seconds)) + 2, 240))
     candles = service._fetch_indicator_candles(market_symbol, limit=limit, interval=interval, conn=conn)

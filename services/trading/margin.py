@@ -766,6 +766,15 @@ def open_margin_position(
         funding_pool = service._funding_pool_payload(
             conn, requested_principal=principal, borrowed_asset=borrowed_asset_symbol
         )
+        if (
+            not service._is_root_actor(actor)
+            and principal > 0
+            and bool(funding_pool.get("projected_over_utilization_limit"))
+        ):
+            raise ValueError(
+                "funding pool is insufficient: borrow amount exceeds funding pool utilization limit "
+                f"{funding_pool.get('max_pool_utilization_percent')}%"
+            )
         if not service._is_root_actor(actor) and principal > int(funding_pool["available_points"] or 0):
             raise ValueError("funding pool is insufficient for requested borrow amount")
         effective_interest_percent_daily = float(
@@ -1453,6 +1462,9 @@ def close_margin_position(
             else collateral
         )
         delta = risk["delta_points"]
+        paid_profit_points = 0
+        pending_profit_points = 0
+        governance_proposal_uuid = ""
         ledger_uuids = []
         is_root_simulated = service._is_root_user_id(conn, user_id)
         if principal and not is_root_simulated:
@@ -1510,14 +1522,26 @@ def close_margin_position(
         if is_root_simulated:
             pass
         elif delta > 0:
-            service._reserve_delta(
+            settlement_capacity = service._reserve_profit_settlement_capacity(
                 conn,
-                delta=-delta,
-                event_type="margin_profit_paid",
+                requested_points=delta,
+                trigger_event_type="margin_profit_paid",
                 reason="TRADING_MARGIN_PROFIT_PAID",
                 actor=actor,
                 source_user_id=user_id,
+                position_uuid=position["position_uuid"],
             )
+            paid_profit_points = int(settlement_capacity["payable_points"] or 0)
+            pending_profit_points = int(settlement_capacity["pending_points"] or 0)
+            if paid_profit_points:
+                service._reserve_delta(
+                    conn,
+                    delta=-paid_profit_points,
+                    event_type="margin_profit_paid",
+                    reason="TRADING_MARGIN_PROFIT_PAID",
+                    actor=actor,
+                    source_user_id=user_id,
+                )
             if collateral_trial:
                 service._release_trial_margin_collateral(
                     conn,
@@ -1525,27 +1549,44 @@ def close_margin_position(
                     collateral_trial=collateral_trial,
                     available_delta_if_active=collateral_trial,
                 )
-            ledger_uuids.append(
-                service._ledger(
+            if paid_profit_points:
+                ledger_uuids.append(
+                    service._ledger(
+                        conn,
+                        ctx=route_ctx,
+                        user_id=user_id,
+                        currency_type="points",
+                        direction="credit",
+                        amount=paid_profit_points,
+                        action_type="trading_margin_profit",
+                        reference_type="trading_margin_position",
+                        reference_id=position["position_uuid"],
+                        idempotency_key=f"trading:margin:profit:{position['position_uuid']}",
+                        reason="TRADING_MARGIN_PROFIT",
+                        public_metadata={
+                            "position_type": position["position_type"],
+                            "market": market["symbol"],
+                            "exit_price_points": price,
+                            "realized_pnl_points": delta,
+                            "paid_profit_points": paid_profit_points,
+                            "pending_profit_points": pending_profit_points,
+                            "settlement_note": "profit paid only from available exchange fund; shortfall becomes a governance-tracked liability",
+                        },
+                        actor=actor,
+                    )["ledger_uuid"]
+                )
+            if pending_profit_points:
+                pending_row = service._record_pending_profit(
                     conn,
-                    ctx=route_ctx,
                     user_id=user_id,
-                    currency_type="points",
-                    direction="credit",
-                    amount=delta,
-                    action_type="trading_margin_profit",
-                    reference_type="trading_margin_position",
-                    reference_id=position["position_uuid"],
-                    idempotency_key=f"trading:margin:profit:{position['position_uuid']}",
-                    reason="TRADING_MARGIN_PROFIT",
-                    public_metadata={
-                        "position_type": position["position_type"],
-                        "market": market["symbol"],
-                        "exit_price_points": price,
-                    },
+                    market_symbol=market["symbol"],
+                    amount_points=pending_profit_points,
+                    reason="TRADING_MARGIN_PROFIT_EXCHANGE_FUND_SHORTFALL",
                     actor=actor,
-                )["ledger_uuid"]
-            )
+                    position_uuid=position["position_uuid"],
+                )
+                if pending_row and "governance_proposal_uuid" in pending_row.keys():
+                    governance_proposal_uuid = str(pending_row["governance_proposal_uuid"] or "")
         elif delta < 0:
             remaining_loss = abs(delta)
             if collateral_trial:
@@ -1589,6 +1630,16 @@ def close_margin_position(
                         actor=actor,
                     )["ledger_uuid"]
                 )
+                collected_price_loss = max(0, debit_amount - int(close_fee or 0) - int(interest or 0))
+                if collected_price_loss:
+                    service._reserve_delta(
+                        conn,
+                        delta=collected_price_loss,
+                        event_type="margin_loss_collected",
+                        reason="TRADING_MARGIN_LOSS_COLLECTED",
+                        actor=actor,
+                        source_user_id=user_id,
+                    )
             if bad_debt:
                 service._audit_event(
                     conn,
@@ -1686,6 +1737,9 @@ def close_margin_position(
                 "exit_price_points": price,
                 "price_source": price_source,
                 "delta_points": delta,
+                "paid_profit_points": paid_profit_points,
+                "pending_profit_points": pending_profit_points,
+                "governance_proposal_uuid": governance_proposal_uuid,
                 "interest_points": interest,
                 "close_fee_points": close_fee,
                 "funding_mode": (
@@ -1719,6 +1773,9 @@ def close_margin_position(
             "ok": True,
             "position": service._margin_position_payload(row),
             "delta_points": delta,
+            "paid_profit_points": paid_profit_points,
+            "pending_profit_points": pending_profit_points,
+            "governance_proposal_uuid": governance_proposal_uuid,
             "interest_points": interest,
             "close_fee_points": close_fee,
             "funding": service._funding_payload(conn, user_id),

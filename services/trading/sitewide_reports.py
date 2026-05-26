@@ -11,6 +11,131 @@ from services.core.sqlite_safe import table_columns
 from services.trading.accounting.core import units_to_quantity
 
 
+CAPITAL_FLOW_EVENT_TYPES = {
+    "initial_funding",
+    "official_exchange_fund_replenishment",
+    "root_reserve_allocation",
+    "walletized_exchange_fund_alignment",
+}
+
+
+PRINCIPAL_TRANSFER_EVENT_TYPES = {
+    "margin_principal_lent",
+    "margin_collateral_withdraw_principal_lent",
+    "margin_principal_repaid",
+}
+
+
+RESERVE_FLOW_LABELS = {
+    "initial_funding": ("capital", "初始資本"),
+    "official_exchange_fund_replenishment": ("capital", "官方財庫撥補"),
+    "root_reserve_allocation": ("capital", "root 交易所基金撥款"),
+    "walletized_exchange_fund_alignment": ("capital", "官方熱錢包校準"),
+    "spot_cfd_principal_collected": ("customer_principal", "現貨/CFD 客戶本金流入"),
+    "spot_cfd_gross_payout": ("customer_payout", "現貨/CFD 客戶賣出或盈利支付"),
+    "fee_retained": ("trading_fee", "現貨交易手續費"),
+    "margin_fee_retained": ("trading_fee", "借貸交易手續費"),
+    "margin_interest_retained": ("interest", "借貸利息收入"),
+    "margin_loss_collected": ("customer_loss", "客戶虧損結算流入"),
+    "margin_principal_lent": ("lending_principal", "借貸本金撥出"),
+    "margin_collateral_withdraw_principal_lent": ("lending_principal", "提領保證金補借貸本金"),
+    "margin_principal_repaid": ("lending_repay", "借貸本金歸還"),
+    "margin_profit_paid": ("customer_payout", "客戶借貸盈利支付"),
+}
+
+
+def _reserve_flow_label(event_type: str) -> tuple[str, str]:
+    normalized = str(event_type or "").strip()
+    if normalized in RESERVE_FLOW_LABELS:
+        return RESERVE_FLOW_LABELS[normalized]
+    return "other", normalized.replace("_", " ").strip() or "其他基金事件"
+
+
+def _build_reserve_flow_summary(conn, reserve: dict) -> dict:
+    rows = conn.execute(
+        """
+        SELECT
+            event_type,
+            COUNT(*) AS event_count,
+            COALESCE(SUM(CASE WHEN delta_points > 0 THEN delta_points ELSE 0 END), 0) AS inflow_points,
+            COALESCE(SUM(CASE WHEN delta_points < 0 THEN ABS(delta_points) ELSE 0 END), 0) AS outflow_points,
+            COALESCE(SUM(delta_points), 0) AS net_points,
+            MIN(created_at) AS first_event_at,
+            MAX(created_at) AS latest_event_at
+        FROM trading_reserve_pool_events
+        GROUP BY event_type
+        ORDER BY ABS(COALESCE(SUM(delta_points), 0)) DESC, event_type ASC
+        """
+    ).fetchall()
+    categories = []
+    total_inflow = 0
+    total_outflow = 0
+    capital_inflow = 0
+    capital_outflow = 0
+    principal_inflow = 0
+    principal_outflow = 0
+    for row in rows:
+        event_type = str(row["event_type"] or "")
+        category_key, label = _reserve_flow_label(event_type)
+        inflow = int(row["inflow_points"] or 0)
+        outflow = int(row["outflow_points"] or 0)
+        net = int(row["net_points"] or 0)
+        total_inflow += inflow
+        total_outflow += outflow
+        if event_type in CAPITAL_FLOW_EVENT_TYPES:
+            capital_inflow += inflow
+            capital_outflow += outflow
+            statement_role = "capital"
+        elif event_type in PRINCIPAL_TRANSFER_EVENT_TYPES:
+            principal_inflow += inflow
+            principal_outflow += outflow
+            statement_role = "principal_transfer"
+        else:
+            statement_role = "operating"
+        categories.append({
+            "event_type": event_type,
+            "category_key": category_key,
+            "label": label,
+            "statement_role": statement_role,
+            "counts_as_operating": statement_role == "operating",
+            "event_count": int(row["event_count"] or 0),
+            "inflow_points": inflow,
+            "outflow_points": outflow,
+            "net_points": net,
+            "direction": "inflow" if net > 0 else "outflow" if net < 0 else "flat",
+            "first_event_at": row["first_event_at"],
+            "latest_event_at": row["latest_event_at"],
+        })
+    net_flow = total_inflow - total_outflow
+    reserve_balance = int((reserve or {}).get("balance_points") or 0)
+    operating_inflow = max(0, total_inflow - capital_inflow - principal_inflow)
+    operating_outflow = max(0, total_outflow - capital_outflow - principal_outflow)
+    operating_net = operating_inflow - operating_outflow
+    realized_categories = [item for item in categories if item.get("counts_as_operating")]
+    return {
+        "total_inflow_points": total_inflow,
+        "total_outflow_points": total_outflow,
+        "net_flow_points": net_flow,
+        "capital_inflow_points": capital_inflow,
+        "capital_outflow_points": capital_outflow,
+        "principal_inflow_points": principal_inflow,
+        "principal_outflow_points": principal_outflow,
+        "principal_net_points": principal_inflow - principal_outflow,
+        "non_operating_inflow_points": capital_inflow + principal_inflow,
+        "non_operating_outflow_points": capital_outflow + principal_outflow,
+        "operating_inflow_points": operating_inflow,
+        "operating_outflow_points": operating_outflow,
+        "operating_net_points": operating_net,
+        "current_balance_points": reserve_balance,
+        "balance_matches_event_replay": reserve_balance == net_flow,
+        "event_count": sum(int(item["event_count"] or 0) for item in categories),
+        "category_count": len(categories),
+        "realized_category_count": len(realized_categories),
+        "realized_categories": realized_categories,
+        "categories": categories,
+    }
+
+
 def build_sitewide_pools_payload(service):
     conn = service.get_db()
     try:
@@ -75,6 +200,7 @@ def build_sitewide_pools_payload(service):
                 """
             ).fetchall()
         ]
+        fund_flow_summary = _build_reserve_flow_summary(conn, reserve)
         return {
             "ok": True,
             "pools": {
@@ -85,6 +211,7 @@ def build_sitewide_pools_payload(service):
                 "lending_summary": lending_summary,
                 "open_margin_summary": open_margin,
                 "reserve_events": reserve_events,
+                "fund_flow_summary": fund_flow_summary,
                 "read_only": True,
                 "snapshot_backed": True,
             },
@@ -97,6 +224,38 @@ def build_sitewide_user_positions_payload(service):
     conn = service.get_db()
     try:
         service.ensure_schema(conn)
+        markets = []
+        for market_row in conn.execute("SELECT * FROM trading_markets").fetchall():
+            market_item = service._market_payload(market_row)
+            reference_context, risk_grade_context = service._stored_market_price_contexts(market_item)
+            markets.append(
+                service._attach_market_price_contexts(
+                    market_item,
+                    reference_context=reference_context,
+                    risk_grade_context=risk_grade_context,
+                )
+            )
+        market_map = {row["symbol"]: row for row in markets}
+        spot_realized_map = {
+            (int(row["user_id"]), row["market_symbol"]): int(row["realized_pnl_points"] or 0)
+            for row in conn.execute(
+                """
+                SELECT user_id, market_symbol, COALESCE(SUM(net_pnl_points), 0) AS realized_pnl_points
+                FROM trading_spot_realized_pnl
+                GROUP BY user_id, market_symbol
+                """
+            ).fetchall()
+        }
+        spot_fee_map = {
+            (int(row["user_id"]), row["market_symbol"]): int(row["total_fee_points"] or 0)
+            for row in conn.execute(
+                """
+                SELECT user_id, market_symbol, COALESCE(SUM(fee_points), 0) AS total_fee_points
+                FROM trading_fills
+                GROUP BY user_id, market_symbol
+                """
+            ).fetchall()
+        }
         spot_summary = dict(conn.execute(
             """
             SELECT COUNT(*) AS position_count
@@ -107,11 +266,12 @@ def build_sitewide_user_positions_payload(service):
             """
         ).fetchone())
         spot_positions = [
-            {
-                **dict(row),
-                "quantity": units_to_quantity(row["quantity_units"]),
-                "locked_quantity": units_to_quantity(row["locked_quantity_units"]),
-            }
+            service._position_payload_with_metrics(
+                row,
+                market=market_map.get(row["market_symbol"]),
+                realized_points=spot_realized_map.get((int(row["user_id"]), row["market_symbol"]), 0),
+                total_fees=spot_fee_map.get((int(row["user_id"]), row["market_symbol"]), 0),
+            )
             for row in conn.execute(
                 """
                 SELECT p.*, u.username
@@ -136,9 +296,9 @@ def build_sitewide_user_positions_payload(service):
         ).fetchone()) if has_margin else {"position_count": 0}
         margin_positions = [
             {
-                **dict(row),
-                "quantity": units_to_quantity(row["quantity_units"]),
+                **service._margin_position_payload_with_risk(conn, row, market=market_map.get(row["market_symbol"])),
                 "interest_due_points": max(0, int(row["interest_points"] or 0) - int(row["interest_paid_points"] or 0)),
+                "total_fee_points": int(row["open_fee_points"] or 0) + int(row["close_fee_points"] or 0),
             }
             for row in conn.execute(
                 """
@@ -152,6 +312,13 @@ def build_sitewide_user_positions_payload(service):
                 """
             ).fetchall()
         ] if has_margin else []
+        spot_unrealized_pnl = sum(int(row.get("unrealized_pnl_points") or 0) for row in spot_positions)
+        spot_realized_pnl = sum(int(row.get("realized_pnl_points") or 0) for row in spot_positions)
+        spot_fee_points = sum(int(row.get("total_fee_points") or 0) for row in spot_positions)
+        margin_unrealized_pnl = sum(int(row.get("unrealized_pnl_points") or 0) for row in margin_positions)
+        margin_realized_pnl = sum(int(row.get("realized_pnl_points") or 0) for row in margin_positions)
+        margin_fee_points = sum(int(row.get("total_fee_points") or 0) for row in margin_positions)
+        margin_interest_due = sum(int(row.get("interest_due_points") or 0) for row in margin_positions)
         order_summary = dict(conn.execute(
             """
             SELECT
@@ -271,6 +438,16 @@ def build_sitewide_user_positions_payload(service):
                     "enabled_grid_bot_count": int(grid_bot_summary["enabled_grid_bot_count"] or 0),
                     "total_bot_count": int(bot_summary["bot_count"] or 0) + int(grid_bot_summary["grid_bot_count"] or 0),
                     "total_enabled_bot_count": int(bot_summary["enabled_bot_count"] or 0) + int(grid_bot_summary["enabled_grid_bot_count"] or 0),
+                    "spot_unrealized_pnl_points": spot_unrealized_pnl,
+                    "spot_realized_pnl_points": spot_realized_pnl,
+                    "margin_unrealized_pnl_points": margin_unrealized_pnl,
+                    "margin_realized_pnl_points": margin_realized_pnl,
+                    "total_unrealized_pnl_points": spot_unrealized_pnl + margin_unrealized_pnl,
+                    "total_realized_pnl_points": spot_realized_pnl + margin_realized_pnl,
+                    "spot_fee_points": spot_fee_points,
+                    "margin_fee_points": margin_fee_points,
+                    "total_fee_points": spot_fee_points + margin_fee_points,
+                    "margin_interest_due_points": margin_interest_due,
                     "root_simulated_excluded": True,
                 },
                 "spot_positions": spot_positions,

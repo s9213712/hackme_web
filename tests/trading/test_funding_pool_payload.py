@@ -69,3 +69,20 @@ def test_zero_base_apr_stays_zero():
     assert payload["base_interest_apr_percent"] == 0.0
     assert payload["effective_interest_apr_percent"] == 0.0
     assert payload["projected_interest_apr_percent"] == 0.0
+
+
+def test_lendable_capacity_keeps_cfd_profit_reserve_out_of_borrow_pool():
+    payload = _payload(
+        balance=4_000_000,
+        outstanding=0,
+        lendable_capacity=4_000_000,
+        liquid_available=4_000_000,
+        exchange_fund_balance=5_000_000,
+        cfd_profit_reserve_required=1_000_000,
+    )
+
+    assert payload["name"] == "借貸基金"
+    assert payload["exchange_fund_balance_points"] == 5_000_000
+    assert payload["available_points"] == 4_000_000
+    assert payload["capacity_points"] == 4_000_000
+    assert payload["cfd_profit_reserve_required_points"] == 1_000_000

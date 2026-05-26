@@ -47,6 +47,16 @@ BACKGROUND_JOB_DEFINITIONS = {
     },
 }
 
+BACKGROUND_JOB_LABELS = {
+    "price_refresh": "價格刷新",
+    "order_matching": "掛單撮合",
+    "take_profit_stop_loss_scan": "止盈止損掃描",
+    "bot_trigger_scan": "交易機器人自動掃描",
+    "margin_liquidation_scan": "借貸清算掃描",
+    "interest_accrual": "借貸利息結算",
+    "sitewide_metrics_refresh": "交易所報表快照",
+}
+
 PAUSED_MODES = {"maintenance", "incident_lockdown", "superweak"}
 SHADOW_REQUIRES_TESTER_MODES = {"internal_test"}
 SYSTEM_ACTOR = {"id": 0, "username": "system", "role": "system"}
@@ -72,6 +82,114 @@ def _parse_dt(value):
 
 def _json_dumps(value) -> str:
     return json.dumps(value or {}, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _job_center_status_for_background(status: str) -> str:
+    status = str(status or "")
+    if status in {"success", "skipped"}:
+        return "running"
+    if status == "failed":
+        return "retry_wait"
+    if status == "running":
+        return "running"
+    return "running"
+
+
+def _sync_job_center_background_run(
+    service,
+    *,
+    lease,
+    status,
+    result=None,
+    error="",
+    finished_at="",
+    duration_ms=None,
+    next_run_at="",
+):
+    """Expose recurring trading jobs in the root task center without blocking trading."""
+    try:
+        from services.job_center import create_job, get_job_by_source, update_job
+    except Exception:
+        return
+    job_key = str((lease or {}).get("job_key") or "")
+    if not job_key:
+        return
+    label = BACKGROUND_JOB_LABELS.get(job_key, job_key)
+    job_status = _job_center_status_for_background(status)
+    success = str(status or "") == "success"
+    skipped = str(status or "") == "skipped"
+    progress = 100 if success or skipped else 0
+    summary = result or {}
+    detail_parts = []
+    if success:
+        detail_parts.append("上次執行成功")
+    elif skipped:
+        reason = str(summary.get("reason") or "條件未符合")
+        detail_parts.append(f"上次略過：{reason}")
+    else:
+        detail_parts.append(f"上次執行失敗：{str(error or 'unknown')[:160]}")
+    if duration_ms is not None:
+        try:
+            detail_parts.append(f"{int(round(float(duration_ms)))} ms")
+        except Exception:
+            pass
+    if next_run_at:
+        detail_parts.append(f"下次 {next_run_at}")
+    metadata = {
+        "server_background": True,
+        "recurring": True,
+        "login_required": False,
+        "job_key": job_key,
+        "run_uuid": lease.get("run_uuid"),
+        "run_id": lease.get("run_id"),
+        "lease_owner": lease.get("lease_owner"),
+        "last_background_status": status,
+        "last_finished_at": finished_at,
+        "next_run_at": next_run_at,
+        "result": summary,
+    }
+    conn = service.get_db()
+    try:
+        existing = get_job_by_source(conn, "trading_background", job_key)
+        if not existing:
+            create_job(
+                conn,
+                owner_user_id=None,
+                created_by_user_id=None,
+                job_type=f"trading.background.{job_key}",
+                title=f"交易背景：{label}",
+                description="伺服器自動交易與結算背景工作，不依賴會員登入或前台按鈕。",
+                source_module="trading_background",
+                source_ref=job_key,
+                status=job_status,
+                progress_percent=progress,
+                stage=str(status or job_status)[:80],
+                stage_detail=" · ".join(detail_parts),
+                cancellable=False,
+                metadata=metadata,
+            )
+        else:
+            update_job(
+                conn,
+                existing["job_uuid"],
+                status=job_status,
+                progress_percent=progress,
+                stage=str(status or job_status)[:80],
+                stage_detail=" · ".join(detail_parts),
+                error_message=str(error or "")[:1000] if job_status in {"failed", "retry_wait"} else "",
+                error_stage=str(status or "")[:80] if job_status in {"failed", "retry_wait"} else "",
+                result_json=summary,
+                metadata_json=metadata,
+                started_at=lease.get("started_at") or None,
+                finished_at=finished_at or None,
+                cancellable=False,
+                defer_progress=True,
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
 
 
 def _feature_enabled(settings, key, *, default=False):
@@ -364,6 +482,16 @@ def _finish_run(service, *, lease, owner, status, result=None, error=""):
             (lease["job_key"], owner),
         )
         conn.commit()
+        _sync_job_center_background_run(
+            service,
+            lease={**lease, "lease_owner": owner},
+            status=status,
+            result=summary,
+            error=err_text,
+            finished_at=finished,
+            duration_ms=duration_ms,
+            next_run_at=next_run_at,
+        )
     except Exception:
         conn.rollback()
         raise
@@ -730,6 +858,7 @@ def run_due_background_jobs(
     get_runtime_server_mode=None,
     owner=None,
     job_keys=None,
+    queued_max_jobs=None,
 ):
     ensure_background_schema(service)
     owner = owner or _lease_owner()
@@ -738,6 +867,7 @@ def run_due_background_jobs(
         get_system_settings=get_system_settings,
         get_runtime_server_mode=get_runtime_server_mode,
         owner=owner,
+        max_jobs=queued_max_jobs if queued_max_jobs is not None else 10,
     )
     keys = list(BACKGROUND_JOB_DEFINITIONS.keys() if job_keys is None else job_keys)
     results = []
@@ -886,7 +1016,7 @@ def process_queued_background_jobs(
     get_system_settings=None,
     get_runtime_server_mode=None,
     owner=None,
-    max_jobs=3,
+    max_jobs=10,
 ):
     ensure_background_schema(service)
     owner = owner or _lease_owner("trading-bg-queue")

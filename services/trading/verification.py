@@ -250,7 +250,11 @@ def verify_reserve_pool(service, conn, errors):
         """
         SELECT COALESCE(SUM(delta_points), 0)
         FROM trading_reserve_pool_events
-        WHERE event_type = 'fee_retained'
+        WHERE event_type IN (
+            'fee_retained',
+            'spot_cfd_principal_collected',
+            'spot_cfd_gross_payout'
+        )
         """
     ).fetchone()[0] or 0)
     if fill_delta != trade_event_delta:
@@ -268,7 +272,8 @@ def verify_reserve_pool(service, conn, errors):
             'margin_interest_retained',
             'margin_principal_lent',
             'margin_principal_repaid',
-            'margin_profit_paid'
+            'margin_profit_paid',
+            'margin_loss_collected'
         )
         """
     ).fetchone()[0] or 0)

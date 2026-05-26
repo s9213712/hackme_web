@@ -29,6 +29,7 @@ TRADING_ROOT_BOOL_SETTING_KEYS = {
     "allow_unready_markets": "trading.allow_unready_markets",
     "disable_price_confidence_gates": "trading.disable_price_confidence_gates",
     "simulated_slippage_enabled": "trading.simulated_slippage_enabled",
+    "qa_live_price_provider_enabled": "trading.qa_live_price_provider_enabled",
 }
 
 

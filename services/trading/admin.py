@@ -52,6 +52,11 @@ def _json_loads(value, default=None):
         return default if default is not None else {}
 
 
+def _require_root_actor(service, actor):
+    if not service._is_root_actor(actor):
+        raise PermissionError("root required for trading admin settings")
+
+
 def _normalize_price_fusion_manual_weights(service, raw):
     out = {}
     source = raw if isinstance(raw, dict) else {}
@@ -98,6 +103,38 @@ def settings_payload(service, conn):
         ),
         "borrow_interest_interval_hours": borrow_interest_interval_hours,
         "borrow_interest_minimum_hours": borrow_interest_minimum_hours,
+        "margin_max_pool_utilization_percent": raw_float_setting(
+            raw,
+            "trading.margin_max_pool_utilization_percent",
+            service.MARGIN_MAX_POOL_UTILIZATION_PERCENT,
+            name="margin_max_pool_utilization_percent",
+            minimum=0,
+            maximum=100,
+        ),
+        "exchange_liability_limit_points": raw_int_setting(
+            raw,
+            "trading.exchange_liability_limit_points",
+            service.EXCHANGE_LIABILITY_LIMIT_POINTS,
+            name="exchange_liability_limit_points",
+            minimum=0,
+            maximum=100_000_000,
+        ),
+        "exchange_liability_grace_minutes": raw_int_setting(
+            raw,
+            "trading.exchange_liability_grace_minutes",
+            service.EXCHANGE_LIABILITY_GRACE_MINUTES,
+            name="exchange_liability_grace_minutes",
+            minimum=0,
+            maximum=30 * 24 * 60,
+        ),
+        "profit_settlement_interval_minutes": raw_int_setting(
+            raw,
+            "trading.profit_settlement_interval_minutes",
+            service.PROFIT_SETTLEMENT_INTERVAL_MINUTES,
+            name="profit_settlement_interval_minutes",
+            minimum=0,
+            maximum=30 * 24 * 60,
+        ),
         "margin_long_financing_percent": raw_float_setting(
             raw,
             "trading.margin_long_financing_percent",
@@ -402,6 +439,7 @@ def record_backtest_capacity_measurement(
 
 
 def update_root_settings(service, *, actor, settings=None, markets=None):
+    _require_root_actor(service, actor)
     conn = service.get_db()
     try:
         service.ensure_schema(conn)
@@ -462,15 +500,27 @@ def update_root_settings(service, *, actor, settings=None, markets=None):
         for input_key, storage_key in (
             ("borrow_interest_interval_hours", "trading.borrow_interest_interval_hours"),
             ("borrow_interest_minimum_hours", "trading.borrow_interest_minimum_hours"),
+            ("exchange_liability_limit_points", "trading.exchange_liability_limit_points"),
+            ("exchange_liability_grace_minutes", "trading.exchange_liability_grace_minutes"),
+            ("profit_settlement_interval_minutes", "trading.profit_settlement_interval_minutes"),
         ):
             if input_key in settings:
-                value = int_input_text(settings, input_key, minimum=1, maximum=168)
+                maximum = 168 if input_key.startswith("borrow_interest_") else 30 * 24 * 60
+                if input_key == "exchange_liability_limit_points":
+                    maximum = 100_000_000
+                value = int_input_text(
+                    settings,
+                    input_key,
+                    minimum=1 if input_key.startswith("borrow_interest_") else 0,
+                    maximum=maximum,
+                )
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     (storage_key, value, now, service._actor_id(actor)),
                 )
                 setting_changes[storage_key] = value
         for input_key, storage_key in (
+            ("margin_max_pool_utilization_percent", "trading.margin_max_pool_utilization_percent"),
             ("margin_long_financing_percent", "trading.margin_long_financing_percent"),
             ("short_collateral_percent", "trading.short_collateral_percent"),
         ):
@@ -746,6 +796,7 @@ def update_root_settings(service, *, actor, settings=None, markets=None):
 
 
 def update_market(service, *, actor, symbol, manual_price_points=None, max_price_jump_percent=None, fee_rate_percent=None, min_order_points=None, max_order_points=None, enabled=None, confirm_jump=False):
+    _require_root_actor(service, actor)
     conn = service.get_db()
     try:
         service.ensure_schema(conn)

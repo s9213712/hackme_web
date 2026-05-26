@@ -94,10 +94,10 @@ def test_root_sitewide_user_positions_are_read_only_and_exclude_root(tmp_path):
             INSERT INTO trading_margin_positions (
                 position_uuid, user_id, market_symbol, position_type, quantity_units,
                 entry_price_points, principal_points, collateral_points,
-                interest_points, interest_paid_points, status, opened_at, updated_at
+                open_fee_points, interest_points, interest_paid_points, status, opened_at, updated_at
             ) VALUES (
                 'pos-alice-1', 1, 'BTC/POINTS', 'margin_long', 100000000,
-                100, 900, 100, 12, 2, 'open',
+                100, 900, 100, 4, 12, 2, 'open',
                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
             )
             """
@@ -110,6 +110,35 @@ def test_root_sitewide_user_positions_are_read_only_and_exclude_root(tmp_path):
             ) VALUES (
                 'ord-alice-1', 1, 'BTC/POINTS', 'buy', 'limit', 100000000,
                 100, 'open', 100, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO trading_fills (
+                fill_uuid, order_id, user_id, market_symbol, side, quantity_units,
+                price_points, notional_points, fee_points, created_at
+            ) VALUES (
+                'fill-alice-1',
+                (SELECT id FROM trading_orders WHERE order_uuid='ord-alice-1'),
+                1, 'BTC/POINTS', 'sell', 100000000,
+                120, 120, 3, '2026-01-01T00:01:00Z'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO trading_spot_realized_pnl (
+                pnl_uuid, user_id, market_symbol, order_id, fill_id, quantity_units,
+                avg_cost_points, sell_price_points, gross_cost_points, gross_proceeds_points,
+                buy_fee_estimate_points, sell_fee_points, net_pnl_points, created_at
+            ) VALUES (
+                'pnl-alice-1',
+                1, 'BTC/POINTS',
+                (SELECT id FROM trading_orders WHERE order_uuid='ord-alice-1'),
+                (SELECT id FROM trading_fills WHERE fill_uuid='fill-alice-1'),
+                100000000, 100, 120, 100, 120,
+                2, 3, 15, '2026-01-01T00:01:00Z'
             )
             """
         )
@@ -164,10 +193,10 @@ def test_root_sitewide_user_positions_are_read_only_and_exclude_root(tmp_path):
             INSERT INTO trading_margin_positions (
                 position_uuid, user_id, market_symbol, position_type, quantity_units,
                 entry_price_points, principal_points, collateral_points,
-                interest_points, interest_paid_points, status, opened_at, updated_at
+                open_fee_points, interest_points, interest_paid_points, status, opened_at, updated_at
             ) VALUES (
                 'pos-admin-1', 3, 'ETH/POINTS', 'margin_long', 200000000,
-                100, 900, 100, 7, 1, 'open',
+                100, 900, 100, 2, 7, 1, 'open',
                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
             )
             """
@@ -204,7 +233,20 @@ def test_root_sitewide_user_positions_are_read_only_and_exclude_root(tmp_path):
     assert {row["username"] for row in payload["positions"]["spot_positions"]} == {"alice", "admin"}
     assert {row["username"] for row in payload["positions"]["margin_positions"]} == {"alice", "admin"}
     assert {row["username"] for row in payload["positions"]["bots"]} == {"alice", "admin"}
-    assert payload["positions"]["margin_positions"][0]["interest_due_points"] == 10
+    alice_spot = next(row for row in payload["positions"]["spot_positions"] if row["username"] == "alice")
+    assert alice_spot["realized_pnl_points"] == 15
+    assert alice_spot["total_fee_points"] == 3
+    assert "unrealized_pnl_points" in alice_spot
+    alice_margin = next(row for row in payload["positions"]["margin_positions"] if row["username"] == "alice")
+    assert alice_margin["interest_due_points"] == 10
+    assert alice_margin["total_fee_points"] == 4
+    assert "unrealized_pnl_points" in alice_margin
+    assert payload["positions"]["summary"]["spot_fee_points"] == 3
+    assert payload["positions"]["summary"]["margin_fee_points"] == 6
+    assert payload["positions"]["summary"]["total_fee_points"] == 9
+    assert payload["positions"]["summary"]["spot_realized_pnl_points"] == 15
+    assert "total_unrealized_pnl_points" in payload["positions"]["summary"]
+    assert payload["positions"]["summary"]["margin_interest_due_points"] == 16
     assert payload["positions"]["summary"]["spot_position_count"] == 2
     assert payload["positions"]["summary"]["margin_position_count"] == 2
     assert payload["positions"]["summary"]["open_order_count"] == 1
@@ -220,16 +262,60 @@ def test_root_sitewide_pools_endpoint_is_root_only(tmp_path):
     conn = get_db()
     try:
         trading.ensure_schema(conn)
+        starting_balance = int(conn.execute(
+            "SELECT balance_points FROM trading_reserve_pool WHERE id=1"
+        ).fetchone()[0] or 0)
         conn.execute(
             """
             INSERT INTO trading_reserve_pool_events (
                 event_uuid, delta_points, balance_after, event_type, reason,
                 actor_user_id, source_user_id, created_at
             ) VALUES (
-                'reserve-event-1', 25, 10025, 'fee_retained', 'test fee',
+                'reserve-event-1', 25, ?, 'fee_retained', 'test fee',
                 2, 1, '2026-01-01T00:00:00Z'
             )
+            """,
+            (starting_balance + 25,),
+        )
+        conn.execute(
             """
+            INSERT INTO trading_reserve_pool_events (
+                event_uuid, delta_points, balance_after, event_type, reason,
+                actor_user_id, source_user_id, created_at
+            ) VALUES (
+                'reserve-event-2', -5, ?, 'margin_profit_paid', 'test payout',
+                2, 1, '2026-01-01T00:00:01Z'
+            )
+            """,
+            (starting_balance + 20,),
+        )
+        conn.execute(
+            """
+            INSERT INTO trading_reserve_pool_events (
+                event_uuid, delta_points, balance_after, event_type, reason,
+                actor_user_id, source_user_id, created_at
+            ) VALUES (
+                'reserve-event-principal-lent', -40, ?, 'margin_principal_lent', 'test principal lent',
+                2, 1, '2026-01-01T00:00:02Z'
+            )
+            """,
+            (starting_balance - 20,),
+        )
+        conn.execute(
+            """
+            INSERT INTO trading_reserve_pool_events (
+                event_uuid, delta_points, balance_after, event_type, reason,
+                actor_user_id, source_user_id, created_at
+            ) VALUES (
+                'reserve-event-principal-repaid', 15, ?, 'margin_principal_repaid', 'test principal repaid',
+                2, 1, '2026-01-01T00:00:03Z'
+            )
+            """,
+            (starting_balance - 5,),
+        )
+        conn.execute(
+            "UPDATE trading_reserve_pool SET balance_points=?, updated_at='2026-01-01T00:00:01Z', updated_by=2 WHERE id=1",
+            (starting_balance - 5,),
         )
         conn.commit()
     finally:
@@ -242,7 +328,27 @@ def test_root_sitewide_pools_endpoint_is_root_only(tmp_path):
     assert response.status_code == 200
     assert payload["ok"] is True
     assert payload["pools"]["read_only"] is True
-    assert payload["pools"]["reserve_events"][0]["event_type"] == "fee_retained"
+    assert {row["event_type"] for row in payload["pools"]["reserve_events"]} >= {"fee_retained", "margin_profit_paid"}
+    flow = payload["pools"]["fund_flow_summary"]
+    assert flow["total_inflow_points"] >= starting_balance + 40
+    assert flow["total_outflow_points"] >= 45
+    assert flow["principal_inflow_points"] == 15
+    assert flow["principal_outflow_points"] == 40
+    assert flow["operating_inflow_points"] == 25
+    assert flow["operating_outflow_points"] == 5
+    assert flow["operating_net_points"] == 20
+    assert flow["net_flow_points"] == flow["current_balance_points"]
+    assert flow["balance_matches_event_replay"] is True
+    categories = {row["label"]: row for row in flow["categories"]}
+    realized_categories = {row["label"]: row for row in flow["realized_categories"]}
+    assert categories["現貨交易手續費"]["inflow_points"] == 25
+    assert categories["客戶借貸盈利支付"]["outflow_points"] == 5
+    assert categories["借貸本金撥出"]["counts_as_operating"] is False
+    assert categories["借貸本金歸還"]["statement_role"] == "principal_transfer"
+    assert "現貨交易手續費" in realized_categories
+    assert "客戶借貸盈利支付" in realized_categories
+    assert "借貸本金撥出" not in realized_categories
+    assert "借貸本金歸還" not in realized_categories
 
     non_root_dir = tmp_path / "non_root"
     non_root_dir.mkdir()

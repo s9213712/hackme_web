@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timedelta
 
 from services.points_chain import PointsLedgerService, ensure_points_economy_schema
+from services.job_center import list_jobs
 from services.server.startup import start_trading_background_worker
 from services.trading.trading_engine import TradingEngineService, ensure_trading_schema
 
@@ -98,6 +99,16 @@ def test_background_price_refresh_runs_without_logged_in_actor(tmp_path):
     price_job = next(row for row in status["jobs"] if row["job_key"] == "price_refresh")
     assert price_job["last_success_at"]
     assert price_job["failure_count"] == 0
+    conn = trading.get_db()
+    try:
+        jobs = list_jobs(conn, include_all=True, limit=20)
+    finally:
+        conn.close()
+    visible = next(row for row in jobs if row["source_module"] == "trading_background" and row["source_ref"] == "price_refresh")
+    assert visible["owner_user_id"] is None
+    assert visible["status"] == "running"
+    assert visible["metadata"]["server_background"] is True
+    assert visible["metadata"]["login_required"] is False
 
 
 def test_background_worker_thread_runs_without_any_login_session(tmp_path, monkeypatch):
@@ -335,3 +346,32 @@ def test_background_run_once_queue_is_processed_by_worker_loop(tmp_path):
     status = trading.get_background_status()
     queued_row = next(row for row in status["queued_runs"] if row["queue_uuid"] == queued["queue_uuid"])
     assert queued_row["status"] == "succeeded"
+
+
+def test_background_queue_drains_more_than_legacy_three_job_batch(tmp_path):
+    _points, trading = _services(tmp_path)
+    queued = [
+        trading.enqueue_background_job_once(
+            job_key="sitewide_metrics_refresh",
+            requested_by={"id": 2, "username": "root"},
+            force=True,
+        )
+        for _ in range(5)
+    ]
+
+    result = trading.run_due_background_jobs(
+        get_system_settings=_settings,
+        get_runtime_server_mode=lambda: "production",
+        owner="unit-test",
+        job_keys=[],
+    )
+
+    succeeded = [row for row in result["queued_results"] if row.get("queue_status") == "succeeded"]
+    assert len(succeeded) == 5
+    status = trading.get_background_status(limit=20)
+    queued_rows = {
+        row["queue_uuid"]: row["status"]
+        for row in status["queued_runs"]
+        if row["queue_uuid"] in {item["queue_uuid"] for item in queued}
+    }
+    assert queued_rows == {item["queue_uuid"]: "succeeded" for item in queued}

@@ -1135,6 +1135,7 @@ def _borrowing_settings(self, conn):
         "borrow_apr_usdt_points_percent": float(settings.get("borrow_apr_usdt_points_percent") or 0),
         "interest_percent_daily": float(settings.get("borrow_interest_percent_daily") or 0),
         "pool_pressure_multiplier": float(settings.get("borrow_interest_pool_pressure_multiplier") or 0),
+        "max_pool_utilization_percent": float(settings.get("margin_max_pool_utilization_percent") or 0),
         "interest_interval_hours": int(settings.get("borrow_interest_interval_hours") or DEFAULT_BORROW_INTEREST_INTERVAL_HOURS),
         "interest_minimum_hours": int(settings.get("borrow_interest_minimum_hours") or DEFAULT_BORROW_INTEREST_MINIMUM_HOURS),
     }

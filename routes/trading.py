@@ -86,6 +86,17 @@ def register_trading_routes(app, deps):
     background_queue_kick_lock = threading.Lock()
     background_queue_kick_active = False
 
+    def trading_manual_price_allowed_in_current_mode():
+        try:
+            mode_payload = get_runtime_server_mode()
+        except Exception:
+            mode_payload = "production"
+        if isinstance(mode_payload, dict):
+            mode = str(mode_payload.get("current_mode") or mode_payload.get("mode") or "production")
+        else:
+            mode = str(mode_payload or "production")
+        return mode.strip().lower() in {"dev_ready", "test", "internal_test", "superweak"}
+
     def actor_value(actor, key, default=None):
         if not actor:
             return default
@@ -118,12 +129,20 @@ def register_trading_routes(app, deps):
         def worker():
             nonlocal background_queue_kick_active
             try:
-                trading_service.run_due_background_jobs(
-                    get_system_settings=get_system_settings,
-                    get_runtime_server_mode=get_runtime_server_mode,
-                    owner=f"trading-bg-kick:{os.getpid()}",
-                    job_keys=[],
-                )
+                owner = f"trading-bg-kick:{os.getpid()}"
+                for _batch in range(20):
+                    result = trading_service.run_due_background_jobs(
+                        get_system_settings=get_system_settings,
+                        get_runtime_server_mode=get_runtime_server_mode,
+                        owner=owner,
+                        job_keys=[],
+                        queued_max_jobs=10,
+                    )
+                    queued_results = result.get("queued_results") or []
+                    if not queued_results:
+                        break
+                    if all(row.get("queue_status") == "retry_wait" for row in queued_results):
+                        break
             except Exception as exc:
                 audit(
                     "TRADING_BACKGROUND_QUEUE_KICK_FAILED",
@@ -2134,8 +2153,8 @@ def register_trading_routes(app, deps):
         if err:
             return err
         settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
-        if settings.get("price_source") == "manual_root":
-            return json_resp({"ok": False, "msg": "交易價格來源不可切換為 root 手動價格，請使用融合價格或單一公開 API"}), 400
+        if settings.get("price_source") == "manual_root" and not trading_manual_price_allowed_in_current_mode():
+            return json_resp({"ok": False, "msg": "手動價格只允許在 dev_ready / test / internal_test / superweak 開發測試模式使用"}), 400
         try:
             result = trading_service.update_root_settings(
                 actor=actor,
@@ -2468,8 +2487,8 @@ def register_trading_routes(app, deps):
         data, err = parse_json_body()
         if err:
             return err
-        if data.get("manual_price_points") is not None:
-            return json_resp({"ok": False, "msg": "不允許 root 手動改價；交易價格只能來自 Binance 或最後健康快取"}), 400
+        if data.get("manual_price_points") is not None and not trading_manual_price_allowed_in_current_mode():
+            return json_resp({"ok": False, "msg": "手動價格只允許在 dev_ready / test / internal_test 開發測試模式使用"}), 400
         try:
             result = trading_service.update_market(
                 actor=actor,

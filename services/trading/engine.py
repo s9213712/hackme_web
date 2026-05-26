@@ -17,13 +17,19 @@ from services.points_chain import (
     DISPLAY_CURRENCY,
     actor_value,
     compute_ledger_hash,
+    create_official_hot_wallet,
+    is_pc0_internal_address,
     metadata_hash,
     normalize_currency_type,
     public_account_id,
     utc_now,
     _metadata_json_checked,
 )
-from services.points_chain.economy_layer import DEFAULT_ECONOMY_POLICY, economy_layer_report
+from services.points_chain.economy_layer import (
+    DEFAULT_ECONOMY_POLICY,
+    append_economy_incident,
+    economy_layer_report,
+)
 from services.server_mode.context import SmV2Context, current_ctx
 from services.server_mode.routing import resolve_table
 from services.trading.accounting.core import (
@@ -387,8 +393,12 @@ TRIAL_CREDIT_DAYS = 7
 TRADING_FUNDING_POOL_LEGACY_INITIAL_POINTS = 10_000
 TRADING_FUNDING_POOL_INITIAL_POINTS = int(DEFAULT_ECONOMY_POLICY["exchange_fund_initial"])
 TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER = 4.0
+MARGIN_MAX_POOL_UTILIZATION_PERCENT = 80.0
 MARGIN_LONG_FINANCING_RATE_PERCENT = 90.0
 SHORT_COLLATERAL_RATE_PERCENT = 60.0
+EXCHANGE_LIABILITY_LIMIT_POINTS = 0
+EXCHANGE_LIABILITY_GRACE_MINUTES = 60
+PROFIT_SETTLEMENT_INTERVAL_MINUTES = 0
 SUPPORTED_EXECUTION_MODES = {"house_counterparty", "pvp_matching", "hybrid_liquidity"}
 BACKTEST_SEGMENT_CANDLES = 10_000
 # Default cap; root may override via trading_settings 'trading.backtest_max_candles'.
@@ -991,6 +1001,10 @@ def ensure_trading_schema(conn):
         ("trading.borrow_interest_pool_pressure_multiplier", str(TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER)),
         ("trading.borrow_interest_interval_hours", str(DEFAULT_BORROW_INTEREST_INTERVAL_HOURS)),
         ("trading.borrow_interest_minimum_hours", str(DEFAULT_BORROW_INTEREST_MINIMUM_HOURS)),
+        ("trading.margin_max_pool_utilization_percent", str(MARGIN_MAX_POOL_UTILIZATION_PERCENT)),
+        ("trading.exchange_liability_limit_points", str(EXCHANGE_LIABILITY_LIMIT_POINTS)),
+        ("trading.exchange_liability_grace_minutes", str(EXCHANGE_LIABILITY_GRACE_MINUTES)),
+        ("trading.profit_settlement_interval_minutes", str(PROFIT_SETTLEMENT_INTERVAL_MINUTES)),
         ("trading.margin_long_financing_percent", str(MARGIN_LONG_FINANCING_RATE_PERCENT)),
         ("trading.short_collateral_percent", str(SHORT_COLLATERAL_RATE_PERCENT)),
         ("trading.margin_liquidation_enabled", "true"),
@@ -1107,6 +1121,15 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_fills ADD COLUMN trial_repaid_points INTEGER NOT NULL DEFAULT 0")
     if "trial_profit_points" not in fill_cols:
         conn.execute("ALTER TABLE trading_fills ADD COLUMN trial_profit_points INTEGER NOT NULL DEFAULT 0")
+    pending_profit_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_pending_profit)").fetchall()}
+    for column_name, ddl in (
+        ("position_uuid", "ALTER TABLE trading_pending_profit ADD COLUMN position_uuid TEXT NOT NULL DEFAULT ''"),
+        ("governance_proposal_uuid", "ALTER TABLE trading_pending_profit ADD COLUMN governance_proposal_uuid TEXT NOT NULL DEFAULT ''"),
+        ("liability_policy_json", "ALTER TABLE trading_pending_profit ADD COLUMN liability_policy_json TEXT NOT NULL DEFAULT '{}'"),
+        ("settle_not_before_at", "ALTER TABLE trading_pending_profit ADD COLUMN settle_not_before_at TEXT"),
+    ):
+        if column_name not in pending_profit_cols:
+            conn.execute(ddl)
     pnl_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_spot_realized_pnl)").fetchall()}
     if "buy_fee_micropoints" not in pnl_cols:
         conn.execute("ALTER TABLE trading_spot_realized_pnl ADD COLUMN buy_fee_micropoints INTEGER NOT NULL DEFAULT 0")
@@ -1221,8 +1244,12 @@ class TradingEngineService:
     DEFAULT_BORROW_INTEREST_INTERVAL_HOURS = DEFAULT_BORROW_INTEREST_INTERVAL_HOURS
     DEFAULT_BORROW_INTEREST_MINIMUM_HOURS = DEFAULT_BORROW_INTEREST_MINIMUM_HOURS
     TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER = TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER
+    MARGIN_MAX_POOL_UTILIZATION_PERCENT = MARGIN_MAX_POOL_UTILIZATION_PERCENT
     MARGIN_LONG_FINANCING_RATE_PERCENT = MARGIN_LONG_FINANCING_RATE_PERCENT
     SHORT_COLLATERAL_RATE_PERCENT = SHORT_COLLATERAL_RATE_PERCENT
+    EXCHANGE_LIABILITY_LIMIT_POINTS = EXCHANGE_LIABILITY_LIMIT_POINTS
+    EXCHANGE_LIABILITY_GRACE_MINUTES = EXCHANGE_LIABILITY_GRACE_MINUTES
+    PROFIT_SETTLEMENT_INTERVAL_MINUTES = PROFIT_SETTLEMENT_INTERVAL_MINUTES
     FUSED_PRICE_SOURCE = FUSED_PRICE_SOURCE
     PRICE_FUSION_MODES = PRICE_FUSION_MODES
     DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS = DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS
@@ -1318,6 +1345,15 @@ class TradingEngineService:
         finally:
             if close_report_conn:
                 report_conn.close()
+
+    def _economy_fund_balance(self, conn, fund_key):
+        report = economy_layer_report(
+            conn,
+            chain_secret=self.points_service.chain_secret,
+            actor={"role": "system", "id": None},
+        )
+        fund = (report.get("funds") or {}).get(str(fund_key or "").strip().lower()) or {}
+        return int(fund.get("balance") or 0)
 
     def _align_reserve_pool_to_exchange_fund(self, conn):
         if not table_columns(conn, "trading_reserve_pool") or not table_columns(conn, "trading_reserve_pool_events"):
@@ -1655,7 +1691,80 @@ class TradingEngineService:
         spend_context="trading spend",
     ):
         source_address = str(source_wallet_address or "").strip().lower()
+        exchange_only = str(spend_context or "").strip().lower().startswith("exchange")
+        def _is_exchange_hot_wallet(row):
+            return bool(
+                row
+                and str(row["wallet_type"] if "wallet_type" in row.keys() else "").strip() == "official_hot"
+                and str(row["custody_mode"] if "custody_mode" in row.keys() else "").strip() == "server_hot"
+                and is_pc0_internal_address(row["address"] if "address" in row.keys() else "")
+            )
+
+        def _payload_for_wallet(row, *, source_label):
+            selected_address = str(row["address"] if "address" in row.keys() else "").strip().lower()
+            state = self.points_service._wallet_identity_balances_for_user(conn, int(user_id))
+            balances = state.get("balances") or {}
+            selected = balances.get(selected_address)
+            if selected is None:
+                raise ValueError("指定交易付款錢包沒有可用餘額資料")
+            payload = self.points_service.wallet_payload_for_read(conn, int(user_id))
+            balance = int(selected.get("balance") or 0)
+            frozen = int(selected.get("frozen") or 0)
+            payload.update(
+                {
+                    "points_balance": balance,
+                    "points_frozen": frozen,
+                    "soft_balance": balance,
+                    "soft_frozen": frozen,
+                    "hard_balance": 0,
+                    "hard_frozen": 0,
+                    "active_wallet_address": selected_address,
+                    "selected_wallet_address": selected_address,
+                    "selected_wallet_label": row["label"] if "label" in row.keys() else "",
+                    "wallet_identity_source": source_label,
+                }
+            )
+            return payload
+
         if not source_address:
+            if exchange_only:
+                hot = conn.execute(
+                    """
+                    SELECT *
+                    FROM points_wallet_identities
+                    WHERE user_id=? AND wallet_type='official_hot' AND custody_mode='server_hot'
+                      AND status IN ('pending_backup', 'active')
+                    ORDER BY id ASC
+                    LIMIT 1
+                    """,
+                    (int(user_id),),
+                ).fetchone()
+                if not hot:
+                    repaired = create_official_hot_wallet(
+                        conn,
+                        user_id=int(user_id),
+                        chain_secret=self.points_service.chain_secret,
+                    )
+                    try:
+                        self.points_service.ensure_user_deposit_address(conn, int(user_id))
+                    except Exception:
+                        pass
+                    hot = conn.execute(
+                        """
+                        SELECT *
+                        FROM points_wallet_identities
+                        WHERE address=?
+                        LIMIT 1
+                        """,
+                        (repaired["address"],),
+                    ).fetchone()
+                if not hot:
+                    raise ValueError("交易所僅支援 pc0 站內託管錢包；請先完成站內託管錢包建立")
+                if not _is_exchange_hot_wallet(hot):
+                    raise ValueError("交易所僅支援 pc0 站內託管錢包，不支援冷錢包直接下單")
+                if require_spend:
+                    self.points_service._assert_wallet_identity_can_spend(hot, context=spend_context)
+                return _payload_for_wallet(hot, source_label="official_hot_exchange_wallet")
             payload = self._wallet_payload(conn, user_id, ctx=ctx)
             if require_spend:
                 active_address = str(payload.get("active_wallet_address") or "").strip().lower()
@@ -1680,31 +1789,11 @@ class TradingEngineService:
         )
         if not row:
             raise ValueError("指定交易付款錢包不存在或已停用")
+        if exchange_only and not _is_exchange_hot_wallet(row):
+            raise ValueError("交易所僅支援 pc0 站內託管錢包，不支援冷錢包直接下單")
         if require_spend:
             self.points_service._assert_wallet_identity_can_spend(row, context=spend_context)
-        state = self.points_service._wallet_identity_balances_for_user(conn, int(user_id))
-        balances = state.get("balances") or {}
-        selected = balances.get(source_address)
-        if selected is None:
-            raise ValueError("指定交易付款錢包沒有可用餘額資料")
-        payload = self.points_service.wallet_payload_for_read(conn, int(user_id))
-        balance = int(selected.get("balance") or 0)
-        frozen = int(selected.get("frozen") or 0)
-        payload.update(
-            {
-                "points_balance": balance,
-                "points_frozen": frozen,
-                "soft_balance": balance,
-                "soft_frozen": frozen,
-                "hard_balance": 0,
-                "hard_frozen": 0,
-                "active_wallet_address": source_address,
-                "selected_wallet_address": source_address,
-                "selected_wallet_label": row["label"] if "label" in row.keys() else "",
-                "wallet_identity_source": "selected_wallet",
-            }
-        )
-        return payload
+        return _payload_for_wallet(row, source_label="selected_wallet")
 
     def _shadow_existing_ledger_row(self, conn, idempotency_key):
         return shadow_existing_ledger_row_helper(self, conn, idempotency_key)
@@ -2050,8 +2139,14 @@ class TradingEngineService:
         base_apr = self._borrow_apr_percent_for_asset(settings, asset_symbol=borrowed_asset)
         raw_pressure = settings.get("borrow_interest_pool_pressure_multiplier")
         pressure = float(TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER if raw_pressure is None else raw_pressure)
+        max_utilization_percent = float(settings.get("margin_max_pool_utilization_percent") or 0)
+        exchange_total_assets = max(0, balance + outstanding)
+        max_outstanding = int(math.floor(exchange_total_assets * max_utilization_percent / 100.0))
+        cfd_profit_reserve_required = max(0, exchange_total_assets - max_outstanding)
+        remaining_capacity = max(0, max_outstanding - outstanding)
+        liquid_available = min(max(0, balance), remaining_capacity)
         payload = funding_pool_payload(
-            balance=balance,
+            balance=liquid_available,
             outstanding=outstanding,
             requested_principal=requested_principal,
             borrowed_asset=borrowed_asset,
@@ -2060,7 +2155,23 @@ class TradingEngineService:
             initial_points=TRADING_FUNDING_POOL_INITIAL_POINTS,
             daily_from_apr=_daily_percent_from_apr,
             apr_from_daily=_apr_percent_from_daily,
+            lendable_capacity=max_outstanding,
+            liquid_available=liquid_available,
+            exchange_fund_balance=balance,
+            cfd_profit_reserve_required=cfd_profit_reserve_required,
         )
+        projected_outstanding = int(payload["outstanding_principal_points"] or 0) + max(
+            0, int(requested_principal or 0)
+        )
+        payload.update({
+            "max_pool_utilization_percent": max_utilization_percent,
+            "max_outstanding_principal_points": max_outstanding,
+            "remaining_borrow_capacity_points": liquid_available,
+            "projected_outstanding_principal_points": projected_outstanding,
+            "projected_over_utilization_limit": projected_outstanding > max_outstanding,
+            "exchange_fund_total_assets_points": exchange_total_assets,
+            "cfd_profit_reserve_percent": round(max(0.0, 100.0 - max_utilization_percent), 6),
+        })
         return payload
 
     def _reserve_delta(self, conn, *, delta, event_type, reason, actor=None, source_user_id=None, order_id=None, fill_id=None, points_ledger_uuid=None):
@@ -2109,6 +2220,232 @@ class TradingEngineService:
             points_ledger_uuid=points_ledger_uuid,
         )
         return next_balance
+
+    def _reserve_profit_settlement_capacity(
+        self,
+        conn,
+        *,
+        requested_points,
+        **_metadata,
+    ):
+        requested = max(0, int(requested_points or 0))
+        if requested <= 0:
+            return {"payable_points": 0, "pending_points": 0}
+        reserve = self._reserve(conn)
+        balance = int(reserve["balance_points"] or 0)
+        payable = min(requested, balance)
+        return {
+            "payable_points": payable,
+            "pending_points": requested - payable,
+        }
+
+    def _trading_governance_actor(self, conn):
+        try:
+            row = conn.execute(
+                """
+                SELECT id, username, role
+                FROM users
+                WHERE username='root' OR role IN ('manager', 'super_admin')
+                ORDER BY CASE WHEN username='root' THEN 0 WHEN role='super_admin' THEN 1 ELSE 2 END, id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+        except Exception:
+            row = None
+        if not row:
+            return None
+        return {"id": row["id"], "username": row["username"], "role": row["role"]}
+
+    def _pending_profit_policy_payload(self, conn, *, new_amount_points, market_symbol, position_uuid, user_id):
+        settings = self._settings_payload(conn)
+        existing_pending = int(
+            conn.execute(
+                "SELECT COALESCE(SUM(amount_points), 0) FROM trading_pending_profit WHERE status='pending'"
+            ).fetchone()[0]
+            or 0
+        )
+        liability_after = existing_pending + int(new_amount_points or 0)
+        limit_points = int(settings.get("exchange_liability_limit_points") or 0)
+        grace_minutes = int(settings.get("exchange_liability_grace_minutes") or 0)
+        settlement_interval = int(settings.get("profit_settlement_interval_minutes") or 0)
+        return {
+            "proposal_type": "TRADING_EXCHANGE_SHORTFALL_RESOLUTION",
+            "execution_class": "TRADING_EMERGENCY_GOVERNANCE",
+            "description": "Resolve exchange fund profit-settlement shortfall without automatic treasury spending.",
+            "market_symbol": str(market_symbol or ""),
+            "position_uuid": str(position_uuid or ""),
+            "affected_user_id": int(user_id),
+            "new_pending_profit_points": int(new_amount_points or 0),
+            "existing_pending_profit_points": existing_pending,
+            "liability_after_points": liability_after,
+            "current_policy": {
+                "exchange_liability_limit_points": limit_points,
+                "exchange_liability_grace_minutes": grace_minutes,
+                "profit_settlement_interval_minutes": settlement_interval,
+            },
+            "options": [
+                {
+                    "key": "official_treasury_replenishment",
+                    "label": "官方 Treasury 撥補交易所基金",
+                    "requires_action_type": "EXCHANGE_FUND_REPLENISH",
+                    "amount_points": int(new_amount_points or 0),
+                },
+                {
+                    "key": "forced_borrower_repayment",
+                    "label": "要求借貸方提前還款或降低未償本金",
+                    "source_user_id": int(user_id),
+                    "amount_points": int(new_amount_points or 0),
+                },
+                {
+                    "key": "accept_temporary_liability",
+                    "label": "接受限額內暫時負債並排程結算",
+                    "suggested_liability_limit_points": max(limit_points, liability_after),
+                    "suggested_grace_minutes": max(grace_minutes, 60),
+                    "suggested_settlement_interval_minutes": max(settlement_interval, 60),
+                },
+            ],
+        }
+
+    def _create_exchange_shortfall_governance_proposal(
+        self,
+        conn,
+        *,
+        user_id,
+        market_symbol,
+        amount_points,
+        position_uuid="",
+    ):
+        actor = self._trading_governance_actor(conn)
+        if not actor:
+            return ""
+        payload = self._pending_profit_policy_payload(
+            conn,
+            new_amount_points=amount_points,
+            market_symbol=market_symbol,
+            position_uuid=position_uuid,
+            user_id=user_id,
+        )
+        try:
+            proposal = self.points_service._create_governance_proposal_locked(
+                conn,
+                actor=actor,
+                proposal_type="protocol_parameter_change",
+                governance_domain="PROTOCOL_PARAMETER",
+                action_type="PARAMETER_CHANGE",
+                title="交易所基金短缺緊急治理",
+                description=payload["description"],
+                reason="交易所基金不足以即時支付已實現盈利，需要治理決定處理方式",
+                reference=f"trading-shortfall:{position_uuid or uuid.uuid4()}",
+                requested_amount=int(amount_points or 0),
+                requested_asset="points",
+                payload=payload,
+                impact_scope="exchange fund liabilities, borrower repayment policy, and profit settlement cadence",
+                risk_summary="No automatic official-wallet spend is performed; voters choose replenishment, forced repayment, or bounded temporary liability.",
+                proposal_severity="CRITICAL",
+            )
+            return str(proposal.get("proposal_uuid") or "")
+        except Exception as exc:
+            self._audit_event(
+                conn,
+                "TRADING_EXCHANGE_SHORTFALL_GOVERNANCE_CREATE_FAILED",
+                "failed to create exchange shortfall governance proposal",
+                actor=actor,
+                target_user_id=user_id,
+                market_symbol=str(market_symbol or ""),
+                severity="critical",
+                metadata={
+                    "amount_points": int(amount_points or 0),
+                    "position_uuid": str(position_uuid or ""),
+                    "error": str(exc)[:240],
+                },
+            )
+            return ""
+
+    def _record_pending_profit(
+        self,
+        conn,
+        *,
+        user_id,
+        market_symbol,
+        amount_points,
+        reason,
+        actor=None,
+        position_uuid="",
+    ):
+        amount = max(0, int(amount_points or 0))
+        if amount <= 0:
+            return None
+        now = _now()
+        policy_payload = self._pending_profit_policy_payload(
+            conn,
+            new_amount_points=amount,
+            market_symbol=market_symbol,
+            position_uuid=position_uuid,
+            user_id=user_id,
+        )
+        proposal_uuid = self._create_exchange_shortfall_governance_proposal(
+            conn,
+            user_id=user_id,
+            market_symbol=market_symbol,
+            amount_points=amount,
+            position_uuid=position_uuid,
+        )
+        cur = conn.execute(
+            """
+            INSERT INTO trading_pending_profit (
+                user_id, market_symbol, amount_points, status, reason, position_uuid,
+                governance_proposal_uuid, liability_policy_json, settle_not_before_at,
+                created_at, released_at
+            ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                int(user_id),
+                str(market_symbol or ""),
+                amount,
+                str(reason or "")[:500],
+                str(position_uuid or ""),
+                proposal_uuid,
+                _json_dumps(policy_payload),
+                None,
+                now,
+            ),
+        )
+        try:
+            append_economy_incident(
+                conn,
+                severity="critical",
+                category="trading_exchange_fund_shortfall",
+                trigger="margin_profit_pending_liability",
+                automatic_actions=["pending_profit_recorded", "emergency_governance_started"],
+                metadata={
+                    "user_id": int(user_id),
+                    "market_symbol": str(market_symbol or ""),
+                    "amount_points": amount,
+                    "position_uuid": str(position_uuid or ""),
+                    "governance_proposal_uuid": proposal_uuid,
+                    "liability_policy": policy_payload,
+                    "reason": str(reason or ""),
+                },
+            )
+        except Exception:
+            pass
+        self._audit_event(
+            conn,
+            "TRADING_PENDING_PROFIT_RECORDED",
+            "margin profit shortfall recorded as pending exchange liability",
+            actor=actor,
+            target_user_id=user_id,
+            market_symbol=str(market_symbol or ""),
+            severity="critical",
+            metadata={
+                "amount_points": amount,
+                "position_uuid": str(position_uuid or ""),
+                "governance_proposal_uuid": proposal_uuid,
+                "liability_policy": policy_payload,
+                "reason": str(reason or ""),
+            },
+        )
+        return conn.execute("SELECT * FROM trading_pending_profit WHERE id=?", (cur.lastrowid,)).fetchone()
 
     def _ledger(self, conn, *, ctx=None, **kwargs):
         ledger_table, route_ctx = self._resolve_table("points_ledger", ctx, action="ledger-write")
@@ -2596,6 +2933,7 @@ class TradingEngineService:
         get_runtime_server_mode=None,
         owner=None,
         job_keys=None,
+        queued_max_jobs=None,
     ):
         return run_due_background_jobs_helper(
             self,
@@ -2603,6 +2941,7 @@ class TradingEngineService:
             get_runtime_server_mode=get_runtime_server_mode,
             owner=owner,
             job_keys=job_keys,
+            queued_max_jobs=queued_max_jobs,
         )
 
     def set_background_job_enabled(self, *, job_key, enabled, reason="", actor=None):

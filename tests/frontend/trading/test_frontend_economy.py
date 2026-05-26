@@ -4,6 +4,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def test_trading_background_refresh_failures_are_visible():
+    trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+
+    for silent_call in [
+        "loadTradingLivePrice().catch(() => {})",
+        "loadGridBots().catch(() => {})",
+        "loadTradingBotCompetition().catch(() => {})",
+        "renderGridBotPreview({ quiet: true }).catch(() => {})",
+    ]:
+        assert silent_call not in trading_js
+    assert "function tradingSetBackgroundStatus" in trading_js
+    assert "即時價格讀取失敗" in trading_js
+    assert "競賽排行讀取失敗" in trading_js
+
+
 def test_public_registration_only_requires_account_password_and_nickname():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     auth_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
@@ -37,7 +52,9 @@ def test_root_points_page_is_chain_operations_console():
         + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
     )
     economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
+    core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+    auth_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
@@ -49,19 +66,20 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-subtabs"' in index_html
     assert 'id="tab-economy-balance"' in index_html
     assert 'id="tab-economy-explorer"' in index_html
-    assert 'id="tab-economy-funding-pools"' in index_html
-    assert 'id="tab-economy-all-positions"' in index_html
-    assert 'id="tab-economy-positions"' in index_html
+    assert 'id="tab-economy-funding-pools"' not in index_html
+    assert 'id="tab-economy-all-positions"' not in index_html
+    assert 'id="tab-economy-positions"' not in index_html
     assert 'id="tab-economy-chain"' in index_html
     assert 'id="economy-balance-page"' in index_html
     assert 'id="economy-explorer-page"' in index_html
-    assert 'id="economy-funding-pools-page"' in index_html
-    assert 'id="economy-all-positions-page"' in index_html
-    assert 'id="economy-positions-page"' in index_html
+    assert 'id="economy-governance-page"' in index_html
+    assert 'id="economy-funding-pools-page"' not in index_html
+    assert 'id="economy-all-positions-page"' not in index_html
+    assert 'id="economy-positions-page"' not in index_html
     assert 'id="economy-chain-page"' in index_html
     economy_balance_page = index_html.split('id="economy-balance-page"', 1)[1].split('id="economy-explorer-page"', 1)[0]
-    economy_explorer_page = index_html.split('id="economy-explorer-page"', 1)[1].split('id="economy-positions-page"', 1)[0]
-    economy_positions_page = index_html.split('id="economy-positions-page"', 1)[1].split('id="economy-chain-page"', 1)[0]
+    economy_explorer_page = index_html.split('id="economy-explorer-page"', 1)[1].split('id="economy-governance-page"', 1)[0]
+    economy_governance_page = index_html.split('id="economy-governance-page"', 1)[1].split('id="economy-chain-page"', 1)[0]
     economy_chain_page = index_html.split('id="economy-chain-page"', 1)[1].split('id="economy-msg"', 1)[0]
     assert 'id="economy-user-summary-grid"' in economy_balance_page
     assert 'id="economy-user-ledger-card"' in economy_balance_page
@@ -78,32 +96,50 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-root-official-grant-details"' in economy_balance_page
     assert 'id="economy-root-official-grant-destination"' in economy_balance_page
     assert 'id="economy-root-official-grant-btn"' in economy_balance_page
+    assert 'id="economy-treasury-analysis-summary"' in economy_balance_page
+    assert "官方財庫收支分析" in economy_balance_page
+    assert "Treasury Signer Center" not in economy_balance_page
+    assert 'id="economy-treasury-service-fee-list"' in economy_balance_page
+    assert "finance-flow-dashboard-list" in economy_balance_page
+    assert 'id="economy-treasury-income-list"' in economy_balance_page
+    assert 'id="economy-treasury-expense-list"' in economy_balance_page
+    assert 'id="economy-treasury-monthly-feature-list"' in economy_balance_page
+    assert 'id="economy-treasury-pricing-fit-list"' not in economy_balance_page
+    assert 'id="economy-treasury-analysis-refresh-btn"' in economy_balance_page
+    assert 'id="economy-treasury-analysis-updated-at"' in economy_balance_page
     assert 'id="economy-explorer-query"' in economy_explorer_page
     assert 'id="economy-explorer-search-btn"' in economy_explorer_page
     assert 'id="economy-explorer-result"' in economy_explorer_page
-    assert 'id="economy-governance-card"' in economy_explorer_page
-    assert 'id="economy-governance-scam-create-btn"' in economy_explorer_page
-    assert 'id="economy-governance-freeze-create-btn"' in economy_explorer_page
-    assert 'id="economy-governance-branch-create-btn"' in economy_explorer_page
-    assert 'id="economy-treasury-analysis-summary"' in economy_explorer_page
-    assert 'id="economy-treasury-service-fee-list"' in economy_explorer_page
-    assert 'id="economy-treasury-income-list"' in economy_explorer_page
-    assert 'id="economy-treasury-expense-list"' in economy_explorer_page
-    assert 'id="economy-treasury-analysis-refresh-btn"' in economy_explorer_page
-    assert 'id="economy-treasury-analysis-updated-at"' in economy_explorer_page
+    assert 'id="economy-explorer-layer-tabs"' in economy_explorer_page
+    assert 'data-economy-explorer-layer="pc1"' in economy_explorer_page
+    assert 'data-economy-explorer-layer="pc0"' in economy_explorer_page
+    assert 'data-economy-explorer-layer="bridge"' in economy_explorer_page
+    assert 'data-economy-explorer-layer="audit"' in economy_explorer_page
+    assert "Settlement Explorer" in economy_explorer_page
+    assert "Operational Explorer" in economy_explorer_page
+    assert "Bridge Explorer" in economy_explorer_page
+    assert "Audit Explorer" in economy_explorer_page
+    assert 'id="economy-governance-card"' in economy_governance_page
+    assert 'id="economy-governance-scam-create-btn"' not in economy_governance_page
+    assert 'id="economy-governance-freeze-create-btn"' not in economy_governance_page
+    assert 'id="economy-governance-branch-create-btn"' in economy_governance_page
+    assert 'id="economy-treasury-analysis-summary"' not in economy_governance_page
+    assert 'id="economy-governance-treasury-create-btn"' not in economy_governance_page
     assert "payload hash" in economy_js
     assert "signing hash" in economy_js
     assert "execution_payload_hash" in economy_js
     assert "signing_payload_hash" in economy_js
-    assert "全站多人投票" in economy_explorer_page
+    assert "全站多人投票" in economy_governance_page
     assert "20 Proved" in economy_explorer_page
     assert "受鏈上忙碌度影響" in economy_explorer_page
-    assert 'id="economy-root-virtual-card"' in economy_positions_page
-    assert 'id="economy-trading-summary-card"' in economy_positions_page
-    assert 'id="economy-asset-overview-card"' in economy_positions_page
-    assert 'id="economy-root-reserve-balance"' in index_html
-    assert 'id="economy-root-funding-available"' in index_html
-    assert 'id="economy-root-lending-pool-list"' in index_html
+    assert 'id="economy-root-virtual-card"' not in index_html
+    assert 'id="economy-trading-summary-card"' not in index_html
+    assert 'id="economy-asset-overview-card"' not in index_html
+    assert 'id="trading-root-sitewide-card"' in index_html
+    assert 'id="trading-asset-overview-card"' in index_html
+    assert 'id="trading-root-reserve-balance"' in index_html
+    assert 'id="trading-root-funding-available"' in index_html
+    assert 'id="trading-root-lending-pool-list"' in index_html
     assert 'id="economy-root-position-users"' not in index_html
     assert 'id="economy-root-position-wallet-total"' not in index_html
     assert 'id="economy-root-wallet-position-list"' not in index_html
@@ -118,17 +154,25 @@ def test_root_points_page_is_chain_operations_console():
     assert '<details class="drive-card" id="economy-wallet-create-card"' in index_html
     assert '<details class="drive-card" id="economy-wallet-create-card" style="display:none;margin-top:.75rem;">' in index_html
     assert "錢包管理" in index_html
-    assert "創建錢包" in index_html
-    assert 'id="economy-wallet-initial-grant"' in index_html
-    assert 'id="economy-wallet-initial-grant-note"' in index_html
+    assert "冷錢包管理" in index_html
+    assert 'id="economy-wallet-initial-grant"' not in index_html
+    assert 'id="economy-wallet-initial-grant-note"' not in index_html
+    assert 'id="economy-wallet-signup-bonus"' not in index_html
     assert 'id="economy-wallet-bound-actions"' in index_html
     assert 'id="economy-wallet-delete-cold-address"' not in index_html
     assert 'id="economy-wallet-delete-cold-btn"' not in index_html
     assert 'id="economy-wallet-generated-panel"' in index_html
     assert 'id="economy-wallet-generated-address"' in index_html
-    assert 'id="economy-wallet-generated-private-key"' in index_html
+    assert 'id="economy-wallet-generated-file-name"' in index_html
+    assert 'id="economy-wallet-generated-trade-password"' in index_html
+    assert 'id="economy-wallet-download-file-btn"' in index_html
+    assert 'id="economy-wallet-copy-trade-password-btn"' in index_html
     assert 'id="economy-wallet-use-generated-cold-btn"' in index_html
-    assert "建立冷錢包不會自動填入此欄" in index_html
+    assert '["economy-wallet-download-file-btn", economyDownloadDraftColdWalletFile]' in economy_js
+    assert '["economy-wallet-copy-trade-password-btn", economyCopyDraftTradePassword]' in economy_js
+    assert "錢包管理：已準備下載冷錢包檔" in economy_js
+    assert "錢包管理：${successText}" in economy_js
+    assert "私鑰已加密封存在錢包檔中" in index_html
     assert 'id="economy-spend-source-wallet"' not in index_html
     assert "預設付款錢包" not in index_html
     assert 'id="economy-wallet-count"' in index_html
@@ -144,18 +188,18 @@ def test_root_points_page_is_chain_operations_console():
     assert "刪除後不再列入帳戶總額" in index_html
     assert 'data-wallet-delete-cold' in economy_js
     assert 'data-wallet-secret-check' in economy_js
-    assert 'data-wallet-transfer-to' in economy_js
+    assert 'data-wallet-receive' in economy_js
+    assert 'data-wallet-send' in economy_js
     assert 'data-wallet-default' in economy_js
-    assert "手續費進 BURN 銷毀錢包" in index_html
-    assert 'id="economy-wallet-transfer-card"' in index_html
-    assert 'id="economy-transfer-source-wallet"' in index_html
-    assert 'id="economy-transfer-destination-wallet"' in index_html
-    assert 'id="economy-transfer-fee-estimate"' in index_html
-    assert 'id="economy-transfer-submit-btn"' in index_html
-    assert 'id="economy-root-spot-position-list"' in index_html
-    assert 'id="economy-root-margin-position-list"' in index_html
-    assert 'id="economy-root-bot-position-list"' in index_html
-    assert 'id="economy-root-position-bots"' in index_html
+    assert "此 pc0 綁定的橋接 pc1 入金地址" in economy_js
+    assert "pc1 冷錢包不能直接轉到 pc0" in economy_js
+    assert 'id="economy-wallet-action-panel"' in index_html
+    assert 'id="economy-transfer-fee-estimate"' in economy_js
+    assert 'id="economy-transfer-submit-btn"' in economy_js
+    assert 'id="trading-root-spot-position-list"' in index_html
+    assert 'id="trading-root-margin-position-list"' in index_html
+    assert 'id="trading-root-bot-position-list"' in index_html
+    assert 'id="trading-root-position-bots"' in index_html
     assert 'id="economy-root-card"' in economy_chain_page
     assert 'id="economy-admin-card"' not in economy_chain_page
     assert "PointsChain 私有鏈管理" in index_html
@@ -185,11 +229,10 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-layer-snapshot-height"' in index_html
     assert 'id="economy-layer-derived-verify"' in index_html
     assert "<pre id=\"economy-chain-status\"" not in index_html
-    assert 'id="economy-root-virtual-card"' in index_html
-    assert 'id="economy-root-virtual-total"' in index_html
-    assert 'id="economy-root-virtual-margin-value"' in index_html
-    assert "剩餘積分 + 現貨估值 + 借貸權益" in index_html
-    assert "剩餘積分 + 現貨估值" in index_html
+    assert 'id="economy-root-virtual-card"' not in index_html
+    assert 'id="economy-root-virtual-total"' not in index_html
+    assert 'id="economy-root-virtual-margin-value"' not in index_html
+    assert "交易所內帳、現貨與借貸倉位的估值摘要" in index_html
     assert 'id="economy-manual-adjust-details"' not in index_html
     assert 'id="economy-chain-seal-details"' in index_html
     assert 'id="economy-chain-audit-details"' in index_html
@@ -228,41 +271,44 @@ def test_root_points_page_is_chain_operations_console():
     assert "/js/50-admin.js?v=" in index_html
     assert "/js/56-trading.js?v=" in index_html
     assert 'id="economy-recovery-card"' in index_html
-    assert 'id="economy-backup-btn"' in index_html
     assert 'id="economy-recovery-auto-handle-btn"' in index_html
-    assert 'id="economy-recovery-approve-btn"' in index_html
+    assert 'id="economy-backup-btn"' not in index_html
+    assert 'id="economy-recovery-approve-btn"' not in index_html
     assert "function renderEconomyRecovery" in economy_js
-    assert 'fetchEconomyJson("/root/points/chain/backups"' in economy_js
+    assert 'fetchEconomyJson("/root/points/chain/backups"' not in economy_js
     assert 'fetchEconomyJson("/root/points/chain/recovery/auto-handle"' in economy_js
-    assert 'fetchEconomyJson("/root/points/chain/recovery/approve"' in economy_js
+    assert 'fetchEconomyJson("/root/points/chain/recovery/approve"' not in economy_js
     assert "async function autoHandlePointsChainRecovery()" in economy_js
     assert '["economy-recovery-auto-handle-btn", autoHandlePointsChainRecovery]' in economy_js
     assert "/js/90-bootstrap.js?v=" in index_html
     assert 'const rootMode = currentUser === "root";' in economy_js
+    assert 'return economyChainEnabled() && economyGovernanceCanManage();' in economy_js
+    assert 'rootWalletManagementCard.style.display = economyGovernanceCanManage() && chainFeatureOn ? "" : "none";' in economy_js
     assert 'const canManagePoints = canManageEconomyPoints();' not in economy_js
     assert 'adminCard.style.display = "none"' not in economy_js
     assert 'economy-admin-ledger-list' not in economy_js
     assert 'economy-pending-list' not in economy_js
     assert "function setEconomyActivePage(page" in economy_js
-    assert "function economyPositionsAvailable()" in economy_js
-    assert 'const positionsAvailable = false;' in economy_js
-    assert 'positionsTab.style.display = "none";' in economy_js
-    assert 'chainTab.textContent = rootMode ? "積分私有鏈" : "積分管理";' in economy_js
-    assert 'if (nextPage === "positions") title.textContent = "倉位管理";' in economy_js
+    assert "function economyPositionsAvailable()" not in economy_js
+    assert 'const positionsAvailable = false;' not in economy_js
+    assert 'positionsTab.style.display = "none";' not in economy_js
+    assert 'chainTab.textContent = rootMode ? "積分私有鏈" : "官方錢包管理";' in economy_js
+    assert 'if (nextPage === "positions") title.textContent = "倉位管理";' not in economy_js
     assert 'else if (nextPage === "explorer") title.textContent = "鏈上瀏覽器";' in economy_js
-    assert 'else if (nextPage === "funding-pools") title.textContent = "資金池管理";' in economy_js
-    assert 'else if (nextPage === "all-positions") title.textContent = "全用戶倉位管理";' in economy_js
-    assert 'else title.textContent = nextPage === "chain" ? "積分私有鏈" : "錢包管理";' in economy_js
+    assert 'else if (nextPage === "funding-pools") title.textContent = "資金池管理";' not in economy_js
+    assert 'else if (nextPage === "all-positions") title.textContent = "全用戶倉位管理";' not in economy_js
+    assert 'else if (!rootMode) title.textContent = nextPage === "chain" ? "官方錢包管理" : "積分錢包";' in economy_js
+    assert 'else title.textContent = nextPage === "chain" ? "積分私有鏈" : "官方錢包管理";' in economy_js
     assert 'fetchEconomyJson("/root/points/report")' in economy_js
-    assert 'fetchEconomyJson("/root/trading/sitewide/refresh"' in economy_js
-    assert 'fetchEconomyJson("/root/trading/sitewide/pools", { allowMissingSnapshot: true })' in economy_js
-    assert 'fetchEconomyJson("/root/trading/sitewide/user-positions", { allowMissingSnapshot: true })' in economy_js
-    assert 'const shouldLoadRootTrading = rootMode && chainFeatureOn && ["funding-pools", "all-positions"].includes(economyActivePage);' in economy_js
-    assert "PointsChain EXCHANGE" in economy_js
+    assert 'fetchTradingJson("/root/trading/sitewide/refresh"' in trading_js
+    assert 'fetchTradingJson("/root/trading/sitewide/pools", { allowMissingSnapshot: true })' in trading_js
+    assert 'fetchTradingJson("/root/trading/sitewide/user-positions", { allowMissingSnapshot: true })' in trading_js
+    assert 'const shouldLoadRootTrading = rootMode && chainFeatureOn && ["funding-pools", "all-positions"].includes(economyActivePage);' not in economy_js
+    assert "PointsChain EXCHANGE" not in economy_js
     assert "未綁定地址" in economy_js
-    assert "function refreshEconomyRootTradingSnapshots" in economy_js
-    assert 'loadEconomyRootTradingReadOnly({ refreshSnapshot: true' in economy_js
-    assert 'balanceTab.textContent = rootMode ? "錢包管理" : "積分餘額";' in economy_js
+    assert "function refreshEconomyRootTradingSnapshots" not in economy_js
+    assert 'loadEconomyRootTradingReadOnly({ refreshSnapshot: true' not in economy_js
+    assert 'balanceTab.textContent = rootMode ? "官方錢包管理" : "積分餘額";' in economy_js
     assert "function renderEconomyRootBalanceSummary" not in economy_js
     assert "function renderEconomyLayerSummary" in economy_js
     assert "function economyFormulaCard" in economy_js
@@ -275,19 +321,23 @@ def test_root_points_page_is_chain_operations_console():
     assert 'setEconomyText("economy-root-wallet-mint-address"' in economy_js
     assert 'setEconomyText("economy-root-wallet-official-balance"' in economy_js
     assert 'setEconomyText("economy-root-wallet-promo-status"' in economy_js
-    assert '["economy-root-wallet-refresh-btn", loadEconomyRootReport]' in economy_js
+    assert '["economy-root-wallet-refresh-btn", refreshEconomyOfficialWalletManagement]' in economy_js
     assert '["economy-root-official-grant-btn", sendEconomyRootOfficialGrant]' in economy_js
-    assert 'fetchEconomyJson("/root/points/official-wallet/grant"' in economy_js
+    assert 'fetchEconomyJson("/admin/points/governance/treasury-transfer"' in economy_js
+    assert 'fetchEconomyJson("/root/points/official-wallet/grant"' not in economy_js
     assert 'fetchEconomyJson("/points/governance/proposals?limit=50")' in economy_js
-    assert 'fetchEconomyJson("/points/governance/address-risk"' in economy_js
-    assert 'fetchEconomyJson("/points/governance/wallet-freeze"' in economy_js
+    assert 'fetchEconomyJson("/points/governance/address-risk"' not in economy_js
+    assert 'fetchEconomyJson("/points/governance/wallet-freeze"' not in economy_js
     assert 'fetchEconomyJson("/admin/points/governance/recovery-branch"' in economy_js
     assert 'fetchEconomyJson(`/points/governance/proposals/${encodeURIComponent(proposalUuid)}/vote`' in economy_js
     assert 'fetchEconomyJson(`/admin/points/governance/proposals/${encodeURIComponent(proposalUuid)}/execute`' in economy_js
     assert "economy-governance-emergency-create-details" in index_html
     assert "function renderEconomyTreasuryAnalysis" in economy_js
-    assert "站內服務費結算" in economy_js
-    assert "actual_chain_transfer_destination_fund_key" in economy_js
+    assert "站內服務費收入" in economy_js
+    assert "各功能服務費收入" in economy_js
+    assert "計費單價請到系統管理" in economy_js
+    assert "服務費定價擬合" not in economy_js
+    assert "actual_chain_transfer_destination_fund_key" not in economy_js
     assert '["economy-treasury-analysis-refresh-btn", () => loadEconomyTreasurySignerCenter()]' in economy_js
     assert "不會刪改舊 ledger" in economy_js
     assert 'if (value === "official_fund_transfer") return "官方基金調撥";' in economy_js
@@ -299,21 +349,28 @@ def test_root_points_page_is_chain_operations_console():
     assert "wallet_creation_fee" in economy_js
     assert "function renderTradingPaymentWalletOptions" in trading_js
     assert "trading-payment-wallet" in trading_js
+    assert 'if (currentUser === "root") return "";' in trading_js
+    assert 'root 下單固定使用 root 模擬資金，不可選用站內託管錢包或官方財庫。' in trading_js
     assert 'const ECONOMY_SPEND_WALLET_STORAGE_KEY = "hackme_web:economy:default_spend_wallet";' in economy_js
     assert "function readEconomyDefaultSpendWalletAddress" in economy_js
     assert "source_wallet_address: sourceWallet" in economy_js
     assert 'window.prompt("請確認本次付款錢包地址；可改用其他錢包。"' in economy_js
     assert "economy-wallet-create-card" in economy_js
-    assert "economy-wallet-initial-grant" in economy_js
-    assert "初始配點已入帳" in economy_js
-    assert "綁定錢包後由官方基金匯入" in economy_js
+    assert "economy-wallet-initial-grant" not in economy_js
+    assert "初始配點已入帳" not in economy_js
+    assert "綁定錢包後由官方基金匯入" not in economy_js
+    assert "economy-wallet-signup-bonus" not in economy_js
     assert "let economyColdWalletDraft = null;" in economy_js
     assert "let economyColdWalletBindCandidate = null;" in economy_js
     assert "let economyDocumentEventsBound = false;" in economy_js
     assert "冷錢包只建立草稿，尚未匯入或綁定" in economy_js
     assert "function destroyEconomyColdWalletSecrets" in economy_js
-    assert '["economy-wallet-generated-address", "economy-wallet-generated-private-key", "economy-wallet-private-key"]' in economy_js
-    assert "function economyLoadColdWalletBackup" in economy_js
+    assert '"economy-wallet-generated-address"' in economy_js
+    assert '"economy-wallet-generated-file-name"' in economy_js
+    assert '"economy-wallet-generated-trade-password"' in economy_js
+    assert '"economy-wallet-file-password"' in economy_js
+    assert '"economy-wallet-file-input"' in economy_js
+    assert "function economyLoadColdWalletBackup" not in economy_js
     assert "function economyNotifyFailure" in economy_js
     assert 'el.classList.toggle("show", Boolean(text));' in economy_js
     assert 'el.classList.toggle("err", Boolean(text) && !ok);' in economy_js
@@ -321,63 +378,150 @@ def test_root_points_page_is_chain_operations_console():
     assert "function selectGeneratedColdWalletForImport" in economy_js
     assert 'id="economy-wallet-generated-selection-status"' in index_html
     assert '["economy-wallet-use-generated-cold-btn", selectGeneratedColdWalletForImport]' in economy_js
-    assert 'const ECONOMY_COLD_BACKUP_PREFIX = "pcw1.p256";' in economy_js
-    assert "function economyCompactColdWalletBackup" in economy_js
-    assert "function economyParseColdWalletBackup" in economy_js
+    assert 'const ECONOMY_COLD_BACKUP_PREFIX = "pcw1.p256";' not in economy_js
+    assert 'const ECONOMY_COLD_WALLET_KDF_ITERATIONS = 600000;' in economy_js
+    assert 'const ECONOMY_COLD_UNLOCK_MNEMONIC_WORD_COUNT = 12;' in economy_js
+    assert 'const ECONOMY_COLD_UNLOCK_QUIZ_COUNT = 4;' in economy_js
+    assert 'const ECONOMY_COLD_WALLET_FILE_FORMAT = "hackme-pcw1-encrypted-wallet";' in economy_js
+    assert "function economyEncryptColdWalletFile" in economy_js
+    assert "function economyDecryptColdWalletFilePayload" in economy_js
+    assert "function economyLoadEncryptedColdWalletFile" in economy_js
+    assert "function economyPromptColdWalletForSigning" in economy_js
+    assert "function economyCompactColdWalletBackup" not in economy_js
+    assert "function economyParseColdWalletBackup" not in economy_js
+    assert "function checkEconomyColdWalletMnemonicQuiz" in economy_js
+    assert "function economyBuildColdWalletMnemonicQuiz" in economy_js
+    assert "function startEconomyColdWalletMnemonicQuiz" in economy_js
+    assert '["economy-wallet-start-mnemonic-quiz-btn", startEconomyColdWalletMnemonicQuiz]' in economy_js
+    assert 'secretInput.value = "";' in economy_js
+    assert "本次冷錢包草稿已作廢" in economy_js
     assert "function economyBuildTransferSignature" in economy_js
     assert "function economyBuildGovernanceMultisigSignature" in economy_js
     assert "economyWalletSignTransfer" not in economy_js
     assert "points_wallet_transfer" in economy_js
     assert "function economyBuildServiceFeeSignature" in economy_js
-    assert "points_service_fee_reserve" in economy_js
-    assert "服務費已凍結" in economy_js
-    assert "批次鏈上扣款" in economy_js
-    assert "付款錢包私鑰備份碼以本機簽署交易" in economy_js
-    assert "付款錢包私鑰備份碼以本機簽署服務費" in economy_js
-    assert "只在可信裝置使用，不會送到伺服器" in economy_js
+    assert "points_service_fee_payment" in economy_js
+    assert "服務費已凍結" not in economy_js
+    assert "批次鏈上扣款" not in economy_js
+    assert "冷錢包直接服務付款已停用" in economy_js
+    assert "錢包檔 JSON 或舊版 pcw1 備份碼以本機簽署" not in economy_js
+    assert "請貼上冷錢包檔 JSON" not in economy_js
+    assert "請貼上有效的加密冷錢包檔 JSON" not in economy_js
+    assert "function economyPickColdWalletFileForSigning" in economy_js
+    assert 'id="economy-wallet-signing-file-input"' in index_html
+    assert 'input.type = "file";' in economy_js
+    assert "await economyReadTextFile(file)" in economy_js
+    assert "function economyVerifyColdWalletSigningSession" in economy_js
+    assert "economyRememberColdWalletSigningSession" in economy_js
+    assert "本機已暫時解鎖此冷錢包" in economy_js
+    assert "不需要輸入完整解鎖助記詞" in economy_js
+    assert "首次解鎖或本機簽署會話逾期" in economy_js
+    assert "錢包檔與冷錢包解鎖助記詞只在可信裝置使用" in economy_js
     assert "showAppToast(`${label}：${message}`" in economy_js
     assert "false,\n    [\"sign\"]" in economy_js
     assert "privateJwk.d = \"\";" in economy_js
     assert "等待冷錢包本機簽署" in economy_js
-    assert "私鑰備份碼地址與付款錢包不一致" in economy_js
+    assert "冷錢包檔地址與付款錢包不一致" in economy_js
     assert 'data-dispute-amount="${sanitize(String(tx.amount_points || tx.amount || 0))}"' in economy_js
     assert 'data-dispute-amount="${sanitize(String(row.claimed_amount_points || 0))}"' in economy_js
     assert "signature," in economy_js
-    assert "const backupCode = economyCompactColdWalletBackup(privateJwk);" in economy_js
-    assert 'if ($("economy-wallet-generated-private-key")) $("economy-wallet-generated-private-key").value = backupCode;' in economy_js
-    assert "貼上 pcw1 私鑰備份碼；也相容舊 JWK JSON" in index_html
-    assert "我已離線保存私鑰備份碼" in index_html
-    assert "持有備份碼者可恢復該地址" in index_html
-    assert "伺服器未保存用戶冷錢包備份碼" in economy_js
+    assert "const tradePassword = await economyDerivedColdWalletTradePassword(privateJwk, address);" in economy_js
+    assert "const walletFile = await economyEncryptColdWalletFile" in economy_js
+    assert "新建冷錢包不會顯示這種備份碼" not in index_html
+    assert "記憶詞考試" in index_html
+    assert 'id="economy-wallet-start-mnemonic-quiz-btn"' in index_html
+    assert "確認已保存，隱藏助記詞並開始考試" in index_html
+    assert "pcp1 只是解鎖助記詞前綴，不是第一個 pc1 冷錢包" in index_html
+    assert "官方 pc0 熱錢包也不計入第一個 pc1 冷錢包" in index_html
+    assert "答錯會作廢本次草稿並要求重來" in index_html
+    assert 'id="economy-wallet-mnemonic-check-btn"' in index_html
+    assert '["economy-wallet-mnemonic-check-btn", checkEconomyColdWalletMnemonicQuiz]' in economy_js
+    assert "我已下載錢包檔並離線保存冷錢包解鎖助記詞" in index_html
+    assert "持有錢包檔與冷錢包解鎖助記詞者可恢復該地址" in index_html
+    assert "伺服器未保存用戶冷錢包檔或冷錢包解鎖助記詞" in economy_js
     assert 'if ($("economy-wallet-private-key")) $("economy-wallet-private-key").value = JSON.stringify(privateJwk, null, 2);' not in economy_js
     assert "economyColdWalletDraft = { privateKey" not in economy_js
     assert "economyColdWalletDraft.privateJwk" not in economy_js
+    assert "殘差舊算法" not in economy_js
+    assert 'const formulaBalanced = gap === 0;' in economy_js
+    assert 'formulaBalanced ? "Settlement invariant 正常" : "需查帳"' in economy_js
     assert "economyColdWalletDraft.backupCode" not in economy_js
     assert "Legacy 帳本身份" in economy_js
     assert "Legacy 帳本 ID" in economy_js
     assert "舊帳本公開識別碼" in economy_js
     assert '"economy-layer-supply-formula"' in economy_js
-    assert "閉環公式" in economy_js
+    assert "多帳本結算控制平面" in economy_js
+    assert "PC1 Canonical Reserve" in economy_js
+    assert "PC0 Wrapped Operational Supply" in economy_js
+    assert "Bridge Settlement / Pending Isolation" in economy_js
+    assert "Financial Reconciliation" in economy_js
+    assert "鏈上/橋外在外流通" not in economy_js
+    assert "pc0出站" not in economy_js
+    assert "入金入站" not in economy_js
+    assert "帳本/事件差" not in economy_js
+    assert "PC1 Reserve 對帳差" in economy_js
+    assert "用戶 PC0 站內流通" in economy_js
+    assert "member_internal_circulating_points" in economy_js
+    assert "root/其他 PC0 站內餘額" in economy_js
+    assert "交易所應收本金" in economy_js
+    assert "扣留式費用對帳" in economy_js
+    assert "未分類橋接流量差" in economy_js
+    assert "ledgerEconomyGap || unexplainedFlowGap" in economy_js
+    assert "ledgerEconomyGap || flowGap" not in economy_js
+    assert "pc0 服務費收入" in economy_js
+    assert "最近服務費收入帳本" in economy_js
+    assert "最高管理者" in economy_js
+    assert "簽署權重" in economy_js
+    assert "super_admin · weight" not in economy_js
+    assert "manager · weight" not in economy_js
+    assert "站內服務待結算" not in economy_js
+    assert "下一次批次差額" not in economy_js
+    assert "最近實際鏈上批次轉帳" not in economy_js
     assert "economy-root-balance-refresh-btn" not in economy_js
     assert 'setEconomyText("economy-layer-derived-verify"' in economy_js
-    assert "function renderEconomyRootFundingPools" in economy_js
-    assert "function renderEconomyRootAllPositions" in economy_js
+    assert "function renderEconomyRootFundingPools" not in economy_js
+    assert "function renderEconomyRootAllPositions" not in economy_js
+    assert "function renderTradingRootSitewidePools" in trading_js
+    assert "function renderTradingRootSitewidePositions" in trading_js
     assert 'setEconomyText("economy-root-position-users"' not in economy_js
     assert '"economy-root-wallet-position-list"' not in economy_js
-    assert 'setEconomyText("economy-root-position-bots"' in economy_js
-    assert 'renderEconomyRootList(botRows, "economy-root-bot-position-list"' in economy_js
+    assert 'setEconomyText("economy-root-position-bots"' not in economy_js
+    assert 'renderEconomyRootList(botRows, "economy-root-bot-position-list"' not in economy_js
+    assert 'tradingSetText("trading-root-position-bots"' in trading_js
+    assert 'tradingRootList(botRows, "trading-root-bot-position-list"' in trading_js
     assert "startEconomyBlockCountdown" in economy_js
     assert "function canManageEconomyPoints()" in economy_js
+    assert "function relocateEconomyOfficialWalletCard(rootMode)" in economy_js
+    assert 'chainPage.insertBefore(card, managerCard || chainPage.firstChild);' in economy_js
     assert "function setEconomyRootLayout(rootMode)" in economy_js
     assert "function economyChainEnabled()" in economy_js
     assert 'siteConfig.feature_points_chain_enabled !== false' in economy_js
-    assert 'return currentUser === "root" && economyChainEnabled();' in economy_js
+    assert 'return economyChainEnabled() && economyGovernanceCanManage();' in economy_js
+    assert 'id="economy-manager-points-management-card"' in index_html
+    assert 'id="economy-manager-points-official-balance"' in index_html
+    assert 'id="economy-manager-points-pending-list"' in index_html
+    assert "官方錢包管理" in index_html
+    assert "manager 以上可查看官方基金錢包" in index_html
+    assert 'const managerCard = $("economy-manager-points-management-card");' in economy_js
+    assert 'const managerMode = canManage && currentUser !== "root";' in economy_js
+    assert '["economy-manager-points-open-wallets-btn", () => {' in economy_js
+    assert '$("economy-root-wallet-management-card")?.scrollIntoView?.({ block: "start", behavior: "smooth" });' in economy_js
+    assert 'id="edit-user-governance-disposition-fields"' in index_html
+    assert 'id="edit-user-restriction-features"' in index_html
+    assert 'id="edit-user-fine-amount"' in index_html
+    assert "payload.restriction_features = restrictionFeatures" in auth_js
+    assert "payload.fine_amount_points = fineAmount" in auth_js
     assert "最後更新" in economy_js
     assert "bindEconomyInlineEvents" in economy_js
     assert "function renderEconomyExplorerResult" in economy_js
+    assert "function economyExplorerBridgeCard" in economy_js
+    assert "function economyExplorerAuditCard" in economy_js
+    assert "function setEconomyExplorerLayer" in economy_js
+    assert 'fetchEconomyJson(`/points/explorer/bridge/${encodeURIComponent(value)}`)' in economy_js
+    assert 'fetchEconomyJson("/root/points/financial-invariants")' in economy_js
     assert "function renderEconomyGovernance" in economy_js
-    assert "function createGovernanceAddressRiskProposal" in economy_js
-    assert "function createGovernanceWalletFreezeProposal" in economy_js
+    assert "function createGovernanceAddressRiskProposal" not in economy_js
+    assert "function createGovernanceWalletFreezeProposal" not in economy_js
     assert "function createGovernanceRecoveryBranchProposal" in economy_js
     assert 'fetchEconomyJson(`/points/explorer/search?q=${encodeURIComponent(value)}&limit=25`)' in economy_js
     assert 'fetchEconomyJson(`/points/explorer/fee-estimate?fee_points=${encodeURIComponent(String(fee))}`)' in economy_js
@@ -393,18 +537,25 @@ def test_root_points_page_is_chain_operations_console():
     assert "function loadEconomyTransactions" in economy_js
     assert '["economy-transactions-refresh-btn", loadEconomyTransactions]' in economy_js
     assert '["economy-governance-refresh-btn", () => loadEconomyGovernance()]' in economy_js
-    assert '["economy-governance-scam-create-btn", createGovernanceAddressRiskProposal]' in economy_js
-    assert '["economy-governance-freeze-create-btn", createGovernanceWalletFreezeProposal]' in economy_js
+    assert '["economy-governance-scam-create-btn", createGovernanceAddressRiskProposal]' not in economy_js
+    assert '["economy-governance-freeze-create-btn", createGovernanceWalletFreezeProposal]' not in economy_js
     assert '["economy-governance-branch-create-btn", createGovernanceRecoveryBranchProposal]' in economy_js
     assert 'requestedPage === "transactions" && !rootMode' not in economy_js
     assert 'transactionsTab.style.display = rootMode ? "none" : ""' not in economy_js
     assert 'if (!currentUser || currentUser === "root")' not in economy_js
-    assert 'if (value === "official_outgoing") return "官方撥款";' in economy_js
+    assert 'if (value === "official_outgoing") return "官方 Treasury 支出";' in economy_js
+    assert "function economyTransactionFinalityIsInternal" in economy_js
+    assert "Number(finality.target_proved_count ?? 20) === 0" in economy_js
+    assert "function economyTransactionProvedText" in economy_js
+    assert 'if (economyTransactionFinalityIsInternal(finality)) return "免 Proved";' in economy_js
+    assert "function economyTransactionAmountText" in economy_js
+    assert 'if (tx.direction === "official_outgoing") return `Treasury 支出 ${formatEconomyPointsValue(amount + fee)}`;' in economy_js
     assert "Pending 不會讓收款錢包入帳" in economy_js
     assert "transaction_hash" in economy_js
     assert 'setEconomyActivePage("transactions")' in economy_js
     assert "function submitEconomyWalletTransfer()" in economy_js
-    assert "const successMessage = txHash" in economy_js
+    assert "const successMessage = immediate" in economy_js
+    assert "pc0 站內互轉已完成" in economy_js
     assert "economySetMsg(visibleMessage, !warningSuffix);" in economy_js
     assert "成交前收款方不會入帳" in economy_js
     assert "設定自動發放交易免鏈上費用" in economy_js
@@ -442,9 +593,11 @@ def test_root_points_page_is_chain_operations_console():
     assert "renderEconomyAccountLookup" not in economy_js
     assert "formatEconomyVerificationSummary" in economy_js
     assert "formatEconomyRecoveryResult" in economy_js
-    assert "PointsChain 已恢復並完成驗證" in economy_js
+    assert "PointsChain 已完成異常處理檢查" in economy_js
+    assert "PointsChain 已恢復並完成驗證" not in economy_js
     assert "const resultMessage = formatEconomyRecoveryResult(json);" in economy_js
-    assert "await loadEconomyDashboard();\n    economySetMsg(resultMessage, !!json.ok);" in economy_js
+    assert "await loadEconomyDashboard();\n    if (json.action === \"verified_clean\")" in economy_js
+    assert "economySetMsg(json.msg || resultMessage || \"異常鏈處理完成\", !!json.ok);" in economy_js
     assert "setEconomyChainStatus" in economy_js
     assert "JSON.stringify(json.report?.verification" not in economy_js
     assert "JSON.stringify(json.verification" not in economy_js
@@ -459,7 +612,7 @@ def test_root_points_page_is_chain_operations_console():
     assert '["economy-wallet-delete-cold-btn", deleteEconomyColdWallet]' not in economy_js
     assert "function startColdWalletImport" in economy_js
     assert '["economy-wallet-import-cold-btn", startColdWalletImport]' in economy_js
-    assert "請貼上要匯入或恢復的冷錢包備份碼" in economy_js
+    assert "請貼上要匯入或恢復的冷錢包備份碼" not in economy_js
     assert "function economyVisibleWallets" in economy_js
     assert "addWallet(onboarding.wallet);" in economy_js
     assert "const visibleWallets = economyVisibleWallets(onboarding);" in economy_js
@@ -482,14 +635,23 @@ def test_root_points_page_is_chain_operations_console():
     assert 'async function rollbackEconomyLedger()' not in economy_js
     assert "/rollback" not in economy_js
     assert "bindEconomyInlineEvents" in bootstrap_js
-    assert 'id="tab-settings-billing"' in index_html
+    assert 'id="tab-settings-billing"' not in index_html
     assert 'id="sec-settings-billing"' in index_html
-    assert 'id="tab-settings-trading"' in index_html
+    assert 'id="economy-root-pricing-settings-card"' in index_html
+    assert 'id="economy-pricing-settings-slot"' in index_html
+    assert 'id="tab-settings-trading"' not in index_html
     assert 'id="sec-settings-trading"' in index_html
+    assert 'id="trading-settings-page"' in index_html
+    assert 'id="trading-settings-slot"' in index_html
+    assert 'id="trading-root-settings-page-btn"' in index_html
+    assert "function openTradingSettingsPage()" in trading_js
+    assert 'action: "trading:settings"' in core_js
     assert 'id="root-catalog-item-key"' in index_html
     assert 'id="root-catalog-storage-gb"' in index_html
     assert 'id="root-catalog-save-btn"' in index_html
     assert 'id="root-service-fee-quick-pricing-list"' in index_html
+    assert "這裡是服務計價的實際設定區" in index_html
+    assert "本月收入統計請到積分錢包" in index_html
     assert "ROOT_SERVICE_FEE_PRICING_PRESETS" in admin_js
     assert "saveRootServiceFeePricingPreset" in admin_js
     assert "video_publish_basic" in admin_js
@@ -503,11 +665,18 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-trading-borrow-interest-minimum-hours"' in index_html
     assert 'id="root-trading-grid-fee-discount-percent"' in index_html
     assert 'id="root-trading-margin-long-financing-percent"' in index_html
+    assert 'id="root-trading-margin-max-pool-utilization-percent"' in index_html
     assert 'id="root-trading-short-collateral-percent"' in index_html
+    assert 'id="root-trading-exchange-liability-limit-points"' in index_html
+    assert 'id="root-trading-exchange-liability-grace-minutes"' in index_html
+    assert 'id="root-trading-profit-settlement-interval-minutes"' in index_html
     assert "融資九成" in index_html
     assert "借券六成" in index_html
     assert "融資可貸比例（%）" in index_html
+    assert "借貸基金使用率上限（%）" in index_html
     assert "借券原始保證金比例（%）" in index_html
+    assert "交易所暫時負債上限（點）" in index_html
+    assert "盈利結算週期（分鐘）" in index_html
     assert "維持保證金比例（%）" in index_html
     assert 'id="root-trading-price-source"' in index_html
     assert 'value="fused_weighted"' in index_html
@@ -604,7 +773,11 @@ def test_root_points_page_is_chain_operations_console():
     assert "borrow_interest_minimum_hours" in admin_js
     assert "grid_fee_discount_percent" in admin_js
     assert "margin_long_financing_percent" in admin_js
+    assert "margin_max_pool_utilization_percent" in admin_js
     assert "short_collateral_percent" in admin_js
+    assert "exchange_liability_limit_points" in admin_js
+    assert "exchange_liability_grace_minutes" in admin_js
+    assert "profit_settlement_interval_minutes" in admin_js
     assert "price_source" in admin_js
     assert "max_price_staleness_seconds" in admin_js
     assert "btc_trade_enabled" in admin_js
@@ -626,8 +799,9 @@ def test_root_points_page_is_chain_operations_console():
     assert "margin_liquidation_enabled" in admin_js
     assert "margin_maintenance_percent" in admin_js
     assert "collectRootTradingMarketSettings" in admin_js
-    assert 'switchSettingsSection("billing")' in bootstrap_js
-    assert 'switchSettingsSection("trading")' in bootstrap_js
+    assert 'if (tab === "billing") {' in admin_js
+    assert 'switchSettingsSection("billing")' not in bootstrap_js
+    assert 'switchSettingsSection("trading")' not in bootstrap_js
     assert "loadRootTradingSettings" in bootstrap_js
     assert "checkRootBtcTradeStatus" in bootstrap_js
     assert "setupRootBtcTrade" in bootstrap_js
@@ -647,13 +821,20 @@ def test_root_points_page_is_chain_operations_console():
     assert "BTC_trade 信號整合" in trading_settings_section
     assert "各交易對參數" in trading_settings_section
     assert 'id="trading-root-card"' in trading_settings_section
-    assert "root 交易引擎操作" in trading_settings_section
+    assert "交易所基金與市場營運" in trading_settings_section
+    assert "交易所基金撥補需改走官方財庫治理提案" in trading_settings_section
+    assert "資金池" not in trading_settings_section
     assert 'id="trading-root-inline-msg"' in trading_settings_section
     assert 'id="trading-limit-match-btn"' in trading_settings_section
     assert 'id="trading-liquidation-scan-btn"' in trading_settings_section
-    assert 'id="trading-root-contract-card"' in trading_settings_section
-    assert "累積利息" in index_html
-    assert "下一次計息" in index_html
+    assert 'id="trading-reserve-allocate-btn"' not in trading_settings_section
+    assert 'id="trading-reserve-source-user-id"' not in trading_settings_section
+    assert "/root/trading/reserve/allocate" not in trading_js
+    assert "function allocateTradingReserve" not in trading_js
+    assert 'id="trading-root-contract-card"' not in trading_settings_section
+    assert 'id="trading-root-sim-card"' in index_html
+    assert "累積利息" in trading_js
+    assert "下一次計息" in trading_js
     assert ".trading-fusion-weight-list" in styles
     assert ".trading-fusion-weight-chip" in styles
     assert ".trading-fusion-inline-input" in styles
@@ -683,6 +864,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-card"' in trading_section
     assert 'id="trading-submit-order-btn"' in trading_section
     assert 'id="trading-order-estimate"' in trading_section
+    assert 'id="trading-sellable-hint"' in trading_section
+    assert 'aria-live="polite"' in trading_section
     assert 'id="trading-margin-card"' in trading_section
     assert 'id="trading-margin-type"' in trading_section
     assert 'id="trading-margin-collateral"' in trading_section
@@ -692,6 +875,7 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "全倉維持率" in trading_section
     assert 'id="trading-order-form"' in trading_section
     assert 'id="trading-availability-note"' in trading_section
+    assert 'id="trading-background-status"' in trading_section
     assert 'id="trading-trial-credit-available"' in trading_section
     assert 'id="trading-trial-credit-note"' in trading_section
     assert 'id="trading-root-card"' not in trading_section
@@ -705,7 +889,13 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-liquidation-status"' in trading_settings_section
     assert 'id="trading-funding-available"' in trading_section
     assert "交易總可用" in trading_section
-    assert 'id="trading-root-reset-sim-btn"' in trading_settings_section
+    assert 'id="trading-portfolio-total-equity"' in trading_section
+    assert 'id="trading-portfolio-leverage-count"' in trading_section
+    assert 'id="trading-portfolio-card"' in trading_section
+    assert 'id="trading-portfolio-asset-list"' in trading_section
+    assert "我的資產組合" in trading_section
+    assert "現貨倉位" in trading_section
+    assert 'id="trading-root-reset-sim-btn"' in trading_section
     assert 'id="trading-btc-signal-card"' in trading_section
     assert 'id="trading-btc-signal-body"' in trading_section
     assert "比特幣信號" in trading_section
@@ -738,29 +928,87 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-btc-trade-path"' not in trading_section
     assert "Binance 參考價格" in trading_section
     assert "蠟燭圖" in trading_section
-    assert "合約模擬與交易引擎操作已移至伺服器設定的交易所設定" in trading_section
-    assert "一般用戶可使用已啟用的積分現貨市場" in trading_section
-    assert 'id="trading-root-contract-card"' not in trading_section
-    assert 'id="trading-root-contract-card"' in trading_settings_section
-    assert '<details class="drive-collapsible-panel settings-collapse" id="trading-root-contract-card"' in trading_settings_section
-    assert '<div class="drive-card" id="trading-root-contract-card"' not in trading_settings_section
-    assert 'id="trading-contract-open-btn"' in trading_settings_section
-    assert 'id="trading-contract-position-list"' in trading_settings_section
+    assert "現貨下單、交易機器人與借貸功能都留在同一個交易所頁" in trading_section
+    assert 'label: "我的倉位", action: "trading:my-positions", hideForRoot: true' in core_js
+    assert "root 的全站倉位、基金營運與模擬倉位另列管理頁" in trading_section
+    assert 'id="trading-root-sim-card"' in trading_section
+    assert 'id="trading-root-contract-card"' in trading_section
+    assert 'id="trading-root-contract-card"' not in trading_settings_section
+    assert '<details class="drive-collapsible-panel settings-collapse" id="trading-root-contract-card"' in trading_section
+    assert '<div class="drive-card" id="trading-root-contract-card"' not in trading_section
+    assert 'id="trading-root-sim-spot-count"' in trading_section
+    assert 'id="trading-root-sim-margin-count"' in trading_section
+    assert 'id="trading-root-sim-contract-count"' in trading_section
+    assert 'id="trading-root-sim-spot-list"' in trading_section
+    assert 'id="trading-root-sim-margin-list"' in trading_section
+    assert "現貨模擬倉位" in trading_section
+    assert "借貸模擬倉位" in trading_section
+    assert "合約模擬倉位" in trading_section
+    assert 'id="trading-contract-open-btn"' in trading_section
+    assert 'id="trading-contract-position-list"' in trading_section
     assert 'id="trading-submit-order-btn"' not in economy_section
     assert 'id="trading-root-card"' not in economy_section
-    assert 'id="economy-trading-summary-card"' in economy_section
     assert 'id="economy-wallet-download-btn"' in economy_section
-    assert 'id="economy-trading-export-btn"' in economy_section
-    assert 'id="economy-spot-position-quantity"' in economy_section
-    assert 'id="economy-spot-position-detail-list"' in economy_section
-    assert "現貨明細" in economy_section
-    assert "進階倉位明細" in economy_section
-    assert "市價平倉" in economy_section
-    assert "現貨部位" in economy_section
-    assert "各交易對分開計算" in economy_section
-    assert 'id="economy-margin-position-count"' in economy_section
-    assert 'id="economy-margin-position-summary"' in economy_section
-    assert 'id="economy-margin-position-detail-list"' in economy_section
+    assert 'id="economy-treasury-analysis-summary"' in economy_section
+    assert "economy-flow-dashboard" in economy_section
+    assert 'id="economy-trading-summary-card"' not in economy_section
+    assert 'id="economy-trading-export-btn"' not in economy_section
+    assert 'id="economy-spot-position-quantity"' not in economy_section
+    assert 'id="economy-spot-position-detail-list"' not in economy_section
+    assert "現貨明細" not in economy_section
+    assert "進階倉位明細" not in economy_section
+    assert "市價平倉" not in economy_section
+    assert "現貨部位" not in economy_section
+    assert "各交易對分開計算" not in economy_section
+    assert 'id="economy-margin-position-count"' not in economy_section
+    assert 'id="economy-margin-position-summary"' not in economy_section
+    assert 'id="economy-margin-position-detail-list"' not in economy_section
+    assert 'id="trading-asset-overview-card"' in trading_section
+    assert 'id="trading-root-sitewide-card"' in trading_section
+    assert 'id="trading-root-fund-flow-inflow"' in trading_section
+    assert 'id="trading-root-fund-flow-outflow"' in trading_section
+    assert 'id="trading-root-fund-flow-net"' in trading_section
+    assert 'id="trading-root-fund-flow-balance"' in trading_section
+    assert 'id="trading-root-fund-flow-meter"' in trading_section
+    assert 'id="trading-root-fund-flow-category-list"' in trading_section
+    assert "finance-flow-panel" in trading_section
+    assert "finance-flow-sections" in trading_section
+    assert "營運流入" in trading_section
+    assert "營運流出" in trading_section
+    assert "本金移轉不列收支" in trading_section
+    assert "已實現淨收支分類" in trading_section
+    assert "只彙總交易所基金已實現營運損益" in trading_section
+    assert "收支狀態" in trading_section
+    assert "fund_flow_summary" in trading_js
+    assert "tradingFundFlowStatus" in trading_js
+    assert "realizedFlowCategories" in trading_js
+    assert "尚無已實現淨收支分類" in trading_js
+    assert "本金移轉 ·" not in trading_js
+    assert "flow_summary" in economy_js
+    assert "service_fee_flow_categories" in economy_js
+    assert "function renderEconomyTreasuryFlowList" in economy_js
+    assert "function economyFlowMeterHtml" in economy_js
+    assert "economy-flow-chart" not in economy_js
+    assert "economy-flow-bar-track" not in economy_js
+    assert "function tradingFundFlowMeterHtml" in trading_js
+    assert "function tradingFundFlowTileHtml" in trading_js
+    assert "流入總額" in economy_js
+    assert "流出總額" in economy_js
+    assert 'id="trading-exchange-reference-card"' in trading_section
+    assert 'id="trading-market-summary-grid"' in trading_section
+    assert 'id="trading-spot-position-card"' in trading_section
+    assert 'id="trading-spot-position-detail-list"' in trading_section
+    assert 'id="trading-bot-position-card"' in trading_section
+    assert 'id="trading-bot-position-list"' in trading_section
+    assert 'id="trading-orders-fills-grid"' in trading_section
+    assert '"trading-orders-fills-grid",' in trading_js
+    assert "let tradingActivePage" in trading_js
+    assert "function setTradingActivePage" in trading_js
+    assert "function openTradingExchangePage" in trading_js
+    assert 'const backgroundStatus = $("trading-background-status");' in trading_js
+    assert 'if (engineStatus) engineStatus.style.display = active === "spot" ? "" : "none";' in trading_js
+    assert 'if (backgroundStatus) backgroundStatus.style.display = active === "spot" && backgroundStatus.textContent ? "" : "none";' in trading_js
+    assert 'status = $("trading-background-status")' in trading_js
     assert "整戶維持率" in trading_js
     assert "補保證金" in trading_js
     assert "原始保證金" in trading_js
@@ -795,16 +1043,17 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function tradingMarginLiveInterest" in trading_js
     assert "function tradingMarginBreakEvenPrice" in trading_js
     assert "function tradingMarginNextInterestAtMs" in trading_js
-    assert 'id="economy-contract-position-count"' in economy_section
-    assert 'id="economy-contract-position-summary"' in economy_section
-    assert 'id="economy-trading-order-list"' in economy_section
-    assert 'id="economy-trading-fill-list"' in economy_section
+    assert 'id="economy-contract-position-count"' not in economy_section
+    assert 'id="economy-contract-position-summary"' not in economy_section
+    assert 'id="economy-trading-order-list"' not in economy_section
+    assert 'id="economy-trading-fill-list"' not in economy_section
     assert 'id="economy-catalog-list"' not in economy_section
     assert "服務價格" not in economy_section
-    assert 'tab-module-trading", module: "trading"' in core_js
+    assert 'tabId: "tab-module-trading"' in core_js
+    assert 'module: "trading"' in core_js
     assert 'switchModuleTab("trading")' in bootstrap_js
     assert 'if (normTab === "trading"' in admin_js
-    assert "function renderTradingWalletSummary" in trading_js
+    assert "function renderTradingWalletSummary" not in trading_js
     assert "function loadTradingBtcSignal" in trading_js
     assert "function tradingBtcSignalCountdownText" in trading_js
     assert "function updateTradingBtcSignalMeta" in trading_js
@@ -813,17 +1062,22 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "策略版本" in trading_js
     assert "fear_greed" in trading_js
     assert "/trading/btc-signal" in trading_js
-    assert "function rootVirtualSpotValue" in trading_js
-    assert "function renderEconomySpotPositionDetails" in trading_js
-    assert "function renderEconomyMarginPositionDetails" in trading_js
-    assert "function submitEconomySpotSell" in trading_js
-    assert "data-economy-spot-limit" in trading_js
-    assert "data-economy-spot-market-close" in trading_js
-    assert "data-economy-margin-close" in trading_js
-    assert "data-economy-margin-add-collateral" in trading_js
-    assert "data-economy-margin-withdraw-collateral" in trading_js
+    assert "function rootVirtualSpotValue" not in trading_js
+    assert "function renderEconomySpotPositionDetails" not in trading_js
+    assert "function renderEconomyMarginPositionDetails" not in trading_js
+    assert "function submitEconomySpotSell" not in trading_js
+    assert "data-economy-spot-limit" not in trading_js
+    assert "data-economy-spot-market-close" not in trading_js
+    assert "data-economy-margin-close" not in trading_js
+    assert "data-economy-margin-add-collateral" not in trading_js
+    assert "data-economy-margin-withdraw-collateral" not in trading_js
     assert "data-margin-add-collateral" in trading_js
     assert "data-margin-withdraw-collateral" in trading_js
+    assert "function bindTradingMarginAssetActions" in trading_js
+    assert "function bindTradingContractAssetActions" in trading_js
+    assert "tradingPortfolioMarginRow" in trading_js
+    assert "trading-portfolio-actions" in trading_js
+    assert "tradingScopedActionInput" in trading_js
     assert "addTradingMarginCollateral" in trading_js
     assert "withdrawTradingMarginCollateral" in trading_js
     assert "function tradingMarginWithdrawEstimate" in trading_js
@@ -831,16 +1085,18 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "amount > withdrawEstimate.maxWithdrawable" in trading_js
     assert "function scheduleTradingMutationRefresh" in trading_js
     assert "applyTradingOrderResult(json.order || null)" in trading_js
+    assert "交易引擎未回傳訂單" in trading_js
+    assert 'currentUser === "root" ? "root 模擬" : ""' in trading_js
     assert "await loadEconomyDashboard();" not in trading_js.split("async function submitTradingOrder()", 1)[1].split("async function saveTradingBot()", 1)[0]
     assert "margin_positions" in trading_js
     assert "margin_summary" in trading_js
-    assert ">確認</button>" in trading_js
+    assert ">確認</button>" not in trading_js
     assert ">市價平倉</button>" in trading_js
     economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
     assert "/points/wallet/export.csv" in economy_js
     assert "/trading/history/export.csv" in economy_js
     assert '"economy-wallet-download-btn", downloadEconomyWalletCsv' in economy_js
-    assert '"economy-trading-export-btn", downloadEconomyTradingCsv' in economy_js
+    assert '"economy-trading-export-btn", downloadEconomyTradingCsv' not in economy_js
     assert "grid-template-columns: minmax(120px, .85fr) repeat(5" in styles
     assert "持有成本" in trading_js
     assert "損益平均價格" in trading_js
@@ -855,8 +1111,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function tradingSpotBackendPnl" in trading_js
     assert 'tradingSpotCostBasis(position, market, "risk_grade")' in trading_js
     assert "沿用上一筆可用風控價顯示盈虧" in trading_js
-    assert "payload.emergency_close = true" in trading_js
-    assert "手續費按平時 2 倍計算" in trading_js
+    assert "payload.emergency_close = true" not in trading_js
+    assert "手續費按平時 2 倍計算" not in trading_js
     assert "function tradingOrderDraftEstimate" in trading_js
     assert "function syncTradingOrderSideTheme" in trading_js
     assert "function tradingOrderInputMode" in trading_js
@@ -871,7 +1127,18 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "賣出下單" in trading_js
     assert ".trading-order-buy" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert ".trading-submit-sell" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    assert ".trading-sellable-hint" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert "function updateTradingOrderEstimate" in trading_js
+    assert "function updateTradingSellableHint" in trading_js
+    assert "data-trading-fill-sellable" in trading_js
+    assert "目前可賣" in trading_js
+    assert "data-sellable-quantity" in trading_js
+    assert "最多 ${formatTradingQuantityValue(state.available)} ${state.asset}" in trading_js
+    assert "目前可賣 ${formatTradingQuantityValue(state.available)} ${state.asset}" in trading_js
+    assert ".trading-sellable-hint.no-sellable" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    assert "function closeTradingSpotPositionMarket" in trading_js
+    assert "data-trading-spot-sell-market" in trading_js
+    assert "data-trading-spot-sell-limit" in trading_js
     assert "超過可用" in trading_js
     assert "超過可賣現貨" in trading_js
     assert "function openTradingMarginPosition" in trading_js
@@ -932,6 +1199,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function renderTradingBotCompetition" in trading_js
     assert "function loadTradingBotCompetition" in trading_js
     assert "function awardTradingBotCompetition" in trading_js
+    assert "網格機器人讀取失敗" in trading_js
+    assert "// silent" not in trading_js
     assert "/trading/bot-competition" in trading_js
     assert "/root/trading/bot-competition/award" in trading_js
     assert "/trading/bots/${encodeURIComponent(botUuid)}/share" in trading_js
@@ -946,6 +1215,11 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "/trading/bots/${encodeURIComponent(botUuid)}/budget" in trading_js
     assert "data-trading-bot-budget" in trading_js
     assert "調整可用" in trading_js
+    assert "function renderTradingBotPositionCard" in trading_js
+    assert "function toggleGridBot" in trading_js
+    assert "準備暫停交易機器人" in trading_js
+    assert "準備暫停網格機器人" in trading_js
+    assert "正在停止網格機器人" in trading_js
     assert "function tradingBotNextRunText" in trading_js
     assert "function updateTradingBotCountdowns" in trading_js
     assert "data-trading-bot-next-run" in trading_js
@@ -1016,7 +1290,11 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "margin_liquidation_enabled" in trading_js
     assert "margin_maintenance_percent" in trading_js
     assert "margin_long_financing_percent" in trading_js
+    assert "margin_max_pool_utilization_percent" in trading_js
     assert "short_collateral_percent" in trading_js
+    assert "exchange_liability_limit_points" in trading_js
+    assert "max_outstanding_principal_points" in trading_js
+    assert "remaining_borrow_capacity_points" in trading_js
     assert 'id="trading-stop-loss-percent"' in trading_section
     assert 'id="trading-take-profit-percent"' in trading_section
     assert 'id="trading-margin-stop-loss-percent"' in trading_section
@@ -1039,8 +1317,16 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "融資可貸比例" in trading_js
     assert "借券保證金比例" in trading_js
     assert "const showMarginCard = borrowingEnabled || openMarginCount > 0;" in trading_js
-    assert 'if (marginCard) marginCard.style.display = showMarginCard ? "" : "none";' in trading_js
-    assert 'if (marginOpenForm) marginOpenForm.style.display = borrowingEnabled ? "" : "none";' in trading_js
+    assert 'marginCard.style.display = activePage === "my-positions" || (activePage === "spot" && showMarginCard) ? "" : "none";' in trading_js
+    assert 'marginCard.style.display = active === "my-positions" || (active === "spot" && tradingMarginCardShouldShow()) ? "" : "none";' in trading_js
+    assert 'if (activePage === "my-positions") marginCard.open = true;' in trading_js
+    assert 'function renderTradingBotPositionCard' in trading_js
+    assert '"trading-bot-position-card"' in trading_js
+    assert 'renderTradingBotPositionCard();' in trading_js
+    assert '|| !data.open_count' not in trading_js
+    assert 'if (marginOpenForm) marginOpenForm.style.display = activePage === "spot" && borrowingEnabled ? "" : "none";' in trading_js
+    assert 'if (marginEstimate) marginEstimate.style.display = activePage === "spot" && borrowingEnabled ? "" : "none";' in trading_js
+    assert 'if (fundingPoolCard) fundingPoolCard.style.display = activePage === "spot" && borrowingEnabled ? "" : "none";' in trading_js
     assert "marginControlsDisabled" in trading_js
     assert 'const marginControlsDisabled = !borrowingEnabled;' in trading_js
     assert 'marginControlsDisabled = !borrowingEnabled || currentUser === "root"' not in trading_js
@@ -1052,10 +1338,10 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "trading-margin-open-btn" in trading_js
     assert '"trading-limit-match-btn", matchTradingLimitOrders' in trading_js
     assert '"trading-liquidation-scan-btn", scanTradingLiquidations' in trading_js
-    assert "economy-root-virtual-total" in trading_js
-    assert "rootVirtualMarginPositionEquity" in trading_js
-    assert "available + spotValue + marginValue" in trading_js
-    assert "economy-root-virtual-margin-value" in trading_js
+    assert "economy-root-virtual-total" not in trading_js
+    assert "rootVirtualMarginPositionEquity" not in trading_js
+    assert "available + spotValue + marginValue" not in trading_js
+    assert "economy-root-virtual-margin-value" not in trading_js
     assert "trial_credit" in trading_js
     assert "function tradingTrialCountdownText" in trading_js
     assert "setInterval(updateTradingTrialCountdown, 1000)" in trading_js
@@ -1121,18 +1407,32 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "≈" not in trading_js
     assert "function renderBtcTradeSignal" not in trading_js
     assert "root 模擬資金" in trading_js
-    assert 'contractCard.style.display = currentUser === "root" ? "" : "none"' in trading_js
+    assert 'contractCard.style.display = currentUser === "root" && active === "root-sim" ? "" : "none"' in trading_js
     assert "openRootTradingContract" in trading_js
     assert "closeRootTradingContract" in trading_js
     assert "/root/trading/contracts" in trading_js
     assert "futures_positions" in trading_js
+    assert "function renderTradingRootSimulationPositions" in trading_js
+    assert "renderTradingRootSimulationPositions();" in trading_js
+    assert "尚無 root 現貨模擬倉位" in trading_js
+    assert "尚無 root 借貸模擬倉位" in trading_js
     assert "totalSpotQuantity" not in trading_js
     assert "function tradingPositionLabel" in trading_js
-    assert 'activePositions.map((row) => tradingPositionLabel(row)).join(" / ")' in trading_js
-    assert "rootVirtualSpotValue(activePositions, markets)" in trading_js
-    assert 'renderTradingOrders(orders, "economy-trading-order-list", false)' in trading_js
-    assert '"economy-trading-open-btn", openTradingModuleFromWallet' in trading_js
-    assert '"economy-root-virtual-open-btn", openTradingModuleFromWallet' in trading_js
+    assert 'activePositions.map((row) => tradingPositionLabel(row)).join(" / ")' not in trading_js
+    assert "function renderTradingSpotPositions" in trading_js
+    assert "function tradingSpotPositionDetailRow" in trading_js
+    assert "function tradingSpotUnrealizedPnl" in trading_js
+    assert "function renderTradingPortfolioSummary" in trading_js
+    assert "function tradingPortfolioSummary" in trading_js
+    assert 'positions: [\n      "trading-portfolio-card",' in trading_js
+    assert 'positions: [\n      "trading-asset-overview-card",' not in trading_js
+    assert 'positions: [\n      "trading-market-summary-grid",' not in trading_js
+    assert "tradingState.futuresPositions = payload.futures_positions || [];" in trading_js
+    assert "tradingState.spotSummary = payload.spot_summary || null;" in trading_js
+    assert "rootVirtualSpotValue(activePositions, markets)" not in trading_js
+    assert 'renderTradingOrders(orders, "economy-trading-order-list", false)' not in trading_js
+    assert '"economy-trading-open-btn", openTradingModuleFromWallet' not in trading_js
+    assert '"economy-root-virtual-open-btn", openTradingModuleFromWallet' not in trading_js
     assert 'id="trading-current-delta"' in trading_section
     assert 'id="trading-current-health"' in trading_section
     assert 'id="trading-risk-dashboard"' in trading_section
@@ -1153,7 +1453,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function tradingMarketBootSummary" in trading_js
     assert "function tradingSelectedPriceReadiness" in trading_js
     assert "Bot / backtest" in trading_js
-    assert "Reserve / pool" in trading_js
+    assert "交易所基金" in trading_js
+    assert "借貸基金" in trading_js
     assert "Trial credit" in trading_js
     assert "Margin / lending" in trading_js
     assert "boot pending" in trading_js
@@ -1273,7 +1574,7 @@ def test_trading_live_price_polling_uses_two_second_timer_and_health_badges():
     assert "current_price_degraded_short" in trading_js
     assert 'tradingWarningText("current_price_healthy_short")' in trading_js
     assert "tradingState.state = state;" in trading_js
-    assert "const marginSummary = tradingDisplayedMarginSummary(payload.margin_summary, marginPositions);" in trading_js
+    assert "const marginSummary = tradingDisplayedMarginSummary(payload.margin_summary, marginPositions);" not in trading_js
     assert "const displayedMarginSummary = tradingDisplayedMarginSummary(tradingState.marginSummary);" in trading_js
     assert "const accountEquity = totalPositionEquity + freeMargin;" in trading_js
     assert "available_margin_points: availableMargin" in trading_js

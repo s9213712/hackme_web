@@ -371,6 +371,10 @@ TRADING_PENDING_PROFIT_DDL = """
             amount_points INTEGER NOT NULL CHECK (amount_points > 0),
             status TEXT NOT NULL DEFAULT 'pending',
             reason TEXT,
+            position_uuid TEXT NOT NULL DEFAULT '',
+            governance_proposal_uuid TEXT NOT NULL DEFAULT '',
+            liability_policy_json TEXT NOT NULL DEFAULT '{}',
+            settle_not_before_at TEXT,
             created_at TEXT NOT NULL,
             released_at TEXT,
             CHECK (status IN ('pending', 'released', 'rejected'))
