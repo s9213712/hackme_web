@@ -173,6 +173,7 @@ def test_ensure_trading_schema_produces_expected_tables(tmp_path):
         "trading_markets",
         "trading_markets_registry",
         "trading_market_provider_mappings",
+        "trading_market_price_snapshots",
         "trading_orders",
         "trading_fills",
         "trading_margin_positions",
@@ -256,6 +257,7 @@ def test_ensure_trading_schema_adds_finance_hot_path_indexes(tmp_path):
         "idx_trading_bots_user_id_desc",
         "idx_trading_bot_runs_user_id_desc",
         "idx_trading_grid_orders_user_order",
+        "idx_trading_market_price_snapshots_health",
     }
     missing = required - set(indexes)
     assert not missing, f"missing finance hot-path indexes: {sorted(missing)}"
@@ -270,6 +272,7 @@ def test_ensure_trading_schema_critical_columns_present(tmp_path):
             "trading_settings",
             "trading_markets",
             "trading_markets_registry",
+            "trading_market_price_snapshots",
             "trading_orders",
             "trading_fills",
             "trading_margin_positions",
@@ -312,6 +315,12 @@ def test_ensure_trading_schema_critical_columns_present(tmp_path):
     assert has_column("trading_markets_registry", "allow_risk_grade_usage", type_="INTEGER", notnull=1)
     assert has_column("trading_markets_registry", "live_price_enabled", type_="INTEGER", notnull=1)
     assert has_column("trading_markets_registry", "reference_price_enabled", type_="INTEGER", notnull=1)
+
+    assert has_column("trading_market_price_snapshots", "market_symbol", type_="TEXT", pk=1)
+    assert has_column("trading_market_price_snapshots", "reference_price_points", type_="REAL")
+    assert has_column("trading_market_price_snapshots", "risk_grade_price_points", type_="REAL")
+    assert has_column("trading_market_price_snapshots", "metadata_json", type_="TEXT", notnull=1)
+    assert has_column("trading_market_price_snapshots", "expires_at", type_="TEXT")
 
     # trading_orders — chain/trial split columns (PointsChain integration)
     assert has_column("trading_orders", "trial_frozen_points", type_="INTEGER", notnull=1)

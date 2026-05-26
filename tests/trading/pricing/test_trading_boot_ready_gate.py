@@ -164,6 +164,40 @@ def test_place_order_blocked_until_market_boot_ready(tmp_path):
     assert result["order"]["status"] == "filled"
 
 
+def test_place_order_resolves_external_price_before_writer_lock(tmp_path, monkeypatch):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="seed")
+    _stamp(trading, "ETH/POINTS")
+    calls = []
+    original = trading._current_market_price_points
+
+    def observed_current_price(conn, market, *, with_meta=False, high_risk=False):
+        calls.append(bool(conn.in_transaction))
+        return original(conn, market, with_meta=with_meta, high_risk=high_risk)
+
+    monkeypatch.setattr(trading, "_current_market_price_points", observed_current_price)
+    result = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="0.1",
+    )
+    assert result["order"]["status"] == "filled"
+    assert calls
+    assert calls == [False]
+
+    conn = trading.get_db()
+    try:
+        row = conn.execute(
+            "SELECT * FROM trading_market_price_snapshots WHERE market_symbol='ETH/POINTS'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row["reference_price_points"] > 0
+
+
 def test_open_margin_position_blocked_until_market_boot_ready(tmp_path):
     points, trading = _services(tmp_path)
     trading.update_root_settings(
@@ -181,6 +215,34 @@ def test_open_margin_position_blocked_until_market_boot_ready(tmp_path):
             quantity="0.1",
             collateral_points=120,
         )
+
+
+def test_open_margin_position_resolves_external_price_before_writer_lock(tmp_path, monkeypatch):
+    points, trading = _services(tmp_path)
+    trading.update_root_settings(
+        actor=_actor(2, "root", "super_admin"),
+        settings={"borrowing_enabled": True},
+        markets=[],
+    )
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="seed")
+    _stamp(trading, "ETH/POINTS")
+    calls = []
+    original = trading._current_market_price_points
+
+    def observed_current_price(conn, market, *, with_meta=False, high_risk=False):
+        calls.append(bool(conn.in_transaction))
+        return original(conn, market, with_meta=with_meta, high_risk=high_risk)
+
+    monkeypatch.setattr(trading, "_current_market_price_points", observed_current_price)
+    result = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=120,
+    )
+    assert result["position"]["status"] == "open"
+    assert calls == [False]
 
 
 def test_live_price_fetch_requires_second_stable_sample_before_boot_ready(tmp_path):

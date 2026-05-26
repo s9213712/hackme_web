@@ -678,6 +678,7 @@ def open_margin_position(
     try:
         service.ensure_schema(conn)
         conn.commit()
+        service._ensure_market_price_snapshot_for_write(market_symbol, high_risk=True)
         conn.execute("BEGIN IMMEDIATE")
         service._assert_writable(conn)
         margin_positions_table, route_ctx = service._resolve_table(
@@ -720,7 +721,7 @@ def open_margin_position(
         if not int(market.get("allow_margin") or 0):
             raise ValueError("margin trading is disabled for this market")
         service._validate_market_quantity_constraints(market, quantity_units)
-        price, price_source, price_meta = service._current_market_price_points(
+        price, price_source, price_meta = service._snapshot_market_price_points(
             conn, market, with_meta=True, high_risk=True
         )
         service._assert_price_meta_allows_high_risk_use(

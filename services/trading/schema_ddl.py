@@ -132,6 +132,30 @@ TRADING_MARKET_PROVIDER_MAPPINGS_DDL = """
         """
 
 
+TRADING_MARKET_PRICE_SNAPSHOTS_DDL = """
+        CREATE TABLE IF NOT EXISTS trading_market_price_snapshots (
+            market_symbol TEXT PRIMARY KEY,
+            reference_price_points REAL,
+            risk_grade_price_points REAL,
+            resolved_source TEXT NOT NULL DEFAULT '',
+            price_health TEXT NOT NULL DEFAULT 'unknown',
+            confidence TEXT NOT NULL DEFAULT 'unknown',
+            reference_provider_count INTEGER NOT NULL DEFAULT 0,
+            risk_grade_provider_count INTEGER NOT NULL DEFAULT 0,
+            high_risk_blocked INTEGER NOT NULL DEFAULT 1 CHECK (high_risk_blocked IN (0,1)),
+            high_risk_block_reason TEXT NOT NULL DEFAULT '',
+            degraded INTEGER NOT NULL DEFAULT 0 CHECK (degraded IN (0,1)),
+            stale INTEGER NOT NULL DEFAULT 0 CHECK (stale IN (0,1)),
+            fallback INTEGER NOT NULL DEFAULT 0 CHECK (fallback IN (0,1)),
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            fetched_at TEXT,
+            expires_at TEXT,
+            stale_until TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """
+
+
 TRADING_MARKET_REGISTRY_AUDIT_DDL = """
         CREATE TABLE IF NOT EXISTS trading_market_registry_audit (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -629,6 +653,7 @@ ALL_TABLE_DDL = (
     TRADING_MARKETS_DDL,
     TRADING_MARKETS_REGISTRY_DDL,
     TRADING_MARKET_PROVIDER_MAPPINGS_DDL,
+    TRADING_MARKET_PRICE_SNAPSHOTS_DDL,
     TRADING_MARKET_REGISTRY_AUDIT_DDL,
     TRADING_ORDERS_DDL,
     TRADING_FILLS_DDL,

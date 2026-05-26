@@ -1010,6 +1010,22 @@ def _current_market_price_points(self, conn, market, *, with_meta=False, high_ri
         high_risk=high_risk,
     )
 
+def _ensure_market_price_snapshot_for_write(self, market_symbol, *, high_risk=False):
+    return ensure_market_price_snapshot_for_write_helper(
+        self,
+        market_symbol,
+        high_risk=high_risk,
+    )
+
+def _snapshot_market_price_points(self, conn, market, *, with_meta=False, high_risk=False):
+    return snapshot_market_price_points_helper(
+        self,
+        conn,
+        market,
+        with_meta=with_meta,
+        high_risk=high_risk,
+    )
+
 def _root_sim_account(self, conn, user_id, *, actor=None):
     return root_sim_account_helper(
         self,

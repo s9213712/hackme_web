@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from functools import lru_cache
 import copy
+import json
 import math
 import os
 import time
@@ -1494,6 +1495,201 @@ def _clone_quote(payload, *, cache_status=None):
     if cache_status:
         cloned["price_cache_status"] = cache_status
     return cloned
+
+
+def _json_dumps(value):
+    return json.dumps(value or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _json_loads(value, default=None):
+    try:
+        parsed = json.loads(value or "")
+    except Exception:
+        return default if default is not None else {}
+    if default is None:
+        return parsed if isinstance(parsed, dict) else {}
+    return parsed if isinstance(parsed, type(default)) else default
+
+
+def _parse_iso(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _snapshot_fresh(row, *, now=None):
+    if not row:
+        return False
+    expires_at = _parse_iso(row["expires_at"] if "expires_at" in row.keys() else "")
+    if expires_at is None:
+        return False
+    return expires_at >= (now or datetime.now())
+
+
+def _snapshot_ttls(settings):
+    settings = settings if isinstance(settings, dict) else {}
+    max_stale = max(1, int(settings.get("max_price_staleness_seconds") or 900))
+    # Financial writes should not reuse a stale provider decision for the full
+    # UI staleness window. Keep the write snapshot short-lived, while
+    # stale_until preserves diagnostic context for read UIs.
+    write_ttl = max(2, min(max_stale, int(os.environ.get("HACKME_TRADING_WRITE_PRICE_SNAPSHOT_SECONDS", "15"))))
+    return write_ttl, max_stale
+
+
+def _snapshot_meta_from_row(row):
+    meta = _json_loads(row["metadata_json"] if row and "metadata_json" in row.keys() else "{}", {})
+    if not isinstance(meta, dict):
+        meta = {}
+    meta.update({
+        "price_health": str(row["price_health"] or "unknown"),
+        "resolved_source": str(row["resolved_source"] or ""),
+        "reference_price_points": row["reference_price_points"],
+        "risk_grade_price_points": row["risk_grade_price_points"],
+        "reference_provider_count": int(row["reference_provider_count"] or 0),
+        "risk_grade_provider_count": int(row["risk_grade_provider_count"] or 0),
+        "high_risk_blocked": bool(int(row["high_risk_blocked"] or 0)),
+        "high_risk_block_reason": str(row["high_risk_block_reason"] or ""),
+        "degraded": bool(int(row["degraded"] or 0)),
+        "stale": bool(int(row["stale"] or 0)),
+        "fallback": bool(int(row["fallback"] or 0)),
+        "confidence": str(row["confidence"] or "unknown"),
+        "last_update_at": str(row["fetched_at"] or row["updated_at"] or ""),
+        "snapshot_updated_at": str(row["updated_at"] or ""),
+        "snapshot_expires_at": str(row["expires_at"] or ""),
+    })
+    return meta
+
+
+def _upsert_market_price_snapshot(service, conn, *, market_symbol, price, price_source, price_meta, settings=None):
+    engine = _engine_module()
+    meta = dict(price_meta or {})
+    settings = settings if isinstance(settings, dict) else service._settings_payload(conn)
+    now = engine._now()
+    write_ttl, stale_ttl = _snapshot_ttls(settings)
+    now_dt = datetime.fromisoformat(now)
+    expires_at = (now_dt + timedelta(seconds=write_ttl)).isoformat()
+    stale_until = (now_dt + timedelta(seconds=max(write_ttl, stale_ttl))).isoformat()
+    reference_price = meta.get("reference_price_points")
+    if reference_price in (None, ""):
+        reference_price = price
+    risk_grade_price = meta.get("risk_grade_price_points")
+    resolved_source = str(meta.get("resolved_source") or price_source or "manual_root")
+    conn.execute(
+        """
+        INSERT INTO trading_market_price_snapshots (
+            market_symbol, reference_price_points, risk_grade_price_points,
+            resolved_source, price_health, confidence,
+            reference_provider_count, risk_grade_provider_count,
+            high_risk_blocked, high_risk_block_reason,
+            degraded, stale, fallback, metadata_json,
+            fetched_at, expires_at, stale_until, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(market_symbol) DO UPDATE SET
+            reference_price_points=excluded.reference_price_points,
+            risk_grade_price_points=excluded.risk_grade_price_points,
+            resolved_source=excluded.resolved_source,
+            price_health=excluded.price_health,
+            confidence=excluded.confidence,
+            reference_provider_count=excluded.reference_provider_count,
+            risk_grade_provider_count=excluded.risk_grade_provider_count,
+            high_risk_blocked=excluded.high_risk_blocked,
+            high_risk_block_reason=excluded.high_risk_block_reason,
+            degraded=excluded.degraded,
+            stale=excluded.stale,
+            fallback=excluded.fallback,
+            metadata_json=excluded.metadata_json,
+            fetched_at=excluded.fetched_at,
+            expires_at=excluded.expires_at,
+            stale_until=excluded.stale_until,
+            updated_at=excluded.updated_at
+        """,
+        (
+            str(market_symbol or "").strip().upper(),
+            float(reference_price) if reference_price not in (None, "") else None,
+            float(risk_grade_price) if risk_grade_price not in (None, "") else None,
+            resolved_source,
+            str(meta.get("price_health") or "unknown"),
+            str(meta.get("confidence") or "unknown"),
+            int(meta.get("reference_provider_count") or 0),
+            int(meta.get("risk_grade_provider_count") or 0),
+            1 if bool(meta.get("high_risk_blocked")) else 0,
+            str(meta.get("high_risk_block_reason") or ""),
+            1 if bool(meta.get("degraded")) else 0,
+            1 if bool(meta.get("stale")) else 0,
+            1 if bool(meta.get("fallback")) else 0,
+            _json_dumps(meta),
+            str(meta.get("last_update_at") or now),
+            expires_at,
+            stale_until,
+            now,
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM trading_market_price_snapshots WHERE market_symbol=?",
+        (str(market_symbol or "").strip().upper(),),
+    ).fetchone()
+
+
+def ensure_market_price_snapshot_for_write(service, market_symbol, *, high_risk=False):
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        symbol = service._normalize_market_symbol_on_conn(conn, str(market_symbol or "").strip().upper())
+        if not symbol:
+            raise ValueError("market not found")
+        row = conn.execute(
+            "SELECT * FROM trading_market_price_snapshots WHERE market_symbol=?",
+            (symbol,),
+        ).fetchone()
+        if _snapshot_fresh(row) and not service.live_price_provider:
+            return dict(row)
+        market = service._market(conn, symbol)
+        if not service._is_market_boot_ready(market, conn=conn):
+            return dict(row) if row else {}
+        price, source, meta = service._current_market_price_points(
+            conn,
+            market,
+            with_meta=True,
+            high_risk=bool(high_risk),
+        )
+        settings = service._settings_payload(conn)
+        row = _upsert_market_price_snapshot(
+            service,
+            conn,
+            market_symbol=symbol,
+            price=price,
+            price_source=source,
+            price_meta=meta,
+            settings=settings,
+        )
+        conn.commit()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def snapshot_market_price_points(service, conn, market, *, with_meta=False, high_risk=False):
+    engine = _engine_module()
+    symbol = str((market or {}).get("symbol") if isinstance(market, dict) else market["symbol"]).strip().upper()
+    row = conn.execute(
+        "SELECT * FROM trading_market_price_snapshots WHERE market_symbol=?",
+        (symbol,),
+    ).fetchone()
+    if not _snapshot_fresh(row):
+        raise ValueError(f"market {symbol} price snapshot unavailable or stale; retry after price refresh")
+    meta = _snapshot_meta_from_row(row)
+    reference_price = row["reference_price_points"]
+    risk_grade_price = row["risk_grade_price_points"]
+    price = risk_grade_price if high_risk and risk_grade_price not in (None, "") else reference_price
+    if price in (None, "") or float(price) <= 0:
+        raise ValueError(f"market {symbol} price snapshot has no usable price")
+    source = str(row["resolved_source"] or meta.get("resolved_source") or "manual_root")
+    price = float(engine._to_decimal(price, name="snapshot_price_points", minimum=0.00000001))
+    return (price, source, meta) if with_meta else (price, source)
 
 
 def _live_quote_cacheable(payload):

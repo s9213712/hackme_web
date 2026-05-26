@@ -216,6 +216,10 @@ def place_order(
     try:
         service.ensure_schema(conn)
         conn.commit()
+        service._ensure_market_price_snapshot_for_write(
+            market_symbol,
+            high_risk=(order_type == "market"),
+        )
         conn.execute("BEGIN IMMEDIATE")
         service._assert_writable(conn)
         if source_wallet_address:
@@ -239,7 +243,7 @@ def place_order(
             raise ValueError("futures interface is reserved but not enabled in v1")
         if int(market["pvp_matching_enabled"] or 0):
             raise ValueError("pvp matching interface is reserved but not enabled in v1")
-        current_price, price_source, price_meta = service._current_market_price_points(
+        current_price, price_source, price_meta = service._snapshot_market_price_points(
             conn, market, with_meta=True, high_risk=(order_type == "market")
         )
         if order_type == "limit":
