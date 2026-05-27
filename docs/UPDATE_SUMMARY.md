@@ -1,6 +1,27 @@
 # Update Summary
 
-Release ID: `2026.05.23-004`
+Release ID: `2026.05.27-001`
+
+## 2026.05.27-001
+
+- Implemented Management Plane Async/Snapshot Phase 1 for finance 50K scale:
+  PointsChain seal, verify, and root report now start Job Center jobs and return
+  `202 + job_id` instead of scanning the large finance DB in the request path.
+- Changed trading sitewide root refresh to an async management-plane job while
+  keeping sitewide pools/user-position reads snapshot-backed.
+- Serialized heavy management-plane background workers with a local file lock,
+  preventing concurrent root jobs from failing each other with SQLite
+  `database is locked`.
+- Added compact wallet-transfer submit responses, explicit compact/cursor
+  transaction-list mode, wallet summary snapshot reads, and management-plane
+  microbenchmark headers/log fields for handler time, SQL time, Python
+  aggregation time, JSON serialization time, response bytes, RSS, and slow
+  reason classification.
+- Updated the 50K destructive stress harness to accept async root/admin starts,
+  read latest snapshots separately, keep finalizer sweeps explicit, and default
+  high-volume transaction submits to compact responses.
+- Updated root economy/trading frontend flows to show queued management jobs and
+  keep reading latest snapshots instead of waiting on synchronous root reports.
 
 ## 2026.05.23-004
 
