@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from scripts.testing.playwright_platform_health_check import ignored_browser_error
+
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -40,6 +42,13 @@ def test_playwright_qa_workflow_is_installed_in_github_actions():
     assert "schedule:" in text
     assert "github.event.inputs.run_deep_playwright" in text
     assert "03b.Comfyui" in text
+
+
+def test_platform_health_filters_expected_offline_browser_http_failures():
+    assert ignored_browser_error("503 https://127.0.0.1:40341/api/admin/trading/report")
+    assert ignored_browser_error("503 https://127.0.0.1:40341/api/trading/btc-signal?market=BTC%2FUSDT")
+    assert ignored_browser_error("Failed to load resource: the server responded with a status of 503")
+    assert not ignored_browser_error("500 https://127.0.0.1:40341/api/storage/files")
 
 
 def test_comfyui_workflow_editor_exports_comfyui_and_project_json_formats():

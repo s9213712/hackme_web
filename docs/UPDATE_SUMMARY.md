@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.27-004`
+Release ID: `2026.05.27-005`
+
+## 2026.05.27-005
+
+- Updated Playwright platform-health browser-error filtering for the current
+  Chromium console format (`503 <url>` / `404 <url>`), so expected offline
+  trading/report probes do not fail the acceptance job after all checks pass.
 
 ## 2026.05.27-004
 

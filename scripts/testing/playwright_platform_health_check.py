@@ -61,6 +61,33 @@ from services.storage.catalog import ensure_storage_album_schema  # noqa: E402
 from services.system.notifications import create_notification, ensure_notifications_schema  # noqa: E402
 
 
+EXPECTED_BROWSER_HTTP_FAILURE_PATHS = (
+    "/api/admin/trading/report",
+    "/api/comfyui/generate",
+    "/api/points/explorer/fee-estimate",
+    "/api/root/trading/sitewide/user-positions",
+    "/api/trading/asset-overview",
+    "/api/trading/bot-competition",
+    "/api/trading/btc-signal",
+    "/api/trading/dashboard",
+    "/api/trading/live-price",
+    "/api/trading/reference-prices",
+)
+
+
+def ignored_browser_error(compact: str) -> bool:
+    text = str(compact or "")
+    if "phase15 forced failure" in text:
+        return True
+    if "Failed to load resource: the server responded with a status of 503" in text:
+        return True
+    if "Failed to load resource: the server responded with a status of 404" in text:
+        return True
+    if text.startswith(("503 ", "404 ")) and any(path in text for path in EXPECTED_BROWSER_HTTP_FAILURE_PATHS):
+        return True
+    return False
+
+
 def now_text() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat()
 
@@ -860,14 +887,7 @@ def main() -> int:
 
             def record_browser_error(kind: str, text: str) -> None:
                 compact = text.replace("\n", " ")[:500]
-                if (
-                    "/api/comfyui/generate" in compact
-                    or "/api/trading/asset-overview" in compact
-                    or "/api/points/explorer/fee-estimate" in compact
-                    or "phase15 forced failure" in compact
-                    or "Failed to load resource: the server responded with a status of 503" in compact
-                    or "Failed to load resource: the server responded with a status of 404" in compact
-                ):
+                if ignored_browser_error(compact):
                     return
                 key = f"{kind}:{compact}"
                 if key in seen_errors or len(browser_errors) >= 80:
