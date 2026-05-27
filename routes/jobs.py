@@ -4,6 +4,7 @@ from services.job_center import (
     ensure_job_center_schema,
     dismiss_job,
     expire_stale_cloud_remote_download_jobs,
+    expire_stale_media_hls_jobs,
     expire_stale_resumable_upload_jobs,
     get_job,
     list_job_events,
@@ -68,6 +69,7 @@ def register_job_routes(app, deps):
         try:
             expire_stale_cloud_remote_download_jobs(conn)
             expire_stale_resumable_upload_jobs(conn)
+            expire_stale_media_hls_jobs(conn)
             purge_terminal_jobs(conn)
             conn.commit()
             jobs = list_jobs(conn, user_id=actor["id"], include_all=False, status=status, limit=limit)
@@ -89,6 +91,7 @@ def register_job_routes(app, deps):
         try:
             expire_stale_cloud_remote_download_jobs(conn)
             expire_stale_resumable_upload_jobs(conn)
+            expire_stale_media_hls_jobs(conn)
             purge_terminal_jobs(conn)
             conn.commit()
             jobs = list_jobs(conn, include_all=True, status=status, limit=limit)
@@ -105,6 +108,10 @@ def register_job_routes(app, deps):
         conn = get_db()
         try:
             job = get_job(conn, job_uuid)
+            if job and str(job.get("source_module") or "") == "media_hls_prepare":
+                expire_stale_media_hls_jobs(conn)
+                conn.commit()
+                job = get_job(conn, job_uuid)
             if not can_access_job(actor, job):
                 return json_resp({"ok": False, "msg": "找不到任務"}), 404
             return json_resp({"ok": True, "job": job})

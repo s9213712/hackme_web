@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import threading
 import time
 import uuid
@@ -1108,6 +1109,140 @@ def expire_stale_resumable_upload_jobs(conn, *, limit=100):
                 job["job_uuid"],
                 event_type="expired",
                 stage="expired",
+                message=message,
+                progress_percent=100,
+                payload=metadata,
+                flush=True,
+            )
+            expired.append(updated)
+    return expired
+
+
+def _media_hls_stale_after_seconds(job):
+    stage = str((job or {}).get("stage") or "").strip().lower()
+    if stage in {"queued", "worker_started", "waiting_worker_slot"}:
+        return _env_int("HACKME_MEDIA_HLS_QUEUE_STALE_SECONDS", 15 * 60, minimum=60)
+    return _env_int("HACKME_MEDIA_HLS_STALE_SECONDS", 20 * 60, minimum=2 * 60)
+
+
+def _media_hls_file_id(job):
+    metadata = (job or {}).get("metadata") if isinstance((job or {}).get("metadata"), dict) else {}
+    file_id = str(metadata.get("file_id") or "").strip()
+    if file_id:
+        return file_id
+    source_ref = str((job or {}).get("source_ref") or "").strip()
+    prefix = "media_stream:"
+    if source_ref.startswith(prefix):
+        return source_ref[len(prefix):].strip()
+    return ""
+
+
+def _media_hls_process_is_running(job):
+    file_id = _media_hls_file_id(job)
+    try:
+        proc = subprocess.run(
+            ["ps", "-eo", "comm=,args="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        # If process inspection is unavailable, avoid false-failing a long HLS
+        # transcode purely from a stale timestamp.
+        return True
+    for raw_line in proc.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "hls_prepare_worker.py" in line and (not file_id or file_id in line):
+            return True
+        if file_id and "ffmpeg" in line and file_id in line and ("media_derivatives" in line or ".m4s" in line):
+            return True
+    return False
+
+
+def _media_hls_job_is_stale(job, *, now=None):
+    status = str((job or {}).get("status") or "")
+    if status not in {"queued", "running", "waiting_external", "retry_wait"}:
+        return False
+    updated = _parse_utc_timestamp((job or {}).get("updated_at") or (job or {}).get("created_at"))
+    if not updated:
+        return False
+    now = now or datetime.now(timezone.utc)
+    age = max(0, int((now - updated).total_seconds()))
+    if age < _media_hls_stale_after_seconds(job):
+        return False
+    return not _media_hls_process_is_running(job)
+
+
+def expire_stale_media_hls_jobs(conn, *, limit=100):
+    """Mark orphaned HLS worker jobs as failed.
+
+    Large HLS jobs update Job Center from the external worker while decrypting,
+    probing, and running ffmpeg.  If the worker/ffmpeg process disappears before
+    it can write a terminal state, the UI must not keep showing an endless
+    "running" job.
+    """
+
+    ensure_job_center_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM job_center_jobs
+        WHERE source_module='media_hls_prepare'
+          AND status IN ('queued', 'running', 'waiting_external', 'retry_wait')
+        ORDER BY updated_at ASC, id ASC
+        LIMIT ?
+        """,
+        (max(1, min(500, _safe_int(limit, 100))),),
+    ).fetchall()
+    now = datetime.now(timezone.utc)
+    now_text = now.replace(tzinfo=None, microsecond=0).isoformat()
+    message = "HLS 背景處理程序已中斷或長時間無進度，系統已標記失敗；請從任務中心重試。"
+    expired = []
+    for row in rows:
+        job = _merge_cached_job(serialize_job(row))
+        if not _media_hls_job_is_stale(job, now=now):
+            continue
+        file_id = _media_hls_file_id(job)
+        metadata = dict(job.get("metadata") or {})
+        metadata.update({
+            "stale_recovered_at": now_text,
+            "stale_recovery_reason": "media_hls_worker_missing_or_timed_out",
+            "file_id": file_id or metadata.get("file_id") or "",
+        })
+        updated = update_job(
+            conn,
+            job["job_uuid"],
+            status="failed",
+            progress_percent=100,
+            stage="failed",
+            stage_detail=message,
+            error_code="media_hls_task_stale",
+            error_message=message,
+            error_stage="stale_task_cleanup",
+            metadata_json=metadata,
+            cancellable=False,
+            finished_at=now_text,
+            flush=True,
+        )
+        if file_id and _table_exists(conn, "media_stream_assets"):
+            conn.execute(
+                """
+                UPDATE media_stream_assets
+                SET status='failed', error_message=?, updated_at=?
+                WHERE uploaded_file_id=?
+                  AND status='processing'
+                """,
+                (message, now_text, file_id),
+            )
+        if updated:
+            add_job_event(
+                conn,
+                job["job_uuid"],
+                event_type="failed",
+                stage="failed",
                 message=message,
                 progress_percent=100,
                 payload=metadata,

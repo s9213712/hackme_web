@@ -9,6 +9,7 @@ from services.job_center import (
     dismiss_job,
     ensure_job_center_schema,
     expire_stale_cloud_remote_download_jobs,
+    expire_stale_media_hls_jobs,
     expire_stale_resumable_upload_jobs,
     list_job_events,
     list_jobs,
@@ -120,6 +121,61 @@ def test_stale_cloud_remote_download_jobs_are_marked_failed():
     assert stale_row["finished_at"]
     assert paused_row["status"] == "paused"
     assert paused_row["finished_at"] is None
+
+
+def test_stale_media_hls_jobs_mark_asset_failed(monkeypatch):
+    conn = connection()
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)")
+    conn.execute("INSERT INTO users (id, username) VALUES (1, 'alice')")
+    conn.execute(
+        """
+        CREATE TABLE media_stream_assets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uploaded_file_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'processing',
+            error_message TEXT NOT NULL DEFAULT '',
+            updated_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO media_stream_assets (uploaded_file_id, status, updated_at) VALUES ('video-1', 'processing', '2026-05-01T00:00:00')"
+    )
+    ensure_job_center_schema(conn)
+    stale = create_job(
+        conn,
+        owner_user_id=1,
+        created_by_user_id=1,
+        job_type="video.hls.prepare",
+        title="HLS",
+        source_module="media_hls_prepare",
+        source_ref="media_stream:video-1",
+        status="running",
+        stage="transcoding",
+        metadata={"file_id": "video-1"},
+    )
+    conn.execute(
+        "UPDATE job_center_jobs SET created_at='2026-05-01T00:00:00', updated_at='2026-05-01T00:00:00' WHERE job_uuid=?",
+        (stale["job_uuid"],),
+    )
+    conn.commit()
+
+    class PsResult:
+        stdout = ""
+
+    monkeypatch.setattr("services.job_center.subprocess.run", lambda *args, **kwargs: PsResult())
+
+    expired = expire_stale_media_hls_jobs(conn)
+    conn.commit()
+
+    assert [job["job_uuid"] for job in expired] == [stale["job_uuid"]]
+    stale_row = conn.execute("SELECT status, error_code, error_stage FROM job_center_jobs WHERE job_uuid=?", (stale["job_uuid"],)).fetchone()
+    asset_row = conn.execute("SELECT status, error_message FROM media_stream_assets WHERE uploaded_file_id='video-1'").fetchone()
+    assert stale_row["status"] == "failed"
+    assert stale_row["error_code"] == "media_hls_task_stale"
+    assert stale_row["error_stage"] == "stale_task_cleanup"
+    assert asset_row["status"] == "failed"
+    assert "HLS" in asset_row["error_message"]
 
 
 def test_cloud_remote_download_heartbeat_prevents_false_stale_failure():

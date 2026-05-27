@@ -55,7 +55,7 @@ from services.job_center import (
     update_job as update_platform_job,
 )
 from services.storage.storage_albums import create_storage_file_entry, ensure_storage_album_schema
-from services.security.upload_security import safe_public_filename
+from services.security.upload_security import get_user_cloud_drive_usage, safe_public_filename
 from services.share_access_events import log_share_access_event_once
 from services.media.videos import (
     add_video_comment,
@@ -921,6 +921,40 @@ def register_video_routes(app, deps):
                 return 0
         return 0
 
+    def _video_upload_content_length_preflight(conn, actor):
+        content_length = int(request.content_length or 0)
+        if content_length <= 0:
+            return None
+        member_rule = get_member_level_rule(conn, actor["effective_level"] or actor["member_level"])
+        usage = get_user_cloud_drive_usage(conn, actor, member_rule=member_rule, storage_root=storage_root)
+        if not usage.get("can_upload"):
+            return json_resp({"ok": False, "msg": "目前會員等級或處分狀態不可上傳", "error": "upload_preflight_rejected"}), 400
+        # multipart/form-data adds boundaries and small form fields.  Use a
+        # conservative estimate so huge uploads can be rejected before Werkzeug
+        # consumes the full request body, without blocking files that only exceed
+        # quota by harmless multipart overhead.
+        overhead_allowance = min(16 * 1024 * 1024, max(2 * 1024 * 1024, int(content_length * 0.01)))
+        estimated_file_bytes = max(0, content_length - overhead_allowance)
+        remaining = usage.get("remaining_bytes")
+        if remaining is not None and estimated_file_bytes > int(remaining):
+            return json_resp({
+                "ok": False,
+                "msg": "超過雲端硬碟容量上限",
+                "error": "upload_preflight_rejected",
+                "content_length": content_length,
+                "remaining_bytes": int(remaining),
+            }), 400
+        max_file = usage.get("max_file_size_bytes")
+        if max_file is not None and estimated_file_bytes > int(max_file):
+            return json_resp({
+                "ok": False,
+                "msg": "檔案超過單檔大小限制",
+                "error": "upload_preflight_rejected",
+                "content_length": content_length,
+                "max_file_size_bytes": int(max_file),
+            }), 400
+        return None
+
     def _env_size_bytes(bytes_key, mb_key, default_bytes):
         raw_bytes = os.environ.get(bytes_key)
         raw_mb = os.environ.get(mb_key)
@@ -1680,6 +1714,13 @@ def register_video_routes(app, deps):
         actor, err = _actor_or_401()
         if err:
             return err
+        conn = get_db()
+        try:
+            preflight = _video_upload_content_length_preflight(conn, actor)
+            if preflight:
+                return preflight
+        finally:
+            conn.close()
         uploaded = request.files.get("video") or request.files.get("file")
         if not uploaded or not uploaded.filename:
             return json_resp({"ok": False, "msg": "請選擇要上傳的影音檔", "error": "missing_file"}), 400

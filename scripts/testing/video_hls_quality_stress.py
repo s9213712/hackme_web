@@ -561,6 +561,7 @@ def run_upload_phase(args: argparse.Namespace) -> dict[str, Any]:
     monitor.join(timeout=5)
     result = {
         "phase": "upload",
+        "ok": any(bool(item.get("ok")) for item in uploads),
         "base_url": args.base_url,
         "video": str(video_path),
         "video_size_bytes": video_path.stat().st_size,
@@ -601,6 +602,8 @@ def format_wait_status(state: dict[str, Any], processes: list[dict[str, Any]], e
 def wait_for_hls(args: argparse.Namespace) -> dict[str, Any]:
     started = time.time()
     history: list[dict[str, Any]] = []
+    last_signature = ""
+    last_change_at = time.time()
     while True:
         state = db_state(Path(args.db))
         processes = ps_snapshot(args.runtime_marker)
@@ -623,6 +626,45 @@ def wait_for_hls(args: argparse.Namespace) -> dict[str, Any]:
             return {
                 "phase": "wait",
                 "ok": True,
+                "elapsed_s": elapsed_s,
+                "final_state": state,
+                "final_processes": processes,
+                "history_tail": history[-10:],
+            }
+        active_jobs = [
+            job for job in jobs
+            if str(job.get("status") or "") not in TERMINAL_JOB_STATUSES
+        ]
+        signature = json.dumps(
+            [
+                {
+                    "id": job.get("id"),
+                    "status": job.get("status"),
+                    "progress_percent": job.get("progress_percent"),
+                    "stage": job.get("stage"),
+                    "updated_at": job.get("updated_at"),
+                }
+                for job in active_jobs
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        if signature != last_signature:
+            last_signature = signature
+            last_change_at = time.time()
+        active_processes = [
+            proc for proc in processes
+            if proc.get("comm") == "ffmpeg" or "hls_prepare_worker.py" in str(proc.get("args") or "")
+        ]
+        if (
+            active_jobs
+            and not active_processes
+            and time.time() - last_change_at >= max(60, int(args.orphan_grace_seconds))
+        ):
+            return {
+                "phase": "wait",
+                "ok": False,
+                "error": "orphaned_hls_job",
                 "elapsed_s": elapsed_s,
                 "final_state": state,
                 "final_processes": processes,
@@ -813,7 +855,10 @@ def measure_hls_variants(args: argparse.Namespace) -> dict[str, Any]:
     state = db_state(Path(args.db))
     measurements: list[dict[str, Any]] = []
     phase_ok = True
-    for video in state.get("videos") or []:
+    videos = state.get("videos") or []
+    if not videos:
+        phase_ok = False
+    for video in videos:
         video_id = int(video["id"])
         playback = timed_get(session, f"{args.base_url}/api/videos/{video_id}/playback", token, timeout=20)
         entry: dict[str, Any] = {
@@ -824,7 +869,10 @@ def measure_hls_variants(args: argparse.Namespace) -> dict[str, Any]:
             "subtitles": [],
         }
         variants: list[dict[str, Any]] = []
-        if playback.get("status") == 200:
+        if playback.get("status") != 200:
+            entry["error"] = "playback_not_available"
+            phase_ok = False
+        else:
             status, payload, elapsed = request_json(
                 session,
                 "GET",
@@ -845,6 +893,9 @@ def measure_hls_variants(args: argparse.Namespace) -> dict[str, Any]:
             if isinstance(payload, dict):
                 variants = list(payload.get("variants") or [])
                 subtitle_tracks = list(payload.get("subtitles") or [])
+                if not payload.get("streaming_ready") or not variants:
+                    entry["stream_error"] = "streaming_not_ready_or_variants_missing"
+                    phase_ok = False
                 entry["subtitles"] = measure_subtitle_tracks(
                     base_url=args.base_url,
                     session=session,
@@ -881,6 +932,11 @@ def measure_hls_variants(args: argparse.Namespace) -> dict[str, Any]:
                     concurrency=args.segment_concurrency,
                     max_segments=args.max_segments_per_variant,
                 )
+                burst = variant_entry["burst"]
+                if int(burst.get("ok_segments") or 0) < int(burst.get("requested_segments") or 0):
+                    phase_ok = False
+            else:
+                phase_ok = False
             entry["variants"].append(variant_entry)
         measurements.append(entry)
     return {
@@ -922,6 +978,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--monitor-interval", type=float, default=2.0)
     parser.add_argument("--wait-timeout-seconds", type=int, default=10800)
     parser.add_argument("--wait-interval-seconds", type=int, default=30)
+    parser.add_argument("--orphan-grace-seconds", type=int, default=600)
     parser.add_argument("--print-wait-status", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--measure-username", default="root")
     parser.add_argument("--measure-password", default="root")
@@ -956,7 +1013,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     write_result(Path(args.out), result)
     print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
-    return 0
+    return 0 if all(bool(phase.get("ok", True)) for phase in phases) else 1
 
 
 if __name__ == "__main__":
