@@ -79,6 +79,16 @@ def db_conn(runtime_root: Path) -> sqlite3.Connection:
     return conn
 
 
+def finance_db_path(runtime_root: Path) -> Path:
+    return runtime_root / "database" / "finance.db"
+
+
+def finance_db_conn(runtime_root: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(finance_db_path(runtime_root)), timeout=15)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def extract_user_id(me_payload: dict[str, Any]) -> int:
     body = me_payload.get("body") or {}
     user = body.get("user") if isinstance(body.get("user"), dict) else body
@@ -323,7 +333,7 @@ def seed_shares(runtime_root: Path, user_id: int) -> dict[str, Any]:
 
 
 def seed_trading(runtime_root: Path, user_id: int) -> dict[str, Any]:
-    conn = db_conn(runtime_root)
+    conn = finance_db_conn(runtime_root)
     try:
         now = now_text()
         conn.execute(
@@ -625,6 +635,16 @@ def check_share_management(rec: Recorder, page, share_seed: dict[str, Any]) -> d
 
 
 def hand_calc_asset_overview(trading_payload: dict[str, Any]) -> dict[str, int]:
+    overview = trading_payload.get("overview") if isinstance(trading_payload.get("overview"), dict) else None
+    if overview and not any(key in trading_payload for key in ("funding", "spot_summary", "margin_summary", "margin_positions")):
+        return {
+            "available_points": int(overview.get("available_points") or 0),
+            "locked_points": int(overview.get("locked_points") or 0),
+            "spot_market_value_points": int(overview.get("spot_market_value_points") or 0),
+            "margin_position_equity_points": int(overview.get("margin_position_equity_points") or 0),
+            "accrued_interest_points": int(overview.get("accrued_interest_points") or 0),
+            "total_equity_points": int(overview.get("total_equity_points") or 0),
+        }
     funding = trading_payload.get("funding") or {}
     spot = trading_payload.get("spot_summary") or {}
     margin = trading_payload.get("margin_summary") or {}
@@ -694,13 +714,13 @@ def check_trading_asset_overview(rec: Recorder, page, trading_seed: dict[str, An
         "trading_available": page.locator("#trading-funding-available").inner_text(timeout=3000),
         "trading_mode": page.locator("#trading-funding-mode").inner_text(timeout=3000),
         "trading_position": page.locator("#trading-position-quantity").inner_text(timeout=3000),
-        "asset_total": page_text_by_id(page, "economy-asset-total-equity"),
-        "asset_available": page_text_by_id(page, "economy-asset-available"),
-        "asset_spot": page_text_by_id(page, "economy-asset-spot"),
-        "asset_margin": page_text_by_id(page, "economy-asset-margin"),
-        "asset_interest": page_text_by_id(page, "economy-asset-interest"),
-        "confidence": page_text_by_id(page, "economy-asset-confidence"),
-        "admin": page_text_by_id(page, "economy-asset-admin-risk"),
+        "asset_total": page_text_by_id(page, "trading-asset-total-equity"),
+        "asset_available": page_text_by_id(page, "trading-asset-available"),
+        "asset_spot": page_text_by_id(page, "trading-asset-spot"),
+        "asset_margin": page_text_by_id(page, "trading-asset-margin"),
+        "asset_interest": page_text_by_id(page, "trading-asset-interest"),
+        "confidence": page_text_by_id(page, "trading-asset-confidence"),
+        "admin": page_text_by_id(page, "trading-asset-admin-risk"),
     }
     failure_ctx = page.context
     failure_ctx.route("**/api/trading/asset-overview", lambda route: route.fulfill(status=503, content_type="application/json", body='{"ok":false,"msg":"phase15 forced failure"}'))

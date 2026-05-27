@@ -101,7 +101,7 @@ def test_explicit_session_pool_is_respected_for_login_limit_probes():
 
 def test_bad_login_operation_treats_auth_rejection_as_expected():
     class FakeLoginClient:
-        base_url = "https://127.0.0.1:5000"
+        base_url = "https://127.0.0.1:0"
         timeout = 1
 
         def __init__(self, *_args, **_kwargs):
