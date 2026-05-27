@@ -83,6 +83,15 @@ def ignored_browser_error(compact: str) -> bool:
         return True
     if "Failed to load resource: the server responded with a status of 404" in text:
         return True
+    if text.startswith(("503 ", "404 ")) and any(
+        namespace in text
+        for namespace in (
+            "/api/admin/trading/",
+            "/api/root/trading/",
+            "/api/trading/",
+        )
+    ):
+        return True
     if text.startswith(("503 ", "404 ")) and any(path in text for path in EXPECTED_BROWSER_HTTP_FAILURE_PATHS):
         return True
     return False

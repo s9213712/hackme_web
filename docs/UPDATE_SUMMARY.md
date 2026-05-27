@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.27-006`
+Release ID: `2026.05.27-007`
+
+## 2026.05.27-007
+
+- Generalized Playwright platform-health filtering for expected offline
+  `503/404` responses under trading API namespaces, while preserving failures
+  for unexpected `500` errors.
 
 ## 2026.05.27-006
 
