@@ -42,7 +42,6 @@ from services.users.profiles import (
     rotate_friend_code,
     update_profile,
 )
-from services.points_chain.wallet_identity import create_official_hot_wallet
 
 
 def register_user_routes(app, deps):
@@ -1128,40 +1127,33 @@ def register_user_routes(app, deps):
                     "WHERE COALESCE(status, 'active') <> 'deleted' GROUP BY role"
                 ).fetchall()
                 role_counts = {str(row["role"] or "user"): int(row["c"] or 0) for row in role_rows}
-                auth_conn = get_readonly_auth_db()
                 try:
-                    sessions_by_user = active_session_map(auth_conn)
-                finally:
-                    auth_conn.close()
-                friend_ids = accepted_friend_ids(conn, actor["id"])
+                    auth_conn = get_readonly_auth_db()
+                    try:
+                        sessions_by_user = active_session_map(auth_conn)
+                    finally:
+                        auth_conn.close()
+                except Exception:
+                    sessions_by_user = {}
+                try:
+                    friend_ids = accepted_friend_ids(conn, actor["id"])
+                except Exception:
+                    friend_ids = set()
                 official_hot_by_user = {}
                 deposit_address_by_user = {}
                 if points_service is not None:
                     points_conn = None
                     try:
                         points_conn = points_service.get_db() if hasattr(points_service, "get_db") else get_db()
-                        points_service.ensure_schema(points_conn)
-                        member_wallet_user_ids = [
-                            int(row["id"]) for row in rows
-                            if str(row["username"] or "") != "root" and int(row["id"] or 0) > 0
-                        ]
+                        member_wallet_user_ids = []
                         for row in rows:
-                            uid = int(row["id"])
-                            status = str(row["status"] or "active")
-                            if uid <= 0 or str(row["username"] or "") == "root" or status in {"deleted", "rejected"}:
+                            if str(row["username"] or "") == "root":
                                 continue
-                            try:
-                                create_official_hot_wallet(points_conn, user_id=uid, chain_secret=getattr(points_service, "chain_secret", ""))
-                            except Exception:
-                                pass
-                            if hasattr(points_service, "ensure_user_deposit_address"):
-                                try:
-                                    deposit = points_service.ensure_user_deposit_address(points_conn, uid)
-                                    if deposit:
-                                        deposit_address_by_user[uid] = str(deposit.get("address") if isinstance(deposit, dict) else deposit["address"])
-                                except Exception:
-                                    pass
-                        if member_wallet_user_ids:
+                            uid = int(row["id"] or 0)
+                            if uid > 0:
+                                member_wallet_user_ids.append(uid)
+                        wallet_balance_by_address = {}
+                        if member_wallet_user_ids and _table_exists(points_conn, "points_wallet_identities"):
                             placeholders = ",".join("?" for _ in member_wallet_user_ids)
                             wallet_rows = points_conn.execute(
                                 f"""
@@ -1175,6 +1167,11 @@ def register_user_routes(app, deps):
                                 """,
                                 tuple(member_wallet_user_ids),
                             ).fetchall()
+                            wallet_addresses = [
+                                str(wallet_row["address"] or "").strip().lower()
+                                for wallet_row in wallet_rows
+                                if str(wallet_row["address"] or "").strip()
+                            ]
                             if _table_exists(points_conn, "points_chain_deposit_addresses"):
                                 deposit_rows = points_conn.execute(
                                     f"""
@@ -1188,6 +1185,37 @@ def register_user_routes(app, deps):
                                 ).fetchall()
                             else:
                                 deposit_rows = []
+                            if wallet_addresses and _table_exists(points_conn, "points_wallet_identity_balances"):
+                                balance_placeholders = ",".join("?" for _ in wallet_addresses)
+                                branch_row = None
+                                if _table_exists(points_conn, "points_wallet_identity_balance_state"):
+                                    branch_row = points_conn.execute(
+                                        """
+                                        SELECT chain_branch
+                                        FROM points_wallet_identity_balance_state
+                                        ORDER BY updated_at DESC
+                                        LIMIT 1
+                                        """
+                                    ).fetchone()
+                                balance_params = list(wallet_addresses)
+                                branch_filter = ""
+                                if branch_row and branch_row["chain_branch"]:
+                                    branch_filter = "AND chain_branch=?"
+                                    balance_params.append(str(branch_row["chain_branch"]))
+                                balance_rows = points_conn.execute(
+                                    f"""
+                                    SELECT wallet_address, available_points, frozen_points, pending_outgoing_points
+                                    FROM points_wallet_identity_balances
+                                    WHERE wallet_address IN ({balance_placeholders}) {branch_filter}
+                                    """,
+                                    tuple(balance_params),
+                                ).fetchall()
+                                for balance_row in balance_rows:
+                                    wallet_balance_by_address[str(balance_row["wallet_address"] or "").strip().lower()] = {
+                                        "balance": int(balance_row["available_points"] or 0),
+                                        "frozen": int(balance_row["frozen_points"] or 0),
+                                        "pending_outgoing": int(balance_row["pending_outgoing_points"] or 0),
+                                    }
                         else:
                             wallet_rows = []
                             deposit_rows = []
@@ -1199,11 +1227,18 @@ def register_user_routes(app, deps):
                             uid = int(wallet_row["user_id"] or 0)
                             if uid <= 0:
                                 continue
-                            try:
-                                balance_state = points_service._wallet_identity_balances_for_user(points_conn, uid)
-                                balance = (balance_state.get("balances") or {}).get(str(wallet_row["address"] or "").strip().lower(), {})
-                            except Exception:
-                                balance = {}
+                            address_key = str(wallet_row["address"] or "").strip().lower()
+                            balance = wallet_balance_by_address.get(address_key, {})
+                            if (
+                                not balance
+                                and hasattr(points_service, "_wallet_identity_balances_for_user")
+                                and not _table_exists(points_conn, "points_wallet_identity_balances")
+                            ):
+                                try:
+                                    balance_state = points_service._wallet_identity_balances_for_user(points_conn, uid)
+                                    balance = (balance_state.get("balances") or {}).get(address_key, {})
+                                except Exception:
+                                    balance = {}
                             official_hot_by_user.setdefault(uid, []).append({
                                 "address": wallet_row["address"],
                                 "status": wallet_row["status"],
@@ -1211,7 +1246,6 @@ def register_user_routes(app, deps):
                                 "points_frozen": int(balance.get("frozen") or 0),
                                 "pending_outgoing_points": int(balance.get("pending_outgoing") or 0),
                             })
-                        points_conn.commit()
                     except Exception:
                         if points_conn is not None:
                             try:
