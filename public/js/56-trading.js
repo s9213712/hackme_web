@@ -2664,7 +2664,13 @@ async function loadTradingRootSitewide({ refreshSnapshot = false, silent = false
   const status = $("trading-root-sitewide-status");
   try {
     if (status && !silent) status.textContent = "正在讀取全站倉位與借貸基金...";
-    if (refreshSnapshot) await refreshTradingRootSitewideSnapshots(`trading_root_sitewide_${tradingRootSitewideActiveTab}_refresh`);
+    if (refreshSnapshot) {
+      const refresh = await refreshTradingRootSitewideSnapshots(`trading_root_sitewide_${tradingRootSitewideActiveTab}_refresh`);
+      if (refresh?.async && status && !silent) {
+        status.textContent = `全站快照刷新已排入背景任務${refresh.job_id ? `：${refresh.job_id}` : ""}`;
+        status.style.color = "var(--muted)";
+      }
+    }
     const [pools, positions] = await Promise.all([
       fetchTradingJson("/root/trading/sitewide/pools", { allowMissingSnapshot: true }),
       fetchTradingJson("/root/trading/sitewide/user-positions", { allowMissingSnapshot: true }),

@@ -50,6 +50,7 @@ EXPLORER_INTERNAL_HOT_WALLET_HUMAN_RULE = "pc0 Inner Address 使用站內帳本�
 # pc0 internal service payments became immediate. New service payments must not
 # wait for this threshold.
 LEGACY_SERVICE_BATCH_SETTLEMENT_MIN_POINTS = 100
+ROOT_TRANSACTION_LIST_SWEEP_LIMIT = 5
 SERVICE_FEE_REVENUE_DESTINATION_FUND = "official_treasury"
 NON_OPERATING_MINT_SOURCE_FUND = "mint"
 TRANSFER_SETTLEMENT_RAILS = {
@@ -7152,6 +7153,125 @@ class PointsLedgerService:
         finally:
             conn.close()
 
+    def get_wallet_snapshot(self, user_id):
+        user_id = int(user_id)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            self.ensure_wallet(conn, user_id)
+            create_official_hot_wallet(conn, user_id=user_id, chain_secret=self.chain_secret)
+            self.ensure_user_deposit_address(conn, user_id)
+            conn.commit()
+            row = conn.execute("SELECT * FROM points_wallets WHERE user_id=?", (user_id,)).fetchone()
+            if row:
+                payload = self.serialize_wallet(row)
+            else:
+                payload = {
+                    "user_id": user_id,
+                    "public_account_id": self._public_account_id(user_id),
+                    "currency_type": DISPLAY_CURRENCY,
+                    "points_balance": 0,
+                    "points_frozen": 0,
+                    "total_points_earned": 0,
+                    "total_points_spent": 0,
+                    "soft_balance": 0,
+                    "hard_balance": 0,
+                    "soft_frozen": 0,
+                    "hard_frozen": 0,
+                    "total_soft_earned": 0,
+                    "total_hard_earned": 0,
+                    "total_soft_spent": 0,
+                    "total_hard_spent": 0,
+                    "wallet_status": "active",
+                    "risk_level": "normal",
+                    "created_at": None,
+                    "updated_at": None,
+                }
+            active_branch = self._canonical_branch_uuid(conn)
+            payload["chain_branch"] = active_branch
+            payload["branch"] = self._branch_metadata(conn, active_branch)
+            deposit_addresses = self._active_deposit_addresses_for_user(conn, user_id)
+            payload["deposit_addresses"] = deposit_addresses
+            payload["deposit_address"] = deposit_addresses[0]["address"] if deposit_addresses else ""
+            payload["deposit_model"] = "external_or_cold_chain_to_platform_deposit_address_then_internal_pc0_credit"
+            payload["wallet_identity_source"] = "wallet_snapshot"
+            try:
+                state = self._wallet_identity_state_for_user(conn, user_id)
+            except Exception:
+                state = {"has_identity": False, "primary": None, "addresses": set()}
+            if state.get("has_identity"):
+                materialized_rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM points_wallet_identity_balances
+                    WHERE chain_branch=? AND user_id=?
+                    ORDER BY wallet_address ASC
+                    """,
+                    (active_branch, user_id),
+                ).fetchall()
+                balances = {
+                    str(row["wallet_address"] or "").strip().lower(): {
+                        "points_balance": int(row["available_points"] or 0),
+                        "points_frozen": int(row["frozen_points"] or 0),
+                        "pending_outgoing_points": int(row["pending_outgoing_points"] or 0),
+                    }
+                    for row in materialized_rows
+                }
+                primary = state.get("primary")
+                if isinstance(primary, dict):
+                    active_address = str(primary.get("address") or "").strip().lower()
+                elif primary is not None:
+                    try:
+                        active_address = str(primary["address"] or "").strip().lower()
+                    except Exception:
+                        active_address = ""
+                else:
+                    active_address = ""
+                active = balances.get(active_address, {"points_balance": 0, "points_frozen": 0, "pending_outgoing_points": 0})
+                account_balance = sum(int(item.get("points_balance") or 0) for item in balances.values())
+                account_frozen = sum(int(item.get("points_frozen") or 0) for item in balances.values())
+                if not balances:
+                    account_balance = int(payload.get("points_balance") or 0)
+                    account_frozen = int(payload.get("points_frozen") or 0)
+                    balances = {
+                        active_address: {
+                            "points_balance": account_balance,
+                            "points_frozen": account_frozen,
+                            "pending_outgoing_points": 0,
+                        }
+                    } if active_address else {}
+                    active = balances.get(active_address, {
+                        "points_balance": account_balance,
+                        "points_frozen": account_frozen,
+                        "pending_outgoing_points": 0,
+                    })
+                payload.update({
+                    "account_points_balance": account_balance,
+                    "account_points_frozen": account_frozen,
+                    "active_wallet_address": active_address,
+                    "points_balance": int(active.get("points_balance") or 0),
+                    "points_frozen": int(active.get("points_frozen") or 0),
+                    "soft_balance": int(active.get("points_balance") or 0),
+                    "soft_frozen": int(active.get("points_frozen") or 0),
+                    "hard_balance": 0,
+                    "hard_frozen": 0,
+                    "wallet_identity_balances": balances,
+                    "wallet_identity_source": "materialized_wallet_identity_balances_snapshot",
+                })
+            else:
+                payload["account_points_balance"] = int(payload.get("points_balance") or 0)
+                payload["account_points_frozen"] = int(payload.get("points_frozen") or 0)
+                payload["active_wallet_address"] = ""
+                payload["wallet_identity_balances"] = {}
+            payload["snapshot"] = {
+                "snapshot_backed": True,
+                "bounded": True,
+                "source": payload.get("wallet_identity_source") or "wallet_snapshot",
+            }
+            return payload
+        finally:
+            conn.close()
+
     def wallet_creation_fee_quote_for_count(self, wallet_count):
         count = max(0, int(wallet_count or 0))
         if count <= 0:
@@ -9457,7 +9577,43 @@ class PointsLedgerService:
         payload = balances.get(str(address or "").strip().lower())
         return int((payload or {}).get("balance") or 0)
 
-    def _transfer_request_public_payload(self, conn, req):
+    def _transfer_request_chain_fee_policy(self, req):
+        req = dict(req)
+        settlement_rail = str(req.get("settlement_rail") or "cold_chain")
+        chain_required = bool(int(req.get("chain_required") if req.get("chain_required") is not None else 1))
+        transaction_type = str(req.get("transaction_type") or "wallet_transfer")
+        source_fund_key = str(req.get("source_fund_key") or "")
+        official_grant = transaction_type == "official_wallet_grant" or source_fund_key == "official_treasury"
+        destination_fund_key = self._explorer_fund_key_for_address(req.get("destination_wallet_address") or "")
+        source_pc0 = is_pc0_internal_address(req.get("source_wallet_address") or "")
+        destination_pc0 = is_pc0_internal_address(req.get("destination_wallet_address") or "")
+        pc0_internal_transfer = bool(
+            source_pc0
+            and (
+                destination_pc0
+                or destination_fund_key in {"exchange_fund", "promo_fund", "burn"}
+            )
+            and official_grant
+        )
+        if pc0_internal_transfer or not chain_required or settlement_rail in {"internal_hot_wallet", "internal_system_burn"}:
+            return {
+                "base_fee_exempt": True,
+                "base_fee_destination_fund_key": "burn",
+                "base_fee_destination_label": "BURN 銷毀錢包",
+                "acceleration_allowed": False,
+                "exemption_reason": EXPLORER_INTERNAL_HOT_WALLET_HUMAN_RULE,
+                "manual_official_wallet_ops_are_auto": False,
+            }
+        return {
+            "base_fee_exempt": False,
+            "base_fee_destination_fund_key": "burn",
+            "base_fee_destination_label": "BURN 銷毀錢包",
+            "acceleration_allowed": bool(str(req.get("status") or "pending") == "pending"),
+            "exemption_reason": "",
+            "manual_official_wallet_ops_are_auto": False,
+        }
+
+    def _transfer_request_public_payload(self, conn, req, *, network_state=None):
         req = dict(req)
         fee = int(req.get("fee_points") or 0)
         settlement_rail = str(req.get("settlement_rail") or "cold_chain")
@@ -9492,7 +9648,11 @@ class PointsLedgerService:
         if not chain_required or settlement_rail in {"internal_hot_wallet", "internal_system_burn"}:
             finality = self._explorer_internal_hot_wallet_finality()
         else:
-            estimate = self._explorer_finality_estimate(fee + acceleration_fee, conn=conn)
+            estimate = self._explorer_finality_estimate(
+                fee + acceleration_fee,
+                conn=conn,
+                network_state=network_state,
+            )
             pseudo_ledger = {
                 "ledger_uuid": req["request_uuid"],
                 "ledger_hash": req["tx_group_hash"],
@@ -9504,14 +9664,7 @@ class PointsLedgerService:
                 estimate=estimate,
                 schedule=schedule,
                 sealed=False,
-                fee_policy={
-                    "base_fee_exempt": False,
-                    "base_fee_destination_fund_key": "burn",
-                    "base_fee_destination_label": "BURN 銷毀錢包",
-                    "acceleration_allowed": bool(str(req.get("status") or "pending") == "pending"),
-                    "exemption_reason": "",
-                    "manual_official_wallet_ops_are_auto": False,
-                },
+                fee_policy=self._transfer_request_chain_fee_policy(req),
                 acceleration_fee_points=fee + acceleration_fee,
             )
         finality.update({
@@ -10984,10 +11137,18 @@ class PointsLedgerService:
             conn.execute("BEGIN IMMEDIATE")
             sweep = {"checked_count": 0, "finalized_count": 0, "confirmed_count": 0, "failed_count": 0}
             if root_view and not finalization_paused:
-                sweep = self._finalize_proved_pending_transfer_requests_locked(conn, actor=actor, limit=1000)
+                sweep = self._finalize_proved_pending_transfer_requests_locked(
+                    conn,
+                    actor=actor,
+                    limit=ROOT_TRANSACTION_LIST_SWEEP_LIMIT,
+                )
             deposit_reconcile = {"checked_count": 0, "credited_count": 0, "linked_count": 0, "skipped_count": 0}
             if not finalization_paused:
-                deposit_reconcile = self._reconcile_confirmed_deposit_transfers_locked(conn, actor=actor, limit=1000)
+                deposit_reconcile = self._reconcile_confirmed_deposit_transfers_locked(
+                    conn,
+                    actor=actor,
+                    limit=ROOT_TRANSACTION_LIST_SWEEP_LIMIT,
+                )
             if root_view:
                 rows = conn.execute(
                     """
@@ -11110,6 +11271,184 @@ class PointsLedgerService:
         except Exception:
             conn.rollback()
             raise
+        finally:
+            conn.close()
+
+    def list_wallet_transactions_compact(self, *, user_id, limit=50, actor=None, cursor=None):
+        viewer_id = int(user_id)
+        limit = min(100, max(1, int(limit or 50)))
+        root_view = actor_value(actor, "username") == "root"
+        cursor_id = 0
+        try:
+            cursor_id = max(0, int(cursor or 0))
+        except Exception:
+            cursor_id = 0
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            branch = self._canonical_branch_uuid(conn)
+            where = []
+            params = []
+            viewer_addresses = set()
+            if cursor_id:
+                where.append("id<?")
+                params.append(cursor_id)
+            if root_view:
+                where.append("chain_branch=?")
+                params.append(branch)
+            else:
+                identity_state = self._wallet_identity_state_for_user(conn, viewer_id)
+                viewer_addresses = {
+                    str(item or "").strip().lower()
+                    for item in (identity_state.get("addresses") or set())
+                    if item
+                }
+                wallet_clause = ""
+                query_params = [viewer_id, viewer_id]
+                if viewer_addresses:
+                    placeholders = ", ".join("?" for _ in viewer_addresses)
+                    wallet_clause = f" OR source_wallet_address IN ({placeholders}) OR destination_wallet_address IN ({placeholders})"
+                    query_params.extend(sorted(viewer_addresses))
+                    query_params.extend(sorted(viewer_addresses))
+                where.append(f"(sender_user_id=? OR recipient_user_id=?{wallet_clause})")
+                params.extend(query_params)
+                where.append("chain_branch=?")
+                params.append(branch)
+            sql_where = "WHERE " + " AND ".join(where) if where else ""
+            sql_started = _monotonic_time.perf_counter()
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM points_chain_transfer_requests
+                {sql_where}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                tuple(params + [limit]),
+            ).fetchall()
+            sql_ms = round((_monotonic_time.perf_counter() - sql_started) * 1000, 3)
+            aggregation_started = _monotonic_time.perf_counter()
+            transactions = []
+            for row in rows:
+                req = dict(row)
+                sender_id = int(req.get("sender_user_id") or 0)
+                recipient_id = self._transfer_request_recipient_user_id(req)
+                source_address = str(req.get("source_wallet_address") or "").strip().lower()
+                destination_address = str(req.get("destination_wallet_address") or "").strip().lower()
+                if root_view:
+                    direction = "observed"
+                    counterparty = req.get("destination_wallet_address") or ""
+                else:
+                    source_is_viewer = sender_id == viewer_id or source_address in viewer_addresses
+                    destination_is_viewer = recipient_id == viewer_id or destination_address in viewer_addresses
+                    if source_is_viewer and destination_is_viewer:
+                        direction = "self"
+                        counterparty = req.get("destination_wallet_address") or ""
+                    elif source_is_viewer:
+                        direction = "outgoing"
+                        counterparty = req.get("destination_wallet_address") or ""
+                    else:
+                        direction = "incoming"
+                        counterparty = req.get("source_wallet_address") or ""
+                status = str(req.get("status") or "pending")
+                if status == "confirmed":
+                    finality_status = "proved"
+                elif status.startswith("failed"):
+                    finality_status = "failed"
+                else:
+                    finality_status = "pending"
+                transactions.append({
+                    "id": int(req.get("id") or 0),
+                    "request_uuid": req.get("request_uuid") or "",
+                    "tx_group_hash": req.get("tx_group_hash") or "",
+                    "transaction_hash": req.get("tx_group_hash") or "",
+                    "transaction_type": req.get("transaction_type") or "wallet_transfer",
+                    "settlement_rail": req.get("settlement_rail") or "cold_chain",
+                    "chain_required": bool(int(req.get("chain_required") if req.get("chain_required") is not None else 1)),
+                    "approval_required": bool(int(req.get("approval_required") if req.get("approval_required") is not None else 1)),
+                    "network_fee_points": int(req.get("network_fee_points") if req.get("network_fee_points") is not None else req.get("fee_points") or 0),
+                    "service_fee_points": int(req.get("service_fee_points") or 0),
+                    "source_fund_key": req.get("source_fund_key") or "",
+                    "direction": direction,
+                    "status": status,
+                    "amount_points": int(req.get("amount_points") or 0),
+                    "fee_points": int(req.get("fee_points") or 0),
+                    "source_wallet_address": req.get("source_wallet_address") or "",
+                    "destination_wallet_address": req.get("destination_wallet_address") or "",
+                    "counterparty_wallet_address": counterparty,
+                    "memo": req.get("memo") or "",
+                    "created_at": req.get("created_at") or "",
+                    "finality": {
+                        "finality_status": finality_status,
+                        "block_status": "snapshot",
+                        "snapshot_backed": True,
+                    },
+                    "wallet_flow": {
+                        "source_wallet_address": req.get("source_wallet_address") or "",
+                        "destination_wallet_address": req.get("destination_wallet_address") or "",
+                        "settlement_rail": req.get("settlement_rail") or "cold_chain",
+                        "chain_required": bool(int(req.get("chain_required") if req.get("chain_required") is not None else 1)),
+                        "approval_required": bool(int(req.get("approval_required") if req.get("approval_required") is not None else 1)),
+                    },
+                    "transfer_ledgers": {
+                        "transfer_out_ledger_uuid": req.get("transfer_out_ledger_uuid") or "",
+                        "transfer_in_ledger_uuid": req.get("transfer_in_ledger_uuid") or "",
+                        "fee_ledger_uuid": req.get("fee_ledger_uuid") or "",
+                    },
+                    "balance_effect": (
+                        "confirmed"
+                        if status == "confirmed"
+                        else "pending_no_recipient_credit"
+                        if status == "pending"
+                        else "failed_no_balance_change"
+                    ),
+                })
+            pending_incoming = sum(
+                int(item["amount_points"] or 0)
+                for item in transactions
+                if item["direction"] in {"incoming", "self"} and item["status"] == "pending"
+            )
+            pending_outgoing = sum(
+                int(item["amount_points"] or 0) + int(item["fee_points"] or 0)
+                for item in transactions
+                if (root_view or item["direction"] in {"outgoing", "self"}) and item["status"] == "pending"
+            )
+            next_cursor = int(transactions[-1]["id"]) if len(transactions) >= limit and transactions else None
+            aggregation_ms = round((_monotonic_time.perf_counter() - aggregation_started) * 1000, 3)
+            return {
+                "ok": True,
+                "transactions": transactions,
+                "summary": {
+                    "count": len(transactions),
+                    "pending_count": sum(1 for item in transactions if item["status"] == "pending"),
+                    "confirmed_count": sum(1 for item in transactions if item["status"] == "confirmed"),
+                    "failed_count": sum(1 for item in transactions if str(item["status"]).startswith("failed")),
+                    "pending_incoming_points": pending_incoming,
+                    "pending_outgoing_points": pending_outgoing,
+                    "finalized_count": 0,
+                    "batch_checked_count": 0,
+                    "batch_finalized_count": 0,
+                    "batch_confirmed_count": 0,
+                    "batch_failed_count": 0,
+                    "deposit_bridge_checked_count": 0,
+                    "deposit_bridge_credited_count": 0,
+                    "deposit_bridge_linked_count": 0,
+                    "finalization_error_count": 0,
+                    "bounded": True,
+                    "compact": True,
+                },
+                "cursor": {
+                    "next": next_cursor,
+                    "limit": limit,
+                    "has_more": next_cursor is not None,
+                },
+                "management_microbenchmark": {
+                    "sql_ms": sql_ms,
+                    "python_aggregation_ms": aggregation_ms,
+                    "rows_returned": len(transactions),
+                    "compact": True,
+                },
+            }
         finally:
             conn.close()
 
@@ -13946,13 +14285,27 @@ class PointsLedgerService:
         finally:
             conn.close()
 
-    def verify_chain(self):
+    def verify_chain(self, *, include_financial=True):
+        started = _monotonic_time.perf_counter()
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
             result = self._verify_chain_on_conn(conn)
-            result["financial_invariants"] = self._financial_invariant_report_locked(conn)
-            result["financial_ok"] = bool(result["financial_invariants"].get("ok"))
+            verify_elapsed_ms = round((_monotonic_time.perf_counter() - started) * 1000, 3)
+            if include_financial:
+                financial_started = _monotonic_time.perf_counter()
+                result["financial_invariants"] = self._financial_invariant_report_locked(conn)
+                result["financial_ok"] = bool(result["financial_invariants"].get("ok"))
+                financial_elapsed_ms = round((_monotonic_time.perf_counter() - financial_started) * 1000, 3)
+            else:
+                result["financial_ok"] = None
+                financial_elapsed_ms = 0.0
+            result["timing"] = {
+                "verify_chain_ms": verify_elapsed_ms,
+                "financial_invariants_ms": financial_elapsed_ms,
+                "total_ms": round((_monotonic_time.perf_counter() - started) * 1000, 3),
+                "include_financial": bool(include_financial),
+            }
             conn.commit()
             return result
         finally:
@@ -14002,8 +14355,19 @@ class PointsLedgerService:
                     (branch,),
                 ).fetchone()[0] or 0)
             if table_columns(conn, "points_ledger"):
-                counts = self._pc1_chain_ledger_count_snapshot_locked(conn, branch=branch)
-                unsealed = int(counts.get("pc1_unsealed_entries") or 0)
+                # This estimate feeds public explorer ETA and fee guidance. It
+                # should stay bounded even when the ledger is large; exact pc0
+                # vs pc1 classification belongs to verify/report paths.
+                unsealed = int(conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM points_ledger
+                    WHERE status='confirmed'
+                      AND chain_block_id IS NULL
+                      AND chain_branch=?
+                    """,
+                    (branch,),
+                ).fetchone()[0] or 0)
                 recent = int(conn.execute(
                     "SELECT COUNT(*) FROM points_ledger WHERE created_at>=? AND chain_branch=?",
                     (cutoff, branch),
@@ -14354,7 +14718,7 @@ class PointsLedgerService:
             "pc0_operational_unsealed_entries": internal_unsealed,
         }
 
-    def _explorer_finality_for_ledger(self, conn, ledger):
+    def _explorer_finality_for_ledger(self, conn, ledger, *, network_state=None):
         if self._ledger_uses_internal_hot_wallet_rail(conn, ledger):
             return {
                 **self._explorer_internal_hot_wallet_finality(
@@ -14368,7 +14732,11 @@ class PointsLedgerService:
                 "latest_acceleration_request": None,
             }
         accel = self._explorer_acceleration_summary(conn, ledger["ledger_uuid"])
-        estimate = self._explorer_finality_estimate(accel["total_fee_points"], conn=conn)
+        estimate = self._explorer_finality_estimate(
+            accel["total_fee_points"],
+            conn=conn,
+            network_state=network_state,
+        )
         fee_policy = self._explorer_chain_fee_policy(ledger)
         schedule = self._explorer_finality_schedule(ledger, estimate)
         finality = self._explorer_finality_from_created(
@@ -14672,7 +15040,7 @@ class PointsLedgerService:
             "finality": self._explorer_finality_for_economy_event(conn, row),
         }
 
-    def _explorer_public_ledger(self, conn, row):
+    def _explorer_public_ledger(self, conn, row, *, network_state=None):
         flow = self._ledger_wallet_flow_for_read(conn, row)
         public_metadata = _json_loads(row["public_metadata_json"], {})
         settlement_rail = self._ledger_settlement_rail_for_read(
@@ -14725,7 +15093,7 @@ class PointsLedgerService:
             "wallet_flow": flow,
             "cross_references": self._explorer_cross_references_for_ledger(conn, row, settlement_rail=settlement_rail),
             "block": block,
-            "finality": self._explorer_finality_for_ledger(conn, row),
+            "finality": self._explorer_finality_for_ledger(conn, row, network_state=network_state),
         }
 
     def explorer_transaction(self, ref):
@@ -15228,14 +15596,7 @@ class PointsLedgerService:
             fee_policy = (
                 self._explorer_chain_fee_policy(ledger)
                 if ledger
-                else ((self._transfer_request_public_payload(conn, transfer_req).get("finality") or {}).get("chain_fee_policy") or {
-                    "base_fee_exempt": False,
-                    "base_fee_destination_fund_key": "burn",
-                    "base_fee_destination_label": "BURN 銷毀錢包",
-                    "acceleration_allowed": True,
-                    "exemption_reason": "",
-                    "manual_official_wallet_ops_are_auto": False,
-                })
+                else self._transfer_request_chain_fee_policy(transfer_req)
             )
             if not fee_policy["acceleration_allowed"]:
                 raise ValueError(fee_policy["exemption_reason"] or "this transaction is chain-fee exempt")
@@ -15265,6 +15626,7 @@ class PointsLedgerService:
                     "result": result,
                 }
             estimate = self._explorer_finality_estimate(fee, conn=conn)
+            network_state = estimate.get("network_fee_state") if isinstance(estimate, dict) else None
             fee_ledger, _created = self._record_transaction(
                 conn,
                 user_id=actor_id,
@@ -15307,16 +15669,16 @@ class PointsLedgerService:
             conn.commit()
             if ledger:
                 refreshed = conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (ledger["ledger_uuid"],)).fetchone()
-                result = {"kind": "transaction", "transaction": self._explorer_public_ledger(conn, refreshed)}
+                result = {"kind": "transaction", "transaction": self._explorer_public_ledger(conn, refreshed, network_state=network_state)}
             else:
                 refreshed = conn.execute("SELECT * FROM points_chain_transfer_requests WHERE request_uuid=?", (target_ref,)).fetchone()
-                result = {"kind": "transaction", "transaction": self._transfer_request_public_payload(conn, refreshed)}
+                result = {"kind": "transaction", "transaction": self._transfer_request_public_payload(conn, refreshed, network_state=network_state)}
             created_row = conn.execute("SELECT * FROM points_chain_acceleration_requests WHERE request_uuid=?", (request_uuid,)).fetchone()
             return {
                 "ok": True,
                 "created": True,
                 "acceleration": dict(created_row),
-                "fee_ledger": self._explorer_public_ledger(conn, fee_ledger),
+                "fee_ledger": self._explorer_public_ledger(conn, fee_ledger, network_state=network_state),
                 "result": result,
             }
         except Exception:
@@ -15706,7 +16068,18 @@ class PointsLedgerService:
         return rows[:limit]
 
     def root_report(self):
-        verification = self.verify_chain()
+        started = _monotonic_time.perf_counter()
+        phase_started = started
+        phases = []
+
+        def mark_phase(name):
+            nonlocal phase_started
+            now = _monotonic_time.perf_counter()
+            phases.append({"phase": name, "elapsed_ms": round((now - phase_started) * 1000, 3)})
+            phase_started = now
+
+        verification = self.verify_chain(include_financial=False)
+        mark_phase("verify_chain")
         scheduled_backup = {
             "ok": True,
             "created": False,
@@ -15714,10 +16087,14 @@ class PointsLedgerService:
             "msg": "PointsChain ledger backup/restore is disabled; recovery uses safe mode, branches, governance, and append-only correction entries.",
         }
         stats = self.economy_stats(verification=verification)
+        mark_phase("economy_stats")
         audit_logs = self.list_chain_audit_logs(limit=50)
+        mark_phase("audit_logs")
         block_schedule = self.block_schedule(verification=verification)
+        mark_phase("block_schedule")
         backups = []
         recovery = self.safe_mode_status()
+        mark_phase("recovery")
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -15761,26 +16138,37 @@ class PointsLedgerService:
                 existing["verification_status"] = "tampered"
                 high_risk_by_id[ledger_id] = existing
             high_risk_ledger = sorted(high_risk_by_id.values(), key=lambda row: int(row.get("id") or 0), reverse=True)[:20]
+            mark_phase("risk_snapshot")
             financial_invariants = self._financial_invariant_report_locked(
                 conn,
                 economy_layer=(stats.get("economy_layer") if isinstance(stats, dict) else None),
             )
+            mark_phase("financial_invariants")
             verification["financial_invariants"] = financial_invariants
             verification["financial_ok"] = bool(financial_invariants.get("ok"))
-            return {
+            unsealed_transactions = self._root_recent_unsealed_transactions(conn, limit=50)
+            mark_phase("unsealed_transactions")
+            governance = self._governance_report_locked(conn)
+            mark_phase("governance")
+            report = {
                 "verification": verification,
                 "stats": stats,
                 "financial_invariants": financial_invariants,
                 "blocks": [dict(row) for row in blocks],
                 "high_risk_ledger": high_risk_ledger,
                 "audit_logs": audit_logs,
-                "unsealed_transactions": self._root_recent_unsealed_transactions(conn, limit=50),
+                "unsealed_transactions": unsealed_transactions,
                 "block_schedule": block_schedule,
                 "ledger_backups": backups,
                 "recovery": recovery,
                 "scheduled_backup": scheduled_backup,
-                "governance": self._governance_report_locked(conn),
+                "governance": governance,
             }
+            report["management_timing"] = {
+                "total_ms": round((_monotonic_time.perf_counter() - started) * 1000, 3),
+                "phases": phases,
+            }
+            return report
         finally:
             conn.close()
 

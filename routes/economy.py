@@ -20,6 +20,13 @@ from services.points_chain import (
 )
 from services.governance.sanction_notices import record_admin_sanction_notice
 from services.governance.violation_fines import assert_user_feature_allowed
+from services.job_center import get_job
+from services.management_plane import (
+    MANAGEMENT_PLANE_SOURCE_MODULE,
+    get_management_snapshot,
+    management_job_start_payload,
+    start_management_plane_job,
+)
 
 
 def register_economy_routes(app, deps):
@@ -203,6 +210,68 @@ def register_economy_routes(app, deps):
             "msg": "PointsChain 私有鏈目前已關閉；基本積分錢包、帳本、服務價格與一般扣點仍可使用。",
         }, 503)
 
+    def management_actor(actor):
+        return {
+            "id": actor_value(actor, "id"),
+            "username": actor_value(actor, "username", ""),
+            "role": actor_value(actor, "role", "user"),
+        }
+
+    def management_job_response(started, *, snapshot_key):
+        payload = management_job_start_payload(
+            started["job"],
+            snapshot_key=snapshot_key,
+            created=bool(started.get("created")),
+        )
+        return json_resp(payload, 202)
+
+    def management_snapshot_response(snapshot_key, *, payload_key=None, missing_status=404):
+        conn = get_db()
+        try:
+            sql_started = time.perf_counter()
+            snapshot = get_management_snapshot(conn, snapshot_key=snapshot_key, include_payload=True)
+            request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        finally:
+            conn.close()
+        if not snapshot.get("ok"):
+            return json_resp({
+                "ok": False,
+                "snapshot": snapshot,
+                "snapshot_key": snapshot_key,
+                "client_should_enqueue": True,
+            }, missing_status)
+        payload = snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {}
+        meta = {
+            "snapshot_key": snapshot.get("snapshot_key"),
+            "generated_at": snapshot.get("generated_at"),
+            "updated_at": snapshot.get("updated_at"),
+            "source_job_uuid": snapshot.get("source_job_uuid"),
+            "summary": snapshot.get("summary") or {},
+            "snapshot_backed": True,
+        }
+        if payload_key:
+            return json_resp({
+                "ok": True,
+                payload_key: payload.get(payload_key),
+                "snapshot": meta,
+            })
+        response_payload = dict(payload)
+        response_payload.setdefault("ok", True)
+        response_payload["snapshot"] = meta
+        return json_resp(response_payload)
+
+    def management_job_status_response(job_uuid):
+        conn = get_db()
+        try:
+            sql_started = time.perf_counter()
+            job = get_job(conn, job_uuid)
+            request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        finally:
+            conn.close()
+        if not job or str(job.get("source_module") or "") != MANAGEMENT_PLANE_SOURCE_MODULE:
+            return json_resp({"ok": False, "msg": "找不到 management-plane 任務"}), 404
+        return json_resp({"ok": True, "job": job})
+
     def csv_download_response(filename, fieldnames, rows):
         buffer = io.StringIO()
         writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
@@ -288,10 +357,11 @@ def register_economy_routes(app, deps):
                 },
                 "initial_grants": None,
             })
-        wallet = points_service.get_wallet(actor["id"])
+        hydrate = str(request.args.get("hydrate") or request.args.get("full") or "").strip().lower() in {"1", "true", "yes", "on"}
+        wallet = points_service.get_wallet(actor["id"]) if hydrate else points_service.get_wallet_snapshot(actor["id"])
         initial_grants = maybe_award_initial_grants_for_actor(actor)
         if initial_grants and int(initial_grants.get("created_count") or 0) > 0:
-            wallet = points_service.get_wallet(actor["id"])
+            wallet = points_service.get_wallet(actor["id"]) if hydrate else points_service.get_wallet_snapshot(actor["id"])
         return json_resp({"ok": True, "wallet": wallet, "initial_grants": initial_grants})
 
     @app.route("/api/points/deposit-address", methods=["GET"])
@@ -718,6 +788,23 @@ def register_economy_routes(app, deps):
                 ua=get_ua(),
                 detail=f"tx_group_hash={result.get('tx_group_hash')}",
             )
+            compact = (
+                bool(data.get("compact"))
+                or str(request.args.get("compact") or "").strip().lower() in {"1", "true", "yes", "on"}
+            )
+            if compact:
+                transaction = result.get("transaction") if isinstance(result.get("transaction"), dict) else {}
+                return json_resp({
+                    "ok": bool(result.get("ok", True)),
+                    "created": bool(result.get("created")),
+                    "tx_group_hash": result.get("tx_group_hash") or transaction.get("tx_group_hash") or transaction.get("transaction_hash") or "",
+                    "transaction_hash": result.get("transaction_hash") or result.get("tx_group_hash") or transaction.get("transaction_hash") or "",
+                    "request_uuid": transaction.get("request_uuid") or data.get("request_uuid") or "",
+                    "transaction_status": transaction.get("status") or ("pending" if result.get("created") else ""),
+                    "settlement_rail": transaction.get("settlement_rail") or "",
+                    "chain_required": transaction.get("chain_required"),
+                    "compact": True,
+                })
             return json_resp(result)
         except PermissionError as exc:
             return json_resp({"ok": False, "msg": str(exc) or "權限不足"}), 403
@@ -872,12 +959,31 @@ def register_economy_routes(app, deps):
         if not points_chain_enabled():
             return points_chain_disabled_response()
         limit = parse_positive_int(request.args.get("limit"), default=50, maximum=100) or 50
+        compact_arg = str(request.args.get("compact") or "").strip().lower()
+        if compact_arg in {"0", "false", "no", "off"}:
+            compact = False
+        else:
+            compact = compact_arg in {"1", "true", "yes", "on"}
+        cursor = request.args.get("cursor")
         try:
-            result = points_service.list_wallet_transactions(
-                user_id=actor["id"],
-                limit=limit,
-                actor={"id": actor["id"], "username": actor["username"], "role": actor["role"]},
-            )
+            if compact:
+                result = points_service.list_wallet_transactions_compact(
+                    user_id=actor["id"],
+                    limit=limit,
+                    actor={"id": actor["id"], "username": actor["username"], "role": actor["role"]},
+                    cursor=cursor,
+                )
+                metrics = result.pop("management_microbenchmark", {}) if isinstance(result, dict) else {}
+                request.environ["hackme.sql_ms"] = metrics.get("sql_ms", 0)
+                request.environ["hackme.python_aggregation_ms"] = metrics.get("python_aggregation_ms", 0)
+            else:
+                aggregation_started = time.perf_counter()
+                result = points_service.list_wallet_transactions(
+                    user_id=actor["id"],
+                    limit=limit,
+                    actor={"id": actor["id"], "username": actor["username"], "role": actor["role"]},
+                )
+                request.environ["hackme.python_aggregation_ms"] = round((time.perf_counter() - aggregation_started) * 1000, 3)
             return json_resp(result)
         except Exception as exc:
             return service_error(exc)
@@ -1849,12 +1955,101 @@ def register_economy_routes(app, deps):
         if request.is_json:
             data = request.get_json(silent=True) or {}
         limit = parse_positive_int(data.get("limit"), default=100, maximum=500) or 100
-        try:
-            result = points_service.seal_block(actor=actor, limit=limit)
-            audit("POINTS_CHAIN_SEAL", get_client_ip(), user=actor["username"], success=bool(result.get("ok")), ua=get_ua(), detail=str(result.get("block") or result.get("msg")))
-            return json_resp(result)
-        except Exception as exc:
-            return service_error(exc)
+        actor_snapshot = management_actor(actor)
+
+        def worker(progress):
+            progress(stage="seal_block", progress_percent=20, detail=f"sealing up to {limit} ledger entries")
+            result = points_service.seal_block(actor=actor_snapshot, limit=limit)
+            progress(stage="snapshot", progress_percent=90, detail="recording seal result snapshot")
+            return {"ok": bool(result.get("ok", True)), "seal": result}
+
+        def summary(payload):
+            seal = payload.get("seal") if isinstance(payload.get("seal"), dict) else {}
+            return {
+                "ok": bool(seal.get("ok", payload.get("ok", True))),
+                "snapshot_key": "points_chain_seal",
+                "sealed": bool(seal.get("sealed") or seal.get("created")),
+                "block": seal.get("block"),
+                "msg": seal.get("msg"),
+            }
+
+        sql_started = time.perf_counter()
+        started = start_management_plane_job(
+            get_db=get_db,
+            actor=actor_snapshot,
+            job_type="points_chain_seal",
+            title="PointsChain seal",
+            snapshot_key="points_chain_seal",
+            request_payload={"limit": limit},
+            worker=worker,
+            summary_builder=summary,
+        )
+        request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        audit("POINTS_CHAIN_SEAL_QUEUED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"job_uuid={started['job'].get('job_uuid')},limit={limit}")
+        return management_job_response(started, snapshot_key="points_chain_seal")
+
+    @app.route("/api/root/points/chain/seal/latest", methods=["GET"])
+    @require_csrf_safe
+    def root_points_chain_seal_latest():
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_snapshot_response("points_chain_seal")
+
+    @app.route("/api/root/points/chain/seal/jobs/<path:job_uuid>", methods=["GET"])
+    @require_csrf_safe
+    def root_points_chain_seal_job(job_uuid):
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_job_status_response(job_uuid)
+
+    def start_points_chain_verify_job(actor):
+        actor_snapshot = management_actor(actor)
+
+        def worker(progress):
+            progress(stage="verify_chain", progress_percent=15, detail="verifying PointsChain off request path")
+            result = points_service.verify_chain()
+            incident = None
+            if not result.get("ok") and server_mode_service and hasattr(server_mode_service, "enter_incident_lockdown"):
+                progress(stage="incident_lockdown", progress_percent=85, detail="verification failed; entering incident lockdown")
+                try:
+                    incident = server_mode_service.enter_incident_lockdown(
+                        actor=actor_snapshot,
+                        trigger_type="points_chain_verify_failed",
+                        reason="PointsChain verification failed",
+                        verification=result,
+                    )
+                except Exception as exc:
+                    incident = {"ok": False, "msg": str(exc)}
+            progress(stage="snapshot", progress_percent=90, detail="recording verification snapshot")
+            return {"ok": bool(result.get("ok")), "verification": result, "incident": incident}
+
+        def summary(payload):
+            verification = payload.get("verification") if isinstance(payload.get("verification"), dict) else {}
+            return {
+                "ok": bool(payload.get("ok")),
+                "snapshot_key": "points_chain_verify",
+                "verification_ok": bool(verification.get("ok")),
+                "error_count": len(verification.get("errors") or []),
+                "counts": verification.get("counts") or {},
+                "financial_ok": verification.get("financial_ok"),
+                "incident": payload.get("incident"),
+            }
+
+        sql_started = time.perf_counter()
+        started = start_management_plane_job(
+            get_db=get_db,
+            actor=actor_snapshot,
+            job_type="points_chain_verify",
+            title="PointsChain verify",
+            snapshot_key="points_chain_verify",
+            request_payload={},
+            worker=worker,
+            summary_builder=summary,
+        )
+        request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        return started
 
     @app.route("/api/root/points/chain/verify", methods=["GET"])
     @require_csrf_safe
@@ -1864,19 +2059,35 @@ def register_economy_routes(app, deps):
             return err
         if not points_chain_enabled():
             return points_chain_disabled_response()
-        result = points_service.verify_chain()
-        incident = None
-        if not result.get("ok") and server_mode_service and hasattr(server_mode_service, "enter_incident_lockdown"):
-            try:
-                incident = server_mode_service.enter_incident_lockdown(
-                    actor=actor,
-                    trigger_type="points_chain_verify_failed",
-                    reason="PointsChain verification failed",
-                    verification=result,
-                )
-            except Exception as exc:
-                incident = {"ok": False, "msg": str(exc)}
-        return json_resp({"ok": result["ok"], "verification": result, "incident": incident})
+        started = start_points_chain_verify_job(actor)
+        return management_job_response(started, snapshot_key="points_chain_verify")
+
+    @app.route("/api/root/points/chain/verify/jobs", methods=["POST"])
+    @require_csrf
+    def root_points_chain_verify_start_job():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        started = start_points_chain_verify_job(actor)
+        return management_job_response(started, snapshot_key="points_chain_verify")
+
+    @app.route("/api/root/points/chain/verify/latest", methods=["GET"])
+    @require_csrf_safe
+    def root_points_chain_verify_latest():
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_snapshot_response("points_chain_verify")
+
+    @app.route("/api/root/points/chain/verify/jobs/<path:job_uuid>", methods=["GET"])
+    @require_csrf_safe
+    def root_points_chain_verify_job(job_uuid):
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_job_status_response(job_uuid)
 
     @app.route("/api/root/points/chain/recovery", methods=["GET"])
     @require_csrf_safe
@@ -2009,6 +2220,42 @@ def register_economy_routes(app, deps):
             "recovery_policy": "branch_governance_forensic_only",
         }, 410)
 
+    def start_root_points_report_job(actor):
+        actor_snapshot = management_actor(actor)
+
+        def worker(progress):
+            progress(stage="root_report", progress_percent=15, detail="building PointsChain root report off request path")
+            report = points_service.root_report()
+            progress(stage="snapshot", progress_percent=90, detail="recording root report snapshot")
+            return {"ok": True, "report": report}
+
+        def summary(payload):
+            report = payload.get("report") if isinstance(payload.get("report"), dict) else {}
+            verification = report.get("verification") if isinstance(report.get("verification"), dict) else {}
+            stats = report.get("stats") if isinstance(report.get("stats"), dict) else {}
+            return {
+                "ok": bool(payload.get("ok", True)),
+                "snapshot_key": "points_root_report",
+                "verification_ok": bool(verification.get("ok")),
+                "financial_ok": verification.get("financial_ok"),
+                "ledger_count": ((stats.get("ledger") or {}).get("count") if isinstance(stats.get("ledger"), dict) else None),
+                "management_timing": report.get("management_timing") or {},
+            }
+
+        sql_started = time.perf_counter()
+        started = start_management_plane_job(
+            get_db=get_db,
+            actor=actor_snapshot,
+            job_type="points_root_report",
+            title="Points root report",
+            snapshot_key="points_root_report",
+            request_payload={},
+            worker=worker,
+            summary_builder=summary,
+        )
+        request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        return started
+
     @app.route("/api/root/points/report", methods=["GET"])
     @require_csrf_safe
     def root_points_report():
@@ -2017,7 +2264,71 @@ def register_economy_routes(app, deps):
             return err
         if not points_chain_enabled():
             return points_chain_disabled_response()
-        return json_resp({"ok": True, "report": points_service.root_report()})
+        refresh = str(request.args.get("refresh") or request.args.get("start_job") or "").strip().lower() in {"1", "true", "yes", "on"}
+        if not refresh:
+            conn = get_db()
+            try:
+                snapshot = get_management_snapshot(conn, snapshot_key="points_root_report", include_payload=True)
+            finally:
+                conn.close()
+            if snapshot.get("ok"):
+                payload = snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {}
+                return json_resp({
+                    "ok": True,
+                    "report": payload.get("report") or {},
+                    "snapshot": {
+                        "snapshot_key": snapshot.get("snapshot_key"),
+                        "generated_at": snapshot.get("generated_at"),
+                        "source_job_uuid": snapshot.get("source_job_uuid"),
+                        "summary": snapshot.get("summary") or {},
+                        "snapshot_backed": True,
+                    },
+                })
+        started = start_root_points_report_job(actor)
+        return management_job_response(started, snapshot_key="points_root_report")
+
+    @app.route("/api/root/points/report/jobs", methods=["POST"])
+    @require_csrf
+    def root_points_report_start_job():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        started = start_root_points_report_job(actor)
+        return management_job_response(started, snapshot_key="points_root_report")
+
+    @app.route("/api/root/points/report/latest", methods=["GET"])
+    @require_csrf_safe
+    def root_points_report_latest():
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_snapshot_response("points_root_report", payload_key="report")
+
+    @app.route("/api/root/points/report/jobs/<path:job_uuid>", methods=["GET"])
+    @require_csrf_safe
+    def root_points_report_job(job_uuid):
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_job_status_response(job_uuid)
+
+    @app.route("/api/root/management/jobs/<path:job_uuid>", methods=["GET"])
+    @require_csrf_safe
+    def root_management_job_status(job_uuid):
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_job_status_response(job_uuid)
+
+    @app.route("/api/root/management/snapshots/<path:snapshot_key>", methods=["GET"])
+    @require_csrf_safe
+    def root_management_snapshot(snapshot_key):
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_snapshot_response(snapshot_key)
 
     @app.route("/api/root/points/financial-invariants", methods=["GET"])
     @require_csrf_safe

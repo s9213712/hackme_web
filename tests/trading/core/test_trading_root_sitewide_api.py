@@ -1,4 +1,5 @@
 import sqlite3
+import time
 
 from flask import Flask, jsonify
 
@@ -423,14 +424,22 @@ def test_root_sitewide_refresh_rebuilds_snapshot_before_read(tmp_path):
     finally:
         conn.close()
 
-    refresh = app.test_client().post("/api/root/trading/sitewide/refresh", json={"reason": "unit-test"})
+    client = app.test_client()
+    refresh = client.post("/api/root/trading/sitewide/refresh", json={"reason": "unit-test"})
     refresh_payload = refresh.get_json()
-    response = app.test_client().get("/api/root/trading/sitewide/user-positions")
-    payload = response.get_json()
+    response = None
+    payload = {}
+    for _attempt in range(50):
+        response = client.get("/api/root/trading/sitewide/user-positions")
+        payload = response.get_json()
+        if payload.get("ok"):
+            break
+        time.sleep(0.02)
 
-    assert refresh.status_code == 200
+    assert refresh.status_code == 202
     assert refresh_payload["ok"] is True
-    assert "sitewide_user_positions" in refresh_payload["refresh"]["snapshot_keys"]
+    assert refresh_payload["async"] is True
+    assert refresh_payload["job_id"]
     assert response.status_code == 200
     assert payload["ok"] is True
     assert payload["snapshot"]["source_job_key"] == "root_manual_sitewide_refresh"

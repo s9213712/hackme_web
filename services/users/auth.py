@@ -181,7 +181,15 @@ def _is_superweak_csrf_bypass():
 
 
 def json_resp(data, status=200):
+    started = time.perf_counter()
     r = make_response(jsonify(data), status)
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+    if has_request_context():
+        try:
+            previous = float(request.environ.get("hackme.json_serialize_ms") or 0.0)
+            request.environ["hackme.json_serialize_ms"] = round(previous + elapsed_ms, 3)
+        except Exception:
+            pass
     r.headers["X-Content-Type-Options"] = "nosniff"
     r.headers["Cache-Control"] = "no-store"
     return r

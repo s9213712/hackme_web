@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 
 from flask import Response, request
 
+from services.management_plane import management_job_start_payload, start_management_plane_job
 from services.server.runtime import default_runtime_root
 from services.governance.violation_fines import assert_user_feature_allowed
 from services.trading.btc_bridge import (
@@ -82,7 +83,7 @@ def register_trading_routes(app, deps):
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
     get_system_settings = deps.get("get_system_settings", lambda: {})
     get_runtime_server_mode = deps.get("get_runtime_server_mode", lambda: "production")
-    get_db = deps.get("get_db")
+    get_db = deps.get("get_db") or getattr(trading_service, "get_db", None)
     background_queue_kick_lock = threading.Lock()
     background_queue_kick_active = False
 
@@ -118,6 +119,23 @@ def register_trading_routes(app, deps):
         if actor_value(actor, "username") != "root":
             return None, json_resp({"ok": False, "msg": "只有 root 可執行此操作"}, 403)
         return actor, None
+
+    def management_actor(actor):
+        return {
+            "id": actor_value(actor, "id"),
+            "username": actor_value(actor, "username", ""),
+            "role": actor_value(actor, "role", "user"),
+        }
+
+    def management_job_response(started, *, snapshot_key):
+        return json_resp(
+            management_job_start_payload(
+                started["job"],
+                snapshot_key=snapshot_key,
+                created=bool(started.get("created")),
+            ),
+            202,
+        )
 
     def kick_trading_background_queue(reason=""):
         nonlocal background_queue_kick_active
@@ -1825,19 +1843,81 @@ def register_trading_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
-        try:
+        data = request.get_json(silent=True) if request.is_json else {}
+        data = data if isinstance(data, dict) else {}
+        actor_snapshot = management_actor(actor)
+        reason = str(data.get("reason") or "root_manual_sitewide_refresh")
+
+        def worker(progress):
+            progress(stage="trading_sitewide_refresh", progress_percent=20, detail="refreshing trading sitewide snapshots")
             result = trading_service.refresh_root_trading_snapshots(
                 source_job_key="root_manual_sitewide_refresh"
             )
-            audit(
-                "TRADING_SITEWIDE_SNAPSHOTS_REFRESHED",
-                get_client_ip(),
-                user=actor_value(actor, "username", "root"),
-                success=True,
-                ua=get_ua(),
-                detail=json.dumps(result, ensure_ascii=False),
-            )
-            return json_resp({"ok": True, "refresh": result})
+            progress(stage="snapshot", progress_percent=90, detail="recording trading refresh result")
+            return {"ok": True, "refresh": result, "reason": reason}
+
+        def summary(payload):
+            refresh = payload.get("refresh") if isinstance(payload.get("refresh"), dict) else {}
+            return {
+                "ok": bool(payload.get("ok", True)),
+                "snapshot_key": "trading_sitewide_refresh",
+                "snapshot_count": int(refresh.get("snapshot_count") or 0),
+                "snapshot_keys": refresh.get("snapshot_keys") or [],
+                "generated_at": refresh.get("generated_at"),
+            }
+
+        sql_started = time.perf_counter()
+        started = start_management_plane_job(
+            get_db=get_db,
+            actor=actor_snapshot,
+            job_type="trading_sitewide_refresh",
+            title="Trading sitewide refresh",
+            snapshot_key="trading_sitewide_refresh",
+            request_payload={"reason": reason},
+            worker=worker,
+            summary_builder=summary,
+        )
+        request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        audit(
+            "TRADING_SITEWIDE_SNAPSHOTS_REFRESH_QUEUED",
+            get_client_ip(),
+            user=actor_value(actor, "username", "root"),
+            success=True,
+            ua=get_ua(),
+            detail=json.dumps({"job_uuid": started["job"].get("job_uuid"), "reason": reason}, ensure_ascii=False),
+        )
+        return management_job_response(started, snapshot_key="trading_sitewide_refresh")
+
+    @app.route("/api/root/trading/sitewide/refresh/latest", methods=["GET"])
+    @require_csrf_safe
+    def root_trading_sitewide_refresh_latest():
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            from services.management_plane import get_management_snapshot
+
+            conn = get_db()
+            try:
+                sql_started = time.perf_counter()
+                snapshot = get_management_snapshot(conn, snapshot_key="trading_sitewide_refresh", include_payload=True)
+                request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+            finally:
+                conn.close()
+            if not snapshot.get("ok"):
+                return json_resp({"ok": False, "snapshot": snapshot, "client_should_enqueue": True}, 404)
+            payload = snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {}
+            return json_resp({
+                "ok": True,
+                "refresh": payload.get("refresh") or {},
+                "snapshot": {
+                    "snapshot_key": snapshot.get("snapshot_key"),
+                    "generated_at": snapshot.get("generated_at"),
+                    "source_job_uuid": snapshot.get("source_job_uuid"),
+                    "summary": snapshot.get("summary") or {},
+                    "snapshot_backed": True,
+                },
+            })
         except Exception as exc:
             return service_error(exc)
 

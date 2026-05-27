@@ -28,6 +28,7 @@ from scripts.testing.db_stress_probe import ResourceMonitor
 from services.platform.db_mode_triggers import register_app_mode_function
 from services.points_chain import PointsLedgerService
 from services.points_chain.economy_layer import append_economy_event, load_economy_policy, replay_economy_events
+from services.server.finance_database import get_finance_db
 
 
 class ProbeClient:
@@ -92,6 +93,13 @@ class ProbeClient:
                         **kwargs,
                     )
                 payload = _json_response(res)
+                management_headers = {
+                    key: value
+                    for key, value in res.headers.items()
+                    if key.lower().startswith("x-management-plane-")
+                }
+                if management_headers:
+                    payload["management_headers"] = management_headers
                 payload["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
                 payload["expected"] = int(res.status_code) in expected
                 return payload
@@ -160,6 +168,12 @@ def db_path(runtime_root: str) -> Path:
     raise SystemExit(f"database.db not found under {runtime_root}")
 
 
+def finance_db_path(runtime_root: str) -> Path | None:
+    database = db_path(runtime_root)
+    candidate = database.parent / "finance.db"
+    return candidate if candidate.exists() else None
+
+
 def chain_seed_path(runtime_root: str) -> Path:
     root = Path(runtime_root)
     candidates = [
@@ -174,11 +188,18 @@ def chain_seed_path(runtime_root: str) -> Path:
 
 
 def service_for_runtime(runtime_root: str, *, mode: str) -> PointsLedgerService:
-    database = db_path(runtime_root)
+    core_database = db_path(runtime_root)
+    finance_database = finance_db_path(runtime_root)
     chain_secret = chain_seed_path(runtime_root).read_text(encoding="utf-8").strip()
 
     def get_db() -> sqlite3.Connection:
-        conn = sqlite3.connect(str(database), timeout=30)
+        if finance_database is not None:
+            return get_finance_db(
+                finance_database,
+                core_db_path=core_database,
+                register_app_mode=lambda conn: register_app_mode_function(conn, mode_reader=lambda: mode),
+            )
+        conn = sqlite3.connect(str(core_database), timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=30000")
@@ -188,7 +209,7 @@ def service_for_runtime(runtime_root: str, *, mode: str) -> PointsLedgerService:
     return PointsLedgerService(
         get_db=get_db,
         chain_secret=chain_secret,
-        backup_dir=database.parent / "points_chain_backups",
+        backup_dir=core_database.parent / "points_chain_backups",
         mode_reader=lambda: mode,
     )
 
@@ -427,13 +448,14 @@ def finalize_prefix_pending_via_explorer(client: ProbeClient, db: Path, prefix: 
     # The old per-request explorer search path used request_uuid as a search
     # query, which is both slow at 50K scale and no longer a valid release-gate
     # finalization primitive.
-    for attempt in range(8):
+    max_attempts = max(8, min(120, ((len(before) + 24) // 25) + 12))
+    for attempt in range(max_attempts):
         if not pending_request_uuids(db, prefix):
             break
         res = client.request(
             "GET",
-            "/api/points/transactions?limit=2000",
-            expected={200},
+            "/api/points/transactions?limit=100&compact=0",
+            expected={200, 400, 503},
         )
         summary = res.get("summary") if isinstance(res.get("summary"), dict) else {}
         sweeps.append({
@@ -443,7 +465,12 @@ def finalize_prefix_pending_via_explorer(client: ProbeClient, db: Path, prefix: 
             "pending_count": summary.get("pending_count"),
             "finalized_count": summary.get("finalized_count"),
             "batch_finalized_count": summary.get("batch_finalized_count"),
+            "msg": res.get("msg"),
+            "error": res.get("error"),
         })
+        lock_text = f"{res.get('msg') or ''} {res.get('error') or ''}".lower()
+        if int(res.get("status") or 0) in {0, 400, 503} and "locked" in lock_text:
+            time.sleep(min(5.0, 0.25 * (attempt + 1)))
     remaining = pending_request_uuids(db, prefix)
     return {
         "attempted": len(before),
@@ -532,8 +559,15 @@ def create_or_get_user(root: ProbeClient, username: str, password: str) -> dict[
 def login_with_retry(client: ProbeClient, *, attempts: int = 8, base_sleep: float = 0.5) -> dict[str, Any]:
     last: dict[str, Any] = {}
     for attempt in range(max(1, int(attempts))):
-        last = client.login()
-        if int(last.get("status") or 0) != 429:
+        try:
+            last = client.login()
+        except Exception as exc:
+            last = {
+                "status": 0,
+                "ok": False,
+                "error": f"{exc.__class__.__name__}: {str(exc)[:240]}",
+            }
+        if int(last.get("status") or 0) not in {0, 429, 503}:
             return last
         time.sleep(float(base_sleep) * (attempt + 1))
     return last
@@ -607,7 +641,8 @@ def main() -> int:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     run_started = time.perf_counter()
-    database = db_path(args.runtime_root)
+    core_database = db_path(args.runtime_root)
+    database = finance_db_path(args.runtime_root) or core_database
     points_service = service_for_runtime(args.runtime_root, mode=args.mode)
     root_actor = root_actor_for_service(points_service)
     prefix = "dstress-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-"
@@ -619,15 +654,20 @@ def main() -> int:
     monitor = None
     pids = parse_pids(args.server_pids)
     if pids:
-        database_dir = db_path(args.runtime_root).parent
+        database_dir = core_database.parent
+        monitored_paths = {
+            "main": database_dir / "database.db",
+            "auth": database_dir / "auth.db",
+            "audit": database_dir / "audit.db",
+            "control": database_dir / "control.db",
+            "finance": database_dir / "finance.db",
+            "points_chain": database_dir / "points_chain.db",
+            "trading": database_dir / "trading.db",
+            "jobs": database_dir / "jobs.db",
+        }
         monitor = ResourceMonitor(
             runtime_root=Path(args.runtime_root),
-            paths={
-                "main": database_dir / "database.db",
-                "auth": database_dir / "auth.db",
-                "audit": database_dir / "audit.db",
-                "control": database_dir / "control.db",
-            },
+            paths={label: path for label, path in monitored_paths.items() if path.exists()},
             interval=max(0.2, float(args.resource_interval or 1.0)),
             pids=pids,
         )
@@ -705,7 +745,7 @@ def main() -> int:
 
     fee_market_samples.append(fee_market_snapshot(root, "after_internal_official_grants"))
     forced_grants = force_proved(database, prefix + "grant-")
-    root_refresh = root.request("GET", "/api/points/transactions?limit=100", expected={200})
+    root_refresh = root.request("GET", "/api/points/transactions?limit=100&compact=0", expected={200})
     samples.append({"op": "root_finalize_grants", **root_refresh})
     explorer_finalized_grants = finalize_prefix_pending_via_explorer(root, database, prefix + "grant-")
     for item in clients:
@@ -746,6 +786,7 @@ def main() -> int:
             "fee_points": fee,
             "request_uuid": request_uuid,
             "memo": memo,
+            "compact": True,
         }
         res = sender["client"].request(
             "POST",
@@ -954,7 +995,7 @@ def main() -> int:
 
     forced_transfers = force_proved(database, prefix)
     for _ in range(3):
-        refreshed = root.request("GET", "/api/points/transactions?limit=100", expected={200})
+        refreshed = root.request("GET", "/api/points/transactions?limit=100&compact=0", expected={200})
         samples.append({"op": "root_finalize_transfers", **refreshed})
         if int(((refreshed.get("summary") or {}).get("pending_count") or 0)) == 0:
             break
@@ -963,14 +1004,21 @@ def main() -> int:
     fee_market_samples.append(fee_market_snapshot(root, "after_forced_finality_before_seal"))
 
     trading_results = []
+    trading_price_mode = root.request(
+        "POST",
+        "/api/root/trading/settings",
+        json={"settings": {"price_source": "manual_root"}},
+        expected={200, 400, 403, 503},
+    )
+    samples.append({"op": "root_trading_price_mode_manual", **trading_price_mode})
     markets = clients[0]["client"].request("GET", "/api/trading/markets", expected={200, 403, 503})
     samples.append({"op": "trading_markets", **markets})
     market_list = markets.get("markets") or markets.get("data") or []
     if isinstance(market_list, list) and market_list:
         market = market_list[0]
-        symbol = market.get("display_symbol") or market.get("symbol") or "BTC/USDT"
+        symbol = market.get("symbol") or market.get("market_symbol") or market.get("display_symbol") or "BTC/POINTS"
     else:
-        symbol = "BTC/USDT"
+        symbol = "BTC/POINTS"
     for idx in range(max(0, int(args.trading_ops))):
         client = clients[idx % len(clients)]["client"]
         res = client.request(
@@ -1004,10 +1052,10 @@ def main() -> int:
     margin_probe["op"] = "margin_exhaustion_probe"
     samples.append(margin_probe)
 
-    seal = root.request("POST", "/api/root/points/chain/seal", json={"limit": 500}, expected={200, 400, 409})
-    verify = root.request("GET", "/api/root/points/chain/verify", expected={200})
-    root_report = root.request("GET", "/api/root/points/report", expected={200})
-    trading_refresh = root.request("POST", "/api/root/trading/sitewide/refresh", json={"reason": "destructive_stress"}, expected={200, 400, 409, 503})
+    seal = root.request("POST", "/api/root/points/chain/seal", json={"limit": 500}, expected={200, 202, 400, 409})
+    verify = root.request("GET", "/api/root/points/chain/verify", expected={200, 202})
+    root_report = root.request("GET", "/api/root/points/report", expected={200, 202})
+    trading_refresh = root.request("POST", "/api/root/trading/sitewide/refresh", json={"reason": "destructive_stress"}, expected={200, 202, 400, 409, 503})
     trading_pools = root.request("GET", "/api/root/trading/sitewide/pools", expected={200, 400, 404, 409, 503})
     samples.extend([
         {"op": "root_chain_seal", **seal},
@@ -1016,6 +1064,20 @@ def main() -> int:
         {"op": "root_trading_refresh", **trading_refresh},
         {"op": "root_trading_pools", **trading_pools},
     ])
+    management_snapshot_reads = []
+    for op_name, started in (
+        ("root_chain_seal_snapshot", seal),
+        ("root_chain_verify_snapshot", verify),
+        ("root_points_report_snapshot", root_report),
+        ("root_trading_refresh_snapshot", trading_refresh),
+    ):
+        snapshot_url = str(started.get("latest_snapshot_url") or "")
+        if not snapshot_url:
+            continue
+        snapshot_res = root.request("GET", snapshot_url, expected={200, 404})
+        snapshot_res["op"] = op_name
+        management_snapshot_reads.append(snapshot_res)
+        samples.append(snapshot_res)
     fee_market_samples.append(fee_market_snapshot(root, "after_seal"))
 
     counts = db_counts(database, prefix)
@@ -1115,6 +1177,7 @@ def main() -> int:
             "sitewide_refresh": trading_refresh,
             "sitewide_pools": trading_pools,
         },
+        "management_snapshot_reads": management_snapshot_reads,
         "findings": findings,
         "sample_errors": ([s for s in samples if not s.get("expected", True) or int(s.get("status") or 0) >= 500] + direct_error_samples)[:100],
     }

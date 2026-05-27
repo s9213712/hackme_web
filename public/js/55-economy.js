@@ -3633,6 +3633,19 @@ async function loadEconomyRootReport() {
   setEconomyChainStatus("讀取 PointsChain 狀態中...");
   try {
     const json = await fetchEconomyJson("/root/points/report");
+    if (json.async) {
+      setEconomyChainStatus(`PointsChain 報表正在背景更新${json.job_id ? `：${json.job_id}` : ""}`);
+      if (json.latest_snapshot_url) {
+        try {
+          const latest = await fetchEconomyJson(json.latest_snapshot_url);
+          renderEconomyRootReport(latest.report || {});
+        } catch (_snapshotErr) {
+          renderEconomyRootReport({});
+        }
+      }
+      economySetMsg("PointsChain 報表已排入背景任務；完成後會讀取最新快照。");
+      return true;
+    }
     renderEconomyRootReport(json.report || {});
     economySetMsg("");
     return true;
@@ -4740,6 +4753,11 @@ async function sealPointsChainBlock() {
       method: "POST",
       body: JSON.stringify({ limit: 100 }),
     });
+    if (json.async) {
+      setEconomyChainStatus(`封塊任務已排入背景執行${json.job_id ? `：${json.job_id}` : ""}`);
+      economySetMsg("封塊已排入背景任務；完成後可讀取 latest snapshot。");
+      return;
+    }
     const block = json.block || {};
     setEconomyChainStatus(json.sealed
       ? `已封存區塊 #${Number(block.block_number || 0)}，包含 ${Number(block.ledger_count || 0)} 筆 ledger`
@@ -4758,6 +4776,11 @@ async function verifyPointsChain() {
   }
   try {
     const json = await fetchEconomyJson("/root/points/chain/verify");
+    if (json.async) {
+      setEconomyChainStatus(`驗證任務已排入背景執行${json.job_id ? `：${json.job_id}` : ""}`);
+      economySetMsg("PointsChain 驗證已排入背景任務；完成後可讀取 latest snapshot。");
+      return;
+    }
     setEconomyChainStatus(formatEconomyVerificationSummary(json.verification || json), (json.verification || json).ok !== false);
     if (currentUser === "root") await loadEconomyRootReport();
   } catch (err) {

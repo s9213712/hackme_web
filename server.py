@@ -195,6 +195,11 @@ from services.server.database import (
     get_user_by_username as get_user_by_username_helper,
 )
 from services.server.container import build_runtime_services
+from services.server.finance_database import (
+    finance_split_enabled,
+    get_finance_db as get_finance_db_helper,
+    migrate_finance_tables_if_needed,
+)
 from services.server.startup import (
     measure_backtest_capacity_if_needed as measure_backtest_capacity_if_needed_helper,
     run_server_main as run_server_main_helper,
@@ -277,6 +282,7 @@ CONTROL_DB_PATH = _env_path("HTML_LEARNING_CONTROL_DB_PATH", os.path.join(DB_DIR
 STORAGE_CATALOG_DB_PATH = _env_path("HTML_LEARNING_STORAGE_DB_PATH", os.path.join(DB_DIR, "storage_catalog.db"))
 POINTS_CHAIN_DB_PATH = _env_path("HTML_LEARNING_POINTSCHAIN_DB_PATH", os.path.join(DB_DIR, "points_chain.db"))
 TRADING_DB_PATH = _env_path("HTML_LEARNING_TRADING_DB_PATH", os.path.join(DB_DIR, "trading.db"))
+FINANCE_DB_PATH = _env_path("HTML_LEARNING_FINANCE_DB_PATH", os.path.join(DB_DIR, "finance.db"))
 JOBS_DB_PATH = _env_path("HTML_LEARNING_JOBS_DB_PATH", os.path.join(DB_DIR, "jobs.db"))
 CHESS_ENGINE_DB_PATH = _env_path("HTML_LEARNING_CHESS_ENGINE_DB_PATH", os.path.join(RUNTIME_DIR, "games", "models", "chess_experiment.db"))
 LOG_DIR = _env_path("HTML_LEARNING_LOG_DIR", os.path.join(RUNTIME_DIR, "logs"))
@@ -679,6 +685,16 @@ def get_control_db():
     return get_control_db_helper(CONTROL_DB_PATH)
 
 
+def get_finance_db():
+    if not finance_split_enabled():
+        return get_db()
+    return get_finance_db_helper(
+        FINANCE_DB_PATH,
+        core_db_path=DB_PATH,
+        register_app_mode=lambda conn: smv2_register_app_mode(conn, mode_reader=get_runtime_server_mode),
+    )
+
+
 def _ensure_split_db_schemas():
     auth_conn = get_auth_db()
     try:
@@ -1004,6 +1020,7 @@ _runtime_services = build_runtime_services(
         "storage_root": STORAGE_DIR,
         "chat_dir": CHAT_DIR,
         "points_chain_backup_dir": POINTS_CHAIN_BACKUP_DIR,
+        "finance_db_path": FINANCE_DB_PATH,
         "audit_log_path": AUDIT_LOG_PATH,
         "audit_anchor_path": AUDIT_ANCHOR_PATH,
         "audit_anchor_latest_path": AUDIT_ANCHOR_LATEST_PATH,
@@ -1029,6 +1046,7 @@ _runtime_services = build_runtime_services(
             "storage_catalog": STORAGE_CATALOG_DB_PATH,
             "points_chain": POINTS_CHAIN_DB_PATH,
             "trading": TRADING_DB_PATH,
+            "finance": FINANCE_DB_PATH,
             "jobs": JOBS_DB_PATH,
             "chess_engine": CHESS_ENGINE_DB_PATH,
         },
@@ -1056,6 +1074,7 @@ _runtime_services = build_runtime_services(
         "get_readonly_auth_db": get_readonly_auth_db,
         "get_audit_db": get_audit_db,
         "get_control_db": get_control_db,
+        "get_finance_db": get_finance_db,
         "get_user_by_username": get_user_by_username,
         "fernet": fernet,
         "get_client_ip": get_client_ip,
@@ -1090,6 +1109,19 @@ trading_price_stream_hub = _runtime_services["trading_price_stream_hub"]
 trading_service = _runtime_services["trading_service"]
 chess_engine_store = _runtime_services["chess_engine_store"]
 server_mode_service = _runtime_services["server_mode_service"]
+
+
+def ensure_runtime_finance_schema(_conn=None):
+    if finance_split_enabled():
+        migrate_finance_tables_if_needed(core_db_path=DB_PATH, finance_db_path=FINANCE_DB_PATH)
+    conn = get_finance_db()
+    try:
+        points_service.ensure_schema(conn)
+        trading_service.ensure_schema(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
 
 # ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
@@ -1182,6 +1214,120 @@ def gzip_frontend_asset_response(response):
     response.headers["Content-Length"] = str(len(compressed))
     return response
 
+
+MANAGEMENT_PLANE_PATH_PREFIXES = (
+    "/api/root/points",
+    "/api/root/trading",
+    "/api/root/management",
+    "/api/points/explorer",
+)
+
+MANAGEMENT_PLANE_EXACT_PATHS = {
+    "/api/points/transactions",
+}
+
+
+def is_management_plane_request_path(path):
+    path = str(path or "")
+    if path in MANAGEMENT_PLANE_EXACT_PATHS:
+        return True
+    return any(path.startswith(prefix) for prefix in MANAGEMENT_PLANE_PATH_PREFIXES)
+
+
+def current_process_rss_mb():
+    try:
+        with open("/proc/self/statm", "r", encoding="utf-8") as fh:
+            parts = fh.read().split()
+        resident_pages = int(parts[1])
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        return round((resident_pages * page_size) / (1024 * 1024), 2)
+    except Exception:
+        return None
+
+
+def management_plane_slow_threshold_ms():
+    try:
+        return max(0, int(os.environ.get("HACKME_MANAGEMENT_PLANE_SLOW_MS", "1000")))
+    except Exception:
+        return 1000
+
+
+def classify_management_plane_slow_reason(path, *, elapsed_ms=0, response_size=None, rss_before=None, rss_after=None, json_ms=0):
+    path = str(path or "")
+    if path == "/api/points/transactions/submit":
+        return "data_plane_transaction_submit"
+    if path.startswith("/api/root/") or path.startswith("/api/admin/"):
+        plane = "management_plane"
+    elif path.startswith("/api/points/explorer") or path == "/api/points/transactions":
+        plane = "analytics_plane"
+    else:
+        plane = "unknown_plane"
+    try:
+        rss_delta = None if rss_before is None or rss_after is None else float(rss_after) - float(rss_before)
+    except Exception:
+        rss_delta = None
+    if response_size is not None and int(response_size or 0) >= 1_000_000:
+        return f"{plane}:large_response_json"
+    if float(json_ms or 0) >= max(250.0, float(elapsed_ms or 0) * 0.25):
+        return f"{plane}:json_serialization"
+    if rss_delta is not None and rss_delta >= 128:
+        return f"{plane}:rss_growth"
+    if path.endswith("/latest") or "/snapshots/" in path or "/jobs/" in path:
+        return f"{plane}:snapshot_or_job_status_slow"
+    return f"{plane}:handler_compute"
+
+
+def record_management_plane_response_metrics(response):
+    started = request.environ.get("hackme.management_started_at")
+    if started is None:
+        return response
+    elapsed_ms = round((time.perf_counter() - float(started)) * 1000, 3)
+    rss_before = request.environ.get("hackme.management_rss_before_mb")
+    rss_after = current_process_rss_mb()
+    response_size = response.calculate_content_length()
+    json_ms = request.environ.get("hackme.json_serialize_ms")
+    sql_ms = request.environ.get("hackme.sql_ms", 0)
+    python_aggregation_ms = request.environ.get("hackme.python_aggregation_ms", 0)
+    slow_reason = classify_management_plane_slow_reason(
+        request.path,
+        elapsed_ms=elapsed_ms,
+        response_size=response_size,
+        rss_before=rss_before,
+        rss_after=rss_after,
+        json_ms=json_ms or 0,
+    )
+    response.headers["X-Management-Plane-Handler-Ms"] = str(elapsed_ms)
+    response.headers["X-Management-Plane-SQL-Ms"] = str(sql_ms)
+    response.headers["X-Management-Plane-Python-Aggregation-Ms"] = str(python_aggregation_ms)
+    response.headers["X-Management-Plane-JSON-Serialize-Ms"] = str(json_ms or 0)
+    response.headers["X-Management-Plane-Slow-Reason"] = slow_reason
+    if rss_after is not None:
+        response.headers["X-Management-Plane-RSS-MB"] = str(rss_after)
+    if response_size is not None:
+        response.headers["X-Management-Plane-Response-Bytes"] = str(response_size)
+    if elapsed_ms >= management_plane_slow_threshold_ms():
+        try:
+            app.logger.warning(
+                "management_plane_slow path=%s method=%s status=%s "
+                "slow_handler_ms=%.3f slow_sql_ms=%s slow_python_aggregation_ms=%s "
+                "json_serialize_ms=%s response_size=%s rss_before_mb=%s rss_after_mb=%s slow_reason=%s",
+                request.path,
+                request.method,
+                response.status_code,
+                elapsed_ms,
+                sql_ms,
+                python_aggregation_ms,
+                json_ms or 0,
+                response_size,
+                rss_before,
+                rss_after,
+                slow_reason,
+            )
+        except Exception:
+            pass
+    return response
+
+
 # ── Legacy security headers (supplement Talisman) ─────────────────────────────
 @app.after_request
 def extra_security_headers(response):
@@ -1200,6 +1346,7 @@ def extra_security_headers(response):
     ):
         response.headers["Cache-Control"] = f"public, max-age={STATIC_ASSET_CACHE_SECONDS}, immutable"
         response.headers.pop("Pragma", None)
+    record_management_plane_response_metrics(response)
     if should_gzip_frontend_asset(response):
         gzip_frontend_asset_response(response)
     return response
@@ -1297,6 +1444,14 @@ def attach_smv2_ctx():
         tester_id_reader=tester_token_tester_id_from_request,
         actor_role_reader=tester_token_actor_role_from_request,
     )
+    return None
+
+
+@app.before_request
+def mark_management_plane_timing():
+    if is_management_plane_request_path(request.path):
+        request.environ["hackme.management_started_at"] = time.perf_counter()
+        request.environ["hackme.management_rss_before_mb"] = current_process_rss_mb()
     return None
 
 
@@ -1701,7 +1856,7 @@ if __name__ == "__main__":
             "hash_password": hash_password,
         },
         get_db=get_db,
-        ensure_trading_schema=ensure_trading_schema,
+        ensure_trading_schema=ensure_runtime_finance_schema,
         reseal_audit_chain_if_required_on_startup=reseal_audit_chain_if_required_on_startup,
         audit=audit,
         server_mode_service=server_mode_service,

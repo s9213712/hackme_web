@@ -240,6 +240,74 @@ def test_points_chain_can_be_disabled_without_disabling_basic_points(tmp_path):
     assert root_grant.get_json()["code"] == "points_chain_disabled"
 
 
+def test_root_points_management_endpoints_start_async_jobs(tmp_path):
+    app, _points, _ledger, _manual_ledger, current = _build_app(tmp_path)
+    client = app.test_client()
+    current.update({"id": 1, "username": "root", "role": "super_admin"})
+
+    seal = client.post("/api/root/points/chain/seal", json={"limit": 5})
+    verify = client.get("/api/root/points/chain/verify")
+    report = client.get("/api/root/points/report?refresh=1")
+
+    for response in (seal, verify, report):
+        payload = response.get_json()
+        assert response.status_code == 202
+        assert payload["ok"] is True
+        assert payload["async"] is True
+        assert payload["job_id"]
+        status = client.get(payload["status_url"])
+        assert status.status_code == 200
+        assert status.get_json()["job"]["source_module"] == "management_plane"
+
+    latest = client.get(seal.get_json()["latest_snapshot_url"])
+    assert latest.status_code in {200, 404}
+
+
+def test_wallet_transaction_submit_compact_response(tmp_path):
+    app, points, _ledger, _manual_ledger, current = _build_app(tmp_path)
+    client = app.test_client()
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        sender_wallet = create_official_hot_wallet(conn, user_id=2, chain_secret="test-secret", label="sender hot")
+        recipient_wallet = create_official_hot_wallet(conn, user_id=3, chain_secret="test-secret", label="recipient hot")
+        conn.commit()
+    finally:
+        conn.close()
+    points.record_transaction(
+        user_id=2,
+        currency_type=DISPLAY_CURRENCY,
+        direction="credit",
+        amount=50,
+        action_type="admin_adjust_credit",
+        reference_type="test",
+        reference_id="compact-submit-source",
+        idempotency_key="explorer:test:compact-submit-source",
+        reason="compact submit source",
+        actor={"id": 1, "username": "root", "role": "super_admin"},
+    )
+
+    current.update({"id": 2, "username": "test", "role": "user"})
+    res = client.post(
+        "/api/points/transactions/submit",
+        json={
+            "source_wallet_address": sender_wallet["address"],
+            "destination_wallet_address": recipient_wallet["address"],
+            "amount_points": 5,
+            "fee_points": 1,
+            "request_uuid": "compact-submit-transfer",
+            "memo": "compact submit",
+            "compact": True,
+        },
+    )
+    payload = res.get_json()
+    assert res.status_code == 200
+    assert payload["compact"] is True
+    assert payload["transaction_hash"]
+    assert payload["request_uuid"] == "compact-submit-transfer"
+    assert "transaction" not in payload
+
+
 def test_points_explorer_searches_transaction_and_wallet_with_finality_rule(tmp_path):
     app, points, ledger, _manual_ledger, _current = _build_app(tmp_path)
     client = app.test_client()
@@ -832,11 +900,24 @@ def test_root_transaction_management_sweeps_proved_pending_beyond_page_limit(tmp
     root_res = client.get("/api/points/transactions?limit=5")
     assert root_res.status_code == 200, root_res.get_json()
     payload = root_res.get_json()
-    assert payload["summary"]["batch_checked_count"] == 15
-    assert payload["summary"]["batch_finalized_count"] == 15
-    assert payload["summary"]["batch_confirmed_count"] == 15
+    assert payload["summary"]["batch_checked_count"] == 5
+    assert payload["summary"]["batch_finalized_count"] == 5
+    assert payload["summary"]["batch_confirmed_count"] == 5
     assert payload["summary"]["pending_count"] == 0
     assert all(item["status"] == "confirmed" for item in payload["transactions"])
+
+    conn = points.get_db()
+    try:
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM points_chain_transfer_requests WHERE request_uuid LIKE 'batch-sweep-transfer-%' AND status='pending'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert remaining == 5
+
+    for _ in range(2):
+        root_res = client.get("/api/points/transactions?limit=5")
+        assert root_res.status_code == 200, root_res.get_json()
 
     conn = points.get_db()
     try:
