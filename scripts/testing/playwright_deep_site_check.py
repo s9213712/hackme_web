@@ -546,7 +546,8 @@ def login(page, base_url: str) -> None:
     login_result = fetch_json(page, "POST", "/api/login", {"username": "root", "password": ROOT_PASSWORD})
     if login_result["status"] != 200 or not login_result["body"].get("ok"):
         raise RuntimeError(f"login api failed: {login_result}")
-    page.goto(base_url + "/", wait_until="networkidle")
+    page.goto(base_url + "/", wait_until="domcontentloaded")
+    page.wait_for_timeout(300)
     me = fetch_json(page, "GET", "/api/me")
     if me["status"] != 200 or not me["body"].get("ok"):
         raise RuntimeError(f"login failed: {me}")

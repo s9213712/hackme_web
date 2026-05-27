@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.27-003`
+Release ID: `2026.05.27-004`
+
+## 2026.05.27-004
+
+- Hardened the Playwright acceptance login helper so root login reload waits
+  for `domcontentloaded` instead of `networkidle`, avoiding CI timeouts from
+  legitimate background polling after authentication.
 
 ## 2026.05.27-003
 
