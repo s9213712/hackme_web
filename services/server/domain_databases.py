@@ -515,6 +515,95 @@ def export_domain_tables(
         source_conn.close()
 
 
+def export_domains_to_database(
+    source_path: str | Path,
+    target_path: str | Path,
+    *,
+    domains: set[str],
+    overwrite: bool = False,
+) -> dict:
+    """Copy selected domain tables into one SQLite database.
+
+    This is used for domains that must keep same-connection transaction
+    semantics after leaving ``database.db``.  For example, PointsChain and
+    Trading are intentionally exported together into one ``finance.db``.
+    """
+
+    source = Path(source_path)
+    target = Path(target_path)
+    selected_domains = set(domains or set())
+    unknown = sorted(selected_domains - set(DOMAIN_TABLES))
+    if unknown:
+        raise ValueError(f"unknown domain(s): {', '.join(unknown)}")
+    if target.exists():
+        if not overwrite:
+            raise FileExistsError(str(target))
+        target.unlink()
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(target) + suffix)
+        if sidecar.exists():
+            sidecar.unlink()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source_conn = connect_db(source, read_only=True)
+    dest = connect_db(target)
+    manifest = {
+        "created_at": utc_now_text(),
+        "source": str(source),
+        "target": str(target),
+        "mode": "single_database_export",
+        "domains": sorted(selected_domains),
+        "tables": {},
+        "row_count": 0,
+        "table_count": 0,
+    }
+    try:
+        existing_tables = set(list_user_tables(source_conn))
+        selected_tables = set().union(*(DOMAIN_TABLES[d] for d in selected_domains)) & existing_tables
+        if not selected_tables:
+            dest.commit()
+            manifest["sha256"] = _digest_domain_table_hashes({})
+            return manifest
+        dest.execute("PRAGMA foreign_keys = OFF")
+        schema_objects = _schema_objects_for_tables(source_conn, selected_tables)
+        for obj in schema_objects:
+            if obj["type"] != "table":
+                continue
+            sql = str(obj["sql"] or "").strip()
+            if sql:
+                dest.execute(sql)
+        for table in sorted(selected_tables):
+            _copy_table_rows(source_conn, dest, table)
+        for obj in schema_objects:
+            if obj["type"] == "table":
+                continue
+            sql = str(obj["sql"] or "").strip()
+            if sql:
+                dest.execute(sql)
+        for row in _sqlite_sequence_rows(source_conn, selected_tables):
+            dest.execute(
+                "INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)",
+                (row["name"], row["seq"]),
+            )
+        dest.commit()
+        table_hashes = {table: table_digest(dest, table) for table in sorted(selected_tables)}
+        manifest["tables"] = table_hashes
+        manifest["row_count"] = sum(int(item["rows"]) for item in table_hashes.values())
+        manifest["table_count"] = len(table_hashes)
+        manifest["sha256"] = _digest_domain_table_hashes(table_hashes)
+        return manifest
+    except Exception:
+        dest.rollback()
+        dest.close()
+        if target.exists():
+            target.unlink()
+        raise
+    finally:
+        try:
+            dest.close()
+        finally:
+            source_conn.close()
+
+
 def _digest_domain_table_hashes(table_hashes: dict[str, dict]) -> str:
     payload = {
         table: {"rows": int(data["rows"]), "sha256": str(data["sha256"])}

@@ -2544,10 +2544,10 @@ def test_points_chain_root_report_reuses_single_verification(tmp_path):
     original_verify_chain = service.verify_chain
     calls = 0
 
-    def counted_verify_chain():
+    def counted_verify_chain(*args, **kwargs):
         nonlocal calls
         calls += 1
-        return original_verify_chain()
+        return original_verify_chain(*args, **kwargs)
 
     service.verify_chain = counted_verify_chain
     report = service.root_report()

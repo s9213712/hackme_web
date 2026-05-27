@@ -1,7 +1,7 @@
 import json
 import sqlite3
 
-from services.server.domain_databases import analyze_database, export_domain_tables, table_domain
+from services.server.domain_databases import analyze_database, export_domain_tables, export_domains_to_database, table_domain
 
 
 def _seed_main_db(path):
@@ -132,3 +132,28 @@ def test_export_domain_tables_copies_rows_and_manifest_hashes(tmp_path):
     assert stored_manifest["domains"]["storage"]["sha256"] == manifest["domains"]["storage"]["sha256"]
     assert any(row["table"] == "misc_table" for row in manifest["skipped"])
 
+
+def test_export_domains_to_database_keeps_finance_domains_together(tmp_path):
+    db_path = tmp_path / "database.db"
+    finance_path = tmp_path / "finance.db"
+    _seed_main_db(db_path)
+
+    manifest = export_domains_to_database(
+        db_path,
+        finance_path,
+        domains={"points_chain", "trading"},
+        overwrite=True,
+    )
+
+    assert finance_path.exists()
+    assert manifest["table_count"] == 2
+    assert manifest["row_count"] == 2
+    assert manifest["tables"]["points_ledger"]["rows"] == 1
+    assert manifest["tables"]["trading_orders"]["rows"] == 1
+    finance = sqlite3.connect(finance_path)
+    try:
+        assert finance.execute("SELECT ledger_uuid FROM points_ledger").fetchone()[0] == "l1"
+        assert finance.execute("SELECT order_uuid FROM trading_orders").fetchone()[0] == "o1"
+        assert finance.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").fetchone() is None
+    finally:
+        finance.close()

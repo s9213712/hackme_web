@@ -89,8 +89,9 @@ def build_runtime_services(*, config, deps):
         encrypt_field=deps["encrypt_field"],
     )
 
+    finance_get_db = deps.get("get_finance_db", deps["get_db"])
     points_service = PointsLedgerService(
-        get_db=deps["get_db"],
+        get_db=finance_get_db,
         chain_secret=config["chain_seed"],
         audit=deps["audit"],
         backup_dir=config["points_chain_backup_dir"],
@@ -122,7 +123,7 @@ def build_runtime_services(*, config, deps):
     )
     trading_price_stream_hub = TradingPriceStreamHub(audit=deps["audit"])
     trading_service = TradingEngineService(
-        get_db=deps["get_db"],
+        get_db=finance_get_db,
         points_service=points_service,
         audit=deps["audit"],
         stream_hub=trading_price_stream_hub,

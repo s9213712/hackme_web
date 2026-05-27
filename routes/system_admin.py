@@ -242,6 +242,7 @@ def register_system_admin_routes(app, deps):
         "storage_catalog": deps.get("STORAGE_CATALOG_DB_PATH"),
         "points_chain": deps.get("POINTS_CHAIN_DB_PATH"),
         "trading": deps.get("TRADING_DB_PATH"),
+        "finance": deps.get("FINANCE_DB_PATH"),
         "jobs": deps.get("JOBS_DB_PATH"),
         "chess_engine": deps.get("CHESS_ENGINE_DB_PATH"),
     }

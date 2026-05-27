@@ -1137,8 +1137,10 @@ def register_user_routes(app, deps):
                 official_hot_by_user = {}
                 deposit_address_by_user = {}
                 if points_service is not None:
+                    points_conn = None
                     try:
-                        points_service.ensure_schema(conn)
+                        points_conn = points_service.get_db() if hasattr(points_service, "get_db") else get_db()
+                        points_service.ensure_schema(points_conn)
                         member_wallet_user_ids = [
                             int(row["id"]) for row in rows
                             if str(row["username"] or "") != "root" and int(row["id"] or 0) > 0
@@ -1149,19 +1151,19 @@ def register_user_routes(app, deps):
                             if uid <= 0 or str(row["username"] or "") == "root" or status in {"deleted", "rejected"}:
                                 continue
                             try:
-                                create_official_hot_wallet(conn, user_id=uid, chain_secret=getattr(points_service, "chain_secret", ""))
+                                create_official_hot_wallet(points_conn, user_id=uid, chain_secret=getattr(points_service, "chain_secret", ""))
                             except Exception:
                                 pass
                             if hasattr(points_service, "ensure_user_deposit_address"):
                                 try:
-                                    deposit = points_service.ensure_user_deposit_address(conn, uid)
+                                    deposit = points_service.ensure_user_deposit_address(points_conn, uid)
                                     if deposit:
                                         deposit_address_by_user[uid] = str(deposit.get("address") if isinstance(deposit, dict) else deposit["address"])
                                 except Exception:
                                     pass
                         if member_wallet_user_ids:
                             placeholders = ",".join("?" for _ in member_wallet_user_ids)
-                            wallet_rows = conn.execute(
+                            wallet_rows = points_conn.execute(
                                 f"""
                                 SELECT user_id, address, status
                                 FROM points_wallet_identities
@@ -1173,8 +1175,8 @@ def register_user_routes(app, deps):
                                 """,
                                 tuple(member_wallet_user_ids),
                             ).fetchall()
-                            if _table_exists(conn, "points_chain_deposit_addresses"):
-                                deposit_rows = conn.execute(
+                            if _table_exists(points_conn, "points_chain_deposit_addresses"):
+                                deposit_rows = points_conn.execute(
                                     f"""
                                     SELECT user_id, address
                                     FROM points_chain_deposit_addresses
@@ -1198,7 +1200,7 @@ def register_user_routes(app, deps):
                             if uid <= 0:
                                 continue
                             try:
-                                balance_state = points_service._wallet_identity_balances_for_user(conn, uid)
+                                balance_state = points_service._wallet_identity_balances_for_user(points_conn, uid)
                                 balance = (balance_state.get("balances") or {}).get(str(wallet_row["address"] or "").strip().lower(), {})
                             except Exception:
                                 balance = {}
@@ -1209,9 +1211,18 @@ def register_user_routes(app, deps):
                                 "points_frozen": int(balance.get("frozen") or 0),
                                 "pending_outgoing_points": int(balance.get("pending_outgoing") or 0),
                             })
+                        points_conn.commit()
                     except Exception:
+                        if points_conn is not None:
+                            try:
+                                points_conn.rollback()
+                            except Exception:
+                                pass
                         official_hot_by_user = {}
                         deposit_address_by_user = {}
+                    finally:
+                        if points_conn is not None:
+                            points_conn.close()
                 data = []
                 for r in rows:
                     item = user_public_payload(r, include_sensitive=False)

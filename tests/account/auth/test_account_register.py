@@ -6,6 +6,7 @@ from flask import Flask, jsonify, make_response
 from routes.public import register_public_routes
 from services.platform.db_mode_triggers import register_app_mode_function
 from services.points_chain import PointsLedgerService, SIGNUP_BONUS_POINTS
+from services.server.finance_database import get_finance_db
 
 
 def _json_resp(payload, status=200):
@@ -192,6 +193,45 @@ def test_register_awards_signup_bonus_to_official_hot_wallet(tmp_path):
     assert ledger is not None
     assert int(ledger["amount"]) == SIGNUP_BONUS_POINTS
     assert points_service.get_wallet(ledger["user_id"])["points_balance"] == SIGNUP_BONUS_POINTS
+
+
+def test_register_writes_signup_bonus_to_split_finance_db(tmp_path):
+    db_path = tmp_path / "register.db"
+    finance_path = tmp_path / "finance.db"
+    _init_register_tables(db_path)
+
+    def points_db():
+        return get_finance_db(finance_path, core_db_path=db_path, register_app_mode=lambda conn: register_app_mode_function(conn, mode_reader=lambda: "production"))
+
+    points_service = PointsLedgerService(
+        get_db=points_db,
+        chain_secret="test-secret",
+        backup_dir=tmp_path / "points_chain_backups",
+        mode_reader=lambda: "production",
+    )
+    client = _build_app(db_path, points_service=points_service).test_client()
+
+    response = client.post(
+        "/api/register",
+        json={
+            "username": "alice123",
+            "password": "GoodPass1!",
+            "password_confirm": "GoodPass1!",
+            "nickname": "Alice",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["signup_bonus"]["created"] is True
+    core = sqlite3.connect(db_path)
+    finance = sqlite3.connect(finance_path)
+    try:
+        assert core.execute("SELECT username FROM users WHERE username='alice123'").fetchone()[0] == "alice123"
+        assert core.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='points_ledger'").fetchone() is None
+        assert finance.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] == 1
+    finally:
+        core.close()
+        finance.close()
 
 
 def test_register_validation_returns_field_for_password_confirmation(tmp_path):

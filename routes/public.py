@@ -804,29 +804,41 @@ def register_public_routes(app, deps):
                 (cur.lastrowid, hash_password(password), now)
             )
             new_user_id = int(cur.lastrowid)
+            conn.commit()
             hot_wallet_address = ""
             deposit_address = ""
             signup_bonus = None
             if points_service is not None:
-                points_service.ensure_schema(conn)
-                hot_wallet = create_official_hot_wallet(
-                    conn,
-                    user_id=new_user_id,
-                    chain_secret=getattr(points_service, "chain_secret", ""),
-                )
-                hot_wallet_address = str((hot_wallet or {}).get("address") or "")
+                points_conn = points_service.get_db() if hasattr(points_service, "get_db") else get_db()
                 try:
-                    deposit = points_service.ensure_user_deposit_address(conn, new_user_id)
-                    deposit_address = str((deposit or {}).get("address") or "")
-                except Exception:
-                    deposit_address = ""
-                if hasattr(points_service, "award_signup_bonus_locked"):
-                    signup_bonus = points_service.award_signup_bonus_locked(
-                        conn,
+                    points_service.ensure_schema(points_conn)
+                    hot_wallet = create_official_hot_wallet(
+                        points_conn,
                         user_id=new_user_id,
-                        actor={"id": new_user_id, "username": username, "role": "user"},
+                        chain_secret=getattr(points_service, "chain_secret", ""),
                     )
-            conn.commit()
+                    hot_wallet_address = str((hot_wallet or {}).get("address") or "")
+                    try:
+                        deposit = points_service.ensure_user_deposit_address(points_conn, new_user_id)
+                        deposit_address = str((deposit or {}).get("address") or "")
+                    except Exception:
+                        deposit_address = ""
+                    if hasattr(points_service, "award_signup_bonus_locked"):
+                        signup_bonus = points_service.award_signup_bonus_locked(
+                            points_conn,
+                            user_id=new_user_id,
+                            actor={"id": new_user_id, "username": username, "role": "user"},
+                        )
+                    points_conn.commit()
+                except Exception as exc:
+                    try:
+                        points_conn.rollback()
+                    except Exception:
+                        pass
+                    signup_bonus = {"created": False, "error": str(exc)}
+                    audit("POINTS_REGISTER_WALLET_INIT_FAILED", ip, username, ua=ua, success=False, detail=str(exc))
+                finally:
+                    points_conn.close()
             audit("REGISTER_PENDING", ip, username, ua=ua, success=True, detail="awaiting manager approval")
             return json_resp({
                 "ok": True,
