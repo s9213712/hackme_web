@@ -14311,6 +14311,159 @@ class PointsLedgerService:
         finally:
             conn.close()
 
+    def verify_chain_bounded_snapshot(self, *, recent_limit=1000):
+        started = _monotonic_time.perf_counter()
+        limit = max(50, min(5000, int(recent_limit or 1000)))
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            branch = self._canonical_branch_uuid(conn)
+            errors = []
+            counts_row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS ledger_entries,
+                    COALESCE(SUM(CASE WHEN chain_block_id IS NULL AND status='confirmed' THEN 1 ELSE 0 END), 0) AS unsealed_entries
+                FROM points_ledger
+                """
+            ).fetchone()
+            block_count = conn.execute("SELECT COUNT(*) AS c FROM points_chain_blocks").fetchone()["c"]
+            audit_count = conn.execute("SELECT COUNT(*) AS c FROM points_chain_audit_logs").fetchone()["c"]
+            wallet_count = conn.execute("SELECT COUNT(*) AS c FROM points_wallets").fetchone()["c"]
+            recent_rows = list(conn.execute(
+                """
+                SELECT *
+                FROM points_ledger
+                WHERE chain_branch=?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (branch, limit),
+            ).fetchall())
+            recent_rows.reverse()
+            previous_hash = None
+            previous_ledger = None
+            if recent_rows:
+                seed = conn.execute(
+                    """
+                    SELECT id, ledger_uuid, ledger_hash
+                    FROM points_ledger
+                    WHERE chain_branch=? AND id<?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (branch, int(recent_rows[0]["id"])),
+                ).fetchone()
+                if seed:
+                    previous_hash = seed["ledger_hash"]
+                    previous_ledger = seed
+            for row in recent_rows:
+                if row["previous_ledger_hash"] != previous_hash:
+                    errors.append({
+                        "type": "recent_ledger_previous_hash",
+                        "severity": "critical",
+                        "message": f"recent ledger #{row['id']} previous hash mismatch",
+                        "chain_branch": branch,
+                        "ledger_id": row["id"],
+                        "ledger_uuid": row["ledger_uuid"],
+                        "expected_previous_ledger_hash": previous_hash,
+                        "actual_previous_ledger_hash": row["previous_ledger_hash"],
+                        "previous_ledger_id": previous_ledger["id"] if previous_ledger else None,
+                        "bounded": True,
+                    })
+                expected = compute_ledger_hash(row)
+                if row["ledger_hash"] != expected:
+                    errors.append({
+                        "type": "recent_ledger_hash",
+                        "severity": "critical",
+                        "message": f"recent ledger #{row['id']} content hash mismatch",
+                        "ledger_id": row["id"],
+                        "ledger_uuid": row["ledger_uuid"],
+                        "expected_ledger_hash": expected,
+                        "actual_ledger_hash": row["ledger_hash"],
+                        "bounded": True,
+                    })
+                previous_hash = row["ledger_hash"]
+                previous_ledger = row
+            block_rows = conn.execute(
+                "SELECT * FROM points_chain_blocks ORDER BY block_number DESC LIMIT 20"
+            ).fetchall()
+            for block in block_rows:
+                expected_block_hash = compute_block_hash(block)
+                if expected_block_hash != block["block_hash"]:
+                    errors.append({
+                        "type": "recent_block_hash",
+                        "severity": "critical",
+                        "message": f"recent block #{block['block_number']} block hash mismatch",
+                        "block_id": block["id"],
+                        "block_number": block["block_number"],
+                        "expected_block_hash": expected_block_hash,
+                        "actual_block_hash": block["block_hash"],
+                        "bounded": True,
+                    })
+                signature = conn.execute(
+                    """
+                    SELECT * FROM points_chain_block_signatures
+                    WHERE block_id=? AND node_id='single-node'
+                    """,
+                    (block["id"],),
+                ).fetchone()
+                if not signature:
+                    errors.append({
+                        "type": "recent_block_signature_missing",
+                        "severity": "high",
+                        "message": f"recent block #{block['block_number']} signature missing",
+                        "block_id": block["id"],
+                        "block_number": block["block_number"],
+                        "bounded": True,
+                    })
+                elif (
+                    signature["signature_algorithm"] != "hmac-sha256"
+                    or signature["public_key_fingerprint"] != self._node_fingerprint()
+                    or signature["signature"] != self._sign_block(block)
+                ):
+                    errors.append({
+                        "type": "recent_block_signature_invalid",
+                        "severity": "critical",
+                        "message": f"recent block #{block['block_number']} signature invalid",
+                        "block_id": block["id"],
+                        "block_number": block["block_number"],
+                        "bounded": True,
+                    })
+            safe_mode = self._safe_mode_status(conn)
+            unsealed_entries = int(counts_row["unsealed_entries"] or 0)
+            result = {
+                "ok": not errors and not bool(safe_mode.get("safe_mode")),
+                "errors": errors[:100],
+                "error_count": len(errors),
+                "bounded": True,
+                "verification_mode": "bounded_recent_snapshot",
+                "recent_limit": limit,
+                "recent_checked": len(recent_rows),
+                "safe_mode": safe_mode,
+                "financial_ok": None,
+                "counts": {
+                    "ledger_entries": int(counts_row["ledger_entries"] or 0),
+                    "sealed_blocks": int(block_count or 0),
+                    "unsealed_entries": unsealed_entries,
+                    "pc1_canonical_entries": None,
+                    "pc1_unsealed_entries": unsealed_entries,
+                    "pc0_operational_entries": None,
+                    "pc0_operational_unsealed_entries": None,
+                    "pc1_pc0_split_source": "omitted_in_bounded_snapshot",
+                    "audit_events": int(audit_count or 0),
+                    "wallets": int(wallet_count or 0),
+                },
+                "timing": {
+                    "total_ms": round((_monotonic_time.perf_counter() - started) * 1000, 3),
+                    "include_financial": False,
+                    "bounded": True,
+                },
+            }
+            return result
+        finally:
+            conn.close()
+
     def _explorer_acceleration_summary(self, conn, ledger_uuid):
         rows = conn.execute(
             """
@@ -16167,6 +16320,165 @@ class PointsLedgerService:
             report["management_timing"] = {
                 "total_ms": round((_monotonic_time.perf_counter() - started) * 1000, 3),
                 "phases": phases,
+            }
+            return report
+        finally:
+            conn.close()
+
+    def root_report_bounded_snapshot(self, *, recent_limit=1000):
+        started = _monotonic_time.perf_counter()
+        phase_started = started
+        phases = []
+
+        def mark_phase(name):
+            nonlocal phase_started
+            now = _monotonic_time.perf_counter()
+            phases.append({"phase": name, "elapsed_ms": round((now - phase_started) * 1000, 3)})
+            phase_started = now
+
+        verification = self.verify_chain_bounded_snapshot(recent_limit=recent_limit)
+        mark_phase("bounded_verify")
+        audit_logs = self.list_chain_audit_logs(limit=50)
+        mark_phase("audit_logs")
+        block_schedule = self.block_schedule(verification=verification, verify=False)
+        mark_phase("block_schedule")
+        recovery = self.safe_mode_status()
+        mark_phase("recovery")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            branch = self._canonical_branch_uuid(conn)
+            wallet = conn.execute(
+                """
+                SELECT COALESCE(SUM(soft_balance + hard_balance), 0) AS points_balance,
+                       COALESCE(SUM(soft_frozen + hard_frozen), 0) AS points_frozen,
+                       COUNT(*) AS wallets
+                FROM points_wallets
+                """
+            ).fetchone()
+            ledger = conn.execute(
+                """
+                SELECT
+                    COALESCE(SUM(CASE WHEN direction IN ('credit','transfer_in') THEN amount ELSE 0 END), 0) AS points_issued,
+                    COALESCE(SUM(CASE WHEN direction IN ('debit','transfer_out','reverse') THEN amount ELSE 0 END), 0) AS points_spent,
+                    COUNT(*) AS ledger_entries
+                FROM points_ledger
+                WHERE status='confirmed'
+                """
+            ).fetchone()
+            sealed = conn.execute(
+                """
+                SELECT
+                    COALESCE(SUM(CASE WHEN chain_block_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS sealed_ledger_entries,
+                    COALESCE(SUM(CASE WHEN chain_block_id IS NULL THEN 1 ELSE 0 END), 0) AS unsealed_ledger_entries,
+                    COUNT(*) AS confirmed_ledger_entries
+                FROM points_ledger
+                WHERE status='confirmed'
+                """
+            ).fetchone()
+            latest = conn.execute(
+                """
+                SELECT
+                    (SELECT created_at FROM points_ledger ORDER BY id DESC LIMIT 1) AS latest_ledger_at,
+                    (SELECT updated_at FROM points_wallets ORDER BY updated_at DESC LIMIT 1) AS latest_wallet_at
+                """
+            ).fetchone()
+            blocks = conn.execute(
+                """
+                SELECT b.*, s.signature_algorithm, s.public_key_fingerprint, s.signed_at
+                FROM points_chain_blocks b
+                LEFT JOIN points_chain_block_signatures s ON s.block_id=b.id AND s.node_id='single-node'
+                ORDER BY b.block_number DESC LIMIT 10
+                """
+            ).fetchall()
+            high_risk = conn.execute(
+                """
+                SELECT * FROM points_ledger
+                WHERE risk_flag != 'none' OR status != 'confirmed'
+                ORDER BY id DESC LIMIT 20
+                """
+            ).fetchall()
+            wallet_data = dict(wallet)
+            ledger_data = dict(ledger)
+            ledger_data["ledger_net_points"] = int(ledger_data.get("points_issued") or 0) - int(ledger_data.get("points_spent") or 0)
+            confirmed_count = int(sealed["confirmed_ledger_entries"] or 0)
+            sealed_count = int(sealed["sealed_ledger_entries"] or 0)
+            stats = {
+                "wallets": wallet_data,
+                "ledger": ledger_data,
+                "chain": verification,
+                "circulation": {
+                    "available_points": int(wallet_data.get("points_balance") or 0),
+                    "frozen_points": int(wallet_data.get("points_frozen") or 0),
+                    "outstanding_points": int(wallet_data.get("points_balance") or 0) + int(wallet_data.get("points_frozen") or 0),
+                    "wallet_count": int(wallet_data.get("wallets") or 0),
+                    "confirmed_ledger_entries": confirmed_count,
+                    "sealed_ledger_entries": sealed_count,
+                    "unsealed_ledger_entries": int(sealed["unsealed_ledger_entries"] or 0),
+                    "sealed_coverage_percent": round((sealed_count / confirmed_count) * 100, 4) if confirmed_count else 0,
+                    "latest_ledger_at": latest["latest_ledger_at"] if latest else None,
+                    "latest_wallet_at": latest["latest_wallet_at"] if latest else None,
+                    "bounded": True,
+                },
+                "currency_type": DISPLAY_CURRENCY,
+                "bounded": True,
+            }
+            mark_phase("bounded_stats")
+            financial_invariants = {
+                "ok": None,
+                "status": "snapshot_only",
+                "bounded": True,
+                "chain_branch": branch,
+                "msg": "Full financial invariant replay is deferred to offline/full audit; this snapshot stays bounded for root UI.",
+            }
+            unsealed_rows = conn.execute(
+                """
+                SELECT *
+                FROM points_ledger
+                WHERE status='confirmed'
+                  AND chain_block_id IS NULL
+                  AND chain_branch=?
+                ORDER BY id DESC
+                LIMIT 50
+                """,
+                (branch,),
+            ).fetchall()
+            unsealed_transactions = [
+                {
+                    **self.serialize_ledger(row, include_user_id=False),
+                    "bounded_snapshot": True,
+                    "pc1_pc0_classification": "deferred",
+                }
+                for row in unsealed_rows
+            ]
+            mark_phase("unsealed_transactions")
+            report = {
+                "verification": verification,
+                "stats": stats,
+                "financial_invariants": financial_invariants,
+                "blocks": [dict(row) for row in blocks],
+                "high_risk_ledger": [self.serialize_ledger(row, include_user_id=False) for row in high_risk],
+                "audit_logs": audit_logs,
+                "unsealed_transactions": unsealed_transactions,
+                "block_schedule": block_schedule,
+                "ledger_backups": [],
+                "recovery": recovery,
+                "scheduled_backup": {
+                    "ok": True,
+                    "created": False,
+                    "disabled": True,
+                    "msg": "PointsChain ledger backup/restore is disabled; recovery uses safe mode, branches, governance, and append-only correction entries.",
+                },
+                "governance": {
+                    "bounded": True,
+                    "msg": "Full governance aggregation is deferred to offline/full audit.",
+                },
+                "bounded": True,
+            }
+            report["management_timing"] = {
+                "total_ms": round((_monotonic_time.perf_counter() - started) * 1000, 3),
+                "phases": phases,
+                "bounded": True,
             }
             return report
         finally:

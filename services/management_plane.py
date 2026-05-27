@@ -432,7 +432,7 @@ def _run_management_plane_job(
                 stage=str(stage or "running")[:80],
                 stage_detail=str(detail or "")[:1000],
                 metadata_json=metadata({"last_progress_payload": payload or {}}),
-                defer_progress=True,
+                flush=True,
             )
             add_job_event(
                 conn,
@@ -442,7 +442,7 @@ def _run_management_plane_job(
                 message=str(detail or "")[:1000],
                 progress_percent=max(1, min(99, int(progress_percent or 1))),
                 payload=payload or {},
-                defer_progress=True,
+                flush=True,
             )
             conn.commit()
 
@@ -521,6 +521,28 @@ def _run_management_plane_job(
             pass
         message = str(exc) or exc.__class__.__name__
         try:
+            failure_payload = {
+                "ok": False,
+                "snapshot_key": snapshot_key,
+                "error": message[:1000],
+                "error_code": exc.__class__.__name__,
+                "generated_at": utc_now(),
+                "management_async": True,
+            }
+            failure_snapshot = write_management_snapshot(
+                conn,
+                snapshot_key=snapshot_key,
+                payload=failure_payload,
+                source_job_uuid=job_uuid,
+                summary={
+                    "ok": False,
+                    "snapshot_key": snapshot_key,
+                    "error": message[:1000],
+                    "error_code": exc.__class__.__name__,
+                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+                },
+                error=message[:1000],
+            )
             update_job(
                 conn,
                 job_uuid,
@@ -531,7 +553,7 @@ def _run_management_plane_job(
                 error_code=exc.__class__.__name__,
                 error_message=message[:1000],
                 error_stage="management_plane_worker",
-                result_json={"ok": False, "snapshot_key": snapshot_key, "error": message[:1000]},
+                result_json=failure_snapshot["summary"],
                 finished_at=utc_now(),
                 flush=True,
             )

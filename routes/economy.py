@@ -251,7 +251,7 @@ def register_economy_routes(app, deps):
         }
         if payload_key:
             return json_resp({
-                "ok": True,
+                "ok": bool(payload.get("ok", True)),
                 payload_key: payload.get(payload_key),
                 "snapshot": meta,
             })
@@ -2011,9 +2011,12 @@ def register_economy_routes(app, deps):
 
         def worker(progress):
             progress(stage="verify_chain", progress_percent=15, detail="verifying PointsChain off request path")
-            result = points_service.verify_chain()
+            if hasattr(points_service, "verify_chain_bounded_snapshot"):
+                result = points_service.verify_chain_bounded_snapshot()
+            else:
+                result = points_service.verify_chain(include_financial=False)
             incident = None
-            if not result.get("ok") and server_mode_service and hasattr(server_mode_service, "enter_incident_lockdown"):
+            if not result.get("ok") and not result.get("bounded") and server_mode_service and hasattr(server_mode_service, "enter_incident_lockdown"):
                 progress(stage="incident_lockdown", progress_percent=85, detail="verification failed; entering incident lockdown")
                 try:
                     incident = server_mode_service.enter_incident_lockdown(
@@ -2230,7 +2233,10 @@ def register_economy_routes(app, deps):
 
         def worker(progress):
             progress(stage="root_report", progress_percent=15, detail="building PointsChain root report off request path")
-            report = points_service.root_report()
+            if hasattr(points_service, "root_report_bounded_snapshot"):
+                report = points_service.root_report_bounded_snapshot()
+            else:
+                report = points_service.root_report()
             progress(stage="snapshot", progress_percent=90, detail="recording root report snapshot")
             return {"ok": True, "report": report}
 
