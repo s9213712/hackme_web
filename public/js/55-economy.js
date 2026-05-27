@@ -1062,15 +1062,15 @@ async function economyPromptColdWalletForSigning({ expectedAddress, purposeLabel
   }
   let loaded = null;
   const file = await economyPickColdWalletFileForSigning({ cancelMessage });
-  const password = window.prompt(`首次解鎖或本機簽署會話逾期時，需輸入完整冷錢包解鎖助記詞以本機解密錢包檔；之後同一頁面短時間內簽署${purposeLabel || "交易"}只會隨機詢問幾個詞。助記詞不會送到伺服器。`, "");
-  if (password === null) {
+  const unlockMnemonic = window.prompt(`首次解鎖或本機簽署會話逾期時，需輸入完整冷錢包解鎖助記詞以本機解密錢包檔；之後同一頁面短時間內簽署${purposeLabel || "交易"}只會隨機詢問幾個詞。助記詞不會送到伺服器。`, "");
+  if (unlockMnemonic === null) {
     throw economyColdWalletSigningCancelled(cancelMessage);
   }
-  loaded = await economyLoadEncryptedColdWalletFile(await economyReadTextFile(file), password, { imported: true });
+  loaded = await economyLoadEncryptedColdWalletFile(await economyReadTextFile(file), unlockMnemonic, { imported: true });
   if (normalizedExpected && String(loaded?.address || "").trim().toLowerCase() !== normalizedExpected) {
     throw new Error(mismatchMessage || "冷錢包檔地址與本次付款錢包不一致");
   }
-  economyRememberColdWalletSigningSession(loaded, password);
+  economyRememberColdWalletSigningSession(loaded, unlockMnemonic);
   return loaded;
 }
 

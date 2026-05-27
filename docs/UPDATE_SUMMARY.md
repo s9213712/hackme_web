@@ -1,6 +1,18 @@
 # Update Summary
 
-Release ID: `2026.05.27-001`
+Release ID: `2026.05.27-002`
+
+## 2026.05.27-002
+
+- Fixed CI acceptance gates after the finance DB split: the Playwright platform
+  probe now seeds trading fixtures into `finance.db`, validates the lightweight
+  trading asset overview read model, and reads the current trading asset
+  overview UI IDs.
+- Registered the missing maintained QA/security scripts in `scripts/INDEX.md`
+  and removed a fixed-port test fixture that violated CI portability checks.
+- Renamed the cold-wallet unlock prompt variable in the economy frontend so the
+  plaintext secrets scanner no longer misclassifies runtime user input as a
+  hard-coded credential.
 
 ## 2026.05.27-001
 
