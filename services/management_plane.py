@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ from services.job_center import (
 
 MANAGEMENT_PLANE_SOURCE_MODULE = "management_plane"
 _LOGGER = logging.getLogger(__name__)
+_LOCK_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 def _json_dumps(payload: Any) -> str:
@@ -44,6 +46,33 @@ def _safe_json_size(payload: Any) -> int:
         return len(_json_dumps(payload).encode("utf-8"))
     except Exception:
         return 0
+
+
+def _safe_lock_name(value: Any, *, default: str = "management") -> str:
+    text = str(value or "").strip().lower()
+    text = _LOCK_NAME_RE.sub("_", text).strip("._-")
+    return (text or default)[:80]
+
+
+def _normalize_resource_locks(resource_locks: Any) -> tuple[str, ...]:
+    if resource_locks is None:
+        raw_items = ("management",)
+    elif isinstance(resource_locks, str):
+        raw_items = (resource_locks,)
+    else:
+        try:
+            raw_items = tuple(resource_locks)
+        except Exception:
+            raw_items = ("management",)
+    normalized = []
+    seen = set()
+    for item in raw_items:
+        name = _safe_lock_name(item, default="")
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        normalized.append(name)
+    return tuple(normalized)
 
 
 def _compact_result_summary(payload: Any, *, snapshot_key: str) -> dict[str, Any]:
@@ -131,13 +160,14 @@ def _main_db_path(conn) -> str:
     return ""
 
 
-def _acquire_management_worker_lock(conn):
+def _acquire_management_worker_lock(conn, *, lock_name: str):
     if fcntl is None:
         return None
     db_path = _main_db_path(conn)
     lock_dir = os.path.dirname(db_path) if db_path else "/tmp"
     os.makedirs(lock_dir, exist_ok=True)
-    lock_path = os.path.join(lock_dir, "management_plane_worker.lock")
+    safe_name = _safe_lock_name(lock_name, default="management")
+    lock_path = os.path.join(lock_dir, f"management_plane_{safe_name}.lock")
     fh = open(lock_path, "a+", encoding="utf-8")
     fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
     return fh
@@ -231,9 +261,27 @@ def get_management_snapshot(conn, *, snapshot_key: str, include_payload: bool = 
     }
 
 
-def _active_existing_job(conn, *, snapshot_key: str) -> dict[str, Any] | None:
+def _job_updated_age_seconds(job: dict[str, Any]) -> float | None:
+    try:
+        updated = datetime.fromisoformat(str(job.get("updated_at") or ""))
+        if updated.tzinfo is not None:
+            updated = updated.astimezone(timezone.utc).replace(tzinfo=None)
+        return (datetime.utcnow() - updated).total_seconds()
+    except Exception:
+        return None
+
+
+def _reusable_existing_job(
+    conn,
+    *,
+    snapshot_key: str,
+    reuse_recent_success_seconds: int = 0,
+) -> dict[str, Any] | None:
     job = get_job_by_source(conn, MANAGEMENT_PLANE_SOURCE_MODULE, snapshot_key)
-    if job and str(job.get("status") or "") in {"queued", "running", "waiting_external", "retry_wait"}:
+    if not job:
+        return None
+    status = str(job.get("status") or "")
+    if status in {"queued", "running", "waiting_external", "retry_wait"}:
         metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
         pid = 0
         try:
@@ -242,14 +290,17 @@ def _active_existing_job(conn, *, snapshot_key: str) -> dict[str, Any] | None:
             pid = 0
         if pid > 0 and os.path.exists(f"/proc/{pid}"):
             return job
-        try:
-            updated = datetime.fromisoformat(str(job.get("updated_at") or ""))
-            if updated.tzinfo is not None:
-                updated = updated.astimezone(timezone.utc).replace(tzinfo=None)
-            if (datetime.utcnow() - updated).total_seconds() <= 10:
-                return job
-        except Exception:
-            pass
+        age = _job_updated_age_seconds(job)
+        if age is not None and age <= 10:
+            return job
+    if status == "succeeded" and int(reuse_recent_success_seconds or 0) > 0:
+        age = _job_updated_age_seconds(job)
+        if age is not None and age <= int(reuse_recent_success_seconds or 0):
+            metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+            metadata = dict(metadata)
+            metadata["reused_recent_success"] = True
+            job["metadata"] = metadata
+            return job
     return None
 
 
@@ -264,12 +315,21 @@ def start_management_plane_job(
     worker: Callable[[Callable[..., None]], dict[str, Any]],
     summary_builder: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     reuse_running: bool = True,
+    reuse_recent_success_seconds: int = 0,
+    queue_class: str = "management",
+    resource_locks: Any = None,
 ) -> dict[str, Any]:
+    queue_class_name = _safe_lock_name(queue_class, default="management")
+    resource_lock_names = _normalize_resource_locks(resource_locks)
     conn = get_db()
     try:
         ensure_management_plane_schema(conn)
         if reuse_running:
-            existing = _active_existing_job(conn, snapshot_key=snapshot_key)
+            existing = _reusable_existing_job(
+                conn,
+                snapshot_key=snapshot_key,
+                reuse_recent_success_seconds=reuse_recent_success_seconds,
+            )
             if existing:
                 return {"created": False, "job": existing}
         job = create_job(
@@ -286,7 +346,13 @@ def start_management_plane_job(
             stage="queued",
             max_retries=0,
             cancellable=False,
-            metadata={"snapshot_key": snapshot_key, "request": request_payload or {}, "starter_pid": os.getpid()},
+            metadata={
+                "snapshot_key": snapshot_key,
+                "request": request_payload or {},
+                "starter_pid": os.getpid(),
+                "queue_class": queue_class_name,
+                "resource_locks": list(resource_lock_names),
+            },
         )
         conn.commit()
     finally:
@@ -298,6 +364,9 @@ def start_management_plane_job(
             "get_db": get_db,
             "job_uuid": job["job_uuid"],
             "snapshot_key": snapshot_key,
+            "request_payload": request_payload or {},
+            "queue_class": queue_class_name,
+            "resource_locks": resource_lock_names,
             "worker": worker,
             "summary_builder": summary_builder,
         },
@@ -313,12 +382,27 @@ def _run_management_plane_job(
     get_db: Callable[[], Any],
     job_uuid: str,
     snapshot_key: str,
+    request_payload: dict[str, Any],
+    queue_class: str,
+    resource_locks: tuple[str, ...],
     worker: Callable[[Callable[..., None]], dict[str, Any]],
     summary_builder: Callable[[dict[str, Any]], dict[str, Any]] | None,
 ) -> None:
     conn = get_db()
     started = time.perf_counter()
     try:
+        def metadata(extra: dict[str, Any] | None = None) -> dict[str, Any]:
+            payload = {
+                "snapshot_key": snapshot_key,
+                "request": request_payload or {},
+                "worker_pid": os.getpid(),
+                "queue_class": queue_class,
+                "resource_locks": list(resource_locks),
+            }
+            if extra:
+                payload.update(extra)
+            return payload
+
         update_job(
             conn,
             job_uuid,
@@ -327,7 +411,7 @@ def _run_management_plane_job(
             stage="running",
             stage_detail="management-plane job started",
             started_at=utc_now(),
-            metadata_json={"snapshot_key": snapshot_key, "worker_pid": os.getpid()},
+            metadata_json=metadata(),
         )
         add_job_event(
             conn,
@@ -347,11 +431,7 @@ def _run_management_plane_job(
                 progress_percent=max(1, min(99, int(progress_percent or 1))),
                 stage=str(stage or "running")[:80],
                 stage_detail=str(detail or "")[:1000],
-                metadata_json={
-                    "snapshot_key": snapshot_key,
-                    "worker_pid": os.getpid(),
-                    "last_progress_payload": payload or {},
-                },
+                metadata_json=metadata({"last_progress_payload": payload or {}}),
                 defer_progress=True,
             )
             add_job_event(
@@ -366,14 +446,38 @@ def _run_management_plane_job(
             )
             conn.commit()
 
-        progress(stage="waiting_worker_lock", progress_percent=8, detail="waiting for management-plane worker slot")
-        lock_fh = None
+        progress(
+            stage="waiting_queue_lock",
+            progress_percent=8,
+            detail=f"waiting for management-plane queue slot: {queue_class}",
+        )
+        lock_fhs = []
         try:
-            lock_fh = _acquire_management_worker_lock(conn)
-            progress(stage="worker_lock_acquired", progress_percent=10, detail="management-plane worker slot acquired")
+            queue_lock = f"queue_{queue_class}"
+            lock_fhs.append(_acquire_management_worker_lock(conn, lock_name=queue_lock))
+            progress(
+                stage="queue_lock_acquired",
+                progress_percent=9,
+                detail=f"management-plane queue slot acquired: {queue_class}",
+            )
+            for index, resource_name in enumerate(resource_locks):
+                progress(
+                    stage="waiting_resource_lock",
+                    progress_percent=9,
+                    detail=f"waiting for management-plane resource: {resource_name}",
+                    payload={"resource": resource_name},
+                )
+                lock_fhs.append(_acquire_management_worker_lock(conn, lock_name=f"resource_{resource_name}"))
+                progress(
+                    stage="resource_lock_acquired",
+                    progress_percent=10,
+                    detail=f"management-plane resource acquired: {resource_name}",
+                    payload={"resource": resource_name, "index": index},
+                )
             result = worker(progress)
         finally:
-            _release_management_worker_lock(lock_fh)
+            for lock_fh in reversed(lock_fhs):
+                _release_management_worker_lock(lock_fh)
         if not isinstance(result, dict):
             result = {"ok": True, "result": result}
         result.setdefault("ok", True)
@@ -451,11 +555,15 @@ def _run_management_plane_job(
 
 def management_job_start_payload(job: dict[str, Any], *, snapshot_key: str, created: bool) -> dict[str, Any]:
     job_uuid = str(job.get("job_uuid") or "")
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
     return {
         "ok": True,
         "async": True,
         "accepted": True,
         "created": bool(created),
+        "queue_class": metadata.get("queue_class") or "management",
+        "resource_locks": metadata.get("resource_locks") or [],
+        "reused_recent_success": bool(metadata.get("reused_recent_success")),
         "job_id": job_uuid,
         "job_uuid": job_uuid,
         "job": job,

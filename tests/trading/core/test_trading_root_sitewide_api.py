@@ -444,3 +444,27 @@ def test_root_sitewide_refresh_rebuilds_snapshot_before_read(tmp_path):
     assert payload["ok"] is True
     assert payload["snapshot"]["source_job_key"] == "root_manual_sitewide_refresh"
     assert [row["username"] for row in payload["positions"]["spot_positions"]] == ["admin"]
+
+
+def test_root_trading_verify_runs_as_management_job_and_serves_latest_snapshot(tmp_path):
+    app, _points, _trading, _get_db = _app(tmp_path, {"id": 2, "username": "root", "role": "super_admin"})
+    client = app.test_client()
+
+    start = client.get("/api/root/trading/verify")
+    start_payload = start.get_json()
+    latest = None
+    latest_payload = {}
+    for _attempt in range(50):
+        latest = client.get("/api/root/trading/verify/latest")
+        latest_payload = latest.get_json()
+        if latest.status_code == 200 and latest_payload.get("ok"):
+            break
+        time.sleep(0.02)
+
+    assert start.status_code == 202
+    assert start_payload["async"] is True
+    assert start_payload["queue_class"] == "trading_admin"
+    assert start_payload["resource_locks"] == ["finance_db"]
+    assert latest.status_code == 200
+    assert latest_payload["verification"]["ok"] is True
+    assert latest_payload["snapshot"]["snapshot_backed"] is True

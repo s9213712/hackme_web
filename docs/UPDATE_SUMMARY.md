@@ -1,6 +1,21 @@
 # Update Summary
 
-Release ID: `2026.05.27-002`
+Release ID: `2026.05.27-003`
+
+## 2026.05.27-003
+
+- Implemented Management Plane Async/Snapshot Phase 2a: management-plane jobs
+  now record queue class and resource locks, reuse fresh successful snapshots
+  for bursty root/admin refreshes, and expose those details in `202` start
+  payloads.
+- Split heavy finance management jobs into explicit `points_chain_admin` and
+  `trading_admin` queues while serializing both on the shared `finance_db`
+  resource lock, keeping DB-heavy control work from stampeding SQLite.
+- Moved `/api/root/trading/verify` to the async/snapshot contract with
+  `/api/root/trading/verify/jobs` and `/api/root/trading/verify/latest`.
+- Routed root economy UI and the 50K destructive stress harness transaction
+  reads through `compact=1` bounded cursor mode instead of the full hydrate /
+  hidden-maintenance path.
 
 ## 2026.05.27-002
 

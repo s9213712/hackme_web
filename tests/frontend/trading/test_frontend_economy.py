@@ -532,7 +532,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "已送出鏈上加速費用，Proved" in economy_js
     assert "加速費" in economy_js
     assert 'fetchEconomyJson("/points/transactions/submit"' in economy_js
-    assert 'fetchEconomyJson("/points/transactions?limit=50")' in economy_js
+    assert 'fetchEconomyJson("/points/transactions?limit=50&compact=1")' in economy_js
     assert "function renderEconomyTransactions" in economy_js
     assert "function loadEconomyTransactions" in economy_js
     assert '["economy-transactions-refresh-btn", loadEconomyTransactions]' in economy_js

@@ -454,7 +454,7 @@ def finalize_prefix_pending_via_explorer(client: ProbeClient, db: Path, prefix: 
             break
         res = client.request(
             "GET",
-            "/api/points/transactions?limit=100&compact=0",
+            "/api/points/transactions?limit=100&compact=1",
             expected={200, 400, 503},
         )
         summary = res.get("summary") if isinstance(res.get("summary"), dict) else {}
@@ -745,7 +745,7 @@ def main() -> int:
 
     fee_market_samples.append(fee_market_snapshot(root, "after_internal_official_grants"))
     forced_grants = force_proved(database, prefix + "grant-")
-    root_refresh = root.request("GET", "/api/points/transactions?limit=100&compact=0", expected={200})
+    root_refresh = root.request("GET", "/api/points/transactions?limit=100&compact=1", expected={200})
     samples.append({"op": "root_finalize_grants", **root_refresh})
     explorer_finalized_grants = finalize_prefix_pending_via_explorer(root, database, prefix + "grant-")
     for item in clients:
@@ -995,7 +995,7 @@ def main() -> int:
 
     forced_transfers = force_proved(database, prefix)
     for _ in range(3):
-        refreshed = root.request("GET", "/api/points/transactions?limit=100&compact=0", expected={200})
+        refreshed = root.request("GET", "/api/points/transactions?limit=100&compact=1", expected={200})
         samples.append({"op": "root_finalize_transfers", **refreshed})
         if int(((refreshed.get("summary") or {}).get("pending_count") or 0)) == 0:
             break

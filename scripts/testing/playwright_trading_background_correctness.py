@@ -1243,9 +1243,9 @@ def main() -> int:
         )
 
         verify_trading = api(root_page2, "GET", "/root/trading/verify")
-        assert_api_ok(rec, "trading verify_state after background/stress", verify_trading)
+        assert_api_ok(rec, "trading verify_state after background/stress", verify_trading, statuses={200, 202})
         verify_chain = api(root_page2, "GET", "/root/points/chain/verify")
-        assert_api_ok(rec, "PointsChain verify after background/stress", verify_chain)
+        assert_api_ok(rec, "PointsChain verify after background/stress", verify_chain, statuses={200, 202})
         root_report_after = api(root_page2, "GET", "/admin/trading/report")
         assert_api_ok(rec, "root trading report after scenario", root_report_after)
         reserve_after = int(((root_report_after["body"].get("report") or {}).get("reserve_pool") or {}).get("balance_points") or 0)

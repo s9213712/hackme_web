@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 from flask import Response, request
 
-from services.management_plane import management_job_start_payload, start_management_plane_job
+from services.management_plane import get_management_snapshot, management_job_start_payload, start_management_plane_job
 from services.server.runtime import default_runtime_root
 from services.governance.violation_fines import assert_user_feature_allowed
 from services.trading.btc_bridge import (
@@ -1876,6 +1876,9 @@ def register_trading_routes(app, deps):
             request_payload={"reason": reason},
             worker=worker,
             summary_builder=summary,
+            reuse_recent_success_seconds=15,
+            queue_class="trading_admin",
+            resource_locks=("finance_db",),
         )
         request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
         audit(
@@ -1895,8 +1898,6 @@ def register_trading_routes(app, deps):
         if err:
             return err
         try:
-            from services.management_plane import get_management_snapshot
-
             conn = get_db()
             try:
                 sql_started = time.perf_counter()
@@ -2618,13 +2619,120 @@ def register_trading_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    def start_root_trading_verify_job(actor):
+        actor_snapshot = management_actor(actor)
+
+        def worker(progress):
+            progress(stage="trading_verify", progress_percent=20, detail="verifying trading state off request path")
+            verification = trading_service.verify_state()
+            progress(stage="snapshot", progress_percent=90, detail="recording trading verification snapshot")
+            return {"ok": bool(verification.get("ok", True)), "verification": verification}
+
+        def summary(payload):
+            verification = payload.get("verification") if isinstance(payload.get("verification"), dict) else {}
+            errors = verification.get("errors") or []
+            return {
+                "ok": bool(payload.get("ok", True)),
+                "snapshot_key": "trading_verify",
+                "verification_ok": bool(verification.get("ok", True)),
+                "error_count": len(errors) if isinstance(errors, list) else 0,
+                "generated_at": payload.get("generated_at"),
+            }
+
+        sql_started = time.perf_counter()
+        started = start_management_plane_job(
+            get_db=get_db,
+            actor=actor_snapshot,
+            job_type="trading_verify",
+            title="Trading verify",
+            snapshot_key="trading_verify",
+            request_payload={},
+            worker=worker,
+            summary_builder=summary,
+            reuse_recent_success_seconds=10,
+            queue_class="trading_admin",
+            resource_locks=("finance_db",),
+        )
+        request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        return started
+
+    def load_root_trading_verify_snapshot():
+        conn = get_db()
+        try:
+            sql_started = time.perf_counter()
+            snapshot = get_management_snapshot(conn, snapshot_key="trading_verify", include_payload=True)
+            request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        finally:
+            conn.close()
+        return snapshot
+
+    def root_trading_verify_snapshot_response(*, missing_status=404):
+        snapshot = load_root_trading_verify_snapshot()
+        if not snapshot.get("ok"):
+            return json_resp({
+                "ok": False,
+                "snapshot": snapshot,
+                "client_should_enqueue": True,
+            }, missing_status)
+        payload = snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {}
+        return json_resp({
+            "ok": bool(payload.get("ok", True)),
+            "verification": payload.get("verification") or {},
+            "snapshot": {
+                "snapshot_key": snapshot.get("snapshot_key"),
+                "generated_at": snapshot.get("generated_at"),
+                "updated_at": snapshot.get("updated_at"),
+                "source_job_uuid": snapshot.get("source_job_uuid"),
+                "summary": snapshot.get("summary") or {},
+                "snapshot_backed": True,
+            },
+        })
+
     @app.route("/api/root/trading/verify", methods=["GET"])
     @require_csrf_safe
     def root_trading_verify():
         actor, err = root_or_403()
         if err:
             return err
+        refresh = str(request.args.get("refresh") or request.args.get("start_job") or "").strip().lower() in {"1", "true", "yes", "on"}
+        if not refresh:
+            snapshot = load_root_trading_verify_snapshot()
+            if snapshot.get("ok"):
+                payload = snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {}
+                return json_resp({
+                    "ok": bool(payload.get("ok", True)),
+                    "verification": payload.get("verification") or {},
+                    "snapshot": {
+                        "snapshot_key": snapshot.get("snapshot_key"),
+                        "generated_at": snapshot.get("generated_at"),
+                        "updated_at": snapshot.get("updated_at"),
+                        "source_job_uuid": snapshot.get("source_job_uuid"),
+                        "summary": snapshot.get("summary") or {},
+                        "snapshot_backed": True,
+                    },
+                })
         try:
-            return json_resp({"ok": True, "verification": trading_service.verify_state()})
+            started = start_root_trading_verify_job(actor)
+            return management_job_response(started, snapshot_key="trading_verify")
         except Exception as exc:
             return service_error(exc)
+
+    @app.route("/api/root/trading/verify/jobs", methods=["POST"])
+    @require_csrf
+    def root_trading_verify_start_job():
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            started = start_root_trading_verify_job(actor)
+            return management_job_response(started, snapshot_key="trading_verify")
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/verify/latest", methods=["GET"])
+    @require_csrf_safe
+    def root_trading_verify_latest():
+        actor, err = root_or_403()
+        if err:
+            return err
+        return root_trading_verify_snapshot_response()

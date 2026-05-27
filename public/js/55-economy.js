@@ -1978,7 +1978,7 @@ async function loadEconomyTransactions() {
     return null;
   }
   try {
-    const json = await fetchEconomyJson("/points/transactions?limit=50");
+    const json = await fetchEconomyJson("/points/transactions?limit=50&compact=1");
     renderEconomyTransactions(json);
     return json;
   } catch (err) {
@@ -3568,7 +3568,7 @@ async function loadEconomyDashboard() {
       }
       if (chainFeatureOn) {
         const [transactions, onboarding] = await Promise.all([
-          fetchEconomyJson("/points/transactions?limit=50"),
+          fetchEconomyJson("/points/transactions?limit=50&compact=1"),
           fetchEconomyJson("/points/wallet/onboarding"),
         ]);
         renderEconomyWalletOnboarding(onboarding.onboarding || {});
@@ -3589,7 +3589,7 @@ async function loadEconomyDashboard() {
       const [onboarding, transactions] = chainFeatureOn
         ? await Promise.all([
             fetchEconomyJson("/points/wallet/onboarding"),
-            fetchEconomyJson("/points/transactions?limit=50"),
+            fetchEconomyJson("/points/transactions?limit=50&compact=1"),
           ])
         : [{ onboarding: {} }, { transactions: [], summary: {} }];
       renderEconomyWallet(wallet.wallet);

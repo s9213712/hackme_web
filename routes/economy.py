@@ -1983,6 +1983,8 @@ def register_economy_routes(app, deps):
             request_payload={"limit": limit},
             worker=worker,
             summary_builder=summary,
+            queue_class="points_chain_admin",
+            resource_locks=("finance_db",),
         )
         request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
         audit("POINTS_CHAIN_SEAL_QUEUED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"job_uuid={started['job'].get('job_uuid')},limit={limit}")
@@ -2047,6 +2049,9 @@ def register_economy_routes(app, deps):
             request_payload={},
             worker=worker,
             summary_builder=summary,
+            reuse_recent_success_seconds=10,
+            queue_class="points_chain_admin",
+            resource_locks=("finance_db",),
         )
         request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
         return started
@@ -2252,6 +2257,9 @@ def register_economy_routes(app, deps):
             request_payload={},
             worker=worker,
             summary_builder=summary,
+            reuse_recent_success_seconds=15,
+            queue_class="points_chain_admin",
+            resource_locks=("finance_db",),
         )
         request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
         return started

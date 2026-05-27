@@ -1,7 +1,8 @@
 # Management Plane Scaling
 
-Status: Phase 1 implemented for the finance 50K pass1 interference findings.
-Later phases still need incremental snapshots and deeper SQL/Python attribution.
+Status: Phase 2a implemented for the finance 50K pass1 interference findings.
+Later phases still need true incremental high-water-mark snapshots and deeper
+SQL/Python attribution.
 
 ## Problem
 
@@ -87,6 +88,7 @@ root/admin behavior to async start plus snapshot reads:
 | PointsChain verify | `GET /api/root/points/chain/verify` or `POST /api/root/points/chain/verify/jobs` | `GET /api/root/points/chain/verify/jobs/<job_id>` or `GET /api/root/management/jobs/<job_id>` | `GET /api/root/points/chain/verify/latest` |
 | Points root report | `GET /api/root/points/report?refresh=1` or `POST /api/root/points/report/jobs` | `GET /api/root/points/report/jobs/<job_id>` or `GET /api/root/management/jobs/<job_id>` | `GET /api/root/points/report/latest` |
 | Trading sitewide refresh | `POST /api/root/trading/sitewide/refresh` | `GET /api/root/management/jobs/<job_id>` | `GET /api/root/trading/sitewide/refresh/latest` |
+| Trading verify | `GET /api/root/trading/verify?refresh=1` or `POST /api/root/trading/verify/jobs` | `GET /api/root/management/jobs/<job_id>` | `GET /api/root/trading/verify/latest` |
 
 `GET /api/root/points/report` now reads the latest successful snapshot when it
 exists. If no snapshot exists, it starts a job and returns `202` instead of
@@ -96,17 +98,23 @@ Snapshots are stored in the small main DB table `management_plane_snapshots`.
 The large finance DB is only touched by the background worker that generates the
 next snapshot.
 
-Management-plane background workers use a host-local file lock beside the main
-DB (`management_plane_worker.lock`) so concurrent root jobs queue behind one
-worker slot instead of failing each other with SQLite `database is locked`.
-Active job reuse checks the recorded worker/starter PID and a short updated-at
-grace period, so stale running rows from a restarted server do not suppress new
-jobs forever.
+Management-plane background workers use host-local file locks beside the main
+DB. Phase 2a records `queue_class` and `resource_locks` on each job and exposes
+them in the start payload. PointsChain heavy jobs run in `points_chain_admin`,
+trading heavy jobs run in `trading_admin`, and both serialize on the shared
+`finance_db` resource lock so control-plane work cannot stampede the finance
+SQLite file. Active job reuse checks the recorded worker/starter PID and a
+short updated-at grace period, so stale running rows from a restarted server do
+not suppress new jobs forever. Fresh successful jobs can also be reused for a
+short burst window, preventing repeated root dashboard refreshes from starting
+identical heavy work.
 
 `GET /api/points/transactions?compact=1&cursor=<id>` provides a bounded compact
 read path without per-row explorer hydration or hidden finality maintenance.
-Finality sweeps that the destructive stress harness still needs must call the
-full path explicitly with `compact=0`.
+The root economy frontend and 50K destructive stress harness now use this
+compact path for list refreshes. Finality sweeps that still need maintenance
+semantics must be moved to an explicit bounded job instead of relying on
+`compact=0` list calls.
 
 `POST /api/points/transactions/submit` accepts `compact: true` or
 `?compact=1`, returning only the fields needed by high-volume data-plane tests.

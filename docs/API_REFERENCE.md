@@ -523,7 +523,9 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/root/trading/simulated-balance/reset` | root | 重置 root 模擬資金 |
 | GET | `/api/root/trading/contracts` | root | root 衍生品模擬列表；路徑名稱保留相容性 |
 | POST | `/api/root/trading/contracts/<position_uuid>/close` | root | root 衍生品模擬平倉；路徑名稱保留相容性 |
-| GET | `/api/root/trading/verify` | root | 交易對帳 |
+| GET | `/api/root/trading/verify` | root | 讀 latest trading verify snapshot；缺 snapshot 時回 `202 + job_id` 啟動 async verify |
+| POST | `/api/root/trading/verify/jobs` | root | 啟動 async trading verify job |
+| GET | `/api/root/trading/verify/latest` | root | 讀 latest trading verify snapshot |
 
 ### ComfyUI
 
