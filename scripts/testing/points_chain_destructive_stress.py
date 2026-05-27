@@ -421,27 +421,36 @@ def pending_request_uuids(db: Path, prefix: str) -> list[str]:
 
 
 def finalize_prefix_pending_via_explorer(client: ProbeClient, db: Path, prefix: str) -> dict[str, Any]:
-    refs = pending_request_uuids(db, prefix)
-    results = []
-    for ref in refs:
+    before = pending_request_uuids(db, prefix)
+    sweeps = []
+    # Root transaction list performs the app's proved-pending sweep in batches.
+    # The old per-request explorer search path used request_uuid as a search
+    # query, which is both slow at 50K scale and no longer a valid release-gate
+    # finalization primitive.
+    for attempt in range(8):
+        if not pending_request_uuids(db, prefix):
+            break
         res = client.request(
             "GET",
-            f"/api/points/explorer/search?q={ref}&limit=1",
-            expected={200, 404},
+            "/api/points/transactions?limit=2000",
+            expected={200},
         )
-        tx_status = ""
-        try:
-            tx_status = str((((res.get("result") or {}).get("transaction") or {}).get("status")) or "")
-        except Exception:
-            tx_status = ""
-        results.append({"request_uuid": ref, "status": res.get("status"), "tx_status": tx_status})
+        summary = res.get("summary") if isinstance(res.get("summary"), dict) else {}
+        sweeps.append({
+            "attempt": attempt + 1,
+            "status": res.get("status"),
+            "elapsed_ms": res.get("elapsed_ms"),
+            "pending_count": summary.get("pending_count"),
+            "finalized_count": summary.get("finalized_count"),
+            "batch_finalized_count": summary.get("batch_finalized_count"),
+        })
     remaining = pending_request_uuids(db, prefix)
     return {
-        "attempted": len(refs),
-        "confirmed": sum(1 for item in results if item.get("tx_status") == "confirmed"),
+        "attempted": len(before),
+        "confirmed": max(0, len(before) - len(remaining)),
         "remaining_pending": len(remaining),
         "remaining_request_uuids": remaining[:50],
-        "samples": results[:20],
+        "samples": sweeps,
     }
 
 
