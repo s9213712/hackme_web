@@ -918,11 +918,16 @@ def main() -> int:
 
             screenshot_dir = runtime_root / "reports" / "qa" / "screenshots"
             screenshot_dir.mkdir(parents=True, exist_ok=True)
-            for module in ("jobs", "shares", "economy"):
+            try:
                 page.set_viewport_size({"width": 1366, "height": 768})
-                switch_module(page, module)
-                page.wait_for_timeout(500)
-                page.screenshot(path=str(screenshot_dir / f"phase15_{module}.png"), full_page=True)
+                page.goto(base_url + "/", wait_until="domcontentloaded")
+                wait_for_auth_app(page)
+                for module in ("jobs", "shares", "economy"):
+                    switch_module(page, module)
+                    page.wait_for_timeout(500)
+                    page.screenshot(path=str(screenshot_dir / f"phase15_{module}.png"), full_page=True)
+            except Exception as exc:
+                rec.add("phase15_screenshots", False, f"screenshot capture failed: {exc}")
             context.close()
             browser.close()
     finally:

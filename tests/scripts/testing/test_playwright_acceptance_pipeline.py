@@ -84,6 +84,15 @@ def test_deep_playwright_shared_video_uses_unlock_share_session():
     assert 'f"/api/videos/shared/{token}/playback{share_session_query}"' in script
 
 
+def test_platform_health_auth_wait_and_screenshots_are_ci_tolerant():
+    deep_script = (ROOT / "scripts" / "testing" / "playwright_deep_site_check.py").read_text(encoding="utf-8")
+    platform_script = (ROOT / "scripts" / "testing" / "playwright_platform_health_check.py").read_text(encoding="utf-8")
+
+    assert "def wait_for_auth_app(page, *, timeout: int = 30000)" in deep_script
+    assert "screenshot capture failed" in platform_script
+    assert "wait_for_auth_app(page)" in platform_script
+
+
 def test_documented_playwright_health_entrypoints_exist_and_delegate():
     testing_dir = ROOT / "scripts" / "testing"
     full_site = (testing_dir / "playwright_full_site_check.py").read_text(encoding="utf-8")

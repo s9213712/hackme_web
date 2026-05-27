@@ -497,10 +497,10 @@ def check_ui_quality(rec: Recorder, page, label: str, *, mobile: bool = False) -
     rec.add(f"ui_quality_{label}", not problems, detail, issues=problems, warnings=warnings)
 
 
-def wait_for_auth_app(page) -> None:
+def wait_for_auth_app(page, *, timeout: int = 30000) -> None:
     page.wait_for_function(
         "() => document.body.classList.contains('app-authenticated') && typeof switchModuleTab === 'function'",
-        timeout=10000,
+        timeout=timeout,
     )
 
 

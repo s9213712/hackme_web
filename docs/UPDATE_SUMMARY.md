@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.27-005`
+Release ID: `2026.05.27-006`
+
+## 2026.05.27-006
+
+- Made Playwright platform health more tolerant of CI timing by extending the
+  authenticated-app wait helper and guarding final screenshot capture instead
+  of crashing after an already-recorded viewport failure.
 
 ## 2026.05.27-005
 
