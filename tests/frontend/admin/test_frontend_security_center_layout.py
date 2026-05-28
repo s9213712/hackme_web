@@ -406,9 +406,19 @@ def test_system_environment_has_resource_dashboard():
     assert "function renderSystemResourceBoard" in admin_js
     assert "function startSystemResourcePoll" in admin_js
     assert "function stopSystemResourcePoll" in admin_js
+    assert "function installRootManagementVisibilityGuard" in admin_js
+    assert 'document.addEventListener("visibilitychange"' in admin_js
+    assert "stopRootManagementPolls" in admin_js
+    assert "resumeRootManagementPolls" in admin_js
+    assert "canRunRootManagementPoll(isSystemEnvActive)" in admin_js
+    assert "canRunRootManagementPoll(isSystemOverviewActive)" in admin_js
+    assert "scheduleRootManagementIdleTask(loadPlatformStats" in admin_js
     assert 'API + "/admin/environment/resources"' in admin_js
     assert "system_resource_board_refresh_seconds" in admin_js
     assert "server_backpressure_traffic_refresh_seconds" in admin_js
+    assert "edge guard" in admin_js
+    assert "traffic-chart-edge" in css
+    assert "totals.edge_guard" in admin_js
     assert "trading_live_price_refresh_seconds" in admin_js
     assert "comfyui_job_poll_seconds" in admin_js
     assert "notification_poll_seconds" in admin_js

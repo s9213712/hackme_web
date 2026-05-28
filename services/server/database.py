@@ -167,6 +167,8 @@ def ensure_session_columns(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_revoked ON sessions(is_revoked)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_active ON sessions(user_id, is_revoked, expires_at, last_seen)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_active_expires ON sessions(is_revoked, expires_at)")
 
 
 def ensure_auth_db_schema(conn):
@@ -228,9 +230,11 @@ def ensure_auth_db_schema(conn):
     )
     ensure_session_columns(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_csrf_expires_at ON csrf_tokens(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_csrf_username_expires ON csrf_tokens(username, expires_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_captcha_expires_at ON captcha_challenges(expires_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_user_time ON login_attempts(user_id, attempted_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_time ON login_attempts(ip_address, attempted_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_user_success_time ON login_attempts(user_id, success, attempted_at)")
 
 
 def get_auth_db(db_path):

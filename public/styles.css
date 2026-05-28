@@ -11516,6 +11516,10 @@
 
     /* ── Mobile ergonomics pass ──────────────────────────── */
     @media (max-width: 860px) {
+      html {
+        -webkit-text-size-adjust: 100%;
+      }
+
       html,
       body {
         width: 100%;
@@ -11634,6 +11638,17 @@
 
       .app-main {
         padding: .75rem .55rem .9rem;
+      }
+
+      body.app-authenticated .app-main,
+      body.app-authenticated .admin-tools,
+      body.app-authenticated .admin-wrap,
+      body.app-authenticated .module-section,
+      body.app-authenticated .drive-card,
+      body.app-authenticated .server-env-panel,
+      body.app-authenticated .health-section {
+        min-width: 0;
+        max-width: 100%;
       }
     }
 
@@ -11826,6 +11841,58 @@
       .minesweeper-board {
         width: min(100%, calc(100vw - 1.5rem));
       }
+
+      .health-hero,
+      .system-resource-board-header {
+        display: grid;
+        grid-template-columns: 1fr;
+        align-items: stretch;
+      }
+
+      .health-actions {
+        justify-content: stretch;
+        width: 100%;
+      }
+
+      .health-actions .btn {
+        width: 100%;
+      }
+
+      .health-row {
+        grid-template-columns: 1fr;
+        align-items: start;
+      }
+
+      .health-row-value {
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+
+      .system-resource-gauges {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: .55rem;
+      }
+
+      .system-resource-arc {
+        width: min(100%, 132px);
+      }
+
+      .system-resource-gauge-card {
+        padding: .65rem .55rem;
+      }
+
+      .server-env-kv-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .server-env-process-command {
+        max-width: 100%;
+      }
+
+      .server-env-table-wrap,
+      .table-scroll-wrap {
+        overscroll-behavior-inline: contain;
+      }
     }
 
     @media (max-width: 480px) {
@@ -11870,6 +11937,10 @@
 
       .trading-reference-tooltip {
         white-space: normal;
+      }
+
+      .system-resource-gauges {
+        grid-template-columns: 1fr;
       }
     }
 
@@ -13071,6 +13142,7 @@
     .traffic-chart-accepted { color: var(--accent2); }
     .traffic-chart-rejected { color: var(--danger); }
     .traffic-chart-root { color: var(--warning); }
+    .traffic-chart-edge { color: #ff7a90; }
     .traffic-chart-total { color: var(--accent); }
 
     .sidebar-nav .tab.active::after {

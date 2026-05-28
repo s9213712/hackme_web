@@ -86,6 +86,33 @@ HEAVY_CONTAINS = (
     "/ai-move",
 )
 
+AUTH_EDGE_GUARD_PATHS = {
+    "/api/csrf-token",
+    "/api/login",
+    "/api/register",
+    "/api/captcha/challenge",
+    "/api/password-reset/request",
+    "/api/password-reset/verify",
+    "/api/password-reset/complete",
+}
+
+AUTH_EDGE_GUARD_PREFIXES = (
+    "/api/password-reset",
+    "/api/email-verification",
+)
+
+UPLOAD_EDGE_GUARD_PATHS = {
+    "/api/files/upload",
+    "/api/cloud-drive/upload",
+    "/api/videos/upload",
+    "/api/root/comfyui/model-upload",
+}
+
+UPLOAD_EDGE_GUARD_PREFIXES = (
+    "/api/cloud-drive/resumable-upload",
+    "/api/cloud-drive/remote-download",
+)
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
@@ -131,6 +158,28 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     except Exception:
         value = default
     return max(minimum, min(maximum, value))
+
+
+def _edge_guard_enabled() -> bool:
+    return _env_bool("HACKME_EDGE_BURST_GUARD_ENABLED", True)
+
+
+def _edge_guard_window_seconds() -> int:
+    return _env_int("HACKME_EDGE_BURST_WINDOW_SECONDS", 10, 1, 300)
+
+
+def _edge_guard_limit(label: str) -> int:
+    defaults = {
+        "auth": 40,
+        "management": 90,
+        "upload": 24,
+    }
+    env_names = {
+        "auth": "HACKME_EDGE_AUTH_BURST_LIMIT",
+        "management": "HACKME_EDGE_MANAGEMENT_BURST_LIMIT",
+        "upload": "HACKME_EDGE_UPLOAD_BURST_LIMIT",
+    }
+    return _env_int(env_names.get(label, "HACKME_EDGE_BURST_LIMIT"), defaults.get(label, 60), 1, 5000)
 
 
 def _env_int_or_none(name: str, minimum: int = 1, maximum: int = 4096) -> int | None:
@@ -373,6 +422,104 @@ def is_heavy_request_path(path: str, method: str = "GET") -> bool:
     return False
 
 
+def classify_request_qos(path: str, method: str = "GET") -> str:
+    path = path or ""
+    method = (method or "GET").upper()
+    if is_health_fast_lane_path(path):
+        return "health"
+    if path.startswith("/js/") or path.startswith("/assets/") or path in {"/styles.css", "/experiments.css", "/i18n-language-switcher.css"}:
+        return "static"
+    if path in AUTH_EDGE_GUARD_PATHS or any(path == prefix or path.startswith(prefix) for prefix in AUTH_EDGE_GUARD_PREFIXES):
+        return "auth"
+    if path.startswith("/api/root/") or path.startswith("/api/admin/"):
+        return "management"
+    if is_heavy_request_path(path, method):
+        return "heavy"
+    if path.startswith("/api/"):
+        return "api_read" if method in {"GET", "HEAD"} else "api_write"
+    return "page"
+
+
+def edge_guard_label_for_path(path: str, method: str = "GET") -> str | None:
+    path = path or ""
+    method = (method or "GET").upper()
+    if is_health_fast_lane_path(path):
+        return None
+    if path in AUTH_EDGE_GUARD_PATHS or any(path == prefix or path.startswith(prefix) for prefix in AUTH_EDGE_GUARD_PREFIXES):
+        return "auth"
+    if path in UPLOAD_EDGE_GUARD_PATHS or any(path == prefix or path.startswith(prefix) for prefix in UPLOAD_EDGE_GUARD_PREFIXES):
+        return "upload"
+    if path.startswith("/api/root/") or path.startswith("/api/admin/"):
+        return "management"
+    return None
+
+
+class EdgeBurstGuard:
+    def __init__(self, window_seconds: int = 10):
+        self.window_seconds = max(1, min(300, int(window_seconds or 10)))
+        self._lock = threading.Lock()
+        self._hits: dict[tuple[str, str], list[float]] = {}
+        self._accepted: dict[str, int] = {}
+        self._rejected: dict[str, int] = {}
+
+    def allow(self, label: str, client_key: str, limit: int) -> tuple[bool, int]:
+        label = str(label or "default")
+        client_key = str(client_key or "-")
+        limit = max(1, int(limit or 1))
+        now = time.monotonic()
+        cutoff = now - self.window_seconds
+        key = (label, client_key)
+        with self._lock:
+            hits = [ts for ts in self._hits.get(key, []) if ts >= cutoff]
+            if len(hits) >= limit:
+                self._hits[key] = hits
+                self._rejected[label] = self._rejected.get(label, 0) + 1
+                oldest = min(hits) if hits else now
+                retry_after = max(1, int(round(self.window_seconds - (now - oldest))))
+                return False, retry_after
+            hits.append(now)
+            self._hits[key] = hits
+            self._accepted[label] = self._accepted.get(label, 0) + 1
+            if len(self._hits) > 4096:
+                for old_key, old_hits in list(self._hits.items()):
+                    fresh = [ts for ts in old_hits if ts >= cutoff]
+                    if fresh:
+                        self._hits[old_key] = fresh
+                    else:
+                        self._hits.pop(old_key, None)
+            return True, 0
+
+    def snapshot(self) -> dict:
+        cutoff = time.monotonic() - self.window_seconds
+        with self._lock:
+            active_keys = 0
+            active_hits: dict[str, int] = {}
+            for (label, _client), hits in list(self._hits.items()):
+                fresh = [ts for ts in hits if ts >= cutoff]
+                if fresh:
+                    self._hits[(label, _client)] = fresh
+                    active_keys += 1
+                    active_hits[label] = active_hits.get(label, 0) + len(fresh)
+                else:
+                    self._hits.pop((label, _client), None)
+            labels = sorted(set(active_hits) | set(self._accepted) | set(self._rejected))
+            per_label = {
+                label: {
+                    "active_hits": active_hits.get(label, 0),
+                    "accepted": self._accepted.get(label, 0),
+                    "rejected": self._rejected.get(label, 0),
+                }
+                for label in labels
+            }
+        return {
+            "enabled": _edge_guard_enabled(),
+            "window_seconds": self.window_seconds,
+            "process_local": True,
+            "active_keys": active_keys,
+            "labels": per_label,
+        }
+
+
 @dataclass
 class _GateLease:
     gate: "RequestGate"
@@ -451,7 +598,7 @@ class RequestTrafficWindow:
         download_bytes: int = 0,
     ) -> None:
         now = int(time.time())
-        label = label if label in {"normal", "heavy", "root", "fast_lane", "off"} else "other"
+        label = label if label in {"normal", "heavy", "root", "fast_lane", "edge_guard", "off"} else "other"
         status_code = int(status_code or 0)
         upload_bytes = max(0, int(upload_bytes or 0))
         download_bytes = max(0, int(download_bytes or 0))
@@ -465,6 +612,7 @@ class RequestTrafficWindow:
                 "heavy": 0,
                 "root": 0,
                 "fast_lane": 0,
+                "edge_guard": 0,
                 "off": 0,
                 "other": 0,
                 "hard_5xx": 0,
@@ -500,6 +648,7 @@ class RequestTrafficWindow:
             "heavy": 0,
             "root": 0,
             "fast_lane": 0,
+            "edge_guard": 0,
             "off": 0,
             "other": 0,
             "hard_5xx": 0,
@@ -631,6 +780,10 @@ def _build_backpressure_state(settings: dict | None = None, previous_state: dict
     now = time.monotonic()
     previous_traffic = (previous_state or {}).get("traffic")
     traffic = previous_traffic if hasattr(previous_traffic, "record") else RequestTrafficWindow()
+    previous_edge_guard = (previous_state or {}).get("edge_guard")
+    edge_guard = previous_edge_guard if hasattr(previous_edge_guard, "allow") else EdgeBurstGuard(_edge_guard_window_seconds())
+    if getattr(edge_guard, "window_seconds", None) != _edge_guard_window_seconds():
+        edge_guard = EdgeBurstGuard(_edge_guard_window_seconds())
     return {
         "enabled": enabled,
         "retry_after": retry_after,
@@ -641,6 +794,7 @@ def _build_backpressure_state(settings: dict | None = None, previous_state: dict
         "heavy": RequestGate("heavy", int(limits["heavy"])),
         "root": RequestGate("root", int(limits["root"])),
         "traffic": traffic,
+        "edge_guard": edge_guard,
         "limits": limits,
     }
 
@@ -660,6 +814,31 @@ def _busy_response(label: str, retry_after: int):
     response.status_code = 503
     response.headers["Retry-After"] = str(retry_after)
     response.headers["X-Hackme-Backpressure"] = label
+    return response
+
+
+def _client_burst_key() -> str:
+    remote = request.remote_addr or "-"
+    ua = (request.headers.get("User-Agent") or "")[:80]
+    return f"{remote}|{ua}"
+
+
+def _edge_rate_limited_response(label: str, retry_after: int):
+    response = jsonify(
+        {
+            "ok": False,
+            "error": "edge_rate_limited",
+            "msg": f"請求過於頻繁，伺服器正在保護登入、管理與上傳入口。請稍候 {retry_after} 秒後再試。",
+            "message": f"請求過於頻繁，伺服器正在保護登入、管理與上傳入口。請稍候 {retry_after} 秒後再試。",
+            "user_message": f"請求過於頻繁，伺服器正在保護登入、管理與上傳入口。請稍候 {retry_after} 秒後再試。",
+            "gate": label,
+            "retry_after_seconds": retry_after,
+        }
+    )
+    response.status_code = 429
+    response.headers["Retry-After"] = str(retry_after)
+    response.headers["X-Hackme-Edge-Guard"] = label
+    response.headers["X-Hackme-Backpressure"] = "edge_guard"
     return response
 
 
@@ -726,6 +905,7 @@ def install_backpressure(app, settings_provider=None, root_priority_detector=Non
         g._backpressure_release_registered = False
         g._backpressure_traffic_label = None
         g._backpressure_rejected = False
+        g._hackme_qos_class = classify_request_qos(request.path, request.method)
         if request.method == "OPTIONS":
             return None
         state = dict(_maybe_refresh_backpressure_state(app) or app.config.get("HACKME_BACKPRESSURE") or {})
@@ -734,6 +914,25 @@ def install_backpressure(app, settings_provider=None, root_priority_detector=Non
             g._backpressure_traffic_label = "off"
             return None
         path = request.path or ""
+        edge_label = edge_guard_label_for_path(path, request.method)
+        edge_guard = state.get("edge_guard")
+        if edge_label and _edge_guard_enabled() and hasattr(edge_guard, "allow"):
+            allowed, retry_after = edge_guard.allow(
+                edge_label,
+                _client_burst_key(),
+                _edge_guard_limit(edge_label),
+            )
+            if not allowed:
+                g._backpressure_traffic_label = "edge_guard"
+                g._backpressure_rejected = True
+                _record_backpressure_anomaly(app, {
+                    "event": "edge_rate_limited",
+                    "gate": edge_label,
+                    "status_code": 429,
+                    "retry_after": retry_after,
+                    "qos_class": getattr(g, "_hackme_qos_class", ""),
+                })
+                return _edge_rate_limited_response(edge_label, retry_after)
         if is_backpressure_fast_lane_path(path):
             g._backpressure_traffic_label = "fast_lane"
             return None
@@ -776,6 +975,9 @@ def install_backpressure(app, settings_provider=None, root_priority_detector=Non
         state = app.config.get("HACKME_BACKPRESSURE") or {}
         traffic = state.get("traffic")
         label = getattr(g, "_backpressure_traffic_label", None)
+        qos_class = getattr(g, "_hackme_qos_class", None)
+        if qos_class:
+            response.headers.setdefault("X-Hackme-QoS-Class", qos_class)
         if label is None and response.status_code == 503:
             label = response.headers.get("X-Hackme-Backpressure") or None
         if label and hasattr(traffic, "record"):
@@ -819,6 +1021,7 @@ def backpressure_status(app) -> dict:
     heavy = state.get("heavy")
     root = state.get("root")
     traffic = state.get("traffic")
+    edge_guard = state.get("edge_guard")
     limits = dict(state.get("limits") or {})
     return {
         "pid": os.getpid(),
@@ -840,6 +1043,7 @@ def backpressure_status(app) -> dict:
         "heavy": heavy.snapshot() if hasattr(heavy, "snapshot") else {},
         "root": root.snapshot() if hasattr(root, "snapshot") else {},
         "traffic": traffic.snapshot() if hasattr(traffic, "snapshot") else {},
+        "edge_guard": edge_guard.snapshot() if hasattr(edge_guard, "snapshot") else {},
         "anomaly_audit": {
             "log_path": _backpressure_anomaly_log_path(app),
             "recent": list(app.config.get("HACKME_BACKPRESSURE_RECENT_ANOMALIES") or [])[-20:],

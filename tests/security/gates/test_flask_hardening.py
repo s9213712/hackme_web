@@ -266,6 +266,63 @@ def test_backpressure_preserves_fast_lane_root_priority_and_heavy_limits():
     assert "download_bytes_per_sec" in traffic
 
 
+def test_backpressure_qos_header_and_edge_burst_guard(monkeypatch):
+    monkeypatch.setenv("HACKME_EDGE_BURST_WINDOW_SECONDS", "60")
+    monkeypatch.setenv("HACKME_EDGE_AUTH_BURST_LIMIT", "1")
+
+    app = Flask(__name__)
+    app.testing = True
+    install_backpressure(
+        app,
+        settings_provider=lambda: {
+            "server_backpressure_enabled": True,
+            "server_backpressure_mode": "manual",
+            "server_backpressure_thread_capacity": 4,
+            "server_backpressure_normal_limit": 4,
+            "server_backpressure_heavy_limit": 1,
+            "server_backpressure_root_priority_enabled": True,
+            "server_backpressure_root_limit": 1,
+            "server_backpressure_fast_lane_reserved": 1,
+            "server_backpressure_retry_after_seconds": 2,
+            "server_backpressure_refresh_seconds": 60,
+        },
+        root_priority_detector=lambda: False,
+    )
+
+    @app.route("/api/login", methods=["POST"])
+    def login_probe():
+        return jsonify({"ok": True})
+
+    client = app.test_client()
+    accepted = client.post("/api/login", json={"username": "alice"})
+    assert accepted.status_code == 200
+    assert accepted.headers["X-Hackme-QoS-Class"] == "auth"
+
+    blocked = client.post("/api/login", json={"username": "alice"})
+    assert blocked.status_code == 429
+    assert blocked.get_json()["error"] == "edge_rate_limited"
+    assert blocked.get_json()["gate"] == "auth"
+    assert blocked.headers["X-Hackme-QoS-Class"] == "auth"
+    assert blocked.headers["X-Hackme-Edge-Guard"] == "auth"
+    assert blocked.headers["X-Hackme-Backpressure"] == "edge_guard"
+    assert int(blocked.headers["Retry-After"]) >= 1
+
+    status = backpressure_module.backpressure_status(app)
+    assert status["edge_guard"]["enabled"] is True
+    assert status["edge_guard"]["labels"]["auth"]["rejected"] >= 1
+    assert status["traffic"]["totals"]["edge_guard"] >= 1
+
+
+def test_backpressure_qos_classification_matches_route_planes():
+    assert backpressure_module.classify_request_qos("/api/version") == "health"
+    assert backpressure_module.classify_request_qos("/styles.css") == "static"
+    assert backpressure_module.classify_request_qos("/api/login", "POST") == "auth"
+    assert backpressure_module.classify_request_qos("/api/admin/health") == "management"
+    assert backpressure_module.classify_request_qos("/api/files/upload", "POST") == "heavy"
+    assert backpressure_module.classify_request_qos("/api/chat/rooms") == "api_read"
+    assert backpressure_module.classify_request_qos("/api/chat/rooms", "POST") == "api_write"
+
+
 def test_backpressure_auto_uses_gunicorn_threads_from_argv(monkeypatch):
     monkeypatch.delenv("HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY", raising=False)
     monkeypatch.delenv("HACKME_DEV_GUNICORN_THREADS", raising=False)

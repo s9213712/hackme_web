@@ -15,6 +15,7 @@ def test_main_app_has_mobile_responsive_overrides():
     assert "Mobile ergonomics pass" in css
     assert "@media (max-width: 860px)" in css
     assert "@media (max-width: 720px)" in css
+    assert "-webkit-text-size-adjust: 100%;" in css
     assert ".app-action-bar" in css
     assert "left: .45rem;" in css
     assert "right: .45rem;" in css
@@ -32,6 +33,13 @@ def test_main_app_has_mobile_responsive_overrides():
     assert "grid-template-columns: 1fr !important;" in css
     assert ".drive-file-row" in css
     assert ".table-scroll-wrap" in css
+    assert ".health-hero" in css
+    assert ".health-row-value" in css
+    assert "white-space: normal;" in css
+    assert ".system-resource-board-header" in css
+    assert ".system-resource-gauges" in css
+    assert ".server-env-kv-grid" in css
+    assert "overscroll-behavior-inline: contain;" in css
     assert ".trading-indicator-controls" in css
     assert ".trading-bot-tabs" in css
     assert ".chess-board" in css

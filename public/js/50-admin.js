@@ -147,6 +147,10 @@ function isSystemOverviewActive() {
   return currentModuleTab === "server" && currentServerTab === "overview";
 }
 
+function isSystemHealthActive() {
+  return currentModuleTab === "system" && currentSystemTab === "health";
+}
+
 function isSystemSettingsActive() {
   return currentModuleTab === "system" && currentSystemTab === "capacity";
 }
@@ -158,6 +162,64 @@ function isSystemEnvActive() {
 function isSystemBugReportsActive() {
   return currentModuleTab === "system" && currentSystemTab === "bug-reports";
 }
+
+function canRunRootManagementPoll(isActive) {
+  if (currentUser !== "root" || document.hidden) return false;
+  return typeof isActive !== "function" || isActive();
+}
+
+function scheduleRootManagementIdleTask(callback, timeout = 900) {
+  if (typeof callback !== "function") return;
+  const run = () => {
+    if (document.hidden) return;
+    try {
+      const result = callback();
+      if (result && typeof result.catch === "function") result.catch(() => {});
+    } catch (_) {}
+  };
+  if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(run, { timeout });
+  } else {
+    setTimeout(run, 0);
+  }
+}
+
+function stopRootManagementPolls() {
+  stopServerOutputPoll();
+  stopSystemResourcePoll();
+  stopBackpressureTrafficPoll();
+}
+
+function resumeRootManagementPolls() {
+  if (!canRunRootManagementPoll()) return;
+  if (isSystemOverviewActive()) {
+    startServerOutputPoll();
+    scheduleRootManagementIdleTask(loadServerOutput, 500);
+  }
+  if (isSystemSettingsActive()) {
+    startBackpressureTrafficPoll();
+    scheduleRootManagementIdleTask(refreshBackpressureTraffic, 650);
+  }
+  if (isSystemEnvActive()) {
+    startSystemResourcePoll();
+    scheduleRootManagementIdleTask(refreshSystemResourceBoard, 650);
+  }
+}
+
+function installRootManagementVisibilityGuard() {
+  if (typeof window === "undefined" || window.__rootManagementVisibilityGuardInstalled) return;
+  window.__rootManagementVisibilityGuardInstalled = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      stopRootManagementPolls();
+      return;
+    }
+    resumeRootManagementPolls();
+  });
+  window.addEventListener("pagehide", stopRootManagementPolls);
+}
+
+installRootManagementVisibilityGuard();
 
 function updateServerModeLaunchCheckVisibility() {
   const target = String($("server-mode-select")?.value || currentServerMode || "").trim().toLowerCase();
@@ -202,6 +264,7 @@ function switchServerTab(tab) {
     loadSecurityCenter();
     loadSettings();
     startServerOutputPoll();
+    scheduleRootManagementIdleTask(loadServerOutput, 600);
   }
   if (currentServerTab === "server-mode") {
     loadSettings();
@@ -250,7 +313,13 @@ function switchSystemTab(tab) {
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-system-" + currentSystemTab);
   });
-  if (currentSystemTab === "health") { loadServerHealth(); loadPlatformStats(); loadServerUpdateStatus(false); }
+  if (currentSystemTab === "health") {
+    loadServerHealth();
+    scheduleRootManagementIdleTask(loadPlatformStats, 750);
+    scheduleRootManagementIdleTask(() => {
+      if (isSystemHealthActive()) loadServerUpdateStatus(false);
+    }, 900);
+  }
   if (["features", "appearance", "core"].includes(currentSystemTab)) loadSettings();
   if (currentSystemTab === "capacity") {
     loadSettings();
@@ -5303,6 +5372,9 @@ function renderBackpressureStatus(backpressure) {
   const normal = backpressure.normal || {};
   const heavy = backpressure.heavy || {};
   const root = backpressure.root || {};
+  const edgeGuard = backpressure.edge_guard || {};
+  const edgeLabels = edgeGuard.labels || {};
+  const edgeRejected = Object.values(edgeLabels).reduce((sum, item) => sum + Number(item?.rejected || 0), 0);
   const sources = backpressure.limit_sources || {};
   const anomalyAudit = backpressure.anomaly_audit || {};
   const anomalyRecent = Array.isArray(anomalyAudit.recent) ? anomalyAudit.recent : [];
@@ -5313,6 +5385,7 @@ function renderBackpressureStatus(backpressure) {
     `normal ${normal.active || 0}/${normal.limit || 0} rejected ${normal.rejected || 0} (${sources.normal || "auto"})`,
     `heavy ${heavy.active || 0}/${heavy.limit || 0} rejected ${heavy.rejected || 0} (${sources.heavy || "auto"})`,
     `root ${root.active || 0}/${root.limit || 0} rejected ${root.rejected || 0} (${sources.root || "auto"})`,
+    `edge guard ${edgeGuard.enabled === false ? "off" : "on"} window ${edgeGuard.window_seconds || "-"}s rejected ${edgeRejected}`,
     anomalyLogPath
       ? `異常審計 ${anomalyRecent.length} 筆近期事件，紀錄檔 ${anomalyLogPath}`
       : `異常審計 ${anomalyRecent.length} 筆近期事件`,
@@ -5346,7 +5419,8 @@ function renderBackpressureTrafficChart(backpressure) {
     Number(point.total || 0),
     Number(point.accepted || 0),
     Number(point.rejected || 0),
-    Number(point.root || 0)
+    Number(point.root || 0),
+    Number(point.edge_guard || 0)
   )));
   const width = 640;
   const height = 150;
@@ -5356,6 +5430,7 @@ function renderBackpressureTrafficChart(backpressure) {
   const acceptedLine = trafficPolyline(points, "accepted", maxValue, width, height, padX, padY);
   const rejectedLine = trafficPolyline(points, "rejected", maxValue, width, height, padX, padY);
   const rootLine = trafficPolyline(points, "root", maxValue, width, height, padX, padY);
+  const edgeLine = trafficPolyline(points, "edge_guard", maxValue, width, height, padX, padY);
   const nowLabel = points[points.length - 1]?.label || "";
   const firstLabel = points[0]?.label || "";
   chart.innerHTML = `
@@ -5367,6 +5442,7 @@ function renderBackpressureTrafficChart(backpressure) {
       <polyline points="${acceptedLine}" fill="none" stroke="var(--accent2)" stroke-width="2.5" vector-effect="non-scaling-stroke" />
       <polyline points="${rejectedLine}" fill="none" stroke="var(--danger)" stroke-width="2.5" vector-effect="non-scaling-stroke" />
       <polyline points="${rootLine}" fill="none" stroke="var(--warning)" stroke-width="2.25" vector-effect="non-scaling-stroke" />
+      <polyline points="${edgeLine}" fill="none" stroke="#ff7a90" stroke-width="2" vector-effect="non-scaling-stroke" stroke-dasharray="4 4" />
       <text x="${padX}" y="${height - 2}" fill="var(--muted)" font-size="10">${sanitize(firstLabel)}</text>
       <text x="${width - padX}" y="${height - 2}" fill="var(--muted)" font-size="10" text-anchor="end">${sanitize(nowLabel)}</text>
       <text x="${width - padX}" y="${padY + 9}" fill="var(--muted)" font-size="10" text-anchor="end">max ${maxValue}/s</text>
@@ -5376,6 +5452,7 @@ function renderBackpressureTrafficChart(backpressure) {
       <span class="traffic-chart-accepted">接受 ${Number(totals.accepted || 0)}</span>
       <span class="traffic-chart-rejected">高峰拒絕 ${Number(totals.rejected || 0)}</span>
       <span class="traffic-chart-root">Root 管理 ${Number(totals.root || 0)}</span>
+      <span class="traffic-chart-edge">Edge guard ${Number(totals.edge_guard || 0)}</span>
       <span>PID ${sanitize(String(backpressure?.pid || "-"))} · ${Number(traffic.window_seconds || 0)} 秒視窗</span>
     </div>
   `;
@@ -5390,12 +5467,12 @@ function stopBackpressureTrafficPoll() {
 
 function startBackpressureTrafficPoll() {
   stopBackpressureTrafficPoll();
-  if (currentUser !== "root") return;
+  if (!canRunRootManagementPoll(isSystemSettingsActive)) return;
   backpressureTrafficPollTimer = setInterval(refreshBackpressureTraffic, backpressureTrafficRefreshSeconds * 1000);
 }
 
 async function refreshBackpressureTraffic() {
-  if (currentUser !== "root" || !isSystemSettingsActive() || document.hidden) return;
+  if (!canRunRootManagementPoll(isSystemSettingsActive)) return;
   try {
     const csrf = await fetchCsrfToken();
     const res = await apiFetch(API + "/root/backpressure", {
@@ -6867,7 +6944,7 @@ async function startSecurityStressTest() {
 }
 
 async function loadServerOutput() {
-  if (currentUser !== "root") return;
+  if (!canRunRootManagementPoll(isSystemOverviewActive)) return;
   const csrf = await fetchCsrfToken();
   const res = await apiFetch(API + "/admin/server-output?limit=300", {
     credentials: "same-origin",
@@ -6882,7 +6959,7 @@ async function loadServerOutput() {
 }
 
 function startServerOutputPoll() {
-  if (currentUser !== "root" || !isSystemOverviewActive()) return;
+  if (!canRunRootManagementPoll(isSystemOverviewActive)) return;
   if (serverOutputPollTimer) return;
   serverOutputPollTimer = setInterval(loadServerOutput, serverOutputRefreshSeconds * 1000);
 }
@@ -6904,7 +6981,7 @@ function populateSecurityProfiles(profiles, selectedMode) {
 }
 
 async function loadSecurityCenter() {
-  if (currentUser !== "root") return;
+  if (!canRunRootManagementPoll(isSystemOverviewActive)) return;
   const csrf = await fetchCsrfToken();
   const res = await apiFetch(API + "/admin/security-center", {
     credentials: "same-origin",
@@ -7197,7 +7274,7 @@ async function loadPlaywrightCiHealth() {
 }
 
 async function loadServerHealth() {
-  if (!currentUser || currentRole !== "super_admin") return;
+  if (!currentUser || currentRole !== "super_admin" || !isSystemHealthActive() || document.hidden) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await apiFetch(API + "/admin/health", {
@@ -8212,12 +8289,12 @@ function stopSystemResourcePoll() {
 
 function startSystemResourcePoll() {
   stopSystemResourcePoll();
-  if (currentUser !== "root" || !isSystemEnvActive()) return;
+  if (!canRunRootManagementPoll(isSystemEnvActive)) return;
   systemResourcePollTimer = setInterval(refreshSystemResourceBoard, systemResourceRefreshSeconds * 1000);
 }
 
 async function refreshSystemResourceBoard() {
-  if (systemResourceRefreshInFlight || currentUser !== "root" || !isSystemEnvActive() || document.hidden) return;
+  if (systemResourceRefreshInFlight || !canRunRootManagementPoll(isSystemEnvActive)) return;
   systemResourceRefreshInFlight = true;
   try {
     const csrf = await fetchCsrfToken();
@@ -8244,7 +8321,7 @@ async function refreshSystemResourceBoard() {
 }
 
 async function loadServerEnv() {
-  if (!currentUser || currentRole !== "super_admin") return;
+  if (!currentUser || currentRole !== "super_admin" || !isSystemEnvActive() || document.hidden) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await apiFetch(API + "/admin/environment", {
@@ -8632,7 +8709,7 @@ function renderPlatformNetChart(stats) {
   return `
     <div class="platform-stats-chart" style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.75rem;min-width:0;">
       <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.6rem;">
-        <strong style="color:#e0e0f0;">本月站內錢包流量</strong>
+        <strong style="color:#e0e0f0;">本月積分收支</strong>
         <small style="color:var(--muted);margin-left:auto;">pc0 member ledger</small>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;align-items:center;margin:.9rem 0 .6rem;">
@@ -8645,7 +8722,7 @@ function renderPlatformNetChart(stats) {
       </div>
       <div style="display:flex;justify-content:space-between;gap:.75rem;font-size:.75rem;color:var(--muted);">
         <span>流出 ${platformStatPoints(outflow)}</span>
-        <strong style="color:${netColor};">淨額 ${platformStatPoints(net)}</strong>
+        <strong style="color:${netColor};">本月積分淨值 ${platformStatPoints(net)}</strong>
         <span>流入 ${platformStatPoints(inflow)}</span>
       </div>
       <div style="margin-top:.75rem;border-top:1px solid rgba(255,255,255,.08);padding-top:.65rem;color:#ce93d8;font-weight:700;">
@@ -8680,6 +8757,7 @@ function renderPlatformSupplyChart(stats) {
 async function loadPlatformStats() {
   const container = $("platform-stats");
   if (!container) return;
+  if (!canRunRootManagementPoll(isSystemHealthActive)) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await apiFetch(API + "/admin/platform-stats", {
