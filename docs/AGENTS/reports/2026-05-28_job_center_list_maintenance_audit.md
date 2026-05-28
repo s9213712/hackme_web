@@ -30,7 +30,11 @@ multiply these writes across users and root/admin pages.
   request.
 - Reused the Security Center audit-chain integrity result across readiness,
   anomaly, and audit summary sections to remove duplicate verification scans in
-  a single `/api/admin/security-center` response.
+  a single `/api/admin/security-center` response. Security Center readiness also
+  uses the schema-only DB summary instead of running SQLite `quick_check`.
+- Changed fast `/api/admin/health` to reuse one audit-chain result and pass a
+  schema-only DB summary into readiness. Full SQLite `quick_check` /
+  `foreign_key_check` stays on `/api/admin/health/db-integrity`.
 
 ## Verification
 
@@ -41,7 +45,8 @@ multiply these writes across users and root/admin pages.
 - `python3 -m py_compile routes/chat.py tests/community/test_chat_permissions.py`
 - `PYTHONPATH=/home/s92137/hackme_web python3 -m pytest -q /home/s92137/hackme_web/tests/community/test_chat_permissions.py -k "fanout or official_chat_message or export_is_paginated"`
 - `python3 -m py_compile routes/system_admin.py tests/security/integrity/test_health_center.py`
-- `PYTHONPATH=/home/s92137/hackme_web python3 -m pytest -q /home/s92137/hackme_web/tests/security/integrity/test_health_center.py -k security_center_reuses_audit_integrity_result`
+- `python3 -m py_compile routes/system_admin_sections/security_routes.py`
+- `PYTHONPATH=/home/s92137/hackme_web python3 -m pytest -q /home/s92137/hackme_web/tests/security/integrity/test_health_center.py -k "security_center_reuses_audit_integrity_result or fast_admin_health_reuses_audit"`
 
 ## Residual Risk
 

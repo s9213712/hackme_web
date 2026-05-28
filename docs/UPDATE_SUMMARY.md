@@ -1,6 +1,16 @@
 # Update Summary
 
-Release ID: `2026.05.28-004`
+Release ID: `2026.05.28-005`
+
+## 2026.05.28-005
+
+- Fast `/api/admin/health` now reuses one audit-chain result across the response
+  and passes a schema-only DB summary into readiness. Full `PRAGMA quick_check`
+  and `foreign_key_check` remain on the explicit `/api/admin/health/db-integrity`
+  endpoint.
+- `/api/admin/security-center` readiness also uses the schema-only DB summary,
+  while still reusing one audit-chain integrity result across readiness,
+  anomaly, and audit summary sections.
 
 ## 2026.05.28-004
 

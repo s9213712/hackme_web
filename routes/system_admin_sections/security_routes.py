@@ -564,6 +564,7 @@ def register_system_admin_security_routes(app, ctx):
     dir_stats = ctx["dir_stats"]
     safe_count = ctx["safe_count"]
     health_counts = ctx["health_counts"]
+    db_schema_summary = ctx["db_schema_summary"]
     db_integrity_summary = ctx["db_integrity_summary"]
     readiness_summary = ctx["readiness_summary"]
     anomaly_summary = ctx["anomaly_summary"]
@@ -679,11 +680,9 @@ def register_system_admin_security_routes(app, ctx):
             return json_resp({"ok":False,"msg":"只有最高管理者可查看伺服器健康度"}), 403
 
         settings = get_system_settings()
-        audit_enabled = is_audit_chain_enabled()
-        if audit_enabled:
-            audit_ok, audit_broken, audit_details = verify_audit_integrity()
-        else:
-            audit_ok, audit_broken, audit_details = None, None, "audit chain disabled"
+        audit_state = audit_integrity_summary()
+        audit_enabled = bool(audit_state.get("enabled"))
+        audit_ok = audit_state.get("ok")
 
         counts, count_errors = health_counts()
         counts["pending_reports"] = counts.get("pending_chat_reports", 0)
@@ -699,8 +698,8 @@ def register_system_admin_security_routes(app, ctx):
             storage_catalog_files, _storage_catalog_error = safe_count(capacity_conn, "storage_files", optional=True)
         finally:
             capacity_conn.close()
-        readiness = readiness_summary()
-        anomaly = anomaly_summary()
+        readiness = readiness_summary(db=db_schema_summary(), audit_state=audit_state)
+        anomaly = anomaly_summary(audit_state=audit_state)
         points_finality = _points_finality_health_snapshot()
         database_usage = _database_usage_snapshot(
             db_path=DB_PATH,
@@ -729,8 +728,8 @@ def register_system_admin_security_routes(app, ctx):
             "audit_integrity": {
                 "enabled": audit_enabled,
                 "ok": audit_ok,
-                "broken_at": audit_broken,
-                "details": audit_details,
+                "broken_at": audit_state.get("broken_at"),
+                "details": audit_state.get("details"),
                 "operator_action_required": audit_ok is False,
                 "auto_lockdown_applied": False,
             },

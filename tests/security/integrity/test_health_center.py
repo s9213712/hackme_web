@@ -191,7 +191,26 @@ def test_security_center_reuses_audit_integrity_result(tmp_path):
     res = app.test_client().get("/api/admin/security-center")
 
     assert res.status_code == 200
-    assert res.get_json()["security_center"]["audit_integrity"]["details"] == "ok"
+    payload = res.get_json()["security_center"]
+    assert payload["audit_integrity"]["details"] == "ok"
+    assert payload["readiness"]["database"]["quick_check"] == ["skipped_fast_health"]
+    assert calls["count"] == 1
+
+
+def test_fast_admin_health_reuses_audit_and_skips_db_quick_check(tmp_path):
+    calls = {"count": 0}
+
+    def verify_once():
+        calls["count"] += 1
+        return True, None, "ok"
+
+    app = _make_app(tmp_path, audit_result=verify_once)
+    res = app.test_client().get("/api/admin/health")
+    data = res.get_json()
+
+    assert res.status_code == 200
+    assert data["readiness"]["database"]["quick_check"] == ["skipped_fast_health"]
+    assert data["readiness"]["database"]["schema_version"] == CURRENT_SCHEMA_VERSION
     assert calls["count"] == 1
 
 

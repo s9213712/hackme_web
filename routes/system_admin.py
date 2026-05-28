@@ -1023,6 +1023,21 @@ def register_system_admin_routes(app, deps):
         finally:
             conn.close()
 
+    def db_schema_summary():
+        conn = get_db()
+        try:
+            schema_version = get_schema_version(conn)
+            return {
+                "ok": schema_version == CURRENT_SCHEMA_VERSION,
+                "quick_check": ["skipped_fast_health"],
+                "foreign_key_violations": [],
+                "schema_version": schema_version,
+                "expected_schema_version": CURRENT_SCHEMA_VERSION,
+                "details": "quick_check and foreign_key_check skipped; use /api/admin/health/db-integrity",
+            }
+        finally:
+            conn.close()
+
     def health_counts():
         conn = get_db()
         auth_conn = get_auth_db()
@@ -1241,7 +1256,7 @@ def register_system_admin_routes(app, deps):
         log_lines = int(settings.get("security_log_tail_lines", 200) or 200)
         audit_state = audit_integrity_summary()
         return {
-            "readiness": readiness_summary(audit_state=audit_state),
+            "readiness": readiness_summary(db=db_schema_summary(), audit_state=audit_state),
             "anomaly": anomaly_summary(audit_state=audit_state),
             "audit_integrity": audit_state,
             "audit_entries": recent_secure_audit(50),
@@ -1319,6 +1334,7 @@ def register_system_admin_routes(app, deps):
         "audit_storage_capacity": audit_storage_capacity,
         "cloud_drive_storage_payload": cloud_drive_storage_payload,
         "current_git_state": current_git_state,
+        "db_schema_summary": db_schema_summary,
         "db_integrity_summary": db_integrity_summary,
         "dir_stats": dir_stats,
         "feature_dependency_error_payload": _feature_dependency_error_payload,

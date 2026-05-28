@@ -20,7 +20,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.28-004`
+- Release ID: `2026.05.28-005`
 - Schema version: `30`
 - Release ID source: `services/platform/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -44,6 +44,8 @@ Related technical references:
   rooms should use Cloud Drive share links or an async grant workflow.
 - Chat room export is paginated by request-path cap (`limit` default `1000`,
   max `5000`) and returns `pagination.next_before_id` for older slices.
+- Fast admin health and Security Center readiness use schema-only DB summaries;
+  full SQLite `quick_check` stays on `/api/admin/health/db-integrity`.
 
 ## Server Runner Boundary
 
