@@ -1,6 +1,27 @@
 # Update Summary
 
-Release ID: `2026.05.28-002`
+Release ID: `2026.05.28-003`
+
+## 2026.05.28-003
+
+- Continued adversarial management-plane audit after the finance 50K work. The
+  remaining synchronous PointsChain pre-checks now use bounded verification:
+  due seal, force seal, server-update recovery checks, root verify jobs,
+  post-restore PointsChain validation, and recovery auto-handle no longer scan
+  the full ledger on the request path.
+- `/api/points/transactions` non-compact root reads now fully respect the
+  explicit `sweep=1` switch. Ordinary list reads no longer finalize pending
+  transfer rows as a hidden side effect.
+- Health Center finality-sweep status now peeks the latest management snapshot
+  read-only instead of creating management-plane tables from a health GET.
+- `/api/admin/platform-stats`, storage capacity health reads, root/admin
+  storage user lists, storage quota sync, storage trash purge, scheduled
+  storage maintenance, announcement attachment request listing, and violation
+  integrity summaries were bounded so common admin pages do not sweep all users
+  or hydrate unbounded lists.
+- PointsChain forensic bundles no longer inline the full ledger into JSON after
+  a safe-mode incident; they keep head/counts plus recent ledger/block/audit
+  samples and leave full ledger export out of the request path.
 
 ## 2026.05.28-002
 
