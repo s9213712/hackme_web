@@ -449,26 +449,40 @@ def register_user_routes(app, deps):
         except Exception:
             return {}
 
-    def active_session_map(auth_conn):
+    def active_session_map(auth_conn, user_ids=None):
         try:
             session_cols = {r["name"] for r in auth_conn.execute("PRAGMA table_info(sessions)").fetchall()}
         except Exception:
             return {}
         if not {"user_id", "expires_at"}.issubset(session_cols):
             return {}
+        scoped_user_ids = None
+        if user_ids is not None:
+            scoped_user_ids = sorted({
+                int(user_id)
+                for user_id in user_ids
+                if str(user_id or "").strip().isdigit() and int(user_id) > 0
+            })
+            if not scoped_user_ids:
+                return {}
         last_seen_expr = "COALESCE(last_seen, created_at)" if "last_seen" in session_cols else "created_at"
         revoked_filter = "AND COALESCE(is_revoked, 0)=0" if "is_revoked" in session_cols else ""
-        now_iso = datetime.now().isoformat()
+        user_filter = ""
+        params = [datetime.now().isoformat()]
+        if scoped_user_ids is not None:
+            placeholders = ",".join("?" for _ in scoped_user_ids)
+            user_filter = f"AND user_id IN ({placeholders})"
+            params.extend(scoped_user_ids)
         online_cutoff = (datetime.now() - timedelta(minutes=5)).isoformat()
         try:
             rows = auth_conn.execute(
                 f"""
                 SELECT user_id, MAX({last_seen_expr}) AS last_seen, COUNT(*) AS session_count
                 FROM sessions
-                WHERE expires_at>? {revoked_filter}
+                WHERE expires_at>? {revoked_filter} {user_filter}
                 GROUP BY user_id
                 """,
-                (now_iso,),
+                tuple(params),
             ).fetchall()
         except Exception:
             return {}
@@ -1130,7 +1144,7 @@ def register_user_routes(app, deps):
                 try:
                     auth_conn = get_readonly_auth_db()
                     try:
-                        sessions_by_user = active_session_map(auth_conn)
+                        sessions_by_user = active_session_map(auth_conn, [int(row["id"]) for row in rows])
                     finally:
                         auth_conn.close()
                 except Exception:

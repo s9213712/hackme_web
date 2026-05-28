@@ -7,6 +7,8 @@ const CHAT_STICKER_LABELS = {
   sad: "🥲"
 };
 let pendingChatAttachments = [];
+const chatMessageLatestIdByRoom = {};
+const chatMessagePollTicksByRoom = {};
 
 function chatConfirm(message, options = {}) {
   if (typeof showAppConfirm === "function") return showAppConfirm(message, options);
@@ -361,7 +363,9 @@ async function openChatRoom(roomId, autoPoll = true) {
     const anonymousState = target.allow_anonymous && !target.is_private ? " · 可匿名" : "";
     member.textContent = `持有者：${target.owner_username || "未知"}${memberCount}${anonymousState}${passwordState}`;
   }
-  await loadChatMessages(id, false);
+  chatMessageLatestIdByRoom[String(id)] = 0;
+  chatMessagePollTicksByRoom[String(id)] = 0;
+  await loadChatMessages(id, false, { full: true });
   if (typeof loadContextAttachments === "function") {
     const refs = await loadContextAttachments("group_chat", id, "chat-attachment-list");
     syncChatSharedAttachmentPanel(refs);
@@ -378,15 +382,25 @@ async function openChatRoom(roomId, autoPoll = true) {
   }
 }
 
-async function loadChatMessages(roomId, silent = false) {
+async function loadChatMessages(roomId, silent = false, options = {}) {
   if (!roomId) return;
+  const roomKey = String(roomId);
+  chatMessagePollTicksByRoom[roomKey] = (chatMessagePollTicksByRoom[roomKey] || 0) + 1;
+  const forceFull = !!options.full || (silent && chatMessagePollTicksByRoom[roomKey] % 12 === 0);
+  const lastSeenId = Number(chatMessageLatestIdByRoom[roomKey] || 0);
+  const deltaMode = silent && !forceFull && lastSeenId > 0;
   const csrf = await fetchCsrfToken();
   try {
-    const res = await apiFetch(API + `/chat/rooms/${roomId}/messages`, {
+    const url = new URL(API + `/chat/rooms/${roomId}/messages`, window.location.origin);
+    url.searchParams.set("limit", deltaMode ? "100" : "50");
+    if (deltaMode) url.searchParams.set("after_id", String(lastSeenId));
+    if (deltaMode) url.searchParams.set("compact", "1");
+    const res = await apiFetch(url.toString(), {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
     const json = await res.json();
+    if (Number(selectedChatRoomId) !== Number(roomId)) return;
     if (!json.ok) {
       if (!silent) {
         setChatMsg("chat-room-warn", json.msg || "讀取訊息失敗", false);
@@ -407,7 +421,16 @@ async function loadChatMessages(roomId, silent = false) {
         member.textContent = `${memberCount.replace(/^ · /, "")}${anonymousState}${passwordState}`;
       }
     }
-    renderChatMessages(Array.isArray(json.messages) ? json.messages : []);
+    const incoming = Array.isArray(json.messages) ? json.messages : [];
+    if (deltaMode && !incoming.length) {
+      const warn = $("chat-room-warn");
+      if (warn) warn.className = "msg";
+      return;
+    }
+    const nextMessages = deltaMode ? chatMessageCache.concat(incoming).slice(-200) : incoming;
+    renderChatMessages(nextMessages);
+    const latest = Number(json.cursor?.latest_id || Math.max(0, ...nextMessages.map((item) => Number(item.id || 0))));
+    chatMessageLatestIdByRoom[roomKey] = latest || 0;
     const warn = $("chat-room-warn");
     if (warn) warn.className = "msg";
   } catch (e) {
@@ -778,7 +801,7 @@ async function deleteChatMessage(messageId, recall = false) {
   const json = await res.json().catch(() => ({}));
   if (json.ok) {
     setChatMsg("chat-room-warn", json.msg || "訊息已刪除", true);
-    if (selectedChatRoomId) await loadChatMessages(selectedChatRoomId, true);
+    if (selectedChatRoomId) await loadChatMessages(selectedChatRoomId, true, { full: true });
     return;
   }
   setChatMsg("chat-room-warn", json.msg || "刪除訊息失敗", false);
@@ -827,7 +850,7 @@ async function editChatMessage(messageId) {
   const json = await res.json().catch(() => ({}));
   if (json.ok) {
     setChatMsg("chat-room-warn", json.msg || "訊息已更新", true);
-    if (selectedChatRoomId) await loadChatMessages(selectedChatRoomId, true);
+    if (selectedChatRoomId) await loadChatMessages(selectedChatRoomId, true, { full: true });
     return;
   }
   setChatMsg("chat-room-warn", json.msg || "訊息編輯失敗", false);

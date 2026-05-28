@@ -61,6 +61,8 @@ def test_community_composers_are_button_opened_not_permanent():
     assert "data-edit-announcement" in community_js
     assert "function editAnnouncement" in community_js
     assert "function resetCommunityAnnouncementEditor" in community_js
+    assert "communityAnnouncementsEtag" in community_js
+    assert 'headers["If-None-Match"] = communityAnnouncementsEtag' in community_js
     assert 'submitBtn.textContent = communityAnnouncementEditingId ? "更新公告" : "發布公告"' in community_js
     assert 'method: isEditing ? "PUT" : "POST"' in community_js
     assert '`/community/announcements/${editingId}`' in community_js
@@ -68,6 +70,8 @@ def test_community_composers_are_button_opened_not_permanent():
     assert "penalizeCommunityPost" in community_js
     assert "can_pin_threads" in community_js
     assert "toggleCommunityThreadSticky" in community_js
+    assert "data-load-more-community-posts" in community_js
+    assert "appendPosts: true" in community_js
     assert "COMMUNITY_INLINE_MEDIA_TOKEN_RE" in community_js
     assert "function uploadCommunityInlineMedia" in community_js
     assert "function insertCommunityInlineMediaToken" in community_js

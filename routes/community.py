@@ -1,10 +1,11 @@
+import hashlib
 import math
 import re
 import threading
 from datetime import datetime, timedelta
 from functools import wraps
 
-from flask import request
+from flask import Response, request
 
 from services.governance.records import add_reputation_event, record_moderation_action
 from services.security.permissions import require_member_action
@@ -39,6 +40,12 @@ def register_community_routes(app, deps):
     points_service = deps.get("points_service")
     community_schema_lock = threading.RLock()
     community_schema_ready_keys = set()
+    community_read_index_ready_keys = set()
+    community_read_load_index_sql = (
+        "CREATE INDEX IF NOT EXISTS idx_announcements_visible_order ON announcements(is_active, is_pinned, created_at, id)",
+        "CREATE INDEX IF NOT EXISTS idx_forum_threads_board_visible_page ON forum_threads(board_id, is_deleted, status, is_sticky, created_at, id)",
+        "CREATE INDEX IF NOT EXISTS idx_forum_posts_thread_page ON forum_posts(thread_id, is_deleted, is_hidden, is_pinned, created_at, id)",
+    )
 
     def _schema_row_value(row, key, index=None, default=None):
         try:
@@ -187,6 +194,23 @@ def register_community_routes(app, deps):
         except Exception:
             return False
 
+    def _ensure_community_read_load_indexes(conn):
+        schema_key = _community_schema_db_key(conn)
+        if schema_key in community_read_index_ready_keys:
+            return True
+        try:
+            for sql in community_read_load_index_sql:
+                conn.execute(sql)
+            if not getattr(conn, "in_transaction", False):
+                conn.commit()
+            community_read_index_ready_keys.add(schema_key)
+            return True
+        except Exception as exc:
+            message = str(exc).lower()
+            if "locked" in message or "busy" in message:
+                return False
+            raise
+
     def require_csrf_by_method(fn):
         safe = require_csrf_safe(fn)
         strict = require_csrf(fn)
@@ -296,14 +320,18 @@ def register_community_routes(app, deps):
     def ensure_community_schema(conn):
         schema_key = _community_schema_db_key(conn)
         if schema_key in community_schema_ready_keys:
+            _ensure_community_read_load_indexes(conn)
             return
         if _community_schema_is_current(conn):
+            _ensure_community_read_load_indexes(conn)
             community_schema_ready_keys.add(schema_key)
             return
         with community_schema_lock:
             if schema_key in community_schema_ready_keys:
+                _ensure_community_read_load_indexes(conn)
                 return
             if _community_schema_is_current(conn):
+                _ensure_community_read_load_indexes(conn)
                 community_schema_ready_keys.add(schema_key)
                 return
 
@@ -461,14 +489,17 @@ def register_community_routes(app, deps):
         );
 
         CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(is_active, created_at);
+        CREATE INDEX IF NOT EXISTS idx_announcements_visible_order ON announcements(is_active, is_pinned, created_at, id);
         CREATE INDEX IF NOT EXISTS idx_forum_categories_active_sort ON forum_categories(is_active, sort_order, name);
         CREATE INDEX IF NOT EXISTS idx_forum_boards_category ON forum_boards(category_id, status, sort_order, last_activity_at);
         CREATE INDEX IF NOT EXISTS idx_forum_boards_visible ON forum_boards(is_active, visibility, status, sort_order);
         CREATE INDEX IF NOT EXISTS idx_forum_boards_status ON forum_boards(status, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_threads_board ON forum_threads(board_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_threads_visible ON forum_threads(board_id, is_deleted, status, is_sticky, created_at);
+        CREATE INDEX IF NOT EXISTS idx_forum_threads_board_visible_page ON forum_threads(board_id, is_deleted, status, is_sticky, created_at, id);
         CREATE INDEX IF NOT EXISTS idx_forum_posts_thread ON forum_posts(thread_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_posts_visible ON forum_posts(thread_id, is_deleted, is_hidden, is_pinned, created_at);
+        CREATE INDEX IF NOT EXISTS idx_forum_posts_thread_page ON forum_posts(thread_id, is_deleted, is_hidden, is_pinned, created_at, id);
         CREATE INDEX IF NOT EXISTS idx_board_moderators_user ON board_moderators(user_id, board_id);
         CREATE INDEX IF NOT EXISTS idx_forum_post_reactions_post ON forum_post_reactions(post_id);
         CREATE INDEX IF NOT EXISTS idx_forum_thread_reactions_thread ON forum_thread_reactions(thread_id);
@@ -565,6 +596,7 @@ def register_community_routes(app, deps):
             ensure_default_forum_boards(conn, default_category_id)
             conn.commit()
             community_schema_ready_keys.add(schema_key)
+            community_read_index_ready_keys.add(schema_key)
 
     def ensure_default_forum_category(conn):
         now = datetime.now().isoformat()
@@ -950,11 +982,22 @@ def register_community_routes(app, deps):
         try:
             ensure_community_schema(conn)
             if request.method == "GET":
+                summary = conn.execute(
+                    "SELECT COUNT(*) AS c, COALESCE(MAX(updated_at), '') AS updated_at, COALESCE(MAX(id), 0) AS max_id "
+                    "FROM announcements WHERE is_active=1"
+                ).fetchone()
+                etag_seed = f"announcements:{summary['c']}:{summary['updated_at']}:{summary['max_id']}"
+                etag = '"' + hashlib.sha256(etag_seed.encode("utf-8")).hexdigest()[:24] + '"'
+                if str(request.headers.get("If-None-Match") or "").strip() == etag:
+                    response = Response(status=304)
+                    response.headers["ETag"] = etag
+                    response.headers["Cache-Control"] = "private, max-age=15"
+                    return response
                 rows = conn.execute(
                     "SELECT id, title, content, author_username, is_pinned, created_at, updated_at "
                     "FROM announcements WHERE is_active=1 ORDER BY is_pinned DESC, created_at DESC LIMIT 30"
                 ).fetchall()
-                return json_resp({
+                response = json_resp({
                     "ok": True,
                     "announcements": [{
                         "id": row["id"],
@@ -967,6 +1010,9 @@ def register_community_routes(app, deps):
                     } for row in rows],
                     "can_publish": can_manage_community(actor),
                 })
+                response.headers["ETag"] = etag
+                response.headers["Cache-Control"] = "private, max-age=15"
+                return response
 
             if not can_manage_community(actor):
                 return json_resp({"ok": False, "msg": "只有管理員以上可發布公告"}), 403
@@ -1065,21 +1111,22 @@ def register_community_routes(app, deps):
                 rows = conn.execute(
                     f"SELECT * FROM forum_categories {where} ORDER BY sort_order ASC, name ASC"
                 ).fetchall()
+                if manageable:
+                    count_rows = conn.execute(
+                        "SELECT category_id, COUNT(*) AS c FROM forum_boards GROUP BY category_id"
+                    ).fetchall()
+                else:
+                    count_rows = conn.execute(
+                        "SELECT category_id, COUNT(*) AS c FROM forum_boards "
+                        "WHERE is_active=1 AND ((status='approved' AND visibility='public') OR owner_user_id=?) "
+                        "GROUP BY category_id",
+                        (actor["id"],),
+                    ).fetchall()
+                board_counts = {row["category_id"]: int(row["c"] or 0) for row in count_rows}
                 categories = []
                 for row in rows:
                     payload = category_payload(row)
-                    if manageable:
-                        counts = conn.execute(
-                            "SELECT COUNT(*) AS c FROM forum_boards WHERE category_id=?",
-                            (row["id"],)
-                        ).fetchone()
-                    else:
-                        counts = conn.execute(
-                            "SELECT COUNT(*) AS c FROM forum_boards WHERE category_id=? AND is_active=1 AND "
-                            "((status='approved' AND visibility='public') OR owner_user_id=?)",
-                            (row["id"], actor["id"])
-                        ).fetchone()
-                    payload["board_count"] = counts["c"] or 0
+                    payload["board_count"] = board_counts.get(row["id"], 0)
                     categories.append(payload)
                 return json_resp({"ok": True, "categories": categories, "can_manage": manageable})
 
@@ -1547,25 +1594,38 @@ def register_community_routes(app, deps):
                     f"WHERE {where} ORDER BY t.is_sticky DESC, t.created_at DESC LIMIT ? OFFSET ?",
                     tuple(params + [limit, page * limit])
                 ).fetchall()
+                thread_ids = [int(row["id"]) for row in rows]
+                reply_counts = {}
+                reaction_map = {}
+                if thread_ids:
+                    placeholders = ",".join("?" for _ in thread_ids)
+                    reply_counts = {
+                        int(row["thread_id"]): int(row["c"] or 0)
+                        for row in conn.execute(
+                            f"SELECT thread_id, COUNT(*) AS c FROM forum_posts "
+                            f"WHERE is_deleted=0 AND thread_id IN ({placeholders}) GROUP BY thread_id",
+                            tuple(thread_ids),
+                        ).fetchall()
+                    }
+                    reaction_map = {
+                        int(row["thread_id"]): row
+                        for row in conn.execute(
+                            "SELECT thread_id, "
+                            "COALESCE(SUM(CASE WHEN value=1 THEN 1 ELSE 0 END), 0) AS like_count, "
+                            "COALESCE(SUM(CASE WHEN value=-1 THEN 1 ELSE 0 END), 0) AS dislike_count, "
+                            "COALESCE(MAX(CASE WHEN user_id=? THEN value ELSE 0 END), 0) AS user_reaction "
+                            f"FROM forum_thread_reactions WHERE thread_id IN ({placeholders}) GROUP BY thread_id",
+                            tuple([actor["id"]] + thread_ids),
+                        ).fetchall()
+                    }
                 threads = []
                 for row in rows:
-                    reply_count = conn.execute(
-                        "SELECT COUNT(*) AS c FROM forum_posts WHERE thread_id=? AND is_deleted=0",
-                        (row["id"],)
-                    ).fetchone()["c"]
                     item = thread_payload(row)
-                    reaction_counts = conn.execute(
-                        "SELECT "
-                        "COALESCE(SUM(CASE WHEN value=1 THEN 1 ELSE 0 END), 0) AS like_count, "
-                        "COALESCE(SUM(CASE WHEN value=-1 THEN 1 ELSE 0 END), 0) AS dislike_count, "
-                        "COALESCE(MAX(CASE WHEN user_id=? THEN value ELSE 0 END), 0) AS user_reaction "
-                        "FROM forum_thread_reactions WHERE thread_id=?",
-                        (actor["id"], row["id"])
-                    ).fetchone()
-                    item["like_count"] = reaction_counts["like_count"] or 0
-                    item["dislike_count"] = reaction_counts["dislike_count"] or 0
-                    item["user_reaction"] = reaction_counts["user_reaction"] or 0
-                    item["reply_count"] = reply_count or 0
+                    reaction_counts = reaction_map.get(int(row["id"]))
+                    item["like_count"] = (reaction_counts["like_count"] if reaction_counts else 0) or 0
+                    item["dislike_count"] = (reaction_counts["dislike_count"] if reaction_counts else 0) or 0
+                    item["user_reaction"] = (reaction_counts["user_reaction"] if reaction_counts else 0) or 0
+                    item["reply_count"] = reply_counts.get(int(row["id"]), 0)
                     threads.append(item)
                 can_post_without_review = not thread_requires_review(actor, manageable)
                 return json_resp({
@@ -1858,6 +1918,16 @@ def register_community_routes(app, deps):
             post_params = [thread_id]
             if not manageable:
                 post_where += " AND p.is_hidden=0"
+            posts_page = parse_positive_int(request.args.get("posts_page", request.args.get("post_page", 0)), default=0, min_value=0)
+            if posts_page is None:
+                return json_resp({"ok": False, "msg": "posts_page 參數格式錯誤"}), 400
+            posts_limit = parse_positive_int(request.args.get("posts_limit", request.args.get("post_limit", 100)), default=100, min_value=1, max_value=200)
+            if posts_limit is None:
+                return json_resp({"ok": False, "msg": "posts_limit 參數格式錯誤"}), 400
+            posts_total = conn.execute(
+                f"SELECT COUNT(*) AS c FROM forum_posts p WHERE {post_where}",
+                tuple(post_params),
+            ).fetchone()["c"]
             posts = conn.execute(
                 "SELECT p.id, p.content, p.author_user_id, p.author_username, COALESCE(u.avatar_file_id, '') AS author_avatar_file_id, p.is_pinned, p.is_hidden, p.hidden_reason, "
                 "p.created_at, p.updated_at, "
@@ -1869,8 +1939,9 @@ def register_community_routes(app, deps):
                 "LEFT JOIN forum_post_reactions r ON r.post_id=p.id "
                 f"WHERE {post_where} "
                 "GROUP BY p.id "
-                "ORDER BY p.is_pinned DESC, p.created_at ASC",
-                tuple([actor["id"]] + post_params)
+                "ORDER BY p.is_pinned DESC, p.created_at ASC "
+                "LIMIT ? OFFSET ?",
+                tuple([actor["id"]] + post_params + [posts_limit, posts_page * posts_limit])
             ).fetchall()
             thread_reactions = conn.execute(
                 "SELECT "
@@ -1935,7 +2006,11 @@ def register_community_routes(app, deps):
                     "user_reaction": row["user_reaction"],
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
-                } for row in posts]
+                } for row in posts],
+                "posts_total": int(posts_total or 0),
+                "posts_page": posts_page,
+                "posts_limit": posts_limit,
+                "posts_has_more": (posts_page + 1) * posts_limit < int(posts_total or 0),
             })
         finally:
             conn.close()

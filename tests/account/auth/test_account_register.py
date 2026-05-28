@@ -234,6 +234,128 @@ def test_register_writes_signup_bonus_to_split_finance_db(tmp_path):
         finance.close()
 
 
+def test_register_marks_signup_bonus_deferred_when_points_init_fails(tmp_path):
+    db_path = tmp_path / "register.db"
+    _init_register_tables(db_path)
+
+    class FailingPointsService:
+        chain_secret = "test-secret"
+
+        def get_db(self):
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            return conn
+
+        def ensure_schema(self, conn):
+            raise RuntimeError("points unavailable")
+
+    client = _build_app(db_path, points_service=FailingPointsService()).test_client()
+
+    response = client.post(
+        "/api/register",
+        json={
+            "username": "deferred_user",
+            "password": "GoodPass1!",
+            "password_confirm": "GoodPass1!",
+            "nickname": "Deferred",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["signup_bonus_deferred"] is True
+    assert payload["signup_bonus"]["created"] is False
+    assert payload["signup_bonus"]["deferred_reason"] == "points_initialization_failed"
+
+    conn = sqlite3.connect(db_path)
+    try:
+        user = conn.execute(
+            "SELECT username, status, signup_bonus_deferred FROM users WHERE username='deferred_user'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert tuple(user) == ("deferred_user", "pending", 1)
+
+
+def test_login_reissues_deferred_signup_bonus_once_after_approval(tmp_path):
+    db_path = tmp_path / "register.db"
+    _init_register_tables(db_path)
+
+    class FailingPointsService:
+        chain_secret = "test-secret"
+
+        def get_db(self):
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            return conn
+
+        def ensure_schema(self, conn):
+            raise RuntimeError("points unavailable")
+
+    register_client = _build_app(db_path, points_service=FailingPointsService()).test_client()
+    register_response = register_client.post(
+        "/api/register",
+        json={
+            "username": "deferred_user",
+            "password": "GoodPass1!",
+            "password_confirm": "GoodPass1!",
+            "nickname": "Deferred",
+        },
+    )
+    assert register_response.status_code == 200
+    assert register_response.get_json()["signup_bonus_deferred"] is True
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("UPDATE users SET status='active' WHERE username='deferred_user'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    def points_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        register_app_mode_function(conn, mode_reader=lambda: "production")
+        return conn
+
+    points_service = PointsLedgerService(
+        get_db=points_db,
+        chain_secret="test-secret",
+        backup_dir=tmp_path / "points_chain_backups",
+        mode_reader=lambda: "production",
+    )
+    login_client = _build_app(db_path, points_service=points_service).test_client()
+
+    first_login = login_client.post(
+        "/api/login",
+        json={"username": "deferred_user", "password": "GoodPass1!"},
+    )
+    assert first_login.status_code == 200
+    first_payload = first_login.get_json()
+    assert first_payload["ok"] is True
+    assert first_payload["signup_bonus"]["created"] is True
+    assert points_service.get_wallet(1)["points_balance"] == SIGNUP_BONUS_POINTS
+
+    conn = sqlite3.connect(db_path)
+    try:
+        deferred = conn.execute(
+            "SELECT signup_bonus_deferred FROM users WHERE username='deferred_user'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert deferred == 0
+
+    second_login = login_client.post(
+        "/api/login",
+        json={"username": "deferred_user", "password": "GoodPass1!"},
+    )
+    assert second_login.status_code == 200
+    assert second_login.get_json()["signup_bonus"] is None
+    assert points_service.get_wallet(1)["points_balance"] == SIGNUP_BONUS_POINTS
+
+
 def test_register_validation_returns_field_for_password_confirmation(tmp_path):
     client = _build_app(tmp_path / "register.db").test_client()
 

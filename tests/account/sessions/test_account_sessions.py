@@ -1,9 +1,13 @@
 import hashlib
 import sqlite3
+from pathlib import Path
 
 from flask import Flask, jsonify, make_response
 
 from routes.users import register_user_routes
+
+
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def _hash_token(token):
@@ -216,6 +220,14 @@ def test_admin_users_include_online_status_from_active_sessions(tmp_path):
     assert users["test"]["online_status"] == "online"
     assert users["test"]["active_session_count"] == 1
     assert users["admin"]["is_online"] is False
+
+
+def test_admin_users_session_lookup_is_scoped_to_visible_page():
+    users_py = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
+
+    assert "def active_session_map(auth_conn, user_ids=None)" in users_py
+    assert "AND user_id IN ({placeholders})" in users_py
+    assert 'active_session_map(auth_conn, [int(row["id"]) for row in rows])' in users_py
 
 
 def test_admin_user_block_rejects_self_block_for_root_and_manager(tmp_path):

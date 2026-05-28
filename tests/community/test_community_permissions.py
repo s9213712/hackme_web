@@ -186,6 +186,23 @@ def test_community_routes_accept_sqlite_row_actor(tmp_path):
     assert boards.status_code == 200
 
 
+def test_announcements_support_conditional_get(tmp_path):
+    db_path = tmp_path / "community.db"
+    _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    first = client.get("/api/community/announcements")
+    etag = first.headers.get("ETag")
+    cached = client.get("/api/community/announcements", headers={"If-None-Match": etag})
+
+    assert first.status_code == 200
+    assert etag
+    assert first.headers.get("Cache-Control") == "private, max-age=15"
+    assert cached.status_code == 304
+    assert cached.headers.get("ETag") == etag
+
+
 def test_boards_list_skips_schema_writes_when_schema_is_current(tmp_path):
     db_path = tmp_path / "community.db"
     _seed_community_db(db_path)
@@ -202,6 +219,28 @@ def test_boards_list_skips_schema_writes_when_schema_is_current(tmp_path):
 
     assert response.status_code == 200
     assert response.get_json()["boards"]
+
+
+def test_current_community_schema_backfills_read_load_indexes(tmp_path):
+    db_path = tmp_path / "community.db"
+    _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    response = client.get("/api/community/boards")
+
+    conn = sqlite3.connect(db_path)
+    try:
+        thread_indexes = {row[1] for row in conn.execute("PRAGMA index_list(forum_threads)").fetchall()}
+        post_indexes = {row[1] for row in conn.execute("PRAGMA index_list(forum_posts)").fetchall()}
+        announcement_indexes = {row[1] for row in conn.execute("PRAGMA index_list(announcements)").fetchall()}
+    finally:
+        conn.close()
+
+    assert response.status_code == 200
+    assert "idx_forum_threads_board_visible_page" in thread_indexes
+    assert "idx_forum_posts_thread_page" in post_indexes
+    assert "idx_announcements_visible_order" in announcement_indexes
 
 
 def test_forum_board_schema_backfills_slug_and_visibility(tmp_path):
@@ -677,6 +716,33 @@ def test_manager_can_sticky_curate_and_view_count_dedupes(tmp_path):
     assert first.get_json()["thread"]["view_counted"] is True
     assert second.get_json()["thread"]["view_counted"] is False
     assert second.get_json()["thread"]["view_count"] == first.get_json()["thread"]["view_count"]
+
+
+def test_thread_detail_bounds_posts_with_page_metadata(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        for idx in range(4):
+            conn.execute(
+                "INSERT INTO forum_posts (thread_id, content, author_user_id, author_username, created_at, updated_at) "
+                "VALUES (?, ?, 4, 'bob', ?, ?)",
+                (ids["thread"], f"extra reply {idx}", f"2026-01-01T00:0{idx}:00", f"2026-01-01T00:0{idx}:00"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    actor_box = {"actor": {"id": 4, "username": "bob", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    response = client.get(f"/api/community/threads/{ids['thread']}?posts_limit=2")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert len(body["posts"]) == 2
+    assert body["posts_total"] == 5
+    assert body["posts_limit"] == 2
+    assert body["posts_has_more"] is True
 
 
 def test_manager_can_assign_board_moderator_with_scoped_permissions(tmp_path):

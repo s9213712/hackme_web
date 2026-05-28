@@ -105,6 +105,7 @@ def ensure_notifications_schema(conn):
             conn.execute(f"ALTER TABLE notifications ADD COLUMN {name} {ddl}")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_dismissed ON notifications(user_id, dismissed_at, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_unread_visible ON notifications(user_id, is_read, dismissed_at)")
 
 
 def create_notification(

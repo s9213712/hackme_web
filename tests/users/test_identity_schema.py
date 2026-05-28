@@ -23,6 +23,7 @@ def test_ensure_user_identity_columns_repairs_legacy_users(tmp_path):
     conn.commit()
 
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    indexes = {row["name"] for row in conn.execute("PRAGMA index_list(users)").fetchall()}
     user = conn.execute(
         "SELECT role, member_level, status, trust_score, points, reputation, failed_login_count "
         "FROM users WHERE username='alice'"
@@ -37,6 +38,13 @@ def test_ensure_user_identity_columns_repairs_legacy_users(tmp_path):
     assert user["points"] == 0
     assert user["reputation"] == 0
     assert user["failed_login_count"] == 0
+    assert {
+        "idx_users_status_id",
+        "idx_users_role_status_id",
+        "idx_users_effective_level_status_id",
+        "idx_users_lower_username",
+        "idx_users_lower_email",
+    } <= indexes
 
 
 def test_role_rank_supports_governance_role_aliases():

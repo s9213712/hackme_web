@@ -21,9 +21,15 @@ def test_get_auth_db_creates_auth_hot_tables(tmp_path):
             row["name"]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
+        csrf_indexes = {row["name"] for row in conn.execute("PRAGMA index_list(csrf_tokens)").fetchall()}
+        session_indexes = {row["name"] for row in conn.execute("PRAGMA index_list(sessions)").fetchall()}
+        login_indexes = {row["name"] for row in conn.execute("PRAGMA index_list(login_attempts)").fetchall()}
     finally:
         conn.close()
     assert {"csrf_tokens", "captcha_challenges", "login_attempts", "sessions"} <= tables
+    assert "idx_csrf_username_expires" in csrf_indexes
+    assert "idx_sessions_user_active" in session_indexes
+    assert "idx_login_attempts_user_success_time" in login_indexes
 
 
 def test_auth_service_writes_hot_auth_state_to_split_db_only(tmp_path):

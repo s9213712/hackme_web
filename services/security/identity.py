@@ -75,9 +75,29 @@ def ensure_user_identity_columns(conn):
     for name, ddl in PHASE1_USER_COLUMNS:
         if name not in cols:
             conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
+            cols.add(name)
     conn.execute("UPDATE users SET role='user' WHERE role IS NULL OR role=''")
     conn.execute("UPDATE users SET member_level='normal' WHERE member_level IS NULL OR member_level=''")
     conn.execute("UPDATE users SET base_level=member_level WHERE base_level IS NULL OR base_level=''")
     conn.execute("UPDATE users SET effective_level=base_level WHERE effective_level IS NULL OR effective_level=''")
     conn.execute("UPDATE users SET sanction_status='none' WHERE sanction_status IS NULL OR sanction_status=''")
     conn.execute("UPDATE users SET status='active' WHERE status IS NULL OR status=''")
+    ensure_user_identity_indexes(conn)
+
+
+def ensure_user_identity_indexes(conn):
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if {"status", "id"} <= cols:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_status_id ON users(status, id)")
+    if {"role", "status", "id"} <= cols:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role_status_id ON users(role, status, id)")
+    if {"effective_level", "status", "id"} <= cols:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_effective_level_status_id ON users(effective_level, status, id)")
+    if {"sanction_status", "sanction_until"} <= cols:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_sanction_status_until ON users(sanction_status, sanction_until)")
+    if {"last_login_at", "id"} <= cols:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_last_login_id ON users(last_login_at, id)")
+    if "username" in cols:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_lower_username ON users(lower(username))")
+    if "email" in cols:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_lower_email ON users(lower(email))")

@@ -166,10 +166,14 @@ async function loadNotifications(options = {}) {
   notificationPollBusy = true;
   try {
     const csrf = await fetchCsrfToken();
-    const res = await apiFetch(API + "/notifications?limit=20", {
+    const loadList = notificationsOpen || force;
+    const requestOptions = {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
-    });
+    };
+    const res = loadList
+      ? await apiFetch(API + "/notifications?limit=20", requestOptions)
+      : await apiFetch(API + "/notifications/unread-count", requestOptions);
     const json = await res.json().catch(() => ({}));
     if (!json.ok) {
       if (res.status === 503) setNotificationBadge(0);
@@ -177,6 +181,10 @@ async function loadNotifications(options = {}) {
       if (notificationsOpen && list) {
         list.innerHTML = `<p style="color:#ffb74d;">${sanitize(json.msg || "通知讀取失敗，請稍後重試。")}</p>`;
       }
+      return;
+    }
+    if (!loadList) {
+      setNotificationBadge(json.unread_count);
       return;
     }
     renderNotifications(json.notifications, json.unread_count);

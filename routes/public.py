@@ -15,6 +15,7 @@ from flask import make_response, request, send_from_directory
 from services.points_chain import BIRTHDAY_GIFT_POINTS
 from services.points_chain.wallet_identity import (
     create_official_hot_wallet,
+    signup_bonus_granted,
     system_account_wallet_onboarding_status,
     wallet_onboarding_status,
 )
@@ -277,6 +278,9 @@ def register_public_routes(app, deps):
         conn = points_service.get_db() if hasattr(points_service, "get_db") else get_db()
         try:
             points_service.ensure_schema(conn)
+            if signup_bonus_granted(conn, int(user_row["id"])):
+                conn.commit()
+                return {"ok": True, "created": False, "already_granted": True}
             create_official_hot_wallet(
                 conn,
                 user_id=int(user_row["id"]),
@@ -477,6 +481,7 @@ def register_public_routes(app, deps):
             ("email", "TEXT"),
             ("email_verified", "INTEGER NOT NULL DEFAULT 0"),
             ("birthdate", "TEXT"),
+            ("blocked_until", "TEXT"),
             ("failed_login_count", "INTEGER NOT NULL DEFAULT 0"),
             ("locked_until", "TEXT"),
             ("last_login_at", "TEXT"),
@@ -484,11 +489,17 @@ def register_public_routes(app, deps):
             ("password_changed_at", "TEXT"),
             ("must_change_password", "INTEGER NOT NULL DEFAULT 0"),
             ("is_default_password", "INTEGER NOT NULL DEFAULT 0"),
+            ("signup_bonus_deferred", "INTEGER NOT NULL DEFAULT 0"),
             ("updated_at", "TEXT"),
         )
         for name, ddl in additions:
             if name not in cols:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
+                cols.add(name)
+        if "username" in cols:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_users_lower_username ON users(lower(username))")
+        if "email" in cols:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_users_lower_email ON users(lower(email))")
 
     @app.route("/")
     @app.route("/videos")
@@ -783,6 +794,7 @@ def register_public_routes(app, deps):
 
         conn = get_db()
         try:
+            ensure_public_account_columns(conn)
             existing = conn.execute("SELECT 1 FROM users WHERE lower(username)=lower(?)",(username,)).fetchone()
             if existing:
                 timing_delay()
@@ -839,16 +851,29 @@ def register_public_routes(app, deps):
                     audit("POINTS_REGISTER_WALLET_INIT_FAILED", ip, username, ua=ua, success=False, detail=str(exc))
                 finally:
                     points_conn.close()
+            signup_bonus_deferred = bool((signup_bonus or {}).get("error"))
+            if signup_bonus_deferred:
+                conn.execute(
+                    "UPDATE users SET signup_bonus_deferred=1, updated_at=? WHERE id=?",
+                    (datetime.now().isoformat(), new_user_id),
+                )
+                conn.commit()
             audit("REGISTER_PENDING", ip, username, ua=ua, success=True, detail="awaiting manager approval")
+            signup_bonus_msg = (
+                "註冊申請已送出，需經管理員或最高管理者審核後才能登入；註冊禮暫時未完成，審核通過後首次登入會自動補發。"
+                if signup_bonus_deferred
+                else "註冊申請已送出，需經管理員或最高管理者審核後才能登入；站內託管錢包與註冊禮已建立，審核通過後可直接使用站內付款與交易所。"
+            )
             return json_resp({
                 "ok": True,
-                "msg": "註冊申請已送出，需經管理員或最高管理者審核後才能登入；站內託管錢包與註冊禮已建立，審核通過後可直接使用站內付款與交易所。",
+                "msg": signup_bonus_msg,
                 "wallet_onboarding_required": False,
-                "signup_bonus_deferred": False,
+                "signup_bonus_deferred": signup_bonus_deferred,
                 "signup_bonus": {
                     "created": bool((signup_bonus or {}).get("created")),
                     "ledger_hash": ((signup_bonus or {}).get("ledger") or {}).get("ledger_hash", ""),
                     "wallet_address": hot_wallet_address,
+                    "deferred_reason": "points_initialization_failed" if signup_bonus_deferred else "",
                 },
                 "official_hot_wallet_address": hot_wallet_address,
                 "deposit_address": deposit_address,
@@ -907,7 +932,7 @@ def register_public_routes(app, deps):
             ensure_public_account_columns(conn)
             user_row = conn.execute(
                 "SELECT id, username, status, blocked_until, locked_until, failed_login_count, role, "
-                "email, email_verified, birthdate, must_change_password, is_default_password FROM users WHERE username=?",
+                "email, email_verified, birthdate, must_change_password, is_default_password, signup_bonus_deferred FROM users WHERE username=?",
                 (username,)
             ).fetchone()
 
@@ -969,7 +994,13 @@ def register_public_routes(app, deps):
                 if settings.get("require_email_verification") and not bool(user_row["email_verified"] or 0):
                     audit("LOGIN_EMAIL_UNVERIFIED", ip, username, ua=ua, success=False)
                     return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
-                signup_bonus = maybe_award_signup_bonus_for_login(user_row)
+                signup_bonus = maybe_award_signup_bonus_for_login(user_row) if bool(user_row["signup_bonus_deferred"] or 0) else None
+                if signup_bonus and signup_bonus.get("ok") and (signup_bonus.get("created") or signup_bonus.get("already_granted")):
+                    conn.execute(
+                        "UPDATE users SET signup_bonus_deferred=0, updated_at=? WHERE id=?",
+                        (now, user_row["id"]),
+                    )
+                    conn.commit()
                 internal_test_auth_scope = ""
                 internal_test_allowed_features = []
                 if token_authz.get("ok"):

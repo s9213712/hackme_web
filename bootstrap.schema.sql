@@ -952,6 +952,14 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
 , role TEXT NOT NULL DEFAULT 'user', nickname TEXT, blocked_until TEXT, violation_count INTEGER NOT NULL DEFAULT 0, chat_violation_warned INTEGER NOT NULL DEFAULT 0);
 
+CREATE INDEX IF NOT EXISTS idx_users_status_id ON users(status, id);
+CREATE INDEX IF NOT EXISTS idx_users_role_status_id ON users(role, status, id);
+CREATE INDEX IF NOT EXISTS idx_users_effective_level_status_id ON users(effective_level, status, id);
+CREATE INDEX IF NOT EXISTS idx_users_sanction_status_until ON users(sanction_status, sanction_until);
+CREATE INDEX IF NOT EXISTS idx_users_last_login_id ON users(last_login_at, id);
+CREATE INDEX IF NOT EXISTS idx_users_lower_username ON users(lower(username));
+CREATE INDEX IF NOT EXISTS idx_users_lower_email ON users(lower(email));
+
 CREATE TABLE IF NOT EXISTS violation_appeals (
             id                      INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id                 INTEGER NOT NULL,
@@ -1116,6 +1124,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_room_members_user ON chat_room_members(user_
 
 CREATE INDEX IF NOT EXISTS idx_csrf_token_hash ON csrf_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_csrf_expires_at ON csrf_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_csrf_username_expires ON csrf_tokens(username, expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_account_recovery_tokens_hash ON account_recovery_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_account_recovery_tokens_user ON account_recovery_tokens(user_id, purpose, created_at);
@@ -1129,6 +1138,7 @@ CREATE INDEX IF NOT EXISTS idx_login_attempts_ip    ON login_attempts(ip_address
 CREATE INDEX IF NOT EXISTS idx_login_attempts_time   ON login_attempts(attempted_at);
 
 CREATE INDEX IF NOT EXISTS idx_login_attempts_user   ON login_attempts(user_id);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_user_success_time ON login_attempts(user_id, success, attempted_at);
 
 CREATE INDEX IF NOT EXISTS idx_member_level_rules_level ON member_level_rules(level);
 CREATE INDEX IF NOT EXISTS idx_member_level_audit_target ON member_level_audit(target_user, created_at);
@@ -1171,5 +1181,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen);
 
 CREATE INDEX IF NOT EXISTS idx_sessions_revoked ON sessions(is_revoked);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_active ON sessions(user_id, is_revoked, expires_at, last_seen);
+CREATE INDEX IF NOT EXISTS idx_sessions_active_expires ON sessions(is_revoked, expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id     ON sessions(user_id);

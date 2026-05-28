@@ -226,7 +226,13 @@ def ensure_chat_feature_schema(conn):
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_room_invites_invitee ON chat_room_invites(invitee_user_id, status)")
-        if db_path:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_room_members_user_room ON chat_room_members(user_id, room_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_room_members_room_user ON chat_room_members(room_id, user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_rooms_active_private_created ON chat_rooms(is_active, is_private, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_room_visible_id ON chat_messages(room_id, is_blocked, id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_sender_created ON chat_messages(sender_id, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_room_invites_room_invitee ON chat_room_invites(room_id, invitee_user_id, status)")
+        if db_path and not getattr(conn, "in_transaction", False):
             _CHAT_SCHEMA_READY_PATHS.add(db_path)
 
 
@@ -564,17 +570,25 @@ def register_chat_routes(app, deps):
                 ensure_user_official_room_membership(conn, urow_id)
                 conn.commit()
                 rows = conn.execute(
-                    "SELECT r.id, r.name, r.owner_user_id, r.is_private, r.created_at, "
-                    "COALESCE(r.join_password_required, 0) AS join_password_required, "
-                    "COALESCE(r.allow_anonymous, 0) AS allow_anonymous, "
-                    "COALESCE(m.anonymous_enabled, 0) AS anonymous_enabled, "
-                    "(SELECT COUNT(*) FROM chat_room_members cm WHERE cm.room_id=r.id) AS member_count, "
-                    "u.username AS owner_username "
-                    "FROM chat_rooms r "
-                    "LEFT JOIN users u ON u.id = r.owner_user_id "
-                    "INNER JOIN chat_room_members m ON m.room_id = r.id "
-                    "WHERE m.user_id = ? AND COALESCE(r.is_active, 1)=1 "
-                    "ORDER BY r.is_private ASC, r.created_at DESC",
+                    "WITH visible_rooms AS ( "
+                    "    SELECT r.id, r.name, r.owner_user_id, r.is_private, r.created_at, "
+                    "           COALESCE(r.join_password_required, 0) AS join_password_required, "
+                    "           COALESCE(r.allow_anonymous, 0) AS allow_anonymous, "
+                    "           COALESCE(m.anonymous_enabled, 0) AS anonymous_enabled "
+                    "    FROM chat_rooms r "
+                    "    INNER JOIN chat_room_members m ON m.room_id = r.id "
+                    "    WHERE m.user_id = ? AND COALESCE(r.is_active, 1)=1 "
+                    "), member_counts AS ( "
+                    "    SELECT cm.room_id, COUNT(*) AS member_count "
+                    "    FROM chat_room_members cm "
+                    "    INNER JOIN visible_rooms vr ON vr.id=cm.room_id "
+                    "    GROUP BY cm.room_id "
+                    ") "
+                    "SELECT vr.*, COALESCE(mc.member_count, 0) AS member_count, u.username AS owner_username "
+                    "FROM visible_rooms vr "
+                    "LEFT JOIN member_counts mc ON mc.room_id=vr.id "
+                    "LEFT JOIN users u ON u.id = vr.owner_user_id "
+                    "ORDER BY vr.is_private ASC, vr.created_at DESC",
                     (urow_id,)
                 ).fetchall()
                 return json_resp({
@@ -766,6 +780,9 @@ def register_chat_routes(app, deps):
                     conn.rollback()
                 except Exception:
                     pass
+                schema_path = _connection_path(conn)
+                if schema_path:
+                    _CHAT_SCHEMA_READY_PATHS.discard(schema_path)
                 if is_sqlite_lock_error(exc):
                     current_app.logger.warning(
                         "chat_room_create_db_busy user_id=%s username=%s attempt=%s/%s error=%s",
@@ -1105,10 +1122,16 @@ def register_chat_routes(app, deps):
                     return json_resp({"ok":False,"msg":msg}), status
             ensure_user_official_room_membership(conn, actor["id"])
             conn.commit()
+            compact_room_meta = request.method == "GET" and request.args.get("compact") in {"1", "true", "yes"}
+            member_count_select = (
+                "NULL AS member_count"
+                if compact_room_meta
+                else "(SELECT COUNT(*) FROM chat_room_members cm WHERE cm.room_id=chat_rooms.id) AS member_count"
+            )
             room = conn.execute(
                 "SELECT id, name, is_private, COALESCE(join_password_required, 0) AS join_password_required, "
                 "COALESCE(allow_anonymous, 0) AS allow_anonymous, "
-                "(SELECT COUNT(*) FROM chat_room_members cm WHERE cm.room_id=chat_rooms.id) AS member_count "
+                f"{member_count_select} "
                 "FROM chat_rooms WHERE id=? AND COALESCE(is_active, 1)=1",
                 (room_id,),
             ).fetchone()
@@ -1126,6 +1149,24 @@ def register_chat_routes(app, deps):
                 limit = parse_positive_int(request.args.get("limit", 50), default=50, min_value=1, max_value=200)
                 if limit is None:
                     return json_resp({"ok":False,"msg":"limit 參數錯誤"}), 400
+                after_id = parse_positive_int(request.args.get("after_id"), default=None, min_value=1)
+                if request.args.get("after_id") not in (None, "") and after_id is None:
+                    return json_resp({"ok":False,"msg":"after_id 參數錯誤"}), 400
+                before_id = parse_positive_int(request.args.get("before_id"), default=None, min_value=1)
+                if request.args.get("before_id") not in (None, "") and before_id is None:
+                    return json_resp({"ok":False,"msg":"before_id 參數錯誤"}), 400
+                if after_id and before_id:
+                    return json_resp({"ok":False,"msg":"after_id 與 before_id 不可同時使用"}), 400
+                cursor_where = "m.room_id = ? AND m.is_blocked = 0 "
+                cursor_params = [room_id]
+                order_clause = "ORDER BY m.id DESC LIMIT ?"
+                if after_id:
+                    cursor_where += "AND m.id > ? "
+                    cursor_params.append(after_id)
+                    order_clause = "ORDER BY m.id ASC LIMIT ?"
+                elif before_id:
+                    cursor_where += "AND m.id < ? "
+                    cursor_params.append(before_id)
                 rows = conn.execute(
                     "SELECT m.id, m.sender_id, cr.owner_user_id, u.username, u.username AS sender_username, u.role AS sender_role, u.avatar_file_id, "
                     "COALESCE(sm.anonymous_enabled, 0) AS sender_anonymous_enabled, "
@@ -1135,16 +1176,17 @@ def register_chat_routes(app, deps):
                     "LEFT JOIN users u ON u.id = m.sender_id "
                     "LEFT JOIN chat_room_members sm ON sm.room_id=m.room_id AND sm.user_id=m.sender_id "
                     "LEFT JOIN chat_rooms cr ON cr.id=m.room_id "
-                    "WHERE m.room_id = ? AND m.is_blocked = 0 "
-                    "ORDER BY m.id DESC LIMIT ?",
-                    (room_id, limit)
+                    f"WHERE {cursor_where}"
+                    f"{order_clause}",
+                    tuple(cursor_params + [limit])
                 ).fetchall()
                 attachment_map = chat_message_attachment_map(conn, actor, [r["id"] for r in rows])
                 pending_report_ids = chat_message_pending_report_ids(conn, [r["id"] for r in rows])
                 official_aliases = official_chat_sender_aliases(conn, room_id) if is_official_chat_room(room) else {}
                 anonymous_aliases = {} if is_official_chat_room(room) else anonymous_chat_sender_aliases(conn, room_id)
                 messages = []
-                for r in reversed(rows):
+                ordered_rows = list(rows) if after_id else list(reversed(rows))
+                for r in ordered_rows:
                     mutation_locked = int(r["id"]) in pending_report_ids
                     is_self_only_actor = (
                         r["sender_id"] == actor["id"]
@@ -1193,7 +1235,16 @@ def register_chat_routes(app, deps):
                         "hide_member_count": is_official_chat_room(room),
                         "member_count": None if is_official_chat_room(room) else room["member_count"],
                     },
-                    "messages": messages
+                    "messages": messages,
+                    "cursor": {
+                        "mode": "after" if after_id else ("before" if before_id else "latest"),
+                        "limit": limit,
+                        "oldest_id": min((int(item["id"]) for item in messages), default=None),
+                        "latest_id": max((int(item["id"]) for item in messages), default=None),
+                        "after_id": after_id,
+                        "before_id": before_id,
+                        "has_more": len(rows) >= limit,
+                    }
                 })
 
             try:

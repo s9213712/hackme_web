@@ -16,11 +16,11 @@ def test_avatar_upload_ui_is_wired():
     assert 'id="edit-user-avatar-file"' in index_html
     assert 'id="edit-user-avatar-upload"' in index_html
     assert 'id="edit-avatar-crop-width"' in index_html
-    assert 'id="edit-avatar-crop-zoom" min="1" max="6"' in index_html
+    assert 'id="edit-avatar-crop-zoom" min="0.5" max="6"' in index_html
     assert "async function uploadUserAvatar()" in auth_js
     assert "function selectedUserAvatarFile()" in auth_js
     assert "const avatarFile = selectedUserAvatarFile();" in auth_js
-    assert "if (!Object.keys(payload).length && !avatarFile && !appearanceChanged)" in auth_js
+    assert "if (!Object.keys(payload).length && !avatarFile && !appearanceChanged && !timezoneChanged)" in auth_js
     assert "submitUserAvatarUpload({ reloadUsers: false })" in auth_js
     assert 'apiFetch(API + `/admin/users/${editingUserId}/avatar`' in auth_js
     assert "markUserAvatarUpdated(editingUserId, json.avatar_file_id || \"\")" in auth_js

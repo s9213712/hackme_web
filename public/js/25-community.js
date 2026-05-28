@@ -1,6 +1,7 @@
 let communityBoards = [];
 let communityCategories = [];
 let communityAnnouncements = [];
+let communityAnnouncementsEtag = "";
 let communityBoardReviews = [];
 let communityThreadReviews = [];
 let selectedCommunityBoardId = null;
@@ -8,6 +9,8 @@ let selectedCommunityThreadId = null;
 let communityThreads = [];
 let selectedCommunityBoard = null;
 let selectedCommunityThread = null;
+let selectedCommunityPosts = [];
+let selectedCommunityPostPageInfo = {};
 let communityBoardQuery = "";
 let communityThreadQuery = "";
 let communityThreadPage = 0;
@@ -160,6 +163,8 @@ function showCommunityBoardStage() {
   selectedCommunityBoard = null;
   selectedCommunityThreadId = null;
   selectedCommunityThread = null;
+  selectedCommunityPosts = [];
+  selectedCommunityPostPageInfo = {};
   communityThreads = [];
   communityBoardModerators = [];
   communityThreadCreatorOpen = false;
@@ -174,6 +179,8 @@ function showCommunityBoardStage() {
 function showCommunityThreadStage() {
   selectedCommunityThreadId = null;
   selectedCommunityThread = null;
+  selectedCommunityPosts = [];
+  selectedCommunityPostPageInfo = {};
   communityModeratorManagerOpen = false;
   renderCommunityThreads(selectedCommunityBoard);
   renderCommunityThreadDetail(null, []);
@@ -866,7 +873,7 @@ function renderCommunityThreads(board) {
   renderCommunityStage();
 }
 
-function renderCommunityThreadDetail(thread, posts) {
+function renderCommunityThreadDetail(thread, posts, postPageInfo = {}) {
   const heading = $("community-thread-heading");
   const detail = $("community-thread-detail");
   const replyBox = $("community-reply-box");
@@ -913,6 +920,15 @@ function renderCommunityThreadDetail(thread, posts) {
         </div>
       `).join("")
     : "<p style='color:var(--muted);'>尚無留言</p>";
+  const totalPosts = Number(postPageInfo.posts_total ?? posts.length ?? 0);
+  const shownPosts = Array.isArray(posts) ? posts.length : 0;
+  const nextPostPage = Number(postPageInfo.posts_page || 0) + 1;
+  const postBoundedNote = postPageInfo.posts_has_more
+    ? `<div class="community-meta" style="display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;">
+        <span>目前顯示 ${shownPosts} / ${totalPosts} 則留言</span>
+        <button class="btn community-mini-btn" type="button" data-load-more-community-posts="${nextPostPage}">載入更多留言</button>
+      </div>`
+    : "";
   detail.innerHTML = `
     <div class="community-card">
       <div class="community-meta">${thread.is_sticky ? "置頂主題 · " : ""}${userIdentityMarkup(thread.author_user_id, thread.author_username || "", `${formatChatTime(thread.created_at || "")} · ${thread.board_title || ""}${thread.is_locked ? " · 已鎖定" : ""}`, "community-author-line", thread.author_avatar_file_id || "")}</div>
@@ -926,6 +942,7 @@ function renderCommunityThreadDetail(thread, posts) {
     </div>
     <div class="mini-title" style="margin:.8rem 0 .45rem;">留言區</div>
     ${replies}
+    ${postBoundedNote}
   `;
   detail.querySelectorAll("button[data-delete-community-post]").forEach((btn) => {
     btn.addEventListener("click", () => deleteCommunityPost(parseInt(btn.getAttribute("data-delete-community-post"), 10)));
@@ -955,20 +972,33 @@ function renderCommunityThreadDetail(thread, posts) {
   detail.querySelectorAll("button[data-reward-community-thread]").forEach((btn) => {
     btn.addEventListener("click", () => rewardCommunityThread(parseInt(btn.getAttribute("data-reward-community-thread"), 10)));
   });
+  detail.querySelectorAll("button[data-load-more-community-posts]").forEach((btn) => {
+    btn.addEventListener("click", () => openCommunityThread(
+      thread.id,
+      { postPage: parseInt(btn.getAttribute("data-load-more-community-posts"), 10) || 0, appendPosts: true }
+    ));
+  });
   renderCommunityStage();
 }
 
 async function loadAnnouncements() {
   await fetchCsrfToken({ force: true });
+  const headers = { "X-CSRF-Token": getCsrfToken() || "" };
+  if (communityAnnouncementsEtag) headers["If-None-Match"] = communityAnnouncementsEtag;
   const res = await apiFetch(API + "/community/announcements", {
     credentials: "same-origin",
-    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+    headers
   });
+  if (res.status === 304) {
+    renderCommunityAnnouncements();
+    return;
+  }
   const json = await res.json().catch(() => ({}));
   if (!json.ok) {
     flash($("community-msg"), json.msg || "公告讀取失敗", false);
     return;
   }
+  communityAnnouncementsEtag = res.headers.get("ETag") || "";
   communityAnnouncements = Array.isArray(json.announcements) ? json.announcements : [];
   renderCommunityAnnouncements();
 }
@@ -1237,6 +1267,8 @@ async function openCommunityBoard(boardId, preserveThread = false) {
   if (!preserveThread) {
     selectedCommunityThreadId = null;
     selectedCommunityThread = null;
+    selectedCommunityPosts = [];
+    selectedCommunityPostPageInfo = {};
     communityThreadCreatorOpen = false;
   }
   await fetchCsrfToken({ force: true });
@@ -1292,10 +1324,15 @@ async function createCommunityThread() {
   }
 }
 
-async function openCommunityThread(threadId) {
+async function openCommunityThread(threadId, options = {}) {
+  const postPage = Math.max(0, Number(options.postPage || 0));
+  const appendPosts = !!options.appendPosts && Number(selectedCommunityThreadId) === Number(threadId);
   selectedCommunityThreadId = threadId;
   await fetchCsrfToken({ force: true });
-  const res = await apiFetch(API + "/community/threads/" + threadId, {
+  const url = new URL(API + "/community/threads/" + threadId, window.location.origin);
+  url.searchParams.set("posts_page", String(postPage));
+  url.searchParams.set("posts_limit", "100");
+  const res = await apiFetch(url.toString(), {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -1305,8 +1342,16 @@ async function openCommunityThread(threadId) {
     return;
   }
   selectedCommunityThread = json.thread || null;
+  const incomingPosts = Array.isArray(json.posts) ? json.posts : [];
+  if (appendPosts) {
+    const seen = new Set(selectedCommunityPosts.map((post) => Number(post.id)));
+    selectedCommunityPosts = selectedCommunityPosts.concat(incomingPosts.filter((post) => !seen.has(Number(post.id))));
+  } else {
+    selectedCommunityPosts = incomingPosts;
+  }
+  selectedCommunityPostPageInfo = json;
   renderCommunityThreads(selectedCommunityBoard || communityBoards.find((item) => Number(item.id) === Number(selectedCommunityBoardId)) || null);
-  renderCommunityThreadDetail(selectedCommunityThread, json.posts || []);
+  renderCommunityThreadDetail(selectedCommunityThread, selectedCommunityPosts, selectedCommunityPostPageInfo);
 }
 
 async function replyCommunityThread() {
@@ -1346,6 +1391,8 @@ async function deleteCommunityThread() {
   if (json.ok) {
     selectedCommunityThreadId = null;
     selectedCommunityThread = null;
+    selectedCommunityPosts = [];
+    selectedCommunityPostPageInfo = {};
     renderCommunityThreadDetail(null, []);
     if (selectedCommunityBoardId) await openCommunityBoard(selectedCommunityBoardId);
   }

@@ -638,6 +638,52 @@ def test_chat_rooms_marks_official_room_for_frontend(tmp_path):
     assert official["is_official"] is True
 
 
+def test_chat_messages_support_delta_cursor_for_polling(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    delta = client.get("/api/chat/rooms/1/messages?after_id=1&limit=10")
+
+    assert delta.status_code == 200
+    body = delta.get_json()
+    assert [item["id"] for item in body["messages"]] == [2, 3]
+    assert body["cursor"]["mode"] == "after"
+    assert body["cursor"]["oldest_id"] == 2
+    assert body["cursor"]["latest_id"] == 3
+
+    history = client.get("/api/chat/rooms/1/messages?before_id=3&limit=10")
+    assert [item["id"] for item in history.get_json()["messages"]] == [1, 2]
+
+    invalid = client.get("/api/chat/rooms/1/messages?before_id=3&after_id=1")
+    assert invalid.status_code == 400
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO chat_rooms (id, name, owner_user_id, is_private, is_active, created_at) "
+        "VALUES (2, 'group', 3, 0, 1, '2026-01-01T00:00:00')"
+    )
+    conn.executemany(
+        "INSERT INTO chat_room_members (room_id, user_id, joined_at) VALUES (2, ?, '2026-01-01T00:00:00')",
+        [(1,), (3,)],
+    )
+    conn.executemany(
+        "INSERT INTO chat_messages (id, room_id, sender_id, content, is_blocked, blocked_reason, created_at) "
+        "VALUES (?, 2, 3, ?, 0, NULL, '2026-01-01T00:00:00')",
+        [(10, "first group message"), (11, "second group message")],
+    )
+    conn.commit()
+    conn.close()
+
+    full_room_meta = client.get("/api/chat/rooms/2/messages?limit=10").get_json()
+    compact_delta = client.get("/api/chat/rooms/2/messages?after_id=10&limit=10&compact=1").get_json()
+
+    assert full_room_meta["room"]["member_count"] == 2
+    assert compact_delta["room"]["member_count"] is None
+    assert [item["id"] for item in compact_delta["messages"]] == [11]
+
+
 def test_official_chat_anonymizes_members_for_regular_users_but_not_managers(tmp_path):
     db_path = tmp_path / "chat.db"
     _seed_chat_db(db_path)
