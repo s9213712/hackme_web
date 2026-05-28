@@ -115,6 +115,49 @@ def test_operations_control_snapshot_is_bounded_and_covers_initial_distribution(
     assert snapshot["management_timing"]["bounded"] is True
 
 
+def test_transfer_finality_observability_snapshot_is_bounded_and_non_mutating(tmp_path):
+    service = _service(tmp_path)
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        branch = service._canonical_branch_uuid(conn)
+        conn.execute(
+            """
+            INSERT INTO points_chain_transfer_requests (
+                request_uuid, chain_branch, request_hash, tx_group_hash,
+                sender_user_id, recipient_user_id, source_wallet_address, destination_wallet_address,
+                amount_points, fee_points, settlement_rail, chain_required, approval_required,
+                network_fee_points, service_fee_points, status, created_at
+            ) VALUES (?, ?, ?, ?, 1, 2, 'pc0:alice', 'pc1:bob', 50, 1, 'cold_chain', 1, 1, 1, 0, 'pending', ?)
+            """,
+            ("obs-pending", branch, "req-hash", "tx-hash", (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    snapshot = service.transfer_finality_observability_snapshot(recent_limit=25)
+
+    assert snapshot["snapshot_type"] == "points_transfer_finality_observability"
+    assert snapshot["bounded"] is True
+    assert snapshot["recent_limit"] == 25
+    assert snapshot["pending_queue"]["pending_count"] == 1
+    assert snapshot["pending_queue"]["by_settlement_rail"]["cold_chain"]["request_count"] == 1
+    assert snapshot["compact_sweep"]["maintenance_from_health_endpoint"] is False
+    assert snapshot["compact_sweep"]["root_transaction_list_sweep_limit"] == 5
+    assert snapshot["management_timing"]["bounded"] is True
+
+    sweep = service.run_transfer_finality_sweep(actor={"id": 1, "username": "root", "role": "super_admin"}, limit=25)
+
+    assert sweep["sweep_type"] == "points_transfer_finality_sweep"
+    assert sweep["bounded"] is True
+    assert sweep["limit"] == 25
+    assert "sweep" in sweep
+    assert "deposit_bridge" in sweep
+    assert sweep["observability_marker"]["source"] == "root_finality_sweep_job"
+    assert sweep["management_timing"]["bounded"] is True
+
+
 def test_wallet_identity_materialized_balances_update_and_verify(tmp_path, monkeypatch):
     service = _service(tmp_path)
     service.record_transaction(

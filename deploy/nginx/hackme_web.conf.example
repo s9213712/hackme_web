@@ -14,6 +14,23 @@ limit_req_zone $binary_remote_addr zone=hackme_management_per_ip:10m rate=4r/s;
 limit_req_zone $binary_remote_addr zone=hackme_upload_per_ip:10m rate=1r/s;
 limit_req_zone $binary_remote_addr zone=hackme_static_per_ip:10m rate=30r/s;
 
+map $uri $hackme_edge_lane {
+    default api;
+    ~^/(livez|readyz)$ fast;
+    ~^/api/version$ fast;
+    ~^/api/(login|register|csrf-token|account/recovery|account/password-reset) auth;
+    ~^/api/(cloud-drive/(upload|resumable-upload|remote-download)|files/upload|storage/files|storage/albums/.*/files|videos/upload|videos/.*/subtitles|root/comfyui/model-upload|admin/snapshots/upload-restore|root/production-report/upload)(/|$) upload;
+    ~^/api/(admin|root)(/|$) management;
+    ~*^/(js|css|data|img|images|assets|fonts)(/|$) static;
+    ~*^/(styles\.css|favicon\.ico|manifest\.json|comfyui-workflow-editor\.html)$ static;
+}
+
+log_format hackme_lane '$remote_addr - $remote_user [$time_local] '
+                       '"$request" $status $body_bytes_sent '
+                       '"$http_referer" "$http_user_agent" '
+                       'lane=$hackme_edge_lane limit=$limit_req_status '
+                       'request_time=$request_time upstream_time=$upstream_response_time';
+
 map $http_upgrade $connection_upgrade {
     default upgrade;
     ''      close;
@@ -50,8 +67,11 @@ server {
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers off;
 
-    access_log /var/log/nginx/hackme_web.access.log;
+    access_log /var/log/nginx/hackme_web.access.log hackme_lane;
     error_log /var/log/nginx/hackme_web.error.log warn;
+
+    add_header X-Hackme-Edge-Lane $hackme_edge_lane always;
+    add_header X-Hackme-RateLimit-Status $limit_req_status always;
 
     client_max_body_size 2g;
     client_body_timeout 60s;
@@ -102,17 +122,6 @@ server {
         proxy_read_timeout 30s;
     }
 
-    # Management lane: root/admin endpoints should be async/snapshot-backed.
-    # Keep the edge burst lower than user data-plane traffic so expensive
-    # control-plane reads cannot starve normal browsing or upload streams.
-    location ~ ^/api/(admin|root)(/|$) {
-        limit_req zone=hackme_management_per_ip burst=12 nodelay;
-        proxy_pass http://hackme_web_app;
-        proxy_connect_timeout 3s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 90s;
-    }
-
     # Upload lane: large request bodies and resumable chunks get their own
     # zone. This protects auth/management/static from slow-client uploads and
     # lets operators tune uploads without weakening login throttles.
@@ -123,6 +132,17 @@ server {
         proxy_connect_timeout 3s;
         proxy_send_timeout 300s;
         proxy_read_timeout 300s;
+    }
+
+    # Management lane: root/admin endpoints should be async/snapshot-backed.
+    # Keep the edge burst lower than user data-plane traffic so expensive
+    # control-plane reads cannot starve normal browsing or upload streams.
+    location ~ ^/api/(admin|root)(/|$) {
+        limit_req zone=hackme_management_per_ip burst=12 nodelay;
+        proxy_pass http://hackme_web_app;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 90s;
     }
 
     # Static lane: static assets are high fan-out but cheap. Give them their own

@@ -1,0 +1,85 @@
+name: long-needle-simulation
+
+on:
+  pull_request:
+    paths:
+      - "routes/economy.py"
+      - "services/points_chain/**"
+      - "scripts/testing/long_needle_simulation_probe.py"
+      - "scripts/testing/points_chain_destructive_stress.py"
+      - "scripts/testing/system_stress_probe.py"
+      - "scripts/testing/long-needle-simulation.workflow.yml"
+      - ".github/workflows/long-needle-simulation.yml"
+  push:
+    branches: [main, 04.BLOCKCHAIN, 04.BLOCKCHAIN_RC1]
+    paths:
+      - "routes/economy.py"
+      - "services/points_chain/**"
+      - "scripts/testing/long_needle_simulation_probe.py"
+      - "scripts/testing/points_chain_destructive_stress.py"
+      - "scripts/testing/system_stress_probe.py"
+      - "scripts/testing/long-needle-simulation.workflow.yml"
+      - ".github/workflows/long-needle-simulation.yml"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Long needle profile
+        required: false
+        default: "quick"
+        type: choice
+        options:
+          - quick
+          - medium
+          - long
+      timeout_seconds:
+        description: Per child probe timeout
+        required: false
+        default: "900"
+  schedule:
+    - cron: "10 19 * * *"
+
+jobs:
+  long-needle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run long needle simulation
+        run: |
+          set -euo pipefail
+          PROFILE="${{ github.event.inputs.profile || '' }}"
+          TIMEOUT_SECONDS="${{ github.event.inputs.timeout_seconds || '' }}"
+          if [ -z "$PROFILE" ]; then
+            if [ "${{ github.event_name }}" = "schedule" ]; then
+              PROFILE="medium"
+            else
+              PROFILE="quick"
+            fi
+          fi
+          if [ -z "$TIMEOUT_SECONDS" ]; then
+            TIMEOUT_SECONDS="900"
+          fi
+          python scripts/testing/long_needle_simulation_probe.py \
+            --runtime-root /tmp/hackme_web_long_needle_ci \
+            --profile "$PROFILE" \
+            --timeout-seconds "$TIMEOUT_SECONDS"
+
+      - name: Upload long needle artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-needle-simulation
+          path: /tmp/hackme_web_long_needle_ci/reports/qa/
+          if-no-files-found: warn

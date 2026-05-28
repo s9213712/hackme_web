@@ -111,6 +111,7 @@ function bindUiEvents() {
   const testerTokenCreate = $("tester-token-create-btn");
   const testerTokenList = $("tester-token-list-btn");
   const healthRefresh = $("health-refresh-btn");
+  const pointsFinalitySweep = $("points-finality-sweep-btn");
   const launchCheckRefresh = $("launch-check-refresh-btn");
   const launchCheckBundle = $("launch-check-bundle-btn");
   const launchCheckArtifacts = $("launch-check-artifacts-btn");
@@ -593,6 +594,7 @@ function bindUiEvents() {
   if (testerTokenCreate) testerTokenCreate.addEventListener("click", createTesterToken);
   if (testerTokenList) testerTokenList.addEventListener("click", loadTesterTokens);
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
+  if (pointsFinalitySweep) pointsFinalitySweep.addEventListener("click", startPointsFinalitySweep);
   if (integrityRefresh) integrityRefresh.addEventListener("click", loadIntegrityGuard);
   if (launchCheckRefresh) launchCheckRefresh.addEventListener("click", () => loadLaunchCheck());
   if (launchCheckBundle) launchCheckBundle.addEventListener("click", () => createLaunchCheckReleaseBundle());

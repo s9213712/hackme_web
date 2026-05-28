@@ -965,6 +965,8 @@ def register_economy_routes(app, deps):
         else:
             compact = compact_arg in {"1", "true", "yes", "on"}
         cursor = request.args.get("cursor")
+        maintenance_arg = str(request.args.get("sweep") or request.args.get("maintenance") or "").strip().lower()
+        run_list_maintenance = actor_value(actor, "username") == "root" and maintenance_arg in {"1", "true", "yes", "on"}
         try:
             if compact:
                 result = points_service.list_wallet_transactions_compact(
@@ -972,6 +974,7 @@ def register_economy_routes(app, deps):
                     limit=limit,
                     actor={"id": actor["id"], "username": actor["username"], "role": actor["role"]},
                     cursor=cursor,
+                    run_root_sweep=run_list_maintenance,
                 )
                 metrics = result.pop("management_microbenchmark", {}) if isinstance(result, dict) else {}
                 request.environ["hackme.sql_ms"] = metrics.get("sql_ms", 0)
@@ -982,6 +985,7 @@ def register_economy_routes(app, deps):
                     user_id=actor["id"],
                     limit=limit,
                     actor={"id": actor["id"], "username": actor["username"], "role": actor["role"]},
+                    run_maintenance=run_list_maintenance,
                 )
                 request.environ["hackme.python_aggregation_ms"] = round((time.perf_counter() - aggregation_started) * 1000, 3)
             return json_resp(result)
@@ -2372,6 +2376,96 @@ def register_economy_routes(app, deps):
     @app.route("/api/root/points/report/jobs/<path:job_uuid>", methods=["GET"])
     @require_csrf_safe
     def root_points_report_job(job_uuid):
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_job_status_response(job_uuid)
+
+    def start_root_points_finality_sweep_job(actor, *, limit):
+        actor_snapshot = management_actor(actor)
+        sweep_limit = max(1, min(500, int(limit or 50)))
+
+        def worker(progress):
+            progress(stage="finality_sweep", progress_percent=20, detail=f"running bounded finality sweep limit={sweep_limit}")
+            result = points_service.run_transfer_finality_sweep(actor=actor_snapshot, limit=sweep_limit)
+            progress(stage="snapshot", progress_percent=90, detail="recording finality sweep snapshot")
+            return {"ok": bool(result.get("ok", True)), "finality_sweep": result}
+
+        def summary(payload):
+            sweep_payload = payload.get("finality_sweep") if isinstance(payload.get("finality_sweep"), dict) else {}
+            sweep = sweep_payload.get("sweep") if isinstance(sweep_payload.get("sweep"), dict) else {}
+            deposit = sweep_payload.get("deposit_bridge") if isinstance(sweep_payload.get("deposit_bridge"), dict) else {}
+            return {
+                "ok": bool(sweep_payload.get("ok", payload.get("ok", True))),
+                "snapshot_key": "points_finality_sweep",
+                "limit": int(sweep_payload.get("limit") or sweep_limit),
+                "finalized_count": int(sweep.get("finalized_count") or 0),
+                "confirmed_count": int(sweep.get("confirmed_count") or 0),
+                "failed_count": int(sweep.get("failed_count") or 0),
+                "deposit_credited_count": int(deposit.get("credited_count") or 0),
+                "finalization_paused": bool(sweep_payload.get("finalization_paused")),
+                "management_timing": sweep_payload.get("management_timing") or {},
+            }
+
+        sql_started = time.perf_counter()
+        started = start_management_plane_job(
+            get_db=get_db,
+            actor=actor_snapshot,
+            job_type="points_finality_sweep",
+            title="Points finality sweep",
+            snapshot_key="points_finality_sweep",
+            request_payload={"limit": sweep_limit},
+            worker=worker,
+            summary_builder=summary,
+            reuse_recent_success_seconds=3,
+            queue_class="points_chain_admin",
+            resource_locks=("finance_db",),
+        )
+        request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        return started
+
+    @app.route("/api/root/points/finality-sweep", methods=["POST"])
+    @require_csrf
+    def root_points_finality_sweep():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data = request.get_json(silent=True) if request.is_json else {}
+        if not isinstance(data, dict):
+            data = {}
+        limit = parse_positive_int(data.get("limit") or request.args.get("limit"), default=50, maximum=500) or 50
+        started = start_root_points_finality_sweep_job(actor, limit=limit)
+        audit("POINTS_FINALITY_SWEEP_QUEUED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"job_uuid={started['job'].get('job_uuid')},limit={limit}")
+        return management_job_response(started, snapshot_key="points_finality_sweep")
+
+    @app.route("/api/root/points/finality-sweep/jobs", methods=["POST"])
+    @require_csrf
+    def root_points_finality_sweep_start_job():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        data = request.get_json(silent=True) if request.is_json else {}
+        if not isinstance(data, dict):
+            data = {}
+        limit = parse_positive_int(data.get("limit") or request.args.get("limit"), default=50, maximum=500) or 50
+        started = start_root_points_finality_sweep_job(actor, limit=limit)
+        return management_job_response(started, snapshot_key="points_finality_sweep")
+
+    @app.route("/api/root/points/finality-sweep/latest", methods=["GET"])
+    @require_csrf_safe
+    def root_points_finality_sweep_latest():
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_snapshot_response("points_finality_sweep", payload_key="finality_sweep")
+
+    @app.route("/api/root/points/finality-sweep/jobs/<path:job_uuid>", methods=["GET"])
+    @require_csrf_safe
+    def root_points_finality_sweep_job(job_uuid):
         actor, err = root_or_403()
         if err:
             return err

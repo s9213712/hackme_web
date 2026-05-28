@@ -442,34 +442,31 @@ def pending_request_uuids(db: Path, prefix: str) -> list[str]:
         conn.close()
 
 
-def finalize_prefix_pending_via_explorer(client: ProbeClient, db: Path, prefix: str) -> dict[str, Any]:
+def finalize_prefix_pending_via_sweep_job(client: ProbeClient, db: Path, prefix: str) -> dict[str, Any]:
     before = pending_request_uuids(db, prefix)
     sweeps = []
-    # Root transaction list performs the app's proved-pending sweep in batches.
-    # The old per-request explorer search path used request_uuid as a search
-    # query, which is both slow at 50K scale and no longer a valid release-gate
-    # finalization primitive.
+    # Finality maintenance is an explicit root management-plane job. The old
+    # per-request explorer/list path was slow at 50K scale and is no longer a
+    # valid release-gate finalization primitive.
     max_attempts = max(8, min(120, ((len(before) + 24) // 25) + 12))
     for attempt in range(max_attempts):
         if not pending_request_uuids(db, prefix):
             break
-        res = client.request(
-            "GET",
-            "/api/points/transactions?limit=100&compact=1",
-            expected={200, 400, 503},
-        )
-        summary = res.get("summary") if isinstance(res.get("summary"), dict) else {}
+        res = run_finality_sweep_job(client, f"prefix_finality_sweep_{attempt + 1}", limit=100)
+        latest = res.get("latest") if isinstance(res.get("latest"), dict) else {}
+        snapshot = latest.get("snapshot") if isinstance(latest.get("snapshot"), dict) else {}
+        summary = snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
         sweeps.append({
             "attempt": attempt + 1,
             "status": res.get("status"),
-            "elapsed_ms": res.get("elapsed_ms"),
-            "pending_count": summary.get("pending_count"),
+            "elapsed_ms": (res.get("start") or {}).get("elapsed_ms"),
             "finalized_count": summary.get("finalized_count"),
-            "batch_finalized_count": summary.get("batch_finalized_count"),
+            "confirmed_count": summary.get("confirmed_count"),
+            "job_succeeded": (res.get("status_check") or {}).get("job_succeeded"),
             "msg": res.get("msg"),
             "error": res.get("error"),
         })
-        lock_text = f"{res.get('msg') or ''} {res.get('error') or ''}".lower()
+        lock_text = f"{res.get('msg') or ''} {res.get('error') or ''} {(res.get('latest') or {}).get('error') or ''}".lower()
         if int(res.get("status") or 0) in {0, 400, 503} and "locked" in lock_text:
             time.sleep(min(5.0, 0.25 * (attempt + 1)))
     remaining = pending_request_uuids(db, prefix)
@@ -616,6 +613,42 @@ def fee_market_snapshot(client: ProbeClient, label: str) -> dict[str, Any]:
     }
 
 
+def wait_management_job(client: ProbeClient, status_url: str, *, timeout_seconds: float = 30.0) -> dict[str, Any]:
+    deadline = time.perf_counter() + max(1.0, float(timeout_seconds))
+    last: dict[str, Any] = {"status": 0, "ok": False, "error": "job status was not checked"}
+    while time.perf_counter() < deadline:
+        last = client.request("GET", status_url, expected={200, 404})
+        job = last.get("job") if isinstance(last.get("job"), dict) else {}
+        status = str(job.get("status") or "")
+        if status in {"succeeded", "failed", "cancelled"}:
+            last["job_terminal"] = True
+            last["job_succeeded"] = status == "succeeded"
+            return last
+        time.sleep(0.25)
+    last["job_terminal"] = False
+    last["job_succeeded"] = False
+    last["error"] = f"management job did not finish within {timeout_seconds}s"
+    return last
+
+
+def run_finality_sweep_job(root: ProbeClient, label: str, *, limit: int = 100) -> dict[str, Any]:
+    started = root.request(
+        "POST",
+        "/api/root/points/finality-sweep",
+        json={"limit": int(limit)},
+        expected={202},
+    )
+    result: dict[str, Any] = {"op": label, "start": started}
+    status_url = str(started.get("status_url") or "")
+    if status_url:
+        result["status_check"] = wait_management_job(root, status_url, timeout_seconds=30)
+    latest = root.request("GET", "/api/root/points/finality-sweep/latest", expected={200, 404})
+    result["latest"] = latest
+    result["ok"] = bool(started.get("expected")) and bool((result.get("status_check") or {}).get("job_succeeded", True))
+    result["status"] = int(started.get("status") or 0)
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Destructive PointsChain/trading stress probe for isolated hackme_web runtimes.")
     parser.add_argument("--base-url", required=True)
@@ -746,9 +779,11 @@ def main() -> int:
 
     fee_market_samples.append(fee_market_snapshot(root, "after_internal_official_grants"))
     forced_grants = force_proved(database, prefix + "grant-")
-    root_refresh = root.request("GET", "/api/points/transactions?limit=100&compact=1", expected={200})
-    samples.append({"op": "root_finalize_grants", **root_refresh})
-    explorer_finalized_grants = finalize_prefix_pending_via_explorer(root, database, prefix + "grant-")
+    grant_sweep = run_finality_sweep_job(root, "root_finalize_grants", limit=100)
+    samples.append(grant_sweep)
+    root_refresh = root.request("GET", "/api/points/transactions?limit=100&compact=1&sweep=0", expected={200})
+    samples.append({"op": "root_observe_grants_after_finality_sweep", **root_refresh})
+    explorer_finalized_grants = finalize_prefix_pending_via_sweep_job(root, database, prefix + "grant-")
     for item in clients:
         after_confirm = wallet_balance(item["client"])
         item["balance_after_confirmed_grant"] = after_confirm
@@ -996,12 +1031,14 @@ def main() -> int:
 
     forced_transfers = force_proved(database, prefix)
     for _ in range(3):
-        refreshed = root.request("GET", "/api/points/transactions?limit=100&compact=1", expected={200})
-        samples.append({"op": "root_finalize_transfers", **refreshed})
+        sweep_result = run_finality_sweep_job(root, "root_finalize_transfers", limit=100)
+        samples.append(sweep_result)
+        refreshed = root.request("GET", "/api/points/transactions?limit=100&compact=1&sweep=0", expected={200})
+        samples.append({"op": "root_observe_transfers_after_finality_sweep", **refreshed})
         if int(((refreshed.get("summary") or {}).get("pending_count") or 0)) == 0:
             break
         time.sleep(0.2)
-    explorer_finalized = finalize_prefix_pending_via_explorer(root, database, prefix)
+    explorer_finalized = finalize_prefix_pending_via_sweep_job(root, database, prefix)
     fee_market_samples.append(fee_market_snapshot(root, "after_forced_finality_before_seal"))
 
     trading_results = []

@@ -89,6 +89,7 @@ root/admin behavior to async start plus snapshot reads:
 | Points root report | `GET /api/root/points/report?refresh=1` or `POST /api/root/points/report/jobs` | `GET /api/root/points/report/jobs/<job_id>` or `GET /api/root/management/jobs/<job_id>` | `GET /api/root/points/report/latest` |
 | Trading sitewide refresh | `POST /api/root/trading/sitewide/refresh` | `GET /api/root/management/jobs/<job_id>` | `GET /api/root/trading/sitewide/refresh/latest` |
 | Trading verify | `GET /api/root/trading/verify?refresh=1` or `POST /api/root/trading/verify/jobs` | `GET /api/root/management/jobs/<job_id>` | `GET /api/root/trading/verify/latest` |
+| Transfer finality sweep | `POST /api/root/points/finality-sweep` or `POST /api/root/points/finality-sweep/jobs` | `GET /api/root/points/finality-sweep/jobs/<job_id>` or `GET /api/root/management/jobs/<job_id>` | `GET /api/root/points/finality-sweep/latest` |
 
 `GET /api/root/points/report` now reads the latest successful snapshot when it
 exists. If no snapshot exists, it starts a job and returns `202` instead of
@@ -110,14 +111,46 @@ short burst window, preventing repeated root dashboard refreshes from starting
 identical heavy work.
 
 `GET /api/points/transactions?compact=1&cursor=<id>` provides a bounded compact
-read path without per-row explorer hydration or hidden finality maintenance.
+read path without per-row explorer hydration or hidden finality maintenance by
+default.
 The root economy frontend and 50K destructive stress harness now use this
-compact path for list refreshes. Finality sweeps that still need maintenance
-semantics must be moved to an explicit bounded job instead of relying on
-`compact=0` list calls.
+compact path for list refreshes. Finality sweeps use
+`POST /api/root/points/finality-sweep`; `sweep=1` is retained only as an
+explicit compatibility switch for focused regression tests and should not be
+used by load harnesses.
 
 `POST /api/points/transactions/submit` accepts `compact: true` or
 `?compact=1`, returning only the fields needed by high-volume data-plane tests.
+
+### Phase 2b Operational Observability
+
+`GET /api/admin/health` now includes two bounded management-plane views:
+
+- `points_finality`: pending transfer count/age, pending rails, recent transfer
+  status sample, unsealed ledger sample, safe-mode state, and the latest
+  process-local root transaction-list compact sweep.
+- `database_usage`: split DB file totals, main DB size, sidecar bytes, and
+  per-file sizes without running `PRAGMA quick_check`.
+
+The Health Center renders these as `鏈佇列` and `DB 維護`. This path must remain
+diagnostic only: it does not seal, verify, finalize pending transfers, or run
+deposit reconciliation. `POST /api/root/points/finality-sweep` is the explicit
+bounded maintenance path; it queues a management-plane job, serializes on the
+`finance_db` resource lock, writes `points_finality_sweep`, and refreshes the
+process-local sweep marker consumed by health. Health also reads the persisted
+latest `points_finality_sweep` snapshot so the dashboard retains the previous
+sweep result after process restarts.
+
+The production Nginx template now adds `X-Hackme-Edge-Lane` and
+`X-Hackme-RateLimit-Status` response headers and logs lane/limit status through
+the `hackme_lane` access log format. Upload regex locations are evaluated
+before generic root/admin management routing so model uploads, snapshot
+restores, and production-report uploads actually use the upload zone.
+
+The long needle simulation probe is installed as a GitHub Actions workflow:
+quick profile on PR/push changes to economy/PointsChain/stress paths and medium
+profile on nightly schedule. This gives the 50K follow-up a regular CI/nightly
+entry before the next large manual pass.
 
 ### Report
 
@@ -191,7 +224,7 @@ GET /api/points/transactions?limit=100&cursor=<id>
   -> bounded list only
 
 POST /api/root/points/finality-sweep
-  -> 202 accepted or bounded synchronous result
+  -> 202 accepted
   -> payload includes {limit}
 ```
 
@@ -287,7 +320,7 @@ At approximately 1GB `finance.db`:
 2. Make root points report read from a persisted snapshot.
 3. Add async jobs for report rebuild, chain seal, and chain verify.
 4. Split transaction listing from finality sweep.
-5. Add bounded finality sweep endpoint/job.
+5. Add bounded finality sweep endpoint/job. (Implemented in Phase 2b.)
 6. Capture query plans from the 928MB DB and add only targeted indexes.
 7. Update the 50K harness result model.
 8. Re-test slow endpoints on the existing 928MB DB.

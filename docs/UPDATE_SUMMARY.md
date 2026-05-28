@@ -87,6 +87,27 @@ Release ID: `2026.05.28-002`
   runtime, records resource/QoS summaries, and found then verified a fix for
   compact root transaction lists skipping the bounded proved-pending finality
   sweep.
+- Added a `long-needle-simulation` GitHub Actions workflow: PR/push changes on
+  PointsChain/economy/stress paths run the quick profile, scheduled nightly
+  runs use the medium profile, and QA artifacts are uploaded from the isolated
+  runtime.
+- The Health Center now receives a bounded PointsChain transfer-finality
+  observability snapshot plus split-DB maintenance file totals, so root/admin
+  can see pending transfer age, compact sweep activity, unsealed ledger sample
+  pressure, DB sidecars, and largest DB file without starting a heavy report.
+- Root can now start `POST /api/root/points/finality-sweep` from the Health
+  Center. It queues a bounded management-plane job, serializes on the finance
+  DB resource lock, writes a latest snapshot, and gives finality maintenance a
+  first-class path outside transaction-list refreshes. Health also reads the
+  persisted latest sweep snapshot, so the last maintenance result survives
+  process restarts.
+- `/api/points/transactions` no longer runs finality/deposit maintenance by
+  default. Root can still request the legacy bounded behavior with `sweep=1`,
+  but the destructive stress harness now queues the explicit finality-sweep job
+  and uses compact transaction lists only for observation.
+- The Nginx production example now emits `X-Hackme-Edge-Lane` and
+  `X-Hackme-RateLimit-Status`, records lane/limit status in access logs, and
+  orders upload regex locations ahead of generic root/admin management routing.
 
 ## 2026.05.28-001
 

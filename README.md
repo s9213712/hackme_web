@@ -144,9 +144,15 @@ Grid Bot 與借貸交易整體封死。若你要手動啟動，
 python3 scripts/prepush/pre_push_checks.py
 scripts/testing/pytest_in_tmp.sh -q tests
 python3 scripts/testing/playwright_platform_health_check.py
+python3 scripts/testing/long_needle_simulation_probe.py --profile quick
 ```
 
 `playwright_platform_health_check.py` 會啟動隔離 QA server 到 `/tmp`、使用隨機非
 `5000` port，並以真實瀏覽器驗 Job Center、Notification Center、Share Link
 Management、Trading Asset Overview 與 mobile viewport。它不是正式 runtime 測試，
 報告會寫到該次 `/tmp/.../reports/qa/`。
+
+`long_needle_simulation_probe.py` 會在同一個隔離 runtime 內串接
+PointsChain/private-chain destructive stress 與全功能 system stress；GitHub
+Actions 的 `long-needle-simulation` workflow 會在 PR/push 相關路徑跑 quick，
+nightly 跑 medium。

@@ -119,6 +119,8 @@ def test_explicit_session_pool_is_respected_for_login_limit_probes():
 def test_long_needle_probe_orchestrates_economy_private_chain_and_full_feature():
     script = (ROOT / "scripts" / "testing" / "long_needle_simulation_probe.py").read_text(encoding="utf-8")
     index = (ROOT / "scripts" / "INDEX.md").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "long-needle-simulation.yml").read_text(encoding="utf-8")
+    workflow_template = (ROOT / "scripts" / "testing" / "long-needle-simulation.workflow.yml").read_text(encoding="utf-8")
 
     assert "points_chain_destructive_stress.py" in script
     assert "system_stress_probe.py" in script
@@ -128,6 +130,21 @@ def test_long_needle_probe_orchestrates_economy_private_chain_and_full_feature()
     assert "--allow-server-busy" in script
     assert "long_needle_simulation" in script
     assert "scripts/testing/long_needle_simulation_probe.py" in index
+    assert workflow == workflow_template
+    assert "schedule:" in workflow
+    assert "PROFILE=\"medium\"" in workflow
+    assert "python scripts/testing/long_needle_simulation_probe.py" in workflow
+    assert "actions/upload-artifact@v4" in workflow
+
+
+def test_points_chain_stress_uses_explicit_finality_sweep_job():
+    script = (ROOT / "scripts" / "testing" / "points_chain_destructive_stress.py").read_text(encoding="utf-8")
+
+    assert "def run_finality_sweep_job" in script
+    assert '"/api/root/points/finality-sweep"' in script
+    assert "root_finalize_transfers" in script
+    assert "root_observe_transfers_after_finality_sweep" in script
+    assert "compact=1&sweep=0" in script
 
 
 def test_points_chain_stress_finds_chain_seed_under_runtime_secrets(tmp_path):

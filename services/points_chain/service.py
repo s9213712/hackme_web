@@ -146,6 +146,8 @@ class PointsLedgerService:
         self._governance_clock_wall = datetime.now(timezone.utc)
         self._governance_clock_monotonic = _monotonic_time.monotonic()
         self._governance_clock_last_error = ""
+        self._observability_lock = threading.Lock()
+        self._last_transfer_compact_sweep = {}
 
     def rc1_facade(self):
         from .wallet_facade import WalletServiceFacade
@@ -11124,7 +11126,7 @@ class PointsLedgerService:
         finally:
             conn.close()
 
-    def list_wallet_transactions(self, *, user_id, limit=50, actor=None):
+    def list_wallet_transactions(self, *, user_id, limit=50, actor=None, run_maintenance=True):
         viewer_id = int(user_id)
         limit = min(100, max(1, int(limit or 50)))
         root_view = actor_value(actor, "username") == "root"
@@ -11133,21 +11135,28 @@ class PointsLedgerService:
             self.ensure_schema(conn)
             safe_mode = self._safe_mode_status(conn)
             finalization_paused = bool(safe_mode.get("safe_mode"))
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
             sweep = {"checked_count": 0, "finalized_count": 0, "confirmed_count": 0, "failed_count": 0}
-            if root_view and not finalization_paused:
-                sweep = self._finalize_proved_pending_transfer_requests_locked(
-                    conn,
-                    actor=actor,
-                    limit=ROOT_TRANSACTION_LIST_SWEEP_LIMIT,
-                )
             deposit_reconcile = {"checked_count": 0, "credited_count": 0, "linked_count": 0, "skipped_count": 0}
-            if not finalization_paused:
+            if run_maintenance and not finalization_paused:
+                conn.commit()
+                conn.execute("BEGIN IMMEDIATE")
+                if root_view:
+                    sweep = self._finalize_proved_pending_transfer_requests_locked(
+                        conn,
+                        actor=actor,
+                        limit=ROOT_TRANSACTION_LIST_SWEEP_LIMIT,
+                    )
                 deposit_reconcile = self._reconcile_confirmed_deposit_transfers_locked(
                     conn,
                     actor=actor,
                     limit=ROOT_TRANSACTION_LIST_SWEEP_LIMIT,
+                )
+            if root_view and run_maintenance:
+                self._record_transfer_compact_sweep_observability(
+                    source="root_transactions_full",
+                    sweep=sweep,
+                    deposit_reconcile=deposit_reconcile,
+                    finalization_paused=finalization_paused,
                 )
             if root_view:
                 rows = conn.execute(
@@ -11242,6 +11251,7 @@ class PointsLedgerService:
                     "deposit_bridge_credited_count": int(deposit_reconcile.get("credited_count") or 0),
                     "deposit_bridge_linked_count": int(deposit_reconcile.get("linked_count") or 0),
                     "finalization_error_count": int(sweep.get("finalization_error_count") or 0) + len(row_finalization_errors),
+                    "maintenance_run": bool(run_maintenance),
                 },
             }
             finalization_errors = list(sweep.get("finalization_errors") or []) + row_finalization_errors
@@ -11274,7 +11284,270 @@ class PointsLedgerService:
         finally:
             conn.close()
 
-    def list_wallet_transactions_compact(self, *, user_id, limit=50, actor=None, cursor=None):
+    def _record_transfer_compact_sweep_observability(self, *, source, sweep=None, deposit_reconcile=None, finalization_paused=False):
+        sweep = sweep or {}
+        deposit_reconcile = deposit_reconcile or {}
+
+        def int_value(value):
+            try:
+                return int(value or 0)
+            except Exception:
+                return 0
+
+        payload = {
+            "source": str(source or "unknown"),
+            "finished_at": utc_now(),
+            "process_local": True,
+            "finalization_paused": bool(finalization_paused),
+            "sweep_limit": ROOT_TRANSACTION_LIST_SWEEP_LIMIT,
+            "checked_count": int_value(sweep.get("checked_count")),
+            "finalized_count": int_value(sweep.get("finalized_count")),
+            "confirmed_count": int_value(sweep.get("confirmed_count")),
+            "failed_count": int_value(sweep.get("failed_count")),
+            "finalization_error_count": int_value(sweep.get("finalization_error_count")),
+            "deposit_bridge_checked_count": int_value(deposit_reconcile.get("checked_count")),
+            "deposit_bridge_credited_count": int_value(deposit_reconcile.get("credited_count")),
+            "deposit_bridge_linked_count": int_value(deposit_reconcile.get("linked_count")),
+        }
+        with self._observability_lock:
+            self._last_transfer_compact_sweep = payload
+        return payload
+
+    def transfer_finality_observability_snapshot(self, *, recent_limit=200):
+        """Bounded health snapshot for admin dashboards; does not finalize rows."""
+        started = _monotonic_time.perf_counter()
+        limit = max(25, min(1000, int(recent_limit or 200)))
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            branch = self._canonical_branch_uuid(conn)
+
+            def int_value(value):
+                try:
+                    return int(value or 0)
+                except Exception:
+                    return 0
+
+            pending = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS request_count,
+                    COALESCE(SUM(amount_points), 0) AS amount_points,
+                    MIN(created_at) AS oldest_created_at,
+                    MAX(created_at) AS latest_created_at,
+                    CAST(COALESCE((julianday('now') - julianday(MIN(created_at))) * 86400, 0) AS INTEGER) AS oldest_age_seconds
+                FROM points_chain_transfer_requests
+                WHERE chain_branch=? AND status='pending'
+                """,
+                (branch,),
+            ).fetchone()
+            pending_by_rail_rows = conn.execute(
+                """
+                SELECT settlement_rail, COUNT(*) AS request_count, COALESCE(SUM(amount_points), 0) AS amount_points
+                FROM points_chain_transfer_requests
+                WHERE chain_branch=? AND status='pending'
+                GROUP BY settlement_rail
+                ORDER BY request_count DESC
+                """,
+                (branch,),
+            ).fetchall()
+            recent_status_rows = conn.execute(
+                """
+                WITH recent AS (
+                    SELECT status, settlement_rail, created_at
+                    FROM points_chain_transfer_requests
+                    WHERE chain_branch=?
+                    ORDER BY id DESC
+                    LIMIT ?
+                )
+                SELECT status, COUNT(*) AS request_count, MAX(created_at) AS latest_at
+                FROM recent
+                GROUP BY status
+                ORDER BY request_count DESC
+                """,
+                (branch, limit),
+            ).fetchall()
+            unsealed_sample = conn.execute(
+                """
+                SELECT COUNT(*) AS ledger_count, MAX(created_at) AS latest_at
+                FROM (
+                    SELECT id, created_at
+                    FROM points_ledger
+                    WHERE chain_branch=? AND status='confirmed' AND chain_block_id IS NULL
+                    ORDER BY id DESC
+                    LIMIT ?
+                )
+                """,
+                (branch, limit),
+            ).fetchone()
+            latest_block = conn.execute(
+                """
+                SELECT block_number, block_hash, sealed_at
+                FROM points_chain_blocks
+                ORDER BY block_number DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            safe_mode = self._safe_mode_status(conn)
+            with self._observability_lock:
+                last_sweep = dict(self._last_transfer_compact_sweep or {})
+
+            pending_count = int_value(pending["request_count"] if pending else 0)
+            oldest_age_seconds = int_value(pending["oldest_age_seconds"] if pending else 0)
+            unsealed_count = int_value(unsealed_sample["ledger_count"] if unsealed_sample else 0)
+            signals = []
+            if safe_mode.get("safe_mode"):
+                signals.append({
+                    "code": "points_chain_safe_mode",
+                    "severity": "critical",
+                    "detail": safe_mode.get("reason") or "",
+                })
+            if pending_count > 1000:
+                signals.append({
+                    "code": "transfer_queue_backlog",
+                    "severity": "warning",
+                    "detail": f"{pending_count} pending transfer requests",
+                })
+            if oldest_age_seconds > 3600:
+                signals.append({
+                    "code": "transfer_queue_oldest_age",
+                    "severity": "warning",
+                    "detail": f"oldest pending transfer age {oldest_age_seconds}s",
+                })
+            if unsealed_count >= limit:
+                signals.append({
+                    "code": "unsealed_ledger_sample_limit_reached",
+                    "severity": "warning",
+                    "detail": f"latest {limit} confirmed ledger rows remain unsealed",
+                })
+            status = "critical" if any(item.get("severity") == "critical" for item in signals) else "warning" if signals else "ok"
+            conn.commit()
+            return {
+                "ok": status != "critical",
+                "status": status,
+                "snapshot_type": "points_transfer_finality_observability",
+                "generated_at": utc_now(),
+                "bounded": True,
+                "recent_limit": limit,
+                "chain_branch": branch,
+                "pending_queue": {
+                    "pending_count": pending_count,
+                    "amount_points": int_value(pending["amount_points"] if pending else 0),
+                    "oldest_created_at": pending["oldest_created_at"] if pending else None,
+                    "latest_created_at": pending["latest_created_at"] if pending else None,
+                    "oldest_age_seconds": oldest_age_seconds,
+                    "by_settlement_rail": {
+                        str(row["settlement_rail"] or "unknown"): {
+                            "request_count": int_value(row["request_count"]),
+                            "amount_points": int_value(row["amount_points"]),
+                        }
+                        for row in pending_by_rail_rows
+                    },
+                },
+                "recent_transfer_sample": {
+                    "limit": limit,
+                    "status_counts": {
+                        str(row["status"] or "unknown"): {
+                            "request_count": int_value(row["request_count"]),
+                            "latest_at": row["latest_at"],
+                        }
+                        for row in recent_status_rows
+                    },
+                },
+                "private_chain": {
+                    "unsealed_recent_sample_count": unsealed_count,
+                    "unsealed_recent_sample_limit": limit,
+                    "unsealed_sample_limit_reached": unsealed_count >= limit,
+                    "latest_unsealed_at": unsealed_sample["latest_at"] if unsealed_sample else None,
+                    "latest_block": dict(latest_block) if latest_block else {},
+                },
+                "compact_sweep": {
+                    "root_transaction_list_sweep_limit": ROOT_TRANSACTION_LIST_SWEEP_LIMIT,
+                    "last_process_local_sweep": last_sweep,
+                    "maintenance_from_health_endpoint": False,
+                },
+                "safe_mode": safe_mode,
+                "signals": signals,
+                "management_timing": {
+                    "total_ms": round((_monotonic_time.perf_counter() - started) * 1000, 3),
+                    "bounded": True,
+                },
+            }
+        finally:
+            conn.close()
+
+    def run_transfer_finality_sweep(self, *, actor=None, limit=ROOT_TRANSACTION_LIST_SWEEP_LIMIT):
+        started = _monotonic_time.perf_counter()
+        try:
+            sweep_limit = int(limit or ROOT_TRANSACTION_LIST_SWEEP_LIMIT)
+        except Exception:
+            sweep_limit = ROOT_TRANSACTION_LIST_SWEEP_LIMIT
+        sweep_limit = max(1, min(500, sweep_limit))
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            safe_mode = self._safe_mode_status(conn)
+            finalization_paused = bool(safe_mode.get("safe_mode"))
+            sweep = {"checked_count": 0, "finalized_count": 0, "confirmed_count": 0, "failed_count": 0}
+            deposit_reconcile = {"checked_count": 0, "credited_count": 0, "linked_count": 0, "skipped_count": 0}
+            if not finalization_paused:
+                conn.commit()
+                conn.execute("BEGIN IMMEDIATE")
+                sweep = self._finalize_proved_pending_transfer_requests_locked(
+                    conn,
+                    actor=actor,
+                    limit=sweep_limit,
+                )
+                deposit_reconcile = self._reconcile_confirmed_deposit_transfers_locked(
+                    conn,
+                    actor=actor,
+                    limit=sweep_limit,
+                )
+                conn.commit()
+            marker = self._record_transfer_compact_sweep_observability(
+                source="root_finality_sweep_job",
+                sweep=sweep,
+                deposit_reconcile=deposit_reconcile,
+                finalization_paused=finalization_paused,
+            )
+            result = {
+                "ok": not finalization_paused,
+                "sweep_type": "points_transfer_finality_sweep",
+                "bounded": True,
+                "limit": sweep_limit,
+                "generated_at": utc_now(),
+                "finalization_paused": finalization_paused,
+                "safe_mode": safe_mode,
+                "sweep": {
+                    "checked_count": int(sweep.get("checked_count") or 0),
+                    "finalized_count": int(sweep.get("finalized_count") or 0),
+                    "confirmed_count": int(sweep.get("confirmed_count") or 0),
+                    "failed_count": int(sweep.get("failed_count") or 0),
+                    "finalization_error_count": int(sweep.get("finalization_error_count") or 0),
+                    "finalization_errors": list(sweep.get("finalization_errors") or [])[:20],
+                },
+                "deposit_bridge": {
+                    "checked_count": int(deposit_reconcile.get("checked_count") or 0),
+                    "credited_count": int(deposit_reconcile.get("credited_count") or 0),
+                    "linked_count": int(deposit_reconcile.get("linked_count") or 0),
+                    "skipped_count": int(deposit_reconcile.get("skipped_count") or 0),
+                },
+                "observability_marker": marker,
+                "management_timing": {
+                    "total_ms": round((_monotonic_time.perf_counter() - started) * 1000, 3),
+                    "bounded": True,
+                },
+            }
+            if finalization_paused:
+                result["warnings"] = ["chain_safe_mode_active_finalization_paused"]
+            return result
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def list_wallet_transactions_compact(self, *, user_id, limit=50, actor=None, cursor=None, run_root_sweep=True):
         viewer_id = int(user_id)
         limit = min(100, max(1, int(limit or 50)))
         root_view = actor_value(actor, "username") == "root"
@@ -11290,7 +11563,7 @@ class PointsLedgerService:
             finalization_paused = bool(safe_mode.get("safe_mode"))
             sweep = {"checked_count": 0, "finalized_count": 0, "confirmed_count": 0, "failed_count": 0}
             deposit_reconcile = {"checked_count": 0, "credited_count": 0, "linked_count": 0}
-            if root_view and not finalization_paused:
+            if root_view and run_root_sweep and not finalization_paused:
                 conn.commit()
                 conn.execute("BEGIN IMMEDIATE")
                 sweep = self._finalize_proved_pending_transfer_requests_locked(
@@ -11304,6 +11577,13 @@ class PointsLedgerService:
                     limit=ROOT_TRANSACTION_LIST_SWEEP_LIMIT,
                 )
                 conn.commit()
+            if root_view and run_root_sweep:
+                self._record_transfer_compact_sweep_observability(
+                    source="root_transactions_compact",
+                    sweep=sweep,
+                    deposit_reconcile=deposit_reconcile,
+                    finalization_paused=finalization_paused,
+                )
             branch = self._canonical_branch_uuid(conn)
             where = []
             params = []
@@ -11454,6 +11734,7 @@ class PointsLedgerService:
                     "finalization_error_count": int(sweep.get("finalization_error_count") or 0),
                     "bounded": True,
                     "compact": True,
+                    "maintenance_run": bool(root_view and run_root_sweep),
                 },
                 "cursor": {
                     "next": next_cursor,

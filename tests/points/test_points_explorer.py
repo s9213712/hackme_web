@@ -230,12 +230,15 @@ def test_points_chain_can_be_disabled_without_disabling_basic_points(tmp_path):
 
     current.update({"id": 1, "username": "root", "role": "super_admin"})
     root_report = client.get("/api/root/points/report")
+    finality_sweep = client.post("/api/root/points/finality-sweep", json={"limit": 5})
     root_grant = client.post(
         "/api/root/points/official-wallet/grant",
         json={"destination_wallet_address": "pc1deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "amount": 1},
     )
     assert root_report.status_code == 503
     assert root_report.get_json()["code"] == "points_chain_disabled"
+    assert finality_sweep.status_code == 503
+    assert finality_sweep.get_json()["code"] == "points_chain_disabled"
     assert root_grant.status_code == 503
     assert root_grant.get_json()["code"] == "points_chain_disabled"
 
@@ -248,13 +251,14 @@ def test_root_points_management_endpoints_start_async_jobs(tmp_path):
     seal = client.post("/api/root/points/chain/seal", json={"limit": 5})
     verify = client.get("/api/root/points/chain/verify")
     report = client.get("/api/root/points/report?refresh=1")
+    finality = client.post("/api/root/points/finality-sweep", json={"limit": 5})
     financial = client.get("/api/root/points/financial-invariants")
     recovery = client.post(
         "/api/root/points/chain/recovery/auto-handle",
         json={"confirm": "AUTO HANDLE POINTSCHAIN"},
     )
 
-    for response in (seal, verify, report, financial, recovery):
+    for response in (seal, verify, report, finality, financial, recovery):
         payload = response.get_json()
         assert response.status_code == 202
         assert payload["ok"] is True
@@ -266,6 +270,8 @@ def test_root_points_management_endpoints_start_async_jobs(tmp_path):
 
     latest = client.get(seal.get_json()["latest_snapshot_url"])
     assert latest.status_code in {200, 404}
+    finality_latest = client.get("/api/root/points/finality-sweep/latest")
+    assert finality_latest.status_code in {200, 404}
 
     current.update({"id": 4, "username": "manager", "role": "manager"})
     stats = client.get("/api/admin/points/economy/stats")
@@ -850,7 +856,7 @@ def test_root_transaction_management_confirms_to_address_even_if_wallet_becomes_
         conn.close()
 
     current.update({"id": 1, "username": "root", "role": "super_admin"})
-    root_res = client.get("/api/points/transactions?limit=10")
+    root_res = client.get("/api/points/transactions?limit=10&sweep=1")
     assert root_res.status_code == 200, root_res.get_json()
     payload = root_res.get_json()
     assert payload["summary"]["confirmed_count"] == 1
@@ -914,7 +920,7 @@ def test_root_transaction_management_sweeps_proved_pending_beyond_page_limit(tmp
         conn.close()
 
     current.update({"id": 1, "username": "root", "role": "super_admin"})
-    root_res = client.get("/api/points/transactions?limit=5")
+    root_res = client.get("/api/points/transactions?limit=5&sweep=1")
     assert root_res.status_code == 200, root_res.get_json()
     payload = root_res.get_json()
     assert payload["summary"]["batch_checked_count"] == 5
@@ -933,7 +939,7 @@ def test_root_transaction_management_sweeps_proved_pending_beyond_page_limit(tmp
     assert remaining == 5
 
     for _ in range(2):
-        root_res = client.get("/api/points/transactions?limit=5")
+        root_res = client.get("/api/points/transactions?limit=5&sweep=1")
         assert root_res.status_code == 200, root_res.get_json()
 
     conn = points.get_db()
@@ -1004,6 +1010,17 @@ def test_root_compact_transaction_list_runs_bounded_finality_sweep(tmp_path):
     assert root_res.status_code == 200, root_res.get_json()
     payload = root_res.get_json()
     assert payload["summary"]["compact"] is True
+    assert payload["summary"]["maintenance_run"] is False
+    assert payload["summary"]["batch_checked_count"] == 0
+    assert payload["summary"]["batch_finalized_count"] == 0
+    assert payload["summary"]["pending_count"] == 5
+    assert all(item["status"] == "pending" for item in payload["transactions"])
+
+    root_res = client.get("/api/points/transactions?limit=5&compact=1&sweep=1")
+    assert root_res.status_code == 200, root_res.get_json()
+    payload = root_res.get_json()
+    assert payload["summary"]["compact"] is True
+    assert payload["summary"]["maintenance_run"] is True
     assert payload["summary"]["batch_checked_count"] == 5
     assert payload["summary"]["batch_finalized_count"] == 5
     assert payload["summary"]["batch_confirmed_count"] == 5

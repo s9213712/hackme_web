@@ -6508,6 +6508,15 @@ function formatBytes(bytes) {
   return `${size.toFixed(decimals)} ${units[index]}`;
 }
 
+function formatDurationSeconds(seconds) {
+  const value = Number(seconds || 0);
+  if (!Number.isFinite(value) || value <= 0) return "0s";
+  if (value < 60) return `${Math.round(value)}s`;
+  if (value < 3600) return `${Math.round(value / 60)}m`;
+  if (value < 86400) return `${Math.round(value / 3600)}h`;
+  return `${Math.round(value / 86400)}d`;
+}
+
 const SECURITY_CONTROL_KEYS = [
   "maintenance_mode",
   "server_ssl_enabled",
@@ -7383,8 +7392,10 @@ async function loadServerHealth() {
   const workqueue = $("server-health-workqueue");
   const countsBox = $("server-health-counts");
   const storageBox = $("server-health-storage");
+  const pointsFinalityBox = $("server-health-points-finality");
+  const dbMaintenanceBox = $("server-health-db-maintenance");
   const auditBox = $("server-health-audit");
-  if (!summary || !details || !workqueue || !countsBox || !storageBox || !auditBox) return;
+  if (!summary || !details || !workqueue || !countsBox || !storageBox || !pointsFinalityBox || !dbMaintenanceBox || !auditBox) return;
   if (!json.ok) {
     summary.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "健康度讀取失敗")}</div>`;
     rootAdminTimingFinish("first-summary", firstSummaryStarted, "GET /api/admin/health failed before summary payload");
@@ -7393,6 +7404,8 @@ async function loadServerHealth() {
     workqueue.innerHTML = "";
     countsBox.innerHTML = "";
     storageBox.innerHTML = "";
+    pointsFinalityBox.innerHTML = "";
+    dbMaintenanceBox.innerHTML = "";
     auditBox.innerHTML = "";
     return;
   }
@@ -7403,9 +7416,17 @@ async function loadServerHealth() {
   const auditEnabled = !(json.audit_integrity && json.audit_integrity.enabled === false);
   const readiness = json.readiness || {};
   const anomaly = json.anomaly || {};
+  const pointsFinality = json.points_finality || {};
+  const pendingQueue = pointsFinality.pending_queue || {};
+  const compactSweep = pointsFinality.compact_sweep || {};
+  const lastSweep = compactSweep.last_process_local_sweep || {};
+  const latestSweepSnapshot = pointsFinality.latest_sweep_snapshot || {};
+  const latestSweepSummary = latestSweepSnapshot.summary || {};
+  const databaseUsage = json.database_usage || {};
   const readinessChecks = Array.isArray(readiness.checks) ? readiness.checks : [];
   const failedChecks = readinessChecks.filter((item) => !item.ok);
   const anomalySignals = Array.isArray(anomaly.signals) ? anomaly.signals : [];
+  const finalitySignals = Array.isArray(pointsFinality.signals) ? pointsFinality.signals : [];
   const statusLabel = json.status === "critical" ? "Critical" : json.status === "degraded" ? "Degraded" : "OK";
   const cards = [
     ["整體狀態", statusLabel, healthStatusColor(json.status)],
@@ -7458,6 +7479,62 @@ async function loadServerHealth() {
       color: "#82b1ff",
     },
   ]);
+  pointsFinalityBox.innerHTML = renderHealthRows([
+    {
+      label: "Pending transfers",
+      value: String(pendingQueue.pending_count || 0),
+      detail: `oldest ${formatDurationSeconds(pendingQueue.oldest_age_seconds || 0)} · ${Number(pendingQueue.amount_points || 0).toLocaleString()} 點`,
+      color: Number(pendingQueue.pending_count || 0) > 1000 ? "#ffb74d" : "#4caf50",
+    },
+    {
+      label: "Compact finality sweep",
+      value: lastSweep.finished_at ? `${lastSweep.finalized_count || 0} finalized` : "no local sweep",
+      detail: lastSweep.finished_at
+        ? `${lastSweep.source || "-"} · checked ${lastSweep.checked_count || 0} · limit ${compactSweep.root_transaction_list_sweep_limit || "-"} · ${lastSweep.finished_at}`
+        : `root list sweep limit ${compactSweep.root_transaction_list_sweep_limit || "-"}`,
+      color: lastSweep.finalization_paused ? "#ffb74d" : "#82b1ff",
+    },
+    {
+      label: "Unsealed ledger sample",
+      value: String(pointsFinality.private_chain?.unsealed_recent_sample_count || 0),
+      detail: `bounded latest ${pointsFinality.private_chain?.unsealed_recent_sample_limit || pointsFinality.recent_limit || "-"} · block ${pointsFinality.private_chain?.latest_block?.block_number ?? "-"}`,
+      color: pointsFinality.private_chain?.unsealed_sample_limit_reached ? "#ffb74d" : "#4caf50",
+    },
+    {
+      label: "Latest sweep snapshot",
+      value: latestSweepSnapshot.ok ? `${latestSweepSummary.finalized_count || 0} finalized` : "missing",
+      detail: latestSweepSnapshot.generated_at
+        ? `${latestSweepSnapshot.generated_at} · job ${(latestSweepSnapshot.source_job_uuid || "").slice(0, 8) || "-"}`
+        : (latestSweepSnapshot.error || "尚未建立 latest snapshot"),
+      color: latestSweepSnapshot.ok ? "#4caf50" : "#ffb74d",
+    },
+    {
+      label: "Finality snapshot",
+      value: pointsFinality.status || "unknown",
+      detail: `bounded=${pointsFinality.bounded ? "true" : "false"} · ${pointsFinality.management_timing?.total_ms ?? 0} ms`,
+      color: healthStatusColor(pointsFinality.status),
+    },
+  ]);
+  dbMaintenanceBox.innerHTML = renderHealthRows([
+    {
+      label: "Split DB total",
+      value: formatBytes(databaseUsage.total_bytes || s.database_bytes || 0),
+      detail: `${Number(databaseUsage.file_count || 0)} DB files · sidecar ${formatBytes(databaseUsage.sidecar_bytes || 0)}`,
+      color: "#82b1ff",
+    },
+    {
+      label: "Main DB",
+      value: formatBytes(databaseUsage.main_database_total_bytes || s.database_bytes || 0),
+      detail: databaseUsage.db_dir || "runtime/database",
+      color: "#82b1ff",
+    },
+    {
+      label: "Largest DB",
+      value: formatBytes((Array.isArray(databaseUsage.files) ? databaseUsage.files : []).reduce((max, item) => Math.max(max, Number(item.total_bytes || 0)), 0)),
+      detail: ((Array.isArray(databaseUsage.files) ? databaseUsage.files : []).slice().sort((a, b) => Number(b.total_bytes || 0) - Number(a.total_bytes || 0))[0] || {}).label || "-",
+      color: "#82b1ff",
+    },
+  ]);
   const auditRows = [
     {
       label: "Audit chain",
@@ -7483,12 +7560,23 @@ async function loadServerHealth() {
       detail: item.detail || `value=${item.value}, threshold=${item.threshold}`,
       color: item.level === "critical" ? "#ff4f6d" : item.level === "warning" ? "#ffb74d" : "#82b1ff",
     })),
+    ...finalitySignals.map((item) => ({
+      label: `Points finality: ${item.code || "-"}`,
+      value: item.severity || "-",
+      detail: item.detail || "",
+      color: item.severity === "critical" ? "#ff4f6d" : "#ffb74d",
+    })),
   ];
   auditBox.innerHTML = renderHealthRows(auditRows);
   renderRootFrontendTimingObservability();
   const repairBtn = $("integrity-repair-btn");
   if (repairBtn) {
     repairBtn.disabled = currentUser !== "root" || !auditEnabled || auditOk !== false;
+  }
+  const sweepBtn = $("points-finality-sweep-btn");
+  if (sweepBtn) {
+    sweepBtn.disabled = currentUser !== "root";
+    sweepBtn.title = currentUser === "root" ? "排入 bounded finality sweep job" : "只有 root 可執行";
   }
   loadPlaywrightCiHealth().catch((err) => {
     const host = $("server-health-playwright-ci");
@@ -7501,6 +7589,43 @@ async function loadServerHealth() {
       }]);
     }
   });
+}
+
+async function startPointsFinalitySweep() {
+  if (currentUser !== "root") {
+    alert("只有 root 可執行 finality sweep");
+    return;
+  }
+  const btn = $("points-finality-sweep-btn");
+  const originalText = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "排入中...";
+  }
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + "/root/points/finality-sweep", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({ limit: 50 }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) {
+      alert(json.msg || "Finality sweep 排入失敗");
+      return;
+    }
+    if (typeof startJobCenterPolling === "function") startJobCenterPolling({ immediate: true, force: true });
+    setTimeout(() => loadServerHealth(), 1200);
+  } catch (err) {
+    alert(err && err.message ? err.message : "Finality sweep 排入失敗");
+  } finally {
+    if (btn) {
+      btn.disabled = currentUser !== "root";
+      btn.textContent = originalText || "Finality sweep";
+    }
+  }
 }
 
 async function repairIntegrityChains() {

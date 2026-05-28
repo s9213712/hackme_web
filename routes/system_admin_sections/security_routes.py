@@ -13,6 +13,7 @@ from pathlib import Path
 
 from flask import request
 
+from services.management_plane import get_management_snapshot
 from services.server.backpressure import backpressure_status
 from services.server.domain_databases import DOMAIN_DATABASES
 from services.system.ci_status import playwright_ci_status
@@ -538,6 +539,7 @@ def register_system_admin_security_routes(app, ctx):
     SECURITY_THRESHOLD_KEYS = ctx["SECURITY_THRESHOLD_KEYS"]
     SERVER_UPDATE_WARNING = ctx["SERVER_UPDATE_WARNING"]
     GIT_REPO_DIR = ctx["GIT_REPO_DIR"]
+    points_service = ctx.get("points_service")
 
     audit = ctx["audit"]
     get_client_ip = ctx["get_client_ip"]
@@ -589,6 +591,51 @@ def register_system_admin_security_routes(app, ctx):
     repair_violation_chains = ctx["repair_violation_chains"]
     audit_storage_capacity = ctx["audit_storage_capacity"]
 
+    def _points_finality_health_snapshot():
+        if not points_service or not hasattr(points_service, "transfer_finality_observability_snapshot"):
+            return {
+                "ok": True,
+                "status": "unavailable",
+                "snapshot_type": "points_transfer_finality_observability",
+                "bounded": True,
+                "disabled": True,
+                "msg": "points service unavailable",
+            }
+        try:
+            payload = points_service.transfer_finality_observability_snapshot(recent_limit=200)
+        except Exception as exc:
+            payload = {
+                "ok": False,
+                "status": "warning",
+                "snapshot_type": "points_transfer_finality_observability",
+                "bounded": True,
+                "error": exc.__class__.__name__,
+                "msg": str(exc)[:200],
+            }
+        try:
+            conn = get_db()
+            try:
+                latest = get_management_snapshot(conn, snapshot_key="points_finality_sweep", include_payload=False)
+            finally:
+                conn.close()
+            payload["latest_sweep_snapshot"] = {
+                "ok": bool(latest.get("ok")),
+                "missing": bool(latest.get("missing")),
+                "generated_at": latest.get("generated_at"),
+                "updated_at": latest.get("updated_at"),
+                "source_job_uuid": latest.get("source_job_uuid"),
+                "summary": latest.get("summary") or {},
+                "error": latest.get("error") or "",
+            }
+        except Exception as exc:
+            payload["latest_sweep_snapshot"] = {
+                "ok": False,
+                "missing": True,
+                "error": f"{exc.__class__.__name__}: {str(exc)[:160]}",
+                "summary": {},
+            }
+        return payload
+
     @app.route("/api/admin/health", methods=["GET"])
     @require_csrf_safe
     def admin_health():
@@ -622,12 +669,26 @@ def register_system_admin_security_routes(app, ctx):
             capacity_conn.close()
         readiness = readiness_summary()
         anomaly = anomaly_summary()
+        points_finality = _points_finality_health_snapshot()
+        database_usage = _database_usage_snapshot(
+            db_path=DB_PATH,
+            db_dir=DB_DIR,
+            additional_db_paths=ADDITIONAL_DB_PATHS,
+            base_dir=BASE_DIR,
+            public_relative_path=public_relative_path,
+            integrity_check={"ok": None, "details": "skipped in fast health endpoint; use /api/admin/health/db-integrity"},
+            audit_hash_check={"ok": None, "details": "skipped in fast health endpoint; use /api/admin/environment"},
+        )
         status = "critical" if ((audit_enabled and audit_ok is False) or settings.get("maintenance_mode", False) or readiness["status"] == "critical") else "ok"
         if storage_capacity["status"] == "critical":
+            status = "critical"
+        if points_finality.get("status") == "critical":
             status = "critical"
         if status == "ok" and (readiness["status"] == "degraded" or anomaly["status"] in {"warning", "critical"} or count_errors):
             status = "degraded"
         if status == "ok" and storage_capacity["status"] == "warning":
+            status = "degraded"
+        if status == "ok" and points_finality.get("status") in {"warning", "degraded"}:
             status = "degraded"
         return json_resp({
             "ok": True,
@@ -657,6 +718,8 @@ def register_system_admin_security_routes(app, ctx):
                 "storage_dir": public_relative_path(storage_stats["path"], BASE_DIR),
                 "capacity_audit": storage_capacity,
             },
+            "database_usage": database_usage,
+            "points_finality": points_finality,
             "readiness": readiness,
             "anomaly": anomaly,
         })
