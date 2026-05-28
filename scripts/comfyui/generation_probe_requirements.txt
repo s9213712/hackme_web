@@ -1,0 +1,47 @@
+# Standalone generation probe helper packages.
+#
+# Isolated install example:
+#   $WSL_PYTHON -m pip install --target "$PROBE_DEPS" -r generation_probe_requirements.txt
+#
+# Windows portable ComfyUI API paths can install the smaller subset documented
+# in generation_probe_dependencies.md. Keeping one complete file makes offline
+# replication simpler.
+diffusers
+transformers
+accelerate
+huggingface-hub
+gguf
+safetensors
+psutil
+pynvml
+nvidia-ml-py
+tokenizers==0.22.2
+regex
+requests
+packaging
+filelock
+importlib-metadata
+tqdm
+pyyaml
+fsspec
+httpx
+anyio
+httpcore
+idna
+certifi
+h11
+urllib3
+charset-normalizer
+zipp
+exceptiongroup
+typing-extensions
+sniffio
+click
+hf-xet
+typer
+rich
+shellingham
+annotated-doc
+markdown-it-py
+pygments
+mdurl

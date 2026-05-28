@@ -12,6 +12,7 @@ from tests.comfyui._integration_suite import (
     test_comfyui_generate_rejects_when_workflow_node_missing,
     test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes,
     test_comfyui_diffusers_mode_auto_routes_native_gguf_to_comfyui_workflow,
+    test_comfyui_diffusers_mode_rejects_unmapped_gguf_before_download,
     test_comfyui_diffusers_mode_local_native_gguf_installs_cached_file,
     test_comfyui_diffusers_mode_remote_native_gguf_requires_remote_admin,
     test_comfyui_diffusers_failure_reports_reason_and_python_log_tail,

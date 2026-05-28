@@ -15,6 +15,9 @@ def test_comfyui_defaults_use_lan_remote_api_mode():
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_diffusers_cuda_fallback_to_cpu"] is True
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_diffusers_keep_downloaded_models"] is True
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_diffusers_disable_xet"] is True
+    assert COMFYUI_DEFAULT_SETTINGS["comfyui_huggingface_cache_root"] == (
+        os.environ.get("COMFYUI_HUGGINGFACE_CACHE_ROOT") or os.environ.get("HACKME_HUGGINGFACE_CACHE_ROOT") or ""
+    )
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_local_vram_mode"] == "auto"
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_local_precision"] == "auto"
     assert COMFYUI_DEFAULT_SETTINGS["comfyui_local_unet_dtype"] == "auto"
@@ -30,5 +33,6 @@ def test_comfyui_defaults_use_lan_remote_api_mode():
     assert DEFAULT_SETTINGS["comfyui_diffusers_cuda_fallback_to_cpu"] is True
     assert DEFAULT_SETTINGS["comfyui_diffusers_keep_downloaded_models"] is True
     assert DEFAULT_SETTINGS["comfyui_diffusers_disable_xet"] is True
+    assert DEFAULT_SETTINGS["comfyui_huggingface_cache_root"] == COMFYUI_DEFAULT_SETTINGS["comfyui_huggingface_cache_root"]
     assert DEFAULT_SETTINGS["comfyui_local_vram_mode"] == "auto"
     assert DEFAULT_SETTINGS["comfyui_local_cpu_vae"] is False

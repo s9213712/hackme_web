@@ -56,6 +56,14 @@ def _env_float_text(name, default=""):
     return ("%0.3f" % value).rstrip("0").rstrip(".")
 
 
+def _first_env_text(*names):
+    for name in names:
+        raw = str(os.environ.get(name, "") or "").strip()
+        if raw:
+            return raw
+    return ""
+
+
 COMFYUI_LOCAL_VRAM_MODES = {"auto", "gpu_only", "highvram", "normalvram", "lowvram", "novram", "cpu"}
 COMFYUI_LOCAL_PRECISION_MODES = {"auto", "force_fp16", "force_fp32"}
 COMFYUI_LOCAL_UNET_DTYPES = {
@@ -143,6 +151,10 @@ COMFYUI_DEFAULT_SETTINGS = {
         or os.environ.get("HF_TOKEN")
         or os.environ.get("HUGGING_FACE_HUB_TOKEN")
         or ""
+    ),
+    "comfyui_huggingface_cache_root": _first_env_text(
+        "COMFYUI_HUGGINGFACE_CACHE_ROOT",
+        "HACKME_HUGGINGFACE_CACHE_ROOT",
     ),
     "comfyui_diffusers_device": os.environ.get("COMFYUI_DIFFUSERS_DEVICE", "auto"),
     "comfyui_diffusers_dtype": os.environ.get("COMFYUI_DIFFUSERS_DTYPE", "auto"),

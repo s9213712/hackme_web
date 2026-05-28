@@ -152,6 +152,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
       { id: "s-comfyui-diffusers-model-repo", label: "Hugging Face Repo", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
       { id: "s-comfyui-huggingface-api-token", label: "Hugging Face API Token", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
       { id: "s-comfyui-huggingface-api-token-clear", label: "清除已儲存 HF Token", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
+      { id: "s-comfyui-huggingface-cache-root", label: "Hugging Face 快取根目錄", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
       { id: "s-comfyui-diffusers-device", label: "Diffusers Device", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
       { id: "s-comfyui-diffusers-cuda-fallback-to-cpu", label: "GPU 失敗改用 CPU", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },
       { id: "s-comfyui-diffusers-dtype", label: "Diffusers dtype", visibleWhen: { id: "s-comfyui-connection-mode", value: "diffusers" } },

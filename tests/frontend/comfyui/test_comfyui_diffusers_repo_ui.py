@@ -15,6 +15,8 @@ def test_diffusers_generation_page_accepts_repo_and_variant_selection():
     assert 'id="comfyui-diffusers-model-repo"' in html
     assert 'id="comfyui-diffusers-inspect-btn"' in html
     assert 'id="comfyui-diffusers-model-variant"' in html
+    assert 'id="comfyui-diffusers-gguf-profile"' in html
+    assert 'id="comfyui-diffusers-gguf-variant"' in html
     assert 'id="comfyui-diffusers-gguf-base-repo"' in html
     assert 'id="comfyui-diffusers-repo-status"' in html
     assert 'id="s-comfyui-allow-in-process-diffusers"' in html
@@ -44,6 +46,9 @@ def test_diffusers_js_preflights_huggingface_repo_before_generation():
     assert "getCachedComfyuiDiffusersInspection" in js
     assert "diffusers_model_variant" in js
     assert "diffusers_gguf_file" in js
+    assert "diffusers_gguf_profile" in js
+    assert "fillComfyuiGgufProfiles" in js
+    assert "GGUF 只允許官方已驗證 profile" in js
     assert "updateComfyuiDiffusersGgufOptions" in js
     assert "尚未開始下載" in js
     assert "避免重複下載" in js

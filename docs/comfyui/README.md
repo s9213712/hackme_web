@@ -19,5 +19,9 @@ Deployment note:
   Hugging Face download, Diffusers model loading, and Python inference phases
   directly; operators can inspect the sanitized Python log tail in the job
   progress panel when a download or model load appears stalled.
+- GGUF customer-facing options must be exposed through official profiles, not
+  arbitrary repo/file inputs. Each profile maps the GGUF UNet, companion text
+  encoders, VAE, loader class, sampler defaults, cache/install expectations,
+  and verification status.
 - On small VRAM hosts, prefer smaller checkpoints and Linux-native model
   storage instead of loading frequently used models from slow mounted paths.

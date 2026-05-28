@@ -36,6 +36,7 @@ let comfyuiUpscaleModels = [];
 let comfyuiGenerationModes = [];
 let comfyuiModelFamilies = [];
 let comfyuiDiffusersInspection = null;
+let comfyuiGgufProfiles = [];
 const comfyuiDiffusersInspectCache = new Map();
 const comfyuiDiffusersInspectInflight = new Map();
 let comfyuiHistoryItems = [];
@@ -105,6 +106,8 @@ const COMFYUI_DRAFT_FIELD_IDS = [
   "comfyui-model-relative-path",
   "comfyui-diffusers-model-repo",
   "comfyui-diffusers-model-variant",
+  "comfyui-diffusers-gguf-profile",
+  "comfyui-diffusers-gguf-variant",
   "comfyui-diffusers-gguf-base-repo",
   "comfyui-model-select",
   "comfyui-vae-select",
@@ -147,6 +150,8 @@ const COMFYUI_DYNAMIC_SELECT_IDS = [
   "comfyui-controlnet-model",
   "comfyui-controlnet-preprocessor",
   "comfyui-upscale-model",
+  "comfyui-diffusers-gguf-profile",
+  "comfyui-diffusers-gguf-variant",
 ];
 const COMFYUI_RANDOM_SEED_MAX = 0xFFFFFFFF;
 const COMFYUI_UI_SEED_MAX = Number.MAX_SAFE_INTEGER;
@@ -568,14 +573,96 @@ function comfyuiSelectedDiffusersVariantOption() {
   return options.find((option) => String(option?.value || option?.variant || "") === selected) || null;
 }
 
+function comfyuiSelectedGgufProfile() {
+  const selected = $("comfyui-diffusers-gguf-profile")?.value || "";
+  return comfyuiGgufProfiles.find((profile) => String(profile?.id || "") === selected) || null;
+}
+
+function comfyuiSelectedGgufVariant() {
+  const selected = $("comfyui-diffusers-gguf-variant")?.value || "";
+  const profile = comfyuiSelectedGgufProfile();
+  const variants = Array.isArray(profile?.variants) ? profile.variants : [];
+  return variants.find((variant) => String(variant?.id || "") === selected) || null;
+}
+
+function comfyuiGgufVariantLabel(variant) {
+  const label = variant?.label || variant?.id || "精度版本";
+  const size = Number(variant?.size_bytes || 0);
+  const sizeText = size > 0 && typeof formatDriveBytes === "function" ? ` · ${formatDriveBytes(size)}` : "";
+  const status = variant?.enabled ? "" : ` · ${variant?.status || "未驗證"}`;
+  return `${label}${sizeText}${status}`;
+}
+
+function fillComfyuiGgufVariants(profileId = "") {
+  const select = $("comfyui-diffusers-gguf-variant");
+  if (!select) return;
+  const profile = comfyuiGgufProfiles.find((item) => String(item?.id || "") === String(profileId || "")) || null;
+  const variants = Array.isArray(profile?.variants) ? profile.variants : [];
+  if (!profile) {
+    select.innerHTML = '<option value="">先選擇官方 GGUF profile</option>';
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  select.innerHTML = variants.length
+    ? variants.map((variant) => {
+        const disabled = profile.enabled && variant?.enabled ? "" : ' disabled="disabled"';
+        return `<option value="${sanitize(variant.id || "")}"${disabled}>${sanitize(comfyuiGgufVariantLabel(variant))}</option>`;
+      }).join("")
+    : '<option value="">這個 profile 尚無精度版本</option>';
+  const enabledDefault = variants.find((variant) => profile.enabled && variant?.enabled);
+  if (enabledDefault && !variants.some((variant) => String(variant?.id || "") === select.value && variant?.enabled)) {
+    select.value = enabledDefault.id || "";
+  }
+}
+
+function fillComfyuiGgufProfiles(profiles = []) {
+  comfyuiGgufProfiles = Array.isArray(profiles) ? profiles.filter((item) => item && item.id) : [];
+  const select = $("comfyui-diffusers-gguf-profile");
+  if (!select) return;
+  const previous = select.value || "";
+  const options = ['<option value="">不使用官方 GGUF</option>']
+    .concat(comfyuiGgufProfiles.map((profile) => {
+      const status = profile.enabled ? "" : `（${profile.status || "未開放"}）`;
+      return `<option value="${sanitize(profile.id || "")}"${profile.enabled ? "" : ' disabled="disabled"'}>${sanitize((profile.label || profile.id || "GGUF profile") + status)}</option>`;
+    }));
+  select.innerHTML = options.join("");
+  if (previous && comfyuiGgufProfiles.some((profile) => profile.id === previous && profile.enabled)) {
+    select.value = previous;
+  }
+  fillComfyuiGgufVariants(select.value || "");
+}
+
+function updateComfyuiGgufProfileSelection({ syncRepo = true } = {}) {
+  const profile = comfyuiSelectedGgufProfile();
+  const variant = comfyuiSelectedGgufVariant();
+  const repoInput = $("comfyui-diffusers-model-repo");
+  const baseInput = $("comfyui-diffusers-gguf-base-repo");
+  const variantSelect = $("comfyui-diffusers-model-variant");
+  if (profile && syncRepo) {
+    if (repoInput) repoInput.value = profile.repo_id || "";
+    if (baseInput) baseInput.value = profile.base_repo || "";
+    if (variantSelect) variantSelect.value = "";
+    clearComfyuiDiffusersInspection();
+  }
+  if (profile && variant && baseInput && !baseInput.value) {
+    baseInput.value = profile.base_repo || "";
+  }
+  updateComfyuiDiffusersGgufOptions();
+}
+
 function updateComfyuiDiffusersGgufOptions() {
   const panel = $("comfyui-diffusers-gguf-options");
   const input = $("comfyui-diffusers-gguf-base-repo");
   const selected = comfyuiSelectedDiffusersVariantOption();
+  const profile = comfyuiSelectedGgufProfile();
   const isGguf = selected?.kind === "gguf";
-  if (panel) panel.style.display = isGguf ? "" : "none";
+  if (panel) panel.style.display = (isComfyuiDiffusersMode() || isGguf || !!profile) ? "" : "none";
   if (isGguf && input && !input.value) {
     input.value = comfyuiDiffusersInspection?.data?.suggested_base_repo || "";
+  }
+  if (profile && input && !input.value) {
+    input.value = profile.base_repo || "";
   }
 }
 
@@ -2174,6 +2261,11 @@ function restoreComfyuiDraft({ includeDynamicSelects = true } = {}) {
     }
     setComfyuiFieldValue(id, draft[id]);
   });
+  if (includeDynamicSelects) {
+    fillComfyuiGgufVariants($("comfyui-diffusers-gguf-profile")?.value || "");
+    setComfyuiFieldValue("comfyui-diffusers-gguf-variant", draft["comfyui-diffusers-gguf-variant"]);
+    updateComfyuiGgufProfileSelection({ syncRepo: false });
+  }
   updateComfyuiModeVisibility();
 }
 
@@ -2606,7 +2698,17 @@ function bindComfyuiAdvancedUi() {
   const diffusersRepoInput = $("comfyui-diffusers-model-repo");
   if (diffusersRepoInput && diffusersRepoInput.dataset.comfyuiBound !== "1") {
     diffusersRepoInput.dataset.comfyuiBound = "1";
-    diffusersRepoInput.addEventListener("input", () => clearComfyuiDiffusersInspection());
+    diffusersRepoInput.addEventListener("input", () => {
+      const profile = comfyuiSelectedGgufProfile();
+      const repo = normalizeComfyuiHuggingFaceRepoInput(diffusersRepoInput.value || "");
+      if (profile && repo !== String(profile.repo_id || "")) {
+        const profileSelect = $("comfyui-diffusers-gguf-profile");
+        if (profileSelect) profileSelect.value = "";
+        fillComfyuiGgufVariants("");
+        updateComfyuiDiffusersGgufOptions();
+      }
+      clearComfyuiDiffusersInspection();
+    });
     diffusersRepoInput.addEventListener("change", () => inspectComfyuiDiffusersRepo({ quiet: true }));
     diffusersRepoInput.addEventListener("blur", () => inspectComfyuiDiffusersRepo({ quiet: true }));
   }
@@ -2619,7 +2721,28 @@ function bindComfyuiAdvancedUi() {
   if (diffusersVariantSelect && diffusersVariantSelect.dataset.comfyuiBound !== "1") {
     diffusersVariantSelect.dataset.comfyuiBound = "1";
     diffusersVariantSelect.addEventListener("change", () => {
+      if (diffusersVariantSelect.value && $("comfyui-diffusers-gguf-profile")) {
+        $("comfyui-diffusers-gguf-profile").value = "";
+        fillComfyuiGgufVariants("");
+      }
       updateComfyuiDiffusersGgufOptions();
+      writeComfyuiDraft();
+    });
+  }
+  const ggufProfileSelect = $("comfyui-diffusers-gguf-profile");
+  if (ggufProfileSelect && ggufProfileSelect.dataset.comfyuiBound !== "1") {
+    ggufProfileSelect.dataset.comfyuiBound = "1";
+    ggufProfileSelect.addEventListener("change", () => {
+      fillComfyuiGgufVariants(ggufProfileSelect.value || "");
+      updateComfyuiGgufProfileSelection({ syncRepo: true });
+      writeComfyuiDraft();
+    });
+  }
+  const ggufVariantSelect = $("comfyui-diffusers-gguf-variant");
+  if (ggufVariantSelect && ggufVariantSelect.dataset.comfyuiBound !== "1") {
+    ggufVariantSelect.dataset.comfyuiBound = "1";
+    ggufVariantSelect.addEventListener("change", () => {
+      updateComfyuiGgufProfileSelection({ syncRepo: true });
       writeComfyuiDraft();
     });
   }
@@ -3457,6 +3580,7 @@ async function loadComfyuiModels(options = {}) {
     fillComfyuiSelect("comfyui-scheduler", json.schedulers || [], "normal");
     fillComfyuiGenerationModes(json.generation_modes || []);
     renderComfyuiModelFamilyHints(json.model_families || []);
+    fillComfyuiGgufProfiles(json.gguf_profiles || []);
     fillComfyuiControlnetTypes(json.controlnet_types || {});
     fillComfyuiUpscaleModels(json.upscale_models || []);
     fillComfyuiControlnetModelOptions();
@@ -3715,16 +3839,23 @@ function comfyuiPayload() {
   const mode = comfyuiGenerationMode();
   const diffusersRepo = normalizeComfyuiHuggingFaceRepoInput($("comfyui-diffusers-model-repo")?.value || "");
   const diffusersVariant = $("comfyui-diffusers-model-variant")?.value || "";
-  const diffusersGgufFile = diffusersVariant.startsWith("gguf::") ? diffusersVariant.slice("gguf::".length) : "";
+  const ggufProfile = comfyuiSelectedGgufProfile();
+  const ggufVariant = comfyuiSelectedGgufVariant();
+  const profileRepo = ggufProfile?.repo_id || "";
+  const profileGgufFile = ggufVariant?.gguf_file || "";
+  const diffusersGgufFile = profileGgufFile || (diffusersVariant.startsWith("gguf::") ? diffusersVariant.slice("gguf::".length) : "");
   const diffusersGgufBaseRepo = normalizeComfyuiHuggingFaceRepoInput($("comfyui-diffusers-gguf-base-repo")?.value || "");
   const diffusersMode = isComfyuiDiffusersMode();
+  const effectiveDiffusersRepo = diffusersMode && profileRepo ? profileRepo : diffusersRepo;
   const payload = {
     generation_mode: mode,
-    model: diffusersMode && diffusersRepo ? diffusersRepo : ($("comfyui-model-select")?.value || ""),
-    diffusers_model_repo: diffusersMode ? diffusersRepo : "",
-    diffusers_model_variant: diffusersMode && !diffusersGgufFile ? diffusersVariant : "",
+    model: diffusersMode && effectiveDiffusersRepo ? effectiveDiffusersRepo : ($("comfyui-model-select")?.value || ""),
+    diffusers_model_repo: diffusersMode ? effectiveDiffusersRepo : "",
+    diffusers_model_variant: diffusersMode && !diffusersGgufFile && !ggufProfile ? diffusersVariant : "",
     diffusers_gguf_file: diffusersMode ? diffusersGgufFile : "",
-    diffusers_gguf_base_repo: diffusersMode && diffusersGgufFile ? diffusersGgufBaseRepo : "",
+    diffusers_gguf_base_repo: diffusersMode && diffusersGgufFile ? (ggufProfile?.base_repo || diffusersGgufBaseRepo) : "",
+    diffusers_gguf_profile: diffusersMode && ggufProfile ? (ggufProfile.id || "") : "",
+    diffusers_gguf_variant: diffusersMode && ggufVariant ? (ggufVariant.id || "") : "",
     prompt: $("comfyui-prompt")?.value || "",
     negative_prompt: $("comfyui-negative-prompt")?.value || "",
     width: comfyuiNumberValue("comfyui-width", comfyuiDefaultWidth),
@@ -3777,6 +3908,15 @@ function comfyuiValidatePayloadForUi(payload) {
     if (!String(payload?.diffusers_model_repo || payload?.model || "").trim()) {
       return "請輸入 Hugging Face repo，例如 dhead/waiIllustriousSDXL_v150 或模型頁網址。";
     }
+    if (String(payload?.diffusers_gguf_file || "").trim() && !String(payload?.diffusers_gguf_profile || "").trim()) {
+      return "GGUF 只允許官方已驗證 profile，請從官方 GGUF 下拉選單選擇模型與精度。";
+    }
+    if (String(payload?.diffusers_gguf_profile || "").trim()) {
+      const profile = comfyuiSelectedGgufProfile();
+      const variant = comfyuiSelectedGgufVariant();
+      if (!profile || !profile.enabled) return "請選擇已開放的官方 GGUF profile。";
+      if (!variant || !variant.enabled) return "請選擇已驗證開放的 GGUF 精度版本。";
+    }
     const repo = normalizeComfyuiHuggingFaceRepoInput(payload.diffusers_model_repo || payload.model || "");
     if (comfyuiDiffusersInspectionMatches(repo, mode)) {
       const inspection = comfyuiDiffusersInspection?.data || {};
@@ -3828,6 +3968,8 @@ function comfyuiBuildGenerateRequest(payload) {
   appendScalar("diffusers_model_variant", payload.diffusers_model_variant);
   appendScalar("diffusers_gguf_file", payload.diffusers_gguf_file);
   appendScalar("diffusers_gguf_base_repo", payload.diffusers_gguf_base_repo);
+  appendScalar("diffusers_gguf_profile", payload.diffusers_gguf_profile);
+  appendScalar("diffusers_gguf_variant", payload.diffusers_gguf_variant);
   appendScalar("prompt", payload.prompt);
   appendScalar("negative_prompt", payload.negative_prompt);
   appendScalar("width", payload.width);

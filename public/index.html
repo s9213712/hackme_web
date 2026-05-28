@@ -2126,9 +2126,16 @@
               <option value="">檢查後選擇精度版本</option>
             </select>
             <div class="field" id="comfyui-diffusers-gguf-options" style="display:none;margin-top:.5rem;">
+              <label>官方 GGUF Profile</label>
+              <select id="comfyui-diffusers-gguf-profile">
+                <option value="">不使用官方 GGUF</option>
+              </select>
+              <select id="comfyui-diffusers-gguf-variant">
+                <option value="">先選擇官方 GGUF profile</option>
+              </select>
               <label>GGUF Base Diffusers Repo</label>
               <input type="text" id="comfyui-diffusers-gguf-base-repo" placeholder="stabilityai/stable-diffusion-xl-base-1.0" autocomplete="off" />
-              <div class="drive-card-sub">Diffusers 相容 GGUF 需搭配 base repo；ComfyUI-GGUF 原生 UNet 會自動改走 ComfyUI workflow。本地 ComfyUI 可由本站從 HF cache 接入；遠端 ComfyUI 需聯絡管理人先把模型放在 models/unet。</div>
+              <div class="drive-card-sub">GGUF 需選用官方已驗證 profile；不同模型會綁定自己的 CLIP / VAE / loader / workflow。ComfyUI-GGUF 原生 UNet 會自動改走 ComfyUI workflow；遠端 ComfyUI 需先把 profile companion models 放在對應模型目錄。</div>
             </div>
             <div class="drive-card-sub" id="comfyui-diffusers-repo-status">貼上 repo 後會先檢查支援模式與可下載精度版本。</div>
             <div class="drive-card-sub">Diffusers 模式可在這裡輸入 namespace/model 簡寫或 Hugging Face 模型頁網址；此欄會覆蓋 root 的預設 repo。</div>
@@ -5318,6 +5325,11 @@
                 <div class="drive-card-sub" id="comfyui-huggingface-api-token-state">尚未讀取 Hugging Face token 狀態。</div>
                 <div class="drive-card-sub">建議用 read 或 fine-grained token。也可用環境變數 <code>HF_TOKEN</code> / <code>COMFYUI_HUGGINGFACE_API_TOKEN</code> 提供。</div>
                 <label style="margin-top:.35rem;"><input type="checkbox" id="s-comfyui-huggingface-api-token-clear" /> 清除已儲存的 Hugging Face API Token</label>
+              </div>
+              <div class="field">
+                <label>Hugging Face 快取根目錄</label>
+                <input type="text" id="s-comfyui-huggingface-cache-root" placeholder="/mnt/d" autocomplete="off" />
+                <div class="drive-card-sub">Diffusers/HF/GGUF 下載快取會放在此目錄的 <code>hub/</code> 底下；留空則使用 Python/Hugging Face 預設。</div>
               </div>
               <div class="field">
                 <label>Diffusers Device</label>

@@ -1,0 +1,61 @@
+{
+  "common": {
+    "prompt": "adult women, fully clothed, by ogipote, 2girls, girls love, kiss, saliva, maid uniform, cat ears, cat tail",
+    "negative_prompt": "child, minor, underage, loli, teen, nude, naked, explicit, low quality, blurry, watermark, distorted, bad anatomy",
+    "width": 1920,
+    "height": 1080,
+    "steps": 24,
+    "cfg": 5.0,
+    "seed": 20260528,
+    "sampler": "euler",
+    "scheduler": "normal",
+    "sample_interval": 2.0
+  },
+  "regular_comfyui": {
+    "comfyui_url": "http://127.0.0.1:8188",
+    "model": "SDXL\\illustrious(IL)\\janxd系列\\JANKUTrainedChenkinNoobai_v777.safetensors",
+    "filename_prefix": "hackme_probe_regular"
+  },
+  "hf_diffusers": {
+    "model": "dhead/wai-nsfw-illustrious-sdxl-v140-sdxl",
+    "variant": "fp16",
+    "hf_cache_root": "",
+    "device": "cuda",
+    "dtype": "float16",
+    "device_map": "disabled",
+    "low_cpu_mem_usage": "true",
+    "disable_xet": true
+  },
+  "gguf": {
+    "gguf_profile": "wai_illustrious_v110_q8",
+    "backend": "auto",
+    "comfyui_url": "http://127.0.0.1:8188",
+    "install_to_comfyui_unet_dir": "",
+    "install_to_comfyui_text_encoder_dir": "",
+    "install_to_comfyui_vae_dir": "",
+    "filename_prefix": "hackme_probe_gguf",
+    "hf_cache_root": "",
+    "device": "cuda",
+    "dtype": "float16",
+    "disable_xet": true
+  },
+  "gguf_profiles": {
+    "wai_illustrious_v110_q8": {
+      "label": "WAI Illustrious SDXL v11 GGUF Q8_0",
+      "status": "experimental",
+      "model": "kekusprod/WAI-NSFW-illustrious-SDXL-v110-GGUF",
+      "gguf_file": "WAI-NSFW-illustrious-SDXL-v110-Q8_0.gguf",
+      "base_repo": "stabilityai/stable-diffusion-xl-base-1.0",
+      "aux_repo": "calcuis/illustrious",
+      "aux_clip_l": "illustrious_clip_l_fp8_e4m3fn.safetensors",
+      "aux_clip_g": "illustrious_clip_g_fp8_e4m3fn.safetensors",
+      "aux_vae": "illustrious_v110_vae_fp8_e4m3fn.safetensors",
+      "clip_loader_class": "DualCLIPLoaderGGUF",
+      "clip_l": "illustrious_clip_l_fp8_e4m3fn.safetensors",
+      "clip_g": "illustrious_clip_g_fp8_e4m3fn.safetensors",
+      "vae": "illustrious_v110_vae_fp8_e4m3fn.safetensors",
+      "sampler": "euler",
+      "scheduler": "normal"
+    }
+  }
+}

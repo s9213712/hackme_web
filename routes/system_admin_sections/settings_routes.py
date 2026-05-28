@@ -393,6 +393,17 @@ def register_system_admin_settings_routes(app, ctx):
             if repo_id is None:
                 return json_resp({"ok":False,"msg":"comfyui_diffusers_model_repo 必須是 Hugging Face repo id 或模型頁網址，例如 dhead/waiIllustriousSDXL_v150"}), 400
             data["comfyui_diffusers_model_repo"] = repo_id
+        if "comfyui_huggingface_cache_root" in data:
+            raw_cache_root = str(data.get("comfyui_huggingface_cache_root") or "").strip()
+            if raw_cache_root:
+                try:
+                    data["comfyui_huggingface_cache_root"] = str(
+                        validate_storage_root(raw_cache_root, base_dir=BASE_DIR, create=False)
+                    )
+                except ValueError as exc:
+                    return json_resp({"ok":False,"msg":f"comfyui_huggingface_cache_root 不安全或格式錯誤：{exc}"}), 400
+            else:
+                data["comfyui_huggingface_cache_root"] = ""
         clear_huggingface_token = False
         if "comfyui_huggingface_api_token_clear" in data:
             clear_token = parse_strict_bool(data.pop("comfyui_huggingface_api_token_clear"))

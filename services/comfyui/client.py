@@ -386,11 +386,17 @@ class ComfyUIClient:
         clip_models = []
         for class_type, input_name in (
             ("CLIPLoader", "clip_name"),
+            ("CLIPLoaderGGUF", "clip_name"),
             ("DualCLIPLoader", "clip_name1"),
             ("DualCLIPLoader", "clip_name2"),
+            ("DualCLIPLoaderGGUF", "clip_name1"),
+            ("DualCLIPLoaderGGUF", "clip_name2"),
             ("TripleCLIPLoader", "clip_name1"),
             ("TripleCLIPLoader", "clip_name2"),
             ("TripleCLIPLoader", "clip_name3"),
+            ("TripleCLIPLoaderGGUF", "clip_name1"),
+            ("TripleCLIPLoaderGGUF", "clip_name2"),
+            ("TripleCLIPLoaderGGUF", "clip_name3"),
         ):
             if class_type in available_nodes:
                 clip_models.extend(_node_input_options_from_info(object_info, class_type, input_name))

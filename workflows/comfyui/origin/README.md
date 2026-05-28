@@ -41,6 +41,7 @@ Keep raw files under `category/mode/`. Do not place JSON files directly in this 
 | `image/txt2img/flux_dev_full_text_to_image.json` | Flux dev text-to-image workflow. |
 | `image/txt2img/image_qwen_image.json` | Qwen image text-to-image workflow. |
 | `image/txt2img/netayume.json` | Netayume text-to-image workflow. |
+| `image/txt2img/sdxl_gguf_comfyui.json` | SDXL ComfyUI-GGUF text-to-image workflow. |
 | `utility/compare/compare_2checkpoints.json` | Two-checkpoint comparison workflow. |
 | `utility/pose/utility_sdpose_multi_person.json` | Multi-person pose helper workflow. |
 | `utility/segmentation/utility_image_segment_sam3.json` | SAM3 segmentation helper workflow. |

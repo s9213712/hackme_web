@@ -34,6 +34,7 @@ def register_comfyui_runtime_routes(app, ctx):
     _comfyui_wallet_payload = ctx["comfyui_wallet_payload"]
     _comfyui_storage_warnings = ctx.get("comfyui_storage_warnings", lambda: [])
     _comfyui_paid_api_status_payload = ctx.get("comfyui_paid_api_status_payload", lambda: {})
+    _official_gguf_profiles = ctx.get("official_gguf_profiles", lambda: [])
     _build_node_catalog = ctx.get("build_node_catalog")
     _configured_comfyui_port = ctx["configured_comfyui_port"]
     _configured_comfyui_url = ctx["configured_comfyui_url"]
@@ -233,6 +234,7 @@ def register_comfyui_runtime_routes(app, ctx):
                 "controlnet_types": {},
                 "generation_modes": [],
                 "model_families": [],
+                "gguf_profiles": _official_gguf_profiles(),
                 "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
                 "wallet": _comfyui_wallet_payload(actor),
                 "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
@@ -287,6 +289,7 @@ def register_comfyui_runtime_routes(app, ctx):
             "controlnet_types": (capabilities or {}).get("controlnet_types") or {},
             "generation_modes": (capabilities or {}).get("generation_modes") or [],
             "model_families": model_families,
+            "gguf_profiles": _official_gguf_profiles(),
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
             "wallet": _comfyui_wallet_payload(actor),
             "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
@@ -328,6 +331,7 @@ def register_comfyui_runtime_routes(app, ctx):
             **inspection,
             "connection_mode": binding["connection_mode"],
             "backend_scope": binding["backend_scope"],
+            "gguf_profiles": _official_gguf_profiles(),
         }, status)
 
     @app.route("/api/comfyui/node-catalog", methods=["GET"])

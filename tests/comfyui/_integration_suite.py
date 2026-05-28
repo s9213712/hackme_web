@@ -30,6 +30,13 @@ from services.security.upload_security import ensure_upload_security_schema, upd
 
 
 ROOT = Path(__file__).resolve().parents[2]
+WAI_GGUF_PROFILE_ID = "wai_illustrious_v110_sdxl"
+WAI_GGUF_VARIANT_ID = "q8_0"
+WAI_GGUF_REPO = "kekusprod/WAI-NSFW-illustrious-SDXL-v110-GGUF"
+WAI_GGUF_FILE = "WAI-NSFW-illustrious-SDXL-v110-Q8_0.gguf"
+WAI_CLIP_L = "illustrious_clip_l_fp8_e4m3fn.safetensors"
+WAI_CLIP_G = "illustrious_clip_g_fp8_e4m3fn.safetensors"
+WAI_VAE = "illustrious_v110_vae_fp8_e4m3fn.safetensors"
 
 
 class FakeComfyUIClient:
@@ -334,6 +341,7 @@ class FakeNativeGgufComfyUIClient(FakeComfyUIClient):
         payload["available_nodes"] = sorted(set(payload["available_nodes"]) | {
             "UnetLoaderGGUF",
             "DualCLIPLoader",
+            "DualCLIPLoaderGGUF",
             "VAELoader",
             "CLIPTextEncode",
             "EmptyLatentImage",
@@ -341,9 +349,9 @@ class FakeNativeGgufComfyUIClient(FakeComfyUIClient):
             "VAEDecode",
             "SaveImage",
         })
-        payload["diffusion_models"] = ["WAI-NSFW-Illustrious-v140-Q8_0.gguf"]
-        payload["clip_models"] = ["clip_l.safetensors", "clip_g.safetensors"]
-        payload["vaes"] = ["SDXL/sdxl_vae.safetensors"]
+        payload["diffusion_models"] = [WAI_GGUF_FILE]
+        payload["clip_models"] = [WAI_CLIP_L, WAI_CLIP_G]
+        payload["vaes"] = [WAI_VAE]
         payload["samplers"] = ["euler", "dpmpp_2m"]
         payload["schedulers"] = ["normal", "karras"]
         return payload
@@ -2618,11 +2626,13 @@ def test_comfyui_workflow_uses_requested_batch_size():
 def test_comfyui_builds_sdxl_gguf_text_to_image_workflow():
     workflow = ComfyUIClient("http://fake-comfyui").build_generation_workflow({
         "generation_mode": "txt2img",
-        "model": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
-        "comfyui_gguf_unet_name": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
-        "clip": "clip_l.safetensors",
-        "clip2": "clip_g.safetensors",
-        "vae": "sdxl_vae.safetensors",
+        "model": WAI_GGUF_FILE,
+        "comfyui_gguf_unet_name": WAI_GGUF_FILE,
+        "clip_loader_class": "DualCLIPLoaderGGUF",
+        "clip_type": "sdxl",
+        "clip": WAI_CLIP_L,
+        "clip2": WAI_CLIP_G,
+        "vae": WAI_VAE,
         "prompt": "gguf prompt",
         "negative_prompt": "bad",
         "width": 1024,
@@ -2637,10 +2647,12 @@ def test_comfyui_builds_sdxl_gguf_text_to_image_workflow():
     })
 
     assert workflow["4"]["class_type"] == "UnetLoaderGGUF"
-    assert workflow["4"]["inputs"]["unet_name"] == "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
-    assert workflow["10"]["class_type"] == "DualCLIPLoader"
-    assert workflow["10"]["inputs"]["clip_name1"] == "clip_l.safetensors"
-    assert workflow["10"]["inputs"]["clip_name2"] == "clip_g.safetensors"
+    assert workflow["4"]["inputs"]["unet_name"] == WAI_GGUF_FILE
+    assert workflow["10"]["class_type"] == "DualCLIPLoaderGGUF"
+    assert workflow["10"]["inputs"]["clip_name1"] == WAI_CLIP_L
+    assert workflow["10"]["inputs"]["clip_name2"] == WAI_CLIP_G
+    assert workflow["10"]["inputs"]["type"] == "sdxl"
+    assert "device" not in workflow["10"]["inputs"]
     assert workflow["3"]["inputs"]["model"] == ["4", 0]
     assert workflow["8"]["inputs"]["vae"] == ["11", 0]
 
@@ -3197,6 +3209,7 @@ def test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes(t
     assert body["models"] == ["dhead/waiIllustriousSDXL_v150"]
     assert body["loras"] == []
     assert body["samplers"] == ["diffusers-auto"]
+    assert any(profile["id"] == WAI_GGUF_PROFILE_ID for profile in body["gguf_profiles"])
 
     generated = client.post(
         "/api/comfyui/generate",
@@ -3236,7 +3249,7 @@ def test_comfyui_diffusers_mode_auto_routes_native_gguf_to_comfyui_workflow(tmp_
                     "detail": "偵測為 ComfyUI-GGUF 原生 UNet",
                 })
             return {
-                "path": str(tmp_path / "WAI-NSFW-Illustrious-v140-Q8_0.gguf"),
+                "path": str(tmp_path / WAI_GGUF_FILE),
                 "stats": {"cache_hit": True, "bytes_written": 1, "total_bytes": 1},
                 "metadata": {"has_comfy_metadata": True, "has_original_unet_names": True},
                 "suggested_backend": "comfyui_gguf",
@@ -3259,7 +3272,7 @@ def test_comfyui_diffusers_mode_auto_routes_native_gguf_to_comfyui_workflow(tmp_
         storage_root,
         settings={
             "comfyui_connection_mode": "diffusers",
-            "comfyui_diffusers_model_repo": "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF",
+            "comfyui_diffusers_model_repo": WAI_GGUF_REPO,
             "comfyui_remote_api_url": "http://192.168.18.19:8188",
             "comfyui_huggingface_api_token": "hf_read_token",
         },
@@ -3273,9 +3286,12 @@ def test_comfyui_diffusers_mode_auto_routes_native_gguf_to_comfyui_workflow(tmp_
         "/api/comfyui/generate",
         json={
             "generation_mode": "txt2img",
-            "model": "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF",
-            "diffusers_gguf_file": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
-            "diffusers_model_variant": "gguf::WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+            "model": WAI_GGUF_REPO,
+            "diffusers_model_repo": WAI_GGUF_REPO,
+            "diffusers_gguf_profile": WAI_GGUF_PROFILE_ID,
+            "diffusers_gguf_variant": WAI_GGUF_VARIANT_ID,
+            "diffusers_gguf_file": WAI_GGUF_FILE,
+            "diffusers_model_variant": f"gguf::{WAI_GGUF_FILE}",
             "prompt": "illustration",
             "negative_prompt": "",
             "sampler_name": "diffusers-auto",
@@ -3288,16 +3304,62 @@ def test_comfyui_diffusers_mode_auto_routes_native_gguf_to_comfyui_workflow(tmp_
     payload = _await_comfyui_result(client, generated)
     assert payload["image"]["image_ref"]["filename"] == "hackme_web_00001_.png"
     assert FakeComfyUIClient.last_params["backend_kind"] == "comfyui_gguf"
-    assert FakeComfyUIClient.last_params["model"] == "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
-    assert FakeComfyUIClient.last_params["clip"] == "clip_l.safetensors"
-    assert FakeComfyUIClient.last_params["clip2"] == "clip_g.safetensors"
-    assert FakeComfyUIClient.last_params["vae"] == "SDXL/sdxl_vae.safetensors"
+    assert FakeComfyUIClient.last_params["model"] == WAI_GGUF_FILE
+    assert FakeComfyUIClient.last_params["clip_loader_class"] == "DualCLIPLoaderGGUF"
+    assert FakeComfyUIClient.last_params["clip"] == WAI_CLIP_L
+    assert FakeComfyUIClient.last_params["clip2"] == WAI_CLIP_G
+    assert FakeComfyUIClient.last_params["vae"] == WAI_VAE
+    assert FakeComfyUIClient.last_params["diffusers_gguf_profile"] == WAI_GGUF_PROFILE_ID
+    assert FakeComfyUIClient.last_params["diffusers_gguf_variant"] == WAI_GGUF_VARIANT_ID
     assert FakeComfyUIClient.last_params["sampler_name"] == "euler"
     assert FakeComfyUIClient.last_params["scheduler"] == "normal"
 
 
+def test_comfyui_diffusers_mode_rejects_unmapped_gguf_before_download(tmp_path):
+    class UnexpectedGgufDownloadClient(FakeDiffusersBackendClient):
+        def prepare_gguf_file_for_backend(self, *args, **kwargs):
+            pytest.fail("arbitrary GGUF must be rejected before any download/prepare step")
+
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "someone/random-gguf",
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: UnexpectedGgufDownloadClient(),
+        },
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "model": "someone/random-gguf",
+            "diffusers_model_repo": "someone/random-gguf",
+            "diffusers_gguf_file": "random-Q8_0.gguf",
+            "diffusers_model_variant": "gguf::random-Q8_0.gguf",
+            "prompt": "illustration",
+            "negative_prompt": "",
+            "sampler_name": "diffusers-auto",
+            "scheduler": "default",
+            "seed": 123,
+            "confirm_billing": True,
+        },
+    )
+
+    assert generated.status_code == 409
+    assert "GGUF 只允許官方已建檔 profile" in generated.get_json()["msg"]
+
+
 def test_comfyui_diffusers_mode_local_native_gguf_installs_cached_file(tmp_path):
-    cached_gguf = tmp_path / "hf-cache" / "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
+    cached_gguf = tmp_path / "hf-cache" / WAI_GGUF_FILE
     cached_gguf.parent.mkdir(parents=True)
     cached_gguf.write_bytes(b"fake gguf")
 
@@ -3336,7 +3398,7 @@ def test_comfyui_diffusers_mode_local_native_gguf_installs_cached_file(tmp_path)
         storage_root,
         settings={
             "comfyui_connection_mode": "diffusers",
-            "comfyui_diffusers_model_repo": "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF",
+            "comfyui_diffusers_model_repo": WAI_GGUF_REPO,
             "comfyui_remote_api_url": "http://127.0.0.1:8188",
             "comfyui_base_dir": str(comfy_base),
         },
@@ -3350,9 +3412,12 @@ def test_comfyui_diffusers_mode_local_native_gguf_installs_cached_file(tmp_path)
         "/api/comfyui/generate",
         json={
             "generation_mode": "txt2img",
-            "model": "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF",
-            "diffusers_gguf_file": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
-            "diffusers_model_variant": "gguf::WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+            "model": WAI_GGUF_REPO,
+            "diffusers_model_repo": WAI_GGUF_REPO,
+            "diffusers_gguf_profile": WAI_GGUF_PROFILE_ID,
+            "diffusers_gguf_variant": WAI_GGUF_VARIANT_ID,
+            "diffusers_gguf_file": WAI_GGUF_FILE,
+            "diffusers_model_variant": f"gguf::{WAI_GGUF_FILE}",
             "prompt": "illustration",
             "negative_prompt": "",
             "sampler_name": "diffusers-auto",
@@ -3363,15 +3428,15 @@ def test_comfyui_diffusers_mode_local_native_gguf_installs_cached_file(tmp_path)
     )
 
     payload = _await_comfyui_result(client, generated)
-    installed = comfy_base / "models" / "unet" / "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
+    installed = comfy_base / "models" / "unet" / WAI_GGUF_FILE
     assert installed.read_bytes() == b"fake gguf"
     assert payload["image"]["image_ref"]["filename"] == "hackme_web_00001_.png"
     assert FakeComfyUIClient.last_params["backend_kind"] == "comfyui_gguf"
-    assert FakeComfyUIClient.last_params["model"] == "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
+    assert FakeComfyUIClient.last_params["model"] == WAI_GGUF_FILE
 
 
 def test_comfyui_diffusers_mode_remote_native_gguf_requires_remote_admin(tmp_path):
-    cached_gguf = tmp_path / "hf-cache" / "WAI-NSFW-Illustrious-v140-Q8_0.gguf"
+    cached_gguf = tmp_path / "hf-cache" / WAI_GGUF_FILE
     cached_gguf.parent.mkdir(parents=True)
     cached_gguf.write_bytes(b"fake gguf")
 
@@ -3407,7 +3472,7 @@ def test_comfyui_diffusers_mode_remote_native_gguf_requires_remote_admin(tmp_pat
         storage_root,
         settings={
             "comfyui_connection_mode": "diffusers",
-            "comfyui_diffusers_model_repo": "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF",
+            "comfyui_diffusers_model_repo": WAI_GGUF_REPO,
             "comfyui_remote_api_url": "http://192.168.18.19:8188",
         },
         extra_deps={
@@ -3420,9 +3485,12 @@ def test_comfyui_diffusers_mode_remote_native_gguf_requires_remote_admin(tmp_pat
         "/api/comfyui/generate",
         json={
             "generation_mode": "txt2img",
-            "model": "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF",
-            "diffusers_gguf_file": "WAI-NSFW-Illustrious-v140-Q8_0.gguf",
-            "diffusers_model_variant": "gguf::WAI-NSFW-Illustrious-v140-Q8_0.gguf",
+            "model": WAI_GGUF_REPO,
+            "diffusers_model_repo": WAI_GGUF_REPO,
+            "diffusers_gguf_profile": WAI_GGUF_PROFILE_ID,
+            "diffusers_gguf_variant": WAI_GGUF_VARIANT_ID,
+            "diffusers_gguf_file": WAI_GGUF_FILE,
+            "diffusers_model_variant": f"gguf::{WAI_GGUF_FILE}",
             "prompt": "illustration",
             "negative_prompt": "",
             "sampler_name": "diffusers-auto",
@@ -3435,7 +3503,7 @@ def test_comfyui_diffusers_mode_remote_native_gguf_requires_remote_admin(tmp_pat
     job = _await_comfyui_job(client, generated, expected_status="error")
     assert "遠端 ComfyUI API 無法由本站直接寫入模型檔" in job["error"]
     assert "請聯絡遠端 ComfyUI 管理人" in job["error"]
-    assert "models/unet/WAI-NSFW-Illustrious-v140-Q8_0.gguf" in job["error"]
+    assert f"models/unet/{WAI_GGUF_FILE}" in job["error"]
 
 
 def test_comfyui_diffusers_stale_progress_does_not_say_comfyui_backend(tmp_path, monkeypatch):
@@ -5603,6 +5671,7 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-diffusers-settings" style="display:none;"' in index_html
     assert 'id="s-comfyui-diffusers-model-repo"' in index_html
     assert 'id="s-comfyui-huggingface-api-token"' in index_html
+    assert 'id="s-comfyui-huggingface-cache-root"' in index_html
     assert 'id="s-comfyui-diffusers-device"' in index_html
     assert 'id="s-comfyui-diffusers-cuda-fallback-to-cpu"' in index_html
     assert 'id="s-comfyui-diffusers-dtype"' in index_html
@@ -5618,7 +5687,7 @@ def test_comfyui_frontend_is_wired():
     assert "if (modelsTab) modelsTab.hidden = !showLocalModels;" in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
     assert "/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" in index_html
-    assert "/styles.css?v=20260519-upscale-breakpoint" in index_html
+    assert "/styles.css?v=20260526-profile-process-detail" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert ".comfyui-root-details" in css
@@ -5638,9 +5707,9 @@ def test_comfyui_frontend_is_wired():
     assert 'apiFetch(API + "/root/comfyui/civitai/inspect"' in comfyui_js
     assert 'apiFetch(API + "/root/comfyui/civitai/download"' in comfyui_js
     assert 'apiFetch(API + "/root/comfyui/model-upload"' in comfyui_js
-    assert 'apiFetch(API + "/comfyui/models" + comfyuiRequestQuery()' in comfyui_js
+    assert 'apiFetch(API + requestPath' in comfyui_js
     assert 'apiFetch(API + "/comfyui/status" + comfyuiRequestQuery()' in comfyui_js
-    assert 'setComfyuiIdleSuspend("comfyui_generate", !!busy, "ComfyUI 產圖中");' in comfyui_js
+    assert 'setComfyuiIdleSuspend("comfyui_generate", !!busy, `${comfyuiConnectionMode === "diffusers" ? "Diffusers" : "ComfyUI"} 產圖中`);' in comfyui_js
     assert 'setComfyuiIdleSuspend("comfyui_start_local", true, "ComfyUI 啟動中");' in comfyui_js
     assert 'setComfyuiIdleSuspend("comfyui_model_download", true, "ComfyUI 模型下載中");' in comfyui_js
     assert 'apiFetch(API + "/comfyui/start"' in comfyui_js
@@ -5839,7 +5908,7 @@ def test_comfyui_frontend_is_wired():
     assert 'let comfyuiBillingQuote = null;' in comfyui_js
     assert 'function applyComfyuiRuntimeLimits(payload = {})' in comfyui_js
     assert "非 root 帳號成功產圖後每張扣" in comfyui_js
-    assert 'setComfyuiIdleSuspend("comfyui_generate", !!busy, "ComfyUI 產圖中");' in comfyui_js
+    assert 'setComfyuiIdleSuspend("comfyui_generate", !!busy, `${comfyuiConnectionMode === "diffusers" ? "Diffusers" : "ComfyUI"} 產圖中`);' in comfyui_js
     assert "function confirmComfyuiBilling(payload)" in comfyui_js
     assert "function preflightComfyuiBilling(payload, runCount, billingConfirmation)" in comfyui_js
     assert "function comfyuiRunCount()" in comfyui_js

@@ -762,6 +762,20 @@ def test_diffusers_settings_reject_invalid_repo_token_and_runtime_options():
     assert "comfyui_diffusers_model_repo" not in state
 
 
+def test_root_can_configure_diffusers_huggingface_cache_root(tmp_path):
+    app, state = _admin_app()
+    client = app.test_client()
+    cache_root = tmp_path / "hf-cache"
+    cache_root.mkdir()
+
+    saved = client.put("/api/admin/settings", json={"comfyui_huggingface_cache_root": str(cache_root)})
+
+    assert saved.status_code == 200
+    assert state["comfyui_huggingface_cache_root"] == str(cache_root.resolve())
+    assert saved.get_json()["settings"]["comfyui_huggingface_cache_root"] == str(cache_root.resolve())
+    assert client.put("/api/admin/settings", json={"comfyui_huggingface_cache_root": "/"}).status_code == 400
+
+
 def test_root_can_configure_comfyui_default_dimensions_without_restart_hint():
     app, state = _admin_app()
     client = app.test_client()

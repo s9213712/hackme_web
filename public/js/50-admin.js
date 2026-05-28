@@ -5679,6 +5679,7 @@ async function loadSettings() {
   if ($("s-comfyui-diffusers-model-repo")) $("s-comfyui-diffusers-model-repo").value = s.comfyui_diffusers_model_repo || "";
   if ($("s-comfyui-huggingface-api-token")) $("s-comfyui-huggingface-api-token").value = "";
   if ($("s-comfyui-huggingface-api-token-clear")) $("s-comfyui-huggingface-api-token-clear").checked = false;
+  if ($("s-comfyui-huggingface-cache-root")) $("s-comfyui-huggingface-cache-root").value = s.comfyui_huggingface_cache_root || "";
   if ($("s-comfyui-diffusers-device")) $("s-comfyui-diffusers-device").value = s.comfyui_diffusers_device || "auto";
   if ($("s-comfyui-diffusers-dtype")) $("s-comfyui-diffusers-dtype").value = s.comfyui_diffusers_dtype || "auto";
   if ($("s-comfyui-diffusers-device-map")) $("s-comfyui-diffusers-device-map").value = s.comfyui_diffusers_device_map || "auto";
@@ -7947,6 +7948,7 @@ async function saveSettings() {
     comfyui_diffusers_model_repo: ($("s-comfyui-diffusers-model-repo")?.value || "").trim(),
     comfyui_huggingface_api_token: ($("s-comfyui-huggingface-api-token")?.value || "").trim(),
     comfyui_huggingface_api_token_clear: !!$("s-comfyui-huggingface-api-token-clear")?.checked,
+    comfyui_huggingface_cache_root: ($("s-comfyui-huggingface-cache-root")?.value || "").trim(),
     comfyui_diffusers_device: $("s-comfyui-diffusers-device")?.value || "auto",
     comfyui_diffusers_dtype: $("s-comfyui-diffusers-dtype")?.value || "auto",
     comfyui_diffusers_device_map: $("s-comfyui-diffusers-device-map")?.value || "auto",

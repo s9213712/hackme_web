@@ -396,11 +396,14 @@ class DiffusersClient:
         allow_in_process_runtime=False,
         keep_downloaded_models=True,
         disable_xet=True,
+        huggingface_cache_root="",
     ):
         self.model_repo = str(model_repo or "").strip()
         self.token = str(token or "").strip()
         self.storage_root = Path(storage_root or ".").expanduser()
         self.runtime_root = self.storage_root / "_runtime" / "comfyui_diffusers"
+        cache_root = str(huggingface_cache_root or "").strip()
+        self.huggingface_cache_root = Path(cache_root).expanduser() if cache_root else None
         self.device_setting = str(device or "auto").strip().lower()
         self.dtype_setting = str(dtype or "auto").strip().lower()
         self.device_map_setting = str(device_map or "auto").strip().lower()
@@ -435,6 +438,7 @@ class DiffusersClient:
             allow_in_process_runtime=_settings_flag(settings.get("comfyui_allow_in_process_diffusers")),
             keep_downloaded_models=_settings_flag(settings.get("comfyui_diffusers_keep_downloaded_models", True)),
             disable_xet=_settings_flag(settings.get("comfyui_diffusers_disable_xet", True)),
+            huggingface_cache_root=settings.get("comfyui_huggingface_cache_root") or "",
         )
 
     def _effective_model_repo(self, params=None):
@@ -535,6 +539,15 @@ class DiffusersClient:
             raise ComfyUIError("GGUF metadata 判斷需要先安裝 Python 套件：gguf")
 
     def _configure_huggingface_download_backend(self, *, log_capture=None):
+        if self.huggingface_cache_root:
+            hf_home = self.huggingface_cache_root
+            hub_cache = hf_home / "hub"
+            hf_home.mkdir(parents=True, exist_ok=True)
+            hub_cache.mkdir(parents=True, exist_ok=True)
+            os.environ["HF_HOME"] = str(hf_home)
+            os.environ["HF_HUB_CACHE"] = str(hub_cache)
+            if log_capture:
+                log_capture.append_line(f"Hugging Face cache root set to {hf_home}")
         if self.disable_xet:
             os.environ["HF_HUB_DISABLE_XET"] = "1"
             if log_capture:
@@ -545,24 +558,36 @@ class DiffusersClient:
             return {
                 "hf_transfer_enabled": False,
                 "xet_disabled": os.environ.get("HF_HUB_DISABLE_XET") == "1",
+                "cache_root": str(self.huggingface_cache_root or ""),
+                "hub_cache": os.environ.get("HF_HUB_CACHE", ""),
             }
         os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
         return {
             "hf_transfer_enabled": True,
             "xet_disabled": os.environ.get("HF_HUB_DISABLE_XET") == "1",
+            "cache_root": str(self.huggingface_cache_root or ""),
+            "hub_cache": os.environ.get("HF_HUB_CACHE", ""),
         }
 
     def _huggingface_repo_cache_dir(self, model_repo):
         repo_id = str(model_repo or "").strip()
         if not repo_id:
             return None
+        if self.huggingface_cache_root:
+            hub_cache = self.huggingface_cache_root / "hub"
+            return hub_cache / ("models--" + repo_id.replace("/", "--"))
+        repo_cache_name = "models--" + repo_id.replace("/", "--")
+        hub_candidates = []
         cache_root = os.environ.get("HF_HUB_CACHE")
         if cache_root:
-            hub_cache = Path(cache_root).expanduser()
-        else:
-            hf_home = Path(os.environ.get("HF_HOME", "~/.cache/huggingface")).expanduser()
-            hub_cache = hf_home / "hub"
-        return hub_cache / ("models--" + repo_id.replace("/", "--"))
+            hub_candidates.append(Path(cache_root).expanduser())
+        hf_home = Path(os.environ.get("HF_HOME", "~/.cache/huggingface")).expanduser()
+        hub_candidates.append(hf_home / "hub")
+        for hub_cache in hub_candidates:
+            candidate = hub_cache / repo_cache_name
+            if candidate.exists():
+                return candidate
+        return hub_candidates[0] / repo_cache_name
 
     def _largest_incomplete_download_bytes(self, model_repo):
         cache_dir = self._huggingface_repo_cache_dir(model_repo)
@@ -898,6 +923,8 @@ class DiffusersClient:
             "base_url": self.base_url,
             "model_repo": self.model_repo,
             "token_configured": bool(self.token),
+            "huggingface_cache_root": str(self.huggingface_cache_root or ""),
+            "huggingface_cache_root_configured": bool(self.huggingface_cache_root),
             "system": {
                 "backend": "diffusers",
                 "model_repo": self.model_repo,
@@ -962,6 +989,8 @@ class DiffusersClient:
             "model_families": model_families,
             "model_repo": self.model_repo,
             "token_configured": bool(self.token),
+            "huggingface_cache_root": str(self.huggingface_cache_root or ""),
+            "huggingface_cache_root_configured": bool(self.huggingface_cache_root),
         }
 
     def inspect_model_repo(self, repo_value, *, mode="txt2img"):

@@ -158,15 +158,30 @@ def build_text_to_image_workflow(params, *, error_cls):
 
 def build_gguf_text_to_image_base(params, *, error_cls):
     unet_name = str(params.get("comfyui_gguf_unet_name") or params.get("diffusion_model") or params.get("model") or "").strip()
+    clip_loader_class = str(params.get("clip_loader_class") or "DualCLIPLoader").strip() or "DualCLIPLoader"
     clip_name1 = str(params.get("clip") or params.get("clip_name1") or "").strip()
     clip_name2 = str(params.get("clip2") or params.get("clip_name2") or "").strip()
+    clip_name3 = str(params.get("clip3") or params.get("clip_name3") or "").strip()
     vae_name = str(params.get("vae") or "").strip()
     if not unet_name:
         raise error_cls("ComfyUI-GGUF workflow 缺少 UNet GGUF 模型")
     if not clip_name1 or not clip_name2:
-        raise error_cls("ComfyUI-GGUF workflow 缺少 SDXL CLIP-L / CLIP-G 文字編碼器")
+        raise error_cls("ComfyUI-GGUF workflow 缺少必要文字編碼器")
+    if clip_loader_class.startswith("TripleCLIPLoader") and not clip_name3:
+        raise error_cls("ComfyUI-GGUF workflow 缺少第三組文字編碼器")
     if not vae_name:
-        raise error_cls("ComfyUI-GGUF workflow 缺少 VAE；請選擇 SDXL VAE")
+        raise error_cls("ComfyUI-GGUF workflow 缺少 VAE；請選擇 profile 指定 VAE")
+
+    clip_inputs = {
+        "clip_name1": clip_name1,
+        "clip_name2": clip_name2,
+    }
+    if clip_loader_class.startswith("TripleCLIPLoader"):
+        clip_inputs["clip_name3"] = clip_name3
+    elif clip_loader_class in {"DualCLIPLoader", "DualCLIPLoaderGGUF"}:
+        clip_inputs["type"] = str(params.get("clip_type") or "sdxl").strip() or "sdxl"
+        if clip_loader_class == "DualCLIPLoader":
+            clip_inputs["device"] = str(params.get("clip_device") or "default").strip() or "default"
 
     workflow = {
         "4": {
@@ -174,13 +189,8 @@ def build_gguf_text_to_image_base(params, *, error_cls):
             "inputs": {"unet_name": unet_name},
         },
         "10": {
-            "class_type": "DualCLIPLoader",
-            "inputs": {
-                "clip_name1": clip_name1,
-                "clip_name2": clip_name2,
-                "type": str(params.get("clip_type") or "sdxl").strip() or "sdxl",
-                "device": str(params.get("clip_device") or "default").strip() or "default",
-            },
+            "class_type": clip_loader_class,
+            "inputs": clip_inputs,
         },
         "11": {
             "class_type": "VAELoader",

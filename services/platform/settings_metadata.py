@@ -491,6 +491,10 @@ SETTING_DETAILS = {
         "label": "雲端硬碟分級限速",
         "description": "依會員等級套用上傳 / 下載速率上限。",
     },
+    "comfyui_huggingface_cache_root": {
+        "label": "Hugging Face 快取根目錄",
+        "description": "Diffusers/HF/GGUF 下載快取根目錄；實際 hub cache 會放在此目錄的 hub/ 底下。",
+    },
     "storage_trash_retention_days": {
         "label": "回收桶保留天數",
         "description": "Trash 內檔案多少天後自動清。",
