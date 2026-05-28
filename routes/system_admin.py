@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import deque
 from datetime import datetime
 from flask import request, send_file
 
@@ -682,6 +683,16 @@ def register_system_admin_routes(app, deps):
             return number
         return None
 
+    def tail_text_lines(path, max_lines=200):
+        try:
+            max_lines = max(1, min(int(max_lines), 1000))
+        except Exception:
+            max_lines = 200
+        if not path or not os.path.exists(path):
+            return []
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return [line.rstrip("\n") for line in deque(handle, maxlen=max_lines)]
+
     def _security_test_job_payload(job):
         if not job:
             return None
@@ -690,8 +701,7 @@ def register_system_admin_routes(app, deps):
         log_tail = []
         if log_abs:
             try:
-                with open(log_abs, "r", encoding="utf-8", errors="replace") as handle:
-                    log_tail = [line.rstrip("\n") for line in handle.readlines()[-80:]]
+                log_tail = tail_text_lines(log_abs, 80)
             except Exception:
                 log_tail = []
         progress = job.get("progress_percent")
@@ -1217,9 +1227,7 @@ def register_system_admin_routes(app, deps):
         if not path or not os.path.exists(path):
             return {"path": path or "", "exists": False, "lines": []}
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()[-max_lines:]
-            return {"path": path, "exists": True, "lines": [line.rstrip("\n") for line in lines]}
+            return {"path": path, "exists": True, "lines": tail_text_lines(path, max_lines)}
         except Exception as exc:
             return {"path": path, "exists": True, "error": str(exc), "lines": []}
 
@@ -1387,6 +1395,7 @@ def register_system_admin_routes(app, deps):
         "security_profile_payload": security_profile_payload,
         "security_test_job_payload": _security_test_job_payload,
         "security_test_report_root": _security_test_report_root,
+        "tail_text_lines": tail_text_lines,
         "server_bind_settings_payload": server_bind_settings_payload,
         "server_mode_service": server_mode_service,
         "server_ssl_payload": server_ssl_payload,

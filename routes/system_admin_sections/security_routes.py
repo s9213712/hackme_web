@@ -586,6 +586,7 @@ def register_system_admin_security_routes(app, ctx):
     security_test_job_payload = ctx["security_test_job_payload"]
     security_test_report_root = ctx["security_test_report_root"]
     start_security_test_job = ctx["start_security_test_job"]
+    tail_text_lines = ctx["tail_text_lines"]
     validate_git_branch_name = ctx["validate_git_branch_name"]
     repair_audit_chain = ctx["repair_audit_chain"]
     repair_violation_chains = ctx["repair_violation_chains"]
@@ -906,8 +907,7 @@ def register_system_admin_security_routes(app, ctx):
                 if not os.path.isfile(log_path):
                     continue
                 try:
-                    with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
-                        tail = fh.readlines()[-limit_int:]
+                    tail = tail_text_lines(log_path, limit_int)
                     if not tail:
                         continue
                     parsed_lines = []

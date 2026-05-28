@@ -1,6 +1,11 @@
 # Update Summary
 
-Release ID: `2026.05.28-005`
+Release ID: `2026.05.28-006`
+
+## 2026.05.28-006
+
+- Root/admin log tails now use bounded `deque(maxlen=N)` reads instead of
+  loading entire log files before slicing the last lines.
 
 ## 2026.05.28-005
 

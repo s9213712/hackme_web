@@ -35,6 +35,9 @@ multiply these writes across users and root/admin pages.
 - Changed fast `/api/admin/health` to reuse one audit-chain result and pass a
   schema-only DB summary into readiness. Full SQLite `quick_check` /
   `foreign_key_check` stays on `/api/admin/health/db-integrity`.
+- Replaced root/admin log-tail `readlines()[-N:]` paths with bounded
+  `deque(maxlen=N)` tail reads for security test jobs, Security Center server
+  logs, and server-output fallback logs.
 
 ## Verification
 
