@@ -1,4 +1,5 @@
 import io
+import importlib.util
 import logging
 import os
 import sys
@@ -10,6 +11,8 @@ import pytest
 from services.comfyui.client import ComfyUIError
 from services.comfyui.diffusers_client import DiffusersClient, diffusers_backend_url, repo_id_from_diffusers_url
 from services.comfyui.huggingface import build_diffusers_variant_options, detect_diffusers_supported_modes
+from services.comfyui.huggingface import inspect_huggingface_diffusers_repo
+from services.comfyui import huggingface as huggingface_service
 from services.comfyui.settings import normalize_huggingface_repo_id
 
 
@@ -72,6 +75,34 @@ def test_huggingface_diffusers_metadata_detects_gguf_text_to_image_only():
         tags=["GGUF"],
         siblings=[{"rfilename": "WAI-NSFW-Illustrious-v140-Q8_0.gguf"}],
     ) == ["txt2img"]
+
+
+def test_huggingface_diffusers_repo_inspection_uses_short_metadata_cache(monkeypatch):
+    huggingface_service._HF_REPO_INSPECT_CACHE.clear()
+    calls = {"count": 0}
+
+    class FakeApi:
+        def model_info(self, repo_id, token=None, files_metadata=True):
+            calls["count"] += 1
+            return types.SimpleNamespace(
+                siblings=[{"rfilename": "model_index.json"}],
+                pipeline_tag="text-to-image",
+                library_name="diffusers",
+                tags=["diffusers"],
+                cardData={},
+                config={},
+            )
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object() if name == "huggingface_hub" else None)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", types.SimpleNamespace(HfApi=lambda: FakeApi()))
+
+    first = inspect_huggingface_diffusers_repo("owner/model", mode="txt2img")
+    second = inspect_huggingface_diffusers_repo("owner/model", mode="txt2img")
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert second["cache"]["hit"] is True
+    assert calls["count"] == 1
 
 
 def test_diffusers_health_allows_blank_default_repo_for_generation_page_override(tmp_path, monkeypatch):

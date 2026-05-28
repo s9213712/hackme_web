@@ -38,6 +38,10 @@ def test_diffusers_js_preflights_huggingface_repo_before_generation():
     assert 'apiFetch(API + "/comfyui/diffusers/inspect?" + query.toString()' in js
     assert "new URLSearchParams" in js
     assert "function inspectComfyuiDiffusersRepo" in js
+    assert "comfyuiDiffusersInspectCache" in js
+    assert "comfyuiDiffusersInspectInflight" in js
+    assert "COMFYUI_DIFFUSERS_INSPECT_CACHE_MS" in js
+    assert "getCachedComfyuiDiffusersInspection" in js
     assert "diffusers_model_variant" in js
     assert "diffusers_gguf_file" in js
     assert "updateComfyuiDiffusersGgufOptions" in js
@@ -47,7 +51,7 @@ def test_diffusers_js_preflights_huggingface_repo_before_generation():
 
 def test_diffusers_cache_busts_preflight_ui_assets():
     html = _read("public/index.html")
-    assert "/js/36-comfyui.js?v=20260521-diffusers-cpu-fallback" in html
+    assert "/js/36-comfyui.js?v=20260528-comfyui-hf-cache" in html
     assert "/js/36-comfyui-workflows.js?v=20260520-embedding-empty-hide" in html
 
 
@@ -73,6 +77,17 @@ def test_diffusers_generation_progress_surfaces_huggingface_download_bytes():
     assert "progress.step" in js
     assert "formatDriveBytes(writtenBytes)" in js
     assert "不設最長等待上限" in js
+
+
+def test_comfyui_model_loading_dedupes_and_manual_refresh_busts_cache():
+    js = _read("public/js/36-comfyui.js")
+    bootstrap_js = _read("public/js/90-bootstrap.js")
+
+    assert "comfyuiModelsLoadPromise" in js
+    assert "COMFYUI_MODELS_CACHE_MS" in js
+    assert "clearComfyuiModelsCache" in js
+    assert "if (!forceRefresh && comfyuiModelsLoadPromise) return comfyuiModelsLoadPromise;" in js
+    assert "loadComfyuiModels({ forceRefresh: true })" in bootstrap_js
 
 
 def test_diffusers_txt2img_hides_source_image_card_until_needed():

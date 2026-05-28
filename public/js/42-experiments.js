@@ -1,8 +1,18 @@
 'use strict';
 
 (function setupExperimentArea() {
-  const PLANE_PARTICLE_COUNT = 160;
-  const LIQUID_PARTICLE_COUNT = 240;
+  function experimentPerformanceProfile() {
+    const cores = Math.max(1, Number(navigator.hardwareConcurrency || 4));
+    const reducedMotion = !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    if (reducedMotion || cores <= 2) return { planeParticles: 72, liquidParticles: 110, dprCap: 1.15 };
+    if (cores <= 4) return { planeParticles: 112, liquidParticles: 170, dprCap: 1.35 };
+    return { planeParticles: 160, liquidParticles: 240, dprCap: 1.6 };
+  }
+
+  const EXPERIMENT_PERFORMANCE_PROFILE = experimentPerformanceProfile();
+  const PLANE_PARTICLE_COUNT = EXPERIMENT_PERFORMANCE_PROFILE.planeParticles;
+  const LIQUID_PARTICLE_COUNT = EXPERIMENT_PERFORMANCE_PROFILE.liquidParticles;
+  const EXPERIMENT_DPR_CAP = EXPERIMENT_PERFORMANCE_PROFILE.dprCap;
   const TWO_PI = Math.PI * 2;
   let initialized = false;
   let rafId = 0;
@@ -86,7 +96,7 @@
     const fallbackWidth = canvas.parentElement ? canvas.parentElement.clientWidth : 640;
     const width = Math.max(300, Math.round(rect.width || fallbackWidth || 640));
     const height = Math.max(280, Math.round(rect.height || 420));
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = Math.min(window.devicePixelRatio || 1, EXPERIMENT_DPR_CAP);
     const targetWidth = Math.round(width * dpr);
     const targetHeight = Math.round(height * dpr);
     if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
@@ -112,7 +122,7 @@
     const fallbackWidth = canvas.parentElement ? canvas.parentElement.clientWidth : 640;
     const width = Math.max(300, Math.round(rect.width || fallbackWidth || 640));
     const height = Math.max(280, Math.round(rect.height || 420));
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.6);
+    const dpr = Math.min(window.devicePixelRatio || 1, EXPERIMENT_DPR_CAP);
     if (!state.plane.scene3d) {
       const targetWidth = Math.round(width * dpr);
       const targetHeight = Math.round(height * dpr);
@@ -1427,7 +1437,7 @@
       rafId = 0;
       return;
     }
-    const dt = lastFrameAt ? time - lastFrameAt : 16;
+    const dt = Math.min(64, lastFrameAt ? time - lastFrameAt : 16);
     lastFrameAt = time;
     drawActiveStage(time, dt);
     rafId = window.requestAnimationFrame(frame);

@@ -41,7 +41,7 @@ def test_game_zone_frontend_assets_are_wired():
 
     assert 'id="tab-module-games"' in index_html
     assert 'id="module-games"' in index_html
-    assert "/js/38-games.js?v=20260520-racing-physics" in index_html
+    assert "/js/38-games.js?v=20260528-games-compact-scores" in index_html
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
     assert 'id="game-practice-stockfish-depth"' in index_html
@@ -156,6 +156,7 @@ def test_game_zone_frontend_assets_are_wired():
         assert script in games_js
     assert "async function ensureGameRuntimeScriptsLoaded()" in games_js
     assert "await runtimeReady" in games_js
+    assert '/solo-scores?compact=1`' in games_js
     assert "/js/56-trading.js?v=" in index_html
     assert 'id="game-select"' in games_js
     assert "chinese_chess" in games_js

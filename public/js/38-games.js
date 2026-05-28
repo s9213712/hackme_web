@@ -522,7 +522,7 @@ function normalizeSoloScoreTiming(body = {}) {
 async function submitLocalGameModuleScore(key, body) {
   const payload = normalizeSoloScoreTiming(body);
   try {
-    const json = await gameRequest(`/games/${encodeURIComponent(key)}/solo-scores`, { method: "POST", body: payload });
+    const json = await gameRequest(`/games/${encodeURIComponent(key)}/solo-scores?compact=1`, { method: "POST", body: payload });
     recordGameOutcome(key, payload, json);
     showGameDailyRewardFeedback(json, "成績已送出");
     await loadSelectedGameLeaderboard();
@@ -1174,7 +1174,7 @@ async function submitSoloGameScore(gameKey, state) {
   const rawElapsed = soloRawElapsedMs(state);
   const elapsed = soloElapsedMs(state);
   try {
-    const json = await gameRequest(`/games/${encodeURIComponent(gameKey)}/solo-scores`, {
+    const json = await gameRequest(`/games/${encodeURIComponent(gameKey)}/solo-scores?compact=1`, {
       method: "POST",
       body: {
         raw_elapsed_ms: rawElapsed,

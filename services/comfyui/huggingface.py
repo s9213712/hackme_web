@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import os
 import re
+import time
 from pathlib import PurePosixPath
 
 from services.comfyui.settings import normalize_huggingface_repo_id
@@ -26,6 +29,40 @@ _PRECISION_LABELS = {
     "fp32": "FP32",
 }
 _PRECISION_ORDER = {"default": 0, "fp16": 1, "bf16": 2, "fp32": 3}
+_HF_REPO_INSPECT_CACHE = {}
+_HF_REPO_INSPECT_CACHE_TTL_SECONDS = max(
+    0,
+    min(3600, int(os.environ.get("COMFYUI_HF_REPO_INSPECT_CACHE_SECONDS", "60") or "60")),
+)
+
+
+def _hf_repo_inspect_cache_key(repo_id, token, mode):
+    token_hash = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()[:16] if token else ""
+    return (str(repo_id or ""), token_hash, str(mode or "txt2img").strip().lower() or "txt2img")
+
+
+def _get_hf_repo_inspect_cache(key):
+    if _HF_REPO_INSPECT_CACHE_TTL_SECONDS <= 0:
+        return None
+    cached = _HF_REPO_INSPECT_CACHE.get(key)
+    if not cached:
+        return None
+    if time.time() - float(cached.get("at") or 0) > _HF_REPO_INSPECT_CACHE_TTL_SECONDS:
+        _HF_REPO_INSPECT_CACHE.pop(key, None)
+        return None
+    payload = dict(cached.get("payload") or {})
+    if payload:
+        payload["cache"] = {"hit": True, "ttl_seconds": _HF_REPO_INSPECT_CACHE_TTL_SECONDS}
+    return payload or None
+
+
+def _set_hf_repo_inspect_cache(key, payload):
+    if _HF_REPO_INSPECT_CACHE_TTL_SECONDS <= 0 or not isinstance(payload, dict):
+        return
+    _HF_REPO_INSPECT_CACHE[key] = {"at": time.time(), "payload": dict(payload)}
+    if len(_HF_REPO_INSPECT_CACHE) > 128:
+        oldest_key = min(_HF_REPO_INSPECT_CACHE, key=lambda item: _HF_REPO_INSPECT_CACHE[item].get("at") or 0)
+        _HF_REPO_INSPECT_CACHE.pop(oldest_key, None)
 
 
 def normalize_diffusers_variant(value, *, allow_blank=True):
@@ -223,6 +260,11 @@ def inspect_huggingface_diffusers_repo(repo_value, *, token="", mode="txt2img"):
         return {"ok": False, "checked": False, "msg": "Hugging Face repo 格式不合法，請填 namespace/model 或模型頁網址"}
     if not repo_id:
         return {"ok": False, "checked": False, "msg": "請輸入 Hugging Face repo"}
+    requested_mode = str(mode or "txt2img").strip().lower() or "txt2img"
+    cache_key = _hf_repo_inspect_cache_key(repo_id, token, requested_mode)
+    cached = _get_hf_repo_inspect_cache(cache_key)
+    if cached:
+        return cached
     if importlib.util.find_spec("huggingface_hub") is None:
         return {"ok": False, "checked": False, "repo_id": repo_id, "msg": "缺少 huggingface_hub 套件，無法在下載前檢查模型 metadata"}
     try:
@@ -248,7 +290,6 @@ def inspect_huggingface_diffusers_repo(repo_value, *, token="", mode="txt2img"):
         config=config,
         siblings=siblings,
     )
-    requested_mode = str(mode or "txt2img").strip().lower() or "txt2img"
     variant_options = build_diffusers_variant_options(siblings)
     has_gguf_options = any(item.get("kind") == "gguf" for item in variant_options)
     suggested_base_repo = infer_gguf_base_repo(repo_id, tags=tags, card_data=card_data) if has_gguf_options else ""
@@ -271,7 +312,7 @@ def inspect_huggingface_diffusers_repo(repo_value, *, token="", mode="txt2img"):
             warnings.append(f"已推定 base repo：{suggested_base_repo}。")
     if not variant_options:
         warnings.append("沒有取得模型檔大小；若這不是 Diffusers repo，生成前會被阻擋。")
-    return {
+    payload = {
         "ok": True,
         "checked": True,
         "repo_id": repo_id,
@@ -285,3 +326,5 @@ def inspect_huggingface_diffusers_repo(repo_value, *, token="", mode="txt2img"):
         "suggested_base_repo": suggested_base_repo,
         "warnings": warnings,
     }
+    _set_hf_repo_inspect_cache(cache_key, payload)
+    return payload

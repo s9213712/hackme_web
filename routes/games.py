@@ -416,6 +416,8 @@ def game_schema_sql():
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         finished_at TEXT,
+        white_deleted_at TEXT,
+        black_deleted_at TEXT,
         CHECK (game_key IN ('chess')),
         CHECK (mode IN ('pvp', 'computer')),
         CHECK (status IN ('active', 'finished', 'cancelled')),
@@ -532,12 +534,18 @@ def game_schema_sql():
     );
     CREATE INDEX IF NOT EXISTS idx_game_matches_players ON game_matches(game_key, status, white_user_id, black_user_id);
     CREATE INDEX IF NOT EXISTS idx_game_matches_finished ON game_matches(game_key, mode, finished_at);
+    CREATE INDEX IF NOT EXISTS idx_game_matches_leaderboard_week ON game_matches(game_key, mode, status, leaderboard_week, winner_user_id);
+    CREATE INDEX IF NOT EXISTS idx_game_matches_white_visible ON game_matches(game_key, white_user_id, white_deleted_at, status, id);
+    CREATE INDEX IF NOT EXISTS idx_game_matches_black_visible ON game_matches(game_key, black_user_id, black_deleted_at, status, id);
     CREATE INDEX IF NOT EXISTS idx_game_invites_user_status ON game_invites(game_key, opponent_user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_game_invites_inviter_status ON game_invites(game_key, inviter_user_id, status, id);
     CREATE INDEX IF NOT EXISTS idx_game_rewards_week ON game_leaderboard_rewards(game_key, week_key);
     CREATE INDEX IF NOT EXISTS idx_game_daily_rewards_user ON game_daily_challenge_rewards(user_id, challenge_key);
     CREATE INDEX IF NOT EXISTS idx_game_solo_scores_rank ON game_solo_scores(game_key, week_key, difficulty, elapsed_ms);
+    CREATE INDEX IF NOT EXISTS idx_game_solo_scores_best_time ON game_solo_scores(game_key, week_key, difficulty, puzzle_id, user_id, elapsed_ms, created_at, id);
     CREATE INDEX IF NOT EXISTS idx_game_multiplayer_rooms_players ON game_multiplayer_rooms(game_key, status, host_user_id, guest_user_id);
     CREATE INDEX IF NOT EXISTS idx_game_multiplayer_invites_user ON game_multiplayer_invites(game_key, invitee_user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_game_multiplayer_invites_inviter ON game_multiplayer_invites(game_key, inviter_user_id, status, id);
     CREATE INDEX IF NOT EXISTS idx_game_multiplayer_events_room ON game_multiplayer_events(room_id, id);
     """.format(SOLO_GAME_CHECK_SQL=SOLO_GAME_CHECK_SQL)
 
@@ -697,6 +705,12 @@ def ensure_game_schema(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_game_solo_scores_score_rank ON game_solo_scores(game_key, week_key, difficulty, score DESC, elapsed_ms)"
     )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_solo_scores_best_time ON game_solo_scores(game_key, week_key, difficulty, puzzle_id, user_id, elapsed_ms, created_at, id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_solo_scores_best_score ON game_solo_scores(game_key, week_key, difficulty, puzzle_id, user_id, score DESC, elapsed_ms, created_at, id)"
+    )
     match_schema = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='game_matches'"
     ).fetchone()
@@ -733,6 +747,15 @@ def ensure_game_schema(conn):
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_game_matches_finished ON game_matches(game_key, mode, finished_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_matches_leaderboard_week ON game_matches(game_key, mode, status, leaderboard_week, winner_user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_matches_white_visible ON game_matches(game_key, white_user_id, white_deleted_at, status, id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_matches_black_visible ON game_matches(game_key, black_user_id, black_deleted_at, status, id)"
     )
     conn.commit()
 
@@ -1040,6 +1063,12 @@ def register_games_routes(app, deps):
         if not isinstance(data, dict):
             return None, json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         return data, None, None
+
+    def compact_response_requested(data=None):
+        raw = request.args.get("compact")
+        if raw is None and isinstance(data, dict):
+            raw = data.get("compact")
+        return str(raw or "").strip().lower() in {"1", "true", "yes", "on", "compact"}
 
     def user_row(conn, user_id):
         return conn.execute("SELECT id, username, role, status FROM users WHERE id=?", (int(user_id),)).fetchone()
@@ -2655,6 +2684,7 @@ def register_games_routes(app, deps):
         data, err, status = parse_json_body()
         if err:
             return err, status
+        compact_response = compact_response_requested(data)
         try:
             raw_elapsed_ms = int(data.get("raw_elapsed_ms") or data.get("elapsed_ms") or 0)
             penalty_seconds = int(data.get("penalty_seconds") or 0)
@@ -2734,7 +2764,8 @@ def register_games_routes(app, deps):
                 "score_id": score_id,
                 "week": week,
                 "daily_reward": daily_reward,
-                "leaderboard": solo_leaderboard_rows(conn, game_key, week, difficulty),
+                "leaderboard": [] if compact_response else solo_leaderboard_rows(conn, game_key, week, difficulty),
+                "compact": compact_response,
             })
         finally:
             conn.close()

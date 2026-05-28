@@ -433,7 +433,7 @@ function bindUiEvents() {
   if (gamePracticeBtn) gamePracticeBtn.addEventListener("click", createPracticeGame);
   if (gameResignBtn) gameResignBtn.addEventListener("click", resignGame);
   if (gameAwardBtn) gameAwardBtn.addEventListener("click", awardGameRewards);
-  if (comfyuiRefreshBtn) comfyuiRefreshBtn.addEventListener("click", loadComfyuiModels);
+  if (comfyuiRefreshBtn) comfyuiRefreshBtn.addEventListener("click", () => loadComfyuiModels({ forceRefresh: true }));
   if (comfyuiLoadDraftBtn) comfyuiLoadDraftBtn.addEventListener("click", loadComfyuiLastSettings);
   if (comfyuiStartBtn) comfyuiStartBtn.addEventListener("click", startLocalComfyui);
   if (comfyuiStopBtn) comfyuiStopBtn.addEventListener("click", stopLocalComfyui);

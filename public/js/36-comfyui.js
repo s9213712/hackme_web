@@ -6,6 +6,9 @@ let comfyuiGeneratedMedia = [];
 let comfyuiSelectedImageIndex = 0;
 let comfyuiSavedResult = null;
 let comfyuiModelsLoaded = false;
+let comfyuiModelsLoadPromise = null;
+let comfyuiModelsLastLoadedAt = 0;
+let comfyuiModelsLastStatusText = "";
 let comfyuiServerAvailable = null;
 let comfyuiAlbumsLoaded = false;
 let comfyuiProgressTimer = null;
@@ -33,6 +36,8 @@ let comfyuiUpscaleModels = [];
 let comfyuiGenerationModes = [];
 let comfyuiModelFamilies = [];
 let comfyuiDiffusersInspection = null;
+const comfyuiDiffusersInspectCache = new Map();
+const comfyuiDiffusersInspectInflight = new Map();
 let comfyuiHistoryItems = [];
 let comfyuiWorkflowPresets = [];
 let comfyuiWorkflowCurrentPresetId = null;
@@ -65,6 +70,8 @@ const COMFYUI_VIDEO_FOREGROUND_TIMEOUT_SECONDS = 0;
 const COMFYUI_INTERRUPT_TIMEOUT_SECONDS = 15;
 const COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800;
 const COMFYUI_QUEUE_MAX_TIMEOUT_SECONDS = 21600;
+const COMFYUI_MODELS_CACHE_MS = 15000;
+const COMFYUI_DIFFUSERS_INSPECT_CACHE_MS = 60000;
 const COMFYUI_MAX_LORAS = 8;
 const COMFYUI_LORA_EXTRA_PRICE = 1;
 const COMFYUI_VAE_BUILTIN = "__checkpoint_builtin__";
@@ -346,7 +353,7 @@ function scheduleComfyuiLocalStartPolling({ attemptsLeft = 120, delayMs = 5000 }
     const ok = await refreshComfyuiStatus({ switchAway: false });
     if (ok) {
       setComfyuiMessage("本地 ComfyUI 已啟動完成。", true);
-      await loadComfyuiModels();
+      await loadComfyuiModels({ forceRefresh: true });
       return;
     }
     scheduleComfyuiLocalStartPolling({ attemptsLeft: attemptsLeft - 1, delayMs });
@@ -629,6 +636,28 @@ function comfyuiDiffusersInspectionMatches(repo, mode) {
   return inspection.repo === repo && inspection.mode === mode;
 }
 
+function comfyuiDiffusersInspectCacheKey(repo, mode) {
+  return `${String(repo || "").trim()}|${String(mode || "txt2img").trim()}|${comfyuiRequestQuery()}`;
+}
+
+function getCachedComfyuiDiffusersInspection(cacheKey) {
+  const cached = comfyuiDiffusersInspectCache.get(cacheKey);
+  if (!cached || Date.now() - Number(cached.at || 0) > COMFYUI_DIFFUSERS_INSPECT_CACHE_MS) {
+    comfyuiDiffusersInspectCache.delete(cacheKey);
+    return null;
+  }
+  return cached.data || null;
+}
+
+function cacheComfyuiDiffusersInspection(cacheKey, data) {
+  if (!data) return;
+  comfyuiDiffusersInspectCache.set(cacheKey, { at: Date.now(), data });
+  if (comfyuiDiffusersInspectCache.size > 40) {
+    const oldestKey = comfyuiDiffusersInspectCache.keys().next().value;
+    if (oldestKey) comfyuiDiffusersInspectCache.delete(oldestKey);
+  }
+}
+
 async function inspectComfyuiDiffusersRepo({ quiet = false } = {}) {
   const repo = normalizeComfyuiHuggingFaceRepoInput($("comfyui-diffusers-model-repo")?.value || "");
   const mode = comfyuiGenerationMode();
@@ -637,9 +666,22 @@ async function inspectComfyuiDiffusersRepo({ quiet = false } = {}) {
     if (!quiet) setComfyuiMessage("請先輸入 Hugging Face repo。", false);
     return null;
   }
+  const cacheKey = comfyuiDiffusersInspectCacheKey(repo, mode);
+  const cached = getCachedComfyuiDiffusersInspection(cacheKey);
+  if (cached) {
+    comfyuiDiffusersInspection = { repo: cached.repo_id || repo, mode, data: cached, cached: true };
+    renderComfyuiDiffusersInspection();
+    if (!cached.supported_for_mode && !quiet) {
+      setComfyuiMessage(`這個 Hugging Face repo 不支援「${comfyuiReadableModeLabel(mode)}」，尚未開始下載。`, false);
+    }
+    return cached;
+  }
+  if (comfyuiDiffusersInspectInflight.has(cacheKey)) {
+    return comfyuiDiffusersInspectInflight.get(cacheKey);
+  }
   comfyuiDiffusersInspection = { repo, mode, loading: true };
   renderComfyuiDiffusersInspection();
-  try {
+  const requestPromise = (async () => {
     const query = new URLSearchParams({
       diffusers_model_repo: repo,
       generation_mode: mode,
@@ -653,17 +695,24 @@ async function inspectComfyuiDiffusersRepo({ quiet = false } = {}) {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `Hugging Face repo 檢查失敗（HTTP ${res.status}）`);
+    cacheComfyuiDiffusersInspection(cacheKey, json);
     comfyuiDiffusersInspection = { repo: json.repo_id || repo, mode, data: json };
     renderComfyuiDiffusersInspection();
     if (!json.supported_for_mode && !quiet) {
       setComfyuiMessage(`這個 Hugging Face repo 不支援「${comfyuiReadableModeLabel(mode)}」，尚未開始下載。`, false);
     }
     return json;
+  })();
+  comfyuiDiffusersInspectInflight.set(cacheKey, requestPromise);
+  try {
+    return await requestPromise;
   } catch (err) {
     comfyuiDiffusersInspection = { repo, mode, error: err.message || "Hugging Face repo 檢查失敗，尚未開始下載。" };
     renderComfyuiDiffusersInspection();
     if (!quiet) setComfyuiMessage(comfyuiDiffusersInspection.error, false);
     return null;
+  } finally {
+    comfyuiDiffusersInspectInflight.delete(cacheKey);
   }
 }
 
@@ -3370,14 +3419,28 @@ function renderComfyuiGeneratedImages(images) {
   });
 }
 
-async function loadComfyuiModels() {
+function clearComfyuiModelsCache() {
+  comfyuiModelsLastLoadedAt = 0;
+  comfyuiModelsLastStatusText = "";
+}
+
+async function loadComfyuiModels(options = {}) {
+  const forceRefresh = options === true || !!(options && options.forceRefresh);
   if (!currentUser || !canAccessModule("comfyui")) return;
   const status = $("comfyui-status");
+  if (!forceRefresh && comfyuiModelsLoaded && Date.now() - comfyuiModelsLastLoadedAt < COMFYUI_MODELS_CACHE_MS) {
+    if (status && comfyuiModelsLastStatusText) status.textContent = comfyuiModelsLastStatusText;
+    return true;
+  }
+  if (!forceRefresh && comfyuiModelsLoadPromise) return comfyuiModelsLoadPromise;
   if (status) status.textContent = "連線 ComfyUI 中...";
   setComfyuiMessage("");
-  try {
+  comfyuiModelsLoadPromise = (async () => {
     await fetchCsrfToken();
-    const res = await apiFetch(API + "/comfyui/models" + comfyuiRequestQuery(), {
+    const requestPath = "/comfyui/models" + (forceRefresh
+      ? (comfyuiRequestQuery() ? `${comfyuiRequestQuery()}&refresh=1` : "?refresh=1")
+      : comfyuiRequestQuery());
+    const res = await apiFetch(API + requestPath, {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": getCsrfToken() || "" }
     });
@@ -3414,9 +3477,16 @@ async function loadComfyuiModels() {
       }
     });
     setComfyuiTabAvailability(true);
-    if (status) status.textContent = `已連線 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}，模型 ${Number((json.models || []).length)} 個，LoRA ${Number((json.loras || []).length)} 個，Embedding ${Number((json.embeddings || []).length)} 個，VAE ${Number((json.vaes || []).length)} 個${comfyuiPaidApiStatusText(json)}${comfyuiStorageWarningText(json)}`;
+    comfyuiModelsLastLoadedAt = Date.now();
+    comfyuiModelsLastStatusText = `已連線 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}，模型 ${Number((json.models || []).length)} 個，LoRA ${Number((json.loras || []).length)} 個，Embedding ${Number((json.embeddings || []).length)} 個，VAE ${Number((json.vaes || []).length)} 個${comfyuiPaidApiStatusText(json)}${comfyuiStorageWarningText(json)}`;
+    if (status) status.textContent = comfyuiModelsLastStatusText;
+    return true;
+  })();
+  try {
+    return await comfyuiModelsLoadPromise;
   } catch (err) {
     comfyuiModelsLoaded = false;
+    clearComfyuiModelsCache();
     comfyuiLoraDetails = {};
     setComfyuiTabAvailability(false, err.message || "ComfyUI 伺服器未連線");
     if (status) status.textContent = "ComfyUI 未連線";
@@ -3424,6 +3494,9 @@ async function loadComfyuiModels() {
       ? "。若使用本地模式，請先按「啟動 ComfyUI」。"
       : (comfyuiConnectionMode === "diffusers" ? "。若使用 Diffusers 模式，請確認 root 已設定 Hugging Face repo 且後端已安裝 diffusers / torch。" : "");
     setComfyuiMessage((err.message || "ComfyUI 模型讀取失敗") + startHint, false);
+    return false;
+  } finally {
+    comfyuiModelsLoadPromise = null;
   }
 }
 
@@ -3509,7 +3582,7 @@ async function startLocalComfyui() {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    await loadComfyuiModels();
+    await loadComfyuiModels({ forceRefresh: true });
   } catch (err) {
     setComfyuiMessage(err.message || "ComfyUI 啟動失敗", false);
     if (status) status.textContent = "ComfyUI 啟動失敗";
@@ -3870,7 +3943,7 @@ async function generateComfyuiImage() {
   }
   if (!comfyuiModelsLoaded) {
     setComfyuiMessage("正在載入 ComfyUI 模型清單...", true);
-    await loadComfyuiModels();
+    await loadComfyuiModels({ forceRefresh: true });
   }
   if (!comfyuiModelsLoaded) {
     setComfyuiMessage("ComfyUI 模型尚未載入，請按「重新整理模型」查看詳細錯誤。", false);
@@ -4759,7 +4832,7 @@ async function downloadComfyuiCivitaiModel() {
       detail: `${info.filename || ""} · ${formatDriveBytes(info.size_bytes || 0)}`
     });
     setComfyuiMessage(json.msg || "模型已下載。請重新整理模型清單。", true);
-    await loadComfyuiModels();
+    await loadComfyuiModels({ forceRefresh: true });
   } catch (err) {
     if (status) status.textContent = err.message || "模型下載失敗";
     setComfyuiModelDownloadProgress({
@@ -4837,7 +4910,7 @@ async function uploadComfyuiModelFile() {
     });
     setComfyuiMessage(json.msg || "模型已匯入。請重新整理模型清單。", true);
     if (fileInput) fileInput.value = "";
-    await loadComfyuiModels();
+    await loadComfyuiModels({ forceRefresh: true });
   } catch (err) {
     if (status) status.textContent = err.message || "模型上傳失敗";
     setComfyuiModelDownloadProgress({

@@ -463,6 +463,11 @@ def test_game_schema_migrates_existing_solo_scores_without_guess_count(tmp_path)
         assert migrated["score"] == 0
         assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_solo_scores_guesses_rank'").fetchone()
         assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_solo_scores_score_rank'").fetchone()
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_solo_scores_best_time'").fetchone()
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_solo_scores_best_score'").fetchone()
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_matches_leaderboard_week'").fetchone()
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_matches_white_visible'").fetchone()
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_matches_black_visible'").fetchone()
         assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='game_daily_challenge_rewards'").fetchone()
     finally:
         conn.close()
@@ -604,6 +609,29 @@ def test_solo_games_use_elapsed_time_leaderboard(tmp_path):
     assert onea2b_payload["leaderboard"][0]["guess_count"] == 1
     assert onea2b_payload["leaderboard"][1]["guess_count"] == 2
     assert onea2b_payload["leaderboard"][1]["elapsed_ms"] == 60000
+
+
+def test_solo_score_compact_response_skips_leaderboard_rebuild(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    compact = client.post(
+        "/api/games/tetris/solo-scores?compact=1",
+        json={"score": 2200, "raw_elapsed_ms": 110000, "penalty_seconds": 0, "elapsed_ms": 110000, "puzzle_id": "tetris-standard"},
+    )
+
+    assert compact.status_code == 200
+    payload = compact.get_json()
+    assert payload["ok"] is True
+    assert payload["compact"] is True
+    assert payload["leaderboard"] == []
+
+    board = client.get("/api/games/tetris/solo-leaderboard")
+    assert board.status_code == 200
+    assert board.get_json()["leaderboard"][0]["score"] == 2200
 
 
 def test_score_ranked_solo_games_use_high_score_leaderboard(tmp_path):
