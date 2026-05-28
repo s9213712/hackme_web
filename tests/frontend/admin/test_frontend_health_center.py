@@ -16,6 +16,7 @@ def test_health_center_is_grouped_into_readable_sections():
     assert 'id="server-health-counts"' in index_html
     assert 'id="server-health-storage"' in index_html
     assert 'id="server-health-audit"' in index_html
+    assert 'id="server-health-frontend-observability"' in index_html
     assert 'id="server-health-playwright-ci"' in index_html
     assert 'class="health-dashboard"' in index_html
     assert 'class="health-summary-grid"' in index_html
@@ -24,7 +25,15 @@ def test_health_center_is_grouped_into_readable_sections():
     assert "資料量" in index_html
     assert "儲存空間" in index_html
     assert "審計與檢查" in index_html
+    assert "前端觀測" in index_html
     assert "function renderHealthRows" in admin_js
+    assert "function renderRootFrontendTimingObservability" in admin_js
+    assert "hackme.root.${key}.start" in admin_js
+    assert "hackme.root.${key}.end" in admin_js
+    assert '"first-summary"' in admin_js
+    assert '"secondary-chart"' in admin_js
+    assert "rootAdminTimingFinish(\"first-summary\"" in admin_js
+    assert "rootAdminTimingFinish(\"secondary-chart\"" in admin_js
     assert "health-metric-card" in admin_js
     assert "health-row" in admin_js
     assert "pending_moderation_proposals" in admin_js

@@ -22,7 +22,10 @@ PointsChain 模擬鏈經濟層與 Phase gate 見
 finance 50K 後的 root/admin 非同步化與 snapshot 架構見
 [docs/architecture/MANAGEMENT_PLANE_SCALING.md](docs/architecture/MANAGEMENT_PLANE_SCALING.md)。
 root/admin 管理頁現在會在瀏覽器背景分頁停止 server output、request capacity、
-system resource 輪詢，並補強手機版健康/資源面板排版；營運端負載規則見
+system resource 輪詢，並補強手機版健康/資源面板排版；root operations
+手機版 smoke 與前端 timing 觀測結果見
+[docs/AGENTS/reports/2026-05-28_root_operations_long_needle_probe.md](docs/AGENTS/reports/2026-05-28_root_operations_long_needle_probe.md)；
+營運端負載規則見
 [docs/For_developer.md](docs/For_developer.md#management-ui-load-discipline)。
 QoS 分類、app-level edge burst guard、抗 DoS 最後防線與 reverse-proxy 分工見
 [docs/For_developer.md](docs/For_developer.md#server-qos-and-edge-guard)。

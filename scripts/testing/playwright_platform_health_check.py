@@ -827,6 +827,139 @@ def check_mobile_platform_views(rec: Recorder, page, base_url: str) -> None:
     rec.add("phase15_mobile_platform_views", not failures, ", ".join(failures) or "jobs/shares/economy fit tested viewports", viewports=results)
 
 
+def switch_system_tab(page, tab: str) -> None:
+    switch_module(page, "system")
+    page.evaluate(
+        """tab => {
+            if (typeof switchSystemTab !== 'function') throw new Error('switchSystemTab missing');
+            switchSystemTab(tab);
+        }""",
+        tab,
+    )
+    page.wait_for_timeout(900)
+
+
+def active_root_operations_overflow(page, section_id: str) -> dict[str, Any]:
+    return page.evaluate(
+        """sectionId => {
+            const section = document.getElementById(sectionId);
+            const module = document.getElementById('module-system');
+            const box = section ? section.getBoundingClientRect() : null;
+            const rootOverflow = document.documentElement.scrollWidth - document.documentElement.clientWidth;
+            const sectionOverflow = section ? section.scrollWidth - section.clientWidth : 0;
+            const moduleOverflow = module ? module.scrollWidth - module.clientWidth : 0;
+            const rightEdgeOverflow = box ? Math.max(0, Math.ceil(box.right - window.innerWidth)) : 0;
+            const offenders = [];
+            if (section) {
+                const sectionBox = section.getBoundingClientRect();
+                for (const node of section.querySelectorAll('*')) {
+                    const nodeBox = node.getBoundingClientRect();
+                    const edgeOverflow = Math.max(0, Math.ceil(nodeBox.right - sectionBox.right));
+                    const ownOverflow = Math.max(0, Math.ceil((node.scrollWidth || 0) - (node.clientWidth || 0)));
+                    const overflow = Math.max(edgeOverflow, ownOverflow);
+                    if (overflow > 3) {
+                        offenders.push({
+                            tag: node.tagName.toLowerCase(),
+                            id: node.id || '',
+                            class_name: String(node.className || '').slice(0, 120),
+                            overflow_px: overflow,
+                            client_width: Math.ceil(node.clientWidth || 0),
+                            scroll_width: Math.ceil(node.scrollWidth || 0),
+                            right: Math.ceil(nodeBox.right),
+                            section_right: Math.ceil(sectionBox.right)
+                        });
+                    }
+                }
+                offenders.sort((a, b) => b.overflow_px - a.overflow_px);
+            }
+            return {
+                section_found: !!section,
+                active: !!(section && section.classList.contains('active')),
+                root_overflow_px: Math.max(0, Math.ceil(rootOverflow)),
+                section_overflow_px: Math.max(0, Math.ceil(sectionOverflow)),
+                module_overflow_px: Math.max(0, Math.ceil(moduleOverflow)),
+                right_edge_overflow_px: rightEdgeOverflow,
+                body_width: document.documentElement.clientWidth,
+                scroll_width: document.documentElement.scrollWidth,
+                offenders: offenders.slice(0, 8)
+            };
+        }""",
+        section_id,
+    )
+
+
+def check_mobile_root_operations(rec: Recorder, page, base_url: str) -> None:
+    pages = (
+        ("health", "sec-server-health", "#server-health-summary .health-metric-card"),
+        ("capacity", "sec-settings-backpressure", "#server-backpressure-chart"),
+        ("env", "sec-server-env", "#server-env-summary .server-env-stat-card, #system-resource-gauges .system-resource-gauge-card"),
+    )
+    results: dict[str, Any] = {}
+    timing_snapshots: dict[str, Any] = {}
+    for width, height in ((390, 844), (768, 1024), (1366, 768)):
+        page.set_viewport_size({"width": width, "height": height})
+        page.goto(base_url + "/", wait_until="domcontentloaded")
+        wait_for_auth_app(page)
+        viewport_key = f"{width}x{height}"
+        results[viewport_key] = {}
+        for tab, section_id, ready_selector in pages:
+            switch_system_tab(page, tab)
+            try:
+                page.wait_for_selector(f"#{section_id}.active", state="visible", timeout=9000)
+                page.wait_for_selector(ready_selector, state="visible", timeout=9000)
+            except Exception:
+                pass
+            if tab == "capacity":
+                page.evaluate("() => typeof refreshBackpressureTraffic === 'function' && refreshBackpressureTraffic()")
+                page.wait_for_timeout(900)
+            if tab == "env":
+                page.evaluate("() => typeof refreshSystemResourceBoard === 'function' && refreshSystemResourceBoard()")
+                page.wait_for_timeout(900)
+            overflow = active_root_operations_overflow(page, section_id)
+            results[viewport_key][tab] = overflow
+            check_ui_quality(rec, page, f"root_operations_{tab}_{width}x{height}", mobile=width <= 640)
+
+        switch_system_tab(page, "health")
+        page.wait_for_selector("#server-health-frontend-observability", state="visible", timeout=9000)
+        page.wait_for_timeout(500)
+        timing_text = page.locator("#server-health-frontend-observability").inner_text(timeout=3000)
+        timing_store = page.evaluate("() => window.__hackmeRootAdminTimings || {}")
+        timing_snapshots[viewport_key] = {"text": timing_text, "store": timing_store}
+
+    failures = []
+    for viewport_key, tabs in results.items():
+        for tab, item in tabs.items():
+            max_overflow = max(
+                int(item.get("root_overflow_px") or 0),
+                int(item.get("section_overflow_px") or 0),
+                int(item.get("module_overflow_px") or 0),
+                int(item.get("right_edge_overflow_px") or 0),
+            )
+            if not item.get("section_found") or not item.get("active") or max_overflow > 6:
+                failures.append(f"{viewport_key}:{tab}:overflow={max_overflow}:active={item.get('active')}")
+    timing_failures = []
+    for viewport_key, snapshot in timing_snapshots.items():
+        store = snapshot.get("store") if isinstance(snapshot.get("store"), dict) else {}
+        text = str(snapshot.get("text") or "")
+        if "first-summary" not in text or "secondary-chart" not in text:
+            timing_failures.append(f"{viewport_key}:health-observability-text")
+        for key in ("first-summary", "secondary-chart"):
+            value = ((store.get(key) or {}) if isinstance(store.get(key), dict) else {}).get("duration_ms")
+            if value is None or float(value) < 0:
+                timing_failures.append(f"{viewport_key}:{key}:missing-duration")
+    ok = not failures and not timing_failures
+    detail = "health/capacity/env mobile root operations fit tested"
+    if failures or timing_failures:
+        detail = "; ".join([*failures[:8], *timing_failures[:8]])
+    rec.add(
+        "phase15_mobile_root_operations",
+        ok,
+        detail,
+        viewports=results,
+        timing=timing_snapshots,
+    )
+
+
 def write_phase15_report(runtime_root: Path, stamp: str, summary: dict[str, Any]) -> tuple[Path, Path]:
     report_dir = runtime_root / "reports" / "qa"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -924,6 +1057,7 @@ def main() -> int:
             rec.guard("share_management", lambda: check_share_management(rec, page, seed_summary["shares"]))
             rec.guard("trading_asset_overview", lambda: check_trading_asset_overview(rec, page, seed_summary["trading"]))
             rec.guard("mobile_platform_views", lambda: check_mobile_platform_views(rec, page, base_url))
+            rec.guard("mobile_root_operations", lambda: check_mobile_root_operations(rec, page, base_url))
 
             screenshot_dir = runtime_root / "reports" / "qa" / "screenshots"
             screenshot_dir.mkdir(parents=True, exist_ok=True)

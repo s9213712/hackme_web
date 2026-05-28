@@ -89,6 +89,9 @@ Rejected bursts return `429 edge_rate_limited`, `Retry-After`, and
 `X-Hackme-Edge-Guard`. This is a last-line application guard. Production
 traffic should still enter through Nginx or an equivalent proxy with TLS,
 request-size limits, connection limits, and first-layer `limit_req` policies.
+The production Nginx example in `deploy/nginx/hackme_web.conf.example` splits
+those edge buckets into separate auth, management, upload, static, and generic
+API zones so one traffic plane cannot consume another plane's burst budget.
 
 Runtime knobs:
 

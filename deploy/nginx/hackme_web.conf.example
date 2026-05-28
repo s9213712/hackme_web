@@ -10,6 +10,9 @@
 
 limit_req_zone $binary_remote_addr zone=hackme_api_per_ip:10m rate=8r/s;
 limit_req_zone $binary_remote_addr zone=hackme_auth_per_ip:10m rate=2r/s;
+limit_req_zone $binary_remote_addr zone=hackme_management_per_ip:10m rate=4r/s;
+limit_req_zone $binary_remote_addr zone=hackme_upload_per_ip:10m rate=1r/s;
+limit_req_zone $binary_remote_addr zone=hackme_static_per_ip:10m rate=30r/s;
 
 map $http_upgrade $connection_upgrade {
     default upgrade;
@@ -89,12 +92,49 @@ server {
         proxy_buffering off;
     }
 
-    location ~ ^/api/(login|register|csrf-token) {
+    # Auth lane: tight per-IP burst. Keep this separate from generic API so
+    # credential stuffing cannot consume upload or management request budget.
+    location ~ ^/api/(login|register|csrf-token|account/recovery|account/password-reset) {
         limit_req zone=hackme_auth_per_ip burst=8 nodelay;
         proxy_pass http://hackme_web_app;
         proxy_connect_timeout 3s;
         proxy_send_timeout 15s;
         proxy_read_timeout 30s;
+    }
+
+    # Management lane: root/admin endpoints should be async/snapshot-backed.
+    # Keep the edge burst lower than user data-plane traffic so expensive
+    # control-plane reads cannot starve normal browsing or upload streams.
+    location ~ ^/api/(admin|root)(/|$) {
+        limit_req zone=hackme_management_per_ip burst=12 nodelay;
+        proxy_pass http://hackme_web_app;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 90s;
+    }
+
+    # Upload lane: large request bodies and resumable chunks get their own
+    # zone. This protects auth/management/static from slow-client uploads and
+    # lets operators tune uploads without weakening login throttles.
+    location ~ ^/api/(cloud-drive/(upload|resumable-upload|remote-download)|files/upload|storage/files|storage/albums/.*/files|videos/upload|videos/.*/subtitles|root/comfyui/model-upload|admin/snapshots/upload-restore|root/production-report/upload)(/|$) {
+        limit_req zone=hackme_upload_per_ip burst=10 nodelay;
+        proxy_pass http://hackme_web_app;
+        proxy_request_buffering off;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+
+    # Static lane: static assets are high fan-out but cheap. Give them their own
+    # generous zone and cache headers instead of spending generic API budget.
+    location ~* ^/(js|css|data|img|images|assets|fonts)(/|$)|^/(styles\.css|favicon\.ico|manifest\.json|comfyui-workflow-editor\.html)$ {
+        limit_req zone=hackme_static_per_ip burst=120 nodelay;
+        proxy_pass http://hackme_web_app;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 30s;
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800, immutable";
     }
 
     # Large uploads/download jobs should still return quickly or move work to

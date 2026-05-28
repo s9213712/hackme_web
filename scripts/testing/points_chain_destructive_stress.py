@@ -179,6 +179,7 @@ def chain_seed_path(runtime_root: str) -> Path:
     candidates = [
         root / "runtime" / ".chain_seed",
         root / "hackme_web" / "runtime" / ".chain_seed",
+        root / "secrets" / ".chain_seed",
         root / ".chain_seed",
     ]
     for path in candidates:

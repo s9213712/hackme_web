@@ -51,6 +51,98 @@ let backpressureTrafficRefreshSeconds = 4;
 let serverOutputRefreshSeconds = 3;
 let securityTestJobPollSeconds = 3;
 
+const ROOT_ADMIN_TIMING_META = {
+  "first-summary": {
+    label: "first-summary",
+    detail: "健康中心首次摘要 render",
+    warnMs: 500,
+    criticalMs: 1500,
+  },
+  "secondary-chart": {
+    label: "secondary-chart",
+    detail: "容量頁次要圖表 render",
+    warnMs: 250,
+    criticalMs: 900,
+  },
+};
+
+function rootAdminTimingStore() {
+  if (typeof window === "undefined") return {};
+  if (!window.__hackmeRootAdminTimings || typeof window.__hackmeRootAdminTimings !== "object") {
+    window.__hackmeRootAdminTimings = {};
+  }
+  return window.__hackmeRootAdminTimings;
+}
+
+function rootAdminTimingStart(key) {
+  const started = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  if (typeof performance !== "undefined" && performance.mark) {
+    try {
+      performance.mark(`hackme.root.${key}.start`);
+    } catch (_) {}
+  }
+  return started;
+}
+
+function rootAdminTimingFinish(key, started, detail = "") {
+  const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  const durationMs = Math.max(0, now - Number(started || now));
+  const meta = ROOT_ADMIN_TIMING_META[key] || { label: key, detail: "", warnMs: 500, criticalMs: 1500 };
+  if (typeof performance !== "undefined" && performance.mark) {
+    try {
+      performance.mark(`hackme.root.${key}.end`);
+    } catch (_) {}
+  }
+  if (typeof performance !== "undefined" && performance.measure) {
+    try {
+      performance.measure(`hackme.root.${key}`, `hackme.root.${key}.start`, `hackme.root.${key}.end`);
+    } catch (_) {}
+  }
+  const record = {
+    key,
+    label: meta.label || key,
+    detail: detail || meta.detail || "",
+    duration_ms: Math.round(durationMs * 10) / 10,
+    sampled_at: new Date().toISOString(),
+    warn_ms: Number(meta.warnMs || 0),
+    critical_ms: Number(meta.criticalMs || 0),
+  };
+  rootAdminTimingStore()[key] = record;
+  renderRootFrontendTimingObservability();
+  return record;
+}
+
+function rootAdminTimingColor(record) {
+  const value = Number(record?.duration_ms || 0);
+  if (record?.critical_ms && value >= Number(record.critical_ms)) return "#ff4f6d";
+  if (record?.warn_ms && value >= Number(record.warn_ms)) return "#ffb74d";
+  return "#4caf50";
+}
+
+function renderRootFrontendTimingObservability() {
+  const host = $("server-health-frontend-observability");
+  if (!host) return;
+  const store = rootAdminTimingStore();
+  const rows = Object.keys(ROOT_ADMIN_TIMING_META).map((key) => {
+    const record = store[key] || {};
+    if (!record.duration_ms && record.duration_ms !== 0) {
+      return {
+        label: ROOT_ADMIN_TIMING_META[key].label,
+        value: "尚未量測",
+        detail: ROOT_ADMIN_TIMING_META[key].detail,
+        color: "#9e9e9e",
+      };
+    }
+    return {
+      label: record.label || key,
+      value: `${Number(record.duration_ms).toLocaleString()} ms`,
+      detail: `${record.detail || ROOT_ADMIN_TIMING_META[key].detail} · ${record.sampled_at || ""}`,
+      color: rootAdminTimingColor(record),
+    };
+  });
+  host.innerHTML = renderHealthRows(rows);
+}
+
 function adminRefreshSeconds(value, fallback = 5, min = 1, max = 300) {
   const parsed = parseInt(value, 10);
   return Math.max(min, Math.min(max, Number.isFinite(parsed) ? parsed : fallback));
@@ -5408,10 +5500,12 @@ function trafficPolyline(points, key, maxValue, width, height, padX, padY) {
 function renderBackpressureTrafficChart(backpressure) {
   const chart = $("server-backpressure-chart");
   if (!chart) return;
+  const chartStarted = rootAdminTimingStart("secondary-chart");
   const traffic = backpressure?.traffic || {};
   const points = Array.isArray(traffic.points) ? traffic.points : [];
   if (!points.length) {
     chart.innerHTML = '<div class="traffic-chart-empty">尚未取得近期流量資料</div>';
+    rootAdminTimingFinish("secondary-chart", chartStarted, "root backpressure chart empty-state render");
     return;
   }
   const totals = traffic.totals || {};
@@ -5456,6 +5550,7 @@ function renderBackpressureTrafficChart(backpressure) {
       <span>PID ${sanitize(String(backpressure?.pid || "-"))} · ${Number(traffic.window_seconds || 0)} 秒視窗</span>
     </div>
   `;
+  rootAdminTimingFinish("secondary-chart", chartStarted, "GET /api/root/backpressure → traffic chart render");
 }
 
 function stopBackpressureTrafficPoll() {
@@ -7275,6 +7370,7 @@ async function loadPlaywrightCiHealth() {
 
 async function loadServerHealth() {
   if (!currentUser || currentRole !== "super_admin" || !isSystemHealthActive() || document.hidden) return;
+  const firstSummaryStarted = rootAdminTimingStart("first-summary");
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await apiFetch(API + "/admin/health", {
@@ -7291,6 +7387,8 @@ async function loadServerHealth() {
   if (!summary || !details || !workqueue || !countsBox || !storageBox || !auditBox) return;
   if (!json.ok) {
     summary.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "健康度讀取失敗")}</div>`;
+    rootAdminTimingFinish("first-summary", firstSummaryStarted, "GET /api/admin/health failed before summary payload");
+    renderRootFrontendTimingObservability();
     details.textContent = "";
     workqueue.innerHTML = "";
     countsBox.innerHTML = "";
@@ -7318,6 +7416,7 @@ async function loadServerHealth() {
     ["活躍 Session", String(c.active_sessions || 0), "#82b1ff"],
   ];
   summary.innerHTML = cards.map(([label, value, color]) => renderHealthMetric(label, value, color)).join("");
+  rootAdminTimingFinish("first-summary", firstSummaryStarted, "GET /api/admin/health → server-health-summary render");
   details.textContent = `最後讀取：${new Date().toLocaleString()} · DB schema ${readiness.database?.schema_version ?? "-"} / ${readiness.database?.expected_schema_version ?? "-"}`;
   const queueRows = [
     ["待審檢舉", c.pending_reports ?? c.pending_chat_reports ?? 0],
@@ -7386,6 +7485,7 @@ async function loadServerHealth() {
     })),
   ];
   auditBox.innerHTML = renderHealthRows(auditRows);
+  renderRootFrontendTimingObservability();
   const repairBtn = $("integrity-repair-btn");
   if (repairBtn) {
     repairBtn.disabled = currentUser !== "root" || !auditEnabled || auditOk !== false;

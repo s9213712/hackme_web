@@ -122,7 +122,9 @@ sudo ln -s /etc/nginx/sites-available/hackme_web /etc/nginx/sites-enabled/hackme
 - `ssl_certificate`
 - `ssl_certificate_key`
 - `client_max_body_size`
-- `limit_req_zone` rate / burst
+- `limit_req_zone` rate / burst：範本已把 `auth`、`management`、`upload`、
+  `static` 與一般 API 分成不同 zone。正式站請依硬體與客戶流量調整，不要讓登入、
+  root/admin、上傳與靜態資產共用同一個邊界層桶。
 
 3. 驗證並 reload：
 

@@ -11286,6 +11286,24 @@ class PointsLedgerService:
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
+            safe_mode = self._safe_mode_status(conn)
+            finalization_paused = bool(safe_mode.get("safe_mode"))
+            sweep = {"checked_count": 0, "finalized_count": 0, "confirmed_count": 0, "failed_count": 0}
+            deposit_reconcile = {"checked_count": 0, "credited_count": 0, "linked_count": 0}
+            if root_view and not finalization_paused:
+                conn.commit()
+                conn.execute("BEGIN IMMEDIATE")
+                sweep = self._finalize_proved_pending_transfer_requests_locked(
+                    conn,
+                    actor=actor,
+                    limit=ROOT_TRANSACTION_LIST_SWEEP_LIMIT,
+                )
+                deposit_reconcile = self._reconcile_confirmed_deposit_transfers_locked(
+                    conn,
+                    actor=actor,
+                    limit=ROOT_TRANSACTION_LIST_SWEEP_LIMIT,
+                )
+                conn.commit()
             branch = self._canonical_branch_uuid(conn)
             where = []
             params = []
@@ -11415,7 +11433,7 @@ class PointsLedgerService:
             )
             next_cursor = int(transactions[-1]["id"]) if len(transactions) >= limit and transactions else None
             aggregation_ms = round((_monotonic_time.perf_counter() - aggregation_started) * 1000, 3)
-            return {
+            payload = {
                 "ok": True,
                 "transactions": transactions,
                 "summary": {
@@ -11425,15 +11443,15 @@ class PointsLedgerService:
                     "failed_count": sum(1 for item in transactions if str(item["status"]).startswith("failed")),
                     "pending_incoming_points": pending_incoming,
                     "pending_outgoing_points": pending_outgoing,
-                    "finalized_count": 0,
-                    "batch_checked_count": 0,
-                    "batch_finalized_count": 0,
-                    "batch_confirmed_count": 0,
-                    "batch_failed_count": 0,
-                    "deposit_bridge_checked_count": 0,
-                    "deposit_bridge_credited_count": 0,
-                    "deposit_bridge_linked_count": 0,
-                    "finalization_error_count": 0,
+                    "finalized_count": int(sweep.get("finalized_count") or 0),
+                    "batch_checked_count": int(sweep.get("checked_count") or 0),
+                    "batch_finalized_count": int(sweep.get("finalized_count") or 0),
+                    "batch_confirmed_count": int(sweep.get("confirmed_count") or 0),
+                    "batch_failed_count": int(sweep.get("failed_count") or 0),
+                    "deposit_bridge_checked_count": int(deposit_reconcile.get("checked_count") or 0),
+                    "deposit_bridge_credited_count": int(deposit_reconcile.get("credited_count") or 0),
+                    "deposit_bridge_linked_count": int(deposit_reconcile.get("linked_count") or 0),
+                    "finalization_error_count": int(sweep.get("finalization_error_count") or 0),
                     "bounded": True,
                     "compact": True,
                 },
@@ -11449,6 +11467,22 @@ class PointsLedgerService:
                     "compact": True,
                 },
             }
+            finalization_errors = list(sweep.get("finalization_errors") or [])
+            if finalization_errors:
+                payload["warnings"] = [
+                    {
+                        "code": "transfer_finalization_failed",
+                        "message": "部分 proved pending 交易因官方來源基金不足已標記失敗；交易列表仍可載入。",
+                        "items": finalization_errors[:20],
+                    }
+                ]
+            if finalization_paused:
+                payload["warnings"] = [*list(payload.get("warnings") or []), "chain_safe_mode_active_finalization_paused"]
+                payload["recovery"] = safe_mode
+            return payload
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

@@ -13119,6 +13119,26 @@
       font-size: .82rem;
     }
 
+    #sec-settings-backpressure,
+    #sec-settings-backpressure .drive-collapsible-body,
+    #sec-settings-backpressure .settings-option-grid,
+    #sec-settings-backpressure .field {
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    #sec-settings-backpressure input,
+    #sec-settings-backpressure select,
+    #sec-settings-backpressure textarea {
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    #sec-settings-backpressure label,
+    #sec-settings-backpressure .drive-card-sub {
+      overflow-wrap: anywhere;
+    }
+
     .traffic-chart-legend {
       display: flex;
       flex-wrap: wrap;

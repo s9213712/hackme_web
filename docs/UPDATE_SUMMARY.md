@@ -75,6 +75,18 @@ Release ID: `2026.05.28-002`
   `HACKME_EDGE_AUTH_BURST_LIMIT`,
   `HACKME_EDGE_MANAGEMENT_BURST_LIMIT`, and
   `HACKME_EDGE_UPLOAD_BURST_LIMIT`.
+- Added a Playwright root-operations mobile smoke that opens the actual Health,
+  Capacity, and Environment management tabs at mobile/tablet/desktop viewports
+  and checks viewport overflow. The Health Center now includes frontend timing
+  marks for management `first-summary` and `secondary-chart` render time.
+- Extended the production Nginx example with split `limit_req` lanes for auth,
+  root/admin management, upload/heavy-transfer, static assets, and generic API
+  traffic so boundary throttling can match app QoS classes.
+- Added a long needle simulation probe for economy, PointsChain/private-chain,
+  and full-feature load. The probe enables all feature flags in its isolated
+  runtime, records resource/QoS summaries, and found then verified a fix for
+  compact root transaction lists skipping the bounded proved-pending finality
+  sweep.
 
 ## 2026.05.28-001
 

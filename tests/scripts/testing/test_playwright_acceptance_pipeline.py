@@ -95,6 +95,20 @@ def test_platform_health_auth_wait_and_screenshots_are_ci_tolerant():
     assert "wait_for_auth_app(page)" in platform_script
 
 
+def test_platform_health_checks_mobile_root_operations_tabs_and_timings():
+    platform_script = (ROOT / "scripts" / "testing" / "playwright_platform_health_check.py").read_text(encoding="utf-8")
+
+    assert "def check_mobile_root_operations" in platform_script
+    assert "switch_system_tab(page, tab)" in platform_script
+    assert '"health", "sec-server-health"' in platform_script
+    assert '"capacity", "sec-settings-backpressure"' in platform_script
+    assert '"env", "sec-server-env"' in platform_script
+    assert "active_root_operations_overflow" in platform_script
+    assert "server-health-frontend-observability" in platform_script
+    assert "__hackmeRootAdminTimings" in platform_script
+    assert "phase15_mobile_root_operations" in platform_script
+
+
 def test_documented_playwright_health_entrypoints_exist_and_delegate():
     testing_dir = ROOT / "scripts" / "testing"
     full_site = (testing_dir / "playwright_full_site_check.py").read_text(encoding="utf-8")

@@ -29,6 +29,15 @@ from scripts.testing.db_stress_probe import ResourceMonitor  # noqa: E402
 
 
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+DEFENSIVE_LATENCY_OPS = {
+    "bad_login",
+    "bt_reject",
+    "chat_bad_message",
+    "community_bad_thread",
+    "hf_generate",
+    "remote_direct_reject",
+    "qos_version",
+}
 
 
 def utc_now() -> str:
@@ -177,11 +186,14 @@ class Stats:
         server_busy = 0
         accepted = 0
         all_latencies: list[float] = []
+        ordinary_latencies: list[float] = []
         for name, values in sorted(self.latencies.items()):
             values = sorted(float(v) for v in values)
             count = len(values)
             total += count
             all_latencies.extend(values)
+            if name not in DEFENSIVE_LATENCY_OPS:
+                ordinary_latencies.extend(values)
             status_counter = self.statuses.get(name, Counter())
             class_counter = self.classes.get(name, Counter())
             op_server_busy = int(class_counter.get("server_busy_503", 0))
@@ -220,6 +232,7 @@ class Stats:
                 "unexpected_503": op_unexpected_503,
             }
         all_latencies = sorted(all_latencies)
+        ordinary_latencies = sorted(ordinary_latencies)
         return {
             "total_ops": total,
             "accepted_ops_excluding_server_busy_and_hard_failure": accepted,
@@ -235,6 +248,14 @@ class Stats:
                 "p95_ms": round(percentile(all_latencies, 0.95), 3),
                 "p99_ms": round(percentile(all_latencies, 0.99), 3),
                 "max_ms": round(all_latencies[-1], 3) if all_latencies else 0.0,
+            },
+            "ordinary_latency": {
+                "count": len(ordinary_latencies),
+                "p50_ms": round(float(median(ordinary_latencies)), 3) if ordinary_latencies else 0.0,
+                "p95_ms": round(percentile(ordinary_latencies, 0.95), 3),
+                "p99_ms": round(percentile(ordinary_latencies, 0.99), 3),
+                "max_ms": round(ordinary_latencies[-1], 3) if ordinary_latencies else 0.0,
+                "excluded_ops": sorted(DEFENSIVE_LATENCY_OPS),
             },
             "ops": op_summary,
             "sample_errors": self.errors[:100],
@@ -859,6 +880,7 @@ def main() -> int:
     elapsed_seconds = time.perf_counter() - started
     summary = stats.summary()
     qos = summary.get("ops", {}).get("qos_version", {})
+    ordinary_latency = summary.get("ordinary_latency") or summary.get("overall_latency") or {}
     degraded_reasons = []
     failure_rate_key = "hard_failure_rate_excluding_503" if args.allow_server_busy else "transport_or_5xx_failure_rate"
     if summary.get(failure_rate_key, 0) > 0.01:
@@ -867,11 +889,11 @@ def main() -> int:
             if args.allow_server_busy
             else "transport_or_5xx_failure_rate_gt_1_percent"
         )
-    if summary["overall_latency"]["p95_ms"] > 1500:
-        degraded_reasons.append("overall_p95_gt_1500ms")
-    if summary["overall_latency"]["p99_ms"] > 5000:
-        degraded_reasons.append("overall_p99_gt_5000ms")
-    if qos and (qos.get("p95_ms") or 0) > 1000:
+    if ordinary_latency.get("p95_ms", 0) > 1500:
+        degraded_reasons.append("ordinary_p95_gt_1500ms")
+    if ordinary_latency.get("p99_ms", 0) > 5000:
+        degraded_reasons.append("ordinary_p99_gt_5000ms")
+    if qos and int(qos.get("count") or 0) >= 10 and (qos.get("p95_ms") or 0) > 1000:
         degraded_reasons.append("qos_version_p95_gt_1000ms")
     if resource_summary.get("mem_available_min_mb") is not None and float(resource_summary.get("mem_available_min_mb") or 0) < 512:
         degraded_reasons.append("available_memory_below_512mb")

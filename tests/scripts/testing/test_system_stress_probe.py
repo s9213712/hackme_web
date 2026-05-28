@@ -1,6 +1,11 @@
 import json
+from pathlib import Path
 
+from scripts.testing.points_chain_destructive_stress import chain_seed_path
 from scripts.testing.system_stress_probe import OperationBudget, Stats, resolve_session_pool_size, run_operation
+
+
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_expected_503_does_not_count_as_server_busy():
@@ -50,6 +55,18 @@ def test_server_busy_503_counts_as_server_failure():
     assert summary["ops"]["upload"]["server_busy_503"] == 1
 
 
+def test_defensive_latency_is_separated_from_ordinary_latency():
+    stats = Stats()
+
+    stats.record("bad_login", status=401, elapsed_ms=10_000.0, ok=True)
+    stats.record("drive_list", status=200, elapsed_ms=120.0, ok=True)
+    summary = stats.summary()
+
+    assert summary["overall_latency"]["p99_ms"] == 10000.0
+    assert summary["ordinary_latency"]["p99_ms"] == 120.0
+    assert "bad_login" in summary["ordinary_latency"]["excluded_ops"]
+
+
 def test_bt_reject_uses_rejected_torrent_url_instead_of_creating_magnet_task():
     calls = []
 
@@ -97,6 +114,29 @@ def test_explicit_session_pool_is_respected_for_login_limit_probes():
 
     assert size == 96
     assert mode == "explicit"
+
+
+def test_long_needle_probe_orchestrates_economy_private_chain_and_full_feature():
+    script = (ROOT / "scripts" / "testing" / "long_needle_simulation_probe.py").read_text(encoding="utf-8")
+    index = (ROOT / "scripts" / "INDEX.md").read_text(encoding="utf-8")
+
+    assert "points_chain_destructive_stress.py" in script
+    assert "system_stress_probe.py" in script
+    assert "economy_private_chain" in script
+    assert "full_feature" in script
+    assert "--direct-transfer-ops" in script
+    assert "--allow-server-busy" in script
+    assert "long_needle_simulation" in script
+    assert "scripts/testing/long_needle_simulation_probe.py" in index
+
+
+def test_points_chain_stress_finds_chain_seed_under_runtime_secrets(tmp_path):
+    secret_dir = tmp_path / "secrets"
+    secret_dir.mkdir()
+    expected = secret_dir / ".chain_seed"
+    expected.write_text("seed", encoding="utf-8")
+
+    assert chain_seed_path(str(tmp_path)) == expected
 
 
 def test_bad_login_operation_treats_auth_rejection_as_expected():

@@ -947,6 +947,79 @@ def test_root_transaction_management_sweeps_proved_pending_beyond_page_limit(tmp
     assert points.explorer_wallet(recipient_address)["wallet"]["points_balance"] == 150
 
 
+def test_root_compact_transaction_list_runs_bounded_finality_sweep(tmp_path):
+    app, points, _auto_ledger, _manual_ledger, current = _build_app(tmp_path)
+    client = app.test_client()
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        sender_wallet = create_official_hot_wallet(conn, user_id=2, chain_secret="test-secret", label="compact sender hot")
+        recipient_address = "pc1" + ("8" * 48)
+        conn.commit()
+    finally:
+        conn.close()
+
+    points.record_transaction(
+        user_id=2,
+        currency_type=DISPLAY_CURRENCY,
+        direction="credit",
+        amount=300,
+        action_type="admin_adjust_credit",
+        reference_type="test",
+        reference_id="compact-batch-sweep-source",
+        idempotency_key="explorer:test:compact-batch-sweep-source",
+        reason="compact fund transfer source",
+        actor={"id": 1, "username": "root", "role": "super_admin"},
+    )
+
+    current.update({"id": 2, "username": "test", "role": "user"})
+    for index in range(5):
+        res = client.post(
+            "/api/points/transactions/submit",
+            json={
+                "source_wallet_address": sender_wallet["address"],
+                "destination_wallet_address": recipient_address,
+                "amount_points": 10,
+                "fee_points": 1,
+                "request_uuid": f"compact-batch-sweep-transfer-{index}",
+                "memo": "compact batch sweep finality",
+            },
+        )
+        assert res.status_code == 200, res.get_json()
+
+    proved_at = (datetime.now(timezone.utc) - timedelta(seconds=600)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    conn = points.get_db()
+    try:
+        points.ensure_schema(conn)
+        conn.execute(
+            "UPDATE points_chain_transfer_requests SET created_at=? WHERE request_uuid LIKE 'compact-batch-sweep-transfer-%'",
+            (proved_at,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    current.update({"id": 1, "username": "root", "role": "super_admin"})
+    root_res = client.get("/api/points/transactions?limit=5&compact=1")
+    assert root_res.status_code == 200, root_res.get_json()
+    payload = root_res.get_json()
+    assert payload["summary"]["compact"] is True
+    assert payload["summary"]["batch_checked_count"] == 5
+    assert payload["summary"]["batch_finalized_count"] == 5
+    assert payload["summary"]["batch_confirmed_count"] == 5
+    assert payload["summary"]["pending_count"] == 0
+    assert all(item["status"] == "confirmed" for item in payload["transactions"])
+
+    conn = points.get_db()
+    try:
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM points_chain_transfer_requests WHERE request_uuid LIKE 'compact-batch-sweep-transfer-%' AND status='pending'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert remaining == 0
+
+
 def test_transaction_management_remains_readable_in_safe_mode(tmp_path):
     app, points, _auto_ledger, _manual_ledger, current = _build_app(tmp_path)
     client = app.test_client()
