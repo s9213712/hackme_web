@@ -60,7 +60,15 @@ from services.storage.remote_downloads import (
     validate_remote_url,
 )
 from services.media.e2ee_streaming import cleanup_e2ee_stream_v2_assets
-from services.media.streaming import cleanup_stream_asset, get_stream_status, parse_subtitle_shift_ms, shift_webvtt_text
+from services.media.streaming import (
+    cleanup_stream_asset,
+    get_stream_status,
+    open_realtime_proxy_stream,
+    parse_subtitle_shift_ms,
+    realtime_proxy_availability,
+    realtime_proxy_runtime_status,
+    shift_webvtt_text,
+)
 from services.storage.storage_albums import (
     add_album_file,
     create_album,
@@ -115,6 +123,7 @@ from services.storage.quota_purchases import (
 )
 from services.storage.capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
 from services.core.http_headers import build_content_disposition
+from services.core.file_offload import x_accel_response
 from services.job_center import (
     add_job_event as add_platform_job_event,
     create_job as create_platform_job,
@@ -154,6 +163,8 @@ def register_file_routes(app, deps):
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
     storage_root = deps.get("STORAGE_DIR", ".")
+    ffmpeg_bin = deps.get("FFMPEG_BIN", "ffmpeg")
+    ffprobe_bin = deps.get("FFPROBE_BIN", "ffprobe")
     points_service = deps.get("points_service")
     server_file_fernet = deps.get("server_file_fernet")
     get_system_settings = deps.get("get_system_settings", lambda: {})
@@ -738,6 +749,8 @@ def register_file_routes(app, deps):
         upload_kb_per_sec = int(policy.get("upload_kb_per_sec") or 0)
         if upload_kb_per_sec <= 0:
             return json_resp({"ok": False, "msg": "目前會員階級已停用雲端硬碟上傳", "error": "upload_rate_limited"}), 429
+        if str(os.environ.get("HACKME_CLOUD_DRIVE_UPLOAD_SLEEP_SHAPER") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+            return None
         size = _uploaded_size(file_storage)
         priority = int(policy.get("priority") or 50)
         transfer_delay = (size / max(1, upload_kb_per_sec * 1024)) if size > 0 else 0
@@ -766,6 +779,7 @@ def register_file_routes(app, deps):
             "attachment" if as_attachment else "inline",
             download_name,
         )
+        response.headers["X-Hackme-Transfer-Mode"] = "python_throttled_stream"
         response.headers["X-Cloud-Drive-Rate-Limit-KB-Per-Sec"] = str(kb_per_sec)
         return response
 
@@ -812,10 +826,31 @@ def register_file_routes(app, deps):
             response = Response(raw, status=200, mimetype=mimetype or mimetypes.guess_type(download_name)[0] or "application/octet-stream")
             response.headers["Content-Length"] = str(total_size)
         response.headers["Accept-Ranges"] = "bytes"
+        response.headers["X-Hackme-Transfer-Mode"] = "python_buffered_bytes"
         response.headers["Content-Disposition"] = build_content_disposition(
             "attachment" if as_attachment else "inline",
             download_name,
         )
+        return response
+
+    def _send_local_storage_file(path, *, as_attachment=False, download_name="download.bin", mimetype=None, conditional=True):
+        offloaded = x_accel_response(
+            path,
+            storage_root=storage_root,
+            as_attachment=as_attachment,
+            download_name=download_name,
+            mimetype=mimetype or mimetypes.guess_type(str(download_name or ""))[0] or "application/octet-stream",
+        )
+        if offloaded is not None:
+            return offloaded
+        response = send_file(
+            path,
+            as_attachment=as_attachment,
+            download_name=download_name,
+            mimetype=mimetype,
+            conditional=conditional,
+        )
+        response.headers.setdefault("X-Hackme-Transfer-Mode", "python_send_file")
         return response
 
     def _send_readable_file(row, *, as_attachment, download_name, mimetype=None, conditional=False, actor=None):
@@ -858,6 +893,7 @@ def register_file_routes(app, deps):
                     response.headers["Content-Range"] = f"bytes {start}-{end}/{total_size}"
                 if download_kb_per_sec > 0:
                     response.headers["X-Cloud-Drive-Rate-Limit-KB-Per-Sec"] = str(download_kb_per_sec)
+                response.headers["X-Hackme-Transfer-Mode"] = "python_chunked_decrypt"
                 response.headers["Content-Disposition"] = build_content_disposition(
                     "attachment" if as_attachment else "inline",
                     download_name,
@@ -888,12 +924,12 @@ def register_file_routes(app, deps):
                     total_size=len(raw),
                     kb_per_sec=download_kb_per_sec,
                 )
-            return send_file(
-                BytesIO(raw),
+            return _send_bytes_with_range(
+                raw,
                 as_attachment=as_attachment,
                 download_name=download_name,
                 mimetype=mimetype,
-                conditional=False,
+                range_header=None,
             )
         if download_kb_per_sec > 0:
             def _file_chunks(chunk_size):
@@ -911,7 +947,7 @@ def register_file_routes(app, deps):
                 total_size=path.stat().st_size,
                 kb_per_sec=download_kb_per_sec,
             )
-        return send_file(
+        return _send_local_storage_file(
             path,
             as_attachment=as_attachment,
             download_name=download_name,
@@ -1379,6 +1415,39 @@ def register_file_routes(app, deps):
             mimetype=row["mime_type"] or mimetypes.guess_type(row["filename"])[0] or "application/octet-stream",
             path=complete_path,
         )
+
+    def _write_resumable_chunk_stream(source, tmp_path, *, expected_bytes):
+        expected = int(expected_bytes or 0)
+        written = 0
+        too_large = False
+        tmp_path = Path(tmp_path)
+        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with tmp_path.open("wb") as out:
+                while True:
+                    remaining = expected - written
+                    read_size = min(1024 * 1024, max(1, remaining + 1))
+                    chunk = source.read(read_size)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > expected:
+                        too_large = True
+                        break
+                    out.write(chunk)
+            if too_large or written != expected:
+                try:
+                    tmp_path.unlink()
+                except FileNotFoundError:
+                    pass
+                return written, "invalid_chunk_size"
+            return written, ""
+        except Exception:
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+            raise
 
     def _task_update(task_id, **changes):
         sync_task = None
@@ -2752,32 +2821,46 @@ def register_file_routes(app, deps):
             total_chunks = int(row["total_chunks"] or 0)
             if chunk_index < 0 or chunk_index >= total_chunks:
                 return json_resp({"ok": False, "msg": "chunk index 超出範圍", "error": "invalid_chunk_index"}), 400
+            expected = int(row["chunk_size"])
+            if chunk_index == total_chunks - 1:
+                expected = int(row["total_bytes"]) - (chunk_index * int(row["chunk_size"]))
             upload = request.files.get("chunk")
             if upload:
                 upload_policy_error = _apply_upload_transfer_policy(actor, upload)
                 if upload_policy_error:
                     return upload_policy_error
-                data = upload.stream.read()
+                source_stream = upload.stream
             else:
-                data = request.get_data(cache=False) or b""
-            expected = int(row["chunk_size"])
-            if chunk_index == total_chunks - 1:
-                expected = int(row["total_bytes"]) - (chunk_index * int(row["chunk_size"]))
-            if len(data) != expected:
-                return json_resp({
-                    "ok": False,
-                    "msg": f"chunk 大小不正確，需要 {expected} bytes，收到 {len(data)} bytes",
-                    "error": "invalid_chunk_size",
-                }), 400
+                source_stream = request.stream
+                content_length = request.content_length
+                if content_length is not None and int(content_length or 0) != expected:
+                    return json_resp({
+                        "ok": False,
+                        "msg": f"chunk 大小不正確，需要 {expected} bytes，收到 {int(content_length or 0)} bytes",
+                        "error": "invalid_chunk_size",
+                    }), 400
             temp_dir = Path(row["temp_dir"])
             temp_dir.mkdir(parents=True, exist_ok=True)
             chunk_path = temp_dir / f"{chunk_index:08d}.part"
             tmp_path = temp_dir / f"{chunk_index:08d}.part.tmp"
-            if chunk_path.exists() and chunk_path.stat().st_size == len(data):
+            bytes_received = expected
+            if chunk_path.exists() and chunk_path.stat().st_size == expected:
                 pass
             else:
-                tmp_path.write_bytes(data)
+                bytes_received, write_error = _write_resumable_chunk_stream(source_stream, tmp_path, expected_bytes=expected)
+                if write_error:
+                    return json_resp({
+                        "ok": False,
+                        "msg": f"chunk 大小不正確，需要 {expected} bytes，收到 {bytes_received} bytes",
+                        "error": write_error,
+                    }), 400
                 os.replace(tmp_path, chunk_path)
+            if bytes_received != expected:
+                return json_resp({
+                    "ok": False,
+                    "msg": f"chunk 大小不正確，需要 {expected} bytes，收到 {bytes_received} bytes",
+                    "error": "invalid_chunk_size",
+                }), 400
             received = _resumable_received_chunks(row)
             received.add(int(chunk_index))
             received_bytes = 0
@@ -2811,7 +2894,15 @@ def register_file_routes(app, deps):
                 detail=f"已接收 {len(received)} / {total_chunks} 個分段",
             )
             conn.commit()
-            return json_resp({"ok": True, "session": _serialize_resumable_session(updated)})
+            return json_resp({
+                "ok": True,
+                "session": _serialize_resumable_session(updated),
+                "chunk": {
+                    "index": int(chunk_index),
+                    "bytes_received": int(expected),
+                    "storage_mode": "streamed_to_disk",
+                },
+            })
         finally:
             conn.close()
 
@@ -3651,6 +3742,8 @@ def register_file_routes(app, deps):
         "requires_download_warning": _requires_download_warning,
         "send_readable_file": _send_readable_file,
         "storage_root": storage_root,
+        "ffmpeg_bin": ffmpeg_bin,
+        "ffprobe_bin": ffprobe_bin,
         "svg_placeholder_response": _svg_placeholder_response,
     }
     register_file_share_preview_routes(app, file_share_preview_ctx)
@@ -4024,13 +4117,36 @@ def register_file_routes(app, deps):
             try:
                 stream_asset = get_stream_status(conn, file_row=row, include_segments=False)
                 if stream_asset:
+                    proxy_state = realtime_proxy_availability(row)
                     stream_payload = {
                         "status": stream_asset.get("status") or "",
                         "media_type": stream_asset.get("media_type") or "",
                         "master_manifest_ready": bool(stream_asset.get("master_manifest_path")),
                         "master_url": f"/api/cloud-drive/files/{file_id}/hls/master.m3u8" if stream_asset.get("master_manifest_path") else "",
+                        "realtime_proxy_url": f"/api/cloud-drive/files/{file_id}/realtime-proxy" if proxy_state.get("available") else "",
+                        "realtime_proxy": {
+                            **proxy_state,
+                            "url": f"/api/cloud-drive/files/{file_id}/realtime-proxy" if proxy_state.get("available") else "",
+                            "selected_audio_query_param": "audio",
+                            "start_seconds_query_param": "start",
+                        },
                         "error_message": stream_asset.get("error_message") or "",
                         "updated_at": stream_asset.get("updated_at") or "",
+                        "premium_hls_profile_policy": stream_asset.get("premium_hls_profile_policy") or {},
+                        "audio_tracks": [
+                            {
+                                "name": str(item.get("name") or ""),
+                                "label": str(item.get("label") or item.get("language") or item.get("name") or "音軌"),
+                                "language": str(item.get("language") or "und"),
+                                "is_default": bool(item.get("is_default")),
+                                "codec": str(item.get("codec") or ""),
+                                "stream_index": int(item.get("stream_index") or -1),
+                                "url": f"/api/cloud-drive/files/{file_id}/hls/{item.get('name')}/playlist.m3u8",
+                                "playlist_url": f"/api/cloud-drive/files/{file_id}/hls/{item.get('name')}/playlist.m3u8",
+                            }
+                            for item in (stream_asset.get("audio_tracks") or [])
+                            if item.get("name")
+                        ],
                         "subtitles": [
                             {
                                 "name": str(item.get("name") or ""),
@@ -4074,6 +4190,80 @@ def register_file_routes(app, deps):
             return actor, row, asset, (json_resp({"ok": False, "msg": "HLS 串流尚未準備完成", "error": "stream_not_ready"}), 409)
         return actor, row, asset, None
 
+    def _cloud_drive_hls_rendition_match(asset, name):
+        clean = str(name or "").strip()
+        if not clean or "/" in clean or ".." in clean:
+            return None
+        for group in ("variants", "audio_tracks"):
+            match = next((item for item in ((asset or {}).get(group) or []) if item.get("name") == clean), None)
+            if match:
+                return match
+        return None
+
+    def _cloud_drive_realtime_proxy_error(message, *, error="realtime_proxy_unavailable", status=409, extra=None):
+        payload = {
+            "ok": False,
+            "msg": message,
+            "error": error,
+            "realtime_proxy": realtime_proxy_runtime_status(),
+        }
+        if extra:
+            payload.update(extra)
+        return json_resp(payload), status
+
+    def _cloud_drive_realtime_proxy_audio_selector():
+        return request.args.get("audio") or request.args.get("audio_track") or request.args.get("track") or ""
+
+    def _cloud_drive_realtime_proxy_response(row):
+        availability = realtime_proxy_availability(row)
+        if not availability.get("available"):
+            return _cloud_drive_realtime_proxy_error(
+                "即時轉封裝目前不可用，請改用直接串流或預處理 HLS。",
+                error=str(availability.get("reason") or "realtime_proxy_unavailable"),
+                status=409,
+                extra={"availability": availability},
+            )
+        path = resolve_file_storage_path(storage_root, row)
+        if not path.exists():
+            return json_resp({"ok": False, "msg": "實體檔案不存在", "error": "file_missing"}), 404
+        try:
+            stream_info = open_realtime_proxy_stream(
+                path,
+                audio_track=_cloud_drive_realtime_proxy_audio_selector(),
+                start_seconds=request.args.get("start") or 0,
+                ffmpeg_bin=ffmpeg_bin,
+                ffprobe_bin=ffprobe_bin,
+            )
+        except RuntimeError as exc:
+            if str(exc).startswith("realtime_proxy_busy:"):
+                return _cloud_drive_realtime_proxy_error(
+                    "即時轉封裝目前已達併發上限，請稍後再試或使用預處理 HLS。",
+                    error="realtime_proxy_busy",
+                    status=429,
+                )
+            return _cloud_drive_realtime_proxy_error(str(exc), status=500)
+        except ValueError as exc:
+            return _cloud_drive_realtime_proxy_error(str(exc), error="invalid_realtime_proxy_request", status=400)
+        except FileNotFoundError:
+            return _cloud_drive_realtime_proxy_error("找不到 ffmpeg / ffprobe，無法啟動即時轉封裝。", error="ffmpeg_missing", status=503)
+        filename = row["original_filename_plain_for_public"] or "video.mp4"
+        response = Response(
+            stream_with_context(stream_info["chunks"]),
+            status=200,
+            mimetype=stream_info.get("mimetype") or "video/mp4",
+            direct_passthrough=True,
+        )
+        response.headers["Content-Disposition"] = build_content_disposition("inline", filename)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Accel-Buffering"] = "no"
+        response.headers["Accept-Ranges"] = "none"
+        response.headers["X-Hackme-Transfer-Mode"] = "python_realtime_proxy"
+        selected_audio = stream_info.get("audio_track") or {}
+        if selected_audio.get("name"):
+            response.headers["X-Hackme-Audio-Track"] = str(selected_audio.get("name") or "")
+        response.headers["X-Hackme-Streaming-Mode"] = "realtime_proxy"
+        return response
+
     @app.route("/api/cloud-drive/files/<file_id>/hls/master.m3u8", methods=["GET"])
     @require_csrf_safe
     def cloud_drive_hls_master(file_id):
@@ -4085,7 +4275,7 @@ def register_file_routes(app, deps):
             path = resolve_file_storage_path(storage_root, {"storage_path": asset["master_manifest_path"]})
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview_hls", result="allowed", reason="hls_master", ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
-            return send_file(path, as_attachment=False, download_name="master.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+            return _send_local_storage_file(path, as_attachment=False, download_name="master.m3u8", mimetype="application/vnd.apple.mpegurl")
         finally:
             conn.close()
 
@@ -4097,11 +4287,11 @@ def register_file_routes(app, deps):
             _actor, _row, asset, err = _cloud_drive_hls_asset(conn, file_id, include_segments=False)
             if err:
                 return err
-            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            match = _cloud_drive_hls_rendition_match(asset, variant)
             if not match:
                 return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
             path = resolve_file_storage_path(storage_root, {"storage_path": match["playlist_path"]})
-            return send_file(path, as_attachment=False, download_name="playlist.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+            return _send_local_storage_file(path, as_attachment=False, download_name="playlist.m3u8", mimetype="application/vnd.apple.mpegurl")
         finally:
             conn.close()
 
@@ -4127,7 +4317,7 @@ def register_file_routes(app, deps):
                     mimetype="text/vtt; charset=utf-8",
                     headers={"Cache-Control": "no-store"},
                 )
-            return send_file(path, as_attachment=False, download_name=f"{clean}.vtt", mimetype="text/vtt; charset=utf-8", conditional=True)
+            return _send_local_storage_file(path, as_attachment=False, download_name=f"{clean}.vtt", mimetype="text/vtt; charset=utf-8")
         finally:
             conn.close()
 
@@ -4141,7 +4331,7 @@ def register_file_routes(app, deps):
                 return err
             if "/" in segment or ".." in segment:
                 return json_resp({"ok": False, "msg": "無效的串流片段", "error": "invalid_segment"}), 400
-            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            match = _cloud_drive_hls_rendition_match(asset, variant)
             if not match:
                 return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
             rel = next((item["path"] for item in (match.get("segments") or []) if item.get("filename") == segment), "")
@@ -4152,7 +4342,34 @@ def register_file_routes(app, deps):
                     return json_resp({"ok": False, "msg": "找不到串流片段", "error": "segment_not_found"}), 404
             path = resolve_file_storage_path(storage_root, {"storage_path": rel})
             mimetype = "video/mp4" if segment.endswith((".mp4", ".m4s")) else "application/octet-stream"
-            return send_file(path, as_attachment=False, download_name=segment, mimetype=mimetype, conditional=True)
+            return _send_local_storage_file(path, as_attachment=False, download_name=segment, mimetype=mimetype)
+        finally:
+            conn.close()
+
+    @app.route("/api/cloud-drive/files/<file_id>/realtime-proxy", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_realtime_proxy(file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            allowed, reason, row = can_download_file(conn, actor=actor, file_id=file_id, action="preview")
+            if not row or row["deleted_at"]:
+                return json_resp({"ok": False, "msg": "找不到檔案"}), 404
+            if not allowed:
+                if reason == "deleted":
+                    return json_resp({"ok": False, "msg": "找不到檔案"}), 404
+                return json_resp({"ok": False, "msg": "沒有預覽權限或檔案尚未通過安全檢查", "reason": reason}), 403
+            if is_e2ee_file(row):
+                return json_resp({"ok": False, "msg": "E2EE 檔案不支援伺服器端即時轉封裝"}), 409
+            policy = get_cloud_drive_security_policy(conn)
+            ok, msg = _preview_allowed_by_policy(policy, row)
+            if not ok:
+                return json_resp({"ok": False, "msg": msg}), 403
+            log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview_realtime_proxy", result="allowed", reason="realtime_proxy", ip=get_client_ip(), user_agent=get_ua())
+            conn.commit()
+            return _cloud_drive_realtime_proxy_response(row)
         finally:
             conn.close()
 
@@ -4180,7 +4397,7 @@ def register_file_routes(app, deps):
             if is_e2ee_file(row):
                 log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="e2ee_preview_ciphertext", result="allowed", reason=reason, ip=get_client_ip(), user_agent=get_ua())
                 conn.commit()
-                return send_file(
+                return _send_local_storage_file(
                     path,
                     as_attachment=False,
                     download_name=row["original_filename_plain_for_public"] or "e2ee.bin",

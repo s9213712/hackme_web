@@ -1301,7 +1301,106 @@ function browserSupportsNativeHls(mediaType = "video") {
   return !!(probe && typeof probe.canPlayType === "function" && probe.canPlayType(hlsMimeForVideo(mediaType)));
 }
 
-function playbackSourceForVideo(video, playback) {
+function videoStreamingOptions(playback = {}) {
+  const rows = Array.isArray(playback?.streaming_options) ? playback.streaming_options : [];
+  return rows.filter((item) => item && item.mode).map((item) => ({
+    mode: String(item.mode || ""),
+    label: String(item.label || item.service_tier_label || item.mode || ""),
+    tier: String(item.service_tier_label || item.service_tier || ""),
+    fee: String(item.fee_label || item.fee_level || ""),
+    available: !!item.available,
+    reason: String(item.availability_reason || ""),
+    summary: String(item.customer_summary || item.notes || ""),
+  }));
+}
+
+function videoServiceModeStorageKey(video) {
+  return `hackme_web.video_service_mode.${String(video?.id || "")}`;
+}
+
+function videoDefaultServiceMode(playback = {}) {
+  const policy = playback?.service_policy || {};
+  const preferred = String(policy.default_mode || policy.recommended_mode || "").trim();
+  if (preferred) return preferred;
+  if (playback?.mode === "hls") return "prepared_hls";
+  return "direct";
+}
+
+function videoSelectedServiceMode(video, playback = {}) {
+  const options = videoStreamingOptions(playback);
+  const availableModes = new Set(options.filter((option) => option.available).map((option) => option.mode));
+  let saved = "";
+  try {
+    saved = localStorage.getItem(videoServiceModeStorageKey(video)) || "";
+  } catch (_) {
+    saved = "";
+  }
+  if (saved && availableModes.has(saved)) return saved;
+  const preferred = videoDefaultServiceMode(playback);
+  if (availableModes.has(preferred)) return preferred;
+  if (availableModes.has("prepared_hls")) return "prepared_hls";
+  if (availableModes.has("realtime_proxy")) return "realtime_proxy";
+  if (availableModes.has("direct")) return "direct";
+  return preferred || "direct";
+}
+
+function saveVideoSelectedServiceMode(video, mode) {
+  try {
+    localStorage.setItem(videoServiceModeStorageKey(video), String(mode || ""));
+  } catch (_) {}
+}
+
+function selectedVideoAudioTrack(playback = {}) {
+  const tracks = videoPlaybackAudioTracks(playback);
+  if (!tracks.length) return null;
+  const select = $("video-audio-track-select");
+  if (select) {
+    const selected = Math.max(0, Math.min(tracks.length - 1, Number(select.value || 0)));
+    return tracks[selected] || tracks[0];
+  }
+  return tracks.find((track) => track.isDefault) || tracks[0];
+}
+
+function videoRealtimeProxyUrl(playback = {}, startSeconds = 0) {
+  const raw = String(playback?.realtime_proxy_url || playback?.realtime_proxy?.url || "").trim();
+  if (!raw) return "";
+  const url = new URL(raw, window.location.origin);
+  const track = selectedVideoAudioTrack(playback);
+  if (track?.name) url.searchParams.set("audio", track.name);
+  const start = Number(startSeconds || 0);
+  if (Number.isFinite(start) && start > 0) url.searchParams.set("start", String(Math.max(0, Math.round(start * 1000) / 1000)));
+  return `${url.pathname}${url.search}`;
+}
+
+function renderVideoStreamingServiceControl(video, playback = {}, selectedMode = "") {
+  const options = videoStreamingOptions(playback);
+  if (!options.length || playback?.mode === "e2ee_stream_v2" || playback?.mode === "e2ee_direct") return "";
+  const selected = selectedMode || videoSelectedServiceMode(video, playback);
+  return `
+    <div class="video-quality-control video-service-mode-control" id="video-service-mode-control">
+      <label for="video-service-mode-select">方案</label>
+      <select id="video-service-mode-select">
+        ${options.map((option) => `
+          <option value="${sanitize(option.mode)}"${option.mode === selected ? " selected" : ""}${option.available ? "" : " disabled"}>
+            ${sanitize(option.tier ? `${option.tier} · ${option.label}` : option.label)}
+          </option>
+        `).join("")}
+      </select>
+      <span class="drive-card-sub">${sanitize((options.find((option) => option.mode === selected) || options[0] || {}).summary || "")}</span>
+    </div>
+  `;
+}
+
+function bindVideoStreamingServiceControl(video, playback = {}) {
+  const select = $("video-service-mode-select");
+  if (!select) return;
+  select.addEventListener("change", () => {
+    saveVideoSelectedServiceMode(video, select.value);
+    openVideoDetail(video?.id || videoState.current?.id || 0);
+  });
+}
+
+function playbackSourceForVideo(video, playback, selectedMode = "") {
   if (playback?.mode === "e2ee_stream_v2") {
     return {
       mode: "e2ee_stream_v2",
@@ -1314,6 +1413,37 @@ function playbackSourceForVideo(video, playback) {
       mode: "e2ee_direct",
       src: "",
       statusText: "端到端加密影音會在瀏覽器端完整解密播放，速度會較慢。",
+    };
+  }
+  const requestedMode = selectedMode || videoSelectedServiceMode(video, playback || {});
+  if (requestedMode === "direct") {
+    if (playback && playback.direct_fallback_allowed === false) {
+      return {
+        mode: "waiting_stream",
+        src: "",
+        statusText: playback.stream_warning || "此影片不允許直接串流，請改用其他方案。",
+      };
+    }
+    return {
+      mode: "direct",
+      src: playback?.fallback_url || playback?.stream_url || videoStreamUrl(video),
+      statusText: "目前使用 Basic 直接串流。",
+    };
+  }
+  if (requestedMode === "realtime_proxy") {
+    const proxy = playback?.realtime_proxy || {};
+    const url = proxy.available === false ? "" : videoRealtimeProxyUrl(playback, 0);
+    if (!url) {
+      return {
+        mode: "waiting_stream",
+        src: "",
+        statusText: proxy.reason || "Standard 即時轉封裝目前不可用。",
+      };
+    }
+    return {
+      mode: "realtime_proxy",
+      src: url,
+      statusText: "目前使用 Standard 即時轉封裝；伺服器會即時轉出瀏覽器較好播放的音訊。",
     };
   }
   if (!playback || playback.mode !== "hls") {
@@ -1933,6 +2063,22 @@ function videoPlaybackSubtitles(playback = {}) {
     }));
 }
 
+function videoPlaybackAudioTracks(playback = {}) {
+  const tracks = Array.isArray(playback?.audio_tracks)
+    ? playback.audio_tracks
+    : (Array.isArray(playback?.status?.audio_tracks) ? playback.status.audio_tracks : []);
+  return tracks
+    .filter((track) => track && track.name)
+    .map((track) => ({
+      name: String(track.name || ""),
+      label: String(track.label || track.language || track.name || "音軌"),
+      language: String(track.language || "und"),
+      playlistUrl: String(track.playlist_url || track.url || ""),
+      streamIndex: Number(track.stream_index ?? -1),
+      isDefault: !!track.is_default,
+    }));
+}
+
 function syncVideoSubtitleTracks(player, playback = {}) {
   if (!player) return;
   Array.from(player.querySelectorAll('track[data-video-subtitle="1"]')).forEach((track) => track.remove());
@@ -2063,17 +2209,44 @@ function fallbackVideoQualityVariant(playback = {}) {
 
 function renderVideoQualityControl(playback = {}) {
   const options = videoPlaybackQualityOptions(playback);
-  if (options.length < 2) return "";
+  const audioTracks = videoPlaybackAudioTracks(playback);
+  if (options.length < 2 && audioTracks.length < 2) return "";
   const preferred = preferredVideoQualityVariant(playback);
   const preferredName = preferred?.name || "";
-  return `
-    <div class="video-quality-control" id="video-quality-control">
+  const defaultAudioIndex = Math.max(0, audioTracks.findIndex((track) => track.isDefault));
+  const audioMarkup = audioTracks.length >= 2 ? `
+      <label for="video-audio-track-select">音軌</label>
+      <select id="video-audio-track-select">
+        ${audioTracks.map((track, index) => `<option value="${index}"${index === defaultAudioIndex ? " selected" : ""}>${sanitize(track.label)}</option>`).join("")}
+      </select>
+    ` : "";
+  const qualityMarkup = options.length >= 2 ? `
       <label for="video-quality-select">畫質</label>
       <select id="video-quality-select">
         <option value="auto"${preferredName ? "" : " selected"}>自動</option>
         ${options.map((option) => `<option value="${sanitize(option.name)}"${option.name === preferredName ? " selected" : ""}>${sanitize(option.label)}</option>`).join("")}
       </select>
-      <span class="drive-card-sub">預設 720p；網路不穩時會嘗試退回 480p。串流衍生畫質不佔用你的雲端硬碟容量。</span>
+    ` : "";
+  return `
+    <div class="video-quality-control" id="video-quality-control">
+      ${qualityMarkup}
+      ${audioMarkup}
+      <span class="drive-card-sub">預處理 HLS 支援多畫質與多音軌；串流衍生檔不佔用你的雲端硬碟容量。</span>
+    </div>
+  `;
+}
+
+function renderVideoRealtimeProxyControl(playback = {}) {
+  const audioTracks = videoPlaybackAudioTracks(playback);
+  if (audioTracks.length < 2) return "";
+  const defaultAudioIndex = Math.max(0, audioTracks.findIndex((track) => track.isDefault));
+  return `
+    <div class="video-quality-control" id="video-realtime-proxy-control">
+      <label for="video-audio-track-select">音軌</label>
+      <select id="video-audio-track-select">
+        ${audioTracks.map((track, index) => `<option value="${index}"${index === defaultAudioIndex ? " selected" : ""}>${sanitize(track.label)}</option>`).join("")}
+      </select>
+      <span class="drive-card-sub">Standard 即時轉封裝一次輸出選定音軌；多人同時觀看會消耗即時 CPU。</span>
     </div>
   `;
 }
@@ -2269,11 +2442,50 @@ function fallbackVideoPlaybackToLowerQuality(playback = {}, reason = "") {
 
 function bindVideoQualityControl(playback = {}) {
   const select = $("video-quality-select");
-  if (!select) return;
-  select.addEventListener("change", () => {
-    videoState.manualQualitySelection = true;
-    applyVideoQualitySelection(playback);
-  });
+  if (select) {
+    select.addEventListener("change", () => {
+      videoState.manualQualitySelection = true;
+      applyVideoQualitySelection(playback);
+    });
+  }
+  const audioSelect = $("video-audio-track-select");
+  if (audioSelect) {
+    audioSelect.addEventListener("change", () => applyVideoAudioTrackSelection(playback));
+  }
+}
+
+function applyVideoAudioTrackSelection(playback = {}) {
+  const tracks = videoPlaybackAudioTracks(playback);
+  const select = $("video-audio-track-select");
+  if (!select || tracks.length < 2) return;
+  const selected = Math.max(0, Math.min(tracks.length - 1, Number(select.value || 0)));
+  if (videoSelectedServiceMode(videoState.current, playback) === "realtime_proxy") {
+    const player = $("video-player");
+    if (!player) return;
+    const resumeAt = videoPlaybackResumeTime(player);
+    const wasPaused = player.paused;
+    const nextUrl = videoRealtimeProxyUrl(playback, resumeAt);
+    if (!nextUrl) return;
+    player.src = nextUrl;
+    if (typeof player.load === "function") player.load();
+    if (!wasPaused && typeof player.play === "function") player.play().catch(() => {});
+    setVideoPlaybackStatus(`音軌：${tracks[selected]?.label || "音軌"}。`, false);
+    return;
+  }
+  if (videoState.currentHls && Array.isArray(videoState.currentHls.audioTracks)) {
+    const chosen = tracks[selected];
+    const index = videoState.currentHls.audioTracks.findIndex((track) => {
+      const name = String(track.name || track.label || "").toLowerCase();
+      const lang = String(track.lang || track.language || "").toLowerCase();
+      return name === chosen.label.toLowerCase() || lang === chosen.language.toLowerCase();
+    });
+    if (index >= 0) {
+      videoState.currentHls.audioTrack = index;
+      setVideoPlaybackStatus(`音軌：${chosen.label}。`, false);
+      return;
+    }
+  }
+  setVideoPlaybackStatus(`已選擇音軌：${tracks[selected]?.label || "音軌"}。`, false);
 }
 
 function bindVideoE2eeQualityControl(video, playback = {}, sessionId = 0) {
@@ -2350,9 +2562,19 @@ async function attachVideoHlsJsPlayer(player, playback, sessionId) {
   videoState.currentHls = hls;
   hls.on(HlsCtor.Events.MANIFEST_PARSED, () => {
     if (sessionId !== videoState.playbackSessionId) return;
-    if (selectedVideoQualityVariant(playback)) applyVideoQualitySelection(playback);
-    else setVideoPlaybackStatus(statusText, false);
+    if (selectedVideoQualityVariant(playback)) {
+      applyVideoQualitySelection(playback);
+    } else {
+      setVideoPlaybackStatus(statusText, false);
+    }
+    applyVideoAudioTrackSelection(playback);
   });
+  if (HlsCtor.Events.AUDIO_TRACKS_UPDATED) {
+    hls.on(HlsCtor.Events.AUDIO_TRACKS_UPDATED, () => {
+      if (sessionId !== videoState.playbackSessionId) return;
+      applyVideoAudioTrackSelection(playback);
+    });
+  }
   hls.on(HlsCtor.Events.ERROR, (_event, data) => {
     if (sessionId !== videoState.playbackSessionId) return;
     const detail = data?.details ? String(data.details) : "";
@@ -2783,17 +3005,21 @@ function renderVideoDetail(video, comments = [], playback = null) {
   showVideoWatchView();
   const videoStatus = String(video.status || "ready");
   const videoPlayable = videoStatus === "ready";
+  const selectedServiceMode = videoSelectedServiceMode(video, playback || {});
   const processingText = videoStatus === "processing"
     ? "影音正在後台處理 HLS；你可以先做別的事，進度會顯示在任務中心，處理完成會通知上傳者。"
     : "影音目前不可播放。";
   const playbackSource = videoPlayable
-    ? playbackSourceForVideo(video, playback)
+    ? playbackSourceForVideo(video, playback, selectedServiceMode)
     : { mode: "processing", src: "", statusText: processingText };
   const playbackStatus = playback?.status || {};
   const streamStatusText = humanVideoStreamStatus(playback) || String(playback?.stream_warning || "").trim();
+  const serviceControl = videoPlayable ? renderVideoStreamingServiceControl(video, playback || {}, selectedServiceMode) : "";
   const qualityControl = playbackSource?.mode && String(playbackSource.mode).startsWith("hls")
     ? renderVideoQualityControl(playback || {})
-    : (playback?.mode === "e2ee_stream_v2" ? renderVideoE2eeQualityControl(playback || {}) : "");
+    : (playbackSource?.mode === "realtime_proxy"
+      ? renderVideoRealtimeProxyControl(playback || {})
+      : (playback?.mode === "e2ee_stream_v2" ? renderVideoE2eeQualityControl(playback || {}) : ""));
   const streamActions = video.can_edit && playback?.mode !== "e2ee_direct"
     ? `
       <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.45rem;">
@@ -2886,6 +3112,7 @@ function renderVideoDetail(video, comments = [], playback = null) {
           ${sanitize(playbackSource.statusText || streamStatusText || "")}
         </div>
         ${videoPlayable ? renderVideoDanmakuControls(video) : ""}
+        ${serviceControl}
         ${qualityControl}
         <div class="drive-file-actions" id="video-playback-action" style="justify-content:flex-start;margin-top:.45rem;"></div>
         ${streamActions}
@@ -2949,6 +3176,7 @@ function renderVideoDetail(video, comments = [], playback = null) {
   if (videoPlayable) {
     bindVideoPlayerView(video.id);
     bindVideoSeekProtection($("video-player"));
+    bindVideoStreamingServiceControl(video, playback || {});
     bindVideoQualityControl(playback || {});
     bindVideoE2eeQualityControl(video, playback || {}, playbackSessionId);
     bindVideoSubtitleShiftControls(video, playback || {});

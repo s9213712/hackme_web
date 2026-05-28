@@ -16,6 +16,51 @@ Current status:
 - Public/unlisted video publishes and `server_encrypted` media now try to
   prepare HLS derivatives automatically, while owners can manually retry
   preparation from the watch page.
+- Prepared HLS supports multi-audio media by emitting alternate audio playlists
+  and supports larger subtitle sets through extracted WebVTT subtitle tracks.
+  Shared video and shared-file preview routes must authorize audio playlist and
+  subtitle child resources the same way they authorize video playlists.
+- Prepared HLS workers now expose Premium queue/resource state through Job
+  Center metadata. Large HLS jobs use host-global file slots, controlled by
+  `HACKME_MEDIA_HLS_MAX_CONCURRENT`, `HACKME_MEDIA_HLS_LOCK_DIR`,
+  `HACKME_MEDIA_HLS_SERIALIZE_ALL`, and `HACKME_MEDIA_HLS_SERIALIZE_MIN_BYTES`,
+  so preprocessing cost stays bounded across server workers.
+  `scripts/testing/hls_worker_slot_probe.py` exercises this with two real
+  workers and validates the Job Center queue stages.
+  `scripts/testing/hls_premium_sizing_probe.py` measures wall time, ffmpeg/worker
+  CPU, RSS, derivative bytes, and Job Center worker metrics so operators can set
+  Premium concurrency from evidence instead of guessing.
+- Premium HLS storage can be tuned with
+  `HACKME_MEDIA_HLS_ORIGINAL_VARIANT_MODE`. The default `always` keeps the
+  original HLS rendition. `never` / `storage_saver` skips it when q480/q720 or
+  another configured quality ladder is available, reducing derivative storage
+  while keeping multi-audio, subtitles, and share authorization behavior intact.
+- Premium HLS profiles can set the common storage/quality policy in one knob:
+  `HACKME_MEDIA_HLS_PROFILE=full|storage_saver|mobile_saver`. `mobile_saver`
+  defaults to q480 and 128k HLS audio, while explicit
+  `HACKME_MEDIA_HLS_QUALITY_HEIGHTS` or `HACKME_MEDIA_HLS_AUDIO_BITRATE` still
+  override the profile.
+- Playback payloads expose the active Premium profile policy through
+  `service_policy.premium_hls_profile_policy` and the prepared-HLS
+  `streaming_options[].profile_policy`, so frontend/customer-support copy can
+  explain fee differences without hard-coding them.
+- The same policy payload includes the inferred prepared asset profile,
+  `asset_profile_candidates`, `profile_matches_asset`, `profile_drift`, and
+  `rebuild_recommended`. This distinguishes "current service tier setting" from
+  "what this file was actually prepared as" after operators change Premium
+  profile knobs.
+- `scripts/testing/hls_premium_profile_matrix_probe.py` compares the same source
+  fixture across Premium profiles and emits the storage/CPU/RSS/wall-time matrix
+  used for pricing and capacity decisions.
+- Standard realtime proxy endpoints are implemented behind
+  `HACKME_MEDIA_REALTIME_PROXY_ENABLED`. They copy the source video when
+  possible, transcode only the selected audio track to AAC stereo, strip
+  subtitles/data/metadata tracks, and enforce timeout plus runtime-wide
+  concurrency controls. With `HACKME_RUNTIME_DIR` or
+  `HACKME_MEDIA_REALTIME_PROXY_LOCK_DIR`, the concurrency cap is host-global
+  across workers through file slots; without that runtime context it falls back
+  to process-local slots. The QA probe supports both Flask and gunicorn modes
+  and validates that gunicorn workers share the same realtime-proxy slot pool.
 - Later Phase C stages are still not fully implemented yet.
 
 ## Problem Statement
@@ -84,7 +129,9 @@ Today:
   prefer native-HLS playback when derivatives are ready. Browsers without native
   HLS support use hls.js where available.
 - Auto-prepare is best-effort and runs through an external HLS worker. A failed
-  derivative must not block the base video publish action.
+  derivative must not block the base video publish action. When HLS workers are
+  queued, Job Center should show `waiting_worker_slot`; after a slot is acquired
+  it should show `worker_slot_acquired` and then `transcoding`.
 
 This design keeps those v1 rules, but adds a media-derivative pipeline for
 larger assets.
@@ -109,13 +156,32 @@ For this project, the default target should be:
   smaller than a generated 1080p H.264 derivative
 - playback defaults to `720p` when available, then falls back to `480p` on poor
   network conditions; original quality remains available as a user-selected
-  option
-- generated quality variants are compared against the original HLS package; if a
-  lower-quality derivative is larger than the original package, it is deleted
-  and omitted from the quality selector
+  option unless the storage-saver original-rendition policy is enabled
+- generated quality variants are compared against the original HLS package, or
+  the original upload size when the original HLS rendition is skipped; if a
+  lower-quality derivative is larger than that baseline, it is deleted and
+  omitted from the quality selector
 
 This gives better startup behavior, easier seeking, and a cleaner long-term path
 to CDN or cache acceleration.
+
+## Customer Service Tiers
+
+The customer-facing product has three streaming service tiers. The detailed
+customer explanation lives in
+[VIDEO_STREAMING_SERVICE_TIERS.md](VIDEO_STREAMING_SERVICE_TIERS.md).
+
+| Tier | Playback route | Cost driver | Operational note |
+| --- | --- | --- | --- |
+| Basic | direct streaming | file I/O and bandwidth only | fastest to start, but browser codec/container support determines whether MKV, E-AC-3, multi-audio, or embedded subtitles work well |
+| Standard | realtime proxy / transwrap | per-viewer ffmpeg CPU | useful for quick MKV/audio compatibility without derivative storage; protected by feature flag, strict concurrency limits, timeout cleanup, and normal video/share ACL |
+| Premium | prepared HLS | preprocessing CPU, derivative storage, cache invalidation, cleanup | preferred for public/shared large media, multi-audio, multi-subtitle, stable seek, and future CDN/cache acceleration |
+
+`lcd_OS` is a useful reference for the Standard route: it keeps CPU low by
+copying video when possible and only transcoding the selected audio track to a
+browser-friendly stream. That approach is intentionally different from
+prepared HLS: it saves storage and setup time, but every viewer creates live
+server work and seek behavior is approximate.
 
 ## Mode Matrix
 
@@ -292,6 +358,12 @@ runtime/storage/media_derivatives/<uploaded_file_id>/
     playlist.m3u8
     init.mp4
     seg_00001.m4s
+  audio_01_jpn/
+    playlist.m3u8
+    init.mp4
+    seg_00001.m4s
+  subtitles/
+    sub01_jpn.vtt
 ```
 
 This keeps:
@@ -323,11 +395,20 @@ Recommended new tables:
 
 - `asset_id`
 - `name`
+- `media_kind`: `variant` or `audio`
+- `label`
+- `language`
+- `stream_index`
+- `is_default`
 - `width`
 - `height`
 - `bitrate`
 - `codec`
 - `playlist_path`
+
+Audio tracks are stored in the same table as variants with
+`media_kind='audio'` so the existing playlist/segment metadata path can serve
+both video renditions and alternate audio renditions.
 
 ### `media_stream_segments`
 
@@ -336,6 +417,17 @@ Recommended new tables:
 - `path`
 - `duration_seconds`
 - `byte_size`
+
+### `media_stream_subtitles`
+
+- `asset_id`
+- `name`
+- `label`
+- `language`
+- `codec`
+- `path`
+- `is_default`
+- `is_forced`
 
 ### `media_stream_jobs`
 
@@ -372,6 +464,10 @@ For streamable assets:
 4. emit:
    - master playlist
    - variant playlists
+   - alternate audio playlists for multi-audio or non-browser-native audio
+     sources
+   - extracted WebVTT subtitle tracks where the source subtitle codec is
+     supported
    - CMAF init + media segments
 5. write derivative metadata into DB
 6. mark stream asset ready
@@ -414,7 +510,48 @@ Current baseline response:
   "mode": "hls",
   "master_url": "/api/videos/123/hls/master.m3u8",
   "fallback_url": "/api/videos/123/stream",
-  "source_mode": "server_encrypted"
+  "source_mode": "server_encrypted",
+  "variants": [{"name": "q720", "label": "720p"}],
+  "audio_tracks": [{"name": "audio_01_jpn", "label": "音軌 1 (jpn)"}],
+  "subtitles": [{"name": "sub01_zh", "label": "中文"}],
+  "service_policy": {
+    "customer_selectable_modes": ["direct", "realtime_proxy", "prepared_hls"],
+    "default_mode": "prepared_hls",
+    "recommended_mode": "prepared_hls",
+    "multi_track_recommended_mode": "prepared_hls",
+    "fee_model": "basic_standard_premium",
+    "fee_difference_reason": "服務費差異來自檔案流量、每位觀看者即時 CPU、預處理 worker CPU、衍生檔儲存與快取清理成本。"
+  },
+  "streaming_options": [
+    {
+      "mode": "direct",
+      "service_tier": "basic",
+      "fee_level": "lowest",
+      "billing_basis": "bandwidth_only",
+      "available": true,
+      "cost_drivers": ["file_io", "bandwidth"],
+      "media_support": {"multi_audio": "browser_dependent", "multi_subtitle": "browser_dependent"}
+    },
+    {
+      "mode": "realtime_proxy",
+      "service_tier": "standard",
+      "fee_level": "middle",
+      "billing_basis": "per_viewer_cpu",
+      "available": false,
+      "implementation_status": "planned",
+      "cost_drivers": ["ffmpeg_process_per_viewer", "audio_transcode_cpu", "process_cleanup"],
+      "media_support": {"multi_audio": "selected_track_only", "multi_subtitle": "external_or_browser_dependent"}
+    },
+    {
+      "mode": "prepared_hls",
+      "service_tier": "premium",
+      "fee_level": "highest",
+      "billing_basis": "preprocess_storage_cache",
+      "available": true,
+      "cost_drivers": ["worker_cpu", "derivative_storage", "segment_indexing", "cache_lifecycle", "cleanup"],
+      "media_support": {"multi_audio": true, "multi_subtitle": true}
+    }
+  ]
 }
 ```
 
@@ -499,6 +636,19 @@ Root-configurable knobs should include:
 - minimum file size / duration before HLS generation
 - whether Cloud Drive preview may use derivatives
 - whether users may create streamable derivatives from non-plain source modes
+- max extracted audio tracks and subtitle tracks for prepared streaming
+- original HLS rendition policy:
+  `HACKME_MEDIA_HLS_ORIGINAL_VARIANT_MODE=always|auto|never`
+- profile presets and audio bitrate:
+  `HACKME_MEDIA_HLS_PROFILE`, `HACKME_MEDIA_HLS_AUDIO_BITRATE`
+- realtime proxy concurrency and per-viewer CPU limits before that tier is
+  exposed in production UI
+- Premium HLS worker slot count from sizing evidence. On this host, Scarlet
+  60s and 180s real-file probes with `jobs=2 / max=2` completed successfully,
+  while `jobs=3 / max=2` confirmed the third job queues instead of starting a
+  third ffmpeg. Similar 12-core deployments may use
+  `HACKME_MEDIA_HLS_MAX_CONCURRENT=2`; keep `1` for smaller hosts or when
+  CPU/IO monitoring is not available.
 
 ## Security Notes
 

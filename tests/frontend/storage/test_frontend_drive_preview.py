@@ -35,6 +35,10 @@ def test_cloud_drive_preview_ui_is_wired():
     assert "function drivePreviewUsesDirectStream(preview)" in drive_js
     assert 'return category === "audio" || category === "video" || category === "pdf";' in drive_js
     assert "function drivePreviewHasReadyHls(preview)" in drive_js
+    assert "function drivePreviewServiceOptions(preview)" in drive_js
+    assert "drive-service-mode-control" in drive_js
+    assert "drivePreviewRealtimeProxyUrl" in drive_js
+    assert "Standard · 即時轉封裝" in drive_js
     assert "function drivePreviewSubtitles(preview)" in drive_js
     assert "function syncDrivePreviewSubtitleTracks(player, preview, fileId = \"\")" in drive_js
     assert "data-drive-preview-subtitle" in drive_js
@@ -62,8 +66,9 @@ def test_cloud_drive_preview_ui_is_wired():
     assert "return previewAlbumFileFullscreen(fileId, options.fileName || \"\")" in drive_js
     assert 'preview.category === "video"' in drive_js
     assert 'preview.category === "audio"' in drive_js
-    assert '<audio controls preload="metadata" src="${url}"></audio>' in drive_js
-    assert '<video controls preload="metadata" playsinline src="${url}"></video>' in drive_js
+    assert "function driveDirectPlayerMarkup(fileId, preview, url" in drive_js
+    assert "function driveRealtimeProxyPlayerMarkup(fileId, preview" in drive_js
+    assert "attachDrivePlainMediaPreview(fileId, preview" in drive_js
     assert 'preview.category === "pdf"' in drive_js
     assert 'preview.category === "image"' in drive_js
     assert '"img-src":     "\'self\' data: blob:"' in server_py
@@ -213,6 +218,10 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "sharedFileRenderBlobPreview" in shared_file_js
     assert "function sharedFileIsServerEncryptedVideoProcessing(file)" in shared_file_js
     assert "function sharedFileHasReadyHls(file)" in shared_file_js
+    assert "function sharedFileServiceOptions(file)" in shared_file_js
+    assert "shared-file-service-mode-select" in shared_file_js
+    assert "sharedFileRealtimeProxyUrl" in shared_file_js
+    assert "Standard · 即時轉封裝" in shared_file_js
     assert "async function sharedFileRenderHlsPreview(file)" in shared_file_js
     assert "SHARED_FILE_HLS_JS_URL" in shared_file_js
     assert "HLS 串流準備中" in shared_file_js

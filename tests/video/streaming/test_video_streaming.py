@@ -3,7 +3,9 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -184,6 +186,96 @@ def _fake_probe_payload(media_type="video"):
     }
 
 
+def _require_ffmpeg_tools():
+    ffmpeg_bin = shutil.which("ffmpeg")
+    ffprobe_bin = shutil.which("ffprobe")
+    if not ffmpeg_bin or not ffprobe_bin:
+        pytest.skip("ffmpeg/ffprobe not available")
+    return ffmpeg_bin, ffprobe_bin
+
+
+def _ffprobe_json(path, *, ffprobe_bin="ffprobe"):
+    result = subprocess.run(
+        [
+            str(ffprobe_bin),
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout or "{}")
+
+
+def _make_multiaudio_mkv_fixture(tmp_path, *, ffmpeg_bin="ffmpeg"):
+    subtitle = tmp_path / "proxy-fixture.srt"
+    subtitle.write_text("1\n00:00:00,200 --> 00:00:01,200\n字幕不應進入 Standard MP4\n", encoding="utf-8")
+    output = tmp_path / "proxy-fixture.mkv"
+    cmd = [
+        str(ffmpeg_bin),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=duration=3:size=160x90:rate=15",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=3",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=880:duration=3",
+        "-i",
+        str(subtitle),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-map",
+        "2:a:0",
+        "-map",
+        "3:s:0",
+        "-metadata:s:a:0",
+        "language=jpn",
+        "-metadata:s:a:0",
+        "title=Japanese",
+        "-metadata:s:a:1",
+        "language=eng",
+        "-metadata:s:a:1",
+        "title=English",
+        "-metadata:s:s:0",
+        "language=zh",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-tune",
+        "zerolatency",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-c:s",
+        "srt",
+        "-shortest",
+        str(output),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
+    return output
+
+
 def _fake_hls_package(
     source_path,
     *,
@@ -197,6 +289,8 @@ def _fake_hls_package(
     target_height=0,
     target_bitrate=0,
     copy_codecs=False,
+    video_only=False,
+    audio_stream_index=None,
     progress_callback=None,
 ):
     variant_name = variant_name or ("audio" if media_type == "audio" else "original")
@@ -431,6 +525,155 @@ def test_prepare_stream_asset_builds_hls_derivatives_for_plain_video(tmp_path, m
     assert 'CODECS="h264"' not in master_text
 
 
+def test_prepare_stream_asset_can_skip_original_variant_for_storage_saver(tmp_path, monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL,
+            storage_path TEXT NOT NULL,
+            privacy_mode TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            scan_status TEXT NOT NULL,
+            original_filename_plain_for_public TEXT,
+            mime_type_plain_for_public TEXT,
+            size_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            deleted_at TEXT
+        )
+        """
+    )
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_uploaded_file(conn, storage_root, file_id="storage-saver-video", owner_user_id=1, filename="clip.mp4", mime="video/mp4")
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id='storage-saver-video'").fetchone()
+
+    monkeypatch.setenv("HACKME_MEDIA_HLS_ORIGINAL_VARIANT_MODE", "never")
+    monkeypatch.setattr(media_streaming, "_run_probe", lambda *args, **kwargs: _fake_probe_payload("video"))
+    monkeypatch.setattr(media_streaming, "_run_ffmpeg_hls", _fake_hls_package)
+
+    asset = media_streaming.prepare_stream_asset(
+        conn,
+        file_row=row,
+        storage_root=storage_root,
+        server_file_fernet=None,
+    )
+
+    assert [variant["name"] for variant in asset["variants"]] == ["q480"]
+    master_text = (storage_root / "media_derivatives" / "storage-saver-video" / "master.m3u8").read_text(encoding="utf-8")
+    assert "original/playlist.m3u8" not in master_text
+    assert "q480/playlist.m3u8" in master_text
+    playback = media_streaming.stream_playback_payload(conn, file_row=row, video_id=12)
+    assert playback["default_quality"] == "q480"
+    assert playback["quality_policy"]["hls_profile"] == "custom"
+    assert playback["quality_policy"]["original_variant_mode"] == "never"
+    assert playback["quality_policy"]["original_variant_present"] is False
+    assert playback["quality_policy"]["asset_profile"] == "storage_saver"
+    assert playback["quality_policy"]["profile_drift"] is False
+    assert playback["service_policy"]["premium_hls_profile_policy"]["current_profile"] == "custom"
+    assert playback["service_policy"]["premium_hls_profile_policy"]["profile_matches_asset"] is True
+
+
+def test_hls_original_variant_skip_falls_back_when_no_quality_variant(monkeypatch):
+    monkeypatch.setenv("HACKME_MEDIA_HLS_ORIGINAL_VARIANT_MODE", "never")
+    metadata = {
+        "media_type": "video",
+        "width": 854,
+        "height": 480,
+        "bitrate": 900000,
+        "codec": "h264",
+        "codec_tag": "avc1",
+    }
+
+    specs = media_streaming._hls_variant_specs(metadata)
+
+    assert [spec["name"] for spec in specs] == ["original"]
+
+
+def test_hls_mobile_saver_profile_sets_ladder_original_policy_and_audio_bitrate(monkeypatch):
+    monkeypatch.setenv("HACKME_MEDIA_HLS_PROFILE", "mobile_saver")
+    metadata = {
+        "media_type": "video",
+        "width": 1920,
+        "height": 1080,
+        "bitrate": 5_000_000,
+        "codec": "h264",
+        "codec_tag": "avc1",
+    }
+
+    specs = media_streaming._hls_variant_specs(metadata)
+
+    assert media_streaming._hls_original_variant_mode() == "never"
+    assert media_streaming._hls_audio_bitrate() == "128k"
+    assert [spec["name"] for spec in specs] == ["q480"]
+
+
+def test_premium_hls_profile_policy_detects_full_asset_drift_when_mobile_policy(monkeypatch):
+    monkeypatch.setenv("HACKME_MEDIA_HLS_PROFILE", "mobile_saver")
+    status = {
+        "status": "ready",
+        "variants": [
+            {"name": "original", "height": 1080, "bitrate": 4_000_000},
+            {"name": "q480", "height": 480, "bitrate": 1_400_000},
+            {"name": "q720", "height": 720, "bitrate": 2_800_000},
+        ],
+        "audio_tracks": [{"name": "audio_01_jpn", "bitrate": 160_000}],
+    }
+
+    policy = media_streaming._premium_hls_profile_policy(status)
+
+    assert policy["current_profile"] == "mobile_saver"
+    assert policy["asset_profile"] == "full"
+    assert policy["asset_profile_candidates"] == ["full"]
+    assert policy["profile_matches_asset"] is False
+    assert policy["profile_drift"] is True
+    assert policy["rebuild_recommended"] is True
+    assert policy["rebuild_reason"] == "current_profile_policy_differs_from_prepared_asset"
+
+
+def test_premium_hls_profile_policy_matches_storage_saver_asset(monkeypatch):
+    monkeypatch.setenv("HACKME_MEDIA_HLS_PROFILE", "storage_saver")
+    status = {
+        "status": "ready",
+        "variants": [
+            {"name": "q480", "height": 480, "bitrate": 1_400_000},
+            {"name": "q720", "height": 720, "bitrate": 2_800_000},
+        ],
+        "audio_tracks": [{"name": "audio_01_jpn", "bitrate": 160_000}],
+    }
+
+    policy = media_streaming._premium_hls_profile_policy(status)
+
+    assert policy["current_profile"] == "storage_saver"
+    assert policy["asset_profile"] == "storage_saver"
+    assert policy["asset_quality_heights"] == [480, 720]
+    assert policy["asset_audio_bitrate"] == 160_000
+    assert policy["profile_matches_asset"] is True
+    assert policy["profile_drift"] is False
+    assert policy["rebuild_recommended"] is False
+
+
+def test_premium_hls_profile_policy_does_not_false_drift_ambiguous_q480_asset(monkeypatch):
+    monkeypatch.setenv("HACKME_MEDIA_HLS_PROFILE", "mobile_saver")
+    status = {
+        "status": "ready",
+        "variants": [{"name": "q480", "height": 480, "bitrate": 1_400_000}],
+        "audio_tracks": [],
+    }
+
+    policy = media_streaming._premium_hls_profile_policy(status)
+
+    assert policy["asset_profile"] == "storage_saver"
+    assert policy["asset_profile_ambiguous"] is True
+    assert policy["asset_profile_candidates"] == ["storage_saver", "mobile_saver"]
+    assert policy["profile_matches_asset"] is True
+    assert policy["profile_drift"] is False
+    assert policy["rebuild_recommended"] is False
+
+
 def test_prepare_stream_asset_extracts_embedded_text_subtitles(tmp_path, monkeypatch):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -494,6 +737,108 @@ def test_prepare_stream_asset_extracts_embedded_text_subtitles(tmp_path, monkeyp
     assert subtitle_path.exists()
     playback = media_streaming.stream_playback_payload(conn, file_row=row, video_id=9)
     assert playback["subtitles"][0]["url"].startswith("/api/videos/9/hls/subtitles/")
+
+
+def test_prepare_stream_asset_preserves_multi_audio_and_many_subtitles(tmp_path, monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL,
+            storage_path TEXT NOT NULL,
+            privacy_mode TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            scan_status TEXT NOT NULL,
+            original_filename_plain_for_public TEXT,
+            mime_type_plain_for_public TEXT,
+            size_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            deleted_at TEXT
+        )
+        """
+    )
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_uploaded_file(conn, storage_root, file_id="multi-track-video", owner_user_id=1, filename="movie.mkv", mime="video/x-matroska")
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id='multi-track-video'").fetchone()
+
+    def probe_payload(*_args, **_kwargs):
+        payload = _fake_probe_payload("video")
+        payload["streams"] = [
+            {"index": 0, "codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080, "bit_rate": "4000000"},
+            {"index": 1, "codec_type": "audio", "codec_name": "eac3", "channels": 6, "tags": {"language": "jpn"}, "disposition": {"default": 1}},
+            {"index": 2, "codec_type": "audio", "codec_name": "eac3", "channels": 6, "tags": {"language": "eng"}, "disposition": {"default": 0}},
+        ]
+        for idx in range(3, 26):
+            payload["streams"].append({
+                "index": idx,
+                "codec_type": "subtitle",
+                "codec_name": "subrip",
+                "tags": {"language": "chi" if idx == 8 else f"s{idx}", "title": "Traditional" if idx == 8 else ""},
+                "disposition": {"default": 1 if idx == 3 else 0, "forced": 1 if idx == 4 else 0},
+            })
+        return payload
+
+    hls_calls = []
+
+    def fake_hls(source_path, **kwargs):
+        hls_calls.append(kwargs)
+        return _fake_hls_package(source_path, **kwargs)
+
+    def fake_run(cmd, **_kwargs):
+        output_path = Path(cmd[-1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n字幕\n", encoding="utf-8")
+        return type("Completed", (), {"stdout": "", "stderr": "", "returncode": 0})()
+
+    monkeypatch.setattr(media_streaming, "_run_probe", probe_payload)
+    monkeypatch.setattr(media_streaming, "_run_ffmpeg_hls", fake_hls)
+    monkeypatch.setattr(media_streaming.subprocess, "run", fake_run)
+
+    asset = media_streaming.prepare_stream_asset(
+        conn,
+        file_row=row,
+        storage_root=storage_root,
+        server_file_fernet=None,
+    )
+
+    assert asset["status"] == "ready"
+    assert len(asset["audio_tracks"]) == 2
+    assert [track["language"] for track in asset["audio_tracks"]] == ["jpn", "eng"]
+    assert len(asset["subtitles"]) == 23
+    assert any(item["is_forced"] for item in asset["subtitles"])
+    assert any(call.get("video_only") for call in hls_calls if call.get("media_type") == "video")
+    assert {call.get("audio_stream_index") for call in hls_calls if call.get("media_type") == "audio"} == {1, 2}
+
+    master = (storage_root / "media_derivatives" / "multi-track-video" / "master.m3u8").read_text(encoding="utf-8")
+    assert '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio"' in master
+    assert 'LANGUAGE="jpn"' in master
+    assert 'LANGUAGE="eng"' in master
+    assert 'AUDIO="audio"' in master
+    playback = media_streaming.stream_playback_payload(conn, file_row=row, video_id=9)
+    assert len(playback["audio_tracks"]) == 2
+    assert any(item["is_forced"] for item in playback["subtitles"])
+    assert playback["service_policy"]["customer_selectable_modes"] == ["direct", "realtime_proxy", "prepared_hls"]
+    assert playback["service_policy"]["fee_model"] == "basic_standard_premium"
+    assert playback["service_policy"]["multi_track_recommended_mode"] == "prepared_hls"
+    premium_policy = playback["service_policy"]["premium_hls_profile_policy"]
+    assert premium_policy["current_profile"] == "full"
+    assert [profile["id"] for profile in premium_policy["profiles"]] == ["full", "storage_saver", "mobile_saver"]
+    assert premium_policy["profiles"][2]["relative_fee"] == "premium_lowest"
+    assert playback["streaming_options"][0]["fee_level"] == "lowest"
+    assert "bandwidth" in playback["streaming_options"][0]["cost_drivers"]
+    assert playback["streaming_options"][1]["mode"] == "realtime_proxy"
+    assert playback["streaming_options"][1]["available"] is False
+    assert playback["streaming_options"][1]["implementation_status"] == "disabled"
+    assert playback["streaming_options"][1]["billing_basis"] == "per_viewer_cpu"
+    assert playback["streaming_options"][2]["mode"] == "prepared_hls"
+    assert playback["streaming_options"][2]["fee_level"] == "highest"
+    assert playback["streaming_options"][2]["profile_policy"]["profiles"][1]["id"] == "storage_saver"
+    assert playback["streaming_options"][2]["media_support"]["multi_audio"] is True
+    assert playback["streaming_options"][2]["media_support"]["multi_subtitle"] is True
 
 
 def test_refresh_stream_subtitles_repairs_ready_asset_without_rebuilding_hls(tmp_path, monkeypatch):
@@ -995,6 +1340,300 @@ def test_ffmpeg_hls_applies_target_bitrate_for_quality_variants(tmp_path, monkey
     assert cmd[cmd.index("-maxrate") + 1] == "3220000"
     assert cmd[cmd.index("-bufsize") + 1] == "5600000"
     assert cmd[cmd.index("-vf") + 1] == "scale=-2:720"
+    assert cmd[cmd.index("-force_key_frames") + 1] == "expr:gte(t,n_forced*4)"
+    assert cmd[cmd.index("-sc_threshold") + 1] == "0"
+
+
+def test_ffmpeg_hls_uses_configured_audio_bitrate(tmp_path, monkeypatch):
+    source = tmp_path / "clip.mkv"
+    source.write_bytes(b"fake-video")
+    derivative_dir = tmp_path / "derivatives"
+    calls = []
+
+    class FakeStdout:
+        def __init__(self):
+            self.lines = iter(["progress=end\n"])
+            self.done = False
+
+        def readline(self):
+            try:
+                return next(self.lines)
+            except StopIteration:
+                self.done = True
+                return ""
+
+    class FakeStderr:
+        def read(self):
+            return ""
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            self.stdout = FakeStdout()
+            self.stderr = FakeStderr()
+            self.returncode = 0
+            calls.append((cmd, kwargs))
+
+        def poll(self):
+            return 0 if self.stdout.done else None
+
+        def wait(self):
+            return 0
+
+        def kill(self):
+            self.stdout.done = True
+
+    def fake_select(readers, _writers, _errors, _timeout):
+        return readers, [], []
+
+    monkeypatch.setenv("HACKME_MEDIA_HLS_AUDIO_BITRATE", "96k")
+    monkeypatch.setattr(media_streaming.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(media_streaming.select, "select", fake_select)
+
+    media_streaming._run_ffmpeg_hls(
+        source,
+        derivative_dir=derivative_dir,
+        media_type="audio",
+        audio_stream_index=2,
+        ffmpeg_bin="ffmpeg",
+    )
+
+    cmd, _kwargs = calls[0]
+    assert cmd[cmd.index("-map") + 1] == "0:2"
+    assert cmd[cmd.index("-b:a") + 1] == "96k"
+    assert cmd[cmd.index("-ac") + 1] == "2"
+
+
+def test_realtime_proxy_command_selects_audio_and_strips_non_media_tracks(tmp_path, monkeypatch):
+    source = tmp_path / "movie.mkv"
+    source.write_bytes(b"media")
+
+    def probe_payload(*_args, **_kwargs):
+        return {
+            "format": {"duration": "300", "bit_rate": "6200000"},
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080},
+                {"index": 1, "codec_type": "audio", "codec_name": "eac3", "channels": 6, "tags": {"language": "jpn"}, "disposition": {"default": 1}},
+                {"index": 2, "codec_type": "audio", "codec_name": "eac3", "channels": 6, "tags": {"language": "eng"}, "disposition": {"default": 0}},
+                {"index": 3, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"language": "eng"}},
+                {"index": 4, "codec_type": "data", "codec_name": "bin_data"},
+            ],
+        }
+
+    monkeypatch.setattr(media_streaming, "_run_probe", probe_payload)
+
+    info = media_streaming.build_realtime_proxy_command(
+        source,
+        audio_track="audio_02_eng",
+        start_seconds=12.5,
+        ffmpeg_bin="ffmpeg-test",
+        ffprobe_bin="ffprobe-test",
+    )
+
+    cmd = info["command"]
+    assert cmd[0] == "ffmpeg-test"
+    assert cmd[cmd.index("-ss") + 1] == "12.5"
+    assert cmd[cmd.index("-map") + 1] == "0:v:0?"
+    assert "0:2" in cmd
+    assert cmd[cmd.index("-map_metadata") + 1] == "-1"
+    assert cmd[cmd.index("-map_chapters") + 1] == "-1"
+    assert "-sn" in cmd
+    assert "-dn" in cmd
+    assert cmd[cmd.index("-c:v") + 1] == "copy"
+    assert cmd[cmd.index("-c:a") + 1] == "aac"
+    assert cmd[cmd.index("-b:a") + 1] == "160k"
+    assert cmd[cmd.index("-ac") + 1] == "2"
+    assert cmd[-2:] == ["mp4", "pipe:1"]
+    assert info["audio_track"]["language"] == "eng"
+    assert [track["name"] for track in info["audio_tracks"]] == ["audio_01_jpn", "audio_02_eng"]
+
+
+def test_realtime_proxy_stream_real_ffmpeg_outputs_single_aac_audio_track(tmp_path, monkeypatch):
+    ffmpeg_bin, ffprobe_bin = _require_ffmpeg_tools()
+    source = _make_multiaudio_mkv_fixture(tmp_path, ffmpeg_bin=ffmpeg_bin)
+    source_probe = media_streaming.realtime_proxy_audio_tracks_for_source(source, ffprobe_bin=ffprobe_bin)
+    assert [track["name"] for track in source_probe] == ["audio_01_jpn", "audio_02_eng"]
+
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_LIMIT_SCOPE", "process")
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_MAX_CONCURRENT", "2")
+    monkeypatch.setattr(media_streaming, "_REALTIME_PROXY_ACTIVE", 0)
+    stream_info = media_streaming.open_realtime_proxy_stream(
+        source,
+        audio_track="audio_02_eng",
+        start_seconds=0,
+        ffmpeg_bin=ffmpeg_bin,
+        ffprobe_bin=ffprobe_bin,
+        chunk_size=32 * 1024,
+    )
+    output = tmp_path / "standard-proxy.mp4"
+    output.write_bytes(b"".join(stream_info["chunks"]))
+
+    assert output.stat().st_size > 1024
+    assert media_streaming.realtime_proxy_runtime_status()["active"] == 0
+    assert stream_info["audio_track"]["name"] == "audio_02_eng"
+    metrics = stream_info["metrics"]
+    assert metrics["finished"] is True
+    assert metrics["closed_by_client"] is False
+    assert metrics["timed_out"] is False
+    assert metrics["bytes_sent"] == output.stat().st_size
+    assert metrics["chunks_sent"] >= 1
+    assert metrics["first_chunk_latency_ms"] is not None
+    assert metrics["duration_ms"] is not None
+    assert "rss_peak_bytes" in metrics
+    assert "cpu_time_seconds" in metrics
+    probe = _ffprobe_json(output, ffprobe_bin=ffprobe_bin)
+    streams = probe.get("streams") or []
+    video_streams = [stream for stream in streams if stream.get("codec_type") == "video"]
+    audio_streams = [stream for stream in streams if stream.get("codec_type") == "audio"]
+    subtitle_streams = [stream for stream in streams if stream.get("codec_type") == "subtitle"]
+    data_streams = [stream for stream in streams if stream.get("codec_type") == "data"]
+
+    assert str((probe.get("format") or {}).get("format_name") or "").startswith("mov,mp4")
+    assert len(video_streams) == 1
+    assert video_streams[0]["codec_name"] == "h264"
+    assert len(audio_streams) == 1
+    assert audio_streams[0]["codec_name"] == "aac"
+    assert int(audio_streams[0].get("channels") or 0) == 2
+    assert subtitle_streams == []
+    assert data_streams == []
+
+
+def test_realtime_proxy_real_ffmpeg_busy_disconnect_metrics_and_reopen(tmp_path, monkeypatch):
+    ffmpeg_bin, ffprobe_bin = _require_ffmpeg_tools()
+    source = _make_multiaudio_mkv_fixture(tmp_path, ffmpeg_bin=ffmpeg_bin)
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_LIMIT_SCOPE", "process")
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_MAX_CONCURRENT", "1")
+    monkeypatch.setattr(media_streaming, "_REALTIME_PROXY_ACTIVE", 0)
+
+    first = media_streaming.open_realtime_proxy_stream(
+        source,
+        audio_track="audio_01_jpn",
+        ffmpeg_bin=ffmpeg_bin,
+        ffprobe_bin=ffprobe_bin,
+        chunk_size=1024,
+    )
+    assert media_streaming.realtime_proxy_runtime_status()["active"] == 1
+    with pytest.raises(RuntimeError, match="realtime_proxy_busy:1/1"):
+        media_streaming.open_realtime_proxy_stream(
+            source,
+            audio_track="audio_02_eng",
+            ffmpeg_bin=ffmpeg_bin,
+            ffprobe_bin=ffprobe_bin,
+            chunk_size=1024,
+        )
+
+    chunks = first["chunks"]
+    first_chunk = next(chunks)
+    assert len(first_chunk) > 0
+    chunks.close()
+    assert media_streaming.realtime_proxy_runtime_status()["active"] == 0
+    first_metrics = first["metrics"]
+    assert first_metrics["finished"] is True
+    assert first_metrics["closed_by_client"] is True
+    assert first_metrics["timed_out"] is False
+    assert first_metrics["chunks_sent"] == 1
+    assert first_metrics["bytes_sent"] == len(first_chunk)
+    assert first_metrics["first_chunk_latency_ms"] is not None
+    assert first_metrics["duration_ms"] is not None
+    assert "rss_peak_bytes" in first_metrics
+    assert "cpu_time_seconds" in first_metrics
+
+    second = media_streaming.open_realtime_proxy_stream(
+        source,
+        audio_track="audio_02_eng",
+        ffmpeg_bin=ffmpeg_bin,
+        ffprobe_bin=ffprobe_bin,
+        chunk_size=32 * 1024,
+    )
+    reopened_bytes = b"".join(second["chunks"])
+    assert len(reopened_bytes) > 1024
+    assert media_streaming.realtime_proxy_runtime_status()["active"] == 0
+    assert second["audio_track"]["name"] == "audio_02_eng"
+    assert second["metrics"]["closed_by_client"] is False
+
+
+def test_stream_playback_payload_exposes_realtime_proxy_when_enabled(tmp_path, monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL,
+            storage_path TEXT NOT NULL,
+            privacy_mode TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            scan_status TEXT NOT NULL,
+            original_filename_plain_for_public TEXT,
+            mime_type_plain_for_public TEXT,
+            size_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            deleted_at TEXT
+        )
+        """
+    )
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_uploaded_file(conn, storage_root, file_id="plain-video", owner_user_id=1, filename="movie.mkv", mime="video/x-matroska")
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id='plain-video'").fetchone()
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_ENABLED", "1")
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_MAX_CONCURRENT", "3")
+
+    playback = media_streaming.stream_playback_payload(conn, file_row=row, video_id=77)
+
+    assert playback["realtime_proxy_url"] == "/api/videos/77/realtime-proxy"
+    assert playback["realtime_proxy"]["available"] is True
+    assert playback["realtime_proxy"]["url"] == "/api/videos/77/realtime-proxy"
+    assert playback["service_policy"]["realtime_proxy_enabled"] is True
+    assert playback["service_policy"]["realtime_proxy_max_concurrent"] == 3
+    standard = next(item for item in playback["streaming_options"] if item["mode"] == "realtime_proxy")
+    assert standard["available"] is True
+    assert standard["implementation_status"] == "ready"
+    assert standard["media_support"]["share_ready"] is True
+
+
+def test_stream_playback_payload_discovers_realtime_proxy_audio_before_hls_ready(tmp_path, monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL,
+            storage_path TEXT NOT NULL,
+            privacy_mode TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            scan_status TEXT NOT NULL,
+            original_filename_plain_for_public TEXT,
+            mime_type_plain_for_public TEXT,
+            size_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            deleted_at TEXT
+        )
+        """
+    )
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_uploaded_file(conn, storage_root, file_id="plain-mkv", owner_user_id=1, filename="movie.mkv", mime="video/x-matroska")
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id='plain-mkv'").fetchone()
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_ENABLED", "1")
+    monkeypatch.setattr(
+        media_streaming,
+        "realtime_proxy_audio_tracks_for_source",
+        lambda *_args, **_kwargs: [
+            {"name": "audio_01_jpn", "label": "Japanese", "language": "jpn", "is_default": True, "stream_index": 1, "codec": "eac3"},
+            {"name": "audio_02_eng", "label": "English", "language": "eng", "is_default": False, "stream_index": 2, "codec": "eac3"},
+        ],
+    )
+
+    playback = media_streaming.stream_playback_payload(conn, file_row=row, video_id=77, storage_root=storage_root)
+
+    assert playback["mode"] == "direct"
+    assert playback["realtime_proxy"]["available"] is True
+    assert [track["name"] for track in playback["audio_tracks"]] == ["audio_01_jpn", "audio_02_eng"]
+    assert all(track["source"] == "realtime_proxy_probe" for track in playback["audio_tracks"])
+    assert all(not track["playlist_url"] for track in playback["audio_tracks"])
 
 
 def test_ffmpeg_hls_falls_back_to_transcode_when_copy_fails(tmp_path, monkeypatch):
@@ -1166,6 +1805,290 @@ def test_video_playback_and_hls_routes_use_ready_stream_asset(tmp_path, monkeypa
     assert segment.mimetype == "video/mp4"
 
 
+def test_video_realtime_proxy_route_streams_when_feature_enabled(tmp_path, monkeypatch):
+    db_path = tmp_path / "video-realtime-proxy.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    client = _build_app(
+        db_path,
+        storage_root,
+        fernet,
+        current_user={"id": 2, "username": "viewer", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(conn, storage_root, file_id="proxy-video-1", owner_user_id=1, filename="movie.mkv", mime="video/x-matroska")
+        video = publish_video(conn, actor={"id": 1, "username": "alice", "role": "user"}, cloud_file_id="proxy-video-1", title="Proxy Movie")
+        conn.commit()
+        video_id = video["id"]
+    finally:
+        conn.close()
+
+    captured = {}
+
+    def fake_open_realtime_proxy_stream(path, **kwargs):
+        captured["path"] = Path(path)
+        captured["kwargs"] = kwargs
+        return {
+            "chunks": iter([b"ftyp", b"moof"]),
+            "mimetype": "video/mp4",
+            "audio_track": {"name": "audio_02_eng"},
+        }
+
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_ENABLED", "1")
+    monkeypatch.setattr(video_routes, "open_realtime_proxy_stream", fake_open_realtime_proxy_stream)
+
+    response = client.get(f"/api/videos/{video_id}/realtime-proxy?audio=audio_02_eng&start=12.5")
+
+    assert response.status_code == 200
+    assert response.mimetype == "video/mp4"
+    assert response.get_data() == b"ftypmoof"
+    assert response.headers["X-Hackme-Streaming-Mode"] == "realtime_proxy"
+    assert response.headers["X-Hackme-Transfer-Mode"] == "python_realtime_proxy"
+    assert response.headers["X-Hackme-Audio-Track"] == "audio_02_eng"
+    assert captured["path"].name == "movie.mkv"
+    assert captured["kwargs"]["audio_track"] == "audio_02_eng"
+    assert captured["kwargs"]["start_seconds"] == "12.5"
+
+
+def test_video_realtime_proxy_route_writes_server_metrics_jsonl(tmp_path, monkeypatch):
+    db_path = tmp_path / "video-realtime-proxy-metrics.db"
+    storage_root = tmp_path / "storage"
+    reports_dir = tmp_path / "reports"
+    storage_root.mkdir()
+    _init_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    client = _build_app(
+        db_path,
+        storage_root,
+        fernet,
+        current_user={"id": 2, "username": "viewer", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+        extra_deps={"REPORTS_DIR": str(reports_dir)},
+    ).test_client()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(conn, storage_root, file_id="proxy-metrics-1", owner_user_id=1, filename="movie.mkv", mime="video/x-matroska", payload=b"media-bytes")
+        video = publish_video(conn, actor={"id": 1, "username": "alice", "role": "user"}, cloud_file_id="proxy-metrics-1", title="Proxy Metrics")
+        conn.commit()
+        video_id = video["id"]
+    finally:
+        conn.close()
+
+    metrics = {
+        "pid": 123,
+        "runtime_active_at_start": 1,
+        "runtime_limit": 2,
+        "bytes_sent": 0,
+        "chunks_sent": 0,
+        "first_chunk_latency_ms": None,
+        "duration_ms": None,
+        "rss_peak_bytes": 0,
+        "cpu_time_seconds": 0.0,
+        "closed_by_client": False,
+        "finished": False,
+    }
+
+    def metric_chunks():
+        try:
+            metrics["chunks_sent"] += 1
+            metrics["bytes_sent"] += 4
+            metrics["first_chunk_latency_ms"] = 12.5
+            yield b"ftyp"
+        finally:
+            metrics.update({
+                "duration_ms": 18.25,
+                "rss_peak_bytes": 51_200_000,
+                "cpu_time_seconds": 0.04,
+                "closed_by_client": True,
+                "finished": True,
+                "returncode": 255,
+            })
+
+    def fake_open_realtime_proxy_stream(_path, **_kwargs):
+        return {
+            "chunks": metric_chunks(),
+            "mimetype": "video/mp4",
+            "audio_track": {"name": "audio_01_jpn", "language": "jpn", "stream_index": 1},
+            "runtime": {"active": 1, "limit": 2},
+            "metrics": metrics,
+        }
+
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_ENABLED", "1")
+    monkeypatch.setattr(video_routes, "open_realtime_proxy_stream", fake_open_realtime_proxy_stream)
+
+    response = client.get(f"/api/videos/{video_id}/realtime-proxy?audio=audio_01_jpn")
+
+    assert response.status_code == 200
+    assert response.get_data() == b"ftyp"
+    assert response.headers["X-Hackme-Realtime-Proxy-Request-Id"]
+    metric_path = reports_dir / "qa" / "realtime_proxy_stream_metrics.jsonl"
+    rows = [json.loads(line) for line in metric_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["event"] == "realtime_proxy_stream_final"
+    assert row["path"] == f"/api/videos/{video_id}/realtime-proxy"
+    assert row["route_kind"] == "video"
+    assert row["audio_selector"] == "audio_01_jpn"
+    assert row["selected_audio"]["name"] == "audio_01_jpn"
+    assert row["runtime"]["active_at_start"] == 1
+    assert row["runtime"]["local_active_at_start"] == 0
+    assert row["runtime"]["limit"] == 2
+    assert row["metrics"]["finished"] is True
+    assert row["metrics"]["bytes_sent"] == 4
+    assert row["metrics"]["rss_peak_bytes"] == 51_200_000
+    assert row["metrics"]["closed_by_client"] is True
+
+
+def test_realtime_proxy_global_slot_rejects_when_host_slot_locked(tmp_path, monkeypatch):
+    fcntl = pytest.importorskip("fcntl")
+    source = tmp_path / "movie.mkv"
+    source.write_bytes(b"demo")
+    lock_dir = tmp_path / "locks"
+    lock_dir.mkdir()
+    lock_handle = (lock_dir / "realtime_proxy_slot_00.lock").open("a+", encoding="utf-8")
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_LOCK_DIR", str(lock_dir))
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_LIMIT_SCOPE", "global")
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_MAX_CONCURRENT", "1")
+    monkeypatch.setattr(media_streaming, "_REALTIME_PROXY_ACTIVE", 0)
+    monkeypatch.setattr(media_streaming, "_REALTIME_PROXY_HELD_SLOTS", set())
+    build_calls = []
+
+    def fake_build(*_args, **_kwargs):
+        build_calls.append(True)
+        raise AssertionError("global slot rejection should happen before ffprobe/ffmpeg setup")
+
+    monkeypatch.setattr(media_streaming, "build_realtime_proxy_command", fake_build)
+    try:
+        with pytest.raises(RuntimeError, match="realtime_proxy_busy:1/1"):
+            media_streaming.open_realtime_proxy_stream(source)
+        status = media_streaming.realtime_proxy_runtime_status()
+        assert status["scope"] == "global"
+        assert status["active"] == 1
+        assert status["global_active"] == 1
+        assert status["limit"] == 1
+        assert build_calls == []
+    finally:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        lock_handle.close()
+
+
+def test_realtime_proxy_stream_releases_slot_on_client_close_and_enforces_limit(tmp_path, monkeypatch):
+    source = tmp_path / "movie.mkv"
+    source.write_bytes(b"demo")
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_LIMIT_SCOPE", "process")
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_MAX_CONCURRENT", "1")
+    monkeypatch.setattr(media_streaming, "_REALTIME_PROXY_ACTIVE", 0)
+    build_calls = []
+
+    def fake_build(*args, **kwargs):
+        build_calls.append((args, kwargs))
+        return {
+            "command": ["ffmpeg", "-i", str(source), "pipe:1"],
+            "mimetype": "video/mp4",
+            "audio_track": {"name": "audio_01_jpn"},
+        }
+
+    monkeypatch.setattr(media_streaming, "build_realtime_proxy_command", fake_build)
+
+    class FakeStdout:
+        def __init__(self):
+            self.closed = False
+            self.reads = 0
+
+        def read(self, _size):
+            self.reads += 1
+            return b"ftyp" if self.reads == 1 else b""
+
+        def close(self):
+            self.closed = True
+
+    class FakeProc:
+        def __init__(self, *_args, **_kwargs):
+            self.stdout = FakeStdout()
+            self.terminated = False
+            self.killed = False
+
+        def poll(self):
+            return None if not self.terminated else 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+            self.terminated = True
+
+    proc_box = {}
+
+    def fake_popen(*args, **kwargs):
+        proc = FakeProc(*args, **kwargs)
+        proc_box["proc"] = proc
+        return proc
+
+    monkeypatch.setattr(media_streaming.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(media_streaming.select, "select", lambda readable, *_args, **_kwargs: (readable, [], []))
+
+    stream_info = media_streaming.open_realtime_proxy_stream(source)
+    assert len(build_calls) == 1
+    assert media_streaming.realtime_proxy_runtime_status()["active"] == 1
+    with pytest.raises(RuntimeError, match="realtime_proxy_busy:1/1"):
+        media_streaming.open_realtime_proxy_stream(source)
+    assert len(build_calls) == 1
+
+    chunks = stream_info["chunks"]
+    assert next(chunks) == b"ftyp"
+    chunks.close()
+
+    assert media_streaming.realtime_proxy_runtime_status()["active"] == 0
+    assert proc_box["proc"].stdout.closed is True
+    assert proc_box["proc"].terminated is True
+
+
+def test_video_realtime_proxy_route_returns_429_when_limit_is_busy(tmp_path, monkeypatch):
+    db_path = tmp_path / "video-realtime-proxy-busy.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    client = _build_app(
+        db_path,
+        storage_root,
+        fernet,
+        current_user={"id": 2, "username": "viewer", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(conn, storage_root, file_id="proxy-busy-1", owner_user_id=1, filename="movie.mkv", mime="video/x-matroska")
+        video = publish_video(conn, actor={"id": 1, "username": "alice", "role": "user"}, cloud_file_id="proxy-busy-1", title="Proxy Busy")
+        conn.commit()
+        video_id = video["id"]
+    finally:
+        conn.close()
+
+    def fake_busy(*_args, **_kwargs):
+        raise RuntimeError("realtime_proxy_busy:1/1")
+
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_ENABLED", "1")
+    monkeypatch.setattr(video_routes, "open_realtime_proxy_stream", fake_busy)
+
+    response = client.get(f"/api/videos/{video_id}/realtime-proxy")
+
+    assert response.status_code == 429
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert payload["error"] == "realtime_proxy_busy"
+    assert payload["realtime_proxy"]["enabled"] is True
+
+
 def test_video_comment_and_danmaku_reject_sensitive_content_before_insert(tmp_path):
     db_path = tmp_path / "video-sensitive.db"
     storage_root = tmp_path / "storage"
@@ -1270,6 +2193,7 @@ def test_shared_standard_video_playback_uses_shared_hls_and_stream_urls(tmp_path
     finally:
         conn.close()
 
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_ENABLED", "1")
     viewer = _build_app(db_path, storage_root, fernet, current_user=None).test_client()
     unlocked = viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"})
     assert unlocked.status_code == 200
@@ -1284,8 +2208,35 @@ def test_shared_standard_video_playback_uses_shared_hls_and_stream_urls(tmp_path
     assert payload["fallback_url"].startswith(f"/api/videos/shared/{token}/stream")
     assert payload["subtitles"][0]["url"].startswith(f"/api/videos/shared/{token}/hls/subtitles/")
     assert "share_session=" in payload["subtitles"][0]["url"]
+    assert payload["realtime_proxy_url"].startswith(f"/api/videos/shared/{token}/realtime-proxy")
+    assert "share_session=" in payload["realtime_proxy_url"]
+    assert payload["realtime_proxy"]["url"].startswith(f"/api/videos/shared/{token}/realtime-proxy")
+    assert "share_session=" in payload["realtime_proxy"]["url"]
     assert f"/api/videos/{video['id']}/" not in payload["master_url"]
     assert f"/api/videos/{video['id']}/" not in payload["stream_url"]
+    assert f"/api/videos/{video['id']}/" not in payload["realtime_proxy_url"]
+
+    proxy_calls = []
+
+    def fake_open_realtime_proxy_stream(path, **kwargs):
+        proxy_calls.append({"path": Path(path), "kwargs": kwargs})
+        return {
+            "chunks": iter([b"ftyp", b"moof"]),
+            "mimetype": "video/mp4",
+            "audio_track": {"name": str(kwargs.get("audio_track") or "")},
+        }
+
+    monkeypatch.setattr(video_routes, "open_realtime_proxy_stream", fake_open_realtime_proxy_stream)
+
+    proxy = viewer.get(f"/api/videos/shared/{token}/realtime-proxy{share_session}&audio=audio_02_eng&start=6.25")
+    assert proxy.status_code == 200
+    assert proxy.get_data() == b"ftypmoof"
+    assert proxy.headers["X-Hackme-Streaming-Mode"] == "realtime_proxy"
+    assert proxy.headers["X-Hackme-Transfer-Mode"] == "python_realtime_proxy"
+    assert proxy.headers["X-Hackme-Audio-Track"] == "audio_02_eng"
+    assert proxy_calls[-1]["path"].name == "movie.mp4"
+    assert proxy_calls[-1]["kwargs"]["audio_track"] == "audio_02_eng"
+    assert proxy_calls[-1]["kwargs"]["start_seconds"] == "6.25"
 
     master = viewer.get(payload["master_url"])
     assert master.status_code == 200
@@ -1500,6 +2451,9 @@ def test_hls_prepare_worker_updates_job_center_until_ready(tmp_path, monkeypatch
 
     monkeypatch.setattr(media_streaming, "_run_probe", lambda *args, **kwargs: _fake_probe_payload("video"))
     monkeypatch.setattr(media_streaming, "_run_ffmpeg_hls", _fake_hls_package)
+    monkeypatch.setenv("HACKME_MEDIA_HLS_SERIALIZE_ALL", "1")
+    monkeypatch.setenv("HACKME_MEDIA_HLS_LOCK_DIR", str(tmp_path / "hls-locks"))
+    monkeypatch.setenv("HACKME_MEDIA_HLS_MAX_CONCURRENT", "1")
 
     rc = hls_prepare_worker.main([
         "--db-path",
@@ -1535,6 +2489,15 @@ def test_hls_prepare_worker_updates_job_center_until_ready(tmp_path, monkeypatch
         assert not job["error_message"]
         assert not job["error_stage"]
         assert "Worker Movie" in job["title"]
+        metadata = json.loads(job["metadata_json"] or "{}")
+        result = json.loads(job["result_json"] or "{}")
+        assert metadata["service_tier"] == "premium_hls"
+        assert metadata["worker_slot"]["scope"] == "global"
+        assert metadata["worker_slot"]["limit"] == 1
+        assert result["worker_slot"]["scope"] == "global"
+        assert result["worker_slot"]["slot_index"] == 0
+        assert result["worker_metrics"]["pid"] > 0
+        assert result["worker_metrics"]["wall_ms"] >= 0
         events = conn.execute(
             "SELECT event_type, stage FROM job_center_events WHERE job_uuid=? ORDER BY id",
             (job["job_uuid"],),
@@ -1543,6 +2506,48 @@ def test_hls_prepare_worker_updates_job_center_until_ready(tmp_path, monkeypatch
         assert ("progress", "ready") in [(row["event_type"], row["stage"]) for row in events]
     finally:
         conn.close()
+
+
+def test_hls_prepare_worker_uses_configurable_global_slot_pool(tmp_path, monkeypatch):
+    fcntl = pytest.importorskip("fcntl")
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    args = type("Args", (), {"storage_root": str(storage_root)})()
+    monkeypatch.setenv("HACKME_MEDIA_HLS_LOCK_DIR", str(tmp_path / "hls-locks"))
+    monkeypatch.setenv("HACKME_MEDIA_HLS_MAX_CONCURRENT", "2")
+
+    first = second = fourth = None
+    try:
+        first, first_state = hls_prepare_worker._try_acquire_hls_worker_slot(args)
+        second, second_state = hls_prepare_worker._try_acquire_hls_worker_slot(args)
+        blocked, blocked_state = hls_prepare_worker._try_acquire_hls_worker_slot(args)
+
+        assert first is not None
+        assert second is not None
+        assert blocked is None
+        assert first_state["scope"] == "global"
+        assert first_state["limit"] == 2
+        assert first_state["slot_index"] == 0
+        assert second_state["slot_index"] == 1
+        assert blocked_state["active"] == 2
+        assert blocked_state["free"] == 0
+
+        hls_prepare_worker._release_hls_worker_slot(first)
+        first = None
+        fourth, fourth_state = hls_prepare_worker._try_acquire_hls_worker_slot(args)
+        assert fourth is not None
+        assert fourth_state["slot_index"] == 0
+    finally:
+        for handle in (first, second, fourth):
+            if handle is not None:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except Exception:
+                    pass
+                try:
+                    handle.close()
+                except Exception:
+                    pass
 
 
 def test_hls_prepare_worker_serializes_only_large_jobs_by_default(tmp_path, monkeypatch):

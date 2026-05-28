@@ -57,6 +57,11 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "browserSupportsNativeHls" in videos_js
     assert "loadVideoHlsLibrary" in videos_js
     assert "attachVideoHlsJsPlayer" in videos_js
+    assert "function videoStreamingOptions(playback = {})" in videos_js
+    assert "video-service-mode-select" in videos_js
+    assert "videoRealtimeProxyUrl" in videos_js
+    assert "realtime_proxy_url" in videos_js
+    assert "Standard 即時轉封裝" in videos_js
     assert "/js/hls.light.min.js?v=20260505-hlsjs" in videos_js
     assert "/js/vendor/hls.light.min.js" not in videos_js
     assert "HLS.js" in videos_js
@@ -222,6 +227,10 @@ def test_video_share_copy_and_shared_page_guardrails_are_visible_in_ui_code():
     assert "function bindSharedSeekProtection" in shared_page
     assert "function sharedQualityFallbackDeferredForSeek" in shared_page
     assert "正在跳轉到指定時間，暫不自動切換畫質。" in shared_page
+    assert "function sharedStreamingOptions(playback={})" in shared_page
+    assert "shared-service-mode-select" in shared_page
+    assert "sharedRealtimeProxyUrl" in shared_page
+    assert "Standard 即時轉封裝" in shared_page
     assert "/js/vendor/hls.light.min.js" not in shared_page
     assert "/js/workers/e2ee-stream-v2-worker.js" not in shared_page
 

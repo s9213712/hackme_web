@@ -97,6 +97,82 @@
       };
     });
   }
+  function sharedAudioTracks(playback={}) {
+    const tracks = Array.isArray(playback?.audio_tracks)
+      ? playback.audio_tracks
+      : (Array.isArray(playback?.status?.audio_tracks) ? playback.status.audio_tracks : []);
+    return tracks.filter((track) => track && track.name).map((track) => ({
+      name: String(track.name || ""),
+      label: String(track.label || track.language || track.name || "音軌"),
+      language: String(track.language || "und"),
+      playlistUrl: String(track.playlist_url || track.url || ""),
+      streamIndex: Number(track.stream_index ?? -1),
+      isDefault: !!track.is_default,
+    }));
+  }
+  function sharedStreamingOptions(playback={}) {
+    const rows = Array.isArray(playback?.streaming_options) ? playback.streaming_options : [];
+    return rows.filter((item) => item && item.mode).map((item) => ({
+      mode: String(item.mode || ""),
+      label: String(item.label || item.service_tier_label || item.mode || ""),
+      tier: String(item.service_tier_label || item.service_tier || ""),
+      available: !!item.available,
+      reason: String(item.availability_reason || ""),
+      summary: String(item.customer_summary || item.notes || ""),
+    }));
+  }
+  function sharedServiceModeStorageKey() {
+    return `hackme_web.shared_video_service_mode.${TOKEN || window.location.pathname}`;
+  }
+  function sharedDefaultServiceMode(playback={}) {
+    const policy = playback?.service_policy || {};
+    const preferred = String(policy.default_mode || policy.recommended_mode || "").trim();
+    if (preferred) return preferred;
+    if (playback?.mode === "hls") return "prepared_hls";
+    return "direct";
+  }
+  function selectedSharedServiceMode(playback={}) {
+    const options = sharedStreamingOptions(playback);
+    const availableModes = new Set(options.filter((option) => option.available).map((option) => option.mode));
+    let saved = "";
+    try {
+      saved = localStorage.getItem(sharedServiceModeStorageKey()) || "";
+    } catch (_err) {
+      saved = "";
+    }
+    if (saved && availableModes.has(saved)) return saved;
+    const preferred = sharedDefaultServiceMode(playback);
+    if (availableModes.has(preferred)) return preferred;
+    if (availableModes.has("prepared_hls")) return "prepared_hls";
+    if (availableModes.has("realtime_proxy")) return "realtime_proxy";
+    if (availableModes.has("direct")) return "direct";
+    return preferred || "direct";
+  }
+  function saveSharedServiceMode(mode) {
+    try {
+      localStorage.setItem(sharedServiceModeStorageKey(), String(mode || ""));
+    } catch (_err) {}
+  }
+  function selectedSharedAudioTrack(playback={}) {
+    const tracks = sharedAudioTracks(playback);
+    if (!tracks.length) return null;
+    const select = $("audio-track-select");
+    if (select) {
+      const selected = Math.max(0, Math.min(tracks.length - 1, Number(select.value || 0)));
+      return tracks[selected] || tracks[0];
+    }
+    return tracks.find((track) => track.isDefault) || tracks[0];
+  }
+  function sharedRealtimeProxyUrl(playback={}, startSeconds=0) {
+    const raw = String(playback?.realtime_proxy_url || playback?.realtime_proxy?.url || "").trim();
+    if (!raw) return "";
+    const url = new URL(raw, window.location.origin);
+    const track = selectedSharedAudioTrack(playback);
+    if (track?.name) url.searchParams.set("audio", track.name);
+    const start = Number(startSeconds || 0);
+    if (Number.isFinite(start) && start > 0) url.searchParams.set("start", String(Math.max(0, Math.round(start * 1000) / 1000)));
+    return withShareSession(`${url.pathname}${url.search}`);
+  }
   function preferredSharedQuality(playback={}) {
     const options = sharedQualityOptions(playback);
     if (!options.length) return null;
@@ -213,13 +289,23 @@
       "manifest_url",
       "chunk_url_template",
       "master_url",
+      "realtime_proxy_url",
     ].forEach((key) => {
       if (playback[key]) playback[key] = withShareSession(playback[key]);
     });
+    if (playback.realtime_proxy && typeof playback.realtime_proxy === "object" && playback.realtime_proxy.url) {
+      playback.realtime_proxy.url = withShareSession(playback.realtime_proxy.url);
+    }
     for (const variant of playback.variants || []) {
       if (!variant || typeof variant !== "object") continue;
       ["playlist_url", "manifest_url", "chunk_url_template"].forEach((key) => {
         if (variant[key]) variant[key] = withShareSession(variant[key]);
+      });
+    }
+    for (const track of playback.audio_tracks || []) {
+      if (!track || typeof track !== "object") continue;
+      ["playlist_url", "url"].forEach((key) => {
+        if (track[key]) track[key] = withShareSession(track[key]);
       });
     }
     for (const subtitle of playback.subtitles || []) {
@@ -268,19 +354,46 @@
     if (!host) return;
     const options = sharedQualityOptions(playback);
     const subtitles = sharedPlaybackSubtitles(playback);
-    if (options.length < 2 && !subtitles.length) {
+    const audioTracks = sharedAudioTracks(playback);
+    const serviceOptions = sharedStreamingOptions(playback);
+    const selectedService = selectedSharedServiceMode(playback);
+    const showHlsControls = selectedService === "prepared_hls";
+    const showRealtimeAudio = selectedService === "realtime_proxy";
+    const hasServiceControl = serviceOptions.length >= 2;
+    const hasQualityControl = showHlsControls && options.length >= 2;
+    const hasAudioControl = (showHlsControls || showRealtimeAudio) && audioTracks.length >= 2;
+    if (!hasServiceControl && !hasQualityControl && !hasAudioControl && !subtitles.length) {
       host.classList.add("hidden");
       host.innerHTML = "";
       return;
     }
     const preferred = preferredSharedQuality(playback);
-    const qualityMarkup = options.length >= 2 ? `
+    const serviceMarkup = hasServiceControl ? `
+      <label for="shared-service-mode-select">方案</label>
+      <select id="shared-service-mode-select">
+        ${serviceOptions.map((option) => `
+          <option value="${escapeHtml(option.mode)}"${option.mode === selectedService ? " selected" : ""}${option.available ? "" : " disabled"}>
+            ${escapeHtml(option.tier ? `${option.tier} · ${option.label}` : option.label)}
+          </option>
+        `).join("")}
+      </select>
+      <small>${escapeHtml((serviceOptions.find((option) => option.mode === selectedService) || serviceOptions[0] || {}).summary || "")}</small>
+    ` : "";
+    const qualityMarkup = hasQualityControl ? `
       <label for="quality-select">畫質</label>
       <select id="quality-select">
         <option value="auto"${preferred?.name ? "" : " selected"}>自動</option>
         ${options.map((option) => `<option value="${escapeHtml(option.name)}"${option.name === preferred?.name ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
       </select>
       <small>預設 720p；網路不穩時會嘗試退回 480p。串流衍生畫質不佔用分享者雲端硬碟容量。</small>
+    ` : "";
+    const defaultAudioIndex = Math.max(0, audioTracks.findIndex((track) => track.isDefault));
+    const audioMarkup = hasAudioControl ? `
+      <label for="audio-track-select">音軌</label>
+      <select id="audio-track-select">
+        ${audioTracks.map((track, index) => `<option value="${index}"${index === defaultAudioIndex ? " selected" : ""}>${escapeHtml(track.label)}</option>`).join("")}
+      </select>
+      ${showRealtimeAudio ? "<small>Standard 即時轉封裝一次輸出選定音軌；切換音軌會重新開啟串流。</small>" : ""}
     ` : "";
     const shiftMarkup = subtitles.length ? `
       <label for="subtitle-shift-seconds">字幕延遲</label>
@@ -290,16 +403,29 @@
       <button class="secondary" type="button" data-subtitle-shift-reset="1">重置</button>
     ` : "";
     host.innerHTML = `
+      ${serviceMarkup}
       ${qualityMarkup}
+      ${audioMarkup}
       ${shiftMarkup}
     `;
     host.classList.remove("hidden");
+    const serviceSelect = $("shared-service-mode-select");
+    if (serviceSelect) {
+      serviceSelect.addEventListener("change", () => {
+        saveSharedServiceMode(serviceSelect.value);
+        loadSharedVideo().catch((err) => setMsg(err.message || "分享影音載入失敗", true));
+      });
+    }
     const select = $("quality-select");
     if (select) {
       select.addEventListener("change", () => {
         sharedManualQualitySelection = true;
         applySharedQualitySelection(playback);
       });
+    }
+    const audioSelect = $("audio-track-select");
+    if (audioSelect) {
+      audioSelect.addEventListener("change", () => applySharedAudioTrackSelection(playback));
     }
     const shiftInput = $("subtitle-shift-seconds");
     const applyShift = (nextMs) => {
@@ -316,6 +442,37 @@
     });
     const reset = host.querySelector("[data-subtitle-shift-reset]");
     if (reset) reset.addEventListener("click", () => applyShift(0));
+  }
+  function applySharedAudioTrackSelection(playback={}) {
+    const tracks = sharedAudioTracks(playback);
+    const select = $("audio-track-select");
+    if (!select || tracks.length < 2) return;
+    const selected = Math.max(0, Math.min(tracks.length - 1, Number(select.value || 0)));
+    if (selectedSharedServiceMode(playback) === "realtime_proxy") {
+      const player = $("shared-player");
+      if (!player) return;
+      const resumeAt = sharedPlaybackResumeTime(player);
+      const wasPaused = player.paused;
+      const nextUrl = sharedRealtimeProxyUrl(playback, resumeAt);
+      if (!nextUrl) return;
+      player.src = nextUrl;
+      if (typeof player.load === "function") player.load();
+      if (!wasPaused && typeof player.play === "function") player.play().catch(() => {});
+      setMsg(`音軌：${tracks[selected]?.label || "音軌"}。`);
+      return;
+    }
+    if (sharedHls && Array.isArray(sharedHls.audioTracks)) {
+      const chosen = tracks[selected];
+      const index = sharedHls.audioTracks.findIndex((track) => {
+        const name = String(track.name || track.label || "").toLowerCase();
+        const lang = String(track.lang || track.language || "").toLowerCase();
+        return name === chosen.label.toLowerCase() || lang === chosen.language.toLowerCase();
+      });
+      if (index >= 0) {
+        sharedHls.audioTrack = index;
+        setMsg(`音軌：${chosen.label}。`);
+      }
+    }
   }
   function applySharedQualitySelection(playback={}) {
     const player = $("shared-player");
@@ -892,6 +1049,28 @@
     clearSharedPlaybackAction();
     const directFallbackAllowed = playback.direct_fallback_allowed !== false;
     renderSharedQualityControl(playback);
+    const selectedService = selectedSharedServiceMode(playback);
+    if (selectedService === "direct") {
+      if (!directFallbackAllowed) {
+        player.removeAttribute("src");
+        setMsg(playback.stream_warning || "此影音不允許直接串流，請改用其他方案。", true);
+        return;
+      }
+      player.src = playback.fallback_url || playback.stream_url || "";
+      setMsg("目前使用 Basic 直接串流。");
+      return;
+    }
+    if (selectedService === "realtime_proxy") {
+      const url = sharedRealtimeProxyUrl(playback, 0);
+      if (!url) {
+        player.removeAttribute("src");
+        setMsg(playback?.realtime_proxy?.reason || "Standard 即時轉封裝目前不可用。", true);
+        return;
+      }
+      player.src = url;
+      setMsg("目前使用 Standard 即時轉封裝；伺服器會即時轉出瀏覽器較好播放的音訊。");
+      return;
+    }
     const preferred = preferredSharedQuality(playback);
     const preferredUrl = preferred?.playlistUrl || playback.master_url || "";
     if (playback.mode === "hls" && browserSupportsNativeHls(video.media_type)) {
@@ -920,7 +1099,11 @@
         sharedHls = new Hls({ enableWorker: true, backBufferLength: 30 });
         sharedHls.on(Hls.Events.MANIFEST_PARSED, () => {
           if (selectedSharedQuality(playback)) applySharedQualitySelection(playback);
+          applySharedAudioTrackSelection(playback);
         });
+        if (Hls.Events.AUDIO_TRACKS_UPDATED) {
+          sharedHls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => applySharedAudioTrackSelection(playback));
+        }
         sharedHls.on(Hls.Events.ERROR, (_event, data) => {
           const detail = data?.details ? String(data.details) : "";
           const type = data?.type ? String(data.type) : "";

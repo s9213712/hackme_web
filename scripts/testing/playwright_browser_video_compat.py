@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -62,10 +64,75 @@ def attach_error_handlers(page, bucket: list[dict[str, str]], browser_name: str)
     page.on("pageerror", lambda exc: add("pageerror", str(exc)))
 
 
+def generate_multiaudio_mkv(target: Path) -> dict[str, Any]:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        target.write_bytes(generate_tiny_mp4())
+        return {"kind": "tiny_mp4_fallback", "multi_audio": False, "reason": "ffmpeg_missing"}
+    subtitle = target.with_suffix(".srt")
+    subtitle.write_text("1\n00:00:00,200 --> 00:00:02,800\nbrowser smoke subtitle\n", encoding="utf-8")
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=duration=3:size=160x90:rate=15",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=3",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=880:duration=3",
+        "-i",
+        str(subtitle),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-map",
+        "2:a:0",
+        "-map",
+        "3:s:0",
+        "-metadata:s:a:0",
+        "language=jpn",
+        "-metadata:s:a:0",
+        "title=Japanese",
+        "-metadata:s:a:1",
+        "language=eng",
+        "-metadata:s:a:1",
+        "title=English",
+        "-metadata:s:s:0",
+        "language=zh",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-tune",
+        "zerolatency",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-c:s",
+        "srt",
+        str(target),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
+    return {"kind": "multiaudio_mkv", "multi_audio": True, "path": str(target)}
+
+
 def publish_video_fixture(page, base_url: str, runtime_root: Path) -> dict[str, Any]:
-    video_path = runtime_root / "reports" / "qa" / f"browser_compat_{int(time.time() * 1000)}.mp4"
+    video_path = runtime_root / "reports" / "qa" / f"browser_compat_{int(time.time() * 1000)}.mkv"
     video_path.parent.mkdir(parents=True, exist_ok=True)
-    video_path.write_bytes(generate_tiny_mp4())
+    fixture_meta = generate_multiaudio_mkv(video_path)
     try:
         login(page, base_url)
         enable_required_features(page, base_url)
@@ -89,10 +156,10 @@ def publish_video_fixture(page, base_url: str, runtime_root: Path) -> dict[str, 
                 if (toggle) toggle.setAttribute('aria-expanded', 'true');
             }"""
         )
-        page.wait_for_selector("#video-upload-file", timeout=5000)
+        page.wait_for_selector("#video-upload-file", state="attached", timeout=5000)
         page.set_input_files("#video-upload-file", str(video_path))
-        page.fill("#video-publish-title", "Browser Compat QA 影音")
-        page.fill("#video-publish-description", "跨瀏覽器影音預覽測試 fixture。")
+        page.fill("#video-publish-title", "Browser Standard Proxy QA 影音")
+        page.fill("#video-publish-description", "跨瀏覽器 Standard 即時轉封裝測試 fixture。")
         page.select_option("#video-publish-visibility", "unlisted")
         page.fill("#video-share-password", SHARE_PASSWORD)
         page.fill("#video-share-max-views", "0")
@@ -135,10 +202,15 @@ def publish_video_fixture(page, base_url: str, runtime_root: Path) -> dict[str, 
             "playback": playback,
             "master": master,
             "latest": latest,
+            "fixture": fixture_meta,
         }
     finally:
         try:
             video_path.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            video_path.with_suffix(".srt").unlink()
         except FileNotFoundError:
             pass
 
@@ -178,6 +250,126 @@ def inspect_media_page(page) -> dict[str, Any]:
             };
         }"""
     )
+
+
+def inspect_standard_controls(page) -> dict[str, Any]:
+    return page.evaluate(
+        """() => {
+            const service = document.querySelector('#shared-service-mode-select');
+            const audio = document.querySelector('#audio-track-select');
+            const player = document.querySelector('#shared-player');
+            const serviceOptions = service ? Array.from(service.options).map(option => ({
+                value: option.value,
+                text: option.textContent || '',
+                disabled: option.disabled,
+                selected: option.selected,
+            })) : [];
+            const audioOptions = audio ? Array.from(audio.options).map(option => ({
+                value: option.value,
+                text: option.textContent || '',
+                selected: option.selected,
+            })) : [];
+            return {
+                hasServiceSelect: !!service,
+                selectedService: service ? service.value : '',
+                serviceOptions,
+                hasRealtimeOption: serviceOptions.some(option => option.value === 'realtime_proxy' && !option.disabled),
+                hasAudioSelect: !!audio,
+                audioOptions,
+                audioOptionCount: audioOptions.length,
+                playerSrc: player ? (player.currentSrc || player.src || '') : '',
+            };
+        }"""
+    )
+
+
+def fetch_realtime_probe(page, player_src: str) -> dict[str, Any]:
+    if not player_src:
+        return {"ok": False, "reason": "empty_player_src"}
+    return page.evaluate(
+        """async url => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 7000);
+            try {
+                const res = await fetch(url, {credentials: 'same-origin', signal: controller.signal});
+                let firstChunkBytes = 0;
+                if (res.body && typeof res.body.getReader === 'function') {
+                    const reader = res.body.getReader();
+                    const first = await reader.read();
+                    firstChunkBytes = first && first.value ? first.value.byteLength : 0;
+                    try { await reader.cancel(); } catch (err) {}
+                } else {
+                    const blob = await res.blob();
+                    firstChunkBytes = blob.size || 0;
+                }
+                return {
+                    ok: res.ok,
+                    status: res.status,
+                    contentType: res.headers.get('content-type') || '',
+                    firstChunkBytes,
+                };
+            } catch (err) {
+                return {ok: false, status: 0, error: String(err && err.message || err)};
+            } finally {
+                clearTimeout(timer);
+                controller.abort();
+            }
+        }""",
+        player_src,
+    )
+
+
+def switch_to_standard_proxy(page) -> dict[str, Any]:
+    before = inspect_standard_controls(page)
+    if not before.get("hasRealtimeOption"):
+        return {"ok": False, "before": before, "reason": "realtime_proxy_option_missing"}
+    if before.get("selectedService") != "realtime_proxy":
+        try:
+            with page.expect_response(lambda response: "/api/videos/shared/" in response.url and "/playback" in response.url, timeout=30000):
+                page.select_option("#shared-service-mode-select", "realtime_proxy")
+        except PlaywrightTimeoutError:
+            page.select_option("#shared-service-mode-select", "realtime_proxy")
+    page.wait_for_function(
+        """() => {
+            const player = document.querySelector('#shared-player');
+            const src = player ? (player.currentSrc || player.src || '') : '';
+            return src.includes('/realtime-proxy');
+        }""",
+        timeout=30000,
+    )
+    page.wait_for_timeout(500)
+    after = inspect_standard_controls(page)
+    audio_switched = False
+    if int(after.get("audioOptionCount") or 0) >= 2:
+        page.select_option("#audio-track-select", str(int(after["audioOptionCount"]) - 1))
+        page.wait_for_function(
+            """() => {
+                const player = document.querySelector('#shared-player');
+                const src = player ? (player.currentSrc || player.src || '') : '';
+                return src.includes('/realtime-proxy') && /[?&]audio=/.test(src);
+            }""",
+            timeout=30000,
+        )
+        page.wait_for_timeout(500)
+        audio_switched = True
+    final_state = inspect_standard_controls(page)
+    proxy_fetch = fetch_realtime_probe(page, final_state.get("playerSrc") or "")
+    ok = (
+        final_state.get("selectedService") == "realtime_proxy"
+        and "/realtime-proxy" in str(final_state.get("playerSrc") or "")
+        and proxy_fetch.get("status") == 200
+        and "video/mp4" in str(proxy_fetch.get("contentType") or "")
+        and int(proxy_fetch.get("firstChunkBytes") or 0) > 0
+        and (int(final_state.get("audioOptionCount") or 0) < 2 or audio_switched)
+    )
+    return {
+        "ok": bool(ok),
+        "before": before,
+        "after": after,
+        "final": final_state,
+        "audio_switched": audio_switched,
+        "proxy_fetch": proxy_fetch,
+    }
 
 
 def check_shared_video_browser(browser_type, *, browser_name: str, base_url: str, share_url: str, headed: bool, mobile: bool) -> dict[str, Any]:
@@ -237,6 +429,7 @@ def check_shared_video_browser(browser_type, *, browser_name: str, base_url: str
                 }""",
                 master_url,
             )
+        standard = switch_to_standard_proxy(page)
         fatal_errors = [
             item
             for item in errors
@@ -249,10 +442,11 @@ def check_shared_video_browser(browser_type, *, browser_name: str, base_url: str
             and media["width"] > 0
             and media["height"] > 0
             and media["hostHidden"] is False
+            and standard.get("ok") is True
             and not fatal_errors
-            and (not master_url or (master.get("status") == 200 and "avc1." in master.get("text", "")))
+            and (not master_url or (master.get("status") == 200 and "#EXTM3U" in master.get("text", "")))
         )
-        result.update({"ok": bool(ok), "media": media, "playback": playback, "master": master, "fatal_errors": fatal_errors})
+        result.update({"ok": bool(ok), "media": media, "playback": playback, "master": master, "standard": standard, "fatal_errors": fatal_errors})
         return result
     except Exception as exc:
         result.update({"ok": False, "exception": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc()})
@@ -283,10 +477,12 @@ def write_outputs(runtime_root: Path, payload: dict[str, Any]) -> tuple[Path, Pa
         mark = "PASS" if item.get("ok") else "FAIL"
         media = item.get("media") or {}
         playback = (item.get("playback") or {}).get("body") or {}
+        standard = item.get("standard") or {}
         lines.append(
             f"- `{mark}` {item.get('browser')} {item.get('viewport')}: "
             f"mode={playback.get('mode')}, player={media.get('playerTag')}, "
-            f"size={media.get('width')}x{media.get('height')}, msg={str(media.get('msg') or '')[:100]}"
+            f"size={media.get('width')}x{media.get('height')}, standard={standard.get('ok')}, "
+            f"msg={str(media.get('msg') or '')[:100]}"
         )
         if item.get("exception"):
             lines.append(f"  - exception: `{item.get('exception')}`")
@@ -309,6 +505,8 @@ def main() -> int:
     runtime_root = Path(args.runtime_root).resolve() if args.runtime_root else Path("/tmp") / f"hackme_web_browser_video_{stamp}"
     mkdirs(runtime_root)
     port = free_port()
+    os.environ.setdefault("HACKME_MEDIA_REALTIME_PROXY_ENABLED", "1")
+    os.environ.setdefault("HACKME_MEDIA_REALTIME_PROXY_MAX_CONCURRENT", "2")
     server = start_server(runtime_root, port)
     base_url = ""
     payload: dict[str, Any] = {

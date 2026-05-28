@@ -14,7 +14,7 @@ import tempfile
 import threading
 from datetime import datetime, timedelta
 
-from flask import Response, request, send_file, session
+from flask import Response, request, send_file, session, stream_with_context
 
 from services.storage.cloud_drive import (
     decrypt_server_encrypted_bytes,
@@ -25,13 +25,17 @@ from services.storage.cloud_drive import (
     store_cloud_upload,
 )
 from services.core.http_headers import build_content_disposition
+from services.core.file_offload import x_accel_response
 from services.media.streaming import (
     add_stream_subtitle,
     ensure_media_stream_schema,
     get_stream_status,
     mark_stream_asset_processing,
+    open_realtime_proxy_stream,
     parse_subtitle_shift_ms,
     repair_hls_master_manifest_text,
+    realtime_proxy_availability,
+    realtime_proxy_runtime_status,
     shift_webvtt_text,
     should_auto_prepare_stream,
     STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON,
@@ -102,6 +106,7 @@ def register_video_routes(app, deps):
     server_file_fernet = deps.get("server_file_fernet")
     db_path = deps.get("DB_PATH")
     log_dir = deps.get("LOG_DIR")
+    reports_dir = deps.get("REPORTS_DIR") or os.environ.get("HTML_LEARNING_REPORTS_DIR")
     server_file_key_path = deps.get("SERVER_FILE_KEY_PATH")
     get_system_settings = deps.get("get_system_settings", lambda: {})
     get_member_level_rule = deps["get_member_level_rule"]
@@ -110,6 +115,7 @@ def register_video_routes(app, deps):
     forbidden_share_fields = {"raw_file_key", "e2ee_password", "vk", "share_key", "share_key_bytes"}
     stream_prepare_lock = threading.Lock()
     stream_prepare_jobs = set()
+    realtime_proxy_metrics_lock = threading.Lock()
 
     def _now_iso():
         return datetime.now().replace(microsecond=0).isoformat()
@@ -257,6 +263,16 @@ def register_video_routes(app, deps):
             return None
         return next((item for item in (asset.get("subtitles") or []) if item.get("name") == clean), None)
 
+    def _hls_rendition_match(asset, name):
+        clean = str(name or "").strip()
+        if not clean or "/" in clean or ".." in clean:
+            return None
+        for group in ("variants", "audio_tracks"):
+            match = next((item for item in ((asset or {}).get(group) or []) if item.get("name") == clean), None)
+            if match:
+                return match
+        return None
+
     def _send_subtitle_file(path, *, download_name):
         shift_ms = parse_subtitle_shift_ms(request.args.get("shift_ms"))
         if shift_ms:
@@ -267,7 +283,186 @@ def register_video_routes(app, deps):
                 mimetype="text/vtt; charset=utf-8",
                 headers={"Cache-Control": "no-store"},
             )
-        return send_file(path, as_attachment=False, download_name=download_name, mimetype="text/vtt; charset=utf-8", conditional=True)
+        return _send_storage_file(path, as_attachment=False, download_name=download_name, mimetype="text/vtt; charset=utf-8")
+
+    def _send_storage_file(path, *, as_attachment=False, download_name="download.bin", mimetype=None, conditional=True):
+        offloaded = x_accel_response(
+            path,
+            storage_root=storage_root,
+            as_attachment=as_attachment,
+            download_name=download_name,
+            mimetype=mimetype or mimetypes.guess_type(str(download_name or ""))[0] or "application/octet-stream",
+        )
+        if offloaded is not None:
+            return offloaded
+        response = send_file(
+            path,
+            as_attachment=as_attachment,
+            download_name=download_name,
+            mimetype=mimetype,
+            conditional=conditional,
+        )
+        response.headers.setdefault("X-Hackme-Transfer-Mode", "python_send_file")
+        return response
+
+    def _realtime_proxy_audio_selector_from_request():
+        return (
+            request.args.get("audio")
+            or request.args.get("audio_track")
+            or request.args.get("track")
+            or ""
+        )
+
+    def _realtime_proxy_error(message, *, error="realtime_proxy_unavailable", status=409, extra=None):
+        payload = {
+            "ok": False,
+            "msg": message,
+            "error": error,
+            "realtime_proxy": realtime_proxy_runtime_status(),
+        }
+        if extra:
+            payload.update(extra)
+        return json_resp(payload), status
+
+    def _realtime_proxy_metrics_path():
+        base = reports_dir or os.environ.get("HTML_LEARNING_REPORTS_DIR")
+        if not base and os.environ.get("HACKME_RUNTIME_DIR"):
+            base = os.path.join(os.environ["HACKME_RUNTIME_DIR"], "reports")
+        if base:
+            return Path(base) / "qa" / "realtime_proxy_stream_metrics.jsonl"
+        if log_dir:
+            return Path(log_dir) / "realtime_proxy_stream_metrics.jsonl"
+        return None
+
+    def _realtime_proxy_request_context(file_row, *, source_path, download_name, stream_info):
+        actor = None
+        try:
+            actor = get_current_user_ctx()
+        except Exception:
+            actor = None
+        selected_audio = stream_info.get("audio_track") or {}
+        runtime = stream_info.get("runtime") or {}
+        return {
+            "event": "realtime_proxy_stream_final",
+            "request_id": secrets.token_hex(8),
+            "method": request.method,
+            "path": request.path,
+            "route_kind": "shared_video" if request.path.startswith("/api/videos/shared/") else "video",
+            "has_share_session": bool(request.args.get("share_session")),
+            "audio_selector": _realtime_proxy_audio_selector_from_request(),
+            "start": str(request.args.get("start") or ""),
+            "client_ip": get_client_ip(),
+            "ua": get_ua(),
+            "user": str((actor or {}).get("username") or ""),
+            "file_id": str(file_row["id"] if "id" in file_row.keys() else ""),
+            "owner_user_id": int(file_row["owner_user_id"] if "owner_user_id" in file_row.keys() else 0),
+            "source_size_bytes": int(file_row["size_bytes"] if "size_bytes" in file_row.keys() else 0),
+            "source_mime_type": str(file_row["mime_type_plain_for_public"] if "mime_type_plain_for_public" in file_row.keys() else ""),
+            "source_mode": str(file_row["privacy_mode"] if "privacy_mode" in file_row.keys() else ""),
+            "source_path_name": Path(source_path).name,
+            "download_name": str(download_name or ""),
+            "selected_audio": {
+                "name": str(selected_audio.get("name") or ""),
+                "language": str(selected_audio.get("language") or ""),
+                "stream_index": int(selected_audio.get("stream_index") or -1),
+            },
+            "runtime": {
+                "active_at_start": int(runtime.get("active") or 0),
+                "local_active_at_start": int(runtime.get("local_active") or 0),
+                "limit": int(runtime.get("limit") or 0),
+                "scope": str(runtime.get("scope") or ""),
+                "slot_index": runtime.get("slot_index"),
+            },
+        }
+
+    def _write_realtime_proxy_metrics(payload):
+        try:
+            path = _realtime_proxy_metrics_path()
+            if path is None:
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+            with realtime_proxy_metrics_lock:
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(line + "\n")
+            try:
+                app.logger.info("realtime_proxy_stream_final %s", line)
+            except Exception:
+                pass
+        except Exception as exc:
+            try:
+                app.logger.warning("realtime_proxy_metrics_write_failed error=%s", exc)
+            except Exception:
+                pass
+
+    def _instrument_realtime_proxy_chunks(chunks, stream_info, context):
+        try:
+            for chunk in chunks:
+                yield chunk
+        finally:
+            close = getattr(chunks, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+            payload = {
+                **context,
+                "ts": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "metrics": dict(stream_info.get("metrics") or {}),
+            }
+            _write_realtime_proxy_metrics(payload)
+
+    def _realtime_proxy_file_response(file_row, *, download_name="video.mp4"):
+        availability = realtime_proxy_availability(file_row)
+        if not availability.get("available"):
+            return _realtime_proxy_error(
+                "即時轉封裝目前不可用，請改用直接串流或預處理 HLS。",
+                error=str(availability.get("reason") or "realtime_proxy_unavailable"),
+                status=409,
+                extra={"availability": availability},
+            )
+        path = resolve_file_storage_path(storage_root, file_row)
+        if not path.exists():
+            return json_resp({"ok": False, "msg": "實體檔案不存在", "error": "file_missing"}), 404
+        try:
+            stream_info = open_realtime_proxy_stream(
+                path,
+                audio_track=_realtime_proxy_audio_selector_from_request(),
+                start_seconds=request.args.get("start") or 0,
+                ffmpeg_bin=ffmpeg_bin,
+                ffprobe_bin=ffprobe_bin,
+            )
+        except RuntimeError as exc:
+            if str(exc).startswith("realtime_proxy_busy:"):
+                return _realtime_proxy_error(
+                    "即時轉封裝目前已達併發上限，請稍後再試或使用預處理 HLS。",
+                    error="realtime_proxy_busy",
+                    status=429,
+                )
+            return _realtime_proxy_error(str(exc), status=500)
+        except ValueError as exc:
+            return _realtime_proxy_error(str(exc), error="invalid_realtime_proxy_request", status=400)
+        except FileNotFoundError:
+            return _realtime_proxy_error("找不到 ffmpeg / ffprobe，無法啟動即時轉封裝。", error="ffmpeg_missing", status=503)
+        metric_context = _realtime_proxy_request_context(file_row, source_path=path, download_name=download_name, stream_info=stream_info)
+        response = Response(
+            stream_with_context(_instrument_realtime_proxy_chunks(stream_info["chunks"], stream_info, metric_context)),
+            status=200,
+            mimetype=stream_info.get("mimetype") or "video/mp4",
+            direct_passthrough=True,
+        )
+        response.headers["X-Hackme-Realtime-Proxy-Request-Id"] = metric_context["request_id"]
+        response.headers["Content-Disposition"] = build_content_disposition("inline", download_name or "video.mp4")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Accel-Buffering"] = "no"
+        response.headers["Accept-Ranges"] = "none"
+        response.headers["X-Hackme-Transfer-Mode"] = "python_realtime_proxy"
+        selected_audio = stream_info.get("audio_track") or {}
+        if selected_audio.get("name"):
+            response.headers["X-Hackme-Audio-Track"] = str(selected_audio.get("name") or "")
+        response.headers["X-Hackme-Streaming-Mode"] = "realtime_proxy"
+        return response
 
     def _video_stream_worker_key(file_id):
         return str(file_id or "").strip()
@@ -1105,6 +1300,7 @@ def register_video_routes(app, deps):
             response = Response(raw, status=200, mimetype=mimetype or "application/octet-stream")
             response.headers["Content-Length"] = str(total_size)
         response.headers["Accept-Ranges"] = "bytes"
+        response.headers["X-Hackme-Transfer-Mode"] = "python_buffered_bytes"
         response.headers["Content-Disposition"] = build_content_disposition("inline", download_name)
         return response
 
@@ -1287,15 +1483,23 @@ def register_video_routes(app, deps):
             "manifest_url",
             "chunk_url_template",
             "master_url",
+            "realtime_proxy_url",
         ):
             if payload.get(key):
                 payload[key] = _url_with_share_session(payload[key], share_session_id)
+        if isinstance(payload.get("realtime_proxy"), dict) and payload["realtime_proxy"].get("url"):
+            payload["realtime_proxy"]["url"] = _url_with_share_session(payload["realtime_proxy"]["url"], share_session_id)
         for variant in payload.get("variants") or []:
             if not isinstance(variant, dict):
                 continue
             for key in ("playlist_url", "manifest_url", "chunk_url_template"):
                 if variant.get(key):
                     variant[key] = _url_with_share_session(variant[key], share_session_id)
+        for track in payload.get("audio_tracks") or []:
+            if not isinstance(track, dict):
+                continue
+            if track.get("playlist_url"):
+                track["playlist_url"] = _url_with_share_session(track["playlist_url"], share_session_id)
         if payload.get("e2ee_variants") is not payload.get("variants"):
             for variant in payload.get("e2ee_variants") or []:
                 if not isinstance(variant, dict):
@@ -1502,18 +1706,25 @@ def register_video_routes(app, deps):
                 },
             }
             return payload
-        payload = stream_playback_payload(conn, file_row=row, video_id=video_id)
+        payload = stream_playback_payload(conn, file_row=row, video_id=video_id, storage_root=storage_root, ffprobe_bin=ffprobe_bin)
         if shared_token:
             shared_base = f"/api/videos/shared/{shared_token}"
             if payload.get("fallback_url"):
                 payload["fallback_url"] = f"{shared_base}/stream"
             if payload.get("stream_url"):
                 payload["stream_url"] = f"{shared_base}/stream"
+            if payload.get("realtime_proxy_url"):
+                payload["realtime_proxy_url"] = f"{shared_base}/realtime-proxy"
+            if isinstance(payload.get("realtime_proxy"), dict) and payload["realtime_proxy"].get("url"):
+                payload["realtime_proxy"]["url"] = f"{shared_base}/realtime-proxy"
             if payload.get("master_url"):
                 payload["master_url"] = f"{shared_base}/hls/master.m3u8"
             for variant in payload.get("variants") or []:
                 if isinstance(variant, dict) and variant.get("name"):
                     variant["playlist_url"] = f"{shared_base}/hls/{variant['name']}/playlist.m3u8"
+            for track in payload.get("audio_tracks") or []:
+                if isinstance(track, dict) and track.get("name"):
+                    track["playlist_url"] = f"{shared_base}/hls/{track['name']}/playlist.m3u8"
             for subtitle in payload.get("subtitles") or []:
                 if isinstance(subtitle, dict) and subtitle.get("name"):
                     subtitle["url"] = f"{shared_base}/hls/subtitles/{subtitle['name']}.vtt"
@@ -2112,7 +2323,7 @@ def register_video_routes(app, deps):
             mimetype = file_row["mime_type_plain_for_public"] or "video/mp4"
             if is_e2ee_file(file_row):
                 conn.commit()
-                return send_file(path, as_attachment=False, download_name=filename, mimetype="application/octet-stream", conditional=True)
+                return _send_storage_file(path, as_attachment=False, download_name=filename, mimetype="application/octet-stream")
             if is_server_encrypted_file(file_row):
                 conn.commit()
                 return json_resp({
@@ -2121,7 +2332,31 @@ def register_video_routes(app, deps):
                     "error": "server_encrypted_hls_required",
                 }), 409
             conn.commit()
-            return send_file(path, as_attachment=False, download_name=filename, mimetype=mimetype, conditional=True)
+            return _send_storage_file(path, as_attachment=False, download_name=filename, mimetype=mimetype)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>/realtime-proxy", methods=["GET"])
+    def shared_video_realtime_proxy(token):
+        conn = get_db()
+        try:
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _ensure_shared_video_session_counted(
+                conn,
+                row,
+                token,
+                password_verified=password_verified,
+                share_session_id=share_session_id,
+                counted_in_session=counted_in_session,
+            )
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            filename = file_row["original_filename_plain_for_public"] or row["title"] or "video.mp4"
+            conn.commit()
+            return _realtime_proxy_file_response(file_row, download_name=filename)
         finally:
             conn.close()
 
@@ -2154,7 +2389,7 @@ def register_video_routes(app, deps):
                 conn.commit()
                 return _send_bytes_with_range(raw, download_name=filename, mimetype=mimetype, range_header=request.headers.get("Range"))
             conn.commit()
-            return send_file(path, as_attachment=False, download_name=filename, mimetype=mimetype, conditional=True)
+            return _send_storage_file(path, as_attachment=False, download_name=filename, mimetype=mimetype)
         finally:
             conn.close()
 
@@ -2249,6 +2484,7 @@ def register_video_routes(app, deps):
             response = Response(resolved["payload"], status=200, mimetype=resolved.get("content_type") or "application/octet-stream")
             response.headers["Content-Length"] = str(len(resolved["payload"]))
             response.headers["Cache-Control"] = "private, max-age=0, no-store"
+            response.headers["X-Hackme-Transfer-Mode"] = "python_e2ee_chunk"
             return response
         finally:
             conn.close()
@@ -2280,6 +2516,7 @@ def register_video_routes(app, deps):
             response = Response(resolved["payload"], status=200, mimetype=resolved.get("content_type") or "application/octet-stream")
             response.headers["Content-Length"] = str(len(resolved["payload"]))
             response.headers["Cache-Control"] = "private, max-age=0, no-store"
+            response.headers["X-Hackme-Transfer-Mode"] = "python_e2ee_chunk"
             return response
         finally:
             conn.close()
@@ -2301,12 +2538,11 @@ def register_video_routes(app, deps):
             if not path.exists():
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             conn.commit()
-            return send_file(
+            return _send_storage_file(
                 path,
                 as_attachment=False,
                 download_name=file_row["original_filename_plain_for_public"] or "e2ee.bin",
                 mimetype="application/octet-stream",
-                conditional=True,
             )
         finally:
             conn.close()
@@ -2345,7 +2581,7 @@ def register_video_routes(app, deps):
             asset = get_stream_status(conn, file_row=file_row, include_segments=False)
             if not asset or asset.get("status") != "ready":
                 return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
-            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            match = _hls_rendition_match(asset, variant)
             if not match:
                 return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
             path = resolve_file_storage_path(storage_root, {"storage_path": match["playlist_path"]})
@@ -2390,7 +2626,7 @@ def register_video_routes(app, deps):
             asset = get_stream_status(conn, file_row=file_row)
             if not asset or asset.get("status") != "ready":
                 return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
-            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            match = _hls_rendition_match(asset, variant)
             if not match:
                 return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
             if "/" in segment or ".." in segment:
@@ -2404,7 +2640,7 @@ def register_video_routes(app, deps):
             path = resolve_file_storage_path(storage_root, {"storage_path": rel})
             mimetype = "video/mp4" if segment.endswith(".mp4") or segment.endswith(".m4s") else "application/octet-stream"
             conn.commit()
-            return send_file(path, as_attachment=False, download_name=segment, mimetype=mimetype, conditional=True)
+            return _send_storage_file(path, as_attachment=False, download_name=segment, mimetype=mimetype)
         finally:
             conn.close()
 
@@ -2991,6 +3227,7 @@ def register_video_routes(app, deps):
             response = Response(resolved["payload"], status=200, mimetype=resolved.get("content_type") or "application/octet-stream")
             response.headers["Content-Length"] = str(len(resolved["payload"]))
             response.headers["Cache-Control"] = "private, max-age=0, no-store"
+            response.headers["X-Hackme-Transfer-Mode"] = "python_e2ee_chunk"
             return response
         except PermissionError as exc:
             return _error_response(exc)
@@ -3025,6 +3262,7 @@ def register_video_routes(app, deps):
             response = Response(resolved["payload"], status=200, mimetype=resolved.get("content_type") or "application/octet-stream")
             response.headers["Content-Length"] = str(len(resolved["payload"]))
             response.headers["Cache-Control"] = "private, max-age=0, no-store"
+            response.headers["X-Hackme-Transfer-Mode"] = "python_e2ee_chunk"
             return response
         except PermissionError as exc:
             return _error_response(exc)
@@ -3086,12 +3324,11 @@ def register_video_routes(app, deps):
             path = resolve_file_storage_path(storage_root, file_row)
             if not path.exists():
                 return json_resp({"ok": False, "msg": "實體檔案不存在", "error": "file_missing"}), 404
-            return send_file(
+            return _send_storage_file(
                 path,
                 as_attachment=False,
                 download_name=file_row["original_filename_plain_for_public"] or "e2ee.bin",
                 mimetype="application/octet-stream",
-                conditional=True,
             )
         except PermissionError as exc:
             return _error_response(exc)
@@ -3161,12 +3398,11 @@ def register_video_routes(app, deps):
             filename = row["original_filename_plain_for_public"] or video["title"] or "video"
             mimetype = row["mime_type_plain_for_public"] or "video/mp4"
             if is_e2ee_file(row):
-                return send_file(
+                return _send_storage_file(
                     path,
                     as_attachment=False,
                     download_name=filename,
                     mimetype="application/octet-stream",
-                    conditional=True,
                 )
             if is_server_encrypted_file(row):
                 return json_resp({
@@ -3174,7 +3410,26 @@ def register_video_routes(app, deps):
                     "msg": "伺服端加密影音不提供主程序直接解密串流，請使用已準備完成的 HLS 播放。",
                     "error": "server_encrypted_hls_required",
                 }), 409
-            return send_file(path, as_attachment=False, download_name=filename, mimetype=mimetype, conditional=True)
+            return _send_storage_file(path, as_attachment=False, download_name=filename, mimetype=mimetype)
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/realtime-proxy", methods=["GET"])
+    @require_csrf
+    def video_realtime_proxy(video_id):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            filename = row["original_filename_plain_for_public"] or video["title"] or "video.mp4"
+            return _realtime_proxy_file_response(row, download_name=filename)
         except PermissionError as exc:
             return _error_response(exc)
         except ValueError as exc:
@@ -3219,11 +3474,11 @@ def register_video_routes(app, deps):
             asset = get_stream_status(conn, file_row=row, include_segments=False)
             if not asset or asset.get("status") != "ready":
                 return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
-            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            match = _hls_rendition_match(asset, variant)
             if not match:
                 return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
             path = resolve_file_storage_path(storage_root, {"storage_path": match["playlist_path"]})
-            return send_file(path, as_attachment=False, download_name="playlist.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+            return _send_storage_file(path, as_attachment=False, download_name="playlist.m3u8", mimetype="application/vnd.apple.mpegurl")
         except PermissionError as exc:
             return _error_response(exc)
         except ValueError as exc:
@@ -3289,7 +3544,7 @@ def register_video_routes(app, deps):
                     ffmpeg_bin=ffmpeg_bin,
                 )
             conn.commit()
-            playback = stream_playback_payload(conn, file_row=row, video_id=video_id)
+            playback = stream_playback_payload(conn, file_row=row, video_id=video_id, storage_root=storage_root, ffprobe_bin=ffprobe_bin)
             return json_resp({"ok": True, "asset": asset, "subtitles": asset.get("subtitles") or [], "playback": playback})
         except PermissionError as exc:
             return _error_response(exc)
@@ -3314,7 +3569,7 @@ def register_video_routes(app, deps):
             asset = get_stream_status(conn, file_row=row)
             if not asset or asset.get("status") != "ready":
                 return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
-            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            match = _hls_rendition_match(asset, variant)
             if not match:
                 return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
             if "/" in segment or ".." in segment:
@@ -3327,7 +3582,7 @@ def register_video_routes(app, deps):
                     return json_resp({"ok": False, "msg": "找不到串流片段", "error": "segment_not_found"}), 404
             path = resolve_file_storage_path(storage_root, {"storage_path": rel})
             mimetype = "video/mp4" if segment.endswith(".mp4") or segment.endswith(".m4s") else "application/octet-stream"
-            return send_file(path, as_attachment=False, download_name=segment, mimetype=mimetype, conditional=True)
+            return _send_storage_file(path, as_attachment=False, download_name=segment, mimetype=mimetype)
         except PermissionError as exc:
             return _error_response(exc)
         except ValueError as exc:
@@ -3364,7 +3619,7 @@ def register_video_routes(app, deps):
                 except ValueError as exc:
                     return _svg_placeholder_response(str(exc))
                 return _send_bytes_with_range(raw, download_name=filename, mimetype=mimetype, range_header=request.headers.get("Range"))
-            return send_file(path, as_attachment=False, download_name=filename, mimetype=mimetype, conditional=True)
+            return _send_storage_file(path, as_attachment=False, download_name=filename, mimetype=mimetype)
         except PermissionError as exc:
             return _error_response(exc)
         except ValueError as exc:

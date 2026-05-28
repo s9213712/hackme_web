@@ -13,6 +13,9 @@ The formal large-media HLS / segmented streaming design is documented in
 Platform v1 is still the user-facing baseline, but Phase C-1 foundation is now
 implemented for prepared HLS playback, automatic stream preparation on eligible
 published media, and manual retry controls in the watch page.
+Customer-facing service-tier language for direct streaming, realtime proxy, and
+prepared HLS is documented in
+[VIDEO_STREAMING_SERVICE_TIERS.md](VIDEO_STREAMING_SERVICE_TIERS.md).
 For the runtime trust boundary between `server_encrypted` and strict `e2ee`,
 see [ENCRYPTION_RUNTIME_BOUNDARY.md](../ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md).
 
@@ -76,6 +79,10 @@ Current playback behavior:
 - Safari keeps native HLS playback
 - desktop Chrome / Firefox / Edge use a same-origin `hls.js` bundle for
   prepared HLS playback
+- prepared HLS now exposes alternate audio playlists for multi-audio or
+  non-browser-native audio sources and WebVTT subtitle tracks for extracted or
+  uploaded text subtitles; the same audio/subtitle URLs are authorized in
+  shared-video and shared-file preview routes
 - if `hls.js` fails to initialize or hits a fatal playback error, the player
   falls back to direct `/stream` with a user-visible warning
 - strict `e2ee` media stay on browser-side decryption and do not use
@@ -126,6 +133,10 @@ Rules:
 - Blocked or quarantined files cannot be published.
 - Private videos require owner or manager/root access.
 - Unlisted videos are not listed publicly but can be opened by direct link.
+- Multi-audio / multi-subtitle videos should be offered to customers as a
+  higher-service prepared-HLS path when reliability matters; direct streaming is
+  still available for simple browser-native files, and realtime proxy remains a
+  Standard service route to enable with explicit concurrency controls.
 
 ## PointsChain Tips
 

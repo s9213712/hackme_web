@@ -1,10 +1,19 @@
 import json
 import re
 
-from flask import Response, request, send_file
+from flask import Response, request, send_file, stream_with_context
 
 from services.media.previews import build_preview_metadata, preview_category
-from services.media.streaming import get_stream_status, parse_subtitle_shift_ms, shift_webvtt_text
+from services.core.http_headers import build_content_disposition
+from services.core.file_offload import x_accel_response
+from services.media.streaming import (
+    get_stream_status,
+    open_realtime_proxy_stream,
+    parse_subtitle_shift_ms,
+    realtime_proxy_availability,
+    realtime_proxy_runtime_status,
+    shift_webvtt_text,
+)
 from services.storage.cloud_drive import (
     can_download_file,
     get_cloud_drive_security_policy,
@@ -38,6 +47,8 @@ def register_file_share_preview_routes(app, ctx):
     require_csrf = ctx["require_csrf"]
     require_csrf_safe = ctx["require_csrf_safe"]
     storage_root = ctx["storage_root"]
+    ffmpeg_bin = ctx.get("ffmpeg_bin", "ffmpeg")
+    ffprobe_bin = ctx.get("ffprobe_bin", "ffprobe")
 
     actor_or_401 = ctx["actor_or_401"]
     read_readable_file_path = ctx["readable_file_path"]
@@ -57,6 +68,26 @@ def register_file_share_preview_routes(app, ctx):
     _preview_row_with_storage_fallback = preview_row_with_storage_fallback
     _send_readable_file = send_readable_file
     _svg_placeholder_response = svg_placeholder_response
+
+    def _send_local_storage_file(path, *, as_attachment=False, download_name="download.bin", mimetype=None, conditional=True):
+        offloaded = x_accel_response(
+            path,
+            storage_root=storage_root,
+            as_attachment=as_attachment,
+            download_name=download_name,
+            mimetype=mimetype or "application/octet-stream",
+        )
+        if offloaded is not None:
+            return offloaded
+        response = send_file(
+            path,
+            as_attachment=as_attachment,
+            download_name=download_name,
+            mimetype=mimetype,
+            conditional=conditional,
+        )
+        response.headers.setdefault("X-Hackme-Transfer-Mode", "python_send_file")
+        return response
 
     @app.route("/api/storage/share-links", methods=["GET", "POST"])
     @require_csrf_safe
@@ -166,31 +197,21 @@ def register_file_share_preview_routes(app, ctx):
         if not file_id:
             return None
         try:
-            asset = conn.execute(
-                """
-                SELECT id, status, media_type, master_manifest_path, error_message, updated_at
-                FROM media_stream_assets
-                WHERE uploaded_file_id=?
-                LIMIT 1
-                """,
+            file_row = conn.execute(
+                "SELECT * FROM uploaded_files WHERE id=? AND deleted_at IS NULL",
                 (file_id,),
             ).fetchone()
+        except Exception:
+            file_row = None
+        if not file_row:
+            return None
+        try:
+            asset = get_stream_status(conn, file_row=file_row, include_segments=False)
         except Exception:
             return None
         if not asset:
             return None
-        try:
-            subtitle_rows = conn.execute(
-                """
-                SELECT name, label, language, is_default
-                FROM media_stream_subtitles
-                WHERE asset_id=?
-                ORDER BY is_default DESC, id ASC
-                """,
-                (int(asset["id"]),),
-            ).fetchall()
-        except Exception:
-            subtitle_rows = []
+        proxy_state = realtime_proxy_availability(file_row)
         job = None
         try:
             job = conn.execute(
@@ -206,22 +227,45 @@ def register_file_share_preview_routes(app, ctx):
         except Exception:
             job = None
         data = {
-            "status": asset["status"] or "",
-            "media_type": asset["media_type"] or "",
-            "master_manifest_ready": bool(asset["master_manifest_path"]),
-            "master_url": f"/api/storage/shared/{token}/hls/master.m3u8" if asset["master_manifest_path"] and token else "",
-            "error_message": asset["error_message"] or "",
-            "updated_at": asset["updated_at"] or "",
+            "status": asset.get("status") or "",
+            "media_type": asset.get("media_type") or "",
+            "master_manifest_ready": bool(asset.get("master_manifest_path")),
+            "master_url": f"/api/storage/shared/{token}/hls/master.m3u8" if asset.get("master_manifest_path") and token else "",
+            "realtime_proxy_url": f"/api/storage/shared/{token}/realtime-proxy" if token and proxy_state.get("available") else "",
+            "realtime_proxy": {
+                **proxy_state,
+                "url": f"/api/storage/shared/{token}/realtime-proxy" if token and proxy_state.get("available") else "",
+                "selected_audio_query_param": "audio",
+                "start_seconds_query_param": "start",
+            },
+            "error_message": asset.get("error_message") or "",
+            "updated_at": asset.get("updated_at") or "",
+            "premium_hls_profile_policy": asset.get("premium_hls_profile_policy") or {},
+            "audio_tracks": [
+                {
+                    "name": str(item.get("name") or ""),
+                    "label": str(item.get("label") or item.get("language") or item.get("name") or "音軌"),
+                    "language": str(item.get("language") or "und"),
+                    "is_default": bool(item.get("is_default")),
+                    "codec": str(item.get("codec") or ""),
+                    "stream_index": int(item.get("stream_index") or -1),
+                    "url": f"/api/storage/shared/{token}/hls/{item.get('name')}/playlist.m3u8" if token and item.get("name") else "",
+                    "playlist_url": f"/api/storage/shared/{token}/hls/{item.get('name')}/playlist.m3u8" if token and item.get("name") else "",
+                }
+                for item in (asset.get("audio_tracks") or [])
+                if item.get("name")
+            ],
             "subtitles": [
                 {
-                    "name": str(item["name"] or ""),
-                    "label": str(item["label"] or item["language"] or "字幕"),
-                    "language": str(item["language"] or "und"),
-                    "is_default": bool(item["is_default"]),
-                    "url": f"/api/storage/shared/{token}/hls/subtitles/{item['name']}.vtt" if token and item["name"] else "",
+                    "name": str(item.get("name") or ""),
+                    "label": str(item.get("label") or item.get("language") or "字幕"),
+                    "language": str(item.get("language") or "und"),
+                    "is_default": bool(item.get("is_default")),
+                    "is_forced": bool(item.get("is_forced")),
+                    "url": f"/api/storage/shared/{token}/hls/subtitles/{item.get('name')}.vtt" if token and item.get("name") else "",
                 }
-                for item in (subtitle_rows or [])
-                if item["name"]
+                for item in (asset.get("subtitles") or [])
+                if item.get("name")
             ],
         }
         if job:
@@ -246,15 +290,18 @@ def register_file_share_preview_routes(app, ctx):
         return f"{raw}{separator}{query}"
 
     def _append_request_query_to_hls_manifest(text):
+        uri_attr_pattern = re.compile(r"URI=([\"'])([^\"']+)\1")
+
+        def replace_uri_attr(match):
+            quote = match.group(1)
+            url = match.group(2)
+            return f"URI={quote}{_hls_url_with_request_query(url)}{quote}"
+
         output = []
         for raw in str(text or "").splitlines():
             line = raw
-            if line.startswith("#EXT-X-MAP:") and "URI=" in line:
-                def repl(match):
-                    quote = match.group(1)
-                    url = match.group(2)
-                    return f"URI={quote}{_hls_url_with_request_query(url)}{quote}"
-                line = re.sub(r'URI=(["\'])([^"\']+)\1', repl, line)
+            if line.startswith("#") and "URI=" in line:
+                line = uri_attr_pattern.sub(replace_uri_attr, line)
             elif line and not line.startswith("#"):
                 line = _hls_url_with_request_query(line)
             output.append(line)
@@ -284,6 +331,80 @@ def register_file_share_preview_routes(app, ctx):
         if not asset or asset.get("status") != "ready" or not asset.get("master_manifest_path"):
             return row, None, (json_resp({"ok": False, "msg": "HLS 串流尚未準備完成", "error": "stream_not_ready"}), 409)
         return row, asset, None
+
+    def _storage_share_hls_rendition_match(asset, name):
+        clean = str(name or "").strip()
+        if not clean or "/" in clean or ".." in clean:
+            return None
+        for group in ("variants", "audio_tracks"):
+            match = next((item for item in ((asset or {}).get(group) or []) if item.get("name") == clean), None)
+            if match:
+                return match
+        return None
+
+    def _storage_share_realtime_proxy_audio_selector():
+        return request.args.get("audio") or request.args.get("audio_track") or request.args.get("track") or ""
+
+    def _storage_share_realtime_proxy_error(message, *, error="realtime_proxy_unavailable", status=409, extra=None):
+        payload = {
+            "ok": False,
+            "msg": message,
+            "error": error,
+            "realtime_proxy": realtime_proxy_runtime_status(),
+        }
+        if extra:
+            payload.update(extra)
+        return json_resp(payload), status
+
+    def _storage_share_realtime_proxy_response(row):
+        availability = realtime_proxy_availability(row)
+        if not availability.get("available"):
+            return _storage_share_realtime_proxy_error(
+                "即時轉封裝目前不可用，請改用直接串流或預處理 HLS。",
+                error=str(availability.get("reason") or "realtime_proxy_unavailable"),
+                status=409,
+                extra={"availability": availability},
+            )
+        path = resolve_file_storage_path(storage_root, row)
+        if not path.exists():
+            return json_resp({"ok": False, "msg": "實體檔案不存在", "error": "file_missing"}), 404
+        try:
+            stream_info = open_realtime_proxy_stream(
+                path,
+                audio_track=_storage_share_realtime_proxy_audio_selector(),
+                start_seconds=request.args.get("start") or 0,
+                ffmpeg_bin=ffmpeg_bin,
+                ffprobe_bin=ffprobe_bin,
+            )
+        except RuntimeError as exc:
+            if str(exc).startswith("realtime_proxy_busy:"):
+                return _storage_share_realtime_proxy_error(
+                    "即時轉封裝目前已達併發上限，請稍後再試或使用預處理 HLS。",
+                    error="realtime_proxy_busy",
+                    status=429,
+                )
+            return _storage_share_realtime_proxy_error(str(exc), status=500)
+        except ValueError as exc:
+            return _storage_share_realtime_proxy_error(str(exc), error="invalid_realtime_proxy_request", status=400)
+        except FileNotFoundError:
+            return _storage_share_realtime_proxy_error("找不到 ffmpeg / ffprobe，無法啟動即時轉封裝。", error="ffmpeg_missing", status=503)
+        filename = row["display_name"] or row["original_filename_plain_for_public"] or "video.mp4"
+        response = Response(
+            stream_with_context(stream_info["chunks"]),
+            status=200,
+            mimetype=stream_info.get("mimetype") or "video/mp4",
+            direct_passthrough=True,
+        )
+        response.headers["Content-Disposition"] = build_content_disposition("inline", filename)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Accel-Buffering"] = "no"
+        response.headers["Accept-Ranges"] = "none"
+        response.headers["X-Hackme-Transfer-Mode"] = "python_realtime_proxy"
+        selected_audio = stream_info.get("audio_track") or {}
+        if selected_audio.get("name"):
+            response.headers["X-Hackme-Audio-Track"] = str(selected_audio.get("name") or "")
+        response.headers["X-Hackme-Streaming-Mode"] = "realtime_proxy"
+        return response
 
     def _storage_shared_file_payload(conn, row, token):
         e2ee = {}
@@ -498,12 +619,11 @@ def register_file_share_preview_routes(app, ctx):
                 log_share_access_event(conn, share_type="file", share_id=row["id"], ip=get_client_ip(), user_agent=get_ua())
                 log_file_access(conn, file_id=row["file_id"], actor_user_id=(actor["id"] if actor else None), action="storage_share_e2ee_preview_ciphertext", result="allowed", reason="share_link", ip=get_client_ip(), user_agent=get_ua())
                 conn.commit()
-                return send_file(
+                return _send_local_storage_file(
                     path,
                     as_attachment=False,
                     download_name=preview_row["original_filename_plain_for_public"] or "e2ee.bin",
                     mimetype="application/octet-stream",
-                    conditional=True,
                 )
             policy = get_cloud_drive_security_policy(conn)
             ok, msg = _preview_allowed_by_policy(policy, row)
@@ -554,7 +674,7 @@ def register_file_share_preview_routes(app, ctx):
             _row, asset, err = _storage_share_hls_asset(conn, token, include_segments=False)
             if err:
                 return err
-            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            match = _storage_share_hls_rendition_match(asset, variant)
             if not match:
                 return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
             path = resolve_file_storage_path(storage_root, {"storage_path": match["playlist_path"]})
@@ -586,7 +706,7 @@ def register_file_share_preview_routes(app, ctx):
                     mimetype="text/vtt; charset=utf-8",
                     headers={"Cache-Control": "no-store"},
                 )
-            return send_file(path, as_attachment=False, download_name=f"{clean}.vtt", mimetype="text/vtt; charset=utf-8", conditional=True)
+            return _send_local_storage_file(path, as_attachment=False, download_name=f"{clean}.vtt", mimetype="text/vtt; charset=utf-8")
         finally:
             conn.close()
 
@@ -599,7 +719,7 @@ def register_file_share_preview_routes(app, ctx):
                 return err
             if "/" in segment or ".." in segment:
                 return json_resp({"ok": False, "msg": "無效的串流片段", "error": "invalid_segment"}), 400
-            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            match = _storage_share_hls_rendition_match(asset, variant)
             if not match:
                 return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
             rel = next((item["path"] for item in (match.get("segments") or []) if item.get("filename") == segment), "")
@@ -610,7 +730,38 @@ def register_file_share_preview_routes(app, ctx):
                     return json_resp({"ok": False, "msg": "找不到串流片段", "error": "segment_not_found"}), 404
             path = resolve_file_storage_path(storage_root, {"storage_path": rel})
             mimetype = "video/mp4" if segment.endswith((".mp4", ".m4s")) else "application/octet-stream"
-            return send_file(path, as_attachment=False, download_name=segment, mimetype=mimetype, conditional=True)
+            return _send_local_storage_file(path, as_attachment=False, download_name=segment, mimetype=mimetype)
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/shared/<token>/realtime-proxy", methods=["GET"])
+    def storage_share_realtime_proxy(token):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            row, reason = resolve_share_token(
+                conn,
+                token,
+                actor=actor,
+                require_download=False,
+                password=_storage_share_password_from_request(),
+            )
+            if not row:
+                return _storage_share_error_response(reason)
+            denied = _storage_share_preview_denied(row)
+            if denied:
+                return denied
+            if is_e2ee_file(row):
+                return json_resp({"ok": False, "msg": "E2EE 分享不支援伺服器端即時轉封裝"}), 409
+            policy = get_cloud_drive_security_policy(conn)
+            ok, msg = _preview_allowed_by_policy(policy, row)
+            if not ok:
+                return json_resp({"ok": False, "msg": msg}), 403
+            mark_share_link_accessed(conn, row["id"])
+            log_share_access_event(conn, share_type="file", share_id=row["id"], ip=get_client_ip(), user_agent=get_ua())
+            log_file_access(conn, file_id=row["file_id"], actor_user_id=(actor["id"] if actor else None), action="storage_share_realtime_proxy", result="allowed", reason="realtime_proxy", ip=get_client_ip(), user_agent=get_ua())
+            conn.commit()
+            return _storage_share_realtime_proxy_response(row)
         finally:
             conn.close()
 

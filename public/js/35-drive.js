@@ -2941,6 +2941,100 @@ function drivePreviewSubtitles(preview) {
     }));
 }
 
+function drivePreviewAudioTracks(preview) {
+  const stream = drivePreviewStreamAsset(preview);
+  const tracks = Array.isArray(stream?.audio_tracks) ? stream.audio_tracks : [];
+  return tracks
+    .filter((track) => track && track.name)
+    .map((track) => ({
+      name: String(track.name || ""),
+      label: String(track.label || track.language || track.name || "音軌"),
+      language: String(track.language || "und"),
+      streamIndex: Number(track.stream_index ?? -1),
+      isDefault: !!track.is_default,
+    }));
+}
+
+function drivePreviewServiceOptions(preview) {
+  const category = String(preview?.category || "");
+  if (!["audio", "video"].includes(category)) return [];
+  const stream = drivePreviewStreamAsset(preview);
+  const proxy = stream?.realtime_proxy || {};
+  const realtimeAvailable = !!(stream?.realtime_proxy_url || proxy.url) && proxy.available !== false;
+  const profilePolicy = stream?.premium_hls_profile_policy || {};
+  const profileDriftSuffix = profilePolicy.profile_drift ? " 目前 HLS 資產與現行 Premium profile 不一致，建議排程重建。" : "";
+  return [
+    {
+      mode: "direct",
+      label: "Basic · 直接串流",
+      available: true,
+      summary: "最低費率；直接送原始檔，格式相容性取決於瀏覽器。",
+    },
+    {
+      mode: "realtime_proxy",
+      label: "Standard · 即時轉封裝",
+      available: realtimeAvailable,
+      summary: "中階費率；用即時 CPU 處理 MKV 或特殊音訊，一次輸出選定音軌。",
+    },
+    {
+      mode: "prepared_hls",
+      label: "Premium · 預處理 HLS",
+      available: drivePreviewHasReadyHls(preview),
+      summary: "最高費率；預先建立分段串流，支援多音軌、多字幕與穩定跳轉。" + profileDriftSuffix,
+    },
+  ];
+}
+
+function drivePreviewServiceModeStorageKey(fileId) {
+  return `hackme_web.drive_preview_service_mode.${String(fileId || "")}`;
+}
+
+function selectedDrivePreviewServiceMode(fileId, preview) {
+  const options = drivePreviewServiceOptions(preview);
+  const availableModes = new Set(options.filter((option) => option.available).map((option) => option.mode));
+  let saved = "";
+  try {
+    saved = localStorage.getItem(drivePreviewServiceModeStorageKey(fileId)) || "";
+  } catch (_) {
+    saved = "";
+  }
+  if (saved && availableModes.has(saved)) return saved;
+  if (availableModes.has("prepared_hls")) return "prepared_hls";
+  if (availableModes.has("realtime_proxy")) return "realtime_proxy";
+  if (availableModes.has("direct")) return "direct";
+  return "direct";
+}
+
+function saveDrivePreviewServiceMode(fileId, mode) {
+  try {
+    localStorage.setItem(drivePreviewServiceModeStorageKey(fileId), String(mode || ""));
+  } catch (_) {}
+}
+
+function selectedDrivePreviewAudioTrack(preview, { fullscreen = false } = {}) {
+  const tracks = drivePreviewAudioTracks(preview);
+  if (!tracks.length) return null;
+  const prefix = fullscreen ? "drive-fullscreen" : "drive-preview";
+  const select = $(`${prefix}-audio-track-select`);
+  if (select) {
+    const selected = Math.max(0, Math.min(tracks.length - 1, Number(select.value || 0)));
+    return tracks[selected] || tracks[0];
+  }
+  return tracks.find((track) => track.isDefault) || tracks[0];
+}
+
+function drivePreviewRealtimeProxyUrl(fileId, preview, startSeconds = 0, { fullscreen = false } = {}) {
+  const stream = drivePreviewStreamAsset(preview);
+  const raw = String(stream?.realtime_proxy_url || stream?.realtime_proxy?.url || `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/realtime-proxy`).trim();
+  if (!raw) return "";
+  const url = new URL(raw, window.location.origin);
+  const track = selectedDrivePreviewAudioTrack(preview, { fullscreen });
+  if (track?.name) url.searchParams.set("audio", track.name);
+  const start = Number(startSeconds || 0);
+  if (Number.isFinite(start) && start > 0) url.searchParams.set("start", String(Math.max(0, Math.round(start * 1000) / 1000)));
+  return `${url.pathname}${url.search}`;
+}
+
 function driveSubtitleShiftStorageKey(fileId) {
   return `hackme_web.drive_subtitle_shift_ms.${String(fileId || "")}`;
 }
@@ -3036,10 +3130,35 @@ function loadDriveHlsLibrary() {
   return driveHlsLibraryPromise;
 }
 
-function driveSubtitleShiftControlsMarkup(preview, { fullscreen = false, fileId = "" } = {}) {
-  if (!drivePreviewSubtitles(preview).length) return "";
+function driveSubtitleShiftControlsMarkup(preview, { fullscreen = false, fileId = "", selectedMode = "" } = {}) {
+  const subtitles = drivePreviewSubtitles(preview);
+  const audioTracks = drivePreviewAudioTracks(preview);
+  const serviceOptions = drivePreviewServiceOptions(preview);
+  const mode = selectedMode || selectedDrivePreviewServiceMode(fileId, preview);
+  const showAudio = ["prepared_hls", "realtime_proxy"].includes(mode);
+  if (serviceOptions.length < 2 && !subtitles.length && (!showAudio || audioTracks.length < 2)) return "";
   const prefix = fullscreen ? "drive-fullscreen" : "drive-preview";
-  return `
+  const selectedOption = serviceOptions.find((option) => option.mode === mode) || serviceOptions[0] || {};
+  const serviceMarkup = serviceOptions.length >= 2 ? `
+    <div class="video-quality-control drive-service-mode-control">
+      <label for="${prefix}-service-mode-select">方案</label>
+      <select id="${prefix}-service-mode-select">
+        ${serviceOptions.map((option) => `<option value="${sanitize(option.mode)}"${option.mode === mode ? " selected" : ""}${option.available ? "" : " disabled"}>${sanitize(option.label)}</option>`).join("")}
+      </select>
+      <span class="drive-card-sub">${sanitize(selectedOption.summary || "")}</span>
+    </div>
+  ` : "";
+  const defaultAudioIndex = Math.max(0, audioTracks.findIndex((track) => track.isDefault));
+  const audioMarkup = showAudio && audioTracks.length >= 2 ? `
+    <div class="video-quality-control drive-audio-track-control">
+      <label for="${prefix}-audio-track-select">音軌</label>
+      <select id="${prefix}-audio-track-select">
+        ${audioTracks.map((track, index) => `<option value="${index}"${index === defaultAudioIndex ? " selected" : ""}>${sanitize(track.label)}</option>`).join("")}
+      </select>
+      ${mode === "realtime_proxy" ? '<span class="drive-card-sub">Standard 即時轉封裝會重新開啟串流以套用音軌。</span>' : ""}
+    </div>
+  ` : "";
+  const subtitleMarkup = subtitles.length ? `
     <div class="video-quality-control drive-subtitle-shift-control">
       <label for="${prefix}-subtitle-shift-seconds">字幕延遲</label>
       <button class="btn btn-sm" type="button" data-drive-subtitle-shift-step="-500">-0.5s</button>
@@ -3047,20 +3166,51 @@ function driveSubtitleShiftControlsMarkup(preview, { fullscreen = false, fileId 
       <button class="btn btn-sm" type="button" data-drive-subtitle-shift-step="500">+0.5s</button>
       <button class="btn btn-sm" type="button" data-drive-subtitle-shift-reset="1">重置</button>
     </div>
+  ` : "";
+  return `
+    ${serviceMarkup}
+    ${audioMarkup}
+    ${subtitleMarkup}
   `;
 }
 
 function driveHlsPlayerMarkup(preview, { fullscreen = false, fileId = "" } = {}) {
   const playerId = fullscreen ? "drive-fullscreen-hls-player" : "drive-preview-hls-player";
   const autoplay = fullscreen ? "autoplay " : "";
-  const controls = driveSubtitleShiftControlsMarkup(preview, { fullscreen, fileId });
+  const controls = driveSubtitleShiftControlsMarkup(preview, { fullscreen, fileId, selectedMode: "prepared_hls" });
   if (preview.category === "audio") return `<audio id="${playerId}" controls ${autoplay}preload="metadata"></audio>${controls}`;
   return `<video id="${playerId}" controls ${autoplay}preload="metadata" playsinline></video>${controls}`;
+}
+
+function driveDirectPlayerMarkup(fileId, preview, url, { fullscreen = false } = {}) {
+  const playerId = fullscreen ? "drive-fullscreen-hls-player" : "drive-preview-hls-player";
+  const autoplay = fullscreen ? "autoplay " : "";
+  const controls = driveSubtitleShiftControlsMarkup(preview, { fullscreen, fileId, selectedMode: "direct" });
+  if (preview.category === "audio") return `<audio id="${playerId}" controls ${autoplay}preload="metadata" src="${sanitize(url)}"></audio>${controls}`;
+  return `<video id="${playerId}" controls ${autoplay}preload="metadata" playsinline src="${sanitize(url)}"></video>${controls}`;
+}
+
+function driveRealtimeProxyPlayerMarkup(fileId, preview, { fullscreen = false } = {}) {
+  const playerId = fullscreen ? "drive-fullscreen-hls-player" : "drive-preview-hls-player";
+  const autoplay = fullscreen ? "autoplay " : "";
+  const src = drivePreviewRealtimeProxyUrl(fileId, preview, 0, { fullscreen });
+  const controls = driveSubtitleShiftControlsMarkup(preview, { fullscreen, fileId, selectedMode: "realtime_proxy" });
+  if (preview.category === "audio") return `<audio id="${playerId}" controls ${autoplay}preload="metadata" src="${sanitize(src)}"></audio>${controls}`;
+  return `<video id="${playerId}" controls ${autoplay}preload="metadata" playsinline src="${sanitize(src)}"></video>${controls}`;
+}
+
+function attachDrivePlainMediaPreview(fileId, preview, { fullscreen = false } = {}) {
+  const player = $(fullscreen ? "drive-fullscreen-hls-player" : "drive-preview-hls-player");
+  if (!player) return;
+  player.dataset.fileId = String(fileId || "");
+  syncDrivePreviewSubtitleTracks(player, preview, fileId);
+  bindDriveSubtitleShiftControls(fileId, preview, player, { fullscreen });
 }
 
 async function attachDriveHlsPreview(fileId, preview, { fullscreen = false } = {}) {
   const player = $(fullscreen ? "drive-fullscreen-hls-player" : "drive-preview-hls-player");
   if (!player) return;
+  player.dataset.fileId = String(fileId || "");
   const masterUrl = drivePreviewHlsMasterUrl(fileId, preview);
   const mediaType = preview.category === "audio" ? "audio" : "video";
   syncDrivePreviewSubtitleTracks(player, preview, fileId);
@@ -3083,10 +3233,29 @@ async function attachDriveHlsPreview(fileId, preview, { fullscreen = false } = {
   currentDrivePreviewHls = hls;
   hls.loadSource(masterUrl);
   hls.attachMedia(player);
+  if (HlsCtor.Events.AUDIO_TRACKS_UPDATED) {
+    hls.on(HlsCtor.Events.AUDIO_TRACKS_UPDATED, () => applyDrivePreviewAudioTrack(preview, { fullscreen, fileId }));
+  }
 }
 
 function bindDriveSubtitleShiftControls(fileId, preview, player, { fullscreen = false } = {}) {
   const prefix = fullscreen ? "drive-fullscreen" : "drive-preview";
+  const serviceSelect = $(`${prefix}-service-mode-select`);
+  if (serviceSelect) {
+    serviceSelect.addEventListener("change", () => {
+      saveDrivePreviewServiceMode(fileId, serviceSelect.value);
+      if (fullscreen) {
+        previewAlbumFileFullscreen(fileId, preview?.filename || "", { skipRepeatCheck: true }).catch((err) => alert(err.message || "預覽失敗"));
+      } else {
+        previewDriveFile(fileId, { skipRepeatCheck: true, fileName: preview?.filename || "" }).catch((err) => alert(err.message || "預覽失敗"));
+      }
+    });
+  }
+  const audioSelect = $(`${prefix}-audio-track-select`);
+  if (audioSelect) {
+    audioSelect.dataset.fileId = String(fileId || "");
+    audioSelect.addEventListener("change", () => applyDrivePreviewAudioTrack(preview, { fullscreen, fileId }));
+  }
   const input = $(`${prefix}-subtitle-shift-seconds`);
   if (!input) return;
   const applyShift = (nextMs) => {
@@ -3101,6 +3270,36 @@ function bindDriveSubtitleShiftControls(fileId, preview, player, { fullscreen = 
   });
   const reset = container.querySelector("[data-drive-subtitle-shift-reset]");
   if (reset) reset.addEventListener("click", () => applyShift(0));
+}
+
+function applyDrivePreviewAudioTrack(preview, { fullscreen = false, fileId = "" } = {}) {
+  const tracks = drivePreviewAudioTracks(preview);
+  const prefix = fullscreen ? "drive-fullscreen" : "drive-preview";
+  const select = $(`${prefix}-audio-track-select`);
+  if (selectedDrivePreviewServiceMode(fileId, preview) === "realtime_proxy") {
+    const player = $(fullscreen ? "drive-fullscreen-hls-player" : "drive-preview-hls-player");
+    const resolvedFileId = fileId || select?.dataset.fileId || player?.dataset.fileId || "";
+    if (!select || tracks.length < 2 || !player || !resolvedFileId) return;
+    const selected = Math.max(0, Math.min(tracks.length - 1, Number(select.value || 0)));
+    const resumeAt = Number(player.currentTime || 0);
+    const wasPaused = player.paused;
+    const nextUrl = drivePreviewRealtimeProxyUrl(resolvedFileId, preview, resumeAt, { fullscreen });
+    if (!nextUrl) return;
+    player.src = nextUrl;
+    if (typeof player.load === "function") player.load();
+    if (!wasPaused && typeof player.play === "function") player.play().catch(() => {});
+    return;
+  }
+  const hls = currentDrivePreviewHls;
+  if (!select || tracks.length < 2 || !hls || !Array.isArray(hls.audioTracks)) return;
+  const selected = Math.max(0, Math.min(tracks.length - 1, Number(select.value || 0)));
+  const chosen = tracks[selected];
+  const index = hls.audioTracks.findIndex((track) => {
+    const name = String(track.name || track.label || "").toLowerCase();
+    const lang = String(track.lang || track.language || "").toLowerCase();
+    return name === chosen.label.toLowerCase() || lang === chosen.language.toLowerCase();
+  });
+  if (index >= 0) hls.audioTrack = index;
 }
 
 async function resolveDrivePreviewMediaUrl(fileId, csrf, preview, { fullscreen = false } = {}) {
@@ -3299,14 +3498,26 @@ async function previewDriveFile(fileId, options = {}) {
       return;
     }
     if (preview.render_mode === "media") {
-      if (drivePreviewHasReadyHls(preview)) {
+      const serviceMode = selectedDrivePreviewServiceMode(fileId, preview);
+      if (["audio", "video"].includes(preview.category) && serviceMode === "prepared_hls" && drivePreviewHasReadyHls(preview)) {
         panel.innerHTML += driveHlsPlayerMarkup(preview, { fileId });
         await attachDriveHlsPreview(fileId, preview);
         return;
       }
+      if (["audio", "video"].includes(preview.category) && serviceMode === "realtime_proxy") {
+        panel.innerHTML += driveRealtimeProxyPlayerMarkup(fileId, preview);
+        attachDrivePlainMediaPreview(fileId, preview);
+        return;
+      }
       const url = await resolveDrivePreviewMediaUrl(fileId, csrf, preview);
-      if (preview.category === "audio") panel.innerHTML += `<audio controls preload="metadata" src="${url}"></audio>`;
-      else if (preview.category === "video") panel.innerHTML += `<video controls preload="metadata" playsinline src="${url}"></video>`;
+      if (preview.category === "audio") {
+        panel.innerHTML += driveDirectPlayerMarkup(fileId, preview, url);
+        attachDrivePlainMediaPreview(fileId, preview);
+      }
+      else if (preview.category === "video") {
+        panel.innerHTML += driveDirectPlayerMarkup(fileId, preview, url);
+        attachDrivePlainMediaPreview(fileId, preview);
+      }
       else if (preview.category === "image") panel.innerHTML += `<img src="${url}" alt="${sanitize(preview.filename || "image preview")}" />`;
       else if (preview.category === "pdf") panel.innerHTML += renderDrivePdfPreview(url, preview.filename || "PDF preview");
       else panel.innerHTML += `<div class="drive-empty">此檔案無可用預覽。</div>`;
@@ -3414,10 +3625,17 @@ async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
     if (preview.render_mode !== "media") {
       throw new Error("這個檔案類型目前只提供右側 metadata 預覽");
     }
-    if (drivePreviewHasReadyHls(preview)) {
+    const serviceMode = selectedDrivePreviewServiceMode(fileId, preview);
+    if (["audio", "video"].includes(preview.category) && serviceMode === "prepared_hls" && drivePreviewHasReadyHls(preview)) {
       if (meta) meta.textContent = `${formatDriveBytes(preview.size_bytes || 0)} · ${preview.mime_type || "-"} · HLS 串流已就緒 · 字幕 ${drivePreviewSubtitles(preview).length} 軌`;
       body.innerHTML = driveHlsPlayerMarkup(preview, { fullscreen: true, fileId });
       await attachDriveHlsPreview(fileId, preview, { fullscreen: true });
+      return;
+    }
+    if (["audio", "video"].includes(preview.category) && serviceMode === "realtime_proxy") {
+      if (meta) meta.textContent = `${formatDriveBytes(preview.size_bytes || 0)} · ${preview.mime_type || "-"} · Standard 即時轉封裝`;
+      body.innerHTML = driveRealtimeProxyPlayerMarkup(fileId, preview, { fullscreen: true });
+      attachDrivePlainMediaPreview(fileId, preview, { fullscreen: true });
       return;
     }
     const url = await resolveDrivePreviewMediaUrl(fileId, csrf, preview, { fullscreen: true });
@@ -3426,9 +3644,11 @@ async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
     if (preview.category === "image") {
       body.innerHTML = `<img src="${url}" alt="${sanitize(preview.filename || fileName || "image preview")}" />`;
     } else if (preview.category === "video") {
-      body.innerHTML = `<video controls autoplay preload="metadata" playsinline src="${url}"></video>`;
+      body.innerHTML = driveDirectPlayerMarkup(fileId, preview, url, { fullscreen: true });
+      attachDrivePlainMediaPreview(fileId, preview, { fullscreen: true });
     } else if (preview.category === "audio") {
-      body.innerHTML = `<audio controls autoplay preload="metadata" src="${url}"></audio>`;
+      body.innerHTML = driveDirectPlayerMarkup(fileId, preview, url, { fullscreen: true });
+      attachDrivePlainMediaPreview(fileId, preview, { fullscreen: true });
     } else if (preview.category === "pdf") {
       body.innerHTML = renderDrivePdfPreview(url, preview.filename || fileName || "PDF preview");
     } else {

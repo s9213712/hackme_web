@@ -15,6 +15,11 @@ from pathlib import Path
 from cryptography.fernet import Fernet
 
 try:
+    import resource
+except Exception:  # pragma: no cover - unavailable on some platforms
+    resource = None
+
+try:
     import fcntl
 except Exception:  # pragma: no cover - non-POSIX fallback
     fcntl = None
@@ -36,6 +41,7 @@ from services.system.notifications import create_notification_if_enabled  # noqa
 
 HLS_JOB_SOURCE_MODULE = "media_hls_prepare"
 DEFAULT_HLS_SERIALIZE_MIN_BYTES = 256 * 1024 * 1024
+DEFAULT_HLS_MAX_CONCURRENT = 1
 
 
 def _now_iso():
@@ -103,6 +109,14 @@ def _bounded_env_int(name, default, *, min_value=0, max_value=10 * 1024 * 1024 *
     return max(int(min_value), min(int(max_value), value))
 
 
+def _bounded_env_float(name, default, *, min_value=0.0, max_value=60.0):
+    try:
+        value = float(str(os.environ.get(name, default)).strip())
+    except Exception:
+        value = float(default)
+    return max(float(min_value), min(float(max_value), value))
+
+
 def _hls_worker_slot_required(file_row):
     if str(os.environ.get("HACKME_MEDIA_HLS_SERIALIZE_ALL") or "").strip().lower() in {"1", "true", "yes", "on"}:
         return True
@@ -120,39 +134,141 @@ def _hls_worker_slot_required(file_row):
     return size_bytes >= threshold
 
 
+def _hls_worker_max_concurrent():
+    return _bounded_env_int(
+        "HACKME_MEDIA_HLS_MAX_CONCURRENT",
+        DEFAULT_HLS_MAX_CONCURRENT,
+        min_value=1,
+        max_value=16,
+    )
+
+
+def _hls_debug_hold_slot_seconds():
+    return _bounded_env_float(
+        "HACKME_MEDIA_HLS_DEBUG_HOLD_SLOT_SECONDS",
+        0.0,
+        min_value=0.0,
+        max_value=30.0,
+    )
+
+
+def _hls_worker_lock_dir(args):
+    raw = str(os.environ.get("HACKME_MEDIA_HLS_LOCK_DIR") or "").strip()
+    if raw:
+        return Path(raw)
+    return _media_runtime_dir(args.storage_root) / "locks" / "hls_prepare"
+
+
+def _hls_worker_slot_path(lock_dir, index):
+    return Path(lock_dir) / f"media_hls_prepare_slot_{int(index):02d}.lock"
+
+
+def _compact_hls_slot_state(state):
+    if not isinstance(state, dict):
+        return {}
+    compact = {}
+    for key in ("scope", "active", "limit", "free", "slot_index", "wait_ms", "lock_dir"):
+        if key in state:
+            compact[key] = state.get(key)
+    return compact
+
+
+def _try_acquire_hls_worker_slot(args):
+    if fcntl is None:
+        return None, {
+            "scope": "process",
+            "active": 0,
+            "limit": 0,
+            "free": None,
+            "reason": "fcntl_unavailable",
+        }
+    limit = _hls_worker_max_concurrent()
+    lock_dir = _hls_worker_lock_dir(args)
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    locked = 0
+    errors = 0
+    for index in range(limit):
+        handle = _hls_worker_slot_path(lock_dir, index).open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            locked += 1
+            handle.close()
+            continue
+        except Exception:
+            errors += 1
+            handle.close()
+            continue
+        active = locked + 1
+        return handle, {
+            "scope": "global",
+            "active": active,
+            "limit": limit,
+            "free": max(0, limit - active),
+            "slot_index": index,
+            "lock_dir": str(lock_dir),
+            "errors": errors,
+        }
+    return None, {
+        "scope": "global",
+        "active": limit,
+        "limit": limit,
+        "free": 0,
+        "slot_index": None,
+        "lock_dir": str(lock_dir),
+        "errors": errors,
+    }
+
+
 def _acquire_hls_worker_slot(conn, *, args, file_row):
     if fcntl is None:
         return None
-    lock_dir = _media_runtime_dir(args.storage_root) / "locks"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_handle = (lock_dir / "media_hls_prepare.lock").open("a+", encoding="utf-8")
-    try:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return lock_handle
-    except BlockingIOError:
-        _sync_hls_platform_job(
-            conn,
-            args=args,
-            file_row=file_row,
-            status="running",
-            progress_percent=12,
-            stage="waiting_worker_slot",
-            stage_detail="HLS 外部程序已排隊，等待前一個影音轉檔釋放資源。",
-        )
-        conn.commit()
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-        return lock_handle
-    except Exception:
-        try:
-            lock_handle.close()
-        except Exception:
-            pass
-        return None
+    started = time.monotonic()
+    last_update = 0.0
+    while True:
+        lock_handle, state = _try_acquire_hls_worker_slot(args)
+        state["wait_ms"] = round((time.monotonic() - started) * 1000, 3)
+        if lock_handle is not None:
+            if state["wait_ms"] > 0:
+                _sync_hls_platform_job(
+                    conn,
+                    args=args,
+                    file_row=file_row,
+                    status="running",
+                    progress_percent=14,
+                    stage="worker_slot_acquired",
+                    stage_detail=f"Premium HLS 轉檔資源已取得：slot {int(state.get('slot_index') or 0) + 1}/{int(state.get('limit') or 1)}。",
+                    slot_state=state,
+                )
+                conn.commit()
+            return lock_handle, state
+        now = time.monotonic()
+        if not last_update or now - last_update >= 2.0:
+            last_update = now
+            active = int(state.get("active") or 0)
+            limit = int(state.get("limit") or 0)
+            detail = f"Premium HLS 外部程序已排隊，等待轉檔資源：目前 {active}/{limit} 個 slot 使用中。"
+            _sync_hls_platform_job(
+                conn,
+                args=args,
+                file_row=file_row,
+                status="running",
+                progress_percent=12,
+                stage="waiting_worker_slot",
+                stage_detail=detail,
+                slot_state=state,
+            )
+            conn.commit()
+        time.sleep(0.5)
 
 
-def _release_hls_worker_slot(lock_handle):
-    if not lock_handle or fcntl is None:
+def _release_hls_worker_slot(slot_lock):
+    if not slot_lock or fcntl is None:
         return
+    if isinstance(slot_lock, tuple):
+        lock_handle = slot_lock[0]
+    else:
+        lock_handle = slot_lock
     try:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
     except Exception:
@@ -161,6 +277,41 @@ def _release_hls_worker_slot(lock_handle):
         lock_handle.close()
     except Exception:
         pass
+
+
+def _worker_resource_summary(started_at=None):
+    summary = {
+        "pid": os.getpid(),
+    }
+    if started_at:
+        summary["wall_ms"] = round((time.monotonic() - float(started_at)) * 1000, 3)
+    if resource is None:
+        return summary
+    try:
+        self_usage = resource.getrusage(resource.RUSAGE_SELF)
+        child_usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+        self_cpu = float(self_usage.ru_utime or 0.0) + float(self_usage.ru_stime or 0.0)
+        child_cpu = float(child_usage.ru_utime or 0.0) + float(child_usage.ru_stime or 0.0)
+        summary.update({
+            "self_cpu_seconds": round(self_cpu, 4),
+            "child_cpu_seconds": round(child_cpu, 4),
+            "total_cpu_seconds": round(self_cpu + child_cpu, 4),
+            "self_max_rss_kb": int(getattr(self_usage, "ru_maxrss", 0) or 0),
+            "child_max_rss_kb": int(getattr(child_usage, "ru_maxrss", 0) or 0),
+        })
+    except Exception:
+        return summary
+    return summary
+
+
+def _hls_result_summary(asset, slot_state=None, worker_metrics=None):
+    result = _asset_result_summary(asset)
+    compact_slot = _compact_hls_slot_state(slot_state)
+    if compact_slot:
+        result["worker_slot"] = compact_slot
+    if isinstance(worker_metrics, dict) and worker_metrics:
+        result["worker_metrics"] = worker_metrics
+    return result
 
 
 def _hls_job_source_ref(file_id):
@@ -187,6 +338,7 @@ def _sync_hls_platform_job(
     stage_detail="",
     error_message="",
     result=None,
+    slot_state=None,
 ):
     try:
         file_id = str(args.file_id or _row_value(file_row, "id", ""))
@@ -199,6 +351,8 @@ def _sync_hls_platform_job(
             "video_id": int(args.video_id or 0),
             "privacy_mode": str(_row_value(file_row, "privacy_mode", "") or ""),
             "source_process": "hls_prepare_worker",
+            "service_tier": "premium_hls",
+            "worker_slot": _compact_hls_slot_state(slot_state),
         }
         if existing:
             updates = {
@@ -352,9 +506,11 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+    worker_started_at = time.monotonic()
     _lower_worker_priority()
     conn = open_db(args.db_path)
     slot_lock = None
+    slot_state = {}
     progress_state = {"last_at": 0.0, "last_percent": -1}
 
     def progress(percent, stage="processing", detail=""):
@@ -375,6 +531,7 @@ def main(argv=None):
             progress_percent=value,
             stage=stage,
             stage_detail=detail or "HLS 外部程序正在處理；你可以先做別的事，完成後會通知。",
+            slot_state=slot_state,
         )
         conn.commit()
 
@@ -393,10 +550,29 @@ def main(argv=None):
         )
         conn.commit()
         if _hls_worker_slot_required(file_row):
-            slot_lock = _acquire_hls_worker_slot(conn, args=args, file_row=file_row)
+            acquired = _acquire_hls_worker_slot(conn, args=args, file_row=file_row)
+            if isinstance(acquired, tuple):
+                slot_lock, slot_state = acquired
+            else:
+                slot_lock = acquired
+                slot_state = {}
             stage_detail = "HLS 外部程序正在轉封裝與產生播放清單。"
         else:
             stage_detail = "小型影音不等待大型 HLS 任務，已直接開始轉封裝與產生播放清單。"
+        debug_hold_seconds = _hls_debug_hold_slot_seconds() if slot_state else 0.0
+        if debug_hold_seconds > 0:
+            _sync_hls_platform_job(
+                conn,
+                args=args,
+                file_row=file_row,
+                status="running",
+                progress_percent=14,
+                stage="worker_slot_hold",
+                stage_detail=f"Premium HLS QA 正在持有轉檔 slot {debug_hold_seconds:.1f}s，用於驗證排隊行為。",
+                slot_state=slot_state,
+            )
+            conn.commit()
+            time.sleep(debug_hold_seconds)
         _sync_hls_platform_job(
             conn,
             args=args,
@@ -405,6 +581,7 @@ def main(argv=None):
             progress_percent=15,
             stage="transcoding",
             stage_detail=stage_detail,
+            slot_state=slot_state,
         )
         conn.commit()
         server_file_fernet = _load_server_file_fernet(
@@ -434,6 +611,7 @@ def main(argv=None):
                 title=args.title,
                 ok=True,
             )
+            ready_result = _hls_result_summary(asset, slot_state, _worker_resource_summary(worker_started_at))
             _sync_hls_platform_job(
                 conn,
                 args=args,
@@ -442,11 +620,13 @@ def main(argv=None):
                 progress_percent=100,
                 stage="ready",
                 stage_detail="HLS 處理完成，影音可以播放與分享。",
-                result=_asset_result_summary(asset),
+                result=ready_result,
+                slot_state=slot_state,
             )
             conn.commit()
-            print(json.dumps({"ok": True, "asset": _asset_result_summary(asset)}, ensure_ascii=False), flush=True)
+            print(json.dumps({"ok": True, "asset": ready_result}, ensure_ascii=False), flush=True)
             return 0
+        failed_result = _hls_result_summary(asset or {}, slot_state, _worker_resource_summary(worker_started_at))
         _sync_hls_platform_job(
             conn,
             args=args,
@@ -456,10 +636,11 @@ def main(argv=None):
             stage="not_ready",
             stage_detail="HLS 處理結束但未產生可播放串流。",
             error_message="stream_not_ready",
-            result=_asset_result_summary(asset or {}),
+            result=failed_result,
+            slot_state=slot_state,
         )
         conn.commit()
-        print(json.dumps({"ok": False, "asset": _asset_result_summary(asset or {}), "error": "stream_not_ready"}, ensure_ascii=False), flush=True)
+        print(json.dumps({"ok": False, "asset": failed_result, "error": "stream_not_ready"}, ensure_ascii=False), flush=True)
         return 1
     except sqlite3.Error as exc:
         try:
@@ -484,6 +665,7 @@ def main(argv=None):
                 stage="failed",
                 stage_detail=f"HLS 處理失敗：{message[:220]}",
                 error_message=message,
+                slot_state=slot_state,
             )
             _notify(
                 conn,

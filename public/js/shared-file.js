@@ -246,6 +246,101 @@ function sharedFileSubtitles(file) {
     }));
 }
 
+function sharedFileAudioTracks(file) {
+  const stream = sharedFileStreamAsset(file);
+  const tracks = Array.isArray(stream?.audio_tracks) ? stream.audio_tracks : [];
+  return tracks
+    .filter((track) => track && track.name)
+    .map((track) => ({
+      name: String(track.name || ""),
+      label: String(track.label || track.language || track.name || "音軌"),
+      language: String(track.language || "und"),
+      streamIndex: Number(track.stream_index ?? -1),
+      isDefault: !!track.is_default,
+    }));
+}
+
+function sharedFileServiceOptions(file) {
+  const category = sharedFileCategory(file?.display_name || "", file?.mime_type || "");
+  if (!["video", "audio"].includes(category)) return [];
+  const stream = sharedFileStreamAsset(file);
+  const proxy = stream?.realtime_proxy || {};
+  const directAvailable = !!file?.can_preview && file?.privacy_mode !== "server_encrypted";
+  const realtimeAvailable = !!(stream?.realtime_proxy_url || proxy.url) && proxy.available !== false;
+  const hlsAvailable = sharedFileHasReadyHls(file);
+  const profilePolicy = stream?.premium_hls_profile_policy || {};
+  const profileDriftSuffix = profilePolicy.profile_drift ? " 目前 HLS 資產與現行 Premium profile 不一致，建議排程重建。" : "";
+  return [
+    {
+      mode: "direct",
+      label: "Basic · 直接串流",
+      available: directAvailable,
+      summary: "最低費率；直接送原始檔，格式相容性取決於瀏覽器。",
+    },
+    {
+      mode: "realtime_proxy",
+      label: "Standard · 即時轉封裝",
+      available: realtimeAvailable,
+      summary: "中階費率；用即時 CPU 處理 MKV 或特殊音訊，一次輸出選定音軌。",
+    },
+    {
+      mode: "prepared_hls",
+      label: "Premium · 預處理 HLS",
+      available: hlsAvailable,
+      summary: "最高費率；預先建立分段串流，支援多音軌、多字幕與穩定跳轉。" + profileDriftSuffix,
+    },
+  ];
+}
+
+function sharedFileServiceModeStorageKey(file) {
+  return `hackme_web.shared_file_service_mode.${sharedFileState.token || sharedFileToken()}.${file?.id || file?.file_id || file?.display_name || ""}`;
+}
+
+function sharedFileSelectedServiceMode(file) {
+  const options = sharedFileServiceOptions(file);
+  const availableModes = new Set(options.filter((option) => option.available).map((option) => option.mode));
+  let saved = "";
+  try {
+    saved = localStorage.getItem(sharedFileServiceModeStorageKey(file)) || "";
+  } catch (_) {
+    saved = "";
+  }
+  if (saved && availableModes.has(saved)) return saved;
+  if (availableModes.has("prepared_hls")) return "prepared_hls";
+  if (availableModes.has("realtime_proxy")) return "realtime_proxy";
+  if (availableModes.has("direct")) return "direct";
+  return "prepared_hls";
+}
+
+function sharedFileSaveServiceMode(file, mode) {
+  try {
+    localStorage.setItem(sharedFileServiceModeStorageKey(file), String(mode || ""));
+  } catch (_) {}
+}
+
+function sharedFileSelectedAudioTrack(file) {
+  const tracks = sharedFileAudioTracks(file);
+  if (!tracks.length) return null;
+  const select = document.getElementById("shared-file-audio-track-select");
+  if (select) {
+    const selected = Math.max(0, Math.min(tracks.length - 1, Number(select.value || 0)));
+    return tracks[selected] || tracks[0];
+  }
+  return tracks.find((track) => track.isDefault) || tracks[0];
+}
+
+function sharedFileRealtimeProxyUrl(file, startSeconds = 0) {
+  const stream = sharedFileStreamAsset(file);
+  const raw = String(stream?.realtime_proxy_url || stream?.realtime_proxy?.url || "").trim();
+  if (!raw) return "";
+  const url = new URL(raw, window.location.origin);
+  const track = sharedFileSelectedAudioTrack(file);
+  if (track?.name) url.searchParams.set("audio", track.name);
+  const start = Number(startSeconds || 0);
+  if (Number.isFinite(start) && start > 0) url.searchParams.set("start", String(Math.max(0, Math.round(start * 1000) / 1000)));
+  return sharedFileUrlWithPassword(`${url.pathname}${url.search}`);
+}
+
 function sharedFileSubtitleShiftStorageKey() {
   return `hackme_web.shared_file_subtitle_shift_ms.${sharedFileState.token || sharedFileToken()}`;
 }
@@ -311,9 +406,34 @@ function sharedFileSyncSubtitleTracks(player, file) {
   });
 }
 
-function sharedFileSubtitleShiftControlsMarkup(file) {
-  if (!sharedFileSubtitles(file).length) return "";
-  return `
+function sharedFileSubtitleShiftControlsMarkup(file, selectedMode = "") {
+  const subtitles = sharedFileSubtitles(file);
+  const audioTracks = sharedFileAudioTracks(file);
+  const serviceOptions = sharedFileServiceOptions(file);
+  const mode = selectedMode || sharedFileSelectedServiceMode(file);
+  const showAudio = ["prepared_hls", "realtime_proxy"].includes(mode);
+  if (serviceOptions.length < 2 && !subtitles.length && (!showAudio || audioTracks.length < 2)) return "";
+  const selectedOption = serviceOptions.find((option) => option.mode === mode) || serviceOptions[0] || {};
+  const serviceMarkup = serviceOptions.length >= 2 ? `
+    <div class="shared-file-progress shared-file-service-mode">
+      <strong>方案</strong>
+      <select id="shared-file-service-mode-select">
+        ${serviceOptions.map((option) => `<option value="${sharedFileEscape(option.mode)}"${option.mode === mode ? " selected" : ""}${option.available ? "" : " disabled"}>${sharedFileEscape(option.label)}</option>`).join("")}
+      </select>
+      <small>${sharedFileEscape(selectedOption.summary || "")}</small>
+    </div>
+  ` : "";
+  const defaultAudioIndex = Math.max(0, audioTracks.findIndex((track) => track.isDefault));
+  const audioMarkup = showAudio && audioTracks.length >= 2 ? `
+    <div class="shared-file-progress shared-file-audio-track">
+      <strong>音軌</strong>
+      <select id="shared-file-audio-track-select">
+        ${audioTracks.map((track, index) => `<option value="${index}"${index === defaultAudioIndex ? " selected" : ""}>${sharedFileEscape(track.label)}</option>`).join("")}
+      </select>
+      ${mode === "realtime_proxy" ? "<small>Standard 即時轉封裝會重新開啟串流以套用音軌。</small>" : ""}
+    </div>
+  ` : "";
+  const subtitleMarkup = subtitles.length ? `
     <div class="shared-file-progress shared-file-subtitle-shift">
       <strong>字幕延遲</strong>
       <div class="shared-file-subtitle-shift-row">
@@ -323,10 +443,26 @@ function sharedFileSubtitleShiftControlsMarkup(file) {
         <button type="button" data-shared-file-subtitle-shift-reset="1">重置</button>
       </div>
     </div>
+  ` : "";
+  return `
+    ${serviceMarkup}
+    ${audioMarkup}
+    ${subtitleMarkup}
   `;
 }
 
 function sharedFileBindSubtitleShiftControls(file, player) {
+  const serviceSelect = document.getElementById("shared-file-service-mode-select");
+  if (serviceSelect) {
+    serviceSelect.addEventListener("change", () => {
+      sharedFileSaveServiceMode(file, serviceSelect.value);
+      sharedFileRenderStreamingPreview(file).catch((err) => sharedFileSetMsg(err.message || "預覽失敗", true));
+    });
+  }
+  const audioSelect = document.getElementById("shared-file-audio-track-select");
+  if (audioSelect) {
+    audioSelect.addEventListener("change", () => sharedFileApplyAudioTrack(file));
+  }
   const input = document.getElementById("shared-file-subtitle-shift-seconds");
   if (!input) return;
   const applyShift = (nextMs) => {
@@ -341,6 +477,35 @@ function sharedFileBindSubtitleShiftControls(file, player) {
   });
   const reset = document.querySelector("[data-shared-file-subtitle-shift-reset]");
   if (reset) reset.addEventListener("click", () => applyShift(0));
+}
+
+function sharedFileApplyAudioTrack(file) {
+  const tracks = sharedFileAudioTracks(file);
+  const select = document.getElementById("shared-file-audio-track-select");
+  if (sharedFileSelectedServiceMode(file) === "realtime_proxy") {
+    const player = document.getElementById("shared-file-hls-player");
+    if (!select || tracks.length < 2 || !player) return;
+    const selected = Math.max(0, Math.min(tracks.length - 1, Number(select.value || 0)));
+    const resumeAt = Number(player.currentTime || 0);
+    const wasPaused = player.paused;
+    const nextUrl = sharedFileRealtimeProxyUrl(file, resumeAt);
+    if (!nextUrl) return;
+    player.src = nextUrl;
+    if (typeof player.load === "function") player.load();
+    if (!wasPaused && typeof player.play === "function") player.play().catch(() => {});
+    sharedFileSetMsg(`音軌：${tracks[selected]?.label || "音軌"}。`);
+    return;
+  }
+  const hls = sharedFileState.hls;
+  if (!select || tracks.length < 2 || !hls || !Array.isArray(hls.audioTracks)) return;
+  const selected = Math.max(0, Math.min(tracks.length - 1, Number(select.value || 0)));
+  const chosen = tracks[selected];
+  const index = hls.audioTracks.findIndex((track) => {
+    const name = String(track.name || track.label || "").toLowerCase();
+    const lang = String(track.lang || track.language || "").toLowerCase();
+    return name === chosen.label.toLowerCase() || lang === chosen.language.toLowerCase();
+  });
+  if (index >= 0) hls.audioTrack = index;
 }
 
 function sharedFileStreamProgressText(stream) {
@@ -492,7 +657,7 @@ async function sharedFileRenderHlsPreview(file) {
   const mediaType = category === "audio" ? "audio" : "video";
   const masterUrl = sharedFileHlsMasterUrl(file);
   const safeName = sharedFileEscape(file?.display_name || "preview");
-  const subtitleControls = sharedFileSubtitleShiftControlsMarkup(file);
+  const subtitleControls = sharedFileSubtitleShiftControlsMarkup(file, "prepared_hls");
   sharedFileShowPreview(mediaType === "audio"
     ? `<audio id="shared-file-hls-player" controls preload="metadata"></audio>${subtitleControls}`
     : `<video id="shared-file-hls-player" controls playsinline preload="metadata" title="${safeName}"></video>${subtitleControls}`);
@@ -518,10 +683,73 @@ async function sharedFileRenderHlsPreview(file) {
     });
     hls.loadSource(masterUrl);
     hls.attachMedia(player);
+    if (HlsCtor.Events.AUDIO_TRACKS_UPDATED) {
+      hls.on(HlsCtor.Events.AUDIO_TRACKS_UPDATED, () => sharedFileApplyAudioTrack(file));
+    }
     sharedFileSetMsg("已使用 HLS.js 串流預覽；不會直接解密並拉取整個原始大檔。");
   } catch (err) {
     sharedFileSetMsg(err.message || "HLS 串流初始化失敗", true);
   }
+}
+
+async function sharedFileRenderDirectMediaPreview(file) {
+  sharedFileClearPreview();
+  const category = sharedFileCategory(file?.display_name || "", file?.mime_type || "");
+  const mediaType = category === "audio" ? "audio" : "video";
+  const safeName = sharedFileEscape(file?.display_name || "preview");
+  const src = sharedFileContentUrl(file);
+  const controls = sharedFileSubtitleShiftControlsMarkup(file, "direct");
+  sharedFileShowPreview(mediaType === "audio"
+    ? `<audio id="shared-file-hls-player" controls preload="metadata" src="${sharedFileEscape(src)}"></audio>${controls}`
+    : `<video id="shared-file-hls-player" controls playsinline preload="metadata" src="${sharedFileEscape(src)}" title="${safeName}"></video>${controls}`);
+  const player = document.getElementById("shared-file-hls-player");
+  if (player) {
+    sharedFileSyncSubtitleTracks(player, file);
+    sharedFileBindSubtitleShiftControls(file, player);
+  }
+  sharedFileSetMsg("目前使用 Basic 直接串流；若瀏覽器不支援此格式，請改用 Standard 或 Premium。");
+}
+
+async function sharedFileRenderRealtimeProxyPreview(file) {
+  sharedFileClearPreview();
+  const category = sharedFileCategory(file?.display_name || "", file?.mime_type || "");
+  const mediaType = category === "audio" ? "audio" : "video";
+  const safeName = sharedFileEscape(file?.display_name || "preview");
+  const src = sharedFileRealtimeProxyUrl(file, 0);
+  if (!src) {
+    sharedFileShowPreview(`<pre>${safeName}\nStandard 即時轉封裝目前不可用。</pre>`);
+    sharedFileSetMsg("Standard 即時轉封裝目前不可用。", true);
+    return;
+  }
+  const controls = sharedFileSubtitleShiftControlsMarkup(file, "realtime_proxy");
+  sharedFileShowPreview(mediaType === "audio"
+    ? `<audio id="shared-file-hls-player" controls preload="metadata" src="${sharedFileEscape(src)}"></audio>${controls}`
+    : `<video id="shared-file-hls-player" controls playsinline preload="metadata" src="${sharedFileEscape(src)}" title="${safeName}"></video>${controls}`);
+  const player = document.getElementById("shared-file-hls-player");
+  if (player) {
+    sharedFileSyncSubtitleTracks(player, file);
+    sharedFileBindSubtitleShiftControls(file, player);
+  }
+  sharedFileSetMsg("目前使用 Standard 即時轉封裝；伺服器會即時轉出瀏覽器較好播放的音訊。");
+}
+
+async function sharedFileRenderStreamingPreview(file) {
+  const category = sharedFileCategory(file?.display_name || "", file?.mime_type || "");
+  if (!["video", "audio"].includes(category)) return false;
+  const mode = sharedFileSelectedServiceMode(file);
+  if (mode === "direct") {
+    await sharedFileRenderDirectMediaPreview(file);
+    return true;
+  }
+  if (mode === "realtime_proxy") {
+    await sharedFileRenderRealtimeProxyPreview(file);
+    return true;
+  }
+  if (sharedFileHasReadyHls(file)) {
+    await sharedFileRenderHlsPreview(file);
+    return true;
+  }
+  return false;
 }
 
 async function sharedFileRenderBlobPreview(blob, filename) {
@@ -650,14 +878,13 @@ async function sharedFilePreview() {
       sharedFileSetMsg("預覽已在瀏覽器端解密。");
       return;
     }
+    if (await sharedFileRenderStreamingPreview(file)) {
+      return;
+    }
     if (sharedFileIsServerEncryptedVideoProcessing(file)) {
       const stream = sharedFileStreamAsset(file);
       sharedFileShowPreview(`<pre>${sharedFileEscape(file.display_name || "影片")}\nHLS 串流準備中：${sharedFileEscape(sharedFileStreamProgressText(stream))}</pre>`);
       sharedFileSetMsg("這個伺服器端加密影片仍在背景建立 HLS；完成前不觸發主程序整檔解密預覽。");
-      return;
-    }
-    if (sharedFileHasReadyHls(file)) {
-      await sharedFileRenderHlsPreview(file);
       return;
     }
     const res = await fetch(sharedFilePreviewMetadataUrl(file), sharedFileRequestOptions());

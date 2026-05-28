@@ -13,6 +13,7 @@ from cryptography.fernet import Fernet
 from flask import Flask, jsonify, make_response
 
 import routes.files as files_routes
+import routes.file_sections.share_preview_routes as share_preview_routes
 from routes.files import register_file_routes
 from services.storage.cloud_drive import (
     decrypt_server_encrypted_bytes,
@@ -233,6 +234,106 @@ def test_dm_upload_enters_owner_drive_and_grants_counterparty_download(tmp_path)
     assert manager_refs.get_json()["refs"] == []
 
 
+def test_plain_cloud_drive_download_can_use_x_accel_offload(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    monkeypatch.setenv("HACKME_CLOUD_DRIVE_X_ACCEL_PREFIX", "/_protected/storage")
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"plain offload"), "plain.txt")},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT storage_path FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+    finally:
+        conn.close()
+
+    download = client.get(f"/api/cloud-drive/files/{file_id}/download")
+
+    assert download.status_code == 200
+    assert download.headers["X-Accel-Redirect"] == f"/_protected/storage/{row['storage_path']}"
+    assert download.headers["Accept-Ranges"] == "bytes"
+    assert download.headers["X-Hackme-Transfer-Mode"] == "x_accel"
+    assert download.headers["X-Hackme-Transfer-Offload"] == "x_accel"
+    assert "attachment" in download.headers["Content-Disposition"]
+    assert download.data == b""
+
+
+def test_e2ee_preview_ciphertext_can_use_x_accel_offload(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    monkeypatch.setenv("HACKME_CLOUD_DRIVE_X_ACCEL_PREFIX", "/_protected/storage")
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={
+            "file": (io.BytesIO(b"browser ciphertext"), "vault.bin"),
+            "privacy_mode": "e2ee",
+            "encrypted_metadata": '{"ciphertext":"metadata"}',
+            "encrypted_file_key": '{"ciphertext":"wrapped-key"}',
+            "wrapped_by": "browser_passphrase_pbkdf2_v2",
+            "ciphertext_sha256": "0" * 64,
+            "encryption_algorithm": "AES-GCM",
+            "encryption_version": "browser-passphrase-v2",
+            "nonce": "nonce",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT storage_path FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+    finally:
+        conn.close()
+
+    preview = client.get(f"/api/cloud-drive/files/{file_id}/preview/content")
+
+    assert preview.status_code == 200
+    assert preview.headers["X-Accel-Redirect"] == f"/_protected/storage/{row['storage_path']}"
+    assert preview.headers["X-Hackme-Transfer-Mode"] == "x_accel"
+    assert preview.data == b""
+
+
+def test_server_encrypted_download_ignores_x_accel_and_streams_plaintext(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    monkeypatch.setenv("HACKME_CLOUD_DRIVE_X_ACCEL_PREFIX", "/_protected/storage")
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"secret offload guard"), "secret.txt"), "privacy_mode": "server_encrypted"},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    download = client.get(f"/api/cloud-drive/files/{file_id}/download")
+
+    assert download.status_code == 200
+    assert "X-Accel-Redirect" not in download.headers
+    assert download.headers["X-Hackme-Transfer-Mode"] == "python_chunked_decrypt"
+    assert download.data == b"secret offload guard"
+
+
 def test_cloud_drive_upload_failure_returns_specific_reason(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
@@ -320,6 +421,9 @@ def test_cloud_drive_resumable_upload_can_resume_chunks_and_complete(tmp_path):
         content_type="multipart/form-data",
     )
     assert chunk1.status_code == 200
+    chunk1_body = chunk1.get_json()
+    assert chunk1_body["chunk"]["bytes_received"] == chunk_size
+    assert chunk1_body["chunk"]["storage_mode"] == "streamed_to_disk"
     status = client.get(f"/api/cloud-drive/resumable-upload/{session_id}/status")
     assert status.get_json()["session"]["received_chunks"] == [1]
 
@@ -327,16 +431,21 @@ def test_cloud_drive_resumable_upload_can_resume_chunks_and_complete(tmp_path):
     assert incomplete.status_code == 409
     assert incomplete.get_json()["missing_chunks"] == [0, 2]
 
-    assert client.post(
+    chunk0 = client.post(
         f"/api/cloud-drive/resumable-upload/{session_id}/chunks/0",
         data={"chunk": (io.BytesIO(b"A" * chunk_size), "part0")},
         content_type="multipart/form-data",
-    ).status_code == 200
-    assert client.post(
+    )
+    assert chunk0.status_code == 200
+    assert chunk0.get_json()["chunk"]["storage_mode"] == "streamed_to_disk"
+    chunk2 = client.post(
         f"/api/cloud-drive/resumable-upload/{session_id}/chunks/2",
         data={"chunk": (io.BytesIO(b"IJ"), "part2")},
         content_type="multipart/form-data",
-    ).status_code == 200
+    )
+    assert chunk2.status_code == 200
+    assert chunk2.get_json()["chunk"]["bytes_received"] == 2
+    assert chunk2.get_json()["chunk"]["storage_mode"] == "streamed_to_disk"
 
     completed = client.post(f"/api/cloud-drive/resumable-upload/{session_id}/complete")
     assert completed.status_code == 200
@@ -359,6 +468,39 @@ def test_cloud_drive_resumable_upload_can_resume_chunks_and_complete(tmp_path):
         assert upload_job["progress_percent"] == 100
     finally:
         conn.close()
+
+
+def test_cloud_drive_resumable_upload_rejects_raw_chunk_size_mismatch(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    started = client.post(
+        "/api/cloud-drive/resumable-upload/start",
+        json={
+            "filename": "bad-chunk.bin",
+            "mime_type": "application/octet-stream",
+            "total_bytes": 8,
+            "chunk_size": 4,
+            "privacy_mode": "standard_plain",
+        },
+    )
+    assert started.status_code == 200
+    session_id = started.get_json()["session"]["session_id"]
+
+    bad = client.post(
+        f"/api/cloud-drive/resumable-upload/{session_id}/chunks/0",
+        data=b"abc",
+        content_type="application/octet-stream",
+    )
+
+    assert bad.status_code == 400
+    body = bad.get_json()
+    assert body["error"] == "invalid_chunk_size"
+    assert body["ok"] is False
 
 
 def test_cloud_drive_resumable_complete_reuses_existing_merged_file_after_interruption(tmp_path):
@@ -883,12 +1025,14 @@ def test_server_encrypted_media_preview_content_supports_range_requests(tmp_path
     content = client.get(f"/api/cloud-drive/files/{file_id}/preview/content")
     assert content.status_code == 200
     assert content.headers["Accept-Ranges"] == "bytes"
+    assert content.headers["X-Hackme-Transfer-Mode"] == "python_chunked_decrypt"
     assert content.data == media_bytes
 
     ranged = client.get(f"/api/cloud-drive/files/{file_id}/preview/content", headers={"Range": "bytes=4-11"})
     assert ranged.status_code == 206
     assert ranged.headers["Content-Range"] == "bytes 4-11/29"
     assert ranged.headers["Accept-Ranges"] == "bytes"
+    assert ranged.headers["X-Hackme-Transfer-Mode"] == "python_chunked_decrypt"
     assert ranged.data == b"a-real-m"
 
 
@@ -1803,6 +1947,75 @@ def test_server_encrypted_mkv_share_preview_does_not_decrypt_entire_file(tmp_pat
     segment = client.get(f"/api/storage/shared/{token}/hls/original/seg_00001.m4s?password=demo")
     assert segment.status_code == 200
     assert segment.data == b"seg"
+
+
+def test_cloud_drive_and_storage_share_realtime_proxy_routes_use_auth_and_audio_params(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"not-a-real-mkv-but-route-test"), "clip.mkv", "video/x-matroska"),
+            "virtual_path": "clip.mkv",
+            "privacy_mode": "standard_plain",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    storage_file = uploaded.get_json()["storage_file"]
+    storage_file_id = storage_file["id"]
+    uploaded_file_id = storage_file["file_id"]
+    created = client.post(
+        "/api/storage/share-links",
+        json={"storage_file_id": storage_file_id, "share_password": "demo"},
+    )
+    assert created.status_code == 200
+    token = created.get_json()["share_link"]["token"]
+
+    calls = []
+
+    def fake_open_realtime_proxy_stream(path, **kwargs):
+        calls.append({"path": Path(path), "kwargs": kwargs})
+        return {
+            "chunks": iter([b"ftyp", b"moof"]),
+            "mimetype": "video/mp4",
+            "audio_track": {"name": str(kwargs.get("audio_track") or "")},
+        }
+
+    monkeypatch.setenv("HACKME_MEDIA_REALTIME_PROXY_ENABLED", "1")
+    monkeypatch.setattr(files_routes, "open_realtime_proxy_stream", fake_open_realtime_proxy_stream)
+    monkeypatch.setattr(share_preview_routes, "open_realtime_proxy_stream", fake_open_realtime_proxy_stream)
+
+    own = client.get(f"/api/cloud-drive/files/{uploaded_file_id}/realtime-proxy?audio=audio_02_eng&start=9.75")
+    assert own.status_code == 200
+    assert own.mimetype == "video/mp4"
+    assert own.get_data() == b"ftypmoof"
+    assert own.headers["X-Hackme-Streaming-Mode"] == "realtime_proxy"
+    assert own.headers["X-Hackme-Transfer-Mode"] == "python_realtime_proxy"
+    assert own.headers["X-Hackme-Audio-Track"] == "audio_02_eng"
+    assert calls[-1]["path"].name == "clip.mkv"
+    assert calls[-1]["kwargs"]["audio_track"] == "audio_02_eng"
+    assert calls[-1]["kwargs"]["start_seconds"] == "9.75"
+
+    shared = client.get(f"/api/storage/shared/{token}/realtime-proxy?password=demo&audio=audio_01_jpn&start=3.5")
+    assert shared.status_code == 200
+    assert shared.mimetype == "video/mp4"
+    assert shared.get_data() == b"ftypmoof"
+    assert shared.headers["X-Hackme-Streaming-Mode"] == "realtime_proxy"
+    assert shared.headers["X-Hackme-Transfer-Mode"] == "python_realtime_proxy"
+    assert shared.headers["X-Hackme-Audio-Track"] == "audio_01_jpn"
+    assert calls[-1]["path"].name == "clip.mkv"
+    assert calls[-1]["kwargs"]["audio_track"] == "audio_01_jpn"
+    assert calls[-1]["kwargs"]["start_seconds"] == "3.5"
+
+    denied = client.get(f"/api/storage/shared/{token}/realtime-proxy?audio=audio_01_jpn")
+    assert denied.status_code == 401
+    assert denied.get_json()["reason"] == "password_required"
 
 
 def test_storage_share_link_account_scope_and_view_limit(tmp_path):

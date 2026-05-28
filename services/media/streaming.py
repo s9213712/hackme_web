@@ -6,10 +6,16 @@ import select
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+try:
+    import fcntl
+except Exception:  # pragma: no cover - non-Unix fallback
+    fcntl = None
 
 from services.storage.cloud_drive import (
     is_e2ee_file,
@@ -30,10 +36,20 @@ DEFAULT_FFMPEG_TIMEOUT_SECONDS = 60 * 60
 DEFAULT_FFMPEG_PRESET = "ultrafast"
 DEFAULT_FFMPEG_MAX_VIDEO_HEIGHT = 0
 DEFAULT_HLS_QUALITY_HEIGHTS = "480,720"
+DEFAULT_HLS_AUDIO_BITRATE = "160k"
+DEFAULT_STREAM_AUDIO_TRACK_LIMIT = 8
+DEFAULT_STREAM_SUBTITLE_TRACK_LIMIT = 32
+DEFAULT_REALTIME_PROXY_MAX_CONCURRENT = 2
+DEFAULT_REALTIME_PROXY_TIMEOUT_SECONDS = 4 * 60 * 60
+DEFAULT_REALTIME_PROXY_AUDIO_BITRATE = "160k"
 HLS_DERIVATIVES_QUOTA_EXEMPT = True
 STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON = (
     "strict E2EE files cannot generate server-side HLS or server-side transcode derivatives"
 )
+
+_REALTIME_PROXY_LOCK = threading.Lock()
+_REALTIME_PROXY_ACTIVE = 0
+_REALTIME_PROXY_HELD_SLOTS = set()
 
 
 def _now():
@@ -81,6 +97,11 @@ def ensure_media_stream_schema(conn):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             asset_id INTEGER NOT NULL REFERENCES media_stream_assets(id) ON DELETE CASCADE,
             name TEXT NOT NULL,
+            media_kind TEXT NOT NULL DEFAULT 'variant',
+            label TEXT,
+            language TEXT,
+            stream_index INTEGER NOT NULL DEFAULT -1,
+            is_default INTEGER NOT NULL DEFAULT 0,
             width INTEGER NOT NULL DEFAULT 0,
             height INTEGER NOT NULL DEFAULT 0,
             bitrate INTEGER NOT NULL DEFAULT 0,
@@ -116,6 +137,7 @@ def ensure_media_stream_schema(conn):
             codec TEXT,
             path TEXT NOT NULL,
             is_default INTEGER NOT NULL DEFAULT 0,
+            is_forced INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )
         """
@@ -135,8 +157,19 @@ def ensure_media_stream_schema(conn):
         """
     )
     _ensure_columns(conn, "media_stream_assets", {"media_type": "TEXT NOT NULL DEFAULT 'video'"})
+    _ensure_columns(conn, "media_stream_variants", {
+        "media_kind": "TEXT NOT NULL DEFAULT 'variant'",
+        "label": "TEXT",
+        "language": "TEXT",
+        "stream_index": "INTEGER NOT NULL DEFAULT -1",
+        "is_default": "INTEGER NOT NULL DEFAULT 0",
+    })
+    _ensure_columns(conn, "media_stream_subtitles", {
+        "is_forced": "INTEGER NOT NULL DEFAULT 0",
+    })
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_stream_assets_status ON media_stream_assets(status, updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_stream_variants_asset ON media_stream_variants(asset_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_media_stream_variants_asset_kind ON media_stream_variants(asset_id, media_kind, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_stream_segments_variant_seq ON media_stream_segments(variant_id, sequence_number)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_stream_subtitles_asset ON media_stream_subtitles(asset_id, name)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_stream_jobs_asset ON media_stream_jobs(asset_id, created_at)")
@@ -172,6 +205,13 @@ def _bounded_env_int(name, default, *, min_value, max_value):
     return max(int(min_value), min(int(max_value), value))
 
 
+def _env_bool(name, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "y", "t"}
+
+
 def _ffmpeg_thread_count():
     return _bounded_env_int("HACKME_MEDIA_FFMPEG_THREADS", DEFAULT_FFMPEG_THREADS, min_value=1, max_value=4)
 
@@ -196,8 +236,23 @@ def _ffmpeg_max_video_height():
     )
 
 
+def _hls_profile():
+    raw = str(os.environ.get("HACKME_MEDIA_HLS_PROFILE") or "").strip().lower().replace("-", "_")
+    if raw in {"storage", "storage_saver", "storage_saving", "saver"}:
+        return "storage_saver"
+    if raw in {"mobile", "mobile_saver", "mobile_storage_saver", "low_cost", "lowcost"}:
+        return "mobile_saver"
+    return "full"
+
+
+def _hls_default_quality_heights():
+    if _hls_profile() == "mobile_saver":
+        return "480"
+    return DEFAULT_HLS_QUALITY_HEIGHTS
+
+
 def _hls_quality_heights():
-    raw = str(os.environ.get("HACKME_MEDIA_HLS_QUALITY_HEIGHTS") or DEFAULT_HLS_QUALITY_HEIGHTS)
+    raw = str(os.environ.get("HACKME_MEDIA_HLS_QUALITY_HEIGHTS") or _hls_default_quality_heights())
     values = []
     for part in raw.replace(";", ",").split(","):
         try:
@@ -207,6 +262,58 @@ def _hls_quality_heights():
         if height in {2160, 1440, 1080, 720, 480, 360} and height not in values:
             values.append(height)
     return values
+
+
+def _hls_original_variant_mode():
+    raw = str(os.environ.get("HACKME_MEDIA_HLS_ORIGINAL_VARIANT_MODE") or "").strip().lower()
+    if not raw and not _env_bool("HACKME_MEDIA_HLS_INCLUDE_ORIGINAL", True):
+        raw = "never"
+    if not raw and _hls_profile() in {"storage_saver", "mobile_saver"}:
+        raw = "never"
+    normalized = raw.replace("-", "_")
+    if normalized in {"never", "skip", "omit", "off", "false", "0", "storage_saver", "storage"}:
+        return "never"
+    if normalized in {"auto", "adaptive"}:
+        return "auto"
+    return "always"
+
+
+def _audio_bitrate_value(raw, default):
+    text = str(raw or default).strip().lower()
+    if re.fullmatch(r"[1-9][0-9]{1,3}k", text):
+        return text
+    return str(default)
+
+
+def _audio_bitrate_to_bits_per_second(value):
+    text = _audio_bitrate_value(value, DEFAULT_HLS_AUDIO_BITRATE)
+    try:
+        return int(text[:-1]) * 1000
+    except Exception:
+        return 160000
+
+
+def _hls_audio_bitrate():
+    default = "128k" if _hls_profile() == "mobile_saver" else DEFAULT_HLS_AUDIO_BITRATE
+    return _audio_bitrate_value(os.environ.get("HACKME_MEDIA_HLS_AUDIO_BITRATE"), default)
+
+
+def _hls_effective_profile():
+    raw_profile = str(os.environ.get("HACKME_MEDIA_HLS_PROFILE") or "").strip()
+    if raw_profile:
+        return _hls_profile()
+    default_heights = [
+        int(part)
+        for part in DEFAULT_HLS_QUALITY_HEIGHTS.split(",")
+        if str(part or "").strip().isdigit()
+    ]
+    if (
+        _hls_original_variant_mode() != "always"
+        or _hls_quality_heights() != default_heights
+        or _hls_audio_bitrate() != DEFAULT_HLS_AUDIO_BITRATE
+    ):
+        return "custom"
+    return "full"
 
 
 def _ffmpeg_maxrate_multiplier():
@@ -234,6 +341,55 @@ def _ffmpeg_timeout_seconds():
         min_value=60,
         max_value=24 * 60 * 60,
     )
+
+
+def realtime_proxy_enabled():
+    return _env_bool("HACKME_MEDIA_REALTIME_PROXY_ENABLED", False)
+
+
+def realtime_proxy_max_concurrent():
+    return _bounded_env_int(
+        "HACKME_MEDIA_REALTIME_PROXY_MAX_CONCURRENT",
+        DEFAULT_REALTIME_PROXY_MAX_CONCURRENT,
+        min_value=1,
+        max_value=16,
+    )
+
+
+def realtime_proxy_timeout_seconds():
+    return _bounded_env_int(
+        "HACKME_MEDIA_REALTIME_PROXY_TIMEOUT_SECONDS",
+        DEFAULT_REALTIME_PROXY_TIMEOUT_SECONDS,
+        min_value=30,
+        max_value=24 * 60 * 60,
+    )
+
+
+def realtime_proxy_audio_bitrate():
+    return _audio_bitrate_value(os.environ.get("HACKME_MEDIA_REALTIME_PROXY_AUDIO_BITRATE"), DEFAULT_REALTIME_PROXY_AUDIO_BITRATE)
+
+
+def realtime_proxy_lock_dir():
+    raw = str(os.environ.get("HACKME_MEDIA_REALTIME_PROXY_LOCK_DIR") or "").strip()
+    if raw:
+        return Path(raw)
+    runtime_root = str(os.environ.get("HACKME_RUNTIME_DIR") or "").strip()
+    if runtime_root:
+        return Path(runtime_root) / "locks" / "realtime_proxy"
+    return None
+
+
+def realtime_proxy_slot_scope():
+    raw = str(
+        os.environ.get("HACKME_MEDIA_REALTIME_PROXY_LIMIT_SCOPE")
+        or os.environ.get("HACKME_MEDIA_REALTIME_PROXY_SLOT_SCOPE")
+        or "auto"
+    ).strip().lower()
+    if raw in {"process", "local", "per_process", "per-process"}:
+        return "process"
+    if raw in {"global", "host", "host_global", "host-global"}:
+        return "global" if fcntl is not None and realtime_proxy_lock_dir() is not None else "process"
+    return "global" if fcntl is not None and realtime_proxy_lock_dir() is not None else "process"
 
 
 def _row_dict(row):
@@ -346,9 +502,15 @@ def serialize_stream_asset(conn, uploaded_file_id, *, include_segments=True):
     data["source_size_bytes"] = _safe_int(data.get("source_size_bytes"), 0)
     data["duration_seconds"] = _safe_float(data.get("duration_seconds"), 0.0)
     data["variants"] = []
+    data["audio_tracks"] = []
     data["subtitles"] = []
     for variant in _variant_rows(conn, asset["id"]):
         item = _row_dict(variant)
+        item["media_kind"] = str(item.get("media_kind") or "variant")
+        item["label"] = str(item.get("label") or "")
+        item["language"] = str(item.get("language") or "")
+        item["stream_index"] = _safe_int(item.get("stream_index"), -1)
+        item["is_default"] = bool(_safe_int(item.get("is_default"), 0))
         item["width"] = _safe_int(item.get("width"), 0)
         item["height"] = _safe_int(item.get("height"), 0)
         item["bitrate"] = _safe_int(item.get("bitrate"), 0)
@@ -371,11 +533,18 @@ def serialize_stream_asset(conn, uploaded_file_id, *, include_segments=True):
                 item["segments"].append(seg)
         else:
             item.update(_segment_summary(conn, variant["id"]))
-        data["variants"].append(item)
+        if item["media_kind"] == "audio":
+            if not item["label"]:
+                item["label"] = item["language"] or item["name"]
+            data["audio_tracks"].append(item)
+        else:
+            data["variants"].append(item)
     for subtitle in _subtitle_rows(conn, asset["id"]):
         item = _row_dict(subtitle)
         item["is_default"] = bool(_safe_int(item.get("is_default"), 0))
+        item["is_forced"] = bool(_safe_int(item.get("is_forced"), 0))
         data["subtitles"].append(item)
+    data["premium_hls_profile_policy"] = _premium_hls_profile_policy(data)
     return data
 
 
@@ -503,6 +672,35 @@ def _run_probe(source_path, *, ffprobe_bin="ffprobe"):
     return json.loads(result.stdout or "{}")
 
 
+def _track_language(value):
+    text = str(value or "und").strip().lower()
+    text = re.sub(r"[^a-z0-9_-]+", "", text)[:16]
+    return text or "und"
+
+
+def _track_title(tags):
+    if not isinstance(tags, dict):
+        return ""
+    return str(tags.get("title") or "").strip()[:80]
+
+
+def _audio_label(stream, index):
+    title = str((stream or {}).get("title") or "").strip()
+    language = _track_language((stream or {}).get("language"))
+    codec = str((stream or {}).get("codec") or "").strip().upper()
+    if title:
+        return title[:80]
+    if language != "und":
+        return f"音軌 {index} ({language})"
+    if codec:
+        return f"音軌 {index} ({codec})"
+    return f"音軌 {index}"
+
+
+def _stream_track_limit(name, default):
+    return _bounded_env_int(name, default, min_value=1, max_value=64)
+
+
 def _parse_probe_metadata(payload):
     streams = payload.get("streams") if isinstance(payload, dict) else []
     fmt = payload.get("format") if isinstance(payload, dict) else {}
@@ -517,6 +715,26 @@ def _parse_probe_metadata(payload):
     audio_codec = (audio_stream or {}).get("codec_name") or ""
     audio_codec_tag = (audio_stream or {}).get("codec_tag_string") or ""
     media_type = "audio" if video_stream is None and audio_stream is not None else "video"
+    audio_streams = []
+    audio_ordinal = 0
+    for stream in streams:
+        if stream.get("codec_type") != "audio":
+            continue
+        tags = stream.get("tags") if isinstance(stream.get("tags"), dict) else {}
+        disposition = stream.get("disposition") if isinstance(stream.get("disposition"), dict) else {}
+        audio_ordinal += 1
+        audio_streams.append({
+            "index": _safe_int(stream.get("index"), -1),
+            "ordinal": audio_ordinal,
+            "codec": str(stream.get("codec_name") or ""),
+            "codec_tag": str(stream.get("codec_tag_string") or ""),
+            "language": _track_language(tags.get("language") or "und"),
+            "title": _track_title(tags),
+            "is_default": bool(_safe_int(disposition.get("default"), 0)) or audio_ordinal == 1,
+            "channels": _safe_int(stream.get("channels"), 0),
+            "channel_layout": str(stream.get("channel_layout") or ""),
+            "bitrate": _safe_int(stream.get("bit_rate"), 0),
+        })
     subtitle_streams = []
     for stream in streams:
         if stream.get("codec_type") != "subtitle":
@@ -526,9 +744,10 @@ def _parse_probe_metadata(payload):
         subtitle_streams.append({
             "index": _safe_int(stream.get("index"), -1),
             "codec": str(stream.get("codec_name") or ""),
-            "language": str(tags.get("language") or "und").strip()[:16] or "und",
-            "title": str(tags.get("title") or "").strip()[:80],
+            "language": _track_language(tags.get("language") or "und"),
+            "title": _track_title(tags),
             "is_default": bool(_safe_int(disposition.get("default"), 0)),
+            "is_forced": bool(_safe_int(disposition.get("forced"), 0)),
         })
     return {
         "duration_seconds": duration_seconds,
@@ -540,14 +759,13 @@ def _parse_probe_metadata(payload):
         "audio_codec": str(audio_codec),
         "audio_codec_tag": str(audio_codec_tag),
         "media_type": media_type,
+        "audio_streams": audio_streams,
         "subtitle_streams": subtitle_streams,
     }
 
 
 def _subtitle_language(value):
-    text = str(value or "und").strip().lower()
-    text = re.sub(r"[^a-z0-9_-]+", "", text)[:16]
-    return text or "und"
+    return _track_language(value)
 
 
 def _subtitle_label(stream, index):
@@ -578,7 +796,7 @@ def _extract_subtitles_to_webvtt(source_path, *, derivative_dir, derivative_root
     rows = []
     errors = []
     supported_index = 0
-    for stream in subtitle_streams[:20]:
+    for stream in subtitle_streams[:_stream_track_limit("HACKME_MEDIA_SUBTITLE_TRACK_LIMIT", DEFAULT_STREAM_SUBTITLE_TRACK_LIMIT)]:
         codec = str(stream.get("codec") or "").strip().lower()
         stream_index = _safe_int(stream.get("index"), -1)
         if stream_index < 0:
@@ -623,6 +841,7 @@ def _extract_subtitles_to_webvtt(source_path, *, derivative_dir, derivative_root
             "codec": codec,
             "path": f"{derivative_root_rel}/subtitles/{name}.vtt",
             "is_default": bool(stream.get("is_default")) or supported_index == 1,
+            "is_forced": bool(stream.get("is_forced")),
             "absolute_path": output_path,
         })
     return rows, errors
@@ -761,8 +980,8 @@ def add_stream_subtitle(
     conn.execute(
         """
         INSERT INTO media_stream_subtitles (
-            asset_id, name, label, language, codec, path, is_default, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            asset_id, name, label, language, codec, path, is_default, is_forced, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(asset["id"]),
@@ -772,6 +991,7 @@ def add_stream_subtitle(
             Path(original_filename or "").suffix.lower().lstrip(".") or "webvtt",
             f"{derivative_root_rel}/subtitles/{name}.vtt",
             0 if has_existing else 1,
+            0,
             now,
         ),
     )
@@ -850,8 +1070,8 @@ def refresh_stream_subtitles(
             conn.execute(
                 """
                 INSERT INTO media_stream_subtitles (
-                    asset_id, name, label, language, codec, path, is_default, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    asset_id, name, label, language, codec, path, is_default, is_forced, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(asset["id"]),
@@ -861,6 +1081,7 @@ def refresh_stream_subtitles(
                     str(subtitle.get("codec") or ""),
                     str(subtitle.get("path") or ""),
                     1 if subtitle.get("is_default") else 0,
+                    1 if subtitle.get("is_forced") else 0,
                     now,
                 ),
             )
@@ -945,11 +1166,36 @@ def _write_master_manifest(target, *, variant_name, playlist_name="playlist.m3u8
     )
 
 
-def _write_master_manifest_variants(target, variants):
+def _hls_attr_quote(value):
+    return str(value or "").replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _write_master_manifest_variants(target, variants, *, audio_tracks=None):
     lines = [
         "#EXTM3U",
         "#EXT-X-VERSION:7",
     ]
+    tracks = list(audio_tracks or [])
+    if tracks:
+        has_default = any(bool(track.get("is_default")) for track in tracks)
+        for index, track in enumerate(tracks):
+            name = str(track.get("name") or "").strip()
+            playlist_name = str(track.get("playlist_name") or "playlist.m3u8")
+            if not name:
+                continue
+            label = str(track.get("label") or track.get("language") or name)
+            language = _track_language(track.get("language") or "und")
+            is_default = bool(track.get("is_default")) or (not has_default and index == 0)
+            attrs = [
+                "TYPE=AUDIO",
+                'GROUP-ID="audio"',
+                f'NAME="{_hls_attr_quote(label)}"',
+                f'LANGUAGE="{_hls_attr_quote(language)}"',
+                f"DEFAULT={'YES' if is_default else 'NO'}",
+                "AUTOSELECT=YES",
+                f'URI="{_hls_attr_quote(f"{name}/{playlist_name}")}"',
+            ]
+            lines.append("#EXT-X-MEDIA:" + ",".join(attrs))
     for variant in variants or []:
         name = str(variant.get("name") or "source").strip() or "source"
         playlist_name = str(variant.get("playlist_name") or "playlist.m3u8")
@@ -962,6 +1208,8 @@ def _write_master_manifest_variants(target, variants):
             attrs.append(f"RESOLUTION={int(width)}x{int(height)}")
         if codecs:
             attrs.append(f'CODECS="{codecs}"')
+        if tracks:
+            attrs.append('AUDIO="audio"')
         lines.append("#EXT-X-STREAM-INF:" + ",".join(attrs))
         lines.append(f"{name}/{playlist_name}")
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -982,6 +1230,499 @@ def _metadata_supports_stream_copy(metadata):
     if audio_codec and audio_codec not in {"aac", "mp3"} and audio_codec_tag not in {"mp4a", "mp3"}:
         return False
     return True
+
+
+def _metadata_supports_video_stream_copy(metadata):
+    if not _ffmpeg_copy_first_enabled():
+        return False
+    if str((metadata or {}).get("media_type") or "") != "video":
+        return False
+    codec = str((metadata or {}).get("codec") or "").lower()
+    codec_tag = str((metadata or {}).get("codec_tag") or "").lower()
+    return codec in {"h264", "avc1", "av1", "hevc", "h265"} or codec_tag in {"avc1", "av01", "hvc1", "hev1"}
+
+
+def _audio_codec_browser_hls_friendly(stream):
+    codec = str((stream or {}).get("codec") or "").lower()
+    codec_tag = str((stream or {}).get("codec_tag") or "").lower()
+    return codec in {"aac", "mp3"} or codec_tag in {"mp4a", "mp3"}
+
+
+def _hls_audio_streams(metadata):
+    limit = _stream_track_limit("HACKME_MEDIA_AUDIO_TRACK_LIMIT", DEFAULT_STREAM_AUDIO_TRACK_LIMIT)
+    rows = []
+    seen_default = False
+    for stream in list((metadata or {}).get("audio_streams") or [])[:limit]:
+        stream_index = _safe_int(stream.get("index"), -1)
+        if stream_index < 0:
+            continue
+        item = dict(stream)
+        item["language"] = _track_language(item.get("language") or "und")
+        item["is_default"] = bool(item.get("is_default"))
+        if item["is_default"]:
+            seen_default = True
+        rows.append(item)
+    if rows and not seen_default:
+        rows[0]["is_default"] = True
+    return rows
+
+
+def _realtime_proxy_audio_track_rows(metadata):
+    rows = []
+    for audio_index, stream in enumerate(_hls_audio_streams(metadata), start=1):
+        language = _track_language(stream.get("language") or "und")
+        name = f"audio_{audio_index:02d}_{language}"
+        rows.append({
+            "name": name,
+            "label": _audio_label(stream, audio_index),
+            "language": language,
+            "stream_index": _safe_int(stream.get("index"), -1),
+            "ordinal": audio_index,
+            "is_default": bool(stream.get("is_default")) or audio_index == 1,
+            "codec": str(stream.get("codec") or ""),
+            "bitrate": _safe_int(stream.get("bitrate"), 0),
+            "channels": _safe_int(stream.get("channels"), 0),
+            "channel_layout": str(stream.get("channel_layout") or ""),
+        })
+    if rows and not any(row["is_default"] for row in rows):
+        rows[0]["is_default"] = True
+    return rows
+
+
+def realtime_proxy_audio_tracks_for_source(source_path, *, ffprobe_bin="ffprobe"):
+    metadata = _parse_probe_metadata(_run_probe(source_path, ffprobe_bin=ffprobe_bin))
+    return _realtime_proxy_audio_track_rows(metadata)
+
+
+def _select_realtime_proxy_audio_track(metadata, selector=None):
+    tracks = _realtime_proxy_audio_track_rows(metadata)
+    if not tracks:
+        return None
+    clean = str(selector or "").strip().lower()
+    if not clean:
+        return next((track for track in tracks if track.get("is_default")), tracks[0])
+    for track in tracks:
+        values = {
+            str(track.get("name") or "").lower(),
+            str(track.get("label") or "").lower(),
+            str(track.get("language") or "").lower(),
+            str(track.get("stream_index")),
+            str(track.get("ordinal")),
+            f"audio_{int(track.get('ordinal') or 0):02d}",
+        }
+        if clean in values:
+            return track
+    raise ValueError("找不到指定的即時轉封裝音軌")
+
+
+def realtime_proxy_availability(file_row):
+    media_type = _file_media_type(file_row)
+    if not realtime_proxy_enabled():
+        return {
+            "available": False,
+            "reason": "realtime_proxy_not_enabled",
+            "media_type": media_type,
+            "implementation_status": "disabled",
+        }
+    if is_e2ee_file(file_row):
+        return {
+            "available": False,
+            "reason": "e2ee_server_proxy_not_allowed",
+            "media_type": media_type,
+            "implementation_status": "ready",
+        }
+    if is_server_encrypted_file(file_row):
+        return {
+            "available": False,
+            "reason": "server_encrypted_requires_prepared_hls",
+            "media_type": media_type,
+            "implementation_status": "ready",
+        }
+    if media_type != "video":
+        return {
+            "available": False,
+            "reason": "realtime_proxy_video_only",
+            "media_type": media_type,
+            "implementation_status": "ready",
+        }
+    return {
+        "available": True,
+        "reason": "available",
+        "media_type": media_type,
+        "implementation_status": "ready",
+    }
+
+
+def _parse_realtime_proxy_start_seconds(value):
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = 0.0
+    if parsed < 0 or not parsed < 24 * 60 * 60:
+        return 0.0
+    return round(parsed, 3)
+
+
+def build_realtime_proxy_command(
+    source_path,
+    *,
+    audio_track=None,
+    start_seconds=0,
+    ffmpeg_bin="ffmpeg",
+    ffprobe_bin="ffprobe",
+):
+    source_path = Path(source_path)
+    metadata = _parse_probe_metadata(_run_probe(source_path, ffprobe_bin=ffprobe_bin))
+    if str(metadata.get("media_type") or "") != "video":
+        raise ValueError("即時轉封裝目前只支援影片")
+    if _safe_int(metadata.get("width"), 0) <= 0 or _safe_int(metadata.get("height"), 0) <= 0:
+        raise ValueError("找不到可轉封裝的影片軌")
+    selected_audio = _select_realtime_proxy_audio_track(metadata, audio_track)
+    start = _parse_realtime_proxy_start_seconds(start_seconds)
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+    ]
+    if start > 0:
+        cmd.extend(["-ss", f"{start:.3f}".rstrip("0").rstrip(".")])
+    cmd.extend(["-i", str(source_path), "-map", "0:v:0?"])
+    if selected_audio:
+        cmd.extend(["-map", f"0:{int(selected_audio['stream_index'])}"])
+    else:
+        cmd.append("-an")
+    cmd.extend([
+        "-map_metadata",
+        "-1",
+        "-map_chapters",
+        "-1",
+        "-sn",
+        "-dn",
+        "-c:v",
+        "copy",
+    ])
+    if selected_audio:
+        cmd.extend(["-c:a", "aac", "-b:a", realtime_proxy_audio_bitrate(), "-ac", "2"])
+    cmd.extend([
+        "-movflags",
+        "frag_keyframe+empty_moov+default_base_moof",
+        "-f",
+        "mp4",
+        "pipe:1",
+    ])
+    return {
+        "command": cmd,
+        "metadata": metadata,
+        "audio_track": selected_audio,
+        "audio_tracks": _realtime_proxy_audio_track_rows(metadata),
+        "start_seconds": start,
+        "mimetype": "video/mp4",
+    }
+
+
+def _realtime_proxy_slot_path(lock_dir, index):
+    return Path(lock_dir) / f"realtime_proxy_slot_{int(index):02d}.lock"
+
+
+def _count_realtime_proxy_global_slots_locked(limit, lock_dir):
+    if fcntl is None or lock_dir is None:
+        return {"global_active": None, "global_free": None}
+    locked = 0
+    free = 0
+    errors = 0
+    for index in range(int(limit)):
+        if index in _REALTIME_PROXY_HELD_SLOTS:
+            locked += 1
+            continue
+        handle = None
+        try:
+            handle = _realtime_proxy_slot_path(lock_dir, index).open("a+", encoding="utf-8")
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            locked += 1
+        except Exception:
+            errors += 1
+        else:
+            free += 1
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+        finally:
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+    return {
+        "global_active": locked,
+        "global_free": free,
+        "global_errors": errors,
+    }
+
+
+def _global_realtime_proxy_state_locked(limit, lock_dir):
+    counts = _count_realtime_proxy_global_slots_locked(limit, lock_dir)
+    active = counts.get("global_active")
+    if active is None:
+        active = _REALTIME_PROXY_ACTIVE
+    return {
+        "active": int(active or 0),
+        "local_active": int(_REALTIME_PROXY_ACTIVE),
+        "limit": int(limit),
+        "scope": "global",
+        "lock_dir": str(lock_dir),
+        **counts,
+    }
+
+
+def _try_acquire_realtime_proxy_slot():
+    global _REALTIME_PROXY_ACTIVE
+    limit = realtime_proxy_max_concurrent()
+    scope = realtime_proxy_slot_scope()
+    if scope == "global":
+        lock_dir = realtime_proxy_lock_dir()
+        if fcntl is not None and lock_dir is not None:
+            with _REALTIME_PROXY_LOCK:
+                lock_dir.mkdir(parents=True, exist_ok=True)
+                for index in range(limit):
+                    if index in _REALTIME_PROXY_HELD_SLOTS:
+                        continue
+                    handle = _realtime_proxy_slot_path(lock_dir, index).open("a+", encoding="utf-8")
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        handle.close()
+                        continue
+                    except Exception:
+                        handle.close()
+                        raise
+                    _REALTIME_PROXY_HELD_SLOTS.add(index)
+                    _REALTIME_PROXY_ACTIVE += 1
+                    state = _global_realtime_proxy_state_locked(limit, lock_dir)
+                    state["slot_index"] = index
+                    return True, state, (handle, index)
+                state = _global_realtime_proxy_state_locked(limit, lock_dir)
+                state["active"] = max(int(state.get("active") or 0), int(limit))
+                return False, state, None
+    with _REALTIME_PROXY_LOCK:
+        if _REALTIME_PROXY_ACTIVE >= limit:
+            return False, {"active": _REALTIME_PROXY_ACTIVE, "local_active": _REALTIME_PROXY_ACTIVE, "limit": limit, "scope": "process"}, None
+        _REALTIME_PROXY_ACTIVE += 1
+        return True, {"active": _REALTIME_PROXY_ACTIVE, "local_active": _REALTIME_PROXY_ACTIVE, "limit": limit, "scope": "process"}, None
+
+
+def _release_realtime_proxy_slot(slot_handle=None):
+    global _REALTIME_PROXY_ACTIVE
+    handle = None
+    index = None
+    if isinstance(slot_handle, tuple):
+        handle, index = slot_handle
+    else:
+        handle = slot_handle
+    with _REALTIME_PROXY_LOCK:
+        if handle is not None:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                handle.close()
+            except Exception:
+                pass
+        if index is not None:
+            _REALTIME_PROXY_HELD_SLOTS.discard(index)
+        _REALTIME_PROXY_ACTIVE = max(0, _REALTIME_PROXY_ACTIVE - 1)
+
+
+def realtime_proxy_runtime_status():
+    limit = realtime_proxy_max_concurrent()
+    scope = realtime_proxy_slot_scope()
+    with _REALTIME_PROXY_LOCK:
+        if scope == "global":
+            lock_dir = realtime_proxy_lock_dir()
+            state = _global_realtime_proxy_state_locked(limit, lock_dir) if lock_dir is not None else {
+                "active": int(_REALTIME_PROXY_ACTIVE),
+                "local_active": int(_REALTIME_PROXY_ACTIVE),
+                "limit": int(limit),
+                "scope": "process",
+            }
+        else:
+            state = {
+                "active": int(_REALTIME_PROXY_ACTIVE),
+                "local_active": int(_REALTIME_PROXY_ACTIVE),
+                "limit": int(limit),
+                "scope": "process",
+            }
+        state.update({
+            "enabled": realtime_proxy_enabled(),
+            "timeout_seconds": realtime_proxy_timeout_seconds(),
+        })
+        return state
+
+
+def _realtime_proxy_process_sample(pid):
+    sample = {"rss_bytes": 0, "cpu_time_seconds": 0.0}
+    try:
+        pid = int(pid or 0)
+    except Exception:
+        pid = 0
+    if pid <= 0:
+        return sample
+    status_path = Path(f"/proc/{pid}/status")
+    try:
+        for line in status_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.startswith("VmRSS:"):
+                parts = line.split()
+                if len(parts) >= 2:
+                    sample["rss_bytes"] = max(0, int(parts[1]) * 1024)
+                break
+    except Exception:
+        pass
+    stat_path = Path(f"/proc/{pid}/stat")
+    try:
+        stat = stat_path.read_text(encoding="utf-8", errors="ignore")
+        tail = stat[stat.rfind(")") + 2 :].split()
+        ticks = os.sysconf(os.sysconf_names.get("SC_CLK_TCK", "SC_CLK_TCK")) or 100
+        if len(tail) >= 13:
+            sample["cpu_time_seconds"] = round((int(tail[11]) + int(tail[12])) / float(ticks), 6)
+    except Exception:
+        pass
+    return sample
+
+
+def open_realtime_proxy_stream(
+    source_path,
+    *,
+    audio_track=None,
+    start_seconds=0,
+    ffmpeg_bin="ffmpeg",
+    ffprobe_bin="ffprobe",
+    chunk_size=256 * 1024,
+):
+    acquired, state, slot_handle = _try_acquire_realtime_proxy_slot()
+    if not acquired:
+        raise RuntimeError(f"realtime_proxy_busy:{state['active']}/{state['limit']}")
+    proc = None
+    try:
+        info = build_realtime_proxy_command(
+            source_path,
+            audio_track=audio_track,
+            start_seconds=start_seconds,
+            ffmpeg_bin=ffmpeg_bin,
+            ffprobe_bin=ffprobe_bin,
+        )
+        proc = subprocess.Popen(
+            info["command"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+    except Exception:
+        _release_realtime_proxy_slot(slot_handle)
+        raise
+
+    timeout_seconds = realtime_proxy_timeout_seconds()
+    started = time.monotonic()
+    metrics = {
+        "pid": int(getattr(proc, "pid", 0) or 0),
+        "runtime_active_at_start": int(state.get("active") or 0),
+        "runtime_local_active_at_start": int(state.get("local_active") or 0),
+        "runtime_limit": int(state.get("limit") or 0),
+        "runtime_scope": str(state.get("scope") or "process"),
+        "runtime_slot_index": state.get("slot_index"),
+        "chunk_size": int(chunk_size or 256 * 1024),
+        "bytes_sent": 0,
+        "chunks_sent": 0,
+        "first_chunk_latency_ms": None,
+        "duration_ms": None,
+        "rss_peak_bytes": 0,
+        "cpu_time_seconds": 0.0,
+        "resource_samples": 0,
+        "returncode": None,
+        "closed_by_client": False,
+        "timed_out": False,
+        "terminated": False,
+        "killed": False,
+        "finished": False,
+    }
+
+    def update_resource_sample():
+        sample = _realtime_proxy_process_sample(metrics["pid"])
+        metrics["resource_samples"] += 1
+        metrics["rss_peak_bytes"] = max(int(metrics["rss_peak_bytes"] or 0), int(sample.get("rss_bytes") or 0))
+        metrics["cpu_time_seconds"] = max(float(metrics["cpu_time_seconds"] or 0.0), float(sample.get("cpu_time_seconds") or 0.0))
+
+    def generate():
+        nonlocal proc
+        try:
+            stdout = proc.stdout
+            while stdout is not None:
+                if time.monotonic() - started > timeout_seconds:
+                    metrics["timed_out"] = True
+                    raise TimeoutError("realtime proxy timeout")
+                update_resource_sample()
+                ready, _, _ = select.select([stdout], [], [], 1.0)
+                if not ready:
+                    if proc.poll() is not None:
+                        break
+                    continue
+                chunk = stdout.read(int(chunk_size or 256 * 1024))
+                update_resource_sample()
+                if not chunk:
+                    break
+                metrics["chunks_sent"] += 1
+                metrics["bytes_sent"] += len(chunk)
+                if metrics["first_chunk_latency_ms"] is None:
+                    metrics["first_chunk_latency_ms"] = round((time.monotonic() - started) * 1000, 3)
+                yield chunk
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+        except GeneratorExit:
+            metrics["closed_by_client"] = True
+            raise
+        finally:
+            try:
+                if proc and proc.stdout:
+                    proc.stdout.close()
+            except Exception:
+                pass
+            try:
+                if proc and proc.poll() is None:
+                    metrics["terminated"] = True
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        metrics["killed"] = True
+                        proc.kill()
+            finally:
+                update_resource_sample()
+                metrics["returncode"] = proc.poll() if proc else None
+                metrics["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+                metrics["finished"] = True
+                _release_realtime_proxy_slot(slot_handle)
+
+    info["chunks"] = generate()
+    info["runtime"] = state
+    info["metrics"] = metrics
+    return info
+
+
+def _should_use_external_hls_audio(metadata):
+    if str((metadata or {}).get("media_type") or "") != "video":
+        return False
+    audio_streams = _hls_audio_streams(metadata)
+    if not audio_streams:
+        return False
+    if len(audio_streams) > 1:
+        return True
+    return not _audio_codec_browser_hls_friendly(audio_streams[0])
 
 
 def _target_bitrate_for_height(height, source_bitrate=0):
@@ -1026,7 +1767,7 @@ def _scaled_width(source_width, source_height, target_height):
     return max(2, width - (width % 2))
 
 
-def _hls_variant_specs(metadata):
+def _hls_variant_specs(metadata, *, external_audio=False):
     media_type = str((metadata or {}).get("media_type") or "")
     source_width = _safe_int((metadata or {}).get("width"), 0)
     source_height = _safe_int((metadata or {}).get("height"), 0)
@@ -1042,20 +1783,21 @@ def _hls_variant_specs(metadata):
             "copy_codecs": _metadata_supports_stream_copy(metadata),
             "target_height": 0,
         }]
-    specs = [{
+    original_spec = {
         "name": "original",
         "label": f"原畫質 {source_height}p" if source_height else "原畫質",
         "width": source_width,
         "height": source_height,
         "bitrate": source_bitrate,
         "codec": metadata.get("codec_tag") or metadata.get("codec") or "",
-        "copy_codecs": _metadata_supports_stream_copy(metadata),
+        "copy_codecs": _metadata_supports_video_stream_copy(metadata) if external_audio else _metadata_supports_stream_copy(metadata),
         "target_height": 0,
-    }]
+    }
+    quality_specs = []
     for height in _hls_quality_heights():
         if source_height and source_height <= height:
             continue
-        specs.append({
+        quality_specs.append({
             "name": f"q{height}",
             "label": f"{height}p",
             "width": _scaled_width(source_width, source_height, height),
@@ -1065,6 +1807,14 @@ def _hls_variant_specs(metadata):
             "copy_codecs": False,
             "target_height": height,
         })
+    original_mode = _hls_original_variant_mode()
+    include_original = original_mode == "always" or not quality_specs
+    if original_mode == "auto":
+        include_original = not quality_specs
+    specs = []
+    if include_original:
+        specs.append(original_spec)
+    specs.extend(quality_specs)
     return specs
 
 
@@ -1081,6 +1831,8 @@ def _run_ffmpeg_hls(
     target_height=0,
     target_bitrate=0,
     copy_codecs=False,
+    video_only=False,
+    audio_stream_index=None,
     progress_callback=None,
 ):
     variant_name = str(variant_name or ("audio" if media_type == "audio" else "source")).strip() or "source"
@@ -1102,13 +1854,16 @@ def _run_ffmpeg_hls(
         str(source_path),
     ]
     if media_type == "audio":
-        cmd.extend(["-map", "0:a:0?", "-sn", "-dn"])
+        stream_index = _safe_int(audio_stream_index, -1)
+        cmd.extend(["-map", f"0:{stream_index}" if stream_index >= 0 else "0:a:0?", "-vn", "-sn", "-dn"])
+    elif video_only:
+        cmd.extend(["-map", "0:v:0?", "-an", "-sn", "-dn"])
     else:
         cmd.extend(["-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn"])
     if copy_codecs:
         cmd.extend(["-c", "copy"])
     elif media_type == "audio":
-        cmd.extend(["-vn", "-c:a", "aac", "-b:a", "128k"])
+        cmd.extend(["-c:a", "aac", "-b:a", _hls_audio_bitrate(), "-ac", "2"])
     else:
         max_height = _ffmpeg_max_video_height()
         scale_height = int(target_height or 0)
@@ -1129,12 +1884,20 @@ def _run_ffmpeg_hls(
             cmd.extend(["-crf", "23"])
         if scale_height and int(source_height or 0) > scale_height:
             cmd.extend(["-vf", f"scale=-2:{int(scale_height)}"])
+        keyframe_seconds = max(1, int(segment_seconds or DEFAULT_HLS_SEGMENT_SECONDS))
         cmd.extend([
-            "-c:a",
-            "aac",
-            "-b:a",
-            "160k",
+            "-force_key_frames",
+            f"expr:gte(t,n_forced*{keyframe_seconds})",
+            "-sc_threshold",
+            "0",
         ])
+        if not video_only:
+            cmd.extend([
+                "-c:a",
+                "aac",
+                "-b:a",
+                _hls_audio_bitrate(),
+            ])
     cmd.extend([
         "-f",
         "hls",
@@ -1219,6 +1982,8 @@ def _run_ffmpeg_hls(
                 target_height=target_height,
                 target_bitrate=target_bitrate,
                 copy_codecs=False,
+                video_only=video_only,
+                audio_stream_index=audio_stream_index,
                 progress_callback=progress_callback,
             )
         raise
@@ -1273,6 +2038,73 @@ def _format_bytes_short(value):
     if num < 1024 * 1024 * 1024:
         return f"{num / 1024 / 1024:.1f} MB"
     return f"{num / 1024 / 1024 / 1024:.2f} GB"
+
+
+def _record_hls_variant(
+    conn,
+    *,
+    asset_id,
+    variant_name,
+    init_name,
+    segments,
+    derivative_root_rel,
+    storage_root,
+    now,
+    width=0,
+    height=0,
+    bitrate=0,
+    codec="",
+    media_kind="variant",
+    label="",
+    language="",
+    stream_index=-1,
+    is_default=False,
+):
+    cur = conn.execute(
+        """
+        INSERT INTO media_stream_variants (
+            asset_id, name, media_kind, label, language, stream_index, is_default,
+            width, height, bitrate, codec, playlist_path, init_segment_path, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(asset_id),
+            str(variant_name),
+            str(media_kind or "variant"),
+            str(label or ""),
+            str(language or ""),
+            _safe_int(stream_index, -1),
+            1 if is_default else 0,
+            int(width or 0),
+            int(height or 0),
+            int(bitrate or 0),
+            str(codec or ""),
+            f"{derivative_root_rel}/{variant_name}/playlist.m3u8",
+            f"{derivative_root_rel}/{variant_name}/{init_name}" if init_name else "",
+            now,
+        ),
+    )
+    variant_id = cur.lastrowid
+    for index, segment in enumerate(segments, start=1):
+        segment_rel = f"{derivative_root_rel}/{variant_name}/{segment['filename']}"
+        segment_file = resolve_storage_path(storage_root, segment_rel)
+        conn.execute(
+            """
+            INSERT INTO media_stream_segments (
+                variant_id, sequence_number, filename, path, duration_seconds, byte_size, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(variant_id),
+                index,
+                str(segment["filename"]),
+                segment_rel,
+                float(segment["duration_seconds"] or 0.0),
+                int(segment_file.stat().st_size if segment_file.exists() else 0),
+                now,
+            ),
+        )
+    return variant_id
 
 
 def _preferred_playback_quality_name(variants):
@@ -1352,6 +2184,9 @@ def prepare_stream_asset(
             probe_payload = _run_probe(prepared_source, ffprobe_bin=ffprobe_bin)
             metadata = _parse_probe_metadata(probe_payload)
             copy_codecs = _metadata_supports_stream_copy(metadata)
+            audio_streams = _hls_audio_streams(metadata)
+            external_audio = _should_use_external_hls_audio(metadata)
+            copy_hint = _metadata_supports_video_stream_copy(metadata) if external_audio else copy_codecs
             subtitle_rows, subtitle_errors = _extract_subtitles_to_webvtt(
                 prepared_source,
                 derivative_dir=derivative_root,
@@ -1360,16 +2195,26 @@ def prepare_stream_asset(
                 ffmpeg_bin=ffmpeg_bin,
             )
             if progress_callback:
-                detail = "正在以低負載快速封裝建立 HLS；進度會顯示在任務中心。" if copy_codecs else "正在建立 HLS 播放清單與片段，進度會顯示在任務中心。"
+                if external_audio:
+                    detail = "正在分離影片與音軌建立 HLS；可保留多音軌並降低整片重轉成本。"
+                else:
+                    detail = "正在以低負載快速封裝建立 HLS；進度會顯示在任務中心。" if copy_hint else "正在建立 HLS 播放清單與片段，進度會顯示在任務中心。"
                 progress_callback(40, "transcoding", detail)
-            variant_specs = _hls_variant_specs(metadata)
+            variant_specs = _hls_variant_specs(metadata, external_audio=external_audio)
             if progress_callback:
                 progress_callback(42, "transcoding", f"正在建立 {len(variant_specs)} 組 HLS 畫質。")
             master_manifest_path = derivative_root / "master.m3u8"
             now = _now()
             manifest_rows = []
+            audio_manifest_rows = []
             variant_errors = list(subtitle_errors or [])
             original_variant_total_bytes = 0
+            source_file_total_bytes = _safe_int(_row_value(file_row, "size_bytes", 0), 0)
+            if source_file_total_bytes <= 0:
+                try:
+                    source_file_total_bytes = int(Path(prepared_source).stat().st_size)
+                except Exception:
+                    source_file_total_bytes = 0
             total_specs = max(1, len(variant_specs))
             for spec_index, spec in enumerate(variant_specs):
                 start_percent = 42 + int((spec_index / total_specs) * 48)
@@ -1389,6 +2234,7 @@ def prepare_stream_asset(
                         target_height=spec.get("target_height") or 0,
                         target_bitrate=spec.get("bitrate") or 0,
                         copy_codecs=bool(spec.get("copy_codecs")),
+                        video_only=bool(external_audio),
                         progress_callback=(
                             (lambda ratio, low=start_percent, high=end_percent, label=spec.get("label"), copied=bool(spec.get("copy_codecs")): progress_callback(
                                 low + int(max(0.0, min(1.0, float(ratio or 0))) * max(1, high - low)),
@@ -1416,15 +2262,18 @@ def prepare_stream_asset(
                 variant_total_bytes = _directory_total_bytes(Path(playlist_path).parent)
                 if variant_name == "original":
                     original_variant_total_bytes = variant_total_bytes
+                variant_size_baseline = original_variant_total_bytes or source_file_total_bytes
                 if (
                     variant_name not in {"original", "audio"}
-                    and original_variant_total_bytes > 0
-                    and variant_total_bytes > original_variant_total_bytes
+                    and variant_size_baseline > 0
+                    and variant_total_bytes > variant_size_baseline
+                    and manifest_rows
                 ):
                     label = str(spec.get("label") or spec.get("name") or variant_name)
+                    baseline_label = "原畫質" if original_variant_total_bytes > 0 else "原始檔"
                     variant_errors.append(
-                        f"{label}: 衍生檔 {_format_bytes_short(variant_total_bytes)} 大於原畫質 "
-                        f"{_format_bytes_short(original_variant_total_bytes)}，已刪除並隱藏"
+                        f"{label}: 衍生檔 {_format_bytes_short(variant_total_bytes)} 大於{baseline_label} "
+                        f"{_format_bytes_short(variant_size_baseline)}，已刪除並隱藏"
                     )
                     shutil.rmtree(Path(playlist_path).parent, ignore_errors=True)
                     if progress_callback:
@@ -1434,44 +2283,22 @@ def prepare_stream_asset(
                             f"HLS 畫質 {label} 比原畫質更大，已刪除並隱藏該畫質選項。",
                         )
                     continue
-                cur = conn.execute(
-                    """
-                    INSERT INTO media_stream_variants (
-                        asset_id, name, width, height, bitrate, codec, playlist_path, init_segment_path, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        int(asset["id"]),
-                        variant_name,
-                        int(spec.get("width") or 0),
-                        int(spec.get("height") or 0),
-                        int(spec.get("bitrate") or 0),
-                        str(spec.get("codec") or metadata["codec"] or ""),
-                        f"{derivative_root_rel}/{variant_name}/playlist.m3u8",
-                        f"{derivative_root_rel}/{variant_name}/{init_name}" if init_name else "",
-                        now,
-                    ),
+                _record_hls_variant(
+                    conn,
+                    asset_id=asset["id"],
+                    variant_name=variant_name,
+                    init_name=init_name,
+                    segments=segments,
+                    derivative_root_rel=derivative_root_rel,
+                    storage_root=storage_root,
+                    now=now,
+                    width=int(spec.get("width") or 0),
+                    height=int(spec.get("height") or 0),
+                    bitrate=int(spec.get("bitrate") or 0),
+                    codec=str(spec.get("codec") or metadata["codec"] or ""),
+                    media_kind="variant",
+                    label=str(spec.get("label") or ""),
                 )
-                variant_id = cur.lastrowid
-                for index, segment in enumerate(segments, start=1):
-                    segment_rel = f"{derivative_root_rel}/{variant_name}/{segment['filename']}"
-                    segment_file = resolve_storage_path(storage_root, segment_rel)
-                    conn.execute(
-                        """
-                        INSERT INTO media_stream_segments (
-                            variant_id, sequence_number, filename, path, duration_seconds, byte_size, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            int(variant_id),
-                            index,
-                            str(segment["filename"]),
-                            segment_rel,
-                            float(segment["duration_seconds"] or 0.0),
-                            int(segment_file.stat().st_size if segment_file.exists() else 0),
-                            now,
-                        ),
-                    )
                 _safe_commit(conn)
                 manifest_rows.append({
                     "name": variant_name,
@@ -1481,6 +2308,64 @@ def prepare_stream_asset(
                     "height": int(spec.get("height") or 0),
                     "codec": spec.get("codec") or metadata.get("codec_tag") or metadata["codec"],
                 })
+            if external_audio:
+                if progress_callback:
+                    progress_callback(90, "transcoding", f"正在建立 {len(audio_streams)} 條 HLS 音軌。")
+                for audio_index, stream in enumerate(audio_streams, start=1):
+                    language = _track_language(stream.get("language") or "und")
+                    audio_name = f"audio_{audio_index:02d}_{language}"
+                    label = _audio_label(stream, audio_index)
+                    try:
+                        variant_name, playlist_path, init_segment_path = _run_ffmpeg_hls(
+                            prepared_source,
+                            derivative_dir=derivative_root,
+                            media_type="audio",
+                            variant_name=audio_name,
+                            ffmpeg_bin=ffmpeg_bin,
+                            duration_seconds=metadata["duration_seconds"],
+                            source_height=0,
+                            target_height=0,
+                            target_bitrate=0,
+                            copy_codecs=False,
+                            audio_stream_index=stream.get("index"),
+                            progress_callback=None,
+                        )
+                    except Exception as exc:
+                        variant_errors.append(f"{label}: 音軌建立失敗 {str(exc)[:180]}")
+                        continue
+                    init_name, segments = _parse_variant_playlist(playlist_path)
+                    bitrate = _audio_bitrate_to_bits_per_second(_hls_audio_bitrate())
+                    _record_hls_variant(
+                        conn,
+                        asset_id=asset["id"],
+                        variant_name=variant_name,
+                        init_name=init_name,
+                        segments=segments,
+                        derivative_root_rel=derivative_root_rel,
+                        storage_root=storage_root,
+                        now=now,
+                        width=0,
+                        height=0,
+                        bitrate=bitrate,
+                        codec="aac",
+                        media_kind="audio",
+                        label=label,
+                        language=language,
+                        stream_index=stream.get("index"),
+                        is_default=bool(stream.get("is_default")) or audio_index == 1,
+                    )
+                    _safe_commit(conn)
+                    audio_manifest_rows.append({
+                        "name": variant_name,
+                        "playlist_name": "playlist.m3u8",
+                        "bitrate": bitrate,
+                        "codec": "aac",
+                        "label": label,
+                        "language": language,
+                        "is_default": bool(stream.get("is_default")) or audio_index == 1,
+                    })
+                if not audio_manifest_rows:
+                    raise RuntimeError("HLS 沒有成功產生任何音軌")
             if progress_callback:
                 progress_callback(92, "finalizing", "HLS 片段已產生，正在寫入播放索引。")
             if not manifest_rows:
@@ -1489,8 +2374,8 @@ def prepare_stream_asset(
                 conn.execute(
                     """
                     INSERT INTO media_stream_subtitles (
-                        asset_id, name, label, language, codec, path, is_default, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        asset_id, name, label, language, codec, path, is_default, is_forced, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         int(asset["id"]),
@@ -1500,10 +2385,11 @@ def prepare_stream_asset(
                         str(subtitle.get("codec") or ""),
                         str(subtitle.get("path") or ""),
                         1 if subtitle.get("is_default") else 0,
+                        1 if subtitle.get("is_forced") else 0,
                         now,
                     ),
                 )
-            _write_master_manifest_variants(master_manifest_path, manifest_rows)
+            _write_master_manifest_variants(master_manifest_path, manifest_rows, audio_tracks=audio_manifest_rows)
             asset = _set_asset_ready(
                 conn,
                 file_row=file_row,
@@ -1543,6 +2429,7 @@ def get_stream_status(conn, *, file_row, include_segments=True):
             "source_size_bytes": _safe_int(file_row["size_bytes"], 0),
             "error_message": STRICT_E2EE_SERVER_TRANSCODE_DISABLED_REASON,
             "variants": [],
+            "audio_tracks": [],
             "subtitles": [],
         }
     return {
@@ -1557,6 +2444,7 @@ def get_stream_status(conn, *, file_row, include_segments=True):
         "source_size_bytes": _safe_int(file_row["size_bytes"], 0),
         "error_message": "",
         "variants": [],
+        "audio_tracks": [],
         "subtitles": [],
     }
 
@@ -1616,26 +2504,363 @@ def cleanup_stream_asset(conn, *, uploaded_file_id, storage_root):
     }
 
 
-def stream_playback_payload(conn, *, file_row, video_id):
+def _premium_hls_profile_policy(status=None):
+    variants = (status or {}).get("variants") if isinstance(status, dict) else []
+    audio_tracks = (status or {}).get("audio_tracks") if isinstance(status, dict) else []
+    present_names = [
+        str(item.get("name") or "")
+        for item in (variants or [])
+        if isinstance(item, dict)
+    ]
+    present_names = [name for name in present_names if name]
+    has_original = "original" in present_names if variants is not None else None
+    quality_heights = sorted({
+        _safe_int(item.get("height"), 0)
+        for item in (variants or [])
+        if isinstance(item, dict)
+        and str(item.get("name") or "") != "original"
+        and _safe_int(item.get("height"), 0) > 0
+    })
+    audio_bitrates = [
+        _safe_int(item.get("bitrate"), 0)
+        for item in (audio_tracks or [])
+        if isinstance(item, dict) and _safe_int(item.get("bitrate"), 0) > 0
+    ]
+    asset_audio_bitrate = max(audio_bitrates) if audio_bitrates else 0
+    prepared = bool(variants)
+    asset_profile = "not_prepared"
+    asset_candidates = []
+    asset_profile_confidence = "none"
+    if prepared:
+        if has_original:
+            asset_profile = "full"
+            asset_candidates = ["full"]
+            asset_profile_confidence = "high"
+        elif quality_heights == [480, 720]:
+            asset_profile = "storage_saver"
+            asset_candidates = ["storage_saver"]
+            asset_profile_confidence = "high"
+        elif quality_heights == [480]:
+            if asset_audio_bitrate and asset_audio_bitrate <= 128000:
+                asset_profile = "mobile_saver"
+                asset_candidates = ["mobile_saver"]
+                asset_profile_confidence = "high"
+            elif asset_audio_bitrate and asset_audio_bitrate > 128000:
+                asset_profile = "storage_saver"
+                asset_candidates = ["storage_saver"]
+                asset_profile_confidence = "medium"
+            else:
+                asset_profile = "storage_saver"
+                asset_candidates = ["storage_saver", "mobile_saver"]
+                asset_profile_confidence = "ambiguous"
+        else:
+            asset_profile = "custom"
+            asset_candidates = ["custom"]
+            asset_profile_confidence = "high"
+
+    current_profile = _hls_effective_profile()
+    original_mode = _hls_original_variant_mode()
+    current_audio_bitrate = _hls_audio_bitrate()
+    target_audio_bitrate = _audio_bitrate_to_bits_per_second(current_audio_bitrate)
+    expected_heights = _hls_quality_heights()
+    if not prepared:
+        profile_matches_asset = None
+    elif current_profile in asset_candidates:
+        profile_matches_asset = True
+    else:
+        original_matches = True
+        if original_mode == "always":
+            original_matches = bool(has_original)
+        elif original_mode == "never":
+            original_matches = not bool(has_original)
+        heights_match = True
+        if quality_heights:
+            heights_match = bool(expected_heights) and all(height in expected_heights for height in quality_heights)
+        audio_matches = True
+        if asset_audio_bitrate:
+            audio_matches = int(asset_audio_bitrate) == int(target_audio_bitrate)
+        profile_matches_asset = bool(original_matches and heights_match and audio_matches)
+    profile_drift = profile_matches_asset is False
+    rebuild_reason = ""
+    if not prepared:
+        rebuild_reason = "hls_not_ready"
+    elif profile_drift:
+        rebuild_reason = "current_profile_policy_differs_from_prepared_asset"
+    return {
+        "version": "2026.05.28-profile-drift-v1",
+        "current_profile": current_profile,
+        "requested_profile": current_profile,
+        "quality_heights": expected_heights,
+        "audio_bitrate": current_audio_bitrate,
+        "original_variant_mode": original_mode,
+        "original_variant_present": has_original,
+        "asset_status": str((status or {}).get("status") or "not_prepared") if isinstance(status, dict) else "not_prepared",
+        "asset_profile": asset_profile,
+        "asset_profile_candidates": asset_candidates,
+        "asset_profile_confidence": asset_profile_confidence,
+        "asset_profile_ambiguous": asset_profile_confidence == "ambiguous",
+        "asset_variant_names": present_names,
+        "asset_quality_heights": quality_heights,
+        "asset_audio_bitrate": asset_audio_bitrate,
+        "profile_matches_asset": profile_matches_asset,
+        "profile_drift": profile_drift,
+        "rebuild_recommended": bool(profile_drift),
+        "rebuild_reason": rebuild_reason,
+        "profile_env": "HACKME_MEDIA_HLS_PROFILE",
+        "quality_heights_env": "HACKME_MEDIA_HLS_QUALITY_HEIGHTS",
+        "audio_bitrate_env": "HACKME_MEDIA_HLS_AUDIO_BITRATE",
+        "original_variant_env": "HACKME_MEDIA_HLS_ORIGINAL_VARIANT_MODE",
+        "profiles": [
+            {
+                "id": "full",
+                "label": "Premium Full",
+                "relative_fee": "premium_highest",
+                "quality_heights": [480, 720],
+                "includes_original_variant": True,
+                "audio_bitrate": DEFAULT_HLS_AUDIO_BITRATE,
+                "storage_cost": "highest",
+                "best_for": ["原畫質需求", "大螢幕觀看", "最高相容性"],
+                "tradeoffs": ["衍生檔儲存最高", "清理與快取成本最高"],
+            },
+            {
+                "id": "storage_saver",
+                "label": "Premium Storage Saver",
+                "relative_fee": "premium_balanced",
+                "quality_heights": [480, 720],
+                "includes_original_variant": False,
+                "audio_bitrate": DEFAULT_HLS_AUDIO_BITRATE,
+                "storage_cost": "medium",
+                "best_for": ["需要 720p", "重視儲存成本", "多人分享"],
+                "tradeoffs": ["不提供 original HLS rendition"],
+            },
+            {
+                "id": "mobile_saver",
+                "label": "Premium Mobile Saver",
+                "relative_fee": "premium_lowest",
+                "quality_heights": [480],
+                "includes_original_variant": False,
+                "audio_bitrate": "128k",
+                "storage_cost": "lowest",
+                "best_for": ["手機觀看", "低費率 Premium", "長片庫大量保存"],
+                "tradeoffs": ["不提供 720p/original HLS rendition"],
+            },
+        ],
+    }
+
+
+def _streaming_service_options(
+    *,
+    direct_available,
+    realtime_proxy_available,
+    realtime_proxy_reason="realtime_proxy_not_enabled",
+    realtime_proxy_status="disabled",
+    prepared_hls_available,
+    media_type,
+    status,
+):
+    premium_profile_policy = _premium_hls_profile_policy(status)
+    source_status = str((status or {}).get("status") or "not_prepared")
+    prepared_reason = "ready" if prepared_hls_available else source_status
+    if prepared_reason == "not_prepared":
+        prepared_reason = "hls_not_prepared"
+    premium_summary_suffix = " 目前資產與現行 Premium profile 不一致，建議排程重建 HLS。" if premium_profile_policy.get("profile_drift") else ""
+    direct_reason = "available" if direct_available else "server_encrypted_requires_prepared_hls"
+    proxy_reason = "available" if realtime_proxy_available else (realtime_proxy_reason or "realtime_proxy_not_enabled")
+    return [
+        {
+            "mode": "direct",
+            "label": "直接串流",
+            "service_tier": "basic",
+            "service_tier_label": "Basic",
+            "fee_level": "lowest",
+            "fee_label": "最低",
+            "billing_basis": "bandwidth_only",
+            "available": bool(direct_available),
+            "availability_reason": direct_reason,
+            "implementation_status": "ready",
+            "requires_preparation": False,
+            "requires_background_job": False,
+            "derivative_storage": False,
+            "seek_quality": "browser_native",
+            "server_cost": "low",
+            "cost_drivers": ["file_io", "bandwidth"],
+            "advantages": [
+                "上傳後可立即嘗試播放",
+                "不需要預處理或額外衍生檔",
+                "服務成本最低",
+            ],
+            "tradeoffs": [
+                "播放能力取決於瀏覽器原生 codec/container 支援",
+                "MKV、E-AC-3、多音軌、多字幕的相容性不保證",
+                "大量觀看時較難做分段快取與畫質調度",
+            ],
+            "best_for": ["小檔案", "標準 MP4", "單音軌", "少量觀看"],
+            "media_support": {
+                "media_type": media_type,
+                "multi_quality": False,
+                "multi_audio": "browser_dependent",
+                "multi_subtitle": "browser_dependent",
+                "share_ready": True,
+                "cache_friendly": False,
+            },
+            "customer_summary": "最低費率；直接送原始檔，適合格式標準且觀看量不大的影片。",
+            "notes": "最低服務成本；不預先轉檔，但受瀏覽器與原始 codec 支援限制。",
+        },
+        {
+            "mode": "realtime_proxy",
+            "label": "即時轉封裝",
+            "service_tier": "standard",
+            "service_tier_label": "Standard",
+            "fee_level": "middle",
+            "fee_label": "中",
+            "billing_basis": "per_viewer_cpu",
+            "available": bool(realtime_proxy_available),
+            "availability_reason": proxy_reason,
+            "implementation_status": realtime_proxy_status or ("ready" if realtime_proxy_available else "disabled"),
+            "requires_preparation": False,
+            "requires_background_job": False,
+            "derivative_storage": False,
+            "seek_quality": "approximate",
+            "server_cost": "per_viewer_cpu",
+            "cost_drivers": ["ffmpeg_process_per_viewer", "audio_transcode_cpu", "process_cleanup"],
+            "advantages": [
+                "不必等待完整 HLS 預處理",
+                "可針對選定音軌即時輸出瀏覽器較好播放的格式",
+                "比直接串流更能處理 MKV 或特殊音訊來源",
+            ],
+            "tradeoffs": [
+                "每位觀看者都會消耗即時 CPU",
+                "跳轉時間較近似，不能保證像 HLS 一樣穩定",
+                "不適合多人同時觀看同一支熱門影片",
+            ],
+            "best_for": ["需要快速上線的 MKV", "少量觀看的多國語音影片", "不想先保存衍生檔的情境"],
+            "media_support": {
+                "media_type": media_type,
+                "multi_quality": False,
+                "multi_audio": "selected_track_only",
+                "multi_subtitle": "external_or_browser_dependent",
+                "share_ready": True,
+                "cache_friendly": False,
+            },
+            "customer_summary": "中階費率；用即時 CPU 換取較好的格式相容性，但併發越高成本越高。",
+            "notes": "可即時選音軌並轉成瀏覽器較容易播放的格式；跳轉時間為近似，每位觀看者都會消耗即時 CPU。Production 應以 feature flag、併發限制與程序 timeout 控制。",
+        },
+        {
+            "mode": "prepared_hls",
+            "label": "預處理 HLS",
+            "service_tier": "premium",
+            "service_tier_label": "Premium",
+            "fee_level": "highest",
+            "fee_label": "最高",
+            "billing_basis": "preprocess_storage_cache",
+            "available": bool(prepared_hls_available),
+            "availability_reason": prepared_reason,
+            "implementation_status": "ready",
+            "requires_preparation": True,
+            "requires_background_job": True,
+            "derivative_storage": True,
+            "seek_quality": "stable",
+            "server_cost": "preprocess_and_storage",
+            "cost_drivers": ["worker_cpu", "derivative_storage", "segment_indexing", "cache_lifecycle", "cleanup"],
+            "profile_policy": premium_profile_policy,
+            "advantages": [
+                "可分段播放與快取",
+                "支援多畫質、多音軌與 WebVTT 字幕選單",
+                "分享影音與分享檔案預覽可一致套用授權",
+                "多人觀看時比即時轉封裝穩定",
+            ],
+            "tradeoffs": [
+                "上傳或發布後需要等待背景處理",
+                "平台需要保存並清理串流衍生檔",
+                "轉檔與抽取字幕會消耗 worker 資源",
+            ],
+            "best_for": ["大檔案", "公開影音", "多人觀看", "多音軌", "多字幕", "需要穩定分享"],
+            "media_support": {
+                "media_type": media_type,
+                "multi_quality": True,
+                "multi_audio": True,
+                "multi_subtitle": True,
+                "share_ready": True,
+                "cache_friendly": True,
+            },
+            "customer_summary": "最高費率；平台先建立可快取、可授權、可分段播放的服務版本。" + premium_summary_suffix,
+            "notes": "預先建立可快取的 HLS 衍生檔，支援多畫質、多音軌與較穩定跳轉。",
+        },
+    ]
+
+
+def _realtime_proxy_audio_tracks_for_payload(file_row, *, storage_root=None, ffprobe_bin="ffprobe"):
+    if not storage_root:
+        return []
+    try:
+        path = resolve_file_storage_path(storage_root, file_row)
+    except Exception:
+        return []
+    if not path.exists():
+        return []
+    try:
+        return realtime_proxy_audio_tracks_for_source(path, ffprobe_bin=ffprobe_bin)
+    except Exception:
+        return []
+
+
+def stream_playback_payload(conn, *, file_row, video_id, storage_root=None, ffprobe_bin="ffprobe"):
     status = get_stream_status(conn, file_row=file_row, include_segments=False)
     media_type = _file_media_type(file_row)
     direct_url = f"/api/videos/{int(video_id)}/stream"
     direct_fallback_allowed = not is_server_encrypted_file(file_row)
+    realtime_proxy_state = realtime_proxy_availability(file_row)
+    realtime_proxy_available = bool(realtime_proxy_state.get("available"))
+    realtime_proxy_url = f"/api/videos/{int(video_id)}/realtime-proxy" if realtime_proxy_available else ""
+    prepared_hls_available = bool(status and status.get("status") == "ready" and status.get("master_manifest_path"))
     payload = {
         "mode": "direct",
         "media_type": media_type,
         "source_mode": str(file_row["privacy_mode"] or "standard_plain"),
         "fallback_url": direct_url if direct_fallback_allowed else "",
         "stream_url": direct_url if direct_fallback_allowed else "",
+        "realtime_proxy_url": realtime_proxy_url,
         "master_url": "",
         "hls_js_url": HLS_JS_URL,
         "player_strategy": "direct_only",
         "stream_warning": "目前使用直接串流。" if direct_fallback_allowed else "伺服端加密影音不提供主程序直接解密串流，請等待 HLS 處理完成。",
         "status": status,
         "variants": [],
+        "audio_tracks": [],
         "subtitles": [],
         "streaming_ready": False,
         "direct_fallback_allowed": direct_fallback_allowed,
+        "service_policy": {
+            "version": "2026.05.28-002",
+            "customer_selectable_modes": ["direct", "realtime_proxy", "prepared_hls"],
+            "default_mode": "prepared_hls" if (prepared_hls_available or not direct_fallback_allowed) else "direct",
+            "recommended_mode": "prepared_hls" if prepared_hls_available else ("direct" if direct_fallback_allowed else "prepared_hls"),
+            "multi_track_recommended_mode": "prepared_hls",
+            "fee_model": "basic_standard_premium",
+            "fee_difference_reason": "服務費差異來自檔案流量、每位觀看者即時 CPU、預處理 worker CPU、衍生檔儲存與快取清理成本。",
+            "strict_e2ee_server_transcode": False,
+            "realtime_proxy_enabled": realtime_proxy_enabled(),
+            "realtime_proxy_max_concurrent": realtime_proxy_max_concurrent(),
+            "premium_hls_profile_policy": _premium_hls_profile_policy(status),
+        },
+        "realtime_proxy": {
+            **realtime_proxy_state,
+            "url": realtime_proxy_url,
+            "selected_audio_query_param": "audio",
+            "start_seconds_query_param": "start",
+            "output_container": "fragmented_mp4",
+            "video_strategy": "copy_when_possible",
+            "audio_strategy": "selected_track_to_aac_stereo",
+        },
+        "streaming_options": _streaming_service_options(
+            direct_available=direct_fallback_allowed,
+            realtime_proxy_available=realtime_proxy_available,
+            realtime_proxy_reason=str(realtime_proxy_state.get("reason") or ""),
+            realtime_proxy_status=str(realtime_proxy_state.get("implementation_status") or ""),
+            prepared_hls_available=prepared_hls_available,
+            media_type=media_type,
+            status=status,
+        ),
     }
     if status and status.get("subtitles"):
         payload["subtitles"] = [
@@ -1644,13 +2869,15 @@ def stream_playback_payload(conn, *, file_row, video_id):
                 "label": str(item.get("label") or item.get("language") or "字幕"),
                 "language": str(item.get("language") or "und"),
                 "is_default": bool(item.get("is_default")),
+                "is_forced": bool(item.get("is_forced")),
                 "url": f"/api/videos/{int(video_id)}/hls/subtitles/{item.get('name')}.vtt",
             }
             for item in (status.get("subtitles") or [])
             if item.get("name")
         ]
-    if status and status.get("status") == "ready" and status.get("master_manifest_path"):
+    if prepared_hls_available:
         variants = []
+        audio_tracks = []
         for variant in status.get("variants") or []:
             name = str(variant.get("name") or "").strip()
             if not name:
@@ -1671,6 +2898,22 @@ def stream_playback_payload(conn, *, file_row, video_id):
                 "source_size_bytes": _safe_int(status.get("source_size_bytes"), 0),
                 "playlist_url": f"/api/videos/{int(video_id)}/hls/{name}/playlist.m3u8",
             })
+        for track in status.get("audio_tracks") or []:
+            name = str(track.get("name") or "").strip()
+            if not name:
+                continue
+            audio_tracks.append({
+                "name": name,
+                "label": str(track.get("label") or track.get("language") or name),
+                "language": str(track.get("language") or "und"),
+                "is_default": bool(track.get("is_default")),
+                "codec": str(track.get("codec") or ""),
+                "bitrate": _safe_int(track.get("bitrate"), 0),
+                "stream_index": _safe_int(track.get("stream_index"), -1),
+                "size_bytes": _safe_int(track.get("segments_total_bytes"), 0),
+                "segments_total_bytes": _safe_int(track.get("segments_total_bytes"), 0),
+                "playlist_url": f"/api/videos/{int(video_id)}/hls/{name}/playlist.m3u8",
+            })
         default_quality = _preferred_playback_quality_name(variants)
         fallback_quality = _fallback_playback_quality_name(variants)
         payload["mode"] = "hls"
@@ -1679,8 +2922,10 @@ def stream_playback_payload(conn, *, file_row, video_id):
         payload["stream_warning"] = ""
         payload["streaming_ready"] = True
         payload["variants"] = variants
+        payload["audio_tracks"] = audio_tracks
         payload["default_quality"] = default_quality
         payload["fallback_quality"] = fallback_quality
+        premium_policy = _premium_hls_profile_policy(status)
         payload["quality_policy"] = {
             "default_height": 720,
             "fallback_height": 480,
@@ -1688,6 +2933,37 @@ def stream_playback_payload(conn, *, file_row, video_id):
             "fallback_quality": fallback_quality,
             "derivatives_quota_exempt": HLS_DERIVATIVES_QUOTA_EXEMPT,
             "larger_derivatives_hidden": True,
+            "hls_profile": premium_policy["current_profile"],
+            "hls_audio_bitrate": premium_policy["audio_bitrate"],
+            "original_variant_mode": premium_policy["original_variant_mode"],
+            "original_variant_present": premium_policy["original_variant_present"],
+            "asset_profile": premium_policy["asset_profile"],
+            "asset_profile_candidates": premium_policy["asset_profile_candidates"],
+            "asset_profile_confidence": premium_policy["asset_profile_confidence"],
+            "asset_quality_heights": premium_policy["asset_quality_heights"],
+            "asset_audio_bitrate": premium_policy["asset_audio_bitrate"],
+            "profile_matches_asset": premium_policy["profile_matches_asset"],
+            "profile_drift": premium_policy["profile_drift"],
+            "rebuild_recommended": premium_policy["rebuild_recommended"],
+            "rebuild_reason": premium_policy["rebuild_reason"],
             "note": "480p/720p/1080p HLS 衍生檔是服務端串流快取，不計入上傳者雲端硬碟配額；若衍生檔比原畫質更大會自動刪除並隱藏。",
         }
+    if realtime_proxy_available and not payload["audio_tracks"]:
+        payload["audio_tracks"] = [
+            {
+                "name": str(track.get("name") or ""),
+                "label": str(track.get("label") or track.get("language") or track.get("name") or "音軌"),
+                "language": str(track.get("language") or "und"),
+                "is_default": bool(track.get("is_default")),
+                "codec": str(track.get("codec") or ""),
+                "bitrate": _safe_int(track.get("bitrate"), 0),
+                "stream_index": _safe_int(track.get("stream_index"), -1),
+                "channels": _safe_int(track.get("channels"), 0),
+                "channel_layout": str(track.get("channel_layout") or ""),
+                "playlist_url": "",
+                "source": "realtime_proxy_probe",
+            }
+            for track in _realtime_proxy_audio_tracks_for_payload(file_row, storage_root=storage_root, ffprobe_bin=ffprobe_bin)
+            if track.get("name")
+        ]
     return payload
