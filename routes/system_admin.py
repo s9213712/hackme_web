@@ -1064,10 +1064,10 @@ def register_system_admin_routes(app, deps):
             auth_conn.close()
             conn.close()
 
-    def readiness_summary():
+    def readiness_summary(db=None, audit_state=None):
         settings = get_system_settings()
-        db = db_integrity_summary()
-        audit_state = audit_integrity_summary()
+        db = db or db_integrity_summary()
+        audit_state = audit_state or audit_integrity_summary()
         checks = []
 
         def add_check(name, ok, detail="", severity="critical"):
@@ -1116,9 +1116,9 @@ def register_system_admin_routes(app, deps):
             status = "degraded"
         return {"status": status, "checks": checks, "database": db, "audit_integrity": audit_state}
 
-    def anomaly_summary():
+    def anomaly_summary(audit_state=None):
         counts, errors = health_counts()
-        audit_state = audit_integrity_summary()
+        audit_state = audit_state or audit_integrity_summary()
         settings = get_system_settings()
         signals = []
 
@@ -1239,10 +1239,11 @@ def register_system_admin_routes(app, deps):
     def security_center_payload():
         settings = get_system_settings()
         log_lines = int(settings.get("security_log_tail_lines", 200) or 200)
+        audit_state = audit_integrity_summary()
         return {
-            "readiness": readiness_summary(),
-            "anomaly": anomaly_summary(),
-            "audit_integrity": audit_integrity_summary(),
+            "readiness": readiness_summary(audit_state=audit_state),
+            "anomaly": anomaly_summary(audit_state=audit_state),
+            "audit_integrity": audit_state,
             "audit_entries": recent_secure_audit(50),
             "server_log": tail_file(SERVER_LOG_PATH, log_lines),
             "server_output": get_server_output(limit=log_lines),

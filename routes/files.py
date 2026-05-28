@@ -4002,6 +4002,14 @@ def register_file_routes(app, deps):
         context_id = (request.args.get("context_id") or "").strip()
         if not context_type or not context_id:
             return json_resp({"ok": False, "msg": "context_type/context_id required"}), 400
+        try:
+            limit = max(1, min(200, int(request.args.get("limit") or 100)))
+        except Exception:
+            limit = 100
+        try:
+            offset = max(0, int(request.args.get("offset") or 0))
+        except Exception:
+            offset = 0
         conn = get_db()
         try:
             ensure_cloud_drive_attachment_schema(conn)
@@ -4014,16 +4022,26 @@ def register_file_routes(app, deps):
                 FROM cloud_file_refs r JOIN uploaded_files f ON f.id=r.file_id
                 WHERE r.context_type=? AND r.context_id=?
                 ORDER BY r.created_at ASC
+                LIMIT ? OFFSET ?
                 """,
-                (context_type, context_id),
+                (context_type, context_id, limit + 1, offset),
             ).fetchall()
+            page_rows = rows[:limit]
             refs = []
-            for row in rows:
+            for row in page_rows:
                 allowed, reason, _ = can_download_file(conn, actor=actor, file_id=row["file_id"])
                 can_remove = can_remove_context_attachment(actor, row)
                 if allowed or can_remove:
                     refs.append({**dict(row), "can_download": allowed, "download_reason": reason, "can_remove": can_remove})
-            return json_resp({"ok": True, "refs": refs})
+            next_offset = offset + len(page_rows)
+            return json_resp({
+                "ok": True,
+                "refs": refs,
+                "limit": limit,
+                "offset": offset,
+                "next_offset": next_offset if len(rows) > limit else None,
+                "has_more": len(rows) > limit,
+            })
         finally:
             conn.close()
 

@@ -213,11 +213,12 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | Method | Path | 角色 | 用途 |
 |---|---|---|---|
 | GET | `/api/jobs` | logged-in | 目前使用者任務列表，支援 `status` / `limit` |
-| GET | `/api/admin/jobs` | manager | 全站任務列表 |
-| GET | `/api/jobs/<job_uuid>` | owner / manager | 單一任務 |
-| GET | `/api/jobs/<job_uuid>/events` | owner / manager | 任務事件 |
-| POST | `/api/jobs/<job_uuid>/cancel` | owner / manager | 要求取消任務 |
-| POST | `/api/jobs/<job_uuid>/retry` | owner / manager | 重試 failed / cancelled / retry_wait 任務 |
+| GET | `/api/admin/jobs` | root | 全站任務列表 |
+| GET | `/api/jobs/<job_uuid>` | owner / root | 單一任務 |
+| GET | `/api/jobs/<job_uuid>/events` | owner / root | 任務事件 |
+| POST | `/api/jobs/<job_uuid>/cancel` | owner / root | 要求取消任務 |
+| POST | `/api/jobs/<job_uuid>/retry` | owner / root | 重試 failed / cancelled / retry_wait 任務 |
+| GET | `/api/cloud-drive/refs` | context member | context 附件列表，支援 `limit` / `offset` |
 | GET | `/api/shares` | logged-in | 分享連結列表，manager 可用 `all=1` |
 | PUT | `/api/shares/<type>/<id>` | owner / manager | 編輯 file / album / video 分享選項，例如密碼、到期、次數、指定用戶、是否允許預覽 |
 | POST | `/api/shares/<type>/<id>/revoke` | owner / manager | 撤銷 file / album / video 分享 |

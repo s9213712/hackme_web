@@ -528,6 +528,99 @@ def test_job_routes_are_owner_scoped_for_manager(tmp_path):
     assert owner_detail.status_code == 200
 
 
+def test_job_list_maintenance_is_rate_limited_and_root_forceable(tmp_path, monkeypatch):
+    db_path = tmp_path / "jobs.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT)")
+    conn.executemany(
+        "INSERT INTO users (id, username, role) VALUES (?, ?, ?)",
+        [(1, "alice", "user"), (2, "root", "super_admin")],
+    )
+    ensure_job_center_schema(conn)
+    conn.commit()
+    conn.close()
+
+    calls = {"cloud": 0, "upload": 0, "hls": 0, "purge": 0}
+
+    def fake_cloud_cleanup(conn, *, limit=100):
+        calls["cloud"] += 1
+        return []
+
+    def fake_upload_cleanup(conn, *, limit=100):
+        calls["upload"] += 1
+        return []
+
+    def fake_hls_cleanup(conn, *, limit=100):
+        calls["hls"] += 1
+        return []
+
+    def fake_purge(conn, *, limit=200, now=None):
+        calls["purge"] += 1
+        return []
+
+    monkeypatch.setenv("HACKME_JOB_LIST_MAINTENANCE_INTERVAL_SECONDS", "30")
+    monkeypatch.setattr("routes.jobs.expire_stale_cloud_remote_download_jobs", fake_cloud_cleanup)
+    monkeypatch.setattr("routes.jobs.expire_stale_resumable_upload_jobs", fake_upload_cleanup)
+    monkeypatch.setattr("routes.jobs.expire_stale_media_hls_jobs", fake_hls_cleanup)
+    monkeypatch.setattr("routes.jobs.purge_terminal_jobs", fake_purge)
+
+    actor_box = {"actor": {"id": 1, "username": "alice", "role": "user"}}
+    time_box = {"now": 100.0}
+
+    def get_db():
+        db = sqlite3.connect(db_path)
+        db.row_factory = sqlite3.Row
+        return db
+
+    def json_resp(payload, status=200):
+        return make_response(jsonify(payload), status)
+
+    app = Flask(__name__)
+    app.testing = True
+    register_job_routes(app, {
+        "audit": lambda *args, **kwargs: None,
+        "get_client_ip": lambda: "127.0.0.1",
+        "get_current_user_ctx": lambda: actor_box["actor"],
+        "get_db": get_db,
+        "get_ua": lambda: "test-agent",
+        "json_resp": json_resp,
+        "parse_positive_int": lambda value, default=50, min_value=1, max_value=200: default,
+        "require_csrf": lambda fn: fn,
+        "require_csrf_safe": lambda fn: fn,
+        "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
+        "time_monotonic": lambda: time_box["now"],
+    })
+    client = app.test_client()
+
+    first = client.get("/api/jobs")
+    assert first.status_code == 200
+    assert first.get_json()["maintenance"]["ran"] is True
+    assert calls == {"cloud": 1, "upload": 1, "hls": 1, "purge": 1}
+
+    second = client.get("/api/jobs?maintenance=1")
+    assert second.status_code == 200
+    assert second.get_json()["maintenance"]["reason"] == "rate_limited"
+    assert calls == {"cloud": 1, "upload": 1, "hls": 1, "purge": 1}
+
+    actor_box["actor"] = {"id": 2, "username": "root", "role": "super_admin"}
+    forced = client.get("/api/admin/jobs?maintenance=1")
+    assert forced.status_code == 200
+    assert forced.get_json()["maintenance"]["forced"] is True
+    assert calls == {"cloud": 2, "upload": 2, "hls": 2, "purge": 2}
+
+    skipped = client.get("/api/admin/jobs")
+    assert skipped.status_code == 200
+    assert skipped.get_json()["maintenance"]["reason"] == "rate_limited"
+    assert calls == {"cloud": 2, "upload": 2, "hls": 2, "purge": 2}
+
+    time_box["now"] = 131.0
+    due = client.get("/api/admin/jobs")
+    assert due.status_code == 200
+    assert due.get_json()["maintenance"]["ran"] is True
+    assert calls == {"cloud": 3, "upload": 3, "hls": 3, "purge": 3}
+
+
 def test_job_route_can_dismiss_terminal_owner_job(tmp_path):
     db_path = tmp_path / "jobs.db"
     conn = sqlite3.connect(db_path)

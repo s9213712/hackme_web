@@ -97,7 +97,7 @@ def _make_app(tmp_path, actor=None, audit_result=(True, None, "integrity OK"), i
         "save_settings": lambda data: data,
         "server_mode_service": None,
         "snapshot_service": _SnapshotStub(),
-        "verify_audit_integrity": lambda: audit_result,
+        "verify_audit_integrity": audit_result if callable(audit_result) else (lambda: audit_result),
     })
     return app
 
@@ -178,6 +178,21 @@ def test_health_anomaly_treats_missing_optional_forum_tables_as_zero(tmp_path):
     assert "pending_board_reviews" not in data["anomaly"]["errors"]
     assert "pending_thread_reviews" not in data["anomaly"]["errors"]
     assert not any(signal["name"] == "count_errors" for signal in data["anomaly"]["signals"])
+
+
+def test_security_center_reuses_audit_integrity_result(tmp_path):
+    calls = {"count": 0}
+
+    def verify_once():
+        calls["count"] += 1
+        return True, None, "ok"
+
+    app = _make_app(tmp_path, audit_result=verify_once)
+    res = app.test_client().get("/api/admin/security-center")
+
+    assert res.status_code == 200
+    assert res.get_json()["security_center"]["audit_integrity"]["details"] == "ok"
+    assert calls["count"] == 1
 
 
 def test_health_audit_chain_reports_broken_chain(tmp_path):

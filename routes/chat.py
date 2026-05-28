@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import secrets
 import sqlite3
@@ -446,6 +447,19 @@ def register_chat_routes(app, deps):
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps["role_rank"]
+
+    def env_int(name, default, *, minimum=0, maximum=10000):
+        try:
+            value = int(os.environ.get(name, default))
+        except Exception:
+            value = default
+        return max(minimum, min(maximum, int(value)))
+
+    def chat_notification_fanout_limit():
+        return env_int("HACKME_CHAT_NOTIFICATION_FANOUT_LIMIT", 200, minimum=0, maximum=5000)
+
+    def chat_attachment_grant_sync_limit():
+        return env_int("HACKME_CHAT_ATTACHMENT_GRANT_SYNC_LIMIT", 1000, minimum=1, maximum=10000)
 
     def is_official_chat_room(row):
         if not row:
@@ -1041,6 +1055,8 @@ def register_chat_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
+        limit = parse_positive_int(request.args.get("limit", 1000), default=1000, min_value=1, max_value=5000)
+        before_id = parse_positive_int(request.args.get("before_id"), default=None, min_value=1)
         conn = get_db()
         try:
             ensure_chat_feature_schema(conn)
@@ -1055,6 +1071,11 @@ def register_chat_routes(app, deps):
             member = conn.execute("SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=?", (room_id, actor["id"])).fetchone()
             if actor["username"] != "root" and not member:
                 return json_resp({"ok":False,"msg":"你不在此聊天室"}), 403
+            where = "m.room_id=? AND m.is_blocked=0"
+            params = [room_id]
+            if before_id:
+                where += " AND m.id<?"
+                params.append(before_id)
             rows = conn.execute(
                 "SELECT m.id, m.sender_id, u.username, u.username AS sender, u.role AS sender_role, u.avatar_file_id, "
                 "COALESCE(sm.anonymous_enabled, 0) AS sender_anonymous_enabled, "
@@ -1062,9 +1083,10 @@ def register_chat_routes(app, deps):
                 "m.is_revoked, m.revoked_at, m.edited_at, m.edit_count, m.created_at "
                 "FROM chat_messages m LEFT JOIN users u ON u.id=m.sender_id "
                 "LEFT JOIN chat_room_members sm ON sm.room_id=m.room_id AND sm.user_id=m.sender_id "
-                "WHERE m.room_id=? AND m.is_blocked=0 ORDER BY m.id ASC",
-                (room_id,),
+                f"WHERE {where} ORDER BY m.id DESC LIMIT ?",
+                tuple(params + [limit + 1]),
             ).fetchall()
+            page_rows = list(reversed(rows[:limit]))
             official_aliases = official_chat_sender_aliases(conn, room_id) if is_official_chat_room(room) else {}
             anonymous_aliases = {} if is_official_chat_room(room) else anonymous_chat_sender_aliases(conn, room_id)
             def export_message_payload(row):
@@ -1098,9 +1120,23 @@ def register_chat_routes(app, deps):
                     "is_private": bool(room["is_private"]),
                     "created_at": room["created_at"],
                 },
-                "messages": [export_message_payload(row) for row in rows],
+                "messages": [export_message_payload(row) for row in page_rows],
+                "pagination": {
+                    "limit": limit,
+                    "before_id": before_id,
+                    "has_more": len(rows) > limit,
+                    "next_before_id": int(page_rows[0]["id"]) if len(rows) > limit and page_rows else None,
+                    "oldest_id": int(page_rows[0]["id"]) if page_rows else None,
+                    "latest_id": int(page_rows[-1]["id"]) if page_rows else None,
+                },
             }
-            audit("CHAT_ROOM_EXPORTED", get_client_ip(), user=actor["username"], success=True, detail=f"room_id={room_id},messages={len(rows)}")
+            audit(
+                "CHAT_ROOM_EXPORTED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                detail=f"room_id={room_id},messages={len(page_rows)},has_more={len(rows) > limit}",
+            )
             body = json.dumps(payload, ensure_ascii=False, indent=2)
             filename = f"chat_room_{room_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             return Response(body, mimetype="application/json; charset=utf-8", headers={"Content-Disposition": f"attachment; filename={filename}"})
@@ -1330,7 +1366,25 @@ def register_chat_routes(app, deps):
             message_id = cur.lastrowid
             if attachment_file_ids:
                 ensure_cloud_drive_attachment_schema(conn)
-                member_rows = conn.execute("SELECT user_id FROM chat_room_members WHERE room_id=?", (room_id,)).fetchall()
+                grant_limit = chat_attachment_grant_sync_limit()
+                member_rows = conn.execute(
+                    """
+                    SELECT user_id
+                    FROM chat_room_members
+                    WHERE room_id=?
+                    ORDER BY user_id ASC
+                    LIMIT ?
+                    """,
+                    (room_id, grant_limit + 1),
+                ).fetchall()
+                if len(member_rows) > grant_limit:
+                    conn.rollback()
+                    return json_resp({
+                        "ok": False,
+                        "msg": "聊天室成員數過多，無法在同步訊息送出流程中建立附件授權；請改用雲端硬碟分享連結或提高同步授權上限。",
+                        "error": "chat_attachment_grant_fanout_too_large",
+                        "limit": grant_limit,
+                    }), 409
                 grant_user_ids = [int(row["user_id"]) for row in member_rows if int(row["user_id"]) != int(actor["id"])]
                 for file_id in attachment_file_ids:
                     _, attach_msg = attach_existing_file(
@@ -1349,6 +1403,7 @@ def register_chat_routes(app, deps):
             transcript_synced = append_chat_record(room_id, message_id, actor["username"], content, created_at)
             if not transcript_synced:
                 audit("CHAT_TRANSCRIPT_WRITE_FAILED", get_client_ip(), user=actor["username"], success=False, detail=f"room_id={room_id},message_id={message_id}")
+            notification_fanout = None
             if not is_official_chat_room(room):
                 notify_conn = get_db()
                 try:
@@ -1359,11 +1414,22 @@ def register_chat_routes(app, deps):
                         if notification_type == "chat_private_message"
                         else f"{actor['username']} 在「{room['name']}」傳送了新訊息。"
                     )
-                    member_rows = notify_conn.execute(
-                        "SELECT user_id FROM chat_room_members WHERE room_id=? AND user_id<>?",
-                        (room_id, actor["id"]),
-                    ).fetchall()
-                    for member_row in member_rows:
+                    fanout_limit = chat_notification_fanout_limit()
+                    if fanout_limit > 0:
+                        member_rows = notify_conn.execute(
+                            """
+                            SELECT user_id
+                            FROM chat_room_members
+                            WHERE room_id=? AND user_id<>?
+                            ORDER BY user_id ASC
+                            LIMIT ?
+                            """,
+                            (room_id, actor["id"], fanout_limit + 1),
+                        ).fetchall()
+                    else:
+                        member_rows = []
+                    visible_member_rows = member_rows[:fanout_limit]
+                    for member_row in visible_member_rows:
                         create_notification_if_enabled(
                             notify_conn,
                             user_id=member_row["user_id"],
@@ -1373,6 +1439,11 @@ def register_chat_routes(app, deps):
                             link=f"/chat?room_id={room_id}",
                         )
                     notify_conn.commit()
+                    notification_fanout = {
+                        "limit": fanout_limit,
+                        "notified": len(visible_member_rows),
+                        "truncated": len(member_rows) > fanout_limit,
+                    }
                 except Exception:
                     try:
                         notify_conn.rollback()
@@ -1380,7 +1451,13 @@ def register_chat_routes(app, deps):
                         pass
                 finally:
                     notify_conn.close()
-            return json_resp({"ok":True,"msg":"訊息已送出","message_id":message_id,"transcript_synced":transcript_synced})
+            return json_resp({
+                "ok":True,
+                "msg":"訊息已送出",
+                "message_id":message_id,
+                "transcript_synced":transcript_synced,
+                "notification_fanout": notification_fanout,
+            })
         finally:
             conn.close()
 

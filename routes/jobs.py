@@ -1,3 +1,7 @@
+import os
+import threading
+import time
+
 from flask import request
 
 from services.job_center import (
@@ -26,6 +30,16 @@ def register_job_routes(app, deps):
     audit = deps.get("audit", lambda *args, **kwargs: None)
     get_client_ip = deps.get("get_client_ip", lambda: "")
     get_ua = deps.get("get_ua", lambda: "")
+    time_monotonic = deps.get("time_monotonic", time.monotonic)
+    job_list_maintenance_state = {"last_run_at": 0.0, "running": False}
+    job_list_maintenance_lock = threading.Lock()
+
+    def maintenance_interval_seconds():
+        try:
+            value = int(os.environ.get("HACKME_JOB_LIST_MAINTENANCE_INTERVAL_SECONDS", "30"))
+        except Exception:
+            value = 30
+        return max(0, min(3600, value))
 
     def actor_value(actor, key, default=None):
         if not actor:
@@ -57,6 +71,53 @@ def register_job_routes(app, deps):
         handler = handlers.get(str(source_module or ""))
         return handler if callable(handler) else None
 
+    def wants_forced_maintenance():
+        raw = request.args.get("maintenance")
+        if raw is None:
+            raw = request.args.get("sweep", "")
+        return str(raw or "").strip().lower() in {"1", "true", "yes", "force"}
+
+    def run_job_list_maintenance(conn, *, force=False):
+        interval = maintenance_interval_seconds()
+        now = float(time_monotonic())
+        with job_list_maintenance_lock:
+            last_run_at = float(job_list_maintenance_state.get("last_run_at") or 0.0)
+            if job_list_maintenance_state.get("running"):
+                return {
+                    "ran": False,
+                    "reason": "already_running",
+                    "interval_seconds": interval,
+                    "next_after_seconds": 0,
+                }
+            elapsed = now - last_run_at if last_run_at else None
+            if not force and last_run_at and interval > 0 and elapsed is not None and elapsed < interval:
+                return {
+                    "ran": False,
+                    "reason": "rate_limited",
+                    "interval_seconds": interval,
+                    "next_after_seconds": max(0, int(interval - elapsed)),
+                }
+            job_list_maintenance_state["running"] = True
+        try:
+            expired_cloud = expire_stale_cloud_remote_download_jobs(conn)
+            expired_uploads = expire_stale_resumable_upload_jobs(conn)
+            expired_hls = expire_stale_media_hls_jobs(conn)
+            purged = purge_terminal_jobs(conn)
+            conn.commit()
+            return {
+                "ran": True,
+                "forced": bool(force),
+                "interval_seconds": interval,
+                "expired_cloud_remote_download": len(expired_cloud),
+                "expired_resumable_upload": len(expired_uploads),
+                "expired_media_hls": len(expired_hls),
+                "purged_terminal": len(purged),
+            }
+        finally:
+            with job_list_maintenance_lock:
+                job_list_maintenance_state["last_run_at"] = float(time_monotonic())
+                job_list_maintenance_state["running"] = False
+
     @app.route("/api/jobs", methods=["GET"])
     @require_csrf_safe
     def jobs_list():
@@ -67,13 +128,9 @@ def register_job_routes(app, deps):
         limit = parse_positive_int(request.args.get("limit"), default=50, min_value=1, max_value=200)
         conn = get_db()
         try:
-            expire_stale_cloud_remote_download_jobs(conn)
-            expire_stale_resumable_upload_jobs(conn)
-            expire_stale_media_hls_jobs(conn)
-            purge_terminal_jobs(conn)
-            conn.commit()
+            maintenance = run_job_list_maintenance(conn, force=wants_forced_maintenance() and is_root(actor))
             jobs = list_jobs(conn, user_id=actor["id"], include_all=False, status=status, limit=limit)
-            return json_resp({"ok": True, "jobs": jobs})
+            return json_resp({"ok": True, "jobs": jobs, "maintenance": maintenance})
         finally:
             conn.close()
 
@@ -89,13 +146,9 @@ def register_job_routes(app, deps):
         limit = parse_positive_int(request.args.get("limit"), default=80, min_value=1, max_value=200)
         conn = get_db()
         try:
-            expire_stale_cloud_remote_download_jobs(conn)
-            expire_stale_resumable_upload_jobs(conn)
-            expire_stale_media_hls_jobs(conn)
-            purge_terminal_jobs(conn)
-            conn.commit()
+            maintenance = run_job_list_maintenance(conn, force=wants_forced_maintenance())
             jobs = list_jobs(conn, include_all=True, status=status, limit=limit)
-            return json_resp({"ok": True, "jobs": jobs})
+            return json_resp({"ok": True, "jobs": jobs, "maintenance": maintenance})
         finally:
             conn.close()
 

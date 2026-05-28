@@ -20,7 +20,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.28-003`
+- Release ID: `2026.05.28-004`
 - Schema version: `30`
 - Release ID source: `services/platform/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -34,6 +34,16 @@ Related technical references:
   default. Set `HACKME_CLOUD_DRIVE_UPLOAD_SLEEP_SHAPER=1` only for legacy
   app-side upload shaping tests; production should enforce upload shaping at the
   proxy or storage edge.
+- Job Center list maintenance is rate-limited by
+  `HACKME_JOB_LIST_MAINTENANCE_INTERVAL_SECONDS` (default `30`). `GET
+  /api/jobs` and `GET /api/admin/jobs` return a compact `maintenance` summary;
+  root may force a sweep with `maintenance=1` or `sweep=1`.
+- Chat send synchronous fanout is bounded by
+  `HACKME_CHAT_NOTIFICATION_FANOUT_LIMIT` (default `200`) and
+  `HACKME_CHAT_ATTACHMENT_GRANT_SYNC_LIMIT` (default `1000`). Larger attachment
+  rooms should use Cloud Drive share links or an async grant workflow.
+- Chat room export is paginated by request-path cap (`limit` default `1000`,
+  max `5000`) and returns `pagination.next_before_id` for older slices.
 
 ## Server Runner Boundary
 
@@ -448,6 +458,7 @@ reads.
 - `GET /api/jobs/{job_uuid}/events`
 - `POST /api/jobs/{job_uuid}/cancel`
 - `POST /api/jobs/{job_uuid}/retry`
+- `GET /api/cloud-drive/refs?context_type=forum_post&context_id=123&limit=80`
 - `GET /api/shares?limit=120`
 - `GET /api/shares?limit=120&all=1`
 - `PUT /api/shares/{type}/{id}`
@@ -458,13 +469,22 @@ reads.
 
 Job Center rows expose `status`, `stage`, `stage_detail`, `progress_percent`,
 `source_module`, `job_type`, `error_stage`, and `error_message`; frontend cancel
-actions must show a confirmation prompt. Share management supports `file`,
-`album`, and `video` share types, including edit flows for password, expiry,
-view limits, targeted user, and browser-preview permission. It must not render
-external `share_url` values as trusted copy targets. Trading Asset Overview is
-display-only and includes spot plus margin / lending equity and accrued
-interest; frontend failures must write a visible error to the economy panel
-instead of failing silently.
+actions must show a confirmation prompt. Job Center list reads must stay
+observational under polling; stale-job expiration and terminal purges are
+process-local rate-limited maintenance, not per-request work. Share management
+supports `file`, `album`, and `video` share types, including edit flows for
+password, expiry, view limits, targeted user, and browser-preview permission.
+It must not render external `share_url` values as trusted copy targets.
+Cloud Drive context attachment reads are bounded with `limit` / `offset`;
+chat/forum/announcement frontends should page large attachment sets instead of
+requesting an unbounded context.
+Chat message sends also keep notification and attachment-grant fanout bounded
+so a large group room cannot turn one send request into unbounded row writes.
+Chat room export is a bounded page export, not a full-room dump; clients that
+need full history must iterate `before_id`.
+Trading Asset Overview is display-only and includes spot plus margin / lending
+equity and accrued interest; frontend failures must write a visible error to
+the economy panel instead of failing silently.
 
 ### Appeals and Violations
 

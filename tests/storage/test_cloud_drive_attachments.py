@@ -2705,6 +2705,54 @@ def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_referenc
     assert download.status_code == 404
 
 
+def test_cloud_drive_refs_are_paginated_per_context(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"context attachment"), "attachment.txt")},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executemany(
+            """
+            INSERT INTO cloud_file_refs (
+                id, file_id, owner_user_id, context_type, context_id,
+                attached_by, created_at, permission_snapshot_json
+            ) VALUES (?, ?, 1, 'forum_post', 'bulk', 1, ?, '{}')
+            """,
+            [(f"bulk-ref-{idx}", file_id, f"2026-01-01T00:00:0{idx}") for idx in range(5)],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    first = client.get("/api/cloud-drive/refs?context_type=forum_post&context_id=bulk&limit=2")
+    assert first.status_code == 200
+    first_body = first.get_json()
+    assert first_body["limit"] == 2
+    assert first_body["offset"] == 0
+    assert first_body["has_more"] is True
+    assert first_body["next_offset"] == 2
+    assert [row["id"] for row in first_body["refs"]] == ["bulk-ref-0", "bulk-ref-1"]
+
+    last = client.get("/api/cloud-drive/refs?context_type=forum_post&context_id=bulk&limit=2&offset=4")
+    assert last.status_code == 200
+    last_body = last.get_json()
+    assert last_body["has_more"] is False
+    assert last_body["next_offset"] is None
+    assert [row["id"] for row in last_body["refs"]] == ["bulk-ref-4"]
+
+
 def test_cloud_drive_refs_requires_private_context_membership(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"

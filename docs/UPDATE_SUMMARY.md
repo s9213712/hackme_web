@@ -1,6 +1,35 @@
 # Update Summary
 
-Release ID: `2026.05.28-003`
+Release ID: `2026.05.28-004`
+
+## 2026.05.28-004
+
+- Continued the adversarial load audit on platform centers. `GET /api/jobs`
+  and `GET /api/admin/jobs` no longer run stale cloud-download cleanup,
+  resumable-upload cleanup, HLS cleanup, and terminal-job purge on every list
+  read.
+- Job Center list maintenance is now process-local rate-limited by
+  `HACKME_JOB_LIST_MAINTENANCE_INTERVAL_SECONDS` (default `30` seconds).
+  Responses include a compact `maintenance` object with run/skip reason and
+  cleanup counts, while root can force a sweep with `maintenance=1` or
+  `sweep=1`.
+- Documented that `/api/admin/jobs` is root-only and that list polling should
+  remain observational; maintenance work should not be amplified by visible
+  Job Center refresh intervals.
+- `GET /api/cloud-drive/refs` now has a hard `limit` / `offset` cap and
+  pagination metadata, preventing large chat/forum/announcement contexts from
+  hydrating every attachment and running per-row permission checks in one
+  request.
+- Chat message synchronous fanout is bounded: group notifications respect
+  `HACKME_CHAT_NOTIFICATION_FANOUT_LIMIT`, while attachment grant creation
+  refuses rooms above `HACKME_CHAT_ATTACHMENT_GRANT_SYNC_LIMIT` with a clear
+  409 instead of trying to insert unbounded grant rows inside the send request.
+- Chat room JSON export now returns a bounded latest page (`limit` default
+  `1000`, max `5000`) plus `pagination.next_before_id`, so exporting a busy room
+  no longer hydrates the entire message history in one request.
+- `/api/admin/security-center` now computes audit-chain integrity once and
+  reuses that result across readiness, anomaly, and audit summary sections
+  instead of repeating the same verification work inside one response.
 
 ## 2026.05.28-003
 

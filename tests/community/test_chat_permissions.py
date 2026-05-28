@@ -309,6 +309,116 @@ def test_official_chat_message_does_not_fan_out_notifications(tmp_path):
         conn.close()
 
 
+def test_chat_group_notification_fanout_is_capped(tmp_path, monkeypatch):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executemany(
+            "INSERT INTO users (id, username, role) VALUES (?, ?, 'user')",
+            [(5, "carol"), (6, "dave"), (7, "erin")],
+        )
+        conn.execute(
+            "INSERT INTO chat_rooms (id, name, owner_user_id, is_private, is_active, created_at) VALUES (2, 'large group', 3, 0, 1, '2026-01-01T00:00:00')"
+        )
+        conn.executemany(
+            "INSERT INTO chat_room_members (room_id, user_id, joined_at) VALUES (2, ?, '2026-01-01T00:00:00')",
+            [(3,), (4,), (5,), (6,), (7,)],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setenv("HACKME_CHAT_NOTIFICATION_FANOUT_LIMIT", "2")
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box).test_client()
+
+    sent = client.post("/api/chat/rooms/2/messages", json={"content": "bounded fanout"})
+
+    assert sent.status_code == 200
+    payload = sent.get_json()
+    assert payload["notification_fanout"] == {"limit": 2, "notified": 2, "truncated": True}
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        notes = conn.execute(
+            "SELECT user_id FROM notifications WHERE type='chat_group_message' ORDER BY user_id"
+        ).fetchall()
+        assert [row["user_id"] for row in notes] == [4, 5]
+    finally:
+        conn.close()
+
+
+def test_chat_attachment_grant_fanout_rejects_oversized_sync_room(tmp_path, monkeypatch):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    _seed_uploaded_file(db_path, file_id="file-large-room", owner_user_id=3)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executemany(
+            "INSERT INTO users (id, username, role) VALUES (?, ?, 'user')",
+            [(5, "carol"), (6, "dave")],
+        )
+        conn.execute(
+            "INSERT INTO chat_rooms (id, name, owner_user_id, is_private, is_active, created_at) VALUES (2, 'attachment group', 3, 0, 1, '2026-01-01T00:00:00')"
+        )
+        conn.executemany(
+            "INSERT INTO chat_room_members (room_id, user_id, joined_at) VALUES (2, ?, '2026-01-01T00:00:00')",
+            [(3,), (4,), (5,), (6,)],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setenv("HACKME_CHAT_ATTACHMENT_GRANT_SYNC_LIMIT", "2")
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box).test_client()
+
+    sent = client.post(
+        "/api/chat/rooms/2/messages",
+        json={"content": "file", "attachment_file_ids": ["file-large-room"]},
+    )
+
+    assert sent.status_code == 409
+    assert sent.get_json()["error"] == "chat_attachment_grant_fanout_too_large"
+    conn = sqlite3.connect(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM chat_messages WHERE room_id=2").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM cloud_file_refs WHERE context_type='chat_message'").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_chat_room_export_is_paginated(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executemany(
+            """
+            INSERT INTO chat_messages (id, room_id, sender_id, content, is_blocked, blocked_reason, created_at)
+            VALUES (?, 1, 3, ?, 0, NULL, '2026-01-01T00:00:00')
+            """,
+            [(idx, f"message {idx}") for idx in range(10, 15)],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box).test_client()
+
+    exported = client.get("/api/chat/rooms/1/export?limit=2")
+
+    assert exported.status_code == 200
+    payload = exported.get_json()
+    assert [message["id"] for message in payload["messages"]] == [13, 14]
+    assert payload["pagination"]["has_more"] is True
+    assert payload["pagination"]["next_before_id"] == 13
+
+    previous = client.get("/api/chat/rooms/1/export?limit=2&before_id=13")
+    assert previous.status_code == 200
+    previous_payload = previous.get_json()
+    assert [message["id"] for message in previous_payload["messages"]] == [11, 12]
+
+
 def test_chat_room_create_failure_returns_error_code(tmp_path):
     db_path = tmp_path / "chat.db"
     _seed_chat_db(db_path)
