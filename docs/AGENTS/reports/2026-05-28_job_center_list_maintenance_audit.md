@@ -38,6 +38,9 @@ multiply these writes across users and root/admin pages.
 - Replaced root/admin log-tail `readlines()[-N:]` paths with bounded
   `deque(maxlen=N)` tail reads for security test jobs, Security Center server
   logs, and server-output fallback logs.
+- Replaced BT/aria2 remote-download failure log `read()` with bounded tail
+  reads so a large aria2 log cannot be loaded into memory just to build the
+  error message.
 
 ## Verification
 

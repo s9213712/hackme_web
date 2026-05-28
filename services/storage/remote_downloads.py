@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -502,7 +503,8 @@ def _tail_lines(text, *, max_lines=8, max_chars=800):
 def _read_tail(path, *, max_lines=12, max_chars=1200):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            return _tail_lines(fh.read(), max_lines=max_lines, max_chars=max_chars)
+            text = "\n".join(deque(fh, maxlen=max(1, int(max_lines or 12))))
+            return _tail_lines(text, max_lines=max_lines, max_chars=max_chars)
     except OSError:
         return ""
 

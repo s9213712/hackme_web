@@ -5,6 +5,7 @@ from pathlib import Path
 
 from services.storage.remote_downloads import (
     RemoteDownloadError,
+    _read_tail,
     download_magnet_with_aria2,
     download_remote_url,
     download_torrent_file_with_aria2,
@@ -13,6 +14,16 @@ from services.storage.remote_downloads import (
     validate_remote_url,
     validate_torrent_file_trackers,
 )
+
+
+def test_remote_download_log_tail_reads_only_tail_window(tmp_path):
+    log_path = tmp_path / "aria2.log"
+    log_path.write_text("\n".join(f"line-{idx}" for idx in range(20)), encoding="utf-8")
+
+    tail = _read_tail(log_path, max_lines=3, max_chars=200)
+
+    assert tail == "line-17\nline-18\nline-19"
+    assert "line-0" not in tail
 
 
 def test_magnet_download_reports_aria2_log_tail(monkeypatch):

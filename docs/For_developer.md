@@ -20,7 +20,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.28-006`
+- Release ID: `2026.05.28-007`
 - Schema version: `30`
 - Release ID source: `services/platform/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -47,6 +47,8 @@ Related technical references:
 - Fast admin health and Security Center readiness use schema-only DB summaries;
   full SQLite `quick_check` stays on `/api/admin/health/db-integrity`.
 - Root/admin log tails use bounded reads instead of full-file `readlines()`.
+- BT/aria2 remote-download error log tails use bounded reads instead of
+  full-file `read()`.
 
 ## Server Runner Boundary
 

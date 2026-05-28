@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.28-006`
+Release ID: `2026.05.28-007`
+
+## 2026.05.28-007
+
+- BT/aria2 remote-download failure reporting now tails logs with a bounded
+  `deque(maxlen=N)` window instead of reading the whole aria2 log file before
+  trimming the error message.
 
 ## 2026.05.28-006
 
