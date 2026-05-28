@@ -45,7 +45,7 @@ operator guidance.
 | Server Mode v2 | [server_mode_v2/README.md](server_mode_v2/README.md), [server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md](server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md) |
 | Social / profiles / friends | [social/USER_PROFILES_AND_FRIENDS.md](social/USER_PROFILES_AND_FRIENDS.md) |
 | Trading | [trading/README.md](trading/README.md), [trading/TRADING.md](trading/TRADING.md) |
-| Video | [video/README.md](video/README.md), [video/VIDEO_PLATFORM.md](video/VIDEO_PLATFORM.md) |
+| Video | [video/README.md](video/README.md), [video/VIDEO_PLATFORM.md](video/VIDEO_PLATFORM.md), [video/VIDEO_STREAMING_SERVICE_TIERS.md](video/VIDEO_STREAMING_SERVICE_TIERS.md) |
 
 ## Frequently Needed Deep Links
 
@@ -57,6 +57,7 @@ operator guidance.
 - Trading background engine: [trading/TRADING_BACKGROUND_ENGINE.md](trading/TRADING_BACKGROUND_ENGINE.md)
 - BTC_trade integration: [trading/BTC_TRADE_INTEGRATION.md](trading/BTC_TRADE_INTEGRATION.md)
 - Video streaming architecture: [video/VIDEO_STREAMING_ARCHITECTURE.md](video/VIDEO_STREAMING_ARCHITECTURE.md)
+- Video streaming service tiers: [video/VIDEO_STREAMING_SERVICE_TIERS.md](video/VIDEO_STREAMING_SERVICE_TIERS.md)
 - Encryption runtime boundary: [ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md](ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md)
 - Runtime reset and recovery: [ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md)
 - Nginx / systemd production templates: [../deploy/README.md](../deploy/README.md)

@@ -25,6 +25,14 @@ After login, the app uses a full-viewport sidebar layout.
 - The sidebar collapse state is saved in `localStorage`.
 - Top-right compact icon buttons handle profile editing, notifications, bug
   reports, logout, and the idle logout countdown.
+- Root/server management pages pause their live server-output, request-capacity,
+  and resource-board polling when the browser tab is hidden, then resume only
+  the active management page when the operator returns. Secondary health-page
+  charts are loaded during browser idle time so opening the health center does
+  not burst all admin reads at once.
+- Mobile layouts keep admin, health, system resource, and wide table sections
+  inside horizontal scroll or single-column panels so root operators can inspect
+  server state from a phone without page-wide overflow.
 
 ## Main Pages
 
@@ -41,6 +49,12 @@ root appears as `root`, managers appear as numbered official managers, and
 root/manager views can still see the original sender for moderation. Normal
 group rooms can optionally allow anonymous participation; joining users then
 choose whether to speak anonymously. PM rooms do not support anonymity.
+
+Chat polling is bounded: normal refreshes request only messages after the last
+seen id and periodically fall back to a full refresh so edits/recalls still
+settle. The room list aggregates member counts in one query instead of counting
+per room, and delta message polls skip room member-count metadata until the next
+full refresh.
 
 ### Direct Messages
 
@@ -79,7 +93,8 @@ The formal requirement is tracked in
 
 Announcements are separated from the forum page. Authorized users can publish
 announcements, pin important items, and submit attachment requests that require
-root review.
+root review. Announcement list reads return an ETag; the web client revalidates
+with `If-None-Match` and can reuse the current list on `304 Not Modified`.
 
 ### Forum
 
@@ -92,6 +107,11 @@ The forum is board-first:
 The default community model includes board categories, board requests, board
 review, thread review, reactions, pinned/locked threads, and moderation tools
 for board maintainers.
+
+Forum list endpoints are bounded and count-heavy views use aggregated queries.
+Thread detail replies default to a capped page and return `posts_total`,
+`posts_limit`, and `posts_has_more` so large threads do not hydrate every reply
+in one request. The web client loads additional reply pages on demand.
 
 ### Cloud Drive
 
@@ -170,10 +190,13 @@ Root can configure per-member-level Cloud Drive transfer controls under
 - priority from 0 to 100
 
 `0` disables that transfer direction for the level. Root is not throttled.
-Download throttling is applied while streaming files from Flask. Upload
-throttling is an application-layer admission delay because the HTTP request body
-has already reached Flask by the time route code runs; for strict network-layer
-upload QoS, deploy an nginx or reverse-proxy limit in front of the app.
+Download throttling is applied while streaming files from Flask unless the file
+is eligible for X-Accel/sendfile offload. Upload limits still reject disabled
+tiers, but app-side sleep shaping is disabled by default because the HTTP
+request body has already reached Flask by the time route code runs. For strict
+network-layer upload QoS, deploy an nginx or reverse-proxy limit in front of
+the app; use `HACKME_CLOUD_DRIVE_UPLOAD_SLEEP_SHAPER=1` only for legacy shaping
+tests.
 
 ### Albums
 
@@ -243,6 +266,10 @@ as a badge and as a short explanation line near the panel title.
 The default generation wait budget is now 30 minutes on both the frontend
 progress poll and the backend route, so large models or slow local GPUs do not
 fail early just because the UI timeout was shorter than the actual job.
+Model-list reads and Hugging Face Diffusers repo preflight checks are
+short-cached and request-deduped in the browser. Manual refresh, local startup,
+model download, and model upload explicitly bypass the cache so root still sees
+newly installed assets immediately.
 
 Root can configure ComfyUI in two modes from server settings:
 
@@ -326,6 +353,20 @@ Interrupt requests are guarded because ComfyUI interrupt is global: normal users
 only interrupt the backend when no other user's generation is active, while root
 can force a global interrupt.
 
+### Games and Experiments
+
+The Games page keeps browser game runtimes lazy-loaded. Solo game score submits
+use a compact API response so the server does not rebuild the leaderboard in
+the submit request and then rebuild it again during the frontend refresh. Chess
+leaderboards, visible match lists, invites, and solo ranking queries have
+dedicated indexes so larger play histories remain bounded.
+
+The Experiments page remains browser-only: it does not create backend jobs,
+tables, or polling traffic. It now chooses a lighter particle/DPR profile on
+low-core devices or when the browser reports reduced-motion preference, and it
+clamps large animation-frame gaps after tab suspension so resuming the page
+does not trigger a large physics jump.
+
 ### Appeals
 
 Users can view violation history and submit appeals. The same page also shows
@@ -339,15 +380,27 @@ violations, review appeals/reports, and handle governance workflows according to
 their authority. Rejecting a pending registration removes that application
 account entirely. Deleting an existing account is a soft-delete: the account is
 hidden from default admin lists, access is revoked, attached storage is trashed,
-and authenticated users can open `我的資料` to keep a personal appearance
+but audit/trading/comment history remains preserved for review.
+
+Registration creates the user's official hot wallet and signup gift when the
+points layer is available. If points initialization is temporarily unavailable,
+the account is still submitted as pending and marked for deferred signup-gift
+reissue; after approval, the first successful login retries the gift once and
+clears the marker when it succeeds. Normal existing accounts are not eligible
+for login-time signup-gift creation unless that deferred marker is present.
+
+Large account lists are treated as management-plane reads: the admin user list
+is paginated, indexed by common role/status/level filters, and online-session
+status is computed only for the users visible on the current page.
+
+Authenticated users can open `我的資料` to keep a personal appearance
 override without changing the root-managed global default theme. That personal
 override now covers font family, background style, panel style, sidebar width,
 colors, layout, density, radius, font scale, and content width. Root still owns
 the global default theme, and can separately decide whether personal appearance
 overrides are allowed at all.
-but audit/trading/comment history remains preserved for review. Member-rights
-changes send a governance notice to the affected user and link to Appeals when
-the action is appealable.
+Member-rights changes send a governance notice to the affected user and link to
+Appeals when the action is appealable.
 
 ### Security Center
 
@@ -370,9 +423,17 @@ Root-facing security and operations pages are grouped under Security Center:
 - system resource board with cached CPU / GPU / VRAM / RAM gauges
 
 The PointsChain operations panel includes a root-only one-click abnormal-chain
-handler. It is intended for safe-mode recovery: the button verifies the chain,
-returns a forensic / branch / emergency-governance recovery plan when needed,
-and never restores a ledger backup or overwrites append-only history.
+handler. It is intended for safe-mode recovery: the button starts an async
+management-plane job, verifies the chain outside the request path, returns a
+forensic / branch / emergency-governance recovery plan when needed, and never
+restores a ledger backup or overwrites append-only history.
+
+Root/admin PointsChain reads are snapshot-first. Seal, verify, root report,
+financial invariants, economy stats, and the operations snapshot use
+management-plane jobs for heavy work and `/latest` snapshot endpoints for fast
+UI reads. The operations snapshot is bounded and covers service-fee linkage,
+initial distribution, private-chain queues, economy fund watermarks, exchange
+fund status, disputes, freezes, and emergency governance counts.
 
 ### Points Exchange
 

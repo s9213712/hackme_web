@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-目前 Release ID：`2026.05.27-007`
+目前 Release ID：`2026.05.28-002`
 
 這份文件只做導覽，不放功能流水帳。近期變更看
 [UPDATE_SUMMARY.md](UPDATE_SUMMARY.md)，完整英文索引看
@@ -58,7 +58,7 @@ Nginx 對外，Gunicorn 只綁 127.0.0.1:8000。
 | 個人主頁 / 好友系統 | [social/USER_PROFILES_AND_FRIENDS.md](social/USER_PROFILES_AND_FRIENDS.md) |
 | ComfyUI | [comfyui/README.md](comfyui/README.md) |
 | Games / AI | [games/README.md](games/README.md) |
-| Video | [video/README.md](video/README.md) |
+| Video | [video/README.md](video/README.md), [video/VIDEO_STREAMING_SERVICE_TIERS.md](video/VIDEO_STREAMING_SERVICE_TIERS.md) |
 | Server Mode v2 | [server_mode_v2/README.md](server_mode_v2/README.md) |
 | 正式部署範本 | [../deploy/README.md](../deploy/README.md), [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md) |
 | Agent QA | [AGENTS/README.md](AGENTS/README.md) |

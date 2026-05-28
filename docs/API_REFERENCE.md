@@ -425,16 +425,18 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/root/points/official-wallet/grant` | root | 建立官方 Treasury 撥款治理提案；只接受 `destination_wallet_address`，不接受 username/user_id。提案通過、timelock 與多簽條件完成後才執行；若目的地是已登記 pc0 official hot/system fund，執行時為 internal settlement，不等待 20/20 Proved |
 | GET | `/api/admin/points/pending-rewards` | manager | 已停用，回 410；官方發點需走官方錢包送單或治理核准規則 |
 | POST | `/api/admin/points/pending-rewards/<pending_reward_id>/review` | manager | 已停用，回 410；後台待審加點流程移除 |
-| POST | `/api/root/points/chain/seal` | root | seal chain |
-| GET | `/api/root/points/chain/verify` | root | verify chain |
+| POST | `/api/root/points/chain/seal` | root | async seal job：2 秒內回 `202 + job_id`，結果寫入 latest snapshot |
+| GET/POST | `/api/root/points/chain/verify`, `/api/root/points/chain/verify/jobs` | root | async bounded verify job；`/latest` 讀快照 |
 | GET | `/api/root/points/chain/recovery` | root | safe mode / forensic / branch-governance recovery status |
-| POST | `/api/root/points/chain/recovery/auto-handle` | root | verify chain and return branch/governance recovery guidance; never restores a backup |
+| POST | `/api/root/points/chain/recovery/auto-handle` | root | async verify/recovery-guidance job；never restores a backup；`/latest` 讀快照 |
 | POST | `/api/root/points/chain/backups` | root | 已停用，回 410；PointsChain 不建立可還原 ledger backup |
 | POST | `/api/root/points/chain/recovery/approve` | root | 已停用，回 410；不得以備份覆寫 append-only ledger |
-| GET | `/api/root/points/report` | root | points 報表，含封塊、審計、異常與近期未封交易 hash |
+| GET/POST | `/api/root/points/report`, `/api/root/points/report/jobs` | root | snapshot-first points 報表；refresh/start job 才背景重建，含封塊、審計、異常與近期未封交易 hash |
+| GET/POST | `/api/root/points/financial-invariants`, `/api/root/points/financial-invariants/jobs` | root | async financial invariant audit；`/latest` 讀快照 |
 | GET | `/api/root/points/audit` | root | points audit |
 | POST | `/api/root/points/ledger/<ledger_uuid>/rollback` | root | 已停用，回 410；修正必須追加新的鏈上補償交易 |
-| GET | `/api/admin/points/economy/stats` | manager | economy stats；包含 Phase 1A replay-derived fund summary |
+| GET/POST | `/api/admin/points/economy/stats`, `/api/admin/points/economy/stats/jobs` | manager | async economy stats；`/latest` 讀 Phase 1A replay-derived fund summary 快照 |
+| GET/POST | `/api/admin/points/operations/snapshot`, `/api/admin/points/operations/snapshot/jobs` | manager | bounded 營運控制 snapshot：服務扣點連接、初始分配、私鏈 queue、交易所基金、緊急治理與風險摘要 |
 
 > 注意：`docs/AGENTS/research/BLOCKCHAIN/POINTS_TRANSFER_API.md` 是 Phase 3 規格，不代表現在已可呼叫。
 > Phase 1B 的 `/api/admin/economy/transfers/*`、ledger、replay-status、rebuild-derived-balances API 尚未開放；目前只提供既有 stats read model。

@@ -1,6 +1,178 @@
 # Update Summary
 
-Release ID: `2026.05.27-007`
+Release ID: `2026.05.28-002`
+
+## 2026.05.28-002
+
+- Added optional Nginx `X-Accel-Redirect` offload for storage-local files that
+  do not require Python to transform the payload: plain Cloud Drive downloads,
+  storage-share downloads, E2EE ciphertext delivery, direct video streams, and
+  HLS playlists/segments/subtitles.
+- Kept server-side encrypted downloads and previews on the existing
+  range-aware chunked decrypt streaming path, so plaintext is never exposed to
+  the web server offload location.
+- Added transfer-path headers (`X-Hackme-Transfer-Mode` /
+  `X-Hackme-Transfer-Offload`) so probes can distinguish X-Accel offload,
+  Python `send_file`, buffered bytes, throttled stream, chunked decrypt, and
+  E2EE chunk delivery. Realtime proxy streams are explicitly marked as
+  `python_realtime_proxy`.
+- Changed resumable Cloud Drive chunk uploads to stream each chunk directly to
+  a temporary part file with bounded reads instead of materializing the chunk in
+  Python memory.
+- Cloud Drive upload transfer limits still reject disabled upload tiers, but
+  app-side sleep shaping is now opt-in via
+  `HACKME_CLOUD_DRIVE_UPLOAD_SLEEP_SHAPER=1` so high-volume uploads do not
+  sleep inside Flask workers by default.
+- Hardened community/chat/notification read load:
+  chat polling can request only messages after the last seen id, notification
+  background polling uses `/api/notifications/unread-count` while the panel is
+  closed, delta chat polls can skip member-count metadata, announcement reads
+  support frontend ETag/304 revalidation, forum category/thread count endpoints
+  avoid per-row count queries, and thread-detail replies are bounded with
+  pagination metadata plus on-demand frontend loading.
+- Hardened auth/member management hot paths: user identity migrations now add
+  indexes for status/role/effective-level/sanction/lowercase username/email
+  lookups, auth DB setup adds CSRF/login-attempt/session composite indexes, and
+  the admin user list scopes online-session aggregation to the visible page
+  instead of grouping every active session.
+- Registration now records a `signup_bonus_deferred` flag when wallet/points
+  initialization fails, and only flagged accounts are eligible for first-login
+  signup-gift reissue after approval. Existing active users no longer receive a
+  signup bonus just because the login path runs points onboarding checks.
+- Reduced ComfyUI/Hugging Face control-plane chatter: Hugging Face Diffusers
+  repo metadata inspection is short-cached server-side and deduped client-side,
+  ComfyUI model-list loads are deduped with a short frontend cache, and manual
+  refresh/start/download/upload paths explicitly bust that cache.
+- Optimized games and experiments read/render load: solo score submits use a
+  compact response by default and refresh the leaderboard once, game leaderboard
+  / visible-match / invite queries gained hot indexes, and the browser-only
+  experiments area now scales particles/DPR down for low-core or
+  reduced-motion clients while clamping large animation frame gaps.
+- Moved the remaining heavy PointsChain control-plane reads further off the
+  request path: financial invariant audit, economy stats, and abnormal-chain
+  auto-handle now run as management-plane jobs with latest snapshot reads.
+  Added a bounded operations snapshot for service-fee linkage, private-chain
+  queue health, exchange-fund watermarks, emergency governance, and initial
+  distribution status.
+- Hardened root/admin browser control-plane load: server output, backpressure
+  traffic, and system resource boards now stop polling while the page is hidden
+  or being unloaded, then resume only for the currently active management tab.
+  Health-page platform/update reads are deferred to idle time, and mobile
+  admin/health/resource panels gained overflow and touch-layout hardening.
+- Added app-level QoS and edge burst hardening: responses now carry
+  `X-Hackme-QoS-Class`, high-risk auth/root-admin/upload entry points have a
+  process-local pre-DB burst guard that returns `429 edge_rate_limited`, and the
+  root backpressure dashboard reports edge-guard rejections alongside normal,
+  heavy, root, and fast-lane traffic.
+- New deployment knobs:
+  `HACKME_CLOUD_DRIVE_X_ACCEL_PREFIX` / `HACKME_X_ACCEL_STORAGE_PREFIX` for the
+  internal Nginx location, and optional
+  `HACKME_CLOUD_DRIVE_X_ACCEL_STORAGE_ROOT` / `HACKME_X_ACCEL_STORAGE_ROOT` when
+  the Nginx alias root differs from the app storage root.
+- New QoS/anti-burst knobs:
+  `HACKME_EDGE_BURST_GUARD_ENABLED`,
+  `HACKME_EDGE_BURST_WINDOW_SECONDS`,
+  `HACKME_EDGE_AUTH_BURST_LIMIT`,
+  `HACKME_EDGE_MANAGEMENT_BURST_LIMIT`, and
+  `HACKME_EDGE_UPLOAD_BURST_LIMIT`.
+
+## 2026.05.28-001
+
+- Added Premium HLS asset/profile drift detection to playback payloads. The
+  API now reports the current requested profile, inferred prepared asset
+  profile, asset variant/quality/audio signature, match status, drift flag, and
+  whether HLS should be rebuilt after operators change
+  `HACKME_MEDIA_HLS_PROFILE` or related profile knobs.
+- Mirrored the drift fields into prepared-HLS `quality_policy` so normal video,
+  shared video, Cloud Drive preview, and storage-share preview clients can make
+  the same support/billing decision from their playback payload without
+  re-querying management endpoints.
+
+## 2026.05.27-008
+
+- Added multi-audio prepared-HLS support for stream assets: browser-ready
+  alternate audio playlists are generated for multi-track or non-browser-native
+  audio sources, while H.264 video can stay video-only/copy instead of being
+  fully retranscoded just because the source audio is E-AC-3.
+- Extended HLS subtitle extraction from a fixed 20-track cap to the configured
+  stream subtitle limit, preserves forced subtitle metadata, and carries audio
+  playlists through normal video, shared video, Cloud Drive preview, and storage
+  share preview HLS routes.
+- Added customer-facing documentation for the three streaming service tiers:
+  direct streaming, realtime proxy/transwrap, and prepared HLS, including why
+  Basic / Standard / Premium service fees differ.
+- Implemented Standard realtime proxy/transwrap Phase 1 behind
+  `HACKME_MEDIA_REALTIME_PROXY_ENABLED`, with video/shared-video/Cloud Drive/
+  storage-share routes, selected-audio AAC transcode, fragmented MP4 output,
+  ffmpeg timeout cleanup, and concurrency limits.
+- Wired the Basic / Standard / Premium selector into normal video playback,
+  shared-video playback, Cloud Drive preview, and storage-share preview; Standard
+  mode now applies selected audio tracks through the realtime proxy URL.
+- Added Standard realtime proxy runtime guardrails for slot release on client
+  close, busy `429` classification, shared-video `share_session` URLs, and Cloud
+  Drive / storage-share authorization plus audio/start parameter forwarding.
+- Added a real ffmpeg/ffprobe Standard realtime proxy smoke that generates a
+  multi-audio MKV fixture, proxies the selected English track, and verifies the
+  resulting MP4 contains H.264 video plus one AAC stereo audio stream with no
+  subtitle/data tracks.
+- Extended the Playwright browser video compatibility probe to generate a
+  multi-audio MKV, enable Standard realtime proxy mode, switch shared-video
+  playback from Premium HLS to Standard, switch audio tracks, and fetch a real
+  `/realtime-proxy` MP4 chunk.
+- Added Standard realtime proxy stress instrumentation and probe coverage:
+  concurrency slots are acquired before ffprobe/ffmpeg setup, streams now expose
+  first-chunk latency/bytes/RSS/CPU/disconnect metrics, and
+  `scripts/testing/realtime_proxy_stress_probe.py` verifies busy-limit,
+  disconnect cleanup, and selected-audio reopen behavior with a generated
+  multi-audio MKV.
+- Added `scripts/testing/realtime_proxy_http_concurrency_probe.py`, which starts
+  an isolated runtime, publishes a shared multi-audio MKV, holds one Standard
+  realtime proxy HTTP stream open, verifies a concurrent Standard request gets
+  `429 realtime_proxy_busy`, and confirms Basic direct plus Premium HLS still
+  serve first chunks.
+- Added route-level realtime proxy metrics JSONL artifacts so live HTTP probes
+  can validate server-side bytes, RSS, CPU, disconnect, and runtime-slot state.
+- Changed Standard realtime proxy concurrency from process-local only to
+  host-global file slots when a runtime/lock dir is configured, with
+  process-local fallback for non-runtime or non-Unix environments.
+- Extended the realtime proxy HTTP concurrency probe with a gunicorn
+  multi-worker mode and verified two workers share the same host-global Standard
+  slot while Basic direct and Premium HLS continue serving first chunks.
+- Added configurable host-global Premium HLS worker slots:
+  `HACKME_MEDIA_HLS_MAX_CONCURRENT`, `HACKME_MEDIA_HLS_LOCK_DIR`,
+  `HACKME_MEDIA_HLS_SERIALIZE_ALL`, and `HACKME_MEDIA_HLS_SERIALIZE_MIN_BYTES`
+  now bound large prepared-HLS jobs across workers and report slot state through
+  Job Center metadata/results.
+- Added `scripts/testing/hls_worker_slot_probe.py`, a live dual-worker Premium
+  HLS probe that verifies the second worker enters `waiting_worker_slot`, then
+  acquires the host-global slot after the first worker releases it.
+- Added worker-side Premium HLS cost telemetry and
+  `scripts/testing/hls_premium_sizing_probe.py`, which samples real ffmpeg/HLS
+  worker CPU/RSS, derivative bytes, queue wait, and Job Center result metrics to
+  recommend a conservative `HACKME_MEDIA_HLS_MAX_CONCURRENT`.
+- Calibrated Premium HLS `max=2` with Scarlet 60s/180s real-file probes and
+  added queue observation checks so `jobs > max_concurrent` must show a waiting
+  worker while ffmpeg process peak remains capped.
+- Added Premium HLS storage-saver policy through
+  `HACKME_MEDIA_HLS_ORIGINAL_VARIANT_MODE`, allowing deployments to skip the
+  original HLS rendition when generated q480/q720 variants exist. Scarlet 60s
+  `jobs=2 / max=2` derivative multiplier dropped from 2.917x to 1.334x.
+- Added Premium HLS profile presets and audio-bitrate control:
+  `HACKME_MEDIA_HLS_PROFILE=full|storage_saver|mobile_saver` and
+  `HACKME_MEDIA_HLS_AUDIO_BITRATE`. Scarlet 60s `mobile_saver` with
+  `jobs=2 / max=2` reduced derivative multiplier to 0.482x while preserving
+  HLS, multi-audio, subtitles, and share authorization.
+- Exposed Premium HLS profile policy in playback payloads through
+  `service_policy.premium_hls_profile_policy` and prepared-HLS
+  `streaming_options[].profile_policy`, including relative fee, storage cost,
+  quality ladder, original-rendition policy, best-fit scenarios, and tradeoffs.
+- Added `scripts/testing/hls_premium_profile_matrix_probe.py`, which reuses one
+  source fixture to compare full / storage_saver / mobile_saver Premium HLS
+  profiles across derivative multiplier, storage reduction, CPU/RSS, wall time,
+  and output variants.
+- Fixed prepared-HLS transcode segmenting by forcing keyframes at the configured
+  HLS segment interval and disabling scene-cut keyframe drift, restoring 4s
+  segment granularity for q480/q720 derivatives.
 
 ## 2026.05.27-007
 

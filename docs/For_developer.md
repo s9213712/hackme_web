@@ -20,12 +20,20 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.27-007`
+- Release ID: `2026.05.28-002`
 - Schema version: `30`
 - Release ID source: `services/platform/release_info.py`
 - Runtime version endpoint: `GET /api/version`
 - Branch and release policy: [BRANCHING_AND_RELEASE.md](BRANCHING_AND_RELEASE.md)
 - Upload request-body cap: `HTML_LEARNING_MAX_CONTENT_MB` (default `1024`, minimum `128`)
+- Optional storage sendfile offload: set `HACKME_CLOUD_DRIVE_X_ACCEL_PREFIX`
+  (or `HACKME_X_ACCEL_STORAGE_PREFIX`) to an internal Nginx location that
+  aliases the app storage root. Set `HACKME_CLOUD_DRIVE_X_ACCEL_STORAGE_ROOT`
+  only when the web-server alias root differs from `STORAGE_DIR`.
+- Cloud Drive upload transfer limits no longer sleep inside Flask workers by
+  default. Set `HACKME_CLOUD_DRIVE_UPLOAD_SLEEP_SHAPER=1` only for legacy
+  app-side upload shaping tests; production should enforce upload shaping at the
+  proxy or storage edge.
 
 ## Server Runner Boundary
 
@@ -46,6 +54,49 @@ entrypoints instead of being hidden inside web workers.
 
 The development script defaults to Gunicorn. Choose the Flask/Werkzeug runner
 only when you deliberately need the direct debug path.
+
+## Management UI Load Discipline
+
+Root/admin pages must be treated as control-plane clients, not free background
+workers. Browser polling for live server output, backpressure traffic, and
+system resource boards should run only while the matching management tab is
+visible. Hidden tabs stop those poll timers and foregrounding a tab resumes only
+the active page's poller.
+
+Health-center secondary reads such as platform statistics and update status are
+scheduled through the frontend idle helper. Keep future management dashboards on
+the same pattern: start critical visible reads immediately, defer secondary
+charts or summaries, guard them with the active tab predicate, and keep list or
+table payloads bounded.
+
+## Server QoS And Edge Guard
+
+The app-level backpressure layer now classifies every request with
+`X-Hackme-QoS-Class` (`health`, `static`, `auth`, `management`, `heavy`,
+`api_read`, `api_write`, or `page`). This is an observability and routing hint
+for stress probes, reverse proxies, and root dashboards; it is not a permission
+boundary.
+
+Backpressure also includes a small process-local edge burst guard for high-risk
+entry points before they reach heavier DB/session checks:
+
+- auth/bootstrap paths such as CSRF token, login, register, CAPTCHA, and
+  password reset
+- root/admin API namespaces
+- upload / resumable-upload / remote-download starts
+
+Rejected bursts return `429 edge_rate_limited`, `Retry-After`, and
+`X-Hackme-Edge-Guard`. This is a last-line application guard. Production
+traffic should still enter through Nginx or an equivalent proxy with TLS,
+request-size limits, connection limits, and first-layer `limit_req` policies.
+
+Runtime knobs:
+
+- `HACKME_EDGE_BURST_GUARD_ENABLED` (default `1`)
+- `HACKME_EDGE_BURST_WINDOW_SECONDS` (default `10`)
+- `HACKME_EDGE_AUTH_BURST_LIMIT` (default `40`)
+- `HACKME_EDGE_MANAGEMENT_BURST_LIMIT` (default `90`)
+- `HACKME_EDGE_UPLOAD_BURST_LIMIT` (default `24`)
 
 ## Project Working Principles
 
@@ -271,6 +322,12 @@ window so a multi-tab page or concurrent request does not create false
 `invalid_authenticated` alerts immediately after a refresh; public/login CSRF
 tokens remain single-use.
 
+Auth hot-state storage is expected to stay cheap under large member counts:
+`csrf_tokens` is indexed by username/expiry, `login_attempts` by
+user/success/time, and `sessions` by active user/expiry. User identity
+migrations also create indexes for role/status/effective-level/sanction
+filters and lowercase username/email lookups.
+
 ## Trading Market Catalog
 
 Trading market metadata is now centralized in
@@ -325,6 +382,12 @@ that asset needs custom handling.
 - `GET /api/me`
 - password reset and email verification endpoints under the public auth routes
 
+Registration tries to create the official hot wallet and signup gift
+immediately. If the points layer is unavailable, the account remains pending
+with `users.signup_bonus_deferred=1`; after approval, `/api/login` retries the
+signup gift only for that flagged account and clears the flag after success or
+after detecting the gift was already granted.
+
 ### Chat
 
 - `GET /api/chat/rooms`
@@ -335,6 +398,11 @@ that asset needs custom handling.
 - `GET /api/chat/rooms/{room_id}/messages`
 - `POST /api/chat/rooms/{room_id}/messages`
 - message delete/report flows through chat and reports routes
+
+`GET /api/chat/rooms/{room_id}/messages` accepts `after_id`, `before_id`, and
+`limit`; use `after_id` for poll/delta refreshes instead of reloading the latest
+message window every few seconds. Delta polling can pass `compact=1` to skip
+room member-count metadata until the next full refresh.
 
 Chat targeting notes:
 
@@ -350,11 +418,15 @@ Chat targeting notes:
 ### Notifications and Reports
 
 - `GET /api/notifications`
+- `GET /api/notifications/unread-count`
 - `POST /api/notifications/{id}/read`
 - `POST /api/notifications/{id}/dismiss`
 - `POST /api/notifications/read-all`
 - `POST /api/admin/notifications/send`
 - `POST /api/reports`
+
+Use `GET /api/notifications/unread-count` for closed-panel/background polling;
+reserve `GET /api/notifications` for the visible notification list.
 - `GET /api/admin/reports`
 - `POST /api/admin/reports/{id}/claim`
 - `POST /api/admin/reports/{id}/resolve`
@@ -426,11 +498,18 @@ Governance notes:
 - Role/status/points-rights changes can generate member-governance notices with
   appeal restore context; governance-only notices may use negative synthetic
   `violation_id` values internally.
+- `GET /api/admin/users` must keep online-session decoration scoped to the
+  current result page. Do not reintroduce a full `sessions GROUP BY user_id`
+  over every active session when rendering paginated user management views.
 
 ### Forum and Announcements
 
 - category, board, board-request, thread, reply, reaction, review, and moderator
   operations under the community routes
+- `GET /api/community/threads/{id}` accepts `posts_page` / `posts_limit` and
+  returns `posts_total` / `posts_has_more`; clients must not assume all replies
+  are returned in a single response for large threads. Use page-by-page loads
+  for large reply lists.
 - `POST /api/cloud-drive/announcement-attachment-requests`
 - `POST /api/root/announcement-attachment-requests/{id}/review`
 
@@ -472,6 +551,10 @@ Resumable upload APIs:
 - `POST /api/cloud-drive/resumable-upload/{session_id}/chunks/{chunk_index}`
 - `POST /api/cloud-drive/resumable-upload/{session_id}/complete`
 - `DELETE /api/cloud-drive/resumable-upload/{session_id}`
+
+Chunk upload responses include `chunk.storage_mode=streamed_to_disk`; each
+chunk is written with bounded reads to a temporary `.part.tmp` file before an
+atomic replace into the session directory.
 
 BT/magnet/`.torrent` support depends on `aria2c`.
 BT transfers run in `scripts/storage/remote_download_worker.py` by default.
@@ -669,6 +752,39 @@ ComfyUI notes:
   model loading, and Python inference, job progress must say `Diffusers` /
   `Hugging Face` and may include a sanitized `python_log_tail`; it must not
   reuse ComfyUI backend-unresponsive wording.
+- Hugging Face Diffusers repo inspection is short-cached in
+  `services.comfyui.huggingface`. Tune
+  `COMFYUI_HF_REPO_INSPECT_CACHE_SECONDS` if operators need a shorter or longer
+  metadata cache window. The frontend also dedupes concurrent repo-inspect and
+  model-list requests; manual refresh / local start / model download / model
+  upload paths pass `forceRefresh` and should continue to bypass the cache.
+
+### Games and Experiments
+
+- `GET /api/games/catalog`
+- `GET /api/games/users`
+- `GET /api/games/chess/matches`
+- `GET /api/games/chess/leaderboard`
+- `POST /api/games/chess/practice`
+- `POST /api/games/chess/matches/{match_id}/move`
+- `GET /api/games/{game_key}/solo-leaderboard`
+- `POST /api/games/{game_key}/solo-scores`
+- multiplayer lobby, room, invite, and state endpoints under
+  `/api/games/{game_key}/multiplayer`
+
+Games notes:
+
+- `POST /api/games/{game_key}/solo-scores?compact=1` records the score and
+  daily reward result without rebuilding the leaderboard in the submit response.
+  The frontend uses this path and then refreshes the leaderboard once.
+- `ensure_game_schema` creates indexes for chess leaderboard weeks, visible
+  user match lists, invites, multiplayer invites, and solo best-score/best-time
+  ranking queries. Keep new game list endpoints bounded and indexed before
+  adding frontend polling.
+- The Experiments page is intentionally client-only. It should not add backend
+  worker jobs, server-side simulation state, or polling endpoints. Browser
+  particle counts and DPR are scaled down for low-core and reduced-motion
+  clients.
 
 ### PointsChain
 
@@ -682,20 +798,46 @@ ComfyUI notes:
 - `POST /api/admin/points/adjust`
 - `GET /api/admin/points/wallets/{user_id}`
 - `GET /api/root/points/report`
+- `GET /api/root/points/report/latest`
+- `POST /api/root/points/report/jobs`
+- `GET /api/root/points/financial-invariants`
+- `GET /api/root/points/financial-invariants/latest`
+- `POST /api/root/points/financial-invariants/jobs`
 - `GET /api/root/points/audit`
 - `POST /api/root/points/chain/seal`
+- `GET /api/root/points/chain/seal/latest`
 - `GET /api/root/points/chain/verify`
+- `GET /api/root/points/chain/verify/latest`
 - `GET /api/root/points/chain/recovery`
 - `POST /api/root/points/chain/backups`（已停用，410）
 - `POST /api/root/points/chain/recovery/approve`（已停用，410）
 - `POST /api/root/points/chain/recovery/auto-handle`
+- `GET /api/root/points/chain/recovery/auto-handle/latest`
+- `GET /api/admin/points/economy/stats`
+- `GET /api/admin/points/economy/stats/latest`
+- `GET /api/admin/points/operations/snapshot`
+- `GET /api/admin/points/operations/snapshot/latest`
 - `GET /api/root/points/system-wallets`
 
-`recovery/auto-handle` is root-only and CSRF-protected. It verifies the chain,
-returns clean status when no recovery is needed, or returns a safe-mode
-forensic/branch/governance recovery plan. It must never apply a ledger backup:
-overwriting an append-only chain is a ledger mutation and must be represented by
-branches, emergency governance, disputes, and corrective transactions instead.
+Heavy root/admin PointsChain endpoints are management-plane jobs. `seal`,
+`verify`, `report`, `financial-invariants`, `economy/stats`, operations
+snapshot, and `recovery/auto-handle` should return `202 + job_id` when work is
+started, while `/latest` endpoints read the last successful snapshot. Do not
+reintroduce synchronous full-chain replay or financial invariant aggregation in
+HTTP request paths.
+
+`recovery/auto-handle` is root-only and CSRF-protected. It starts an async
+verification/recovery-guidance job, returns clean status when no recovery is
+needed, or returns a safe-mode forensic/branch/governance recovery plan. It
+must never apply a ledger backup: overwriting an append-only chain is a ledger
+mutation and must be represented by branches, emergency governance, disputes,
+and corrective transactions instead.
+
+`GET /api/admin/points/operations/snapshot` summarizes the operational posture
+without full replay: service-fee linkage, initial grants, wallet identities,
+transfer queues, economy fund watermarks, exchange-fund status, disputes,
+address freezes, and governance severity counts. Use it for root/manager
+dashboards before reaching for the heavier financial invariant audit.
 
 `GET /api/root/points/report` also returns `stats.circulation`, including
 member outstanding points, root-held points, confirmed ledger net points,
