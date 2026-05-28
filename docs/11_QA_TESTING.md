@@ -332,6 +332,8 @@ python3 scripts/on_live_reports/snapshot_restore.py
 - `pytest` / `log_chain_verify` / `snapshot_restore` / `points_chain_consistency` / `cloud_drive_quota_permission`
   這幾類若不是由單一腳本直接產生檔案，仍應把最後簽署/上傳前的 raw report staging 到
   `runtime/reports/security/production_gate/`，不要散落在 repo root。
+- `artifacts/` 與 `runtime/reports/` 都是可再生測試輸出，預設不進 git；需要長期保留的結論請整理到
+  `docs/AGENTS/reports/` 或 `docs/RELEASE/`。
 - `functional` 與 `pentest` 都是目錄型報告，不是單一 `.json`；前者偏功能流程，後者偏安全/攻擊面。
 - `stress` 一次通常會有兩份報告：一般 HTTP 壓測與 trading stress，各自獨立保存。
 - `on_live_reports_make.py` 會額外生成：
