@@ -11,6 +11,8 @@ def test_server_update_routes_are_root_only_and_use_safe_git_flow():
         + (ROOT / "routes" / "system_admin_sections" / "security_routes.py").read_text(encoding="utf-8")
     )
     server_py = (ROOT / "server.py").read_text(encoding="utf-8")
+    container_py = (ROOT / "services" / "server" / "container.py").read_text(encoding="utf-8")
+    runtime_routes = (ROOT / "routes" / "system_admin_sections" / "runtime_routes.py").read_text(encoding="utf-8")
 
     assert '@app.route("/api/root/server-update/status", methods=["GET"])' in system_admin
     assert '@app.route("/api/root/server-update/preview", methods=["POST"])' in system_admin
@@ -28,6 +30,12 @@ def test_server_update_routes_are_root_only_and_use_safe_git_flow():
     assert "APPLY_UNVERIFIED_UPDATE" not in system_admin
     assert "release_summary" in system_admin
     assert "read_update_summary_from_ref(remote_ref)" in system_admin
+    assert "verification = points_service.verify_chain_bounded_snapshot()" in system_admin
+    assert "verification = points_service.verify_chain()" not in system_admin
+    assert '("points_chain", lambda: points_service.verify_chain_bounded_snapshot())' in container_py
+    assert '("points_chain", lambda: points_service.verify_chain())' not in container_py
+    assert "points_service.operations_control_snapshot(recent_limit=20)" in runtime_routes
+    assert "points_service.economy_stats() or {}" not in runtime_routes
     assert "線上套用 GitHub 更新已停用" in system_admin
     assert "SERVER_UPDATE_APPLY_DISABLED" in system_admin
     assert "schedule_server_restart(reason=f\"server update from origin/{branch}\"" not in system_admin

@@ -622,11 +622,11 @@ def register_system_admin_routes(app, deps):
                 "msg": "更新前 snapshot 建立失敗，已中止更新",
                 "snapshot": {"ok": False, "snapshot_id": snapshot.snapshot_id, "status": snapshot.status, "error": snapshot.error},
             }
-        verification = points_service.verify_chain()
+        verification = points_service.verify_chain_bounded_snapshot()
         if verification.get("ok") is not True:
             return {
                 "ok": False,
-                "msg": "更新前 PointsChain 驗證失敗，已中止更新",
+                "msg": "更新前 PointsChain bounded 驗證失敗，已中止更新",
                 "snapshot": {"ok": True, "snapshot_id": snapshot.snapshot_id, "status": snapshot.status},
                 "points_verification": verification,
             }

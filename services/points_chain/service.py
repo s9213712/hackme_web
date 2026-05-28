@@ -11194,7 +11194,7 @@ class PointsLedgerService:
             row_finalization_errors = []
             for row in rows:
                 before = str(row["status"] or "")
-                current = row if finalization_paused else self._maybe_finalize_transfer_request_or_mark_failed_locked(
+                current = row if finalization_paused or not run_maintenance else self._maybe_finalize_transfer_request_or_mark_failed_locked(
                     conn,
                     row,
                     actor=actor,
@@ -13840,12 +13840,12 @@ class PointsLedgerService:
         )
         if not schedule.get("due"):
             return {"ok": True, "sealed": False, "msg": schedule.get("message") or "not due", "schedule": schedule}
-        verification = self.verify_chain()
+        verification = self.verify_chain_bounded_snapshot()
         if verification.get("ok") is not True:
             return {
                 "ok": False,
                 "sealed": False,
-                "msg": "PointsChain 驗證失敗",
+                "msg": "PointsChain bounded 驗證失敗",
                 "schedule": self.block_schedule(
                     ledger_threshold=ledger_threshold,
                     max_interval_seconds=max_interval_seconds,
@@ -13880,12 +13880,18 @@ class PointsLedgerService:
                 "reason": str(reason or ""),
                 "msg": f"skipped: chain writes require production/dev_ready (mode={exc.mode!r})",
             }
-        verification = self.verify_chain()
+        verification = self.verify_chain_bounded_snapshot()
         if verification.get("ok") is not True:
-            return {"ok": False, "sealed": False, "msg": "PointsChain 驗證失敗", "verification": verification}
+            return {"ok": False, "sealed": False, "msg": "PointsChain bounded 驗證失敗", "verification": verification}
         result = self.seal_block(actor=actor, limit=limit)
         result["forced"] = True
         result["reason"] = str(reason or "")
+        result["pre_seal_verification"] = {
+            "bounded": bool(verification.get("bounded")),
+            "verification_mode": verification.get("verification_mode"),
+            "recent_checked": verification.get("recent_checked"),
+            "counts": verification.get("counts") or {},
+        }
         return result
 
     def _verify_chain_on_conn(self, conn, *, mark_safe_mode=True):
@@ -16948,6 +16954,8 @@ class PointsLedgerService:
                 "seconds_remaining": seconds_remaining,
                 "unsealed_entries": unsealed,
                 "chain_ok": chain_ok,
+                "verification_mode": verification.get("verification_mode"),
+                "verification_bounded": bool(verification.get("bounded")),
                 "due": bool(chain_ok and (count_due or time_due)),
                 "due_reason": due_reason,
                 "message": "全鏈驗證異常，暫停自動封塊" if not chain_ok else ("目前沒有未封 ledger" if not unsealed else (f"已累積 {unsealed}/{ledger_threshold} 筆，可封塊" if count_due else ("已到達最長等待時間，可封塊" if time_due else f"已累積 {unsealed}/{ledger_threshold} 筆，尚需 {entries_remaining} 筆或等待時間到"))),

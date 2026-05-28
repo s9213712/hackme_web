@@ -131,7 +131,7 @@ def build_runtime_services(*, config, deps):
     chess_engine_store = ChessExperimentStore(db_path=config["chess_engine_db_path"])
     snapshot_service.set_post_restore_validators(
         [
-            ("points_chain", lambda: points_service.verify_chain()),
+            ("points_chain", lambda: points_service.verify_chain_bounded_snapshot()),
             ("trading_state", lambda: trading_service.verify_state()),
         ]
     )

@@ -2015,10 +2015,7 @@ def register_economy_routes(app, deps):
 
         def worker(progress):
             progress(stage="verify_chain", progress_percent=15, detail="verifying PointsChain off request path")
-            if hasattr(points_service, "verify_chain_bounded_snapshot"):
-                result = points_service.verify_chain_bounded_snapshot()
-            else:
-                result = points_service.verify_chain(include_financial=False)
+            result = points_service.verify_chain_bounded_snapshot()
             incident = None
             if not result.get("ok") and not result.get("bounded") and server_mode_service and hasattr(server_mode_service, "enter_incident_lockdown"):
                 progress(stage="incident_lockdown", progress_percent=85, detail="verification failed; entering incident lockdown")
@@ -2122,8 +2119,8 @@ def register_economy_routes(app, deps):
         actor_snapshot = management_actor(actor)
 
         def worker(progress):
-            progress(stage="verify_chain", progress_percent=15, detail="verifying PointsChain before recovery guidance")
-            verification = points_service.verify_chain(include_financial=False)
+            progress(stage="bounded_verify", progress_percent=15, detail="building bounded PointsChain verification before recovery guidance")
+            verification = points_service.verify_chain_bounded_snapshot()
             recovery = points_service.safe_mode_status()
             if verification.get("ok") and not recovery.get("safe_mode"):
                 progress(stage="verified_clean", progress_percent=90, detail="PointsChain is clean; no recovery action needed")

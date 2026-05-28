@@ -2,6 +2,7 @@ import base64
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import hashes
@@ -20,6 +21,8 @@ from services.points_chain import (
     wallet_service_fee_payload,
     wallet_transaction_payload,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
 from services.points_chain.economy_layer import economy_fund_address
 from services.points_chain.schema import canonical_json, compute_block_hash, compute_ledger_hash, merkle_root
 
@@ -2173,6 +2176,13 @@ def test_points_chain_verify_identifies_tampered_ledger(tmp_path):
     assert recovery["restore_plan"]["auto_apply"] is False
 
 
+def test_points_chain_forensic_bundle_does_not_inline_full_ledger():
+    source = (ROOT / "services" / "points_chain" / "backup_recovery.py").read_text(encoding="utf-8")
+
+    assert '"full_ledger_inline": False' in source
+    assert '"current_ledger": [dict(row) for row in conn.execute("SELECT * FROM points_ledger ORDER BY id ASC").fetchall()]' not in source
+
+
 def test_points_chain_block_and_signature_tables_are_append_only(tmp_path):
     service = _service(tmp_path)
     _record_pc1_canonical_credit(service, amount=10, action_type="test_pc1_append_only")
@@ -2596,6 +2606,38 @@ def test_points_chain_not_due_schedule_avoids_full_verification(tmp_path):
     assert pending["sealed"] is False
     assert pending["schedule"]["unsealed_entries"] == 3
     assert calls == 0
+
+
+def test_points_chain_due_seal_uses_bounded_verification(tmp_path):
+    service = _service(tmp_path)
+    actor = {"id": 3, "username": "root", "role": "super_admin"}
+    _record_pc1_canonical_credit(service, amount=1, action_type="schedule_pc1_bounded_check")
+
+    def forbidden_full_verify(*args, **kwargs):
+        raise AssertionError("seal_due_block should use bounded verification before sealing")
+
+    service.verify_chain = forbidden_full_verify
+    sealed = service.seal_due_block(actor=actor, ledger_threshold=1)
+
+    assert sealed["sealed"] is True
+    assert sealed["schedule"]["verification_bounded"] is True
+    assert sealed["schedule"]["verification_mode"] == "bounded_recent_snapshot"
+
+
+def test_points_chain_force_seal_uses_bounded_verification(tmp_path):
+    service = _service(tmp_path)
+    actor = {"id": 3, "username": "root", "role": "super_admin"}
+    _record_pc1_canonical_credit(service, amount=1, action_type="force_pc1_bounded_check")
+
+    def forbidden_full_verify(*args, **kwargs):
+        raise AssertionError("force_seal_block should use bounded verification before sealing")
+
+    service.verify_chain = forbidden_full_verify
+    sealed = service.force_seal_block(actor=actor, reason="test_force_bounded")
+
+    assert sealed["sealed"] is True
+    assert sealed["forced"] is True
+    assert sealed["pre_seal_verification"]["bounded"] is True
 
 
 def test_points_chain_root_report_reuses_single_verification(tmp_path):

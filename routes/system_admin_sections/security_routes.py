@@ -13,7 +13,6 @@ from pathlib import Path
 
 from flask import request
 
-from services.management_plane import get_management_snapshot
 from services.server.backpressure import backpressure_status
 from services.server.domain_databases import DOMAIN_DATABASES
 from services.system.ci_status import playwright_ci_status
@@ -591,6 +590,43 @@ def register_system_admin_security_routes(app, ctx):
     repair_violation_chains = ctx["repair_violation_chains"]
     audit_storage_capacity = ctx["audit_storage_capacity"]
 
+    def _peek_management_snapshot_summary(snapshot_key):
+        conn = get_db()
+        try:
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='management_plane_snapshots'"
+            ).fetchone()
+            if not table:
+                return {"ok": False, "missing": True, "summary": {}, "msg": "management-plane snapshot table missing"}
+            row = conn.execute(
+                """
+                SELECT snapshot_key, summary_json, source_job_uuid, generated_at, updated_at, error
+                FROM management_plane_snapshots
+                WHERE snapshot_key=?
+                """,
+                (str(snapshot_key),),
+            ).fetchone()
+            if not row:
+                return {"ok": False, "missing": True, "summary": {}, "msg": "management-plane snapshot missing"}
+            try:
+                summary = json.loads(row["summary_json"] or "{}")
+            except Exception:
+                summary = {}
+            if not isinstance(summary, dict):
+                summary = {}
+            return {
+                "ok": True,
+                "missing": False,
+                "snapshot_key": row["snapshot_key"],
+                "summary": summary,
+                "generated_at": row["generated_at"],
+                "updated_at": row["updated_at"],
+                "source_job_uuid": row["source_job_uuid"],
+                "error": row["error"],
+            }
+        finally:
+            conn.close()
+
     def _points_finality_health_snapshot():
         if not points_service or not hasattr(points_service, "transfer_finality_observability_snapshot"):
             return {
@@ -613,11 +649,7 @@ def register_system_admin_security_routes(app, ctx):
                 "msg": str(exc)[:200],
             }
         try:
-            conn = get_db()
-            try:
-                latest = get_management_snapshot(conn, snapshot_key="points_finality_sweep", include_payload=False)
-            finally:
-                conn.close()
+            latest = _peek_management_snapshot_summary("points_finality_sweep")
             payload["latest_sweep_snapshot"] = {
                 "ok": bool(latest.get("ok")),
                 "missing": bool(latest.get("missing")),
@@ -663,7 +695,7 @@ def register_system_admin_security_routes(app, ctx):
         storage_stats = dir_stats(STORAGE_DIR)
         capacity_conn = get_db()
         try:
-            storage_capacity = audit_storage_capacity(capacity_conn, STORAGE_DIR)
+            storage_capacity = audit_storage_capacity(capacity_conn, STORAGE_DIR, include_users=False)
             storage_catalog_files, _storage_catalog_error = safe_count(capacity_conn, "storage_files", optional=True)
         finally:
             capacity_conn.close()

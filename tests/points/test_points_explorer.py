@@ -920,9 +920,18 @@ def test_root_transaction_management_sweeps_proved_pending_beyond_page_limit(tmp
         conn.close()
 
     current.update({"id": 1, "username": "root", "role": "super_admin"})
+    root_read = client.get("/api/points/transactions?limit=5")
+    assert root_read.status_code == 200, root_read.get_json()
+    read_payload = root_read.get_json()
+    assert read_payload["summary"]["maintenance_run"] is False
+    assert read_payload["summary"]["batch_checked_count"] == 0
+    assert read_payload["summary"]["pending_count"] == 5
+    assert all(item["status"] == "pending" for item in read_payload["transactions"])
+
     root_res = client.get("/api/points/transactions?limit=5&sweep=1")
     assert root_res.status_code == 200, root_res.get_json()
     payload = root_res.get_json()
+    assert payload["summary"]["maintenance_run"] is True
     assert payload["summary"]["batch_checked_count"] == 5
     assert payload["summary"]["batch_finalized_count"] == 5
     assert payload["summary"]["batch_confirmed_count"] == 5
