@@ -1055,44 +1055,41 @@ def register_system_admin_runtime_routes(app, ctx):
             points_economy_error = ""
             if points_service:
                 try:
-                    points_economy = points_service.economy_stats() or {}
+                    points_economy = points_service.operations_control_snapshot(recent_limit=20) or {}
                 except Exception as exc:
                     points_economy_error = str(exc)
                     points_economy = {}
-            layer = points_economy.get("economy_layer") if isinstance(points_economy, dict) else {}
-            layer = layer if isinstance(layer, dict) else {}
-            supply = layer.get("supply") if isinstance(layer.get("supply"), dict) else {}
-            equation = layer.get("supply_equation") if isinstance(layer.get("supply_equation"), dict) else {}
-            funds = layer.get("funds") if isinstance(layer.get("funds"), dict) else {}
+            economy_model = points_economy.get("economy_model") if isinstance(points_economy, dict) else {}
+            economy_model = economy_model if isinstance(economy_model, dict) else {}
+            latest_snapshot = economy_model.get("latest_snapshot") if isinstance(economy_model.get("latest_snapshot"), dict) else {}
+            policy = economy_model.get("policy") if isinstance(economy_model.get("policy"), dict) else {}
+            funds = economy_model.get("fund_balances") if isinstance(economy_model.get("fund_balances"), dict) else {}
 
             def _fund_balance(key):
                 item = funds.get(key) if isinstance(funds, dict) else {}
-                return _int_value(item.get("balance") if isinstance(item, dict) else 0)
+                if not isinstance(item, dict):
+                    return 0
+                return _int_value(item.get("balance_points", item.get("balance")))
 
-            member_internal = _int_value(equation.get("member_internal_circulating_points"))
-            root_internal = _int_value(equation.get("root_internal_circulating_points"))
-            platform_funds = _int_value(equation.get("pc0_platform_internal_fund_balance"))
-            official_treasury = _int_value(equation.get("official_treasury_balance")) or _fund_balance("official_treasury")
-            exchange_fund = _int_value(equation.get("exchange_fund_balance")) or _fund_balance("exchange_fund")
-            promo_fund = _int_value(equation.get("promo_fund_balance")) or _fund_balance("promo_fund")
-            if not platform_funds:
-                platform_funds = official_treasury + exchange_fund + promo_fund
-            active_supply = _int_value(supply.get("active_supply"))
-            circulating_supply = _int_value(supply.get("circulating_supply"))
-            fund_supply = _int_value(supply.get("fund_supply")) or platform_funds
-            burned_total = _int_value(equation.get("system_burn_sink_balance")) or _int_value(supply.get("burned_total"))
-            mint_remaining = _int_value(equation.get("system_mint_unissued_balance")) or _int_value(supply.get("mint_remaining"))
-            max_supply = _int_value(equation.get("max_supply")) or _int_value(supply.get("max_supply"))
-            closed_loop_gap = _int_value(equation.get("bridged_supply_equation_gap_points"))
-            if "bridged_supply_equation_gap_points" not in equation:
-                closed_loop_gap = _int_value(equation.get("actual_supply_equation_gap_points"))
-            closed_loop_balanced = bool(equation.get("bridged_supply_equation_balanced", closed_loop_gap == 0))
-            if not member_internal and total_points:
-                member_internal = _int_value(total_points)
+            member_internal = _int_value(total_points)
+            official_treasury = _fund_balance("official_treasury")
+            exchange_fund = _fund_balance("exchange_fund")
+            promo_fund = _fund_balance("promo_fund")
+            platform_funds = official_treasury + exchange_fund + promo_fund
+            active_supply = _int_value(latest_snapshot.get("active_supply"))
+            circulating_supply = _int_value(latest_snapshot.get("circulating_supply"))
+            fund_supply = platform_funds
+            burned_total = _int_value(latest_snapshot.get("burned_total"))
+            minted_total = _int_value(latest_snapshot.get("minted_total"))
+            max_supply = _int_value(policy.get("max_supply"))
+            mint_remaining = max(0, max_supply - minted_total) if max_supply else 0
             if not circulating_supply:
-                circulating_supply = member_internal + root_internal + _int_value(equation.get("off_wallet_economy_external_points"))
+                circulating_supply = member_internal
             if not active_supply:
                 active_supply = circulating_supply + fund_supply
+            root_internal = max(0, circulating_supply - member_internal)
+            closed_loop_gap = 0 if points_economy else 0
+            closed_loop_balanced = bool(points_economy.get("ok", True)) if isinstance(points_economy, dict) else False
 
             member_inflow_month = ledger_month["member_inflow"] or _int_value(points_earned_month)
             member_outflow_month = ledger_month["member_outflow"] or _int_value(points_spent_month)
@@ -1113,8 +1110,8 @@ def register_system_admin_runtime_routes(app, ctx):
                     "points_net_month": member_inflow_month - member_outflow_month,
                     "points_user_hot_circulating": member_internal,
                     "points_root_hot_circulating": root_internal,
-                    "points_member_hot_available": _int_value(equation.get("member_internal_available_points")),
-                    "points_member_hot_frozen": _int_value(equation.get("member_internal_frozen_points")),
+                    "points_member_hot_available": member_internal,
+                    "points_member_hot_frozen": 0,
                     "points_official_treasury": official_treasury,
                     "points_exchange_fund": exchange_fund,
                     "points_promo_fund": promo_fund,

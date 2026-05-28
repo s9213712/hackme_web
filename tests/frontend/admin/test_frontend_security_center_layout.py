@@ -4,6 +4,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def test_moderation_violation_integrity_scan_is_bounded():
+    moderation = (ROOT / "routes" / "moderation.py").read_text(encoding="utf-8")
+
+    assert "users_limit = 500" in moderation
+    assert "integrity_limit = 1000" in moderation
+    assert "SELECT id FROM users WHERE username<>'root' ORDER BY id ASC LIMIT ?" in moderation
+    assert "SELECT id FROM users WHERE username<>'root' ORDER BY id ASC\").fetchall()" not in moderation
+
+
 def test_security_center_logs_have_non_overlapping_layout():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     admin_js = (

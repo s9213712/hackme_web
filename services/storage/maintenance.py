@@ -42,6 +42,18 @@ def run_storage_maintenance(conn, *, actor_user_id=None, retention_days=30, now=
     retention_days = max(0, min(retention_days, 3650))
     cutoff = (now - timedelta(days=retention_days)).isoformat()
     update_now = now.isoformat()
+    affected_user_ids = {
+        int(row["owner_user_id"])
+        for row in conn.execute(
+            """
+            SELECT DISTINCT owner_user_id
+            FROM storage_files
+            WHERE is_trashed=1 AND deleted_at IS NULL AND trashed_at IS NOT NULL AND trashed_at<=?
+            """,
+            (cutoff,),
+        ).fetchall()
+        if row["owner_user_id"] is not None
+    }
     purged = conn.execute(
         """
         UPDATE storage_files
@@ -50,22 +62,26 @@ def run_storage_maintenance(conn, *, actor_user_id=None, retention_days=30, now=
         """,
         (update_now, update_now, cutoff),
     ).rowcount
-    users = conn.execute("SELECT id FROM users ORDER BY id ASC").fetchall()
-    synced = [
-        sync_user_storage_summary(
-            conn,
-            row["id"],
-            actor_user_id=actor_user_id,
-            source="maintenance",
-            reason="storage_maintenance",
-        )
-        for row in users
-    ]
     quota_enforcement = purge_expired_quota_reduction_files(
         conn,
         actor_user_id=actor_user_id,
         now=now,
     )
+    for item in quota_enforcement.get("results") or []:
+        try:
+            affected_user_ids.add(int(item.get("user_id") or 0))
+        except Exception:
+            pass
+    synced = [
+        sync_user_storage_summary(
+            conn,
+            user_id,
+            actor_user_id=actor_user_id,
+            source="maintenance",
+            reason="storage_maintenance",
+        )
+        for user_id in sorted(uid for uid in affected_user_ids if uid > 0)
+    ]
     return {
         "purged_trash_entries": int(purged or 0),
         "quota_enforcement": quota_enforcement,

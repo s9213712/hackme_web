@@ -866,9 +866,13 @@ def register_moderation_routes(app, deps):
 
         conn = get_db()
         try:
+            users_limit = 500
+            users_total = conn.execute("SELECT COUNT(*) AS c FROM users WHERE username<>'root'").fetchone()["c"]
             users_all = conn.execute(
-                "SELECT username, violation_count FROM users WHERE username<>'root' ORDER BY id ASC"
+                "SELECT username, violation_count FROM users WHERE username<>'root' ORDER BY id ASC LIMIT ?",
+                (users_limit,),
             ).fetchall()
+            users_truncated = int(users_total or 0) > len(users_all)
             where = "WHERE username<>'root'"
             params = []
             if username_filter:
@@ -932,11 +936,23 @@ def register_moderation_routes(app, deps):
                     ):
                         cached = dict(_VIOLATION_INTEGRITY_CACHE["payload"])
                 if cached is None:
-                    cached = {"ok": True, "broken_at": None, "details": "integrity OK"}
-                    for u in conn.execute("SELECT id FROM users WHERE username<>'root' ORDER BY id ASC").fetchall():
+                    integrity_limit = 1000
+                    cached = {
+                        "ok": True,
+                        "broken_at": None,
+                        "details": "integrity OK",
+                        "bounded": True,
+                        "checked_users": 0,
+                        "truncated": int(users_total or 0) > integrity_limit,
+                    }
+                    for u in conn.execute(
+                        "SELECT id FROM users WHERE username<>'root' ORDER BY id ASC LIMIT ?",
+                        (integrity_limit,),
+                    ).fetchall():
+                        cached["checked_users"] += 1
                         ok, broken_at, details = verify_violation_integrity(u["id"])
                         if not ok:
-                            cached = {"ok": False, "broken_at": broken_at, "details": details}
+                            cached.update({"ok": False, "broken_at": broken_at, "details": details})
                             break
                     with _VIOLATION_INTEGRITY_CACHE_LOCK:
                         _VIOLATION_INTEGRITY_CACHE.update({
@@ -955,6 +971,8 @@ def register_moderation_routes(app, deps):
                 "page":    page,
                 "limit":   limit,
                 "users":   [{"username": u["username"], "violation_count": u["violation_count"]} for u in users_all],
+                "users_total": int(users_total or 0),
+                "users_truncated": users_truncated,
                 "fines":   fines,
                 "fine_total": fine_total,
                 "fine_appeals": fine_appeals,
@@ -962,6 +980,9 @@ def register_moderation_routes(app, deps):
                     "ok":        integrity_ok,
                     "broken_at": integrity_broken,
                     "details":   integrity_details,
+                    "bounded":   bool(cached.get("bounded")) if username_filter is None else False,
+                    "checked_users": int(cached.get("checked_users") or 0) if username_filter is None else (1 if username_filter else 0),
+                    "truncated": bool(cached.get("truncated")) if username_filter is None else False,
                 }
             })
         finally:

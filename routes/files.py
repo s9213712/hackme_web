@@ -4702,8 +4702,29 @@ def register_file_routes(app, deps):
             if request.method == "GET":
                 if not _is_root(actor):
                     return json_resp({"ok": False, "msg": "只有 root 可查看所有公告附件請求"}), 403
-                rows = conn.execute("SELECT * FROM announcement_attachment_requests ORDER BY created_at DESC").fetchall()
-                return json_resp({"ok": True, "requests": [dict(row) for row in rows]})
+                try:
+                    limit = max(1, min(200, int(request.args.get("limit") or 100)))
+                except Exception:
+                    limit = 100
+                try:
+                    offset = max(0, int(request.args.get("offset") or 0))
+                except Exception:
+                    offset = 0
+                total = conn.execute("SELECT COUNT(*) AS c FROM announcement_attachment_requests").fetchone()["c"]
+                rows = conn.execute(
+                    "SELECT * FROM announcement_attachment_requests ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                ).fetchall()
+                next_offset = offset + len(rows)
+                return json_resp({
+                    "ok": True,
+                    "requests": [dict(row) for row in rows],
+                    "limit": limit,
+                    "offset": offset,
+                    "next_offset": next_offset if next_offset < int(total or 0) else None,
+                    "has_more": next_offset < int(total or 0),
+                    "total": int(total or 0),
+                })
             try:
                 data = request.get_json(force=True)
             except Exception:

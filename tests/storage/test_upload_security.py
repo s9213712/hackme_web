@@ -716,6 +716,35 @@ def test_storage_capacity_audit_detects_host_overcommit(tmp_path, monkeypatch):
         conn.close()
 
 
+def test_storage_capacity_audit_summary_mode_skips_user_quota_scan(tmp_path, monkeypatch):
+    class FakeDiskUsage:
+        total = 1_000
+        used = 500
+        free = 500
+
+    monkeypatch.setattr("services.storage.capacity_audit.shutil.disk_usage", lambda path: FakeDiskUsage())
+    conn = _conn()
+    try:
+        set_storage_quota_override(
+            conn,
+            1,
+            quota_bytes=1_000,
+            reason="summary mode should not scan per-user quotas",
+            actor_user_id=2,
+        )
+        full = audit_storage_capacity(conn, tmp_path)
+        summary = audit_storage_capacity(conn, tmp_path, include_users=False)
+
+        assert full["status"] == "critical"
+        assert summary["status"] == "ok"
+        assert summary["user_scan_mode"] == "skipped"
+        assert summary["user_count"] == 0
+        assert summary["users"] == []
+        assert summary["total_user_count"] >= 1
+    finally:
+        conn.close()
+
+
 def test_storage_capacity_guard_blocks_new_quota_when_host_is_full(tmp_path, monkeypatch):
     class FakeDiskUsage:
         total = 1_000

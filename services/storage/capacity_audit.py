@@ -48,7 +48,7 @@ def _cloud_used_bytes(conn):
     return int(row["bytes"] if row and row["bytes"] is not None else 0)
 
 
-def audit_storage_capacity(conn, storage_root, settings=None):
+def audit_storage_capacity(conn, storage_root, settings=None, *, include_users=True, user_limit=None):
     disk = storage_disk_usage(storage_root)
     cloud_used = _cloud_used_bytes(conn)
     global_limit = resolve_global_capacity_limit(disk, settings=settings)
@@ -65,8 +65,27 @@ def audit_storage_capacity(conn, storage_root, settings=None):
     committed_total = 0
     committed_remaining = 0
     unbounded_users = []
+    total_user_count = 0
+    user_scan_mode = "skipped"
+    user_scan_truncated = False
     if _table_exists(conn, "users"):
-        rows = conn.execute("SELECT * FROM users ORDER BY id ASC").fetchall()
+        total_row = conn.execute("SELECT COUNT(*) AS c FROM users WHERE COALESCE(username, '')<>'root'").fetchone()
+        total_user_count = int(total_row["c"] if total_row else 0)
+    if include_users and _table_exists(conn, "users"):
+        params = ()
+        limit_clause = ""
+        if user_limit is not None:
+            try:
+                limit_value = max(1, min(1000, int(user_limit)))
+            except Exception:
+                limit_value = 200
+            limit_clause = " LIMIT ?"
+            params = (limit_value,)
+            user_scan_truncated = total_user_count > limit_value
+            user_scan_mode = "bounded"
+        else:
+            user_scan_mode = "full"
+        rows = conn.execute(f"SELECT * FROM users ORDER BY id ASC{limit_clause}", params).fetchall()
         for row in rows:
             data = dict(row)
             if data.get("username") == "root":
@@ -133,6 +152,9 @@ def audit_storage_capacity(conn, storage_root, settings=None):
         "remaining_overcommitted_by_bytes": int(remaining_over_by),
         "percent_committed": percent_committed,
         "user_count": len(users),
+        "total_user_count": total_user_count,
+        "user_scan_mode": user_scan_mode,
+        "user_scan_truncated": bool(user_scan_truncated),
         "unbounded_users": unbounded_users,
         "users": users,
     }

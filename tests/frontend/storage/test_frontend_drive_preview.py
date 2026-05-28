@@ -4,6 +4,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def test_admin_storage_maintenance_routes_are_bounded():
+    routes = (ROOT / "routes" / "file_sections" / "admin_storage_routes.py").read_text(encoding="utf-8")
+    files_routes = (ROOT / "routes" / "files.py").read_text(encoding="utf-8")
+
+    assert "SELECT * FROM users ORDER BY id ASC LIMIT ? OFFSET ?" in routes
+    assert '"has_more": has_more' in routes
+    assert "SELECT id FROM users ORDER BY id ASC" not in routes
+    assert "SELECT DISTINCT owner_user_id FROM storage_files" in routes
+    assert "SELECT * FROM announcement_attachment_requests ORDER BY created_at DESC LIMIT ? OFFSET ?" in files_routes
+    assert "SELECT * FROM announcement_attachment_requests ORDER BY created_at DESC\").fetchall()" not in files_routes
+
+
 def test_cloud_drive_preview_ui_is_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))

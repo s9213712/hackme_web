@@ -115,7 +115,7 @@ def register_file_admin_storage_routes(app, ctx):
                 users.append(usage)
             users.sort(key=lambda item: (-int(item.get("used_bytes") or 0), -int(item.get("file_count") or 0), int(item.get("user_id") or 0)))
             settings = get_system_settings() if get_system_settings else {}
-            capacity = audit_storage_capacity(conn, storage_root, settings=settings)
+            capacity = audit_storage_capacity(conn, storage_root, settings=settings, include_users=False)
             return json_resp({"ok": True, "users": users, "storage_capacity": capacity})
         finally:
             conn.close()
@@ -138,7 +138,7 @@ def register_file_admin_storage_routes(app, ctx):
                     continue
                 users.append(usage)
             settings = get_system_settings() if get_system_settings else {}
-            capacity = audit_storage_capacity(conn, storage_root, settings=settings)
+            capacity = audit_storage_capacity(conn, storage_root, settings=settings, include_users=False)
             return json_resp({"ok": True, "users": users, "storage_capacity": capacity})
         finally:
             conn.close()
@@ -302,18 +302,43 @@ def register_file_admin_storage_routes(app, ctx):
         actor, err = manager_or_403()
         if err:
             return err
+        data = request.get_json(silent=True) if request.is_json else {}
+        if not isinstance(data, dict):
+            data = {}
+        try:
+            limit = max(1, min(500, int(data.get("limit") or request.args.get("limit") or 200)))
+        except Exception:
+            limit = 200
+        try:
+            offset = max(0, int(data.get("offset") or request.args.get("offset") or 0))
+        except Exception:
+            offset = 0
         conn = get_db()
         try:
             ensure_storage_album_schema(conn)
-            rows = conn.execute("SELECT * FROM users ORDER BY id ASC").fetchall()
+            total = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+            rows = conn.execute(
+                "SELECT * FROM users ORDER BY id ASC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
             synced = []
             for row in rows:
                 usage = storage_usage_for_user_row(conn, row)
                 summary = sync_user_storage_summary(conn, row["id"], actor_user_id=actor["id"], source="admin", reason="admin_sync_quota")
                 synced.append(storage_summary_with_live_quota(summary, usage))
             conn.commit()
-            audit("STORAGE_ADMIN_SYNC_QUOTA", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"users={len(synced)}")
-            return json_resp({"ok": True, "synced": synced})
+            next_offset = offset + len(rows)
+            has_more = next_offset < int(total or 0)
+            audit("STORAGE_ADMIN_SYNC_QUOTA", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"users={len(synced)},offset={offset},limit={limit},has_more={has_more}")
+            return json_resp({
+                "ok": True,
+                "synced": synced,
+                "limit": limit,
+                "offset": offset,
+                "next_offset": next_offset if has_more else None,
+                "has_more": has_more,
+                "total_users": int(total or 0),
+            })
         finally:
             conn.close()
 
@@ -341,13 +366,20 @@ def register_file_admin_storage_routes(app, ctx):
                 where += " AND owner_user_id=?"
                 params.append(int(user_id))
             now = datetime.now().isoformat()
+            affected_users = [
+                int(row["owner_user_id"])
+                for row in conn.execute(
+                    f"SELECT DISTINCT owner_user_id FROM storage_files WHERE {where}",
+                    tuple(params),
+                ).fetchall()
+                if row["owner_user_id"] is not None
+            ]
             cur = conn.execute(f"UPDATE storage_files SET deleted_at=?, updated_at=? WHERE {where}", (now, now, *params))
-            users = conn.execute("SELECT id FROM users ORDER BY id ASC").fetchall()
-            for row in users:
-                sync_user_storage_summary(conn, row["id"], actor_user_id=actor["id"], source="admin", reason="admin_purge_trash")
+            for owner_user_id in affected_users:
+                sync_user_storage_summary(conn, owner_user_id, actor_user_id=actor["id"], source="admin", reason="admin_purge_trash")
             conn.commit()
-            audit("STORAGE_ADMIN_PURGE_TRASH", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"purged={cur.rowcount}, user_id={user_id or '*'}")
-            return json_resp({"ok": True, "purged": cur.rowcount})
+            audit("STORAGE_ADMIN_PURGE_TRASH", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"purged={cur.rowcount}, user_id={user_id or '*'},synced_users={len(affected_users)}")
+            return json_resp({"ok": True, "purged": cur.rowcount, "synced_users": len(affected_users)})
         finally:
             conn.close()
 
