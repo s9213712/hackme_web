@@ -3542,7 +3542,9 @@ async function fetchEconomyJson(url, options = {}) {
   await fetchCsrfToken({ force: true });
   const headers = { ...(requestOptions.headers || {}), "X-CSRF-Token": getCsrfToken() || "" };
   if (requestOptions.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
-  const res = await apiFetch(API + url, { credentials: "same-origin", ...requestOptions, headers });
+  const path = String(url || "");
+  const requestUrl = path.startsWith("/api/") ? path : API + path;
+  const res = await apiFetch(requestUrl, { credentials: "same-origin", ...requestOptions, headers });
   const json = await res.json().catch(() => ({}));
   if (allowMissingSnapshot && json?.snapshot?.missing) return json;
   if (!res.ok || !json.ok) throw new Error(json.msg || json.message || json.error || `HTTP ${res.status}`);
@@ -4819,6 +4821,14 @@ async function autoHandlePointsChainRecovery() {
       method: "POST",
       body: JSON.stringify({ confirm: "AUTO HANDLE POINTSCHAIN" }),
     });
+    if (json.async) {
+      const msg = `異常鏈處理方案已排入背景任務${json.job_id ? `：${json.job_id}` : ""}`;
+      economySetMsg(msg);
+      economyRecoveryActionMsg(msg);
+      setEconomyChainStatus(msg);
+      await loadEconomyRootReport();
+      return;
+    }
     await loadEconomyDashboard();
     if (json.action === "verified_clean") {
       economySetMsg(json.msg || "PointsChain 驗證正常");
@@ -5393,6 +5403,22 @@ async function searchEconomyExplorer(query = null) {
   if (!value && economyExplorerActiveLayer === "audit") {
     try {
       const json = await fetchEconomyJson("/root/points/financial-invariants");
+      if (json.async) {
+        let latestPayload = null;
+        if (json.latest_snapshot_url) {
+          try {
+            const latest = await fetchEconomyJson(json.latest_snapshot_url, { allowMissingSnapshot: true });
+            latestPayload = latest?.financial_invariants ? latest : null;
+          } catch (_) {}
+        }
+        if (latestPayload) {
+          renderEconomyExplorerResult({ kind: "audit", layer: "audit", asset_type: "Reserve / Liability Audit", financial_invariants: latestPayload.financial_invariants || {} });
+        } else {
+          renderEconomyExplorerResult(null);
+        }
+        economyExplorerMsg(`Audit invariant 已排入背景任務${json.job_id ? `：${json.job_id}` : ""}`);
+        return;
+      }
       renderEconomyExplorerResult({ kind: "audit", layer: "audit", asset_type: "Reserve / Liability Audit", financial_invariants: json.financial_invariants || {} });
       economyExplorerMsg("已更新 Audit invariant");
     } catch (err) {

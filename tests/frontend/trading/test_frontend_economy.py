@@ -277,6 +277,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "function renderEconomyRecovery" in economy_js
     assert 'fetchEconomyJson("/root/points/chain/backups"' not in economy_js
     assert 'fetchEconomyJson("/root/points/chain/recovery/auto-handle"' in economy_js
+    assert "異常鏈處理方案已排入背景任務" in economy_js
     assert 'fetchEconomyJson("/root/points/chain/recovery/approve"' not in economy_js
     assert "async function autoHandlePointsChainRecovery()" in economy_js
     assert '["economy-recovery-auto-handle-btn", autoHandlePointsChainRecovery]' in economy_js
@@ -300,6 +301,7 @@ def test_root_points_page_is_chain_operations_console():
     assert 'else if (!rootMode) title.textContent = nextPage === "chain" ? "官方錢包管理" : "積分錢包";' in economy_js
     assert 'else title.textContent = nextPage === "chain" ? "積分私有鏈" : "官方錢包管理";' in economy_js
     assert 'fetchEconomyJson("/root/points/report")' in economy_js
+    assert 'path.startsWith("/api/") ? path : API + path' in economy_js
     assert 'fetchTradingJson("/root/trading/sitewide/refresh"' in trading_js
     assert 'fetchTradingJson("/root/trading/sitewide/pools", { allowMissingSnapshot: true })' in trading_js
     assert 'fetchTradingJson("/root/trading/sitewide/user-positions", { allowMissingSnapshot: true })' in trading_js
@@ -519,6 +521,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "function setEconomyExplorerLayer" in economy_js
     assert 'fetchEconomyJson(`/points/explorer/bridge/${encodeURIComponent(value)}`)' in economy_js
     assert 'fetchEconomyJson("/root/points/financial-invariants")' in economy_js
+    assert "Audit invariant 已排入背景任務" in economy_js
     assert "function renderEconomyGovernance" in economy_js
     assert "function createGovernanceAddressRiskProposal" not in economy_js
     assert "function createGovernanceWalletFreezeProposal" not in economy_js

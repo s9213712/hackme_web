@@ -248,8 +248,13 @@ def test_root_points_management_endpoints_start_async_jobs(tmp_path):
     seal = client.post("/api/root/points/chain/seal", json={"limit": 5})
     verify = client.get("/api/root/points/chain/verify")
     report = client.get("/api/root/points/report?refresh=1")
+    financial = client.get("/api/root/points/financial-invariants")
+    recovery = client.post(
+        "/api/root/points/chain/recovery/auto-handle",
+        json={"confirm": "AUTO HANDLE POINTSCHAIN"},
+    )
 
-    for response in (seal, verify, report):
+    for response in (seal, verify, report, financial, recovery):
         payload = response.get_json()
         assert response.status_code == 202
         assert payload["ok"] is True
@@ -261,6 +266,18 @@ def test_root_points_management_endpoints_start_async_jobs(tmp_path):
 
     latest = client.get(seal.get_json()["latest_snapshot_url"])
     assert latest.status_code in {200, 404}
+
+    current.update({"id": 4, "username": "manager", "role": "manager"})
+    stats = client.get("/api/admin/points/economy/stats")
+    operations = client.get("/api/admin/points/operations/snapshot")
+    for response in (stats, operations):
+        payload = response.get_json()
+        assert response.status_code == 202
+        assert payload["ok"] is True
+        assert payload["async"] is True
+        assert payload["job_id"]
+        assert payload["queue_class"] == "points_chain_admin"
+        assert payload["resource_locks"] == ["finance_db"]
 
 
 def test_wallet_transaction_submit_compact_response(tmp_path):

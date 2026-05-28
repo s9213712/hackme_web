@@ -73,9 +73,14 @@ def test_points_schema_adds_finance_hot_path_indexes(tmp_path):
         service.ensure_schema(conn)
         ledger_indexes = {row["name"] for row in conn.execute("PRAGMA index_list(points_ledger)").fetchall()}
         assert "idx_points_ledger_branch_user_id_desc" in ledger_indexes
+        assert "idx_points_ledger_branch_action_user" in ledger_indexes
 
         bridge_indexes = {row["name"] for row in conn.execute("PRAGMA index_list(points_chain_bridge_events)").fetchall()}
         assert "idx_points_chain_bridge_chain_tx" in bridge_indexes
+        transfer_indexes = {row["name"] for row in conn.execute("PRAGMA index_list(points_chain_transfer_requests)").fetchall()}
+        assert "idx_points_chain_transfer_branch_status_created" in transfer_indexes
+        service_fee_indexes = {row["name"] for row in conn.execute("PRAGMA index_list(points_service_fee_charges)").fetchall()}
+        assert "idx_points_service_fee_branch_status_item" in service_fee_indexes
 
         plan = conn.execute(
             """
@@ -90,6 +95,24 @@ def test_points_schema_adds_finance_hot_path_indexes(tmp_path):
         assert "idx_points_chain_bridge_chain_tx" in details
     finally:
         conn.close()
+
+
+def test_operations_control_snapshot_is_bounded_and_covers_initial_distribution(tmp_path):
+    service = _service(tmp_path)
+    snapshot = service.operations_control_snapshot()
+
+    assert snapshot["snapshot_type"] == "points_operations_control"
+    assert snapshot["bounded"] is True
+    assert snapshot["initial_distribution"]["eligible"]["admins"] == 1
+    assert snapshot["initial_distribution"]["eligible"]["users"] == 1
+    assert snapshot["initial_distribution"]["missing"]["admin_initial_grants"] == 1
+    assert snapshot["initial_distribution"]["missing"]["user_initial_grants"] == 1
+    assert snapshot["service_fee_connection"]["catalog"]["total_items"] >= 1
+    assert "private_chain" in snapshot
+    assert "economy_model" in snapshot
+    assert "exchange_operations" in snapshot
+    assert "emergency" in snapshot
+    assert snapshot["management_timing"]["bounded"] is True
 
 
 def test_wallet_identity_materialized_balances_update_and_verify(tmp_path, monkeypatch):

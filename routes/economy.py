@@ -2114,6 +2114,65 @@ def register_economy_routes(app, deps):
             "msg": "PointsChain 不提供 ledger backup 還原；異常處理須透過 safe mode、forensic bundle、分支與緊急治理保留事件軌跡。",
         })
 
+    def start_points_chain_recovery_auto_handle_job(actor):
+        actor_snapshot = management_actor(actor)
+
+        def worker(progress):
+            progress(stage="verify_chain", progress_percent=15, detail="verifying PointsChain before recovery guidance")
+            verification = points_service.verify_chain(include_financial=False)
+            recovery = points_service.safe_mode_status()
+            if verification.get("ok") and not recovery.get("safe_mode"):
+                progress(stage="verified_clean", progress_percent=90, detail="PointsChain is clean; no recovery action needed")
+                return {
+                    "ok": True,
+                    "action": "verified_clean",
+                    "msg": "PointsChain 驗證正常，無需恢復",
+                    "verification": verification,
+                    "recovery": recovery,
+                    "restore_disabled": True,
+                    "recovery_policy": "branch_governance_forensic_only",
+                }
+            progress(stage="governance_required", progress_percent=90, detail="recovery requires branch/governance handling")
+            return {
+                "ok": False,
+                "action": "branch_governance_required",
+                "msg": "PointsChain 異常已停止自動覆寫還原；請檢查 forensic bundle，必要時建立 recovery branch 或發起緊急治理修正交易。",
+                "verification": verification,
+                "recovery": recovery,
+                "restore_disabled": True,
+                "recovery_policy": "branch_governance_forensic_only",
+                "backups": [],
+            }
+
+        def summary(payload):
+            verification = payload.get("verification") if isinstance(payload.get("verification"), dict) else {}
+            recovery = payload.get("recovery") if isinstance(payload.get("recovery"), dict) else {}
+            return {
+                "ok": bool(payload.get("ok")),
+                "snapshot_key": "points_chain_recovery_auto_handle",
+                "action": payload.get("action"),
+                "verification_ok": bool(verification.get("ok")),
+                "safe_mode": bool(recovery.get("safe_mode")),
+                "error_count": len(verification.get("errors") or []),
+                "restore_disabled": True,
+            }
+
+        sql_started = time.perf_counter()
+        started = start_management_plane_job(
+            get_db=get_db,
+            actor=actor_snapshot,
+            job_type="points_chain_recovery_auto_handle",
+            title="PointsChain recovery auto-handle",
+            snapshot_key="points_chain_recovery_auto_handle",
+            request_payload={"restore_disabled": True},
+            worker=worker,
+            summary_builder=summary,
+            queue_class="points_chain_admin",
+            resource_locks=("finance_db",),
+        )
+        request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        return started
+
     @app.route("/api/root/points/chain/recovery/auto-handle", methods=["POST"])
     @require_csrf
     def root_points_chain_recovery_auto_handle():
@@ -2136,42 +2195,16 @@ def register_economy_routes(app, deps):
                 ua=get_ua(),
                 detail="root requested one-click PointsChain anomaly handling",
             )
-            verification = points_service.verify_chain()
-            recovery = points_service.safe_mode_status()
-            if verification.get("ok") and not recovery.get("safe_mode"):
-                audit(
-                    "POINTS_CHAIN_AUTO_HANDLE_CLEAN",
-                    get_client_ip(),
-                    user=actor["username"],
-                    success=True,
-                    ua=get_ua(),
-                    detail="PointsChain verification passed; no recovery needed",
-                )
-                return json_resp({
-                    "ok": True,
-                    "action": "verified_clean",
-                    "msg": "PointsChain 驗證正常，無需恢復",
-                    "verification": verification,
-                    "recovery": recovery,
-                })
+            started = start_points_chain_recovery_auto_handle_job(actor)
             audit(
-                "POINTS_CHAIN_AUTO_HANDLE_GOVERNANCE_REQUIRED",
+                "POINTS_CHAIN_AUTO_HANDLE_QUEUED",
                 get_client_ip(),
                 user=actor["username"],
-                success=False,
+                success=True,
                 ua=get_ua(),
-                detail=f"safe_mode={bool(recovery.get('safe_mode'))}, backup_restore_disabled=true",
+                detail=f"job_uuid={started['job'].get('job_uuid')}, backup_restore_disabled=true",
             )
-            return json_resp({
-                "ok": False,
-                "action": "branch_governance_required",
-                "msg": "PointsChain 異常已停止自動覆寫還原；請檢查 forensic bundle，必要時建立 recovery branch 或發起緊急治理修正交易。",
-                "verification": verification,
-                "recovery": recovery,
-                "restore_disabled": True,
-                "recovery_policy": "branch_governance_forensic_only",
-                "backups": [],
-            }, 409)
+            return management_job_response(started, snapshot_key="points_chain_recovery_auto_handle")
         except Exception as exc:
             audit(
                 "POINTS_CHAIN_AUTO_HANDLE_FAILED",
@@ -2182,6 +2215,22 @@ def register_economy_routes(app, deps):
                 detail=str(exc),
             )
             return service_error(exc)
+
+    @app.route("/api/root/points/chain/recovery/auto-handle/latest", methods=["GET"])
+    @require_csrf_safe
+    def root_points_chain_recovery_auto_handle_latest():
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_snapshot_response("points_chain_recovery_auto_handle")
+
+    @app.route("/api/root/points/chain/recovery/auto-handle/jobs/<path:job_uuid>", methods=["GET"])
+    @require_csrf_safe
+    def root_points_chain_recovery_auto_handle_job(job_uuid):
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_job_status_response(job_uuid)
 
     @app.route("/api/root/points/chain/backups", methods=["POST"])
     @require_csrf
@@ -2344,6 +2393,42 @@ def register_economy_routes(app, deps):
             return err
         return management_snapshot_response(snapshot_key)
 
+    def start_root_points_financial_invariants_job(actor):
+        actor_snapshot = management_actor(actor)
+
+        def worker(progress):
+            progress(stage="financial_invariants", progress_percent=15, detail="checking PointsChain financial invariants off request path")
+            result = points_service.financial_invariant_report()
+            progress(stage="snapshot", progress_percent=90, detail="recording financial invariant snapshot")
+            return {"ok": bool(result.get("ok")), "financial_invariants": result}
+
+        def summary(payload):
+            invariants = payload.get("financial_invariants") if isinstance(payload.get("financial_invariants"), dict) else {}
+            return {
+                "ok": bool(invariants.get("ok")),
+                "snapshot_key": "points_financial_invariants",
+                "status": invariants.get("status"),
+                "error_count": int(invariants.get("error_count") or 0),
+                "model": invariants.get("model"),
+            }
+
+        sql_started = time.perf_counter()
+        started = start_management_plane_job(
+            get_db=get_db,
+            actor=actor_snapshot,
+            job_type="points_financial_invariants",
+            title="Points financial invariants",
+            snapshot_key="points_financial_invariants",
+            request_payload={},
+            worker=worker,
+            summary_builder=summary,
+            reuse_recent_success_seconds=30,
+            queue_class="points_chain_admin",
+            resource_locks=("finance_db",),
+        )
+        request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        return started
+
     @app.route("/api/root/points/financial-invariants", methods=["GET"])
     @require_csrf_safe
     def root_points_financial_invariants():
@@ -2352,7 +2437,55 @@ def register_economy_routes(app, deps):
             return err
         if not points_chain_enabled():
             return points_chain_disabled_response()
-        return json_resp({"ok": True, "financial_invariants": points_service.financial_invariant_report()})
+        refresh = str(request.args.get("refresh") or request.args.get("start_job") or "").strip().lower() in {"1", "true", "yes", "on"}
+        if not refresh:
+            conn = get_db()
+            try:
+                snapshot = get_management_snapshot(conn, snapshot_key="points_financial_invariants", include_payload=True)
+            finally:
+                conn.close()
+            if snapshot.get("ok"):
+                payload = snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {}
+                return json_resp({
+                    "ok": bool(payload.get("ok", True)),
+                    "financial_invariants": payload.get("financial_invariants") or {},
+                    "snapshot": {
+                        "snapshot_key": snapshot.get("snapshot_key"),
+                        "generated_at": snapshot.get("generated_at"),
+                        "source_job_uuid": snapshot.get("source_job_uuid"),
+                        "summary": snapshot.get("summary") or {},
+                        "snapshot_backed": True,
+                    },
+                })
+        started = start_root_points_financial_invariants_job(actor)
+        return management_job_response(started, snapshot_key="points_financial_invariants")
+
+    @app.route("/api/root/points/financial-invariants/jobs", methods=["POST"])
+    @require_csrf
+    def root_points_financial_invariants_start_job():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        started = start_root_points_financial_invariants_job(actor)
+        return management_job_response(started, snapshot_key="points_financial_invariants")
+
+    @app.route("/api/root/points/financial-invariants/latest", methods=["GET"])
+    @require_csrf_safe
+    def root_points_financial_invariants_latest():
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_snapshot_response("points_financial_invariants", payload_key="financial_invariants")
+
+    @app.route("/api/root/points/financial-invariants/jobs/<path:job_uuid>", methods=["GET"])
+    @require_csrf_safe
+    def root_points_financial_invariants_job(job_uuid):
+        actor, err = root_or_403()
+        if err:
+            return err
+        return management_job_status_response(job_uuid)
 
     @app.route("/api/root/points/audit", methods=["GET"])
     @require_csrf_safe
@@ -2374,6 +2507,85 @@ def register_economy_routes(app, deps):
             "msg": "私有鏈模式不允許 rollback 既有交易；修正必須以新的鏈上補償交易追加。",
         }, 410)
 
+    def start_admin_points_economy_stats_job(actor):
+        actor_snapshot = management_actor(actor)
+
+        def worker(progress):
+            progress(stage="bounded_verify", progress_percent=15, detail="building bounded verification for economy stats")
+            verification = points_service.verify_chain_bounded_snapshot()
+            progress(stage="economy_stats", progress_percent=45, detail="building economy stats off request path")
+            stats = points_service.economy_stats(verification=verification)
+            progress(stage="snapshot", progress_percent=90, detail="recording economy stats snapshot")
+            return {"ok": True, "stats": stats, "verification": verification}
+
+        def summary(payload):
+            stats = payload.get("stats") if isinstance(payload.get("stats"), dict) else {}
+            circulation = stats.get("circulation") if isinstance(stats.get("circulation"), dict) else {}
+            verification = payload.get("verification") if isinstance(payload.get("verification"), dict) else {}
+            return {
+                "ok": bool(payload.get("ok", True)),
+                "snapshot_key": "points_economy_stats",
+                "verification_ok": bool(verification.get("ok")),
+                "bounded_verify": bool(verification.get("bounded")),
+                "wallet_count": int(circulation.get("wallet_count") or 0),
+                "outstanding_points": int(circulation.get("outstanding_points") or 0),
+                "unsealed_entries": int(circulation.get("unsealed_entries") or 0),
+            }
+
+        sql_started = time.perf_counter()
+        started = start_management_plane_job(
+            get_db=get_db,
+            actor=actor_snapshot,
+            job_type="points_economy_stats",
+            title="Points economy stats",
+            snapshot_key="points_economy_stats",
+            request_payload={},
+            worker=worker,
+            summary_builder=summary,
+            reuse_recent_success_seconds=15,
+            queue_class="points_chain_admin",
+            resource_locks=("finance_db",),
+        )
+        request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        return started
+
+    def start_admin_points_operations_snapshot_job(actor):
+        actor_snapshot = management_actor(actor)
+
+        def worker(progress):
+            progress(stage="operations_snapshot", progress_percent=30, detail="building bounded points operations snapshot")
+            snapshot = points_service.operations_control_snapshot()
+            progress(stage="snapshot", progress_percent=90, detail="recording operations snapshot")
+            return {"ok": bool(snapshot.get("ok", True)), "operations": snapshot}
+
+        def summary(payload):
+            operations = payload.get("operations") if isinstance(payload.get("operations"), dict) else {}
+            return {
+                "ok": bool(operations.get("ok", payload.get("ok", True))),
+                "snapshot_key": "points_operations_control",
+                "warning_count": int(operations.get("warning_count") or 0),
+                "chain_branch": operations.get("chain_branch"),
+                "unsealed_entries": ((operations.get("private_chain") or {}).get("unsealed_entries") if isinstance(operations.get("private_chain"), dict) else 0),
+                "pending_transfers": ((operations.get("exchange_operations") or {}).get("pending_transfers") if isinstance(operations.get("exchange_operations"), dict) else 0),
+            }
+
+        sql_started = time.perf_counter()
+        started = start_management_plane_job(
+            get_db=get_db,
+            actor=actor_snapshot,
+            job_type="points_operations_control",
+            title="Points operations control snapshot",
+            snapshot_key="points_operations_control",
+            request_payload={},
+            worker=worker,
+            summary_builder=summary,
+            reuse_recent_success_seconds=15,
+            queue_class="points_chain_admin",
+            resource_locks=("finance_db",),
+        )
+        request.environ["hackme.sql_ms"] = round((time.perf_counter() - sql_started) * 1000, 3)
+        return started
+
     @app.route("/api/admin/points/economy/stats", methods=["GET"])
     @require_csrf_safe
     def admin_points_economy_stats():
@@ -2382,4 +2594,110 @@ def register_economy_routes(app, deps):
             return err
         if not points_chain_enabled():
             return points_chain_disabled_response()
-        return json_resp({"ok": True, "stats": points_service.economy_stats()})
+        refresh = str(request.args.get("refresh") or request.args.get("start_job") or "").strip().lower() in {"1", "true", "yes", "on"}
+        if not refresh:
+            conn = get_db()
+            try:
+                snapshot = get_management_snapshot(conn, snapshot_key="points_economy_stats", include_payload=True)
+            finally:
+                conn.close()
+            if snapshot.get("ok"):
+                payload = snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {}
+                return json_resp({
+                    "ok": bool(payload.get("ok", True)),
+                    "stats": payload.get("stats") or {},
+                    "snapshot": {
+                        "snapshot_key": snapshot.get("snapshot_key"),
+                        "generated_at": snapshot.get("generated_at"),
+                        "source_job_uuid": snapshot.get("source_job_uuid"),
+                        "summary": snapshot.get("summary") or {},
+                        "snapshot_backed": True,
+                    },
+                })
+        started = start_admin_points_economy_stats_job(actor)
+        return management_job_response(started, snapshot_key="points_economy_stats")
+
+    @app.route("/api/admin/points/economy/stats/jobs", methods=["POST"])
+    @require_csrf
+    def admin_points_economy_stats_start_job():
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        started = start_admin_points_economy_stats_job(actor)
+        return management_job_response(started, snapshot_key="points_economy_stats")
+
+    @app.route("/api/admin/points/economy/stats/latest", methods=["GET"])
+    @require_csrf_safe
+    def admin_points_economy_stats_latest():
+        actor, err = manager_or_403()
+        if err:
+            return err
+        return management_snapshot_response("points_economy_stats", payload_key="stats")
+
+    @app.route("/api/admin/points/economy/stats/jobs/<path:job_uuid>", methods=["GET"])
+    @require_csrf_safe
+    def admin_points_economy_stats_job(job_uuid):
+        actor, err = manager_or_403()
+        if err:
+            return err
+        return management_job_status_response(job_uuid)
+
+    @app.route("/api/admin/points/operations/snapshot", methods=["GET"])
+    @require_csrf_safe
+    def admin_points_operations_snapshot():
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        refresh = str(request.args.get("refresh") or request.args.get("start_job") or "").strip().lower() in {"1", "true", "yes", "on"}
+        if not refresh:
+            conn = get_db()
+            try:
+                snapshot = get_management_snapshot(conn, snapshot_key="points_operations_control", include_payload=True)
+            finally:
+                conn.close()
+            if snapshot.get("ok"):
+                payload = snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {}
+                return json_resp({
+                    "ok": bool(payload.get("ok", True)),
+                    "operations": payload.get("operations") or {},
+                    "snapshot": {
+                        "snapshot_key": snapshot.get("snapshot_key"),
+                        "generated_at": snapshot.get("generated_at"),
+                        "source_job_uuid": snapshot.get("source_job_uuid"),
+                        "summary": snapshot.get("summary") or {},
+                        "snapshot_backed": True,
+                    },
+                })
+        started = start_admin_points_operations_snapshot_job(actor)
+        return management_job_response(started, snapshot_key="points_operations_control")
+
+    @app.route("/api/admin/points/operations/snapshot/jobs", methods=["POST"])
+    @require_csrf
+    def admin_points_operations_snapshot_start_job():
+        actor, err = manager_or_403()
+        if err:
+            return err
+        if not points_chain_enabled():
+            return points_chain_disabled_response()
+        started = start_admin_points_operations_snapshot_job(actor)
+        return management_job_response(started, snapshot_key="points_operations_control")
+
+    @app.route("/api/admin/points/operations/snapshot/latest", methods=["GET"])
+    @require_csrf_safe
+    def admin_points_operations_snapshot_latest():
+        actor, err = manager_or_403()
+        if err:
+            return err
+        return management_snapshot_response("points_operations_control", payload_key="operations")
+
+    @app.route("/api/admin/points/operations/snapshot/jobs/<path:job_uuid>", methods=["GET"])
+    @require_csrf_safe
+    def admin_points_operations_snapshot_job(job_uuid):
+        actor, err = manager_or_403()
+        if err:
+            return err
+        return management_job_status_response(job_uuid)

@@ -14285,6 +14285,484 @@ class PointsLedgerService:
         finally:
             conn.close()
 
+    def operations_control_snapshot(self, *, recent_limit=50):
+        """Bounded management-plane snapshot for economy and exchange ops.
+
+        This deliberately avoids full ledger replay. It gives operators the
+        current control-plane posture for initial grants, service-fee linkage,
+        chain queues, emergency governance, and exchange fund watermarks.
+        """
+        started = _monotonic_time.perf_counter()
+        recent_limit = max(10, min(200, int(recent_limit or 50)))
+        phases = []
+        phase_started = started
+
+        def mark_phase(name):
+            nonlocal phase_started
+            now = _monotonic_time.perf_counter()
+            phases.append({"phase": name, "elapsed_ms": round((now - phase_started) * 1000, 3)})
+            phase_started = now
+
+        def int_value(value):
+            try:
+                return int(value or 0)
+            except Exception:
+                return 0
+
+        def first_int(row):
+            if not row:
+                return 0
+            try:
+                return int_value(row[0])
+            except Exception:
+                keys = row.keys()
+                return int_value(row[keys[0]]) if keys else 0
+
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            ensure_economy_layer_schema(conn)
+            try:
+                self._ensure_transaction_dispute_schema(conn)
+                dispute_schema_error = ""
+            except Exception as exc:
+                dispute_schema_error = str(exc)[:240]
+            branch = self._canonical_branch_uuid(conn)
+            mark_phase("schema")
+
+            user_cols = table_columns(conn, "users")
+            has_users = {"id", "username", "role"}.issubset(user_cols)
+            status_filter = "AND COALESCE(status, 'active')='active'" if "status" in user_cols else ""
+            if has_users:
+                eligible_admin_sql = f"""
+                    FROM users u
+                    WHERE COALESCE(u.username, '')<>'root'
+                      AND u.role IN ('manager', 'super_admin')
+                      {status_filter}
+                """
+                eligible_user_sql = f"""
+                    FROM users u
+                    WHERE COALESCE(u.username, '')<>'root'
+                      AND u.role NOT IN ('manager', 'super_admin')
+                      {status_filter}
+                """
+                admin_eligible = first_int(conn.execute(f"SELECT COUNT(*) {eligible_admin_sql}").fetchone())
+                user_eligible = first_int(conn.execute(f"SELECT COUNT(*) {eligible_user_sql}").fetchone())
+                admin_missing = first_int(conn.execute(
+                    f"""
+                    SELECT COUNT(*) {eligible_admin_sql}
+                      AND NOT EXISTS (
+                        SELECT 1 FROM points_ledger l
+                        WHERE l.chain_branch=? AND l.user_id=u.id AND l.action_type='admin_initial_grant'
+                      )
+                    """,
+                    (branch,),
+                ).fetchone())
+                user_missing = first_int(conn.execute(
+                    f"""
+                    SELECT COUNT(*) {eligible_user_sql}
+                      AND NOT EXISTS (
+                        SELECT 1 FROM points_ledger l
+                        WHERE l.chain_branch=? AND l.user_id=u.id AND l.action_type='user_initial_grant'
+                      )
+                    """,
+                    (branch,),
+                ).fetchone())
+                signup_missing = first_int(conn.execute(
+                    f"""
+                    SELECT COUNT(*) {eligible_user_sql}
+                      AND NOT EXISTS (
+                        SELECT 1 FROM points_ledger l
+                        WHERE l.chain_branch=? AND l.user_id=u.id AND l.action_type='new_user_signup_bonus'
+                      )
+                    """,
+                    (branch,),
+                ).fetchone())
+            else:
+                admin_eligible = user_eligible = admin_missing = user_missing = signup_missing = 0
+            grant_rows = conn.execute(
+                """
+                SELECT action_type,
+                       COUNT(*) AS ledger_entries,
+                       COUNT(DISTINCT user_id) AS recipients,
+                       COALESCE(SUM(amount), 0) AS amount_points,
+                       MAX(created_at) AS latest_at
+                FROM points_ledger
+                WHERE chain_branch=?
+                  AND action_type IN (
+                    'admin_initial_grant',
+                    'user_initial_grant',
+                    'new_user_signup_bonus',
+                    'birthday_gift',
+                    'admin_weekly_salary'
+                  )
+                GROUP BY action_type
+                """,
+                (branch,),
+            ).fetchall()
+            grant_summary = {
+                row["action_type"]: {
+                    "ledger_entries": int_value(row["ledger_entries"]),
+                    "recipients": int_value(row["recipients"]),
+                    "amount_points": int_value(row["amount_points"]),
+                    "latest_at": row["latest_at"],
+                }
+                for row in grant_rows
+            }
+            mark_phase("initial_distribution")
+
+            service_fee_rows = conn.execute(
+                """
+                SELECT status,
+                       COUNT(*) AS charge_count,
+                       COALESCE(SUM(amount_points), 0) AS amount_points,
+                       MAX(created_at) AS latest_at
+                FROM points_service_fee_charges
+                WHERE chain_branch=?
+                GROUP BY status
+                """,
+                (branch,),
+            ).fetchall()
+            service_fee_by_status = {
+                row["status"]: {
+                    "charge_count": int_value(row["charge_count"]),
+                    "amount_points": int_value(row["amount_points"]),
+                    "latest_at": row["latest_at"],
+                }
+                for row in service_fee_rows
+            }
+            catalog_row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    COALESCE(SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END), 0) AS enabled_count,
+                    COALESCE(SUM(CASE WHEN enabled=0 THEN 1 ELSE 0 END), 0) AS disabled_count
+                FROM economy_price_catalog
+                """
+            ).fetchone()
+            service_spend_row = conn.execute(
+                """
+                SELECT COUNT(*) AS ledger_entries,
+                       COALESCE(SUM(amount), 0) AS amount_points,
+                       MAX(created_at) AS latest_at
+                FROM points_ledger
+                WHERE chain_branch=?
+                  AND (
+                    action_type LIKE 'spend:%'
+                    OR action_type IN ('service_fee_debit', 'service_fee_settlement')
+                    OR reference_type='price_catalog'
+                  )
+                """,
+                (branch,),
+            ).fetchone()
+            mark_phase("service_fee_connection")
+
+            chain_counts = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS ledger_entries,
+                    COALESCE(SUM(CASE WHEN status='confirmed' THEN 1 ELSE 0 END), 0) AS confirmed_entries,
+                    COALESCE(SUM(CASE WHEN status='confirmed' AND chain_block_id IS NULL THEN 1 ELSE 0 END), 0) AS unsealed_entries,
+                    COALESCE(SUM(CASE WHEN status!='confirmed' THEN 1 ELSE 0 END), 0) AS nonconfirmed_entries,
+                    MAX(id) AS latest_ledger_id,
+                    MAX(created_at) AS latest_ledger_at
+                FROM points_ledger
+                WHERE chain_branch=?
+                """,
+                (branch,),
+            ).fetchone()
+            transfer_rows = conn.execute(
+                """
+                SELECT status,
+                       COUNT(*) AS request_count,
+                       COALESCE(SUM(amount_points), 0) AS amount_points,
+                       MAX(created_at) AS latest_at
+                FROM points_chain_transfer_requests
+                WHERE chain_branch=?
+                GROUP BY status
+                """,
+                (branch,),
+            ).fetchall()
+            transfer_by_status = {
+                row["status"]: {
+                    "request_count": int_value(row["request_count"]),
+                    "amount_points": int_value(row["amount_points"]),
+                    "latest_at": row["latest_at"],
+                }
+                for row in transfer_rows
+            }
+            blocks = conn.execute(
+                """
+                SELECT COUNT(*) AS block_count,
+                       MAX(block_number) AS latest_block_number,
+                       MAX(sealed_at) AS latest_sealed_at
+                FROM points_chain_blocks
+                """
+            ).fetchone()
+            recent_unsealed = [
+                {
+                    "ledger_uuid": row["ledger_uuid"],
+                    "transaction_hash": row["transaction_hash"] if "transaction_hash" in row.keys() else row["ledger_hash"],
+                    "action_type": row["action_type"],
+                    "amount": int_value(row["amount"]),
+                    "created_at": row["created_at"],
+                }
+                for row in conn.execute(
+                    """
+                    SELECT *
+                    FROM points_ledger
+                    WHERE chain_branch=? AND status='confirmed' AND chain_block_id IS NULL
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (branch, min(recent_limit, 50)),
+                ).fetchall()
+            ]
+            mark_phase("private_chain")
+
+            policy_row = conn.execute("SELECT * FROM points_economy_policy WHERE id=1").fetchone()
+            policy_payload = _json_loads(policy_row["policy_json"], {}) if policy_row else {}
+            economy_snapshot = conn.execute(
+                "SELECT * FROM points_economy_snapshots ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            derived_rows = conn.execute(
+                """
+                SELECT fund_key, address, balance, replay_height, replay_event_hash, updated_at
+                FROM points_economy_derived_balances
+                ORDER BY fund_key
+                """
+            ).fetchall()
+            fund_balances = {
+                row["fund_key"]: {
+                    "address": row["address"],
+                    "balance_points": int_value(row["balance"]),
+                    "replay_height": int_value(row["replay_height"]),
+                    "updated_at": row["updated_at"],
+                }
+                for row in derived_rows
+            }
+            incident_rows = conn.execute(
+                """
+                SELECT status, severity, COUNT(*) AS incident_count
+                FROM points_economy_incidents
+                GROUP BY status, severity
+                """
+            ).fetchall()
+            incidents = [
+                {
+                    "status": row["status"],
+                    "severity": row["severity"],
+                    "incident_count": int_value(row["incident_count"]),
+                }
+                for row in incident_rows
+            ]
+            mark_phase("economy_model")
+
+            governance_rows = conn.execute(
+                """
+                SELECT lifecycle_status, proposal_severity, COUNT(*) AS proposal_count
+                FROM points_chain_governance_proposals
+                GROUP BY lifecycle_status, proposal_severity
+                """
+            ).fetchall()
+            governance_by_status = {}
+            for row in governance_rows:
+                lifecycle = str(row["lifecycle_status"] or "unknown")
+                severity = str(row["proposal_severity"] or "NORMAL")
+                governance_by_status.setdefault(lifecycle, {})
+                governance_by_status[lifecycle][severity] = int_value(row["proposal_count"])
+            emergency_proposals = first_int(conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM points_chain_governance_proposals
+                WHERE proposal_severity IN ('HIGH', 'CRITICAL')
+                   OR governance_domain='EMERGENCY_SECURITY'
+                   OR action_type IN ('EMERGENCY_LOCKDOWN', 'ROLLBACK_BRANCH')
+                """
+            ).fetchone())
+            dispute_counts = {}
+            if not dispute_schema_error:
+                dispute_rows = conn.execute(
+                    """
+                    SELECT status, COUNT(*) AS dispute_count
+                    FROM points_chain_transaction_disputes
+                    GROUP BY status
+                    """
+                ).fetchall()
+                dispute_counts = {row["status"]: int_value(row["dispute_count"]) for row in dispute_rows}
+            active_freezes = first_int(conn.execute(
+                "SELECT COUNT(*) FROM points_chain_address_freezes WHERE status='active'"
+            ).fetchone())
+            active_provisional_freezes = first_int(conn.execute(
+                "SELECT COUNT(*) FROM points_chain_address_provisional_freezes WHERE status='active'"
+            ).fetchone())
+            safe_mode = self._safe_mode_status(conn)
+            mark_phase("emergency")
+
+            wallet_identity_counts = {}
+            if table_columns(conn, "points_wallet_identities"):
+                wallet_identity_rows = conn.execute(
+                    """
+                    SELECT wallet_type, status, COUNT(*) AS wallet_count
+                    FROM points_wallet_identities
+                    GROUP BY wallet_type, status
+                    """
+                ).fetchall()
+                for row in wallet_identity_rows:
+                    wallet_type = str(row["wallet_type"] or "unknown")
+                    status = str(row["status"] or "unknown")
+                    wallet_identity_counts.setdefault(wallet_type, {})
+                    wallet_identity_counts[wallet_type][status] = int_value(row["wallet_count"])
+
+            warnings = []
+            if admin_missing or user_missing:
+                warnings.append({
+                    "code": "initial_grants_pending",
+                    "severity": "warning",
+                    "admin_missing": admin_missing,
+                    "user_missing": user_missing,
+                })
+            if signup_missing:
+                warnings.append({
+                    "code": "signup_bonus_pending",
+                    "severity": "info",
+                    "missing": signup_missing,
+                })
+            if safe_mode.get("safe_mode"):
+                warnings.append({
+                    "code": "points_chain_safe_mode",
+                    "severity": "critical",
+                    "reason": safe_mode.get("reason") or "",
+                })
+            pending_transfers = int_value((transfer_by_status.get("pending") or {}).get("request_count"))
+            if pending_transfers > 1000:
+                warnings.append({
+                    "code": "transfer_queue_backlog",
+                    "severity": "warning",
+                    "pending_requests": pending_transfers,
+                })
+            promo_balance = int_value((fund_balances.get("promo_fund") or {}).get("balance_points"))
+            exchange_balance = int_value((fund_balances.get("exchange_fund") or {}).get("balance_points"))
+            promo_low = int_value(policy_payload.get("promo_low_watermark"))
+            promo_critical = int_value(policy_payload.get("promo_critical_watermark"))
+            exchange_low = int_value(policy_payload.get("exchange_low_watermark"))
+            exchange_critical = int_value(policy_payload.get("exchange_critical_watermark"))
+            promo_known = "promo_fund" in fund_balances
+            exchange_known = "exchange_fund" in fund_balances
+            if promo_known and promo_critical and promo_balance <= promo_critical:
+                warnings.append({"code": "promo_fund_critical", "severity": "critical", "balance_points": promo_balance})
+            elif promo_known and promo_low and promo_balance <= promo_low:
+                warnings.append({"code": "promo_fund_low", "severity": "warning", "balance_points": promo_balance})
+            if exchange_known and exchange_critical and exchange_balance <= exchange_critical:
+                warnings.append({"code": "exchange_fund_critical", "severity": "critical", "balance_points": exchange_balance})
+            elif exchange_known and exchange_low and exchange_balance <= exchange_low:
+                warnings.append({"code": "exchange_fund_low", "severity": "warning", "balance_points": exchange_balance})
+
+            snapshot = {
+                "ok": not any(item.get("severity") == "critical" for item in warnings),
+                "snapshot_type": "points_operations_control",
+                "generated_at": utc_now(),
+                "bounded": True,
+                "recent_limit": recent_limit,
+                "chain_branch": branch,
+                "initial_distribution": {
+                    "policy": {
+                        "admin_initial_points": ADMIN_INITIAL_POINTS,
+                        "user_initial_points": USER_INITIAL_POINTS,
+                        "signup_bonus_points": SIGNUP_BONUS_POINTS,
+                    },
+                    "eligible": {
+                        "admins": admin_eligible,
+                        "users": user_eligible,
+                    },
+                    "missing": {
+                        "admin_initial_grants": admin_missing,
+                        "user_initial_grants": user_missing,
+                        "signup_bonus": signup_missing,
+                    },
+                    "grants": grant_summary,
+                },
+                "service_fee_connection": {
+                    "catalog": {
+                        "total_items": int_value(catalog_row["total"] if catalog_row else 0),
+                        "enabled_items": int_value(catalog_row["enabled_count"] if catalog_row else 0),
+                        "disabled_items": int_value(catalog_row["disabled_count"] if catalog_row else 0),
+                    },
+                    "charges_by_status": service_fee_by_status,
+                    "ledger_spend": {
+                        "ledger_entries": int_value(service_spend_row["ledger_entries"] if service_spend_row else 0),
+                        "amount_points": int_value(service_spend_row["amount_points"] if service_spend_row else 0),
+                        "latest_at": service_spend_row["latest_at"] if service_spend_row else None,
+                    },
+                },
+                "private_chain": {
+                    "ledger_entries": int_value(chain_counts["ledger_entries"] if chain_counts else 0),
+                    "confirmed_entries": int_value(chain_counts["confirmed_entries"] if chain_counts else 0),
+                    "unsealed_entries": int_value(chain_counts["unsealed_entries"] if chain_counts else 0),
+                    "nonconfirmed_entries": int_value(chain_counts["nonconfirmed_entries"] if chain_counts else 0),
+                    "latest_ledger_id": int_value(chain_counts["latest_ledger_id"] if chain_counts else 0),
+                    "latest_ledger_at": chain_counts["latest_ledger_at"] if chain_counts else None,
+                    "blocks": {
+                        "block_count": int_value(blocks["block_count"] if blocks else 0),
+                        "latest_block_number": int_value(blocks["latest_block_number"] if blocks else 0),
+                        "latest_sealed_at": blocks["latest_sealed_at"] if blocks else None,
+                    },
+                    "transfer_requests_by_status": transfer_by_status,
+                    "recent_unsealed": recent_unsealed,
+                    "wallet_identities_by_type_status": wallet_identity_counts,
+                },
+                "economy_model": {
+                    "policy": {
+                        "policy_version": policy_row["policy_version"] if policy_row else "uninitialized",
+                        "max_supply": int_value(policy_row["max_supply"] if policy_row else policy_payload.get("max_supply")),
+                        "reserved_locked": int_value(policy_row["reserved_locked"] if policy_row else policy_payload.get("reserved_locked")),
+                        "initial_mint": int_value(policy_row["initial_mint"] if policy_row else policy_payload.get("initial_mint")),
+                        "promo_low_watermark": promo_low,
+                        "promo_critical_watermark": promo_critical,
+                        "exchange_low_watermark": exchange_low,
+                        "exchange_critical_watermark": exchange_critical,
+                    },
+                    "latest_snapshot": dict(economy_snapshot) if economy_snapshot else {},
+                    "fund_balances": fund_balances,
+                    "incidents": incidents,
+                },
+                "exchange_operations": {
+                    "exchange_fund": fund_balances.get("exchange_fund") or {},
+                    "fund_watermark": {
+                        "balance_points": exchange_balance,
+                        "low_watermark": exchange_low,
+                        "critical_watermark": exchange_critical,
+                        "status": (
+                            "critical" if exchange_known and exchange_critical and exchange_balance <= exchange_critical
+                            else "low" if exchange_known and exchange_low and exchange_balance <= exchange_low
+                            else "ok"
+                        ),
+                    },
+                    "pending_transfers": pending_transfers,
+                    "service_fee_settled_points": int_value((service_fee_by_status.get("settled") or {}).get("amount_points")),
+                },
+                "emergency": {
+                    "safe_mode": safe_mode,
+                    "governance_by_lifecycle_and_severity": governance_by_status,
+                    "high_or_emergency_proposals": emergency_proposals,
+                    "transaction_disputes_by_status": dispute_counts,
+                    "dispute_schema_error": dispute_schema_error,
+                    "active_address_freezes": active_freezes,
+                    "active_provisional_freezes": active_provisional_freezes,
+                },
+                "warnings": warnings,
+                "warning_count": len(warnings),
+            }
+            snapshot["management_timing"] = {
+                "total_ms": round((_monotonic_time.perf_counter() - started) * 1000, 3),
+                "phases": phases,
+                "bounded": True,
+            }
+            conn.commit()
+            return snapshot
+        finally:
+            conn.close()
+
     def verify_chain(self, *, include_financial=True):
         started = _monotonic_time.perf_counter()
         conn = self.get_db()

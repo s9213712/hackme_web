@@ -773,6 +773,12 @@ def ensure_points_economy_schema(conn):
     )
     conn.execute(
         """
+        CREATE INDEX IF NOT EXISTS idx_points_service_fee_branch_status_item
+        ON points_service_fee_charges(chain_branch, status, item_key, created_at)
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS points_chain_nodes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             node_id TEXT NOT NULL UNIQUE,
@@ -1147,6 +1153,7 @@ def ensure_points_economy_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_branch_status_block ON points_ledger(chain_branch, status, chain_block_id, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_branch_created ON points_ledger(chain_branch, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_action_ref ON points_ledger(action_type, reference_type, reference_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_branch_action_user ON points_ledger(chain_branch, action_type, user_id, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_block ON points_ledger(chain_block_id, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_pending_status ON points_pending_rewards(status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_blocks_number ON points_chain_blocks(block_number)")
@@ -1154,6 +1161,7 @@ def ensure_points_economy_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_transfer_wallets ON points_chain_transfer_requests(source_wallet_address, destination_wallet_address, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_transfer_branch_wallets ON points_chain_transfer_requests(chain_branch, source_wallet_address, destination_wallet_address, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_transfer_pending_source ON points_chain_transfer_requests(chain_branch, status, source_wallet_address, request_uuid)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_transfer_branch_status_created ON points_chain_transfer_requests(chain_branch, status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_backup_created ON points_chain_backup_catalog(created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_governance_status ON points_chain_governance_proposals(status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_governance_domain ON points_chain_governance_proposals(governance_domain, lifecycle_status, created_at)")
