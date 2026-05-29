@@ -3144,6 +3144,7 @@ def test_comfyui_inpaint_workflow_sets_grow_mask_by():
 
     assert workflow["10"]["class_type"] == "VAEEncodeForInpaint"
     assert workflow["10"]["inputs"]["grow_mask_by"] == 6
+    assert workflow["11"]["inputs"]["channel"] == "red"
 
 
 def test_comfyui_outpaint_workflow_sets_grow_mask_by():
@@ -3413,13 +3414,10 @@ def test_comfyui_gguf_profiles_hide_failed_sd35_and_keep_sothmik_q8(tmp_path):
     profiles = {profile["id"]: profile for profile in body["gguf_profiles"]}
     assert SOTHMIK_WAI_GGUF_PROFILE_ID in profiles
     assert CALCUIS_ILLUSTRIOUS_GGUF_PROFILE_ID in profiles
-    assert BTASKEL_ILLUSTRIOUS_GGUF_PROFILE_ID in profiles
     assert DIVING_ILLUSTRIOUS_GGUF_PROFILE_ID in profiles
+    assert BTASKEL_ILLUSTRIOUS_GGUF_PROFILE_ID not in profiles
     assert SD35_GGUF_PROFILE_ID not in profiles
     assert profiles[CALCUIS_ILLUSTRIOUS_GGUF_PROFILE_ID]["variants"][0]["gguf_file"] == CALCUIS_ILLUSTRIOUS_GGUF_FILE
-    assert profiles[BTASKEL_ILLUSTRIOUS_GGUF_PROFILE_ID]["variants"][0]["gguf_file"] == BTASKEL_ILLUSTRIOUS_GGUF_FILE
-    assert profiles[BTASKEL_ILLUSTRIOUS_GGUF_PROFILE_ID]["enabled"] is False
-    assert profiles[BTASKEL_ILLUSTRIOUS_GGUF_PROFILE_ID]["variants"][0]["enabled"] is False
     assert profiles[DIVING_ILLUSTRIOUS_GGUF_PROFILE_ID]["variants"][0]["gguf_file"] == DIVING_ILLUSTRIOUS_GGUF_FILE
     assert body["installed_gguf_models"][0]["profile_id"] == SD35_GGUF_PROFILE_ID
     assert body["installed_gguf_models"][0]["variant_id"] == SD35_GGUF_VARIANT_ID

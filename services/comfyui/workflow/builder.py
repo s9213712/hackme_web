@@ -441,7 +441,10 @@ def build_inpaint_workflow(params, *, error_cls):
     }
     workflow["11"] = {
         "class_type": "LoadImageMask",
-        "inputs": {"image": mask_image["filename"], "channel": "alpha"},
+        # ComfyUI's alpha mask output is inverted (1 - alpha).  The frontend
+        # mask editor emits white-on-black masks where white means "repaint",
+        # so use an RGB channel to preserve that user-facing semantics.
+        "inputs": {"image": mask_image["filename"], "channel": "red"},
     }
     workflow["10"] = {
         "class_type": "VAEEncodeForInpaint",

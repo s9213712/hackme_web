@@ -1,0 +1,1732 @@
+#!/usr/bin/env python3
+"""Standalone ComfyUI-only img2img semantic matrix probe.
+
+The script talks directly to a ComfyUI HTTP API.  It does not import
+hackme_web, so it can be copied to a remote ComfyUI machine for live I2I
+reprobes.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import http.client
+import json
+import os
+import re
+import ssl
+import sys
+import time
+import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from pathlib import Path
+
+
+DEFAULT_MODEL = "SDXL\\illustrious(IL)\\WAI系列\\waiIllustriousSDXL_v160.safetensors"
+MODEL_FALLBACK_KEYWORDS = (
+    "waiillustrioussdxl_v160",
+    "jankutrainedchenkinnoobai_v777",
+    "animagine-xl-4.0",
+    "illustrious",
+    "sdxl",
+)
+DEFAULT_SOURCE_PROMPT = (
+    "anime style, adult woman, solo, cat girl, bikini, laying on the beach, "
+    "red beach ball near her right side, blue beach umbrella in the background, "
+    "ocean, sunny sky, clean lineart, detailed"
+)
+LEGACY_2GIRLS_PROMPT = (
+    "adult women, fully clothed, by ogipote, 2girls, girls love, kiss, "
+    "saliva, maid uniform, cat ears, cat tail"
+)
+DEFAULT_NEGATIVE_PROMPT = (
+    "child, minor, underage, loli, teen, explicit, nude, naked, monochrome, "
+    "text, watermark, low quality, blurry, bad hand, bad fingers, bad legs, "
+    "bad anatomy, deformed"
+)
+SENSITIVE_RE = re.compile(r"hf_[A-Za-z0-9]{8,}|(Bearer\s+)[A-Za-z0-9._-]+", re.IGNORECASE)
+
+
+CONTROLNET_TYPES = {
+    "canny": {
+        "preprocessors": ("CannyEdgePreprocessor",),
+        "keywords": ("canny",),
+    },
+    "openpose": {
+        "preprocessors": ("OpenposePreprocessor", "DWPreprocessor"),
+        "keywords": ("openpose", "pose"),
+    },
+    "depth": {
+        "preprocessors": ("DepthAnythingPreprocessor", "MiDaS-DepthMapPreprocessor"),
+        "keywords": ("depth",),
+    },
+    "lineart": {
+        "preprocessors": ("LineArtPreprocessor", "LineartStandardPreprocessor"),
+        "keywords": ("lineart", "line-art"),
+    },
+}
+
+
+class ProbeError(RuntimeError):
+    pass
+
+
+def now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def sanitize_text(value) -> str:
+    text = str(value or "")
+    return SENSITIVE_RE.sub(lambda match: (match.group(1) or "") + "***" if match.group(1) else "hf_***", text)
+
+
+def _ask_text(label: str, current):
+    shown = str(current or "")
+    value = input(f"{label} [{shown}]: ").strip()
+    return value or current
+
+
+def _ask_choice(label: str, current: str, choices: tuple[str, ...]) -> str:
+    allowed = ", ".join(choices)
+    while True:
+        value = input(f"{label} ({allowed}) [{current}]: ").strip()
+        if not value:
+            return current
+        if value in choices:
+            return value
+        print(f"Enter one of: {allowed}", file=sys.stderr)
+
+
+def _ask_int(label: str, current: int) -> int:
+    while True:
+        value = input(f"{label} [{current}]: ").strip()
+        if not value:
+            return int(current)
+        try:
+            return int(value)
+        except ValueError:
+            print("Enter an integer.", file=sys.stderr)
+
+
+def _ask_float(label: str, current: float) -> float:
+    while True:
+        value = input(f"{label} [{current}]: ").strip()
+        if not value:
+            return float(current)
+        try:
+            return float(value)
+        except ValueError:
+            print("Enter a number.", file=sys.stderr)
+
+
+def _case_options() -> str:
+    return (
+        "blank for all, img2img_redraw_sunset, img2img_style_watercolor, "
+        "img2img_feature_preserve, inpaint_remove_repair, inpaint_replace_edit, "
+        "outpaint_expand_beach, controlnet_copy_composition_canny/openpose/depth/lineart, "
+        "upscale_redraw_imagescale, two_image_blend_mix, ipadapter_style_reference, "
+        "ipadapter_inpaint_reference"
+    )
+
+
+def apply_interactive_prompts(args):
+    if not getattr(args, "interactive", False):
+        return args
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise ProbeError("--interactive requires a TTY; omit it for non-interactive CLI runs.")
+    print("Interactive ComfyUI I2I matrix probe. Press Enter to keep the shown value.")
+    args.comfyui_url = _ask_text("ComfyUI URL", args.comfyui_url)
+    args.model = _ask_text("Checkpoint model name", args.model)
+    args.prompt_suite = _ask_choice("Prompt suite", args.prompt_suite, ("beach_catgirl", "legacy_2girls"))
+    args.source_image_path = _ask_text("Source image path (blank = generate source)", args.source_image_path)
+    print(f"Only-case options: {_case_options()}")
+    args.only_case = _ask_text("Only case", args.only_case)
+    args.case_prompt = _ask_text("Case prompt override", args.case_prompt)
+    args.case_denoise = _ask_float("Case denoise override (0 = case default)", args.case_denoise)
+    args.prompt = _ask_text("Base positive prompt", args.prompt)
+    args.source_prompt = _ask_text("Source positive prompt", args.source_prompt)
+    args.negative_prompt = _ask_text("Negative prompt", args.negative_prompt)
+    args.width = _ask_int("Width", args.width)
+    args.height = _ask_int("Height", args.height)
+    args.steps = _ask_int("Steps", args.steps)
+    args.cfg = _ask_float("CFG", args.cfg)
+    args.seed = _ask_int("Seed", args.seed)
+    args.controlnet_type = _ask_text("ControlNet type", args.controlnet_type)
+    args.controlnet_model = _ask_text("ControlNet model override", args.controlnet_model)
+    args.control_strength = _ask_float("ControlNet strength", args.control_strength)
+    args.inpaint_method = _ask_choice("Inpaint method", args.inpaint_method, ("auto", "conditioning", "vae_encode"))
+    args.mask_shape = _ask_choice("Mask shape", args.mask_shape, ("default", "window", "background_wall", "small_wall", "kimono_clothes"))
+    args.outpaint = _ask_int("Outpaint default pixels", args.outpaint)
+    args.blend_image_path = _ask_text("Blend image path", args.blend_image_path)
+    args.style_image_path = _ask_text("Style/reference image path", args.style_image_path)
+    args.out_dir = _ask_text("Output directory", args.out_dir)
+    return args
+
+
+def safe_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip()).strip("_") or "case"
+
+
+def windows_equivalent_path(value: str) -> str:
+    raw = str(value or "").strip()
+    if os.name == "nt" and raw.startswith("/mnt/") and len(raw) >= 6 and raw[5].isalpha():
+        drive = raw[5].upper()
+        rest = raw[6:].lstrip("/").replace("/", "\\")
+        return f"{drive}:\\{rest}" if rest else f"{drive}:\\"
+    return raw
+
+
+def normalize_runtime_paths(args):
+    if os.name != "nt":
+        return args
+    for name in ("out_dir", "out_json", "source_image_path", "blend_image_path", "style_image_path"):
+        if hasattr(args, name):
+            setattr(args, name, windows_equivalent_path(getattr(args, name)))
+    return args
+
+
+class ComfyClient:
+    def __init__(self, base_url: str, *, insecure: bool = False, timeout: int = 60):
+        self.base_url = str(base_url or "").rstrip("/")
+        self.timeout = int(timeout or 60)
+        handlers = []
+        if self.base_url.startswith("https://"):
+            context = ssl._create_unverified_context() if insecure else ssl.create_default_context()
+            handlers.append(urllib.request.HTTPSHandler(context=context))
+        self.opener = urllib.request.build_opener(*handlers)
+        self.opener.addheaders = [("User-Agent", "hackme-comfyui-i2i-matrix/1.0")]
+
+    def _url(self, path: str) -> str:
+        return f"{self.base_url}{path if path.startswith('/') else '/' + path}"
+
+    @staticmethod
+    def _read_body(resp) -> bytes:
+        try:
+            return resp.read()
+        except http.client.IncompleteRead as exc:
+            return exc.partial or b""
+
+    def json(self, path: str, *, method="GET", payload=None, timeout=None) -> dict:
+        body = None
+        headers = {}
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(self._url(path), data=body, headers=headers, method=method)
+        try:
+            with self.opener.open(req, timeout=timeout or self.timeout) as resp:
+                raw = self._read_body(resp)
+        except urllib.error.HTTPError as exc:
+            raw = self._read_body(exc)
+            raise ProbeError(f"{method} {path} HTTP {exc.code}: {raw[:800]!r}") from exc
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def bytes(self, path: str, *, timeout=None) -> bytes:
+        req = urllib.request.Request(self._url(path), method="GET")
+        with self.opener.open(req, timeout=timeout or self.timeout) as resp:
+            return self._read_body(resp)
+
+    def multipart(self, path: str, *, fields=None, files=None, timeout=None) -> dict:
+        boundary = f"----HackmeComfyI2I{uuid.uuid4().hex}"
+        body = bytearray()
+        for key, value in (fields or {}).items():
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+            body.extend(str(value).encode("utf-8"))
+            body.extend(b"\r\n")
+        for item in files or []:
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(
+                f'Content-Disposition: form-data; name="{item["field"]}"; filename="{item["filename"]}"\r\n'.encode("utf-8")
+            )
+            body.extend(f'Content-Type: {item.get("content_type") or "application/octet-stream"}\r\n\r\n'.encode("utf-8"))
+            body.extend(item.get("data") or b"")
+            body.extend(b"\r\n")
+        body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+        req = urllib.request.Request(
+            self._url(path),
+            data=bytes(body),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        )
+        try:
+            with self.opener.open(req, timeout=timeout or self.timeout) as resp:
+                raw = self._read_body(resp)
+        except urllib.error.HTTPError as exc:
+            raw = self._read_body(exc)
+            raise ProbeError(f"POST {path} HTTP {exc.code}: {raw[:800]!r}") from exc
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def upload_image(self, path: Path, *, overwrite=False) -> dict:
+        payload = self.multipart(
+            "/upload/image",
+            fields={"type": "input", "overwrite": "true" if overwrite else "false", "subfolder": ""},
+            files=[{
+                "field": "image",
+                "filename": path.name,
+                "content_type": "image/png",
+                "data": path.read_bytes(),
+            }],
+            timeout=max(self.timeout, 120),
+        )
+        name = str(payload.get("name") or path.name).strip()
+        if not name:
+            raise ProbeError(f"ComfyUI upload did not return a filename for {path}")
+        return {
+            "filename": name,
+            "subfolder": str(payload.get("subfolder") or "").strip(),
+            "type": str(payload.get("type") or "input").strip() or "input",
+        }
+
+
+def object_input_meta(object_info: dict, node_class: str, input_name: str):
+    node = object_info.get(node_class) if isinstance(object_info, dict) else None
+    inputs = (node or {}).get("input") or {}
+    required = inputs.get("required") or {}
+    optional = inputs.get("optional") or {}
+    if input_name in required:
+        return required.get(input_name)
+    return optional.get(input_name)
+
+
+def node_options(object_info: dict, node_class: str, input_name: str) -> list[str]:
+    raw = object_input_meta(object_info, node_class, input_name)
+    if isinstance(raw, list):
+        if raw and isinstance(raw[0], list):
+            return [str(item) for item in raw[0] if str(item).strip()]
+        if len(raw) > 1 and isinstance(raw[1], dict):
+            options = raw[1].get("options") or raw[1].get("values")
+            if isinstance(options, list):
+                return [str(item) for item in options if str(item).strip()]
+    return []
+
+
+def input_default(object_info: dict, node_class: str, input_name: str):
+    raw = object_input_meta(object_info, node_class, input_name)
+    if isinstance(raw, list) and len(raw) > 1 and isinstance(raw[1], dict):
+        if "default" in raw[1]:
+            return raw[1]["default"]
+    options = node_options(object_info, node_class, input_name)
+    return options[0] if options else None
+
+
+def required_default_inputs(object_info: dict, node_class: str, provided: dict) -> dict:
+    node = object_info.get(node_class) if isinstance(object_info, dict) else None
+    node_inputs = (node or {}).get("input") or {}
+    expected = {}
+    expected.update(node_inputs.get("required") or {})
+    expected.update(node_inputs.get("optional") or {})
+    inputs = dict(provided)
+    for key in expected:
+        if key in inputs:
+            continue
+        default = input_default(object_info, node_class, key)
+        if default is not None:
+            inputs[key] = default
+    return inputs
+
+
+def has_node(object_info: dict, node_class: str) -> bool:
+    return isinstance(object_info, dict) and node_class in object_info
+
+
+def selected_inpaint_method(args, object_info: dict) -> str:
+    method = str(getattr(args, "inpaint_method", "auto") or "auto").strip().lower()
+    if method == "auto":
+        return "conditioning" if has_node(object_info, "InpaintModelConditioning") else "vae_encode"
+    return method
+
+
+def maybe_apply_differential_diffusion(args, object_info: dict, workflow: dict, model_ref: list) -> list:
+    if not bool(getattr(args, "differential_diffusion", False)):
+        return model_ref
+    if not has_node(object_info, "DifferentialDiffusion"):
+        return model_ref
+    node_id = str(max(int(item) for item in workflow) + 1)
+    workflow[node_id] = {
+        "class_type": "DifferentialDiffusion",
+        "inputs": required_default_inputs(
+            object_info,
+            "DifferentialDiffusion",
+            {"model": model_ref, "strength": float(getattr(args, "differential_strength", 1.0))},
+        ),
+    }
+    return [node_id, 0]
+
+
+def resolve_choice(requested: str, options: list[str], *, label: str, allow_fallback=False) -> str:
+    requested = str(requested or "").strip()
+    if not options:
+        if requested:
+            return requested
+        raise ProbeError(f"{label} options are unavailable")
+    if requested in options:
+        return requested
+    requested_name = Path(requested.replace("\\", "/")).name.lower()
+    for item in options:
+        if Path(item.replace("\\", "/")).name.lower() == requested_name:
+            return item
+    if allow_fallback:
+        lowered = [(item, item.lower().replace("\\", "/")) for item in options]
+        for keyword in MODEL_FALLBACK_KEYWORDS:
+            for item, low in lowered:
+                if keyword in low:
+                    return item
+        return options[0]
+    preview = ", ".join(options[:12])
+    raise ProbeError(f"{label} is not available: {requested}. Available examples: {preview}")
+
+
+def choose_sampler_settings(object_info: dict, sampler: str, scheduler: str) -> tuple[str, str]:
+    sampler_options = node_options(object_info, "KSampler", "sampler_name")
+    scheduler_options = node_options(object_info, "KSampler", "scheduler")
+    sampler_name = sampler if not sampler_options or sampler in sampler_options else sampler_options[0]
+    scheduler_name = scheduler if not scheduler_options or scheduler in scheduler_options else scheduler_options[0]
+    return sampler_name, scheduler_name
+
+
+def choose_controlnet(object_info: dict, requested_type: str, requested_model: str = "") -> dict | None:
+    if "ControlNetLoader" not in object_info or "ControlNetApplyAdvanced" not in object_info:
+        return None
+    model_options = node_options(object_info, "ControlNetLoader", "control_net_name")
+    if not model_options:
+        return None
+    ordered_types = [requested_type] if requested_type in CONTROLNET_TYPES else []
+    ordered_types.extend(item for item in ("canny", "openpose", "depth", "lineart") if item not in ordered_types)
+    for control_type in ordered_types:
+        definition = CONTROLNET_TYPES.get(control_type) or {}
+        preprocessor = next((item for item in definition.get("preprocessors", ()) if item in object_info), "")
+        if not preprocessor:
+            continue
+        keywords = tuple(definition.get("keywords", ()))
+        if requested_model:
+            model_name = resolve_choice(requested_model, model_options, label="controlnet")
+            return {
+                "type": control_type,
+                "preprocessor": preprocessor,
+                "model_name": model_name,
+                "available_model_count": len(model_options),
+            }
+        matching = [item for item in model_options if any(keyword in item.lower() for keyword in keywords)]
+        if not matching:
+            continue
+        preferred = [
+            item for item in matching
+            if "sdxl" in item.lower() or "\\xl" in item.lower() or "_xl" in item.lower() or "control-lora" in item.lower()
+        ]
+        return {
+            "type": control_type,
+            "preprocessor": preprocessor,
+            "model_name": (preferred or matching)[0],
+            "available_model_count": len(matching),
+        }
+    return None
+
+
+def file_input_name(ref: dict) -> str:
+    subfolder = str(ref.get("subfolder") or "").strip().strip("/\\")
+    filename = str(ref.get("filename") or "").strip()
+    return f"{subfolder}/{filename}" if subfolder else filename
+
+
+def base_nodes(args, model_name: str) -> dict:
+    return {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": model_name}},
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": args.prompt, "clip": ["1", 1]}},
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": args.negative_prompt, "clip": ["1", 1]}},
+    }
+
+
+def attach_controlnet(workflow: dict, object_info: dict, controlnet: dict, *, positive_ref, negative_ref, image_ref, vae_ref) -> tuple[list, list]:
+    preprocessor_id = str(max(int(item) for item in workflow) + 1)
+    preprocessor_inputs = required_default_inputs(object_info, controlnet["preprocessor"], {"image": image_ref})
+    workflow[preprocessor_id] = {"class_type": controlnet["preprocessor"], "inputs": preprocessor_inputs}
+    loader_id = str(int(preprocessor_id) + 1)
+    workflow[loader_id] = {
+        "class_type": "ControlNetLoader",
+        "inputs": {"control_net_name": controlnet["model_name"]},
+    }
+    apply_id = str(int(loader_id) + 1)
+    apply_inputs = {
+        "positive": positive_ref,
+        "negative": negative_ref,
+        "control_net": [loader_id, 0],
+        "image": [preprocessor_id, 0],
+        "strength": float(controlnet.get("strength", 0.8)),
+        "start_percent": float(controlnet.get("start_percent", 0.0)),
+        "end_percent": float(controlnet.get("end_percent", 1.0)),
+    }
+    if object_input_meta(object_info, "ControlNetApplyAdvanced", "vae") is not None:
+        apply_inputs["vae"] = vae_ref
+    workflow[apply_id] = {
+        "class_type": "ControlNetApplyAdvanced",
+        "inputs": required_default_inputs(object_info, "ControlNetApplyAdvanced", apply_inputs),
+    }
+    return [apply_id, 0], [apply_id, 1]
+
+
+def build_txt2img(args, object_info: dict, model_name: str, *, prompt: str, prefix: str) -> dict:
+    workflow = base_nodes(args, model_name)
+    workflow["2"]["inputs"]["text"] = prompt
+    workflow["4"] = {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": int(args.width), "height": int(args.height), "batch_size": 1},
+    }
+    workflow["5"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": ["1", 0],
+            "positive": ["2", 0],
+            "negative": ["3", 0],
+            "latent_image": ["4", 0],
+            "seed": int(args.seed),
+            "steps": int(args.steps),
+            "cfg": float(args.cfg),
+            "sampler_name": args.sampler,
+            "scheduler": args.scheduler,
+            "denoise": 1,
+        },
+    }
+    workflow["6"] = {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}}
+    workflow["7"] = {"class_type": "SaveImage", "inputs": {"images": ["6", 0], "filename_prefix": prefix}}
+    return workflow
+
+
+def build_img2img(
+    args,
+    object_info: dict,
+    model_name: str,
+    *,
+    source_ref: dict,
+    prompt: str,
+    denoise: float,
+    prefix: str,
+    controlnet: dict | None = None,
+) -> dict:
+    workflow = base_nodes(args, model_name)
+    workflow["2"]["inputs"]["text"] = prompt
+    workflow["4"] = {
+        "class_type": "LoadImage",
+        "inputs": {"image": file_input_name(source_ref), "upload": "image"},
+    }
+    workflow["5"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["4", 0], "vae": ["1", 2]}}
+    positive_ref = ["2", 0]
+    negative_ref = ["3", 0]
+    if controlnet:
+        positive_ref, negative_ref = attach_controlnet(
+            workflow,
+            object_info,
+            controlnet,
+            positive_ref=positive_ref,
+            negative_ref=negative_ref,
+            image_ref=["4", 0],
+            vae_ref=["1", 2],
+        )
+    sampler_id = str(max(int(item) for item in workflow) + 1)
+    workflow[sampler_id] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": ["1", 0],
+            "positive": positive_ref,
+            "negative": negative_ref,
+            "latent_image": ["5", 0],
+            "seed": int(args.seed) + len(workflow),
+            "steps": int(args.steps),
+            "cfg": float(args.cfg),
+            "sampler_name": args.sampler,
+            "scheduler": args.scheduler,
+            "denoise": float(denoise),
+        },
+    }
+    decode_id = str(int(sampler_id) + 1)
+    save_id = str(int(sampler_id) + 2)
+    workflow[decode_id] = {"class_type": "VAEDecode", "inputs": {"samples": [sampler_id, 0], "vae": ["1", 2]}}
+    workflow[save_id] = {"class_type": "SaveImage", "inputs": {"images": [decode_id, 0], "filename_prefix": prefix}}
+    return workflow
+
+
+def build_inpaint(
+    args,
+    object_info: dict,
+    model_name: str,
+    *,
+    source_ref: dict,
+    mask_ref: dict,
+    prompt: str,
+    denoise: float,
+    prefix: str,
+) -> dict:
+    workflow = base_nodes(args, model_name)
+    workflow["2"]["inputs"]["text"] = prompt
+    workflow["4"] = {"class_type": "LoadImage", "inputs": {"image": file_input_name(source_ref), "upload": "image"}}
+    workflow["5"] = {"class_type": "LoadImageMask", "inputs": {"image": file_input_name(mask_ref), "channel": "red"}}
+    method = selected_inpaint_method(args, object_info)
+    if method == "conditioning":
+        if not has_node(object_info, "InpaintModelConditioning"):
+            raise ProbeError("InpaintModelConditioning is not available on this ComfyUI instance")
+        workflow["6"] = {
+            "class_type": "InpaintModelConditioning",
+            "inputs": required_default_inputs(
+                object_info,
+                "InpaintModelConditioning",
+                {
+                    "positive": ["2", 0],
+                    "negative": ["3", 0],
+                    "vae": ["1", 2],
+                    "pixels": ["4", 0],
+                    "mask": ["5", 0],
+                    "noise_mask": bool(args.inpaint_noise_mask),
+                },
+            ),
+        }
+        positive_ref = ["6", 0]
+        negative_ref = ["6", 1]
+        latent_ref = ["6", 2]
+    else:
+        workflow["6"] = {
+            "class_type": "VAEEncodeForInpaint",
+            "inputs": required_default_inputs(
+                object_info,
+                "VAEEncodeForInpaint",
+                {"pixels": ["4", 0], "mask": ["5", 0], "vae": ["1", 2], "grow_mask_by": 6},
+            ),
+        }
+        positive_ref = ["2", 0]
+        negative_ref = ["3", 0]
+        latent_ref = ["6", 0]
+    model_ref = maybe_apply_differential_diffusion(args, object_info, workflow, ["1", 0])
+    sampler_id = str(max(int(item) for item in workflow) + 1)
+    workflow[sampler_id] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": model_ref,
+            "positive": positive_ref,
+            "negative": negative_ref,
+            "latent_image": latent_ref,
+            "seed": int(args.seed) + 107,
+            "steps": int(args.steps),
+            "cfg": float(args.cfg),
+            "sampler_name": args.sampler,
+            "scheduler": args.scheduler,
+            "denoise": float(denoise),
+        },
+    }
+    decode_id = str(int(sampler_id) + 1)
+    save_id = str(int(sampler_id) + 2)
+    workflow[decode_id] = {"class_type": "VAEDecode", "inputs": {"samples": [sampler_id, 0], "vae": ["1", 2]}}
+    workflow[save_id] = {"class_type": "SaveImage", "inputs": {"images": [decode_id, 0], "filename_prefix": prefix}}
+    return workflow
+
+
+def build_outpaint(args, object_info: dict, model_name: str, *, source_ref: dict, prompt: str, prefix: str) -> dict:
+    workflow = base_nodes(args, model_name)
+    workflow["2"]["inputs"]["text"] = prompt
+    workflow["4"] = {"class_type": "LoadImage", "inputs": {"image": file_input_name(source_ref), "upload": "image"}}
+    default_expand = int(args.outpaint)
+    left = default_expand if args.outpaint_left is None else int(args.outpaint_left)
+    top = default_expand if args.outpaint_top is None else int(args.outpaint_top)
+    right = default_expand if args.outpaint_right is None else int(args.outpaint_right)
+    bottom = default_expand if args.outpaint_bottom is None else int(args.outpaint_bottom)
+    workflow["5"] = {
+        "class_type": "ImagePadForOutpaint",
+        "inputs": required_default_inputs(
+            object_info,
+            "ImagePadForOutpaint",
+            {
+                "image": ["4", 0],
+                "left": left,
+                "top": top,
+                "right": right,
+                "bottom": bottom,
+                "feathering": int(args.outpaint_feathering),
+            },
+        ),
+    }
+    method = selected_inpaint_method(args, object_info)
+    if method == "conditioning":
+        if not has_node(object_info, "InpaintModelConditioning"):
+            raise ProbeError("InpaintModelConditioning is not available on this ComfyUI instance")
+        workflow["6"] = {
+            "class_type": "InpaintModelConditioning",
+            "inputs": required_default_inputs(
+                object_info,
+                "InpaintModelConditioning",
+                {
+                    "positive": ["2", 0],
+                    "negative": ["3", 0],
+                    "vae": ["1", 2],
+                    "pixels": ["5", 0],
+                    "mask": ["5", 1],
+                    "noise_mask": bool(args.inpaint_noise_mask),
+                },
+            ),
+        }
+        positive_ref = ["6", 0]
+        negative_ref = ["6", 1]
+        latent_ref = ["6", 2]
+    else:
+        workflow["6"] = {
+            "class_type": "VAEEncodeForInpaint",
+            "inputs": required_default_inputs(
+                object_info,
+                "VAEEncodeForInpaint",
+                {"pixels": ["5", 0], "mask": ["5", 1], "vae": ["1", 2], "grow_mask_by": 6},
+            ),
+        }
+        positive_ref = ["2", 0]
+        negative_ref = ["3", 0]
+        latent_ref = ["6", 0]
+    model_ref = maybe_apply_differential_diffusion(args, object_info, workflow, ["1", 0])
+    sampler_id = str(max(int(item) for item in workflow) + 1)
+    workflow[sampler_id] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": model_ref,
+            "positive": positive_ref,
+            "negative": negative_ref,
+            "latent_image": latent_ref,
+            "seed": int(args.seed) + 211,
+            "steps": int(args.steps),
+            "cfg": float(args.cfg),
+            "sampler_name": args.sampler,
+            "scheduler": args.scheduler,
+            "denoise": float(args.outpaint_denoise),
+        },
+    }
+    decode_id = str(int(sampler_id) + 1)
+    save_id = str(int(sampler_id) + 2)
+    workflow[decode_id] = {"class_type": "VAEDecode", "inputs": {"samples": [sampler_id, 0], "vae": ["1", 2]}}
+    workflow[save_id] = {"class_type": "SaveImage", "inputs": {"images": [decode_id, 0], "filename_prefix": prefix}}
+    return workflow
+
+
+def build_upscale_redraw(args, object_info: dict, model_name: str, *, source_ref: dict, prompt: str, prefix: str) -> dict:
+    target_width = int(round(int(args.width) * float(args.upscale_factor)))
+    target_height = int(round(int(args.height) * float(args.upscale_factor)))
+    workflow = base_nodes(args, model_name)
+    workflow["2"]["inputs"]["text"] = prompt
+    workflow["4"] = {"class_type": "LoadImage", "inputs": {"image": file_input_name(source_ref), "upload": "image"}}
+    workflow["5"] = {
+        "class_type": "ImageScale",
+        "inputs": required_default_inputs(
+            object_info,
+            "ImageScale",
+            {
+                "image": ["4", 0],
+                "upscale_method": "lanczos",
+                "width": target_width,
+                "height": target_height,
+                "crop": "disabled",
+            },
+        ),
+    }
+    workflow["6"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["5", 0], "vae": ["1", 2]}}
+    workflow["7"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": ["1", 0],
+            "positive": ["2", 0],
+            "negative": ["3", 0],
+            "latent_image": ["6", 0],
+            "seed": int(args.seed) + 307,
+            "steps": int(args.steps),
+            "cfg": float(args.cfg),
+            "sampler_name": args.sampler,
+            "scheduler": args.scheduler,
+            "denoise": float(args.upscale_denoise),
+        },
+    }
+    workflow["8"] = {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["1", 2]}}
+    workflow["9"] = {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": prefix}}
+    return workflow
+
+
+def build_two_image_blend(args, object_info: dict, model_name: str, *, source_ref: dict, blend_ref: dict, prompt: str, prefix: str) -> dict:
+    workflow = base_nodes(args, model_name)
+    workflow["2"]["inputs"]["text"] = prompt
+    workflow["4"] = {"class_type": "LoadImage", "inputs": {"image": file_input_name(source_ref), "upload": "image"}}
+    workflow["5"] = {"class_type": "LoadImage", "inputs": {"image": file_input_name(blend_ref), "upload": "image"}}
+    workflow["6"] = {
+        "class_type": "ImageBlend",
+        "inputs": required_default_inputs(
+            object_info,
+            "ImageBlend",
+            {
+                "image1": ["4", 0],
+                "image2": ["5", 0],
+                "blend_factor": float(args.blend_factor),
+                "blend_mode": args.blend_mode,
+            },
+        ),
+    }
+    workflow["7"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["6", 0], "vae": ["1", 2]}}
+    workflow["8"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": ["1", 0],
+            "positive": ["2", 0],
+            "negative": ["3", 0],
+            "latent_image": ["7", 0],
+            "seed": int(args.seed) + 409,
+            "steps": int(args.steps),
+            "cfg": float(args.cfg),
+            "sampler_name": args.sampler,
+            "scheduler": args.scheduler,
+            "denoise": float(args.blend_denoise),
+        },
+    }
+    workflow["9"] = {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["1", 2]}}
+    workflow["10"] = {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": prefix}}
+    return workflow
+
+
+def build_ipadapter_style_reference(
+    args,
+    object_info: dict,
+    model_name: str,
+    *,
+    source_ref: dict,
+    style_ref: dict,
+    prompt: str,
+    prefix: str,
+) -> dict:
+    workflow = base_nodes(args, model_name)
+    workflow["2"]["inputs"]["text"] = prompt
+    workflow["4"] = {
+        "class_type": "IPAdapterUnifiedLoader",
+        "inputs": required_default_inputs(
+            object_info,
+            "IPAdapterUnifiedLoader",
+            {"model": ["1", 0], "preset": args.ipadapter_preset},
+        ),
+    }
+    workflow["5"] = {"class_type": "LoadImage", "inputs": {"image": file_input_name(style_ref), "upload": "image"}}
+    workflow["6"] = {"class_type": "LoadImage", "inputs": {"image": file_input_name(source_ref), "upload": "image"}}
+    workflow["7"] = {
+        "class_type": "IPAdapterStyleComposition",
+        "inputs": required_default_inputs(
+            object_info,
+            "IPAdapterStyleComposition",
+            {
+                "model": ["4", 0],
+                "ipadapter": ["4", 1],
+                "image_style": ["5", 0],
+                "image_composition": ["6", 0],
+                "weight_style": float(args.ipadapter_style_weight),
+                "weight_composition": float(args.ipadapter_composition_weight),
+                "expand_style": False,
+                "combine_embeds": "average",
+                "start_at": 0.0,
+                "end_at": 1.0,
+                "embeds_scaling": "V only",
+            },
+        ),
+    }
+    workflow["8"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["6", 0], "vae": ["1", 2]}}
+    workflow["9"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": ["7", 0],
+            "positive": ["2", 0],
+            "negative": ["3", 0],
+            "latent_image": ["8", 0],
+            "seed": int(args.seed) + 503,
+            "steps": int(args.steps),
+            "cfg": float(args.cfg),
+            "sampler_name": args.sampler,
+            "scheduler": args.scheduler,
+            "denoise": float(args.ipadapter_denoise),
+        },
+    }
+    workflow["10"] = {"class_type": "VAEDecode", "inputs": {"samples": ["9", 0], "vae": ["1", 2]}}
+    workflow["11"] = {"class_type": "SaveImage", "inputs": {"images": ["10", 0], "filename_prefix": prefix}}
+    return workflow
+
+
+def build_ipadapter_inpaint_reference(
+    args,
+    object_info: dict,
+    model_name: str,
+    *,
+    source_ref: dict,
+    mask_ref: dict,
+    style_ref: dict,
+    prompt: str,
+    denoise: float,
+    prefix: str,
+) -> dict:
+    workflow = base_nodes(args, model_name)
+    workflow["2"]["inputs"]["text"] = prompt
+    workflow["4"] = {
+        "class_type": "IPAdapterUnifiedLoader",
+        "inputs": required_default_inputs(
+            object_info,
+            "IPAdapterUnifiedLoader",
+            {"model": ["1", 0], "preset": args.ipadapter_preset},
+        ),
+    }
+    workflow["5"] = {"class_type": "LoadImage", "inputs": {"image": file_input_name(style_ref), "upload": "image"}}
+    workflow["6"] = {"class_type": "LoadImage", "inputs": {"image": file_input_name(source_ref), "upload": "image"}}
+    workflow["7"] = {"class_type": "LoadImageMask", "inputs": {"image": file_input_name(mask_ref), "channel": "red"}}
+    workflow["8"] = {
+        "class_type": "IPAdapterStyleComposition",
+        "inputs": required_default_inputs(
+            object_info,
+            "IPAdapterStyleComposition",
+            {
+                "model": ["4", 0],
+                "ipadapter": ["4", 1],
+                "image_style": ["5", 0],
+                "image_composition": ["6", 0],
+                "weight_style": float(args.ipadapter_style_weight),
+                "weight_composition": float(args.ipadapter_composition_weight),
+                "expand_style": False,
+                "combine_embeds": "average",
+                "start_at": 0.0,
+                "end_at": 1.0,
+                "embeds_scaling": "V only",
+            },
+        ),
+    }
+    method = selected_inpaint_method(args, object_info)
+    if method == "conditioning":
+        if not has_node(object_info, "InpaintModelConditioning"):
+            raise ProbeError("InpaintModelConditioning is not available on this ComfyUI instance")
+        workflow["9"] = {
+            "class_type": "InpaintModelConditioning",
+            "inputs": required_default_inputs(
+                object_info,
+                "InpaintModelConditioning",
+                {
+                    "positive": ["2", 0],
+                    "negative": ["3", 0],
+                    "vae": ["1", 2],
+                    "pixels": ["6", 0],
+                    "mask": ["7", 0],
+                    "noise_mask": bool(args.inpaint_noise_mask),
+                },
+            ),
+        }
+        positive_ref = ["9", 0]
+        negative_ref = ["9", 1]
+        latent_ref = ["9", 2]
+    else:
+        workflow["9"] = {
+            "class_type": "VAEEncodeForInpaint",
+            "inputs": required_default_inputs(
+                object_info,
+                "VAEEncodeForInpaint",
+                {"pixels": ["6", 0], "mask": ["7", 0], "vae": ["1", 2], "grow_mask_by": 6},
+            ),
+        }
+        positive_ref = ["2", 0]
+        negative_ref = ["3", 0]
+        latent_ref = ["9", 0]
+    model_ref = maybe_apply_differential_diffusion(args, object_info, workflow, ["8", 0])
+    sampler_id = str(max(int(item) for item in workflow) + 1)
+    workflow[sampler_id] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": model_ref,
+            "positive": positive_ref,
+            "negative": negative_ref,
+            "latent_image": latent_ref,
+            "seed": int(args.seed) + 607,
+            "steps": int(args.steps),
+            "cfg": float(args.cfg),
+            "sampler_name": args.sampler,
+            "scheduler": args.scheduler,
+            "denoise": float(denoise),
+        },
+    }
+    decode_id = str(int(sampler_id) + 1)
+    save_id = str(int(sampler_id) + 2)
+    workflow[decode_id] = {"class_type": "VAEDecode", "inputs": {"samples": [sampler_id, 0], "vae": ["1", 2]}}
+    workflow[save_id] = {"class_type": "SaveImage", "inputs": {"images": [decode_id, 0], "filename_prefix": prefix}}
+    return workflow
+
+
+def case_enabled(args, case_id: str) -> bool:
+    selected = str(getattr(args, "only_case", "") or "").strip()
+    return not selected or selected == case_id
+
+
+def case_denoise(args, default: float) -> float:
+    override = float(getattr(args, "case_denoise", 0.0) or 0.0)
+    return override if override > 0 else float(default)
+
+
+def case_prompt_suite(args) -> dict:
+    if str(args.prompt_suite or "").strip().lower() == "legacy_2girls":
+        source = LEGACY_2GIRLS_PROMPT
+        prompts = {
+            "source": source,
+            "redraw": f"{source}, warm sunset lighting, polished anime illustration",
+            "style": f"{source}, soft watercolor anime illustration, pastel wash, paper texture",
+            "feature": f"{source}, same two adult cat girls, same pose, same maid uniforms, refined lineart",
+            "inpaint_remove": f"{source}, remove the masked object, seamless repair, keep the two adult cat girls consistent",
+            "inpaint_replace": f"{source}, a blue beach umbrella and small seashells in the masked area, consistent anime lighting",
+            "outpaint": f"{source}, continue the same anime scene outward, seamless extension",
+            "controlnet": f"{source}, same controlled composition, black maid uniforms, crisp lineart",
+            "upscale_redraw": f"{source}, high detail anime style, clean refined redraw, preserve composition",
+            "blend": f"{source}, merge the indoor source image with the second reference image, coherent anime illustration, preserve the two adult cat girls and kissing action",
+            "style_reference": f"{source}, imitate the style reference while preserving the source composition and two adult cat girls",
+            "ipadapter_inpaint": f"{source}, replace only the masked clothing with an elegant patterned kimono, use the separate style reference for fabric color and painterly texture, preserve faces and pose",
+        }
+    else:
+        prompts = {
+        "source": args.source_prompt,
+        "redraw": "anime style, adult cat girl laying on the beach at sunset, same pose, warm orange sky, polished illustration",
+        "style": "soft watercolor anime illustration, adult cat girl laying on the beach, pastel wash, paper texture, same composition",
+        "feature": "clean detailed anime style, same adult cat girl, same pose, same cat ears, same beach layout, refined lineart",
+        "inpaint_remove": "clean empty beach sand and ocean background, remove the object in the masked area, seamless repair, anime style",
+        "inpaint_replace": "a blue beach umbrella and small seashells in the masked area, consistent anime beach lighting",
+        "outpaint": "continue the sunny anime beach scene outward, ocean horizon, sand, blue sky, seamless extension",
+        "controlnet": "anime style, adult cat girl in the same lying pose on the beach, black bikini, crisp lineart, controlled composition",
+        "upscale_redraw": "high detail anime style, same adult cat girl on the beach, clean refined upscale redraw, preserve composition",
+        "blend": "anime style, blend the source character pose with the second reference image, coherent scene, clean lineart",
+        "style_reference": "anime style, imitate the style reference image while preserving the source composition, clean lineart",
+        "ipadapter_inpaint": "anime style, replace only the masked clothing using the separate style reference, preserve face, pose, and background",
+        }
+    override = str(getattr(args, "case_prompt", "") or "").strip()
+    if override:
+        case_key = str(getattr(args, "only_case", "") or "").strip()
+        mapping = {
+            "img2img_redraw_sunset": "redraw",
+            "img2img_style_watercolor": "style",
+            "img2img_feature_preserve": "feature",
+            "inpaint_remove_repair": "inpaint_remove",
+            "inpaint_replace_edit": "inpaint_replace",
+            "outpaint_expand_beach": "outpaint",
+            "upscale_redraw_imagescale": "upscale_redraw",
+            "two_image_blend_mix": "blend",
+            "ipadapter_style_reference": "style_reference",
+            "ipadapter_inpaint_reference": "ipadapter_inpaint",
+        }
+        if case_key.startswith("controlnet_copy_composition_"):
+            prompts["controlnet"] = override
+        elif case_key in mapping:
+            prompts[mapping[case_key]] = override
+    return prompts
+
+
+def queue_and_fetch(client: ComfyClient, workflow: dict, out_png: Path, *, max_seconds: int, poll_seconds: float, timeout: int) -> dict:
+    client_id = uuid.uuid4().hex
+    submitted_at = time.perf_counter()
+    prompt = client.json("/prompt", method="POST", payload={"prompt": workflow, "client_id": client_id}, timeout=timeout)
+    prompt_id = str(prompt.get("prompt_id") or "").strip()
+    if not prompt_id:
+        raise ProbeError(f"ComfyUI did not return prompt_id: {prompt}")
+    last_history = {}
+    while time.perf_counter() - submitted_at <= int(max_seconds):
+        history = client.json(f"/history/{urllib.parse.quote(prompt_id)}", timeout=timeout)
+        last_history = history
+        item = history.get(prompt_id) if isinstance(history.get(prompt_id), dict) else None
+        if item:
+            status = item.get("status") if isinstance(item.get("status"), dict) else {}
+            if str(status.get("status_str") or "").lower() == "error":
+                raise ProbeError(f"ComfyUI prompt {prompt_id} failed: {json.dumps(status, ensure_ascii=False)[:1200]}")
+            outputs = item.get("outputs") if isinstance(item.get("outputs"), dict) else {}
+            for output in outputs.values():
+                images = output.get("images") if isinstance(output, dict) and isinstance(output.get("images"), list) else []
+                if not images:
+                    continue
+                image = images[0]
+                query = urllib.parse.urlencode({
+                    "filename": image.get("filename") or "",
+                    "subfolder": image.get("subfolder") or "",
+                    "type": image.get("type") or "output",
+                })
+                data = client.bytes(f"/view?{query}", timeout=timeout)
+                out_png.write_bytes(data)
+                return {
+                    "prompt_id": prompt_id,
+                    "image_ref": image,
+                    "path": str(out_png),
+                    "size_bytes": out_png.stat().st_size,
+                    "seconds": round(time.perf_counter() - submitted_at, 3),
+                }
+        time.sleep(max(0.5, float(poll_seconds)))
+    raise ProbeError(f"timeout waiting for ComfyUI prompt {prompt_id}; last_history={json.dumps(last_history, ensure_ascii=False)[:1200]}")
+
+
+def create_mask(path: Path, width: int, height: int, *, shape: str = "default") -> None:
+    from PIL import Image, ImageDraw
+
+    mask = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(mask)
+    draw_mask_shape(draw, width, height, shape)
+    mask.save(path)
+
+
+def draw_mask_shape(draw, width: int, height: int, shape: str) -> None:
+    shape = str(shape or "default").strip().lower()
+    if shape == "window":
+        polygon = [
+            (int(width * 0.42), int(height * 0.00)),
+            (int(width * 0.89), int(height * 0.00)),
+            (int(width * 0.81), int(height * 0.20)),
+            (int(width * 0.36), int(height * 0.17)),
+        ]
+        draw.polygon(polygon, fill=(255, 255, 255, 255))
+        return
+    if shape == "background_wall":
+        draw.rectangle(
+            (int(width * 0.04), int(height * 0.03), int(width * 0.28), int(height * 0.24)),
+            fill=(255, 255, 255, 255),
+        )
+        return
+    if shape == "small_wall":
+        draw.ellipse(
+            (int(width * 0.06), int(height * 0.06), int(width * 0.19), int(height * 0.19)),
+            fill=(255, 255, 255, 255),
+        )
+        return
+    if shape == "kimono_clothes":
+        polygons = [
+            [
+                (int(width * 0.39), int(height * 0.45)),
+                (int(width * 0.67), int(height * 0.43)),
+                (int(width * 0.95), int(height * 0.55)),
+                (int(width * 1.00), int(height * 0.96)),
+                (int(width * 0.58), int(height * 1.00)),
+                (int(width * 0.39), int(height * 0.78)),
+            ],
+            [
+                (int(width * 0.13), int(height * 0.56)),
+                (int(width * 0.50), int(height * 0.55)),
+                (int(width * 0.74), int(height * 0.75)),
+                (int(width * 0.55), int(height * 1.00)),
+                (int(width * 0.04), int(height * 0.91)),
+            ],
+            [
+                (int(width * 0.00), int(height * 0.54)),
+                (int(width * 0.28), int(height * 0.56)),
+                (int(width * 0.44), int(height * 0.74)),
+                (int(width * 0.25), int(height * 0.96)),
+                (int(width * 0.00), int(height * 0.90)),
+            ],
+            [
+                (int(width * 0.62), int(height * 0.66)),
+                (int(width * 1.00), int(height * 0.62)),
+                (int(width * 1.00), int(height * 1.00)),
+                (int(width * 0.70), int(height * 1.00)),
+            ],
+            [
+                (int(width * 0.30), int(height * 0.86)),
+                (int(width * 0.73), int(height * 0.84)),
+                (int(width * 0.83), int(height * 1.00)),
+                (int(width * 0.24), int(height * 1.00)),
+            ],
+        ]
+        for polygon in polygons:
+            draw.polygon(polygon, fill=(255, 255, 255, 255))
+        return
+    x0 = int(width * 0.58)
+    y0 = int(height * 0.52)
+    x1 = int(width * 0.92)
+    y1 = int(height * 0.88)
+    draw.ellipse((x0, y0, x1, y1), fill=(255, 255, 255, 255))
+
+
+def create_synthetic_source(path: Path, width: int, height: int) -> None:
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (width, height), (126, 199, 235))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((0, int(height * 0.45), width, height), fill=(238, 211, 145))
+    draw.rectangle((0, int(height * 0.35), width, int(height * 0.47)), fill=(58, 151, 195))
+    draw.ellipse((int(width * 0.34), int(height * 0.35), int(width * 0.58), int(height * 0.70)), fill=(240, 189, 164))
+    draw.ellipse((int(width * 0.41), int(height * 0.22), int(width * 0.53), int(height * 0.34)), fill=(242, 198, 176))
+    draw.polygon(
+        [(int(width * 0.43), int(height * 0.22)), (int(width * 0.40), int(height * 0.13)), (int(width * 0.48), int(height * 0.21))],
+        fill=(70, 55, 62),
+    )
+    draw.polygon(
+        [(int(width * 0.51), int(height * 0.22)), (int(width * 0.57), int(height * 0.13)), (int(width * 0.54), int(height * 0.25))],
+        fill=(70, 55, 62),
+    )
+    draw.ellipse((int(width * 0.64), int(height * 0.58), int(width * 0.83), int(height * 0.77)), fill=(210, 32, 48))
+    draw.line((int(width * 0.66), int(height * 0.66), int(width * 0.82), int(height * 0.66)), fill=(255, 255, 255), width=max(2, width // 160))
+    draw.line((int(width * 0.74), int(height * 0.59), int(width * 0.74), int(height * 0.77)), fill=(255, 255, 255), width=max(2, width // 160))
+    img.save(path)
+
+
+def image_stats(path: Path) -> dict:
+    from PIL import Image, ImageStat
+
+    with Image.open(path) as img:
+        rgb = img.convert("RGB")
+        stat = ImageStat.Stat(rgb)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        return {
+            "width": rgb.width,
+            "height": rgb.height,
+            "mode": img.mode,
+            "sha256": digest,
+            "mean_rgb": [round(float(item), 2) for item in stat.mean],
+            "extrema": stat.extrema,
+            "size_bytes": path.stat().st_size,
+        }
+
+
+def diff_metrics(source: Path, output: Path, *, mask: Path | None = None) -> dict:
+    from PIL import Image, ImageChops, ImageStat
+
+    with Image.open(source) as src_raw, Image.open(output) as out_raw:
+        src = src_raw.convert("RGB")
+        out = out_raw.convert("RGB")
+        if out.size != src.size:
+            out_cmp = out.resize(src.size)
+        else:
+            out_cmp = out
+        diff = ImageChops.difference(src, out_cmp).convert("L")
+        total = diff.width * diff.height
+        changed = diff.point(lambda pixel: 255 if pixel > 12 else 0)
+        changed_count = total - changed.histogram()[0]
+        payload = {
+            "changed_ratio": round(changed_count / max(1, total), 4),
+            "mean_abs_luma_delta": round(float(ImageStat.Stat(diff).mean[0]), 3),
+            "compared_size": list(src.size),
+        }
+        if mask and mask.exists():
+            with Image.open(mask) as mask_raw:
+                alpha = mask_raw.convert("RGBA").getchannel("A").resize(src.size)
+                masked_pixels = sum(alpha.point(lambda pixel: 1 if pixel > 16 else 0).histogram()[1:])
+                if masked_pixels:
+                    masked = ImageChops.multiply(changed, alpha.point(lambda pixel: 255 if pixel > 16 else 0))
+                    masked_changed = sum(masked.point(lambda pixel: 1 if pixel > 0 else 0).histogram()[1:])
+                    inverse = alpha.point(lambda pixel: 0 if pixel > 16 else 255)
+                    unmasked = ImageChops.multiply(changed, inverse)
+                    unmasked_changed = sum(unmasked.point(lambda pixel: 1 if pixel > 0 else 0).histogram()[1:])
+                    payload.update({
+                        "masked_changed_ratio": round(masked_changed / max(1, masked_pixels), 4),
+                        "unmasked_changed_ratio": round(unmasked_changed / max(1, total - masked_pixels), 4),
+                    })
+        return payload
+
+
+def run_case(client: ComfyClient, args, *, case: dict, workflow: dict, source_path: Path | None, mask_path: Path | None) -> dict:
+    started = time.perf_counter()
+    out_png = Path(args.out_dir) / f"{case['id']}.png"
+    result = {
+        "id": case["id"],
+        "label": case["label"],
+        "status": "fail",
+        "semantic_expectation": case.get("semantic_expectation", ""),
+        "notes": case.get("notes", ""),
+        "started_at": now_iso(),
+    }
+    try:
+        output = queue_and_fetch(
+            client,
+            workflow,
+            out_png,
+            max_seconds=args.max_seconds,
+            poll_seconds=args.poll_seconds,
+            timeout=args.request_timeout,
+        )
+        result["status"] = "pass"
+        result["output"] = output
+        result["image_stats"] = image_stats(out_png)
+        if source_path:
+            result["diff_metrics"] = diff_metrics(source_path, out_png, mask=mask_path)
+        if case.get("expect_larger_than_source") and source_path:
+            source_stats = image_stats(source_path)
+            result["automated_size_check"] = {
+                "passed": result["image_stats"]["width"] > source_stats["width"] or result["image_stats"]["height"] > source_stats["height"],
+                "source": {"width": source_stats["width"], "height": source_stats["height"]},
+                "output": {"width": result["image_stats"]["width"], "height": result["image_stats"]["height"]},
+            }
+    except Exception as exc:
+        result["status"] = "fail"
+        result["error"] = sanitize_text(exc)
+        result["traceback"] = sanitize_text(traceback.format_exc(limit=8))
+    finally:
+        result["seconds"] = round(time.perf_counter() - started, 3)
+        result["finished_at"] = now_iso()
+    return result
+
+
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def run_matrix(args) -> dict:
+    out_dir = Path(args.out_dir).expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    args.out_dir = str(out_dir)
+    object_info_path = out_dir / "object_info_summary.json"
+    client = ComfyClient(args.comfyui_url, insecure=args.insecure, timeout=args.request_timeout)
+    object_info = client.json("/object_info", timeout=args.request_timeout)
+    sampler, scheduler = choose_sampler_settings(object_info, args.sampler, args.scheduler)
+    args.sampler = sampler
+    args.scheduler = scheduler
+    checkpoint_options = node_options(object_info, "CheckpointLoaderSimple", "ckpt_name")
+    model_name = resolve_choice(args.model, checkpoint_options, label="checkpoint", allow_fallback=True)
+    controlnet = choose_controlnet(object_info, args.controlnet_type, args.controlnet_model)
+    summary = {
+        "available_nodes": {
+            name: name in object_info
+            for name in (
+                "CheckpointLoaderSimple",
+                "KSampler",
+                "VAEEncode",
+                "VAEEncodeForInpaint",
+                "ImagePadForOutpaint",
+                "ImageScale",
+                "ControlNetLoader",
+                "ControlNetApplyAdvanced",
+                "UpscaleModelLoader",
+                "ImageUpscaleWithModel",
+            )
+        },
+        "checkpoint_count": len(checkpoint_options),
+        "checkpoint_resolved": model_name,
+        "sampler": sampler,
+        "scheduler": scheduler,
+        "controlnet": controlnet or {},
+        "upscale_model_options": node_options(object_info, "UpscaleModelLoader", "model_name")[:30],
+    }
+    write_json(object_info_path, summary)
+    report = {
+        "ok": False,
+        "label": "standalone_comfyui_i2i_matrix",
+        "started_at": now_iso(),
+        "comfyui_url": args.comfyui_url,
+        "model_requested": args.model,
+        "model_resolved": model_name,
+        "dimensions": {"width": args.width, "height": args.height, "steps": args.steps, "cfg": args.cfg},
+        "artifacts": {"out_dir": str(out_dir), "object_info_summary": str(object_info_path)},
+        "capabilities": summary,
+        "cases": [],
+        "skips": [],
+        "backend_generalization": {
+            "diffusers": (
+                "Generic HF Diffusers can cover txt2img/img2img/inpaint when a repo exposes compatible Diffusers "
+                "metadata or a model-card from_pretrained snippet. ControlNet, outpaint, redraw-upscale, and multi-image "
+                "blend need pipeline-specific support instead of the current project shortcut."
+            ),
+            "gguf": (
+                "The current hackme_web ComfyUI-GGUF shortcut is intentionally txt2img-only. I2I is theoretically possible "
+                "through explicit ComfyUI workflow templates that reuse the GGUF UNet/CLIP/VAE mapping, but each official "
+                "GGUF profile needs a separate visual reprobe before exposing it."
+            ),
+        },
+        "unsupported_or_template_only": [
+            "True separate-reference style imitation needs IPAdapter/reference/Redux-style nodes or a workflow template; shortcut img2img can only restyle the source image by prompt and denoise.",
+            "True separate-reference feature imitation/faces/identity transfer needs reference/adapter nodes and is not a generic shortcut.",
+            "Prompt-guided blending of two images is not available in the current shortcut builder; it should be a workflow-template feature.",
+            "The project shortcut upscale path is pure model upscaling. This matrix tests redraw-upscale as a custom ComfyUI workflow via ImageScale + VAEEncode + KSampler.",
+        ],
+    }
+    prompts = case_prompt_suite(args)
+
+    source_path = out_dir / "source_t2i_reference.png"
+    source_case = {
+        "id": "source_t2i_reference",
+        "label": "Reference txt2img source",
+        "semantic_expectation": "Generate a beach cat-girl source image with a visible editable object region.",
+    }
+    imported_source = Path(str(args.source_image_path or "")).expanduser() if args.source_image_path else None
+    if imported_source:
+        if not imported_source.is_file():
+            raise ProbeError(f"--source-image-path does not exist: {imported_source}")
+        source_path.write_bytes(imported_source.read_bytes())
+        source_result = {
+            "id": source_case["id"],
+            "label": source_case["label"],
+            "status": "pass",
+            "semantic_expectation": source_case["semantic_expectation"],
+            "output": {
+                "path": str(source_path),
+                "size_bytes": source_path.stat().st_size,
+                "imported_from": str(imported_source),
+            },
+            "image_stats": image_stats(source_path),
+        }
+    elif args.synthetic_source_only:
+        create_synthetic_source(source_path, args.width, args.height)
+        source_result = {
+            "id": source_case["id"],
+            "label": source_case["label"],
+            "status": "pass",
+            "semantic_expectation": source_case["semantic_expectation"],
+            "output": {"path": str(source_path), "size_bytes": source_path.stat().st_size, "synthetic": True},
+            "image_stats": image_stats(source_path),
+        }
+    else:
+        source_workflow = build_txt2img(args, object_info, model_name, prompt=prompts["source"], prefix="hackme_i2i_source")
+        source_result = run_case(client, args, case=source_case, workflow=source_workflow, source_path=None, mask_path=None)
+        if source_result.get("status") == "pass":
+            generated = Path(source_result["output"]["path"])
+            if generated != source_path:
+                source_path.write_bytes(generated.read_bytes())
+                source_result["output"]["reference_copy"] = str(source_path)
+        elif args.allow_synthetic_fallback:
+            create_synthetic_source(source_path, args.width, args.height)
+            source_result["fallback"] = {"synthetic_source": str(source_path), "reason": source_result.get("error", "")}
+            source_result["status"] = "pass_with_fallback"
+    report["source"] = source_result
+    if source_result.get("status") not in {"pass", "pass_with_fallback"}:
+        report["ok"] = False
+        return report
+
+    source_ref = client.upload_image(source_path, overwrite=True)
+    report["artifacts"]["uploaded_source_ref"] = source_ref
+    blend_ref = None
+    blend_path = None
+    if str(getattr(args, "blend_image_path", "") or "").strip():
+        blend_path = Path(str(args.blend_image_path)).expanduser()
+        if not blend_path.is_file():
+            raise ProbeError(f"--blend-image-path does not exist: {blend_path}")
+        blend_ref = client.upload_image(blend_path, overwrite=True)
+        report["artifacts"]["blend_image"] = str(blend_path)
+        report["artifacts"]["uploaded_blend_ref"] = blend_ref
+    style_ref = None
+    style_path = None
+    if str(getattr(args, "style_image_path", "") or "").strip():
+        style_path = Path(str(args.style_image_path)).expanduser()
+        if not style_path.is_file():
+            raise ProbeError(f"--style-image-path does not exist: {style_path}")
+        style_ref = client.upload_image(style_path, overwrite=True)
+        report["artifacts"]["style_image"] = str(style_path)
+        report["artifacts"]["uploaded_style_ref"] = style_ref
+
+    cases = []
+    if case_enabled(args, "img2img_redraw_sunset"):
+        cases.append({
+            "id": "img2img_redraw_sunset",
+            "label": "img2img redraw",
+            "semantic_expectation": "Keep the beach/cat-girl composition but redraw it as a warm sunset scene.",
+            "workflow": build_img2img(
+                args,
+                object_info,
+                model_name,
+                source_ref=source_ref,
+                prompt=prompts["redraw"],
+                denoise=case_denoise(args, 0.58),
+                prefix="hackme_i2i_redraw",
+            ),
+        })
+    if case_enabled(args, "img2img_style_watercolor"):
+        cases.append({
+            "id": "img2img_style_watercolor",
+            "label": "style imitation by prompt",
+            "semantic_expectation": "Restyle the same source into a soft watercolor anime illustration.",
+            "notes": "This is prompt-driven source restyling, not separate style-reference imitation.",
+            "workflow": build_img2img(
+                args,
+                object_info,
+                model_name,
+                source_ref=source_ref,
+                prompt=prompts["style"],
+                denoise=case_denoise(args, 0.46),
+                prefix="hackme_i2i_style",
+            ),
+        })
+    if case_enabled(args, "img2img_feature_preserve"):
+        cases.append({
+            "id": "img2img_feature_preserve",
+            "label": "feature imitation from source",
+            "semantic_expectation": "Preserve the source pose, cat ears, beach layout, and main character features while cleaning details.",
+            "notes": "Feature preservation uses low denoise img2img; identity/reference transfer is template-only.",
+            "workflow": build_img2img(
+                args,
+                object_info,
+                model_name,
+                source_ref=source_ref,
+                prompt=prompts["feature"],
+                denoise=case_denoise(args, 0.32),
+                prefix="hackme_i2i_features",
+            ),
+        })
+    inpaint_enabled = any(
+        case_enabled(args, case_id)
+        for case_id in ("inpaint_remove_repair", "inpaint_replace_edit", "ipadapter_inpaint_reference")
+    )
+    mask_path = None
+    mask_ref = None
+    if inpaint_enabled:
+        mask_path = out_dir / "inpaint_mask_alpha.png"
+        create_mask(mask_path, args.width, args.height, shape=args.mask_shape)
+        report["artifacts"]["mask"] = str(mask_path)
+        mask_ref = client.upload_image(mask_path, overwrite=True)
+        report["artifacts"]["uploaded_mask_ref"] = mask_ref
+    if case_enabled(args, "inpaint_remove_repair"):
+        cases.append({
+            "id": "inpaint_remove_repair",
+            "label": "inpaint delete and repair",
+            "semantic_expectation": "Remove the masked object area and repair it into clean beach sand/ocean background.",
+            "workflow": build_inpaint(
+                args,
+                object_info,
+                model_name,
+                source_ref=source_ref,
+                mask_ref=mask_ref,
+                prompt=prompts["inpaint_remove"],
+                denoise=case_denoise(args, 0.86),
+                prefix="hackme_i2i_inpaint_remove",
+            ),
+        })
+    if case_enabled(args, "inpaint_replace_edit"):
+        cases.append({
+            "id": "inpaint_replace_edit",
+            "label": "inpaint replacement edit",
+            "semantic_expectation": "Replace the masked region with a blue beach umbrella and small seashells.",
+            "workflow": build_inpaint(
+                args,
+                object_info,
+                model_name,
+                source_ref=source_ref,
+                mask_ref=mask_ref,
+                prompt=prompts["inpaint_replace"],
+                denoise=case_denoise(args, 0.86),
+                prefix="hackme_i2i_inpaint_replace",
+            ),
+        })
+    if case_enabled(args, "outpaint_expand_beach"):
+        cases.append({
+            "id": "outpaint_expand_beach",
+            "label": "outpainting",
+            "semantic_expectation": "Extend the beach/ocean/sky beyond the original square without obvious borders.",
+            "expect_larger_than_source": True,
+            "workflow": build_outpaint(
+                args,
+                object_info,
+                model_name,
+                source_ref=source_ref,
+                prompt=prompts["outpaint"],
+                prefix="hackme_i2i_outpaint",
+            ),
+        })
+    if controlnet and case_enabled(args, f"controlnet_copy_composition_{safe_name(controlnet['type'])}"):
+        control_case = dict(controlnet)
+        control_case.update({"strength": args.control_strength, "start_percent": 0.0, "end_percent": 1.0})
+        cases.append({
+            "id": f"controlnet_copy_composition_{safe_name(control_case['type'])}",
+            "label": f"ControlNet copy composition ({control_case['type']})",
+            "semantic_expectation": "Use the source-derived control image to keep the lying pose/composition while changing outfit/details by prompt.",
+            "workflow": build_img2img(
+                args,
+                object_info,
+                model_name,
+                source_ref=source_ref,
+                prompt=prompts["controlnet"],
+                denoise=case_denoise(args, 0.72),
+                prefix="hackme_i2i_controlnet",
+                controlnet=control_case,
+            ),
+        })
+    elif not args.only_case:
+        report["skips"].append({"id": "controlnet_copy_composition", "reason": "No compatible ControlNet loader/model/preprocessor combination was detected."})
+    if "ImageScale" in object_info and case_enabled(args, "upscale_redraw_imagescale"):
+        cases.append({
+            "id": "upscale_redraw_imagescale",
+            "label": "upscale redraw",
+            "semantic_expectation": "Scale up the source and run a low-denoise redraw to add detail while preserving the scene.",
+            "expect_larger_than_source": True,
+            "workflow": build_upscale_redraw(
+                args,
+                object_info,
+                model_name,
+                source_ref=source_ref,
+                prompt=prompts["upscale_redraw"],
+                prefix="hackme_i2i_upscale_redraw",
+            ),
+        })
+    elif not args.only_case:
+        report["skips"].append({"id": "upscale_redraw", "reason": "ImageScale is missing, so redraw-upscale cannot be built without an upscaler model/template."})
+    if "ImageBlend" in object_info and blend_ref and case_enabled(args, "two_image_blend_mix"):
+        cases.append({
+            "id": "two_image_blend_mix",
+            "label": "two-image blend and redraw",
+            "semantic_expectation": "Blend the source image with a second reference and redraw a coherent single image.",
+            "notes": "This tests ImageBlend + low-denoise redraw. It is not a full IPAdapter/reference-image semantic blend.",
+            "workflow": build_two_image_blend(
+                args,
+                object_info,
+                model_name,
+                source_ref=source_ref,
+                blend_ref=blend_ref,
+                prompt=prompts["blend"],
+                prefix="hackme_i2i_blend",
+            ),
+        })
+    elif not args.only_case:
+        report["skips"].append({
+            "id": "two_image_blend",
+            "reason": "ImageBlend is missing or no --blend-image-path was provided. Prompt-guided multi-image semantic blend should be handled by an imported workflow template.",
+        })
+    if (
+        all(name in object_info for name in ("IPAdapterUnifiedLoader", "IPAdapterStyleComposition"))
+        and style_ref
+        and case_enabled(args, "ipadapter_style_reference")
+    ):
+        cases.append({
+            "id": "ipadapter_style_reference",
+            "label": "IPAdapter style/reference imitation",
+            "semantic_expectation": "Use a separate style reference image while preserving the source image composition.",
+            "notes": "Requires IPAdapter and CLIP Vision model files on the ComfyUI host.",
+            "workflow": build_ipadapter_style_reference(
+                args,
+                object_info,
+                model_name,
+                source_ref=source_ref,
+                style_ref=style_ref,
+                prompt=prompts["style_reference"],
+                prefix="hackme_i2i_ipadapter_style",
+            ),
+        })
+    elif not args.only_case:
+        report["skips"].append({
+            "id": "ipadapter_style_reference",
+            "reason": "IPAdapter style/reference nodes are missing or no --style-image-path was provided.",
+        })
+    if (
+        all(name in object_info for name in ("IPAdapterUnifiedLoader", "IPAdapterStyleComposition"))
+        and style_ref
+        and mask_ref
+        and case_enabled(args, "ipadapter_inpaint_reference")
+    ):
+        cases.append({
+            "id": "ipadapter_inpaint_reference",
+            "label": "IPAdapter reference plus masked inpaint",
+            "semantic_expectation": "Use a separate reference image while changing only the masked clothing region.",
+            "notes": "Tests whether IPAdapter can be composed with the inpaint conditioning path for local reference-guided edits.",
+            "workflow": build_ipadapter_inpaint_reference(
+                args,
+                object_info,
+                model_name,
+                source_ref=source_ref,
+                mask_ref=mask_ref,
+                style_ref=style_ref,
+                prompt=prompts["ipadapter_inpaint"],
+                denoise=case_denoise(args, float(args.ipadapter_denoise)),
+                prefix="hackme_i2i_ipadapter_inpaint",
+            ),
+        })
+    elif not args.only_case:
+        report["skips"].append({
+            "id": "ipadapter_inpaint_reference",
+            "reason": "IPAdapter nodes, style image, or inpaint mask are missing.",
+        })
+    if args.only_case and not cases:
+        raise ProbeError(f"--only-case did not match a runnable case: {args.only_case}")
+
+    for case in cases:
+        print(f"[i2i-matrix] running {case['id']}...", flush=True)
+        result = run_case(client, args, case=case, workflow=case["workflow"], source_path=source_path, mask_path=mask_path)
+        report["cases"].append(result)
+        print(f"[i2i-matrix] {case['id']}: {result['status']} {result.get('output', {}).get('path', result.get('error', ''))}", flush=True)
+        write_json(Path(args.out_json), report)
+
+    failed = [case for case in report["cases"] if case.get("status") != "pass"]
+    report["ok"] = not failed
+    report["finished_at"] = now_iso()
+    return report
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Run a standalone direct-ComfyUI img2img/inpaint/outpaint/controlnet matrix.")
+    parser.add_argument("--interactive", action="store_true", help="Prompt for common options while keeping CLI defaults.")
+    parser.add_argument("--comfyui-url", default="http://127.0.0.1:8188")
+    parser.add_argument("--insecure", action="store_true")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--prompt", default=DEFAULT_SOURCE_PROMPT, help="Base positive prompt used by non-source cases unless a case overrides it.")
+    parser.add_argument("--source-prompt", default=DEFAULT_SOURCE_PROMPT)
+    parser.add_argument("--prompt-suite", choices=("beach_catgirl", "legacy_2girls"), default="beach_catgirl")
+    parser.add_argument("--negative-prompt", default=DEFAULT_NEGATIVE_PROMPT)
+    parser.add_argument("--width", type=int, default=1024)
+    parser.add_argument("--height", type=int, default=1024)
+    parser.add_argument("--steps", type=int, default=20)
+    parser.add_argument("--cfg", type=float, default=6.5)
+    parser.add_argument("--seed", type=int, default=20260529)
+    parser.add_argument("--sampler", default="euler")
+    parser.add_argument("--scheduler", default="normal")
+    parser.add_argument("--controlnet-type", default="canny")
+    parser.add_argument("--controlnet-model", default="", help="Optional exact ControlNet model name/path from ControlNetLoader.")
+    parser.add_argument("--control-strength", type=float, default=0.8)
+    parser.add_argument("--outpaint", type=int, default=128)
+    parser.add_argument("--outpaint-left", type=int, default=None)
+    parser.add_argument("--outpaint-top", type=int, default=None)
+    parser.add_argument("--outpaint-right", type=int, default=None)
+    parser.add_argument("--outpaint-bottom", type=int, default=None)
+    parser.add_argument("--outpaint-feathering", type=int, default=48)
+    parser.add_argument("--outpaint-denoise", type=float, default=0.90)
+    parser.add_argument("--inpaint-method", choices=("auto", "conditioning", "vae_encode"), default="auto")
+    parser.add_argument("--inpaint-noise-mask", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--differential-diffusion", action="store_true")
+    parser.add_argument("--differential-strength", type=float, default=1.0)
+    parser.add_argument("--upscale-factor", type=float, default=1.25)
+    parser.add_argument("--upscale-denoise", type=float, default=0.28)
+    parser.add_argument("--blend-image-path", default="", help="Optional second image for the two_image_blend_mix case.")
+    parser.add_argument("--blend-factor", type=float, default=0.5)
+    parser.add_argument("--blend-mode", default="normal")
+    parser.add_argument("--blend-denoise", type=float, default=0.38)
+    parser.add_argument("--style-image-path", default="", help="Optional style/reference image for the ipadapter_style_reference case.")
+    parser.add_argument("--ipadapter-preset", default="PLUS (high strength)")
+    parser.add_argument("--ipadapter-style-weight", type=float, default=0.85)
+    parser.add_argument("--ipadapter-composition-weight", type=float, default=0.85)
+    parser.add_argument("--ipadapter-denoise", type=float, default=0.45)
+    parser.add_argument("--request-timeout", type=int, default=90)
+    parser.add_argument("--max-seconds", type=int, default=1200)
+    parser.add_argument("--poll-seconds", type=float, default=3)
+    parser.add_argument("--out-dir", default="/tmp/hackme_comfyui_i2i_matrix")
+    parser.add_argument("--out-json", default="")
+    parser.add_argument("--source-image-path", default="", help="Use an existing source PNG/JPG instead of generating a reference source.")
+    parser.add_argument("--only-case", default="", help="Run one case id, for step-by-step live audit.")
+    parser.add_argument("--case-prompt", default="", help="Override the positive prompt for --only-case.")
+    parser.add_argument("--case-denoise", type=float, default=0.0, help="Override denoise for supported single-case img2img probes.")
+    parser.add_argument("--mask-shape", choices=("default", "window", "background_wall", "small_wall", "kimono_clothes"), default="default")
+    parser.add_argument("--synthetic-source-only", action="store_true", help="Use a PIL fixture source instead of generating the reference source with txt2img.")
+    parser.add_argument("--allow-synthetic-fallback", action="store_true", help="Fall back to a PIL fixture source if the reference txt2img source fails.")
+    args = parser.parse_args(argv)
+    args = apply_interactive_prompts(args)
+    args = normalize_runtime_paths(args)
+    if not args.out_json:
+        args.out_json = str(Path(args.out_dir) / "i2i_matrix_report.json")
+    return args
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
+    report_path = Path(args.out_json).expanduser().resolve()
+    report = {
+        "ok": False,
+        "label": "standalone_comfyui_i2i_matrix",
+        "started_at": now_iso(),
+        "artifacts": {"report": str(report_path), "out_dir": str(Path(args.out_dir).expanduser().resolve())},
+    }
+    try:
+        report = run_matrix(args)
+        return_code = 0 if report.get("ok") else 1
+    except Exception as exc:
+        report["ok"] = False
+        report["error"] = sanitize_text(exc)
+        report["traceback"] = sanitize_text(traceback.format_exc(limit=8))
+        report["finished_at"] = now_iso()
+        return_code = 1
+    finally:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(report_path, report)
+        print(json.dumps({
+            "ok": report.get("ok"),
+            "report": str(report_path),
+            "out_dir": str(Path(args.out_dir).expanduser().resolve()),
+            "passed": sum(1 for item in report.get("cases", []) if item.get("status") == "pass"),
+            "failed": sum(1 for item in report.get("cases", []) if item.get("status") == "fail"),
+            "skipped": len(report.get("skips", [])),
+            "error": report.get("error"),
+        }, ensure_ascii=False, indent=2))
+    return return_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

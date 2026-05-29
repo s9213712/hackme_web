@@ -60,6 +60,74 @@ def sanitize_text(value) -> str:
     return SENSITIVE_RE.sub(lambda match: (match.group(1) or "") + "***" if match.group(1) else "hf_***", text)
 
 
+def _ask_text(label: str, current):
+    shown = str(current or "")
+    value = input(f"{label} [{shown}]: ").strip()
+    return value or current
+
+
+def _ask_choice(label: str, current: str, choices: tuple[str, ...]) -> str:
+    allowed = ", ".join(choices)
+    while True:
+        value = input(f"{label} ({allowed}) [{current}]: ").strip()
+        if not value:
+            return current
+        if value in choices:
+            return value
+        print(f"Enter one of: {allowed}", file=sys.stderr)
+
+
+def _ask_int(label: str, current: int) -> int:
+    while True:
+        value = input(f"{label} [{current}]: ").strip()
+        if not value:
+            return int(current)
+        try:
+            return int(value)
+        except ValueError:
+            print("Enter an integer.", file=sys.stderr)
+
+
+def _ask_float(label: str, current: float) -> float:
+    while True:
+        value = input(f"{label} [{current}]: ").strip()
+        if not value:
+            return float(current)
+        try:
+            return float(value)
+        except ValueError:
+            print("Enter a number.", file=sys.stderr)
+
+
+def apply_interactive_prompts(args):
+    if not getattr(args, "interactive", False):
+        return args
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise ProbeError("--interactive requires a TTY; omit it for non-interactive CLI runs.")
+    print("Interactive GGUF txt2img probe. Press Enter to keep the shown value.")
+    args.gguf_profile = _ask_text("GGUF profile id", args.gguf_profile)
+    args.model = _ask_text("HF GGUF repo id", args.model)
+    args.gguf_file = _ask_text("GGUF filename (blank = auto select)", args.gguf_file)
+    args.backend = _ask_choice("Backend", args.backend, ("auto", "inspect", "diffusers", "comfyui"))
+    args.base_repo = _ask_text("Base Diffusers repo", args.base_repo)
+    args.prompt = _ask_text("Positive prompt", args.prompt)
+    args.negative_prompt = _ask_text("Negative prompt", args.negative_prompt)
+    args.width = _ask_int("Width", args.width)
+    args.height = _ask_int("Height", args.height)
+    args.steps = _ask_int("Steps", args.steps)
+    args.cfg = _ask_float("CFG", args.cfg)
+    args.seed = _ask_int("Seed", args.seed)
+    args.comfyui_url = _ask_text("ComfyUI URL (required for comfyui backend)", args.comfyui_url)
+    args.install_to_comfyui_unet_dir = _ask_text("ComfyUI UNet/GGUF model directory", args.install_to_comfyui_unet_dir)
+    args.install_to_comfyui_text_encoder_dir = _ask_text("ComfyUI text encoder/clip directory", args.install_to_comfyui_text_encoder_dir)
+    args.install_to_comfyui_vae_dir = _ask_text("ComfyUI VAE directory", args.install_to_comfyui_vae_dir)
+    args.hf_cache_root = _ask_text("HF cache root", args.hf_cache_root)
+    args.hf_token_env = _ask_text("HF token environment variable", args.hf_token_env)
+    args.hf_token_file = _ask_text("HF token file path (blank for env/stdin)", args.hf_token_file)
+    args.out_dir = _ask_text("Output directory", args.out_dir)
+    return args
+
+
 def _explicit_cli_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
     explicit = set()
     for action in parser._actions:
@@ -880,6 +948,7 @@ def parse_args():
             "huggingface-hub gguf pillow psutil pynvml"
         )
     )
+    parser.add_argument("--interactive", action="store_true", help="Prompt for common options while keeping CLI defaults.")
     parser.add_argument("--config", default="", help="Shared JSON config for regular/HF/GGUF probes.")
     parser.add_argument("--gguf-profile", default="", help="Official GGUF profile id from the shared config gguf_profiles map.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
@@ -940,7 +1009,9 @@ def parse_args():
     parser.add_argument("--out-json", default="")
     parser.add_argument("--preflight-only", action="store_true", help="Download and inspect only; do not generate.")
     args = parser.parse_args()
-    return normalize_runtime_paths(apply_config(args, parser))
+    args = apply_config(args, parser)
+    args = apply_interactive_prompts(args)
+    return normalize_runtime_paths(args)
 
 
 def main() -> int:

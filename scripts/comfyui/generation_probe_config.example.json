@@ -94,27 +94,6 @@
       "cfg": 8.0,
       "steps": 20
     },
-    "btaskel_illustrious_xl_v20_q8_0": {
-      "label": "Illustrious XL v2.0 GGUF Q8_0",
-      "status": "failed_visual_reprobe",
-      "enabled": false,
-      "model": "btaskel/Illustrious-XL-v2.0-GGUF",
-      "gguf_file": "illustriousXLV20_v20Stable-Q8_0.gguf",
-      "base_repo": "OnomaAIResearch/Illustrious-XL-v2.0",
-      "aux_repo": "calcuis/illustrious",
-      "aux_clip_l": "illustrious_clip_l.safetensors",
-      "aux_clip_g": "illustrious_clip_g.safetensors",
-      "aux_vae": "illustrious_vae.safetensors",
-      "clip_loader_class": "DualCLIPLoader",
-      "clip_l": "illustrious_clip_l.safetensors",
-      "clip_g": "illustrious_clip_g.safetensors",
-      "clip_type": "sdxl",
-      "vae": "illustrious_vae.safetensors",
-      "sampler": "euler",
-      "scheduler": "normal",
-      "cfg": 6.0,
-      "steps": 24
-    },
     "diving_illustrious_flat_anime_q4_k_m": {
       "label": "Diving Illustrious Flat Anime GGUF Q4_K_M",
       "status": "experimental",

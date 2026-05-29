@@ -49,6 +49,55 @@ def sanitize_text(value) -> str:
     return SENSITIVE_RE.sub(lambda match: (match.group(1) or "") + "***" if match.group(1) else "hf_***", text)
 
 
+def _ask_text(label: str, current):
+    shown = str(current or "")
+    value = input(f"{label} [{shown}]: ").strip()
+    return value or current
+
+
+def _ask_int(label: str, current: int) -> int:
+    while True:
+        value = input(f"{label} [{current}]: ").strip()
+        if not value:
+            return int(current)
+        try:
+            return int(value)
+        except ValueError:
+            print("Enter an integer.", file=sys.stderr)
+
+
+def _ask_float(label: str, current: float) -> float:
+    while True:
+        value = input(f"{label} [{current}]: ").strip()
+        if not value:
+            return float(current)
+        try:
+            return float(value)
+        except ValueError:
+            print("Enter a number.", file=sys.stderr)
+
+
+def apply_interactive_prompts(args):
+    if not getattr(args, "interactive", False):
+        return args
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise ProbeError("--interactive requires a TTY; omit it for non-interactive CLI runs.")
+    print("Interactive regular ComfyUI txt2img probe. Press Enter to keep the shown value.")
+    args.comfyui_url = _ask_text("ComfyUI URL", args.comfyui_url)
+    args.model = _ask_text("Checkpoint model name", args.model)
+    args.prompt = _ask_text("Positive prompt", args.prompt)
+    args.negative_prompt = _ask_text("Negative prompt", args.negative_prompt)
+    args.width = _ask_int("Width", args.width)
+    args.height = _ask_int("Height", args.height)
+    args.steps = _ask_int("Steps", args.steps)
+    args.cfg = _ask_float("CFG", args.cfg)
+    args.seed = _ask_int("Seed", args.seed)
+    args.sampler = _ask_text("Sampler", args.sampler)
+    args.scheduler = _ask_text("Scheduler", args.scheduler)
+    args.out_dir = _ask_text("Output directory", args.out_dir)
+    return args
+
+
 def _explicit_cli_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
     explicit = set()
     for action in parser._actions:
@@ -369,6 +418,7 @@ def run_generation(client: ComfyClient, args, out_png: Path, timings: dict) -> d
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run a standalone regular ComfyUI SDXL txt2img workflow.")
+    parser.add_argument("--interactive", action="store_true", help="Prompt for common options while keeping CLI defaults.")
     parser.add_argument("--config", default="", help="Shared JSON config for regular/HF/GGUF probes.")
     parser.add_argument("--comfyui-url", default="http://127.0.0.1:8188")
     parser.add_argument("--insecure", action="store_true")
@@ -391,7 +441,9 @@ def parse_args():
     parser.add_argument("--out-json", default="")
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
-    return normalize_runtime_paths(apply_config(args, parser))
+    args = apply_config(args, parser)
+    args = apply_interactive_prompts(args)
+    return normalize_runtime_paths(args)
 
 
 def main() -> int:

@@ -52,6 +52,94 @@ def sanitize_text(value) -> str:
     return SENSITIVE_RE.sub(lambda match: (match.group(1) or "") + "***" if match.group(1) else "hf_***", text)
 
 
+def _ask_text(label: str, current):
+    shown = str(current or "")
+    value = input(f"{label} [{shown}]: ").strip()
+    return value or current
+
+
+def _ask_choice(label: str, current: str, choices: tuple[str, ...]) -> str:
+    allowed = ", ".join(choices)
+    while True:
+        value = input(f"{label} ({allowed}) [{current}]: ").strip()
+        if not value:
+            return current
+        if value in choices:
+            return value
+        print(f"Enter one of: {allowed}", file=sys.stderr)
+
+
+def _ask_int(label: str, current: int) -> int:
+    while True:
+        value = input(f"{label} [{current}]: ").strip()
+        if not value:
+            return int(current)
+        try:
+            return int(value)
+        except ValueError:
+            print("Enter an integer.", file=sys.stderr)
+
+
+def _ask_float(label: str, current: float) -> float:
+    while True:
+        value = input(f"{label} [{current}]: ").strip()
+        if not value:
+            return float(current)
+        try:
+            return float(value)
+        except ValueError:
+            print("Enter a number.", file=sys.stderr)
+
+
+def apply_interactive_prompts(args):
+    if not getattr(args, "interactive", False):
+        return args
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise ProbeError("--interactive requires a TTY; omit it for non-interactive CLI runs.")
+    print("Interactive HF Diffusers txt2img probe. Press Enter to keep the shown value.")
+    args.model = _ask_text("HF Diffusers repo id", args.model)
+    args.variant = _ask_text("Variant", args.variant)
+    args.prompt = _ask_text("Positive prompt", args.prompt)
+    args.negative_prompt = _ask_text("Negative prompt", args.negative_prompt)
+    args.width = _ask_int("Width", args.width)
+    args.height = _ask_int("Height", args.height)
+    args.steps = _ask_int("Steps", args.steps)
+    args.cfg = _ask_float("CFG", args.cfg)
+    args.seed = _ask_int("Seed", args.seed)
+    args.device = _ask_text("Device", args.device)
+    args.dtype = _ask_text("Dtype", args.dtype)
+    args.device_map = _ask_text("Device map", args.device_map)
+    args.pipeline_loader = _ask_choice("Pipeline loader", args.pipeline_loader, ("auto", "diffusion"))
+    args.model_card_hints = _ask_choice("Model-card hints", args.model_card_hints, ("auto", "off", "force"))
+    args.hf_cache_root = _ask_text("HF cache root", args.hf_cache_root)
+    args.hf_token_env = _ask_text("HF token environment variable", args.hf_token_env)
+    args.hf_token_file = _ask_text("HF token file path (blank for env/stdin)", args.hf_token_file)
+    args.out_dir = _ask_text("Output directory", args.out_dir)
+    explicit = set(getattr(args, "_explicit_cli_dests", []) or [])
+    explicit.update({
+        "model",
+        "variant",
+        "prompt",
+        "negative_prompt",
+        "width",
+        "height",
+        "steps",
+        "cfg",
+        "seed",
+        "device",
+        "dtype",
+        "device_map",
+        "pipeline_loader",
+        "model_card_hints",
+        "hf_cache_root",
+        "hf_token_env",
+        "hf_token_file",
+        "out_dir",
+    })
+    args._explicit_cli_dests = sorted(explicit)
+    return args
+
+
 def _explicit_cli_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
     explicit = set()
     for action in parser._actions:
@@ -641,6 +729,7 @@ def parse_args():
             "huggingface-hub pillow psutil pynvml"
         )
     )
+    parser.add_argument("--interactive", action="store_true", help="Prompt for common options while keeping CLI defaults.")
     parser.add_argument("--config", default="", help="Shared JSON config for regular/HF/GGUF probes.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--variant", default="fp16")
@@ -675,7 +764,9 @@ def parse_args():
     argv = sys.argv[1:]
     args = parser.parse_args(argv)
     args._explicit_cli_dests = sorted(_explicit_cli_dests(parser, argv))
-    return normalize_runtime_paths(apply_config(args, parser, argv=argv))
+    args = apply_config(args, parser, argv=argv)
+    args = apply_interactive_prompts(args)
+    return normalize_runtime_paths(args)
 
 
 def main() -> int:

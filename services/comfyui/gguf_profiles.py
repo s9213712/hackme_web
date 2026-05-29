@@ -202,13 +202,15 @@ OFFICIAL_GGUF_PROFILES = {
         "family": "sdxl",
         "status": "failed_visual_reprobe",
         "enabled": False,
+        "hidden": True,
+        "disabled_reason": "生成圖異常，已放棄 btaskel Illustrious XL v2.0 GGUF 支援",
         "repo_id": "btaskel/Illustrious-XL-v2.0-GGUF",
         "base_repo": "OnomaAIResearch/Illustrious-XL-v2.0",
         "workflow_family": "sdxl_dual_clip_gguf",
         "clip_loader_class": "DualCLIPLoader",
         "clip_type": "sdxl",
         "source_url": "https://huggingface.co/btaskel/Illustrious-XL-v2.0-GGUF",
-        "prompt_style_hint": "Remote reprobe 2026-05-29 completed but visual output was judged abnormal; keep disabled until a better model-card mapping is found.",
+        "prompt_style_hint": "Remote reprobe 2026-05-29 completed but visual output was judged abnormal; hidden from public options and kept only as an internal failed-record profile.",
         "sampler_defaults": {"sampler_name": "euler", "scheduler": "normal", "cfg": 6.0, "steps": 24},
         "companions": [
             {

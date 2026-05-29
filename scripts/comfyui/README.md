@@ -5,9 +5,10 @@ This folder holds ComfyUI-specific live probes and helper tooling.
 - [comfyui_run_in_linux.template.sh](comfyui_run_in_linux.template.sh): Linux local startup template that operators can download from the root ComfyUI settings panel
 - [feature_probe.py](feature_probe.py): end-to-end ComfyUI feature probe
 - [hf_diffusers_repo_smoke.sh](hf_diffusers_repo_smoke.sh): batch HF Diffusers repo smoke runner; supports `HF_TOKEN`, `--hf-token-file`, and `--hf-token-stdin` without writing tokens to config or reports, and copies each image to repo-slug PNGs for live audit; by default it generates the current 1girl beach prompt and the legacy 2girls prompt
-- [standalone_hf_diffusers_txt2img.py](standalone_hf_diffusers_txt2img.py): direct HF Diffusers txt2img probe for another machine; it does not call hackme_web and records cache placement, timings, output image, and resource peaks
-- [standalone_gguf_txt2img.py](standalone_gguf_txt2img.py): direct GGUF probe for another machine; GGUF should be selected from an official profile because each model needs its own UNet/CLIP/VAE/loader map
-- [standalone_regular_comfyui_txt2img.py](standalone_regular_comfyui_txt2img.py): direct ComfyUI API SDXL checkpoint workflow probe for the regular JAN v777 path
+- [standalone_hf_diffusers_txt2img.py](standalone_hf_diffusers_txt2img.py): direct HF Diffusers txt2img probe for another machine; it does not call hackme_web and records cache placement, timings, output image, and resource peaks; supports `--interactive` for TTY-guided setup
+- [standalone_gguf_txt2img.py](standalone_gguf_txt2img.py): direct GGUF probe for another machine; GGUF should be selected from an official profile because each model needs its own UNet/CLIP/VAE/loader map; supports `--interactive` for TTY-guided setup
+- [standalone_regular_comfyui_txt2img.py](standalone_regular_comfyui_txt2img.py): direct ComfyUI API SDXL checkpoint workflow probe for the regular JAN v777 path; supports `--interactive` for TTY-guided setup
+- [standalone_comfyui_i2i_matrix.py](standalone_comfyui_i2i_matrix.py): direct ComfyUI API I2I matrix for img2img, inpaint delete/repair, replacement edit, outpaint, ControlNet copy-composition when available, redraw-upscale via `ImageScale + VAEEncode + KSampler`, two-image blend, IPAdapter style reference, and IPAdapter plus masked inpaint; supports `InpaintModelConditioning`/`DifferentialDiffusion` reprobes, per-side outpaint controls, and `--interactive` for TTY-guided setup
 - [generation_probe_config.example.json](generation_probe_config.example.json): shared config for all three standalone generation probes; CLI flags override the config when explicitly supplied
 - [generation_probe_dependencies.md](generation_probe_dependencies.md): remote runtime package/model dependency checklist and standard commands
 - [generation_probe_requirements.txt](generation_probe_requirements.txt): pip requirements for the isolated WSL dependency target used by the standalone probes
@@ -26,6 +27,11 @@ concrete pipeline class. The repo smoke runner also reads the model card's
 Diffusers `from_pretrained(...)` snippet by default and applies loader hints
 such as `dtype=torch.bfloat16`, `device_map="cuda"`, `revision`, `variant`, and
 `subfolder` unless the operator explicitly overrides those flags.
+
+All standalone scripts keep non-interactive CLI mode as the default. Add
+`--interactive` only when running in a real terminal and you want prompts for
+common values; CI, remote automation, and copied command lines should keep using
+explicit flags or the shared config file.
 
 ```bash
 export HF_TOKEN=...
@@ -80,13 +86,19 @@ python3 standalone_gguf_txt2img.py \
   through `UnetLoaderGGUF + DualCLIPLoader`.
 
 `calcuis/sd3.5-large-gguf` was tested and then removed from the supported probe
-set after visual output was judged abnormal. Keep SD35 GGUF disabled unless a
-new mapping and visual reprobe passes.
+set after visual output was judged abnormal. Do not expose SD35 GGUF publicly
+unless a new mapping and visual reprobe passes.
 
 ```bash
 python3 standalone_regular_comfyui_txt2img.py \
   --config generation_probe_config.example.json \
   --out-dir /tmp/hackme_regular_comfyui_probe
+```
+
+```bash
+python3 standalone_comfyui_i2i_matrix.py \
+  --comfyui-url http://127.0.0.1:8188 \
+  --out-dir /tmp/hackme_comfyui_i2i_matrix
 ```
 
 For GGUF diagnosis without generation, run `standalone_gguf_txt2img.py --backend inspect --preflight-only`. Do not expose arbitrary GGUF repos as customer-facing options until a profile has been model-card mapped, predownloaded, and visually verified.
