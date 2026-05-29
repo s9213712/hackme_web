@@ -35,6 +35,7 @@ def register_comfyui_runtime_routes(app, ctx):
     _comfyui_storage_warnings = ctx.get("comfyui_storage_warnings", lambda: [])
     _comfyui_paid_api_status_payload = ctx.get("comfyui_paid_api_status_payload", lambda: {})
     _official_gguf_profiles = ctx.get("official_gguf_profiles", lambda: [])
+    _installed_gguf_inventory = ctx.get("installed_gguf_inventory", lambda values: [])
     _build_node_catalog = ctx.get("build_node_catalog")
     _configured_comfyui_port = ctx["configured_comfyui_port"]
     _configured_comfyui_url = ctx["configured_comfyui_url"]
@@ -230,6 +231,7 @@ def register_comfyui_runtime_routes(app, ctx):
                 "latent_upscale_models": [],
                 "clip_vision_models": [],
                 "diffusion_models": [],
+                "installed_gguf_models": [],
                 "clip_models": [],
                 "controlnet_types": {},
                 "generation_modes": [],
@@ -265,6 +267,7 @@ def register_comfyui_runtime_routes(app, ctx):
             clip_vision_models = []
         lora_details = _build_lora_details(loras)
         model_families = (capabilities or {}).get("model_families") or []
+        diffusion_models = list((capabilities or {}).get("diffusion_models") or [])
         return json_resp({
             "ok": True,
             "models": models,
@@ -284,7 +287,8 @@ def register_comfyui_runtime_routes(app, ctx):
             "upscale_models": (capabilities or {}).get("upscale_models") or [],
             "latent_upscale_models": latent_upscale_models,
             "clip_vision_models": clip_vision_models,
-            "diffusion_models": (capabilities or {}).get("diffusion_models") or [],
+            "diffusion_models": diffusion_models,
+            "installed_gguf_models": _installed_gguf_inventory(diffusion_models),
             "clip_models": (capabilities or {}).get("clip_models") or [],
             "controlnet_types": (capabilities or {}).get("controlnet_types") or {},
             "generation_modes": (capabilities or {}).get("generation_modes") or [],
@@ -295,6 +299,37 @@ def register_comfyui_runtime_routes(app, ctx):
             "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
             "paid_api_nodes": _comfyui_paid_api_status_payload(),
             "storage_warnings": _comfyui_storage_warnings(),
+        })
+
+    @app.route("/api/comfyui/installed-gguf", methods=["GET"])
+    @require_csrf_safe
+    def comfyui_installed_gguf():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        binding = _comfyui_binding(actor)
+        active_client = _client_for_url(binding["url"])
+        try:
+            capabilities = active_client.get_capabilities() if hasattr(active_client, "get_capabilities") else {}
+        except ComfyUIError as exc:
+            unavailable = _comfyui_unavailable_payload(exc, active_client)
+            return json_resp({
+                **unavailable,
+                "installed_gguf_models": [],
+                "gguf_profiles": _official_gguf_profiles(),
+                "connection_mode": binding["connection_mode"],
+                "backend_scope": binding["backend_scope"],
+                "comfyui_url": getattr(active_client, "base_url", binding["url"]),
+            }, 503)
+        diffusion_models = list((capabilities or {}).get("diffusion_models") or [])
+        return json_resp({
+            "ok": True,
+            "installed_gguf_models": _installed_gguf_inventory(diffusion_models),
+            "diffusion_models": diffusion_models,
+            "gguf_profiles": _official_gguf_profiles(),
+            "connection_mode": binding["connection_mode"],
+            "backend_scope": binding["backend_scope"],
+            "comfyui_url": getattr(active_client, "base_url", binding["url"]),
         })
 
     @app.route("/api/comfyui/diffusers/inspect", methods=["GET", "POST"])

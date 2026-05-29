@@ -2133,12 +2133,16 @@
               <select id="comfyui-diffusers-gguf-variant">
                 <option value="">先選擇官方 GGUF profile</option>
               </select>
+              <div class="drive-card-sub" id="comfyui-diffusers-gguf-profile-hint">官方 profile 會帶入對應 workflow、文字編碼器、VAE 與已驗證精度。</div>
               <label>GGUF Base Diffusers Repo</label>
               <input type="text" id="comfyui-diffusers-gguf-base-repo" placeholder="stabilityai/stable-diffusion-xl-base-1.0" autocomplete="off" />
               <div class="drive-card-sub">GGUF 需選用官方已驗證 profile；不同模型會綁定自己的 CLIP / VAE / loader / workflow。ComfyUI-GGUF 原生 UNet 會自動改走 ComfyUI workflow；遠端 ComfyUI 需先把 profile companion models 放在對應模型目錄。</div>
+              <div id="comfyui-installed-gguf-list" class="drive-file-list" style="margin-top:.5rem;">
+                <div class="drive-empty">已安裝 GGUF 清單尚未讀取。</div>
+              </div>
             </div>
             <div class="drive-card-sub" id="comfyui-diffusers-repo-status">貼上 repo 後會先檢查支援模式與可下載精度版本。</div>
-            <div class="drive-card-sub">Diffusers 模式可在這裡輸入 namespace/model 簡寫或 Hugging Face 模型頁網址；此欄會覆蓋 root 的預設 repo。</div>
+            <div class="drive-card-sub">Diffusers 模式只支援 Hugging Face 模型頁「Use this model」內有 Diffusers 的 repo；可輸入 namespace/model 或模型頁網址，此欄會覆蓋 root 的預設 repo。</div>
           </div>
           <div class="field">
             <label>模型</label>
@@ -7325,7 +7329,7 @@
 <script src="/js/35-drive.js?v=20260525-chat-attachment-dedupe" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
 <!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
-<script src="/js/36-comfyui.js?v=20260528-comfyui-hf-cache" defer></script>
+<script src="/js/36-comfyui.js?v=20260529-comfyui-gguf-disabled-cleanup" defer></script>
 <script src="/js/36-comfyui-workflows.js?v=20260520-embedding-empty-hide" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/41-game-modules.js?v=20260518-game-ux" defer></script>

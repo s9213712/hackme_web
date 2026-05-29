@@ -37,6 +37,7 @@ let comfyuiGenerationModes = [];
 let comfyuiModelFamilies = [];
 let comfyuiDiffusersInspection = null;
 let comfyuiGgufProfiles = [];
+let comfyuiInstalledGgufModels = [];
 const comfyuiDiffusersInspectCache = new Map();
 const comfyuiDiffusersInspectInflight = new Map();
 let comfyuiHistoryItems = [];
@@ -593,6 +594,49 @@ function comfyuiGgufVariantLabel(variant) {
   return `${label}${sizeText}${status}`;
 }
 
+function renderComfyuiGgufProfileHint() {
+  const hint = $("comfyui-diffusers-gguf-profile-hint");
+  if (!hint) return;
+  const profile = comfyuiSelectedGgufProfile();
+  const variant = comfyuiSelectedGgufVariant();
+  if (!profile) {
+    hint.textContent = "官方 profile 會帶入對應 workflow、文字編碼器、VAE 與已驗證精度。";
+    return;
+  }
+  const parts = [];
+  if (profile.prompt_style_hint) parts.push(String(profile.prompt_style_hint));
+  const status = [profile.status, variant?.status].filter(Boolean).join(" / ");
+  if (status) parts.push(`狀態：${status}`);
+  if (profile.family) parts.push(`family：${profile.family}`);
+  hint.textContent = parts.join(" ");
+}
+
+function renderComfyuiInstalledGgufModels(items = []) {
+  const box = $("comfyui-installed-gguf-list");
+  if (!box) return;
+  const rows = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (!rows.length) {
+    box.innerHTML = '<div class="drive-empty">尚未偵測到已安裝 GGUF UNet。</div>';
+    return;
+  }
+  box.innerHTML = rows.map((item) => {
+    const name = item.basename || item.name || item.option || "GGUF";
+    const mapped = item.official_profile ? "官方 profile" : "未建檔";
+    const profile = item.profile_label || item.profile_id || "";
+    const variant = item.variant_label || item.variant_id || "";
+    const status = item.enabled ? "可用" : (item.status || "未開放");
+    const size = Number(item.size_bytes || 0);
+    const sizeText = size > 0 && typeof formatDriveBytes === "function" ? ` · ${formatDriveBytes(size)}` : "";
+    const meta = [mapped, profile, variant, `${status}${sizeText}`].filter(Boolean).join(" · ");
+    return `<div class="drive-file-row">
+      <div>
+        <strong>${sanitize(name)}</strong>
+        <div class="drive-card-sub">${sanitize(meta)}</div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
 function fillComfyuiGgufVariants(profileId = "") {
   const select = $("comfyui-diffusers-gguf-variant");
   if (!select) return;
@@ -601,6 +645,7 @@ function fillComfyuiGgufVariants(profileId = "") {
   if (!profile) {
     select.innerHTML = '<option value="">先選擇官方 GGUF profile</option>';
     select.disabled = true;
+    renderComfyuiGgufProfileHint();
     return;
   }
   select.disabled = false;
@@ -614,6 +659,7 @@ function fillComfyuiGgufVariants(profileId = "") {
   if (enabledDefault && !variants.some((variant) => String(variant?.id || "") === select.value && variant?.enabled)) {
     select.value = enabledDefault.id || "";
   }
+  renderComfyuiGgufProfileHint();
 }
 
 function fillComfyuiGgufProfiles(profiles = []) {
@@ -631,6 +677,7 @@ function fillComfyuiGgufProfiles(profiles = []) {
     select.value = previous;
   }
   fillComfyuiGgufVariants(select.value || "");
+  renderComfyuiGgufProfileHint();
 }
 
 function updateComfyuiGgufProfileSelection({ syncRepo = true } = {}) {
@@ -648,6 +695,7 @@ function updateComfyuiGgufProfileSelection({ syncRepo = true } = {}) {
   if (profile && variant && baseInput && !baseInput.value) {
     baseInput.value = profile.base_repo || "";
   }
+  renderComfyuiGgufProfileHint();
   updateComfyuiDiffusersGgufOptions();
 }
 
@@ -3581,6 +3629,8 @@ async function loadComfyuiModels(options = {}) {
     fillComfyuiGenerationModes(json.generation_modes || []);
     renderComfyuiModelFamilyHints(json.model_families || []);
     fillComfyuiGgufProfiles(json.gguf_profiles || []);
+    comfyuiInstalledGgufModels = Array.isArray(json.installed_gguf_models) ? json.installed_gguf_models : [];
+    renderComfyuiInstalledGgufModels(comfyuiInstalledGgufModels);
     fillComfyuiControlnetTypes(json.controlnet_types || {});
     fillComfyuiUpscaleModels(json.upscale_models || []);
     fillComfyuiControlnetModelOptions();

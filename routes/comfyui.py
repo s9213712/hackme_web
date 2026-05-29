@@ -63,6 +63,8 @@ from services.comfyui.client import (
 )
 from services.comfyui.files import normalize_file_ref as normalize_comfyui_file_ref
 from services.comfyui.gguf_profiles import (
+    gguf_profile_unavailable_message,
+    installed_gguf_inventory,
     public_gguf_profiles,
     resolve_official_gguf_selection,
 )
@@ -1538,7 +1540,7 @@ def register_comfyui_routes(app, deps):
                 if not profile or not profile_variant:
                     return capabilities, "GGUF 只允許官方已建檔 profile，請從官方 GGUF 下拉選單選擇模型與精度。"
                 if not profile.get("enabled") or not profile_variant.get("enabled"):
-                    return capabilities, f"GGUF profile「{profile.get('label') or profile.get('id')}」的 {profile_variant.get('label') or profile_variant.get('id')} 尚未通過本站驗證，暫不開放。"
+                    return capabilities, gguf_profile_unavailable_message(profile, profile_variant)
                 model_repo = str(profile.get("repo_id") or model_repo).strip()
                 selected_gguf_file = str(profile_variant.get("gguf_file") or selected_gguf_file).strip()
                 params["diffusers_gguf_profile"] = str(profile.get("id") or "")
@@ -1577,7 +1579,7 @@ def register_comfyui_routes(app, deps):
                     if not profile or not profile_variant:
                         return {**(capabilities or {}), "diffusers_inspection": inspection}, "GGUF 只允許官方已建檔 profile，請從官方 GGUF 下拉選單選擇模型與精度。"
                     if not profile.get("enabled") or not profile_variant.get("enabled"):
-                        return {**(capabilities or {}), "diffusers_inspection": inspection}, f"GGUF profile「{profile.get('label') or profile.get('id')}」的 {profile_variant.get('label') or profile_variant.get('id')} 尚未通過本站驗證，暫不開放。"
+                        return {**(capabilities or {}), "diffusers_inspection": inspection}, gguf_profile_unavailable_message(profile, profile_variant)
                     params["diffusers_gguf_profile"] = str(profile.get("id") or "")
                     params["diffusers_gguf_variant"] = str(profile_variant.get("id") or "")
                     params["diffusers_gguf_base_repo"] = str(profile.get("base_repo") or params.get("diffusers_gguf_base_repo") or "").strip()
@@ -1592,6 +1594,7 @@ def register_comfyui_routes(app, deps):
                     return {**(capabilities or {}), "diffusers_inspection": inspection}, "選擇的模型精度版本不在 Hugging Face repo metadata 中。"
                 params["diffusers_model_variant"] = selected_variant
                 params["diffusers_gguf_file"] = selected_gguf_file
+                params["diffusers_model_card_hints"] = inspection.get("model_card_hints") or {}
                 if selected_gguf_file:
                     base_repo = normalize_huggingface_repo_id(
                         params.get("diffusers_gguf_base_repo") or inspection.get("suggested_base_repo"),
@@ -2589,16 +2592,27 @@ def register_comfyui_routes(app, deps):
     def _select_gguf_profile_runtime_models(native_client, capabilities, profile, variant, gguf_file):
         available_nodes = set((capabilities or {}).get("available_nodes") or [])
         clip_loader_class = str((profile or {}).get("clip_loader_class") or "DualCLIPLoaderGGUF").strip() or "DualCLIPLoaderGGUF"
+        workflow_family = str((profile or {}).get("workflow_family") or "").strip()
         required_nodes = {
             "UnetLoaderGGUF",
             clip_loader_class,
             "CLIPTextEncode",
-            "EmptyLatentImage",
             "KSampler",
             "VAEDecode",
             "VAELoader",
             "SaveImage",
         }
+        if workflow_family == "sd3_triple_clip_gguf":
+            required_nodes.update({
+                "ModelSamplingSD3",
+                "EmptySD3LatentImage",
+                "ConditioningZeroOut",
+                "ConditioningSetTimestepRange",
+                "ConditioningCombine",
+                "ImageScale",
+            })
+        else:
+            required_nodes.add("EmptyLatentImage")
         missing_nodes = sorted(required_nodes - available_nodes)
         if missing_nodes:
             raise ComfyUIError(
@@ -2633,8 +2647,10 @@ def register_comfyui_routes(app, deps):
         if missing:
             raise ComfyUIError(f"ComfyUI-GGUF 自動路由缺少 {profile_label} 模型：" + "；".join(missing))
         sampler_defaults = (profile or {}).get("sampler_defaults") if isinstance((profile or {}).get("sampler_defaults"), dict) else {}
+        native_policy = (profile or {}).get("native_resolution_policy") if isinstance((profile or {}).get("native_resolution_policy"), dict) else {}
         return {
             "unet_name": unet_name,
+            "workflow_family": workflow_family,
             "clip_loader_class": clip_loader_class,
             "clip_type": str((profile or {}).get("clip_type") or "").strip(),
             "clip_name1": resolved.get("clip_name1", ""),
@@ -2653,7 +2669,32 @@ def register_comfyui_routes(app, deps):
             ),
             "cfg": sampler_defaults.get("cfg"),
             "steps": sampler_defaults.get("steps"),
+            "sd3_shift": sampler_defaults.get("sd3_shift"),
+            "sd3_negative_split": sampler_defaults.get("sd3_negative_split"),
+            "native_max_megapixels": native_policy.get("max_megapixels"),
+            "native_multiple_of": native_policy.get("multiple_of"),
+            "output_upscale_method": native_policy.get("output_upscale_method"),
         }
+
+    def _fit_native_generation_dimensions(width, height, *, max_megapixels=1.05, multiple_of=64):
+        requested_width = max(64, int(width or 1024))
+        requested_height = max(64, int(height or 1024))
+        multiple = max(8, int(multiple_of or 64))
+        max_pixels = max(multiple * multiple, int(float(max_megapixels or 1.05) * 1_000_000))
+        scale = 1.0
+        pixels = requested_width * requested_height
+        if pixels > max_pixels:
+            scale = (max_pixels / float(pixels)) ** 0.5
+        native_width = max(multiple, int((requested_width * scale) // multiple) * multiple)
+        native_height = max(multiple, int((requested_height * scale) // multiple) * multiple)
+        while native_width * native_height > max_pixels and (native_width > multiple or native_height > multiple):
+            if native_width >= native_height and native_width > multiple:
+                native_width -= multiple
+            elif native_height > multiple:
+                native_height -= multiple
+            else:
+                break
+        return native_width, native_height
 
     def _install_cached_gguf_to_local_comfyui(prepared, native_binding):
         gguf_path = Path(str((prepared or {}).get("path") or ""))
@@ -2706,7 +2747,7 @@ def register_comfyui_routes(app, deps):
         if not profile or not profile_variant:
             raise ComfyUIError("GGUF 只允許官方已建檔 profile，請從官方 GGUF 下拉選單選擇模型與精度。")
         if not profile.get("enabled") or not profile_variant.get("enabled"):
-            raise ComfyUIError(f"GGUF profile「{profile.get('label') or profile.get('id')}」的 {profile_variant.get('label') or profile_variant.get('id')} 尚未通過本站驗證，暫不開放。")
+            raise ComfyUIError(gguf_profile_unavailable_message(profile, profile_variant))
         params["diffusers_gguf_profile"] = str(profile.get("id") or "")
         params["diffusers_gguf_variant"] = str(profile_variant.get("id") or "")
         params["diffusers_model_repo"] = str(profile.get("repo_id") or params.get("diffusers_model_repo") or "").strip()
@@ -2751,6 +2792,17 @@ def register_comfyui_routes(app, deps):
                 capabilities["diffusion_models"] = sorted(set(refreshed_options + diffusion_options + [installed_name]))
             gguf_option = resolve_model_option(installed_name, (capabilities or {}).get("diffusion_models") or []) or installed_name
         runtime_models = _select_gguf_profile_runtime_models(native_client, capabilities, profile, profile_variant, gguf_option)
+        requested_width = int(params.get("width") or 1024)
+        requested_height = int(params.get("height") or 1024)
+        native_width = requested_width
+        native_height = requested_height
+        if runtime_models.get("workflow_family") == "sd3_triple_clip_gguf":
+            native_width, native_height = _fit_native_generation_dimensions(
+                requested_width,
+                requested_height,
+                max_megapixels=float(runtime_models.get("native_max_megapixels") or 1.05),
+                multiple_of=int(runtime_models.get("native_multiple_of") or 64),
+            )
         routed_params = dict(params)
         routed_params.update({
             "backend_kind": "comfyui_gguf",
@@ -2758,6 +2810,7 @@ def register_comfyui_routes(app, deps):
             "model": runtime_models["unet_name"],
             "diffusion_model": runtime_models["unet_name"],
             "comfyui_gguf_unet_name": runtime_models["unet_name"],
+            "workflow_family": runtime_models.get("workflow_family") or "",
             "clip_loader_class": runtime_models["clip_loader_class"],
             "clip_type": runtime_models["clip_type"],
             "clip": runtime_models["clip_name1"],
@@ -2768,6 +2821,13 @@ def register_comfyui_routes(app, deps):
             "scheduler": _select_enum_option(params.get("scheduler"), (capabilities or {}).get("schedulers") or [], [runtime_models["scheduler"]]),
             "steps": _int_range(params.get("steps"), int(runtime_models.get("steps") or 24), 1, 80),
             "cfg": _float_range(params.get("cfg"), float(runtime_models.get("cfg") or 5.0), 1.0, 30.0),
+            "sd3_shift": _float_range(params.get("sd3_shift"), float(runtime_models.get("sd3_shift") or 3.0), 0.0, 20.0),
+            "sd3_negative_split": _float_range(params.get("sd3_negative_split"), float(runtime_models.get("sd3_negative_split") or 0.1), 0.0, 1.0),
+            "sd3_native_width": native_width,
+            "sd3_native_height": native_height,
+            "output_width": requested_width,
+            "output_height": requested_height,
+            "output_upscale_method": str(runtime_models.get("output_upscale_method") or "lanczos").strip() or "lanczos",
             "filename_prefix": params.get("filename_prefix") or "hackme_web_gguf",
         })
         _update_generation_job_progress(job_id, {
@@ -3511,7 +3571,7 @@ def register_comfyui_routes(app, deps):
             if not profile or not profile_variant:
                 return None, "GGUF 只允許官方已建檔 profile，請從官方 GGUF 下拉選單選擇模型與精度"
             if not profile.get("enabled") or not profile_variant.get("enabled"):
-                return None, f"GGUF profile「{profile.get('label') or profile.get('id')}」的 {profile_variant.get('label') or profile_variant.get('id')} 尚未通過本站驗證，暫不開放"
+                return None, gguf_profile_unavailable_message(profile, profile_variant).rstrip("。")
             diffusers_gguf_profile = str(profile.get("id") or "")
             diffusers_gguf_variant = str(profile_variant.get("id") or "")
             diffusers_model_repo = str(profile.get("repo_id") or "").strip()
@@ -3910,6 +3970,7 @@ def register_comfyui_routes(app, deps):
         "local_comfyui_runtime_status": _local_comfyui_runtime_status,
         "comfyui_paid_api_status_payload": _comfyui_paid_api_status_payload,
         "official_gguf_profiles": public_gguf_profiles,
+        "installed_gguf_inventory": installed_gguf_inventory,
         "build_node_catalog": build_node_catalog,
         "normalize_generation_payload": _normalize_generation_payload,
         "normalize_generation_timeout": _normalize_generation_timeout,

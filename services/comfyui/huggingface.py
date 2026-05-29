@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import importlib.util
 import os
 import re
 import time
 from pathlib import PurePosixPath
+from urllib import request as urllib_request
 
 from services.comfyui.settings import normalize_huggingface_repo_id
 
@@ -29,10 +31,26 @@ _PRECISION_LABELS = {
     "fp32": "FP32",
 }
 _PRECISION_ORDER = {"default": 0, "fp16": 1, "bf16": 2, "fp32": 3}
+_DIFFUSERS_COMPONENT_DIRS = {
+    "controlnet",
+    "prior",
+    "text_conditioner",
+    "text_encoder",
+    "text_encoder_2",
+    "text_encoder_3",
+    "transformer",
+    "unet",
+    "vae",
+}
 _HF_REPO_INSPECT_CACHE = {}
 _HF_REPO_INSPECT_CACHE_TTL_SECONDS = max(
     0,
     min(3600, int(os.environ.get("COMFYUI_HF_REPO_INSPECT_CACHE_SECONDS", "60") or "60")),
+)
+_FROM_PRETRAINED_RE = re.compile(
+    r"(?P<class>[A-Za-z_][A-Za-z0-9_]*Pipeline)\.from_pretrained\(\s*"
+    r"(?P<quote>['\"])(?P<repo>[^'\"]+)(?P=quote)(?P<args>.*?)\)",
+    re.DOTALL,
 )
 
 
@@ -107,6 +125,97 @@ def _sibling_size(sibling):
     return value if isinstance(value, int) and value >= 0 else None
 
 
+def _arg_value(call_args, name):
+    match = re.search(rf"\b{re.escape(name)}\s*=\s*(?P<value>\"[^\"]*\"|'[^']*'|[^,\n)]+)", str(call_args or ""))
+    return match.group("value").strip() if match else ""
+
+
+def _string_literal_value(value):
+    raw = str(value or "").strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+        return raw[1:-1]
+    return ""
+
+
+def _bool_literal_value(value):
+    raw = str(value or "").strip().lower()
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    return None
+
+
+def _dtype_hint(value):
+    lowered = str(value or "").lower()
+    if "bfloat16" in lowered or "bf16" in lowered:
+        return "bfloat16"
+    if "float16" in lowered or "fp16" in lowered or "torch.half" in lowered:
+        return "float16"
+    if "float32" in lowered or "fp32" in lowered:
+        return "float32"
+    return ""
+
+
+def parse_diffusers_model_card_hints(card_text, repo_id):
+    hints = {}
+    for match in _FROM_PRETRAINED_RE.finditer(str(card_text or "")):
+        if match.group("repo") != repo_id:
+            continue
+        class_name = match.group("class")
+        call_args = match.group("args") or ""
+        if class_name == "DiffusionPipeline":
+            hints["pipeline_loader"] = "diffusion"
+        elif class_name == "AutoPipelineForText2Image":
+            hints["pipeline_loader"] = "auto"
+        for dtype_kwarg in ("dtype", "torch_dtype"):
+            dtype = _dtype_hint(_arg_value(call_args, dtype_kwarg))
+            if dtype:
+                hints["dtype"] = dtype
+                hints["dtype_kwarg"] = dtype_kwarg
+                break
+        for name in ("device_map", "variant", "revision", "subfolder", "custom_pipeline"):
+            value = _string_literal_value(_arg_value(call_args, name))
+            if value:
+                hints[name] = value
+        trust_remote_code = _bool_literal_value(_arg_value(call_args, "trust_remote_code"))
+        if trust_remote_code is not None:
+            hints["trust_remote_code"] = trust_remote_code
+        if hints:
+            hints["source"] = "model_card"
+            hints["class_name"] = class_name
+            break
+    return hints
+
+
+def _load_model_card_hints(repo_id, token):
+    try:
+        from huggingface_hub import hf_hub_download
+
+        path = hf_hub_download(repo_id=repo_id, filename="README.md", repo_type="model", token=(token or None))
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            hints = parse_diffusers_model_card_hints(fh.read(), repo_id)
+        if hints:
+            return hints
+    except Exception:
+        pass
+    try:
+        url = f"https://huggingface.co/{repo_id}"
+        headers = {"User-Agent": "hackme-hf-diffusers-inspect/1.0"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib_request.Request(url, headers=headers)
+        with urllib_request.urlopen(req, timeout=20) as response:
+            page_text = response.read().decode("utf-8", errors="replace")
+        hints = parse_diffusers_model_card_hints(html.unescape(page_text), repo_id)
+        if hints:
+            hints["source"] = "model_page"
+            return hints
+    except Exception:
+        pass
+    return {}
+
+
 def _precision_from_filename(filename):
     lowered = str(filename or "").lower()
     if re.search(r"(^|[._/-])(fp16|float16|half)([._/-]|$)", lowered):
@@ -133,6 +242,13 @@ def _option_sort_key(option):
 def build_diffusers_variant_options(siblings):
     groups = {}
     gguf_options = []
+    sibling_names = [_sibling_filename(sibling) for sibling in (siblings or [])]
+    has_component_weights = any(
+        PurePosixPath(name).suffix.lower() in {".safetensors", ".bin"}
+        and PurePosixPath(name).parts
+        and PurePosixPath(name).parts[0] in _DIFFUSERS_COMPONENT_DIRS
+        for name in sibling_names
+    )
     for sibling in siblings or []:
         filename = _sibling_filename(sibling)
         if not filename:
@@ -158,6 +274,8 @@ def build_diffusers_variant_options(siblings):
             continue
         lowered = filename.lower()
         if any(skip in lowered for skip in ("optimizer", "scheduler", "training_args")):
+            continue
+        if has_component_weights and ((not path.parts) or path.parts[0] not in _DIFFUSERS_COMPONENT_DIRS):
             continue
         precision = _precision_from_filename(filename)
         group = groups.setdefault(precision, {"precision": precision, "size_bytes": 0, "file_count": 0, "files": []})
@@ -227,7 +345,9 @@ def detect_diffusers_supported_modes(*, repo_id="", pipeline_tag="", library_nam
     config = config if isinstance(config, dict) else {}
     class_name = str(config.get("_class_name") or config.get("pipeline_class") or "").lower()
     sibling_names = [_sibling_filename(item).lower() for item in (siblings or [])]
-    has_model_index = any(name.endswith("model_index.json") for name in sibling_names)
+    has_regular_model_index = any(PurePosixPath(name).name == "model_index.json" for name in sibling_names)
+    has_modular_model_index = any(PurePosixPath(name).name == "modular_model_index.json" for name in sibling_names)
+    has_model_index = has_regular_model_index or has_modular_model_index
     has_gguf = any(name.endswith(".gguf") for name in sibling_names)
     is_diffusers = library == "diffusers" or "diffusers" in tag_set or has_model_index
     inpaint_hint = any("inpaint" in item for item in [repo_text, tag, class_name, *tag_set])
@@ -237,6 +357,8 @@ def detect_diffusers_supported_modes(*, repo_id="", pipeline_tag="", library_nam
         return []
     if has_gguf:
         return ["txt2img"] if tag in {"", "text-to-image", "unconditional-image-generation"} else []
+    if not is_diffusers:
+        return []
     if tag in {"text-to-image", "unconditional-image-generation"}:
         supported.add("txt2img")
     if tag == "image-to-image":
@@ -277,6 +399,9 @@ def inspect_huggingface_diffusers_repo(repo_value, *, token="", mode="txt2img"):
         return {"ok": False, "checked": False, "repo_id": repo_id, "msg": f"Hugging Face repo 檢查失敗，尚未開始下載：{exc}"}
 
     siblings = list(_info_value(info, "siblings", []) or [])
+    sibling_names = [_sibling_filename(item).lower() for item in siblings]
+    has_regular_model_index = any(PurePosixPath(name).name == "model_index.json" for name in sibling_names)
+    has_modular_model_index = any(PurePosixPath(name).name == "modular_model_index.json" for name in sibling_names)
     pipeline_tag = str(_info_value(info, "pipeline_tag", "") or "")
     library_name = str(_info_value(info, "library_name", "") or "")
     tags = list(_info_value(info, "tags", []) or [])
@@ -290,18 +415,46 @@ def inspect_huggingface_diffusers_repo(repo_value, *, token="", mode="txt2img"):
         config=config,
         siblings=siblings,
     )
+    requires_modular_pipeline = bool(has_modular_model_index and not has_regular_model_index)
+    if requires_modular_pipeline:
+        supported_modes = []
     variant_options = build_diffusers_variant_options(siblings)
+    model_card_hints = _load_model_card_hints(repo_id, token)
     has_gguf_options = any(item.get("kind") == "gguf" for item in variant_options)
     suggested_base_repo = infer_gguf_base_repo(repo_id, tags=tags, card_data=card_data) if has_gguf_options else ""
+    has_diffusers_metadata = (
+        library_name.lower() == "diffusers"
+        or "diffusers" in {str(item or "").lower() for item in tags}
+        or any(
+            PurePosixPath(_sibling_filename(item).lower()).name == "model_index.json"
+            or PurePosixPath(_sibling_filename(item).lower()).name == "modular_model_index.json"
+            for item in siblings
+        )
+        or bool(model_card_hints)
+    )
     warnings = []
     if pipeline_tag.lower() in _UNSUPPORTED_PIPELINE_TAGS:
         warnings.append(f"此 repo 的 Hugging Face pipeline 是 {pipeline_tag}，不是本站 Diffusers 生圖模式。")
+    if not has_diffusers_metadata and not has_gguf_options:
+        warnings.append("此 repo 的 Hugging Face metadata 沒有 Diffusers；請只使用模型頁 Use this model 內有 Diffusers 的 repo。")
     if not supported_modes:
         warnings.append("沒有偵測到可用的 Diffusers t2i / i2i metadata；為避免下載無法使用的模型，請改用支援的 repo。")
     elif requested_mode not in supported_modes:
         warnings.append(f"此 repo 目前偵測支援 {', '.join(supported_modes)}，不支援 {requested_mode}。")
     if len(variant_options) > 1:
         warnings.append("偵測到多個精度版本，請先選擇要下載/載入的版本，避免同一模型重複下載。")
+    if model_card_hints:
+        hint_parts = []
+        for key in ("dtype", "dtype_kwarg", "device_map", "pipeline_loader", "variant", "revision", "subfolder"):
+            if model_card_hints.get(key):
+                hint_parts.append(f"{key}={model_card_hints[key]}")
+        if hint_parts:
+            warnings.append("已從 model card Diffusers 範例偵測官方載入參數：" + ", ".join(hint_parts) + "。")
+    if requires_modular_pipeline:
+        warnings.append(
+            "此 repo 只有 modular_model_index.json、沒有 model_index.json；"
+            "目前本站 DiffusionPipeline 通用路徑不支援 ModularPipeline repo。"
+        )
     if has_gguf_options:
         warnings.append(
             "GGUF 需要選擇檔案；Diffusers component 需搭配 base repo，"
@@ -323,7 +476,9 @@ def inspect_huggingface_diffusers_repo(repo_value, *, token="", mode="txt2img"):
         "supported_for_mode": requested_mode in supported_modes,
         "variant_options": variant_options,
         "has_gguf": has_gguf_options,
+        "requires_modular_pipeline": requires_modular_pipeline,
         "suggested_base_repo": suggested_base_repo,
+        "model_card_hints": model_card_hints,
         "warnings": warnings,
     }
     _set_hf_repo_inspect_cache(cache_key, payload)

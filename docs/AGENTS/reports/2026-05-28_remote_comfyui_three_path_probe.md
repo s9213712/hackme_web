@@ -18,10 +18,10 @@ Common parameters: `1920x1080`, `24` steps, `cfg=5.0`, seed `20260528`, same pro
 
 ## Cache
 
-- HF Diffusers cache: `/mnt/d/hub/models--dhead--wai-nsfw-illustrious-sdxl-v140-sdxl`, `27756441028` bytes.
-- GGUF cache: `D:\hub\models--kekusprod--WAI-NSFW-illustrious-SDXL-v110-GGUF`, `5517496296` bytes.
+- HF Diffusers cache: `/mnt/d/tmp/hackme_hf_cache/hub/models--dhead--wai-nsfw-illustrious-sdxl-v140-sdxl`, `27756441028` bytes.
+- GGUF cache: `D:\tmp\hackme_hf_cache\hub\models--kekusprod--WAI-NSFW-illustrious-SDXL-v110-GGUF`, `5517496296` bytes.
 - GGUF installed for ComfyUI-GGUF: `D:\ComfyUI\ComfyUI_windows_portable\ComfyUI\models\unet\WAI-NSFW-illustrious-SDXL-v110-Q8_0.gguf`.
-- GGUF companion cache: `D:\hub\models--calcuis--illustrious`.
+- GGUF companion cache: `D:\tmp\hackme_hf_cache\hub\models--calcuis--illustrious`.
 - GGUF companion install targets:
   - `D:\ComfyUI\ComfyUI_windows_portable\ComfyUI\models\text_encoders\illustrious_clip_l_fp8_e4m3fn.safetensors`
   - `D:\ComfyUI\ComfyUI_windows_portable\ComfyUI\models\text_encoders\illustrious_clip_g_fp8_e4m3fn.safetensors`
@@ -37,12 +37,23 @@ Common parameters: `1920x1080`, `24` steps, `cfg=5.0`, seed `20260528`, same pro
 - The generic SDXL CLIP/VAE GGUF attempts produced unusable purple output even when the API returned success. The passing GGUF run used the model-card required `calcuis/illustrious` companion CLIP/VAE files and `DualCLIPLoaderGGUF`.
 - Customer-facing GGUF must be exposed as official profiles only. Each profile needs an explicit model map for UNet GGUF, text encoders, VAE, loader class, cache/install paths, and verified sampler defaults.
 
-## Retained Remote Artifacts
+## Remote Cleanup Target
 
-- Scripts/config/docs: `/mnt/d/tmp/hackme_comfyui_remote_probe`
-- WSL isolated deps: `/mnt/d/tmp/hackme_probe_deps`
-- HF model cache: `/mnt/d/hub`
-- Successful output images and reports under:
+- Scripts/config/docs were staged under `/mnt/d/tmp/hackme_comfyui_remote_probe`.
+- WSL isolated deps were staged under `/mnt/d/tmp/hackme_probe_deps`.
+- HF model cache was staged under `/mnt/d/tmp/hackme_hf_cache/hub`.
+- Successful output images and reports were staged under:
   - `/mnt/d/tmp/hackme_comfyui_remote_probe/hf_1920x1080_steps24_token_r3`
   - `/mnt/d/tmp/hackme_comfyui_remote_probe/regular_1920x1080_steps24_win`
   - `/mnt/d/tmp/hackme_comfyui_remote_probe/gguf_1920x1080_steps24_illustrious_aux`
+- Final cleanup should remove remote cache/probe/deps output directories and
+  leave only copied scripts/docs/skill backup plus installed supported ComfyUI
+  model files.
+- 2026-05-29 cleanup removed `/mnt/d/tmp/hackme_hf_cache` and
+  `/mnt/d/tmp/hackme_probe_deps`. After remounting the remote WSL `D:` drvfs
+  mount, verification showed the probe root reduced to scripts/config/reports,
+  no SD35-specific model leftovers, and the skill backup still present. A 28KB
+  `retest_hf_diffusionpipeline_20260529/Thumbs.db` directory remained locked by
+  Windows and was explicitly left alone. Windows ComfyUI was restarted and port
+  `8188` was observed listening; the final Windows-side HTTP check was blocked
+  by a later SSH timeout.

@@ -1,6 +1,21 @@
 # Update Summary
 
-Release ID: `2026.05.28-007`
+Release ID: `2026.05.28-008`
+
+## 2026.05.28-008
+
+- Added official ComfyUI GGUF profiles for
+  `sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF` and
+  `calcuis/sd3.5-large-gguf`. SD3.5 exposes Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/F16
+  variants so users can select precision explicitly.
+- Added installed-GGUF inventory in `/api/comfyui/models` and
+  `/api/comfyui/installed-gguf`, with frontend display near the official GGUF
+  selector.
+- Updated the standalone GGUF probe to support SD3.5-style
+  `UnetLoaderGGUF + TripleCLIPLoader` workflows with a third text encoder/T5
+  slot.
+- Added a reusable `hackme-gguf-profile` skill and repo backup for adding,
+  validating, testing, and documenting future Hugging Face GGUF profiles.
 
 ## 2026.05.28-007
 

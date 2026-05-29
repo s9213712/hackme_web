@@ -33,6 +33,7 @@ DEFAULT_BASE_REPO = "stabilityai/stable-diffusion-xl-base-1.0"
 DEFAULT_AUX_REPO = "calcuis/illustrious"
 DEFAULT_AUX_CLIP_L = "illustrious_clip_l_fp8_e4m3fn.safetensors"
 DEFAULT_AUX_CLIP_G = "illustrious_clip_g_fp8_e4m3fn.safetensors"
+DEFAULT_AUX_CLIP_T = ""
 DEFAULT_AUX_VAE = "illustrious_v110_vae_fp8_e4m3fn.safetensors"
 DEFAULT_PROMPT = (
     "adult women, fully clothed, by ogipote, 2girls, girls love, kiss, "
@@ -96,7 +97,7 @@ def _config_sections(config: dict, section_names: tuple[str, ...], *, profile_id
     selected_profile = str(profile_id or merged.get("gguf_profile") or config.get("gguf_profile") or "").strip()
     profile = _profile_from_config(config, selected_profile) if selected_profile else {}
     if profile:
-        merged = {**profile, **merged, "gguf_profile": selected_profile}
+        merged = {**merged, **profile, "gguf_profile": selected_profile}
     return merged
 
 
@@ -115,6 +116,8 @@ def apply_config(args, parser: argparse.ArgumentParser, *, section_names=("gguf"
         "negative_prompt": ("negative",),
         "hf_cache_root": ("cache_root", "huggingface_cache_root"),
         "sample_interval": ("resource_sample_interval",),
+        "prompt_prefix": ("style_prompt", "style_prefix", "gguf_prompt_prefix"),
+        "prompt_suffix": ("style_suffix", "gguf_prompt_suffix"),
         "base_repo": ("gguf_base_repo",),
         "install_to_comfyui_unet_dir": ("comfyui_unet_dir",),
         "install_to_comfyui_text_encoder_dir": ("comfyui_text_encoder_dir", "comfyui_clip_dir"),
@@ -123,8 +126,18 @@ def apply_config(args, parser: argparse.ArgumentParser, *, section_names=("gguf"
         "aux_repo": ("gguf_aux_repo",),
         "aux_clip_l": ("gguf_aux_clip_l",),
         "aux_clip_g": ("gguf_aux_clip_g",),
+        "aux_clip_t": ("gguf_aux_clip_t", "aux_t5", "gguf_aux_t5"),
         "aux_vae": ("gguf_aux_vae",),
         "clip_loader_class": ("gguf_clip_loader_class",),
+        "clip_t": ("clip3", "clip_name3", "t5", "gguf_clip_t", "gguf_t5"),
+        "workflow_family": ("gguf_workflow_family",),
+        "sd3_shift": ("model_shift", "gguf_sd3_shift"),
+        "sd3_negative_split": ("negative_split", "gguf_sd3_negative_split"),
+        "latent_width": ("native_width", "sd3_native_width", "gguf_latent_width"),
+        "latent_height": ("native_height", "sd3_native_height", "gguf_latent_height"),
+        "output_width": ("target_width", "gguf_output_width"),
+        "output_height": ("target_height", "gguf_output_height"),
+        "output_upscale_method": ("upscale_method", "gguf_output_upscale_method"),
     }
     for action in parser._actions:
         dest = action.dest
@@ -143,14 +156,19 @@ def parse_bool(value) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def merge_prompt_affixes(prompt: str, prefix: str = "", suffix: str = "") -> str:
+    parts = [str(prefix or "").strip(), str(prompt or "").strip(), str(suffix or "").strip()]
+    return ", ".join(item.strip(" ,") for item in parts if item.strip(" ,"))
+
+
 def default_cache_root() -> str:
     explicit = os.environ.get("HF_PROBE_CACHE_ROOT") or os.environ.get("HF_HOME")
     if explicit:
         return explicit
     if os.name == "nt":
-        for candidate in ("D:/", str(Path.home() / ".cache" / "huggingface")):
+        for candidate in ("D:/tmp/hackme_hf_cache", str(Path.home() / ".cache" / "huggingface")):
             try:
-                if Path(candidate).exists():
+                if Path(candidate).parent.exists():
                     return candidate
             except OSError:
                 continue
@@ -617,6 +635,7 @@ def maybe_install_aux_models(args, token: str, timings: dict) -> dict:
     files = {
         "clip_l": str(args.aux_clip_l or "").strip(),
         "clip_g": str(args.aux_clip_g or "").strip(),
+        "clip_t": str(getattr(args, "aux_clip_t", "") or "").strip(),
         "vae": str(args.aux_vae or "").strip(),
     }
     if not aux_repo or not any(files.values()):
@@ -644,8 +663,95 @@ def maybe_install_aux_models(args, token: str, timings: dict) -> dict:
     return installed
 
 
-def build_comfyui_gguf_workflow(args, *, unet_name: str, clip_l: str, clip_g: str, vae_name: str, clip_loader_class: str) -> dict:
-    return {
+def build_comfyui_gguf_workflow(
+    args,
+    *,
+    unet_name: str,
+    clip_l: str,
+    clip_g: str,
+    clip_t: str,
+    vae_name: str,
+    clip_loader_class: str,
+) -> dict:
+    clip_inputs = {
+        "clip_name1": clip_l,
+        "clip_name2": clip_g,
+    }
+    if clip_loader_class.startswith("TripleCLIPLoader"):
+        clip_inputs["clip_name3"] = clip_t
+    elif clip_loader_class in {"DualCLIPLoader", "DualCLIPLoaderGGUF"}:
+        clip_inputs["type"] = str(getattr(args, "clip_type", "") or "sdxl").strip() or "sdxl"
+        if clip_loader_class == "DualCLIPLoader":
+            clip_inputs["device"] = "default"
+    if str(getattr(args, "workflow_family", "") or "").strip() == "sd3_triple_clip_gguf":
+        negative_split = float(getattr(args, "sd3_negative_split", 0.1) or 0.1)
+        latent_width = int(getattr(args, "latent_width", 0) or args.width)
+        latent_height = int(getattr(args, "latent_height", 0) or args.height)
+        output_width = int(getattr(args, "output_width", 0) or args.width)
+        output_height = int(getattr(args, "output_height", 0) or args.height)
+        image_ref = ["8", 0]
+        scale_node = {}
+        if output_width != latent_width or output_height != latent_height:
+            image_ref = ["12", 0]
+            scale_node = {
+                "12": {
+                    "class_type": "ImageScale",
+                    "inputs": {
+                        "image": ["8", 0],
+                        "upscale_method": str(getattr(args, "output_upscale_method", "") or "lanczos"),
+                        "width": output_width,
+                        "height": output_height,
+                        "crop": "disabled",
+                    },
+                },
+            }
+        return {
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "cfg": float(args.cfg),
+                    "denoise": 1,
+                    "latent_image": ["5", 0],
+                    "model": ["13", 0],
+                    "negative": ["69", 0],
+                    "positive": ["6", 0],
+                    "sampler_name": args.sampler,
+                    "scheduler": args.scheduler,
+                    "seed": int(args.seed),
+                    "steps": int(args.steps),
+                },
+            },
+            "4": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": unet_name}},
+            "5": {
+                "class_type": "EmptySD3LatentImage",
+                "inputs": {"batch_size": 1, "height": latent_height, "width": latent_width},
+            },
+            "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["10", 0], "text": args.prompt}},
+            "7": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["10", 0], "text": args.negative_prompt}},
+            "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["11", 0]}},
+            **scale_node,
+            "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": args.filename_prefix, "images": image_ref}},
+            "10": {"class_type": clip_loader_class, "inputs": clip_inputs},
+            "11": {"class_type": "VAELoader", "inputs": {"vae_name": vae_name}},
+            "13": {
+                "class_type": "ModelSamplingSD3",
+                "inputs": {"model": ["4", 0], "shift": float(getattr(args, "sd3_shift", 3.0) or 3.0)},
+            },
+            "67": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["7", 0]}},
+            "68": {
+                "class_type": "ConditioningSetTimestepRange",
+                "inputs": {"conditioning": ["67", 0], "start": negative_split, "end": 1.0},
+            },
+            "70": {
+                "class_type": "ConditioningSetTimestepRange",
+                "inputs": {"conditioning": ["7", 0], "start": 0.0, "end": negative_split},
+            },
+            "69": {
+                "class_type": "ConditioningCombine",
+                "inputs": {"conditioning_1": ["68", 0], "conditioning_2": ["70", 0]},
+            },
+        }
+    workflow = {
         "3": {
             "class_type": "KSampler",
             "inputs": {
@@ -670,11 +776,9 @@ def build_comfyui_gguf_workflow(args, *, unet_name: str, clip_l: str, clip_g: st
         "7": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["10", 0], "text": args.negative_prompt}},
         "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["11", 0]}},
         "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": args.filename_prefix, "images": ["8", 0]}},
-        "10": {"class_type": clip_loader_class, "inputs": {"clip_name1": clip_l, "clip_name2": clip_g, "type": "sdxl"}},
+        "10": {"class_type": clip_loader_class, "inputs": clip_inputs},
         "11": {"class_type": "VAELoader", "inputs": {"vae_name": vae_name}},
     }
-    if clip_loader_class == "DualCLIPLoader":
-        workflow["10"]["inputs"]["device"] = "default"
     return workflow
 
 
@@ -700,12 +804,23 @@ def run_comfyui_gguf(args, token: str, gguf_path: Path, out_png: Path, timings: 
     )
     clip_l = resolve_comfy_option(args.clip_l, comfy_options(object_info, clip_loader_class, "clip_name1"), label="CLIP-L")
     clip_g = resolve_comfy_option(args.clip_g, comfy_options(object_info, clip_loader_class, "clip_name2"), label="CLIP-G")
+    clip_t = ""
+    if clip_loader_class.startswith("TripleCLIPLoader"):
+        clip_t = resolve_comfy_option(args.clip_t, comfy_options(object_info, clip_loader_class, "clip_name3"), label="CLIP/T5")
     vae_name = resolve_comfy_option(args.vae, comfy_options(object_info, "VAELoader", "vae_name"), label="VAE")
+    if (
+        str(getattr(args, "workflow_family", "") or "").strip() == "sd3_triple_clip_gguf"
+        and (int(getattr(args, "latent_width", 0) or args.width) != int(getattr(args, "output_width", 0) or args.width)
+             or int(getattr(args, "latent_height", 0) or args.height) != int(getattr(args, "output_height", 0) or args.height))
+        and "ImageScale" not in object_info
+    ):
+        raise ProbeError("SD3.5 output resize requires ComfyUI ImageScale node")
     workflow = build_comfyui_gguf_workflow(
         args,
         unet_name=unet_name,
         clip_l=clip_l,
         clip_g=clip_g,
+        clip_t=clip_t,
         vae_name=vae_name,
         clip_loader_class=clip_loader_class,
     )
@@ -747,6 +862,7 @@ def run_comfyui_gguf(args, token: str, gguf_path: Path, out_png: Path, timings: 
                         "clip_loader_class": clip_loader_class,
                         "clip_l": clip_l,
                         "clip_g": clip_g,
+                        "clip_t": clip_t,
                         "vae": vae_name,
                     },
                     "install": install,
@@ -772,6 +888,8 @@ def parse_args():
     parser.add_argument("--backend", choices=["auto", "inspect", "diffusers", "comfyui"], default="auto")
     parser.add_argument("--allow-comfy-native-diffusers", action="store_true")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
+    parser.add_argument("--prompt-prefix", default="", help="Optional style prefix merged before the prompt.")
+    parser.add_argument("--prompt-suffix", default="", help="Optional style suffix merged after the prompt.")
     parser.add_argument("--negative-prompt", default=DEFAULT_NEGATIVE)
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--height", type=int, default=1080)
@@ -795,10 +913,21 @@ def parse_args():
     parser.add_argument("--aux-repo", default="", help="HF repo for model-card-required CLIP/VAE companion files.")
     parser.add_argument("--aux-clip-l", default="", help="Companion CLIP-L filename to download/install before ComfyUI generation.")
     parser.add_argument("--aux-clip-g", default="", help="Companion CLIP-G filename to download/install before ComfyUI generation.")
+    parser.add_argument("--aux-clip-t", default=DEFAULT_AUX_CLIP_T, help="Companion T5/third text encoder filename to download/install before ComfyUI generation.")
     parser.add_argument("--aux-vae", default="", help="Companion VAE filename to download/install before ComfyUI generation.")
     parser.add_argument("--clip-loader-class", default="DualCLIPLoader", help="ComfyUI CLIP loader class, e.g. DualCLIPLoader or DualCLIPLoaderGGUF.")
     parser.add_argument("--clip-l", default="clip_l.safetensors")
     parser.add_argument("--clip-g", default="clip_g.safetensors")
+    parser.add_argument("--clip-t", default="", help="T5/third text encoder option for TripleCLIPLoader/TripleCLIPLoaderGGUF.")
+    parser.add_argument("--clip-type", default="sdxl", help="DualCLIPLoader type input; ignored by TripleCLIPLoader.")
+    parser.add_argument("--workflow-family", default="", help="Official workflow family override, e.g. sd3_triple_clip_gguf.")
+    parser.add_argument("--sd3-shift", type=float, default=3.0)
+    parser.add_argument("--sd3-negative-split", type=float, default=0.1)
+    parser.add_argument("--latent-width", type=int, default=0, help="Native latent width for workflows that should generate below the final output size.")
+    parser.add_argument("--latent-height", type=int, default=0, help="Native latent height for workflows that should generate below the final output size.")
+    parser.add_argument("--output-width", type=int, default=0, help="Final image width after optional ImageScale. Defaults to --width.")
+    parser.add_argument("--output-height", type=int, default=0, help="Final image height after optional ImageScale. Defaults to --height.")
+    parser.add_argument("--output-upscale-method", default="lanczos", help="ImageScale method when output size differs from latent size.")
     parser.add_argument("--vae", default="sdxl_vae.safetensors")
     parser.add_argument("--sampler", default="euler")
     parser.add_argument("--scheduler", default="normal")
@@ -816,6 +945,7 @@ def parse_args():
 
 def main() -> int:
     args = parse_args()
+    args.prompt = merge_prompt_affixes(args.prompt, getattr(args, "prompt_prefix", ""), getattr(args, "prompt_suffix", ""))
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     out_json = Path(args.out_json or (out_dir / "gguf_standalone_report.json")).expanduser().resolve()

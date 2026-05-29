@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.28-007`**
+**Current Release ID: `2026.05.28-008`**
 
 `hackme_web` 是一個部署者優先的 Flask 單機站點，整合了帳號與權限、
 Cloud Drive、ComfyUI、PointsChain、交易實驗、Snapshot/Restore 與
@@ -31,10 +31,13 @@ QoS 分類、app-level edge burst guard、抗 DoS 最後防線與 reverse-proxy 
 [docs/For_developer.md](docs/For_developer.md#server-qos-and-edge-guard)。
 任務中心 list API 的 maintenance sweep 已節流並可觀測；帳號、會員治理、
 註冊禮補發與 auth hot-state 索引的近期調整見
-[docs/UPDATE_SUMMARY.md](docs/UPDATE_SUMMARY.md) 的 `2026.05.28-007`。
+[docs/UPDATE_SUMMARY.md](docs/UPDATE_SUMMARY.md) 的 `2026.05.28-008`。
 影音直接串流、即時轉封裝、預處理 HLS 三種客戶服務層與費率差異、X-Accel
 送檔 offload、Standard 即時轉封裝的同機併發控制，以及 Premium HLS worker sizing / profile matrix 見
 [docs/video/VIDEO_STREAMING_SERVICE_TIERS.md](docs/video/VIDEO_STREAMING_SERVICE_TIERS.md)。
+ComfyUI GGUF 只能走官方建檔 profile；新增 profile、遠端實測、已安裝 GGUF
+清單與多精度選單流程見
+[docs/AGENTS/skills/hackme-gguf-profile/SKILL.md](docs/AGENTS/skills/hackme-gguf-profile/SKILL.md)。
 
 ## First-Time Deployer Route
 

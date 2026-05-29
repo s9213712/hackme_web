@@ -9,6 +9,7 @@ plain Diffusers, while recording cache placement and resource usage.
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import platform
@@ -17,7 +18,8 @@ import sys
 import threading
 import time
 import traceback
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib import request as urllib_request
 
 
 DEFAULT_MODEL = "dhead/wai-nsfw-illustrious-sdxl-v140-sdxl"
@@ -30,6 +32,11 @@ DEFAULT_NEGATIVE = (
     "blurry, watermark, distorted, bad anatomy"
 )
 SENSITIVE_RE = re.compile(r"hf_[A-Za-z0-9]{8,}|(Bearer\s+)[A-Za-z0-9._-]+", re.IGNORECASE)
+FROM_PRETRAINED_RE = re.compile(
+    r"(?P<class>[A-Za-z_][A-Za-z0-9_]*Pipeline)\.from_pretrained\(\s*"
+    r"(?P<quote>['\"])(?P<repo>[^'\"]+)(?P=quote)(?P<args>.*?)\)",
+    re.DOTALL,
+)
 
 
 class ProbeError(RuntimeError):
@@ -55,6 +62,183 @@ def _explicit_cli_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set
                 explicit.add(action.dest)
                 break
     return explicit
+
+
+def _arg_value(call_args: str, name: str) -> str:
+    match = re.search(rf"\b{re.escape(name)}\s*=\s*(?P<value>\"[^\"]*\"|'[^']*'|[^,\n)]+)", call_args or "")
+    return match.group("value").strip() if match else ""
+
+
+def _string_literal_value(value: str) -> str:
+    raw = str(value or "").strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+        return raw[1:-1]
+    return ""
+
+
+def _bool_literal_value(value: str):
+    raw = str(value or "").strip().lower()
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    return None
+
+
+def _dtype_hint(value: str) -> str:
+    lowered = str(value or "").lower()
+    if "bfloat16" in lowered or "bf16" in lowered:
+        return "bfloat16"
+    if "float16" in lowered or "fp16" in lowered or "torch.half" in lowered:
+        return "float16"
+    if "float32" in lowered or "fp32" in lowered:
+        return "float32"
+    return ""
+
+
+def parse_model_card_diffusers_hints(card_text: str, repo_id: str) -> dict:
+    hints = {}
+    for match in FROM_PRETRAINED_RE.finditer(card_text or ""):
+        if match.group("repo") != repo_id:
+            continue
+        class_name = match.group("class")
+        call_args = match.group("args") or ""
+        if class_name == "DiffusionPipeline":
+            hints["pipeline_loader"] = "diffusion"
+        elif class_name == "AutoPipelineForText2Image":
+            hints["pipeline_loader"] = "auto"
+        for dtype_kwarg in ("dtype", "torch_dtype"):
+            dtype = _dtype_hint(_arg_value(call_args, dtype_kwarg))
+            if dtype:
+                hints["dtype"] = dtype
+                hints["dtype_kwarg"] = dtype_kwarg
+                break
+        for name in ("device_map", "variant", "revision", "subfolder", "custom_pipeline"):
+            value = _string_literal_value(_arg_value(call_args, name))
+            if value:
+                hints[name] = value
+        trust_remote_code = _bool_literal_value(_arg_value(call_args, "trust_remote_code"))
+        if trust_remote_code is not None:
+            hints["trust_remote_code"] = trust_remote_code
+        if hints:
+            hints["source"] = "model_card"
+            hints["class_name"] = class_name
+            break
+    return hints
+
+
+def load_model_card_hints(args, token: str) -> dict:
+    if str(getattr(args, "model_card_hints", "auto") or "auto").strip().lower() == "off":
+        return {}
+    errors = []
+    try:
+        from huggingface_hub import hf_hub_download
+
+        path = hf_hub_download(
+            repo_id=args.model,
+            filename="README.md",
+            repo_type="model",
+            token=(token or None),
+            local_files_only=bool(args.local_files_only),
+        )
+        card_text = Path(path).read_text(encoding="utf-8", errors="replace")
+        hints = parse_model_card_diffusers_hints(card_text, args.model)
+        if hints:
+            return hints
+    except Exception as exc:
+        errors.append(sanitize_text(exc))
+    try:
+        url = f"https://huggingface.co/{args.model}"
+        headers = {"User-Agent": "hackme-hf-diffusers-probe/1.0"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib_request.Request(url, headers=headers)
+        with urllib_request.urlopen(req, timeout=20) as response:
+            page_text = response.read().decode("utf-8", errors="replace")
+        hints = parse_model_card_diffusers_hints(html.unescape(page_text), args.model)
+        if hints:
+            hints["source"] = "model_page"
+            return hints
+    except Exception as exc:
+        errors.append(sanitize_text(exc))
+    payload = {"source": "model_card", "found": False}
+    if errors:
+        payload["errors"] = errors[-3:]
+    return payload
+
+
+def apply_model_card_hints(args, hints: dict):
+    if not isinstance(hints, dict) or hints.get("error") or hints.get("found") is False:
+        return args
+    mode = str(getattr(args, "model_card_hints", "auto") or "auto").strip().lower()
+    explicit = set(getattr(args, "_explicit_cli_dests", []) or [])
+    force = mode == "force"
+
+    def maybe_set(dest: str, value):
+        if value in (None, ""):
+            return
+        if force or dest not in explicit:
+            setattr(args, dest, value)
+
+    maybe_set("dtype", hints.get("dtype"))
+    maybe_set("dtype_kwarg", hints.get("dtype_kwarg"))
+    maybe_set("device_map", hints.get("device_map"))
+    maybe_set("pipeline_loader", hints.get("pipeline_loader"))
+    maybe_set("variant", hints.get("variant"))
+    maybe_set("revision", hints.get("revision"))
+    maybe_set("subfolder", hints.get("subfolder"))
+    maybe_set("custom_pipeline", hints.get("custom_pipeline"))
+    if "trust_remote_code" in hints and (force or "trust_remote_code" not in explicit):
+        args.trust_remote_code = bool(hints.get("trust_remote_code"))
+    return args
+
+
+def inspect_diffusers_repo_layout(args, token: str) -> dict:
+    try:
+        from huggingface_hub import HfApi, hf_hub_download
+
+        info = HfApi().model_info(args.model, token=(token or None), files_metadata=False)
+        sibling_names = [str(getattr(item, "rfilename", "") or getattr(item, "filename", "") or "") for item in (getattr(info, "siblings", []) or [])]
+    except Exception as exc:
+        return {"ok": False, "error": sanitize_text(exc)}
+    has_model_index = any(PurePosixPath(name).name == "model_index.json" for name in sibling_names)
+    has_modular_model_index = any(PurePosixPath(name).name == "modular_model_index.json" for name in sibling_names)
+    layout = {
+        "ok": True,
+        "has_model_index": has_model_index,
+        "has_modular_model_index": has_modular_model_index,
+        "requires_modular_pipeline": bool(has_modular_model_index and not has_model_index),
+    }
+    if not layout["requires_modular_pipeline"]:
+        return layout
+    try:
+        path = hf_hub_download(
+            repo_id=args.model,
+            filename="modular_model_index.json",
+            repo_type="model",
+            token=(token or None),
+            local_files_only=bool(args.local_files_only),
+        )
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        layout["required_diffusers_version"] = str(data.get("_diffusers_version") or "")
+        layout["modular_class_name"] = str(data.get("_class_name") or "")
+        missing = []
+        for name, value in data.items():
+            if not isinstance(value, list) or len(value) < 2:
+                continue
+            library_name, class_name = str(value[0] or ""), str(value[1] or "")
+            if library_name not in {"diffusers", "transformers"} or not class_name:
+                continue
+            try:
+                module = __import__(library_name)
+                if not hasattr(module, class_name):
+                    missing.append(f"{library_name}.{class_name}")
+            except Exception:
+                missing.append(f"{library_name}.{class_name}")
+        layout["missing_runtime_classes"] = missing
+    except Exception as exc:
+        layout["modular_inspect_error"] = sanitize_text(exc)
+    return layout
 
 
 def _config_sections(config: dict, section_names: tuple[str, ...]) -> dict:
@@ -108,9 +292,9 @@ def default_cache_root() -> str:
     if explicit:
         return explicit
     if os.name == "nt":
-        for candidate in ("D:/", str(Path.home() / ".cache" / "huggingface")):
+        for candidate in ("D:/tmp/hackme_hf_cache", str(Path.home() / ".cache" / "huggingface")):
             try:
-                if Path(candidate).exists():
+                if Path(candidate).parent.exists():
                     return candidate
             except OSError:
                 continue
@@ -345,19 +529,31 @@ def resolve_device_and_dtype(torch, args):
 def load_pipeline(args, token: str, timings: dict):
     t0 = time.perf_counter()
     import torch
-    from diffusers import AutoPipelineForText2Image
+    from diffusers import AutoPipelineForText2Image, DiffusionPipeline
 
     timings["import_seconds"] = round(time.perf_counter() - t0, 3)
     device, dtype = resolve_device_and_dtype(torch, args)
     device_map = str(args.device_map or "disabled").strip().lower()
     if device_map in {"none", "off", "false"}:
         device_map = "disabled"
-    kwargs = {
-        "torch_dtype": dtype,
-        "use_safetensors": True,
-    }
+    pipeline_loader = str(getattr(args, "pipeline_loader", "") or "auto").strip().lower()
+    if pipeline_loader not in {"auto", "diffusion"}:
+        raise ProbeError(f"unsupported pipeline loader: {args.pipeline_loader}")
+    pipeline_cls = DiffusionPipeline if pipeline_loader == "diffusion" else AutoPipelineForText2Image
+    dtype_kwarg = str(getattr(args, "dtype_kwarg", "") or "torch_dtype").strip()
+    if dtype_kwarg not in {"torch_dtype", "dtype"}:
+        raise ProbeError(f"unsupported dtype kwarg: {args.dtype_kwarg}")
+    kwargs = {"use_safetensors": True, dtype_kwarg: dtype}
     if args.variant:
         kwargs["variant"] = args.variant
+    if getattr(args, "revision", ""):
+        kwargs["revision"] = args.revision
+    if getattr(args, "subfolder", ""):
+        kwargs["subfolder"] = args.subfolder
+    if getattr(args, "custom_pipeline", ""):
+        kwargs["custom_pipeline"] = args.custom_pipeline
+    if bool(getattr(args, "trust_remote_code", False)):
+        kwargs["trust_remote_code"] = True
     if token:
         kwargs["token"] = token
     if args.local_files_only:
@@ -369,11 +565,11 @@ def load_pipeline(args, token: str, timings: dict):
 
     t1 = time.perf_counter()
     try:
-        pipe = AutoPipelineForText2Image.from_pretrained(args.model, **kwargs)
+        pipe = pipeline_cls.from_pretrained(args.model, **kwargs)
     except TypeError:
         if token and "token" in kwargs:
             kwargs["use_auth_token"] = kwargs.pop("token")
-        pipe = AutoPipelineForText2Image.from_pretrained(args.model, **kwargs)
+        pipe = pipeline_cls.from_pretrained(args.model, **kwargs)
     timings["pipeline_load_seconds"] = round(time.perf_counter() - t1, 3)
 
     moved = False
@@ -392,7 +588,14 @@ def load_pipeline(args, token: str, timings: dict):
     return pipe, torch, {
         "device": device,
         "dtype": str(dtype).replace("torch.", ""),
+        "dtype_kwarg": dtype_kwarg,
         "device_map": device_map,
+        "pipeline_loader": pipeline_loader,
+        "revision": getattr(args, "revision", ""),
+        "subfolder": getattr(args, "subfolder", ""),
+        "custom_pipeline": getattr(args, "custom_pipeline", ""),
+        "trust_remote_code": bool(getattr(args, "trust_remote_code", False)),
+        "pipeline_class": f"{pipe.__class__.__module__}.{pipe.__class__.__name__}",
         "manual_to_device": moved,
         "cuda_available": bool(torch.cuda.is_available()),
         "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "",
@@ -450,7 +653,14 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=20260528)
     parser.add_argument("--device", default="auto", help="auto, cuda, cpu, cuda:0, etc.")
     parser.add_argument("--dtype", default="auto", help="auto, float16, bfloat16, float32")
+    parser.add_argument("--dtype-kwarg", choices=("torch_dtype", "dtype"), default="torch_dtype")
     parser.add_argument("--device-map", default="disabled", help="disabled, auto, balanced, sequential")
+    parser.add_argument("--pipeline-loader", choices=("auto", "diffusion"), default="diffusion", help="diffusion uses DiffusionPipeline like HF snippets; auto uses AutoPipelineForText2Image.")
+    parser.add_argument("--model-card-hints", choices=("auto", "off", "force"), default="auto", help="Read README Diffusers snippet and apply loader hints.")
+    parser.add_argument("--revision", default="")
+    parser.add_argument("--subfolder", default="")
+    parser.add_argument("--custom-pipeline", default="")
+    parser.add_argument("--trust-remote-code", action="store_true")
     parser.add_argument("--low-cpu-mem-usage", default="true")
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--hf-cache-root", default=default_cache_root())
@@ -462,8 +672,10 @@ def parse_args():
     parser.add_argument("--out-dir", default="/tmp/hackme_hf_diffusers_standalone")
     parser.add_argument("--out-json", default="")
     parser.add_argument("--preflight-only", action="store_true", help="Check imports/cache/token/env but do not load or generate.")
-    args = parser.parse_args()
-    return normalize_runtime_paths(apply_config(args, parser))
+    argv = sys.argv[1:]
+    args = parser.parse_args(argv)
+    args._explicit_cli_dests = sorted(_explicit_cli_dests(parser, argv))
+    return normalize_runtime_paths(apply_config(args, parser, argv=argv))
 
 
 def main() -> int:
@@ -474,6 +686,9 @@ def main() -> int:
     output_png = out_dir / "hf_diffusers.png"
     token = read_token(args)
     hf_env = configure_hf_env(args.hf_cache_root, disable_xet=bool(args.disable_xet))
+    model_card_hints = load_model_card_hints(args, token)
+    args = apply_model_card_hints(args, model_card_hints)
+    repo_layout = inspect_diffusers_repo_layout(args, token)
     started = time.time()
     timings = {}
     report = {
@@ -484,6 +699,18 @@ def main() -> int:
         "model": args.model,
         "variant": args.variant,
         "dimensions": {"width": args.width, "height": args.height, "steps": args.steps, "cfg": args.cfg},
+        "pipeline_loader": args.pipeline_loader,
+        "model_card_hints": model_card_hints,
+        "repo_layout": repo_layout,
+        "dtype": args.dtype,
+        "dtype_kwarg": args.dtype_kwarg,
+        "device_map": args.device_map,
+        "revision": args.revision,
+        "subfolder": args.subfolder,
+        "custom_pipeline": args.custom_pipeline,
+        "trust_remote_code": bool(args.trust_remote_code),
+        "prompt": args.prompt,
+        "negative_prompt": args.negative_prompt,
         "hf_env": hf_env,
         "hf_token_supplied": bool(token),
         "cache_before": cache_report(args.hf_cache_root, args.model),
@@ -496,6 +723,14 @@ def main() -> int:
             report["preflight_only"] = True
             return_code = 0
         else:
+            if repo_layout.get("requires_modular_pipeline"):
+                missing = ", ".join(repo_layout.get("missing_runtime_classes") or []) or "none reported"
+                version = repo_layout.get("required_diffusers_version") or "unknown"
+                raise ProbeError(
+                    "Repo has modular_model_index.json but no model_index.json; "
+                    "DiffusionPipeline.from_pretrained requires model_index.json. "
+                    f"Use ModularPipeline support instead. Required diffusers={version}; missing_runtime_classes={missing}"
+                )
             with ResourceMonitor(args.sample_interval) as monitor:
                 pipe, torch, runtime = load_pipeline(args, token, timings)
                 report["runtime"] = runtime

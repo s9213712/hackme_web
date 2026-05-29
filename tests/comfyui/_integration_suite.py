@@ -1,4 +1,5 @@
 import io
+import importlib.util
 import json
 import sqlite3
 import threading
@@ -37,6 +38,26 @@ WAI_GGUF_FILE = "WAI-NSFW-illustrious-SDXL-v110-Q8_0.gguf"
 WAI_CLIP_L = "illustrious_clip_l_fp8_e4m3fn.safetensors"
 WAI_CLIP_G = "illustrious_clip_g_fp8_e4m3fn.safetensors"
 WAI_VAE = "illustrious_v110_vae_fp8_e4m3fn.safetensors"
+SOTHMIK_WAI_GGUF_PROFILE_ID = "sothmik_wai_illustrious_v140_sdxl"
+SOTHMIK_WAI_GGUF_VARIANT_ID = "q8_0"
+SOTHMIK_WAI_GGUF_REPO = "sothmik/Wai-NSFW-Illustrious-v140-Q8-GGUF"
+SOTHMIK_WAI_GGUF_FILE = "waiNSFWIllustrious_v140-Q8_0.gguf"
+CALCUIS_ILLUSTRIOUS_GGUF_PROFILE_ID = "calcuis_illustrious_sdxl"
+CALCUIS_ILLUSTRIOUS_GGUF_FILE = "illustrious-q4_0.gguf"
+BTASKEL_ILLUSTRIOUS_GGUF_PROFILE_ID = "btaskel_illustrious_xl_v20_sdxl"
+BTASKEL_ILLUSTRIOUS_GGUF_VARIANT_ID = "q8_0"
+BTASKEL_ILLUSTRIOUS_GGUF_REPO = "btaskel/Illustrious-XL-v2.0-GGUF"
+BTASKEL_ILLUSTRIOUS_GGUF_FILE = "illustriousXLV20_v20Stable-Q8_0.gguf"
+DIVING_ILLUSTRIOUS_GGUF_PROFILE_ID = "diving_illustrious_flat_anime_sdxl"
+DIVING_ILLUSTRIOUS_GGUF_FILE = "diving-illustrious-flat-anime-paradigm-shift.Q4_K_M.gguf"
+SD35_GGUF_PROFILE_ID = "sd35_large_gguf"
+SD35_GGUF_VARIANT_ID = "q4_0"
+SD35_GGUF_REPO = "calcuis/sd3.5-large-gguf"
+SD35_GGUF_FILE = "sd3.5_large-q4_0.gguf"
+SD35_CLIP_L = "clip_l.safetensors"
+SD35_CLIP_G = "clip_g.safetensors"
+SD35_T5 = "t5xxl_fp8_e4m3fn.safetensors"
+SD35_VAE = "diffusion_pytorch_model.safetensors"
 
 
 class FakeComfyUIClient:
@@ -354,6 +375,34 @@ class FakeNativeGgufComfyUIClient(FakeComfyUIClient):
         payload["vaes"] = [WAI_VAE]
         payload["samplers"] = ["euler", "dpmpp_2m"]
         payload["schedulers"] = ["normal", "karras"]
+        return payload
+
+
+class FakeSd35NativeGgufComfyUIClient(FakeComfyUIClient):
+    base_url = "http://192.168.18.19:8188"
+
+    def get_capabilities(self):
+        payload = super().get_capabilities()
+        payload["available_nodes"] = sorted(set(payload["available_nodes"]) | {
+            "UnetLoaderGGUF",
+            "TripleCLIPLoader",
+            "VAELoader",
+            "CLIPTextEncode",
+            "ModelSamplingSD3",
+            "EmptySD3LatentImage",
+            "ConditioningZeroOut",
+            "ConditioningSetTimestepRange",
+            "ConditioningCombine",
+            "ImageScale",
+            "KSampler",
+            "VAEDecode",
+            "SaveImage",
+        })
+        payload["diffusion_models"] = [SD35_GGUF_FILE, "SD35/" + SD35_GGUF_FILE]
+        payload["clip_models"] = [SD35_CLIP_L, SD35_CLIP_G, SD35_T5]
+        payload["vaes"] = [SD35_VAE]
+        payload["samplers"] = ["euler", "dpmpp_2m"]
+        payload["schedulers"] = ["normal", "karras", "sgm_uniform"]
         return payload
 
 
@@ -2657,6 +2706,93 @@ def test_comfyui_builds_sdxl_gguf_text_to_image_workflow():
     assert workflow["8"]["inputs"]["vae"] == ["11", 0]
 
 
+def test_standalone_gguf_probe_profile_config_overrides_common_defaults():
+    script_path = ROOT / "scripts" / "comfyui" / "standalone_gguf_txt2img.py"
+    spec = importlib.util.spec_from_file_location("standalone_gguf_txt2img", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    config = {
+        "common": {"steps": 24, "cfg": 5.0, "sampler": "euler", "scheduler": "normal"},
+        "gguf": {"gguf_profile": "btaskel"},
+        "gguf_profiles": {
+            "btaskel": {
+                "steps": 24,
+                "cfg": 6.0,
+                "sampler": "dpmpp_2m",
+                "scheduler": "karras",
+                "model": "btaskel/Illustrious-XL-v2.0-GGUF",
+            }
+        },
+    }
+
+    merged = module._config_sections(config, ("gguf",), profile_id="btaskel")
+    assert merged["model"] == "btaskel/Illustrious-XL-v2.0-GGUF"
+    assert merged["cfg"] == 6.0
+    assert merged["sampler"] == "dpmpp_2m"
+    assert merged["scheduler"] == "karras"
+
+
+def test_comfyui_builds_sd35_gguf_text_to_image_workflow_with_sd3_nodes():
+    workflow = ComfyUIClient("http://fake-comfyui").build_generation_workflow({
+        "generation_mode": "txt2img",
+        "model": SD35_GGUF_FILE,
+        "comfyui_gguf_unet_name": SD35_GGUF_FILE,
+        "workflow_family": "sd3_triple_clip_gguf",
+        "clip_loader_class": "TripleCLIPLoader",
+        "clip": SD35_CLIP_G,
+        "clip2": SD35_CLIP_L,
+        "clip3": SD35_T5,
+        "vae": SD35_VAE,
+        "prompt": "sd3 prompt",
+        "negative_prompt": "bad",
+        "width": 1024,
+        "height": 1024,
+        "sd3_native_width": 1344,
+        "sd3_native_height": 768,
+        "output_width": 1920,
+        "output_height": 1080,
+        "output_upscale_method": "lanczos",
+        "steps": 40,
+        "cfg": 4.5,
+        "sampler_name": "dpmpp_2m",
+        "scheduler": "sgm_uniform",
+        "seed": 123,
+        "batch_size": 1,
+        "filename_prefix": "hackme_web_sd35",
+        "sd3_shift": 3.0,
+        "sd3_negative_split": 0.1,
+    })
+
+    class_types = {node["class_type"] for node in workflow.values()}
+    assert {
+        "UnetLoaderGGUF",
+        "TripleCLIPLoader",
+        "ModelSamplingSD3",
+        "EmptySD3LatentImage",
+        "ConditioningZeroOut",
+        "ConditioningSetTimestepRange",
+        "ConditioningCombine",
+    } <= class_types
+    model_sampling_node = next(key for key, node in workflow.items() if node["class_type"] == "ModelSamplingSD3")
+    latent_node = next(key for key, node in workflow.items() if node["class_type"] == "EmptySD3LatentImage")
+    negative_node = next(key for key, node in workflow.items() if node["class_type"] == "ConditioningCombine")
+    scale_node = next(key for key, node in workflow.items() if node["class_type"] == "ImageScale")
+    assert workflow["10"]["inputs"]["clip_name1"] == SD35_CLIP_G
+    assert workflow["10"]["inputs"]["clip_name2"] == SD35_CLIP_L
+    assert workflow["10"]["inputs"]["clip_name3"] == SD35_T5
+    assert workflow[model_sampling_node]["inputs"]["shift"] == 3.0
+    assert workflow["3"]["inputs"]["model"] == [model_sampling_node, 0]
+    assert workflow["3"]["inputs"]["latent_image"] == [latent_node, 0]
+    assert workflow["3"]["inputs"]["negative"] == [negative_node, 0]
+    assert workflow["3"]["inputs"]["scheduler"] == "sgm_uniform"
+    assert workflow[latent_node]["inputs"]["width"] == 1344
+    assert workflow[latent_node]["inputs"]["height"] == 768
+    assert workflow[scale_node]["inputs"]["width"] == 1920
+    assert workflow[scale_node]["inputs"]["height"] == 1080
+    assert workflow["9"]["inputs"]["images"] == [scale_node, 0]
+
+
 def test_comfyui_object_info_combo_options_are_parsed_for_upscale_models(monkeypatch):
     client = ComfyUIClient("http://fake-comfyui")
 
@@ -3210,6 +3346,7 @@ def test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes(t
     assert body["loras"] == []
     assert body["samplers"] == ["diffusers-auto"]
     assert any(profile["id"] == WAI_GGUF_PROFILE_ID for profile in body["gguf_profiles"])
+    assert body["installed_gguf_models"] == []
 
     generated = client.post(
         "/api/comfyui/generate",
@@ -3234,6 +3371,60 @@ def test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes(t
     payload = _await_comfyui_result(client, generated)
     assert payload["image"]["image_ref"]["filename"] == "hackme_web_diffusers.png"
     assert FakeDiffusersBackendClient.last_params["model"] == "dhead/waiIllustriousSDXL_v150"
+
+
+def test_comfyui_installed_gguf_inventory_marks_official_profiles(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        comfyui_client=FakeNativeGgufComfyUIClient(),
+    ).test_client()
+
+    listed = client.get("/api/comfyui/models")
+    assert listed.status_code == 200
+    body = listed.get_json()
+    assert body["installed_gguf_models"][0]["profile_id"] == WAI_GGUF_PROFILE_ID
+    assert body["installed_gguf_models"][0]["variant_id"] == WAI_GGUF_VARIANT_ID
+    assert body["installed_gguf_models"][0]["official_profile"] is True
+
+    inventory = client.get("/api/comfyui/installed-gguf")
+    assert inventory.status_code == 200
+    payload = inventory.get_json()
+    assert payload["installed_gguf_models"][0]["gguf_file"] == WAI_GGUF_FILE
+    assert not any(profile["id"] == SD35_GGUF_PROFILE_ID for profile in payload["gguf_profiles"])
+
+
+def test_comfyui_gguf_profiles_hide_failed_sd35_and_keep_sothmik_q8(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        comfyui_client=FakeSd35NativeGgufComfyUIClient(),
+    ).test_client()
+
+    body = client.get("/api/comfyui/models").get_json()
+    profiles = {profile["id"]: profile for profile in body["gguf_profiles"]}
+    assert SOTHMIK_WAI_GGUF_PROFILE_ID in profiles
+    assert CALCUIS_ILLUSTRIOUS_GGUF_PROFILE_ID in profiles
+    assert BTASKEL_ILLUSTRIOUS_GGUF_PROFILE_ID in profiles
+    assert DIVING_ILLUSTRIOUS_GGUF_PROFILE_ID in profiles
+    assert SD35_GGUF_PROFILE_ID not in profiles
+    assert profiles[CALCUIS_ILLUSTRIOUS_GGUF_PROFILE_ID]["variants"][0]["gguf_file"] == CALCUIS_ILLUSTRIOUS_GGUF_FILE
+    assert profiles[BTASKEL_ILLUSTRIOUS_GGUF_PROFILE_ID]["variants"][0]["gguf_file"] == BTASKEL_ILLUSTRIOUS_GGUF_FILE
+    assert profiles[BTASKEL_ILLUSTRIOUS_GGUF_PROFILE_ID]["enabled"] is False
+    assert profiles[BTASKEL_ILLUSTRIOUS_GGUF_PROFILE_ID]["variants"][0]["enabled"] is False
+    assert profiles[DIVING_ILLUSTRIOUS_GGUF_PROFILE_ID]["variants"][0]["gguf_file"] == DIVING_ILLUSTRIOUS_GGUF_FILE
+    assert body["installed_gguf_models"][0]["profile_id"] == SD35_GGUF_PROFILE_ID
+    assert body["installed_gguf_models"][0]["variant_id"] == SD35_GGUF_VARIANT_ID
+    assert body["installed_gguf_models"][0]["enabled"] is False
+    assert body["installed_gguf_models"][0]["status"] == "failed_visual_reprobe"
 
 
 def test_comfyui_diffusers_mode_auto_routes_native_gguf_to_comfyui_workflow(tmp_path):
@@ -3315,6 +3506,59 @@ def test_comfyui_diffusers_mode_auto_routes_native_gguf_to_comfyui_workflow(tmp_
     assert FakeComfyUIClient.last_params["scheduler"] == "normal"
 
 
+def test_comfyui_diffusers_mode_rejects_failed_sd35_gguf_before_download(tmp_path):
+    class UnexpectedGgufDownloadClient(FakeDiffusersBackendClient):
+        def prepare_gguf_file_for_backend(self, model_repo, gguf_file, *, progress_callback=None, log_capture=None):
+            pytest.fail("failed SD35 GGUF must be rejected before any download/prepare step")
+
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": SD35_GGUF_REPO,
+            "comfyui_remote_api_url": "http://192.168.18.19:8188",
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: UnexpectedGgufDownloadClient(),
+        },
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "model": SD35_GGUF_REPO,
+            "diffusers_model_repo": SD35_GGUF_REPO,
+            "diffusers_gguf_profile": SD35_GGUF_PROFILE_ID,
+            "diffusers_gguf_variant": SD35_GGUF_VARIANT_ID,
+            "diffusers_gguf_file": SD35_GGUF_FILE,
+            "diffusers_model_variant": f"gguf::{SD35_GGUF_FILE}",
+            "prompt": "illustration",
+            "negative_prompt": "",
+            "sampler_name": "diffusers-auto",
+            "scheduler": "default",
+            "steps": 28,
+            "cfg": 4.5,
+            "width": 1920,
+            "height": 1080,
+            "seed": 123,
+            "confirm_billing": True,
+        },
+    )
+
+    assert generated.status_code == 400
+    body = generated.get_json()
+    assert "生成圖異常" in body["msg"]
+    assert "暫不開放" in body["msg"]
+
+
 def test_comfyui_diffusers_mode_rejects_unmapped_gguf_before_download(tmp_path):
     class UnexpectedGgufDownloadClient(FakeDiffusersBackendClient):
         def prepare_gguf_file_for_backend(self, *args, **kwargs):
@@ -3356,6 +3600,51 @@ def test_comfyui_diffusers_mode_rejects_unmapped_gguf_before_download(tmp_path):
 
     assert generated.status_code == 409
     assert "GGUF 只允許官方已建檔 profile" in generated.get_json()["msg"]
+
+
+def test_comfyui_diffusers_mode_rejects_disabled_gguf_profile_before_download(tmp_path):
+    class UnexpectedGgufDownloadClient(FakeDiffusersBackendClient):
+        def prepare_gguf_file_for_backend(self, *args, **kwargs):
+            pytest.fail("disabled GGUF profiles must be rejected before any download/prepare step")
+
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": BTASKEL_ILLUSTRIOUS_GGUF_REPO,
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: UnexpectedGgufDownloadClient(),
+        },
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "model": BTASKEL_ILLUSTRIOUS_GGUF_REPO,
+            "diffusers_model_repo": BTASKEL_ILLUSTRIOUS_GGUF_REPO,
+            "diffusers_gguf_profile": BTASKEL_ILLUSTRIOUS_GGUF_PROFILE_ID,
+            "diffusers_gguf_variant": BTASKEL_ILLUSTRIOUS_GGUF_VARIANT_ID,
+            "diffusers_gguf_file": BTASKEL_ILLUSTRIOUS_GGUF_FILE,
+            "diffusers_model_variant": f"gguf::{BTASKEL_ILLUSTRIOUS_GGUF_FILE}",
+            "prompt": "illustration",
+            "negative_prompt": "",
+            "sampler_name": "diffusers-auto",
+            "scheduler": "default",
+            "seed": 123,
+            "confirm_billing": True,
+        },
+    )
+
+    assert generated.status_code == 400
+    assert "尚未通過本站驗證" in generated.get_json()["msg"]
 
 
 def test_comfyui_diffusers_mode_local_native_gguf_installs_cached_file(tmp_path):

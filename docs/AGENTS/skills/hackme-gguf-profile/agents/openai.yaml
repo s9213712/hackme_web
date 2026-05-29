@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hackme GGUF Profile"
+  short_description: "Add verified hackme_web GGUF profile"
+  default_prompt: "Add this Hugging Face GGUF model to hackme_web as an official profile and test it."

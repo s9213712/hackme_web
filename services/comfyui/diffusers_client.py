@@ -546,6 +546,7 @@ class DiffusersClient:
             hub_cache.mkdir(parents=True, exist_ok=True)
             os.environ["HF_HOME"] = str(hf_home)
             os.environ["HF_HUB_CACHE"] = str(hub_cache)
+            os.environ["HUGGINGFACE_HUB_CACHE"] = str(hub_cache)
             if log_capture:
                 log_capture.append_line(f"Hugging Face cache root set to {hf_home}")
         if self.disable_xet:
@@ -581,6 +582,11 @@ class DiffusersClient:
         cache_root = os.environ.get("HF_HUB_CACHE")
         if cache_root:
             hub_candidates.append(Path(cache_root).expanduser())
+        legacy_cache_root = os.environ.get("HUGGINGFACE_HUB_CACHE")
+        if legacy_cache_root:
+            legacy_cache_path = Path(legacy_cache_root).expanduser()
+            if legacy_cache_path not in hub_candidates:
+                hub_candidates.append(legacy_cache_path)
         hf_home = Path(os.environ.get("HF_HOME", "~/.cache/huggingface")).expanduser()
         hub_candidates.append(hf_home / "hub")
         for hub_cache in hub_candidates:
@@ -1110,6 +1116,16 @@ class DiffusersClient:
             return torch.float32
         return torch.float16 if device == "cuda" else torch.float32
 
+    def _dtype_from_hint(self, torch, value):
+        requested = str(value or "").strip().lower()
+        if requested in {"float16", "fp16", "half"}:
+            return torch.float16
+        if requested in {"bfloat16", "bf16"}:
+            return torch.bfloat16
+        if requested in {"float32", "fp32"}:
+            return torch.float32
+        return None
+
     def _accelerate_available(self):
         return importlib.util.find_spec("accelerate") is not None
 
@@ -1334,14 +1350,33 @@ class DiffusersClient:
             "**/*.py",
         ]
         weight_extensions = ("safetensors", "bin")
+        component_dirs = (
+            "controlnet",
+            "prior",
+            "text_conditioner",
+            "text_encoder",
+            "text_encoder_2",
+            "text_encoder_3",
+            "transformer",
+            "unet",
+            "vae",
+        )
+        def component_weights(pattern):
+            return [
+                f"{component}/{pattern}"
+                for component in component_dirs
+            ] + [
+                f"{component}/**/{pattern}"
+                for component in component_dirs
+            ]
         if variant:
             weights = []
             for ext in weight_extensions:
-                weights.extend([f"*.{variant}.{ext}", f"**/*.{variant}.{ext}"])
+                weights.extend(component_weights(f"*.{variant}.{ext}"))
             return base_patterns + weights, None
         weights = []
         for ext in weight_extensions:
-            weights.extend([f"*.{ext}", f"**/*.{ext}"])
+            weights.extend(component_weights(f"*.{ext}"))
         ignore = []
         for precision in ("fp16", "float16", "half", "bf16", "bfloat16", "fp32", "float32"):
             ignore.extend([f"*.{precision}.*", f"**/*.{precision}.*"])
@@ -1462,9 +1497,9 @@ class DiffusersClient:
 
     def _pipeline_class(self, mode):
         if mode == "txt2img":
-            from diffusers import AutoPipelineForText2Image
+            from diffusers import DiffusionPipeline
 
-            return AutoPipelineForText2Image
+            return DiffusionPipeline
         if mode == "img2img":
             from diffusers import AutoPipelineForImage2Image
 
@@ -1486,6 +1521,7 @@ class DiffusersClient:
         log_capture=None,
         force_device=None,
         cpu_fallback_attempted=False,
+        model_card_hints=None,
     ):
         model_repo = self._effective_model_repo({"model": model_repo})
         variant = self._effective_model_variant({"diffusers_model_variant": variant})
@@ -1588,6 +1624,13 @@ class DiffusersClient:
             log_capture.append_line("Resolving Diffusers device and dtype")
         device = force_device or self._resolve_device(torch)
         dtype = self._resolve_dtype(torch, device)
+        hints = model_card_hints if isinstance(model_card_hints, dict) else {}
+        if not gguf_file and self.dtype_setting == "auto" and hints.get("dtype"):
+            hinted_dtype = self._dtype_from_hint(torch, hints.get("dtype"))
+            if hinted_dtype is not None:
+                dtype = hinted_dtype
+                if log_capture:
+                    log_capture.append_line(f"Applied model-card dtype hint: {hints.get('dtype')}", force=True)
         cuda_memory = self._log_cuda_memory(torch, log_capture=log_capture, progress_callback=progress_callback) if device == "cuda" else {}
         if self._should_fallback_to_cpu_for_low_vram(device, cuda_memory):
             if log_capture:
@@ -1615,6 +1658,15 @@ class DiffusersClient:
                 f"Diffusers environment ready: repo={model_repo}, mode={mode}, device={device}, dtype={dtype}"
             )
         resolved_device_map = self._resolve_device_map(device, cuda_memory=cuda_memory)
+        if (
+            not gguf_file
+            and self.device_map_setting == "auto"
+            and str(hints.get("device_map") or "").strip().lower() in {"cuda", "auto", "balanced", "balanced_low_0", "sequential"}
+            and self._accelerate_available()
+        ):
+            resolved_device_map = str(hints.get("device_map") or "").strip().lower()
+            if log_capture:
+                log_capture.append_line(f"Applied model-card device_map hint: {resolved_device_map}", force=True)
         cache_key = _PipelineCacheKey(
             model_repo=model_repo,
             variant=variant,
@@ -1653,6 +1705,7 @@ class DiffusersClient:
                 log_capture=log_capture,
                 force_device="cpu",
                 cpu_fallback_attempted=True,
+                model_card_hints=model_card_hints,
             )
 
         with self._pipeline_cache_lock:
@@ -1714,8 +1767,9 @@ class DiffusersClient:
                 pipeline_cls = self._pipeline_class(mode)
             if log_capture:
                 log_capture.append_line(f"Selected Diffusers pipeline class: {pipeline_cls.__name__}")
+            dtype_kwarg = "dtype" if hints.get("dtype_kwarg") == "dtype" else "torch_dtype"
             kwargs = {
-                "torch_dtype": dtype,
+                dtype_kwarg: dtype,
                 "use_safetensors": True,
             }
             device_map = resolved_device_map
@@ -1730,6 +1784,12 @@ class DiffusersClient:
                 )
             if variant:
                 kwargs["variant"] = variant
+            for key in ("revision", "subfolder", "custom_pipeline"):
+                value = str(hints.get(key) or "").strip()
+                if value:
+                    kwargs[key] = value
+            if hints.get("trust_remote_code") is True:
+                kwargs["trust_remote_code"] = True
             if self.token:
                 kwargs["token"] = self.token
             if log_capture:
@@ -1752,7 +1812,7 @@ class DiffusersClient:
             if log_capture:
                 source = "local snapshot" if snapshot_path else "remote repo"
                 log_capture.append_line(
-                    f"{pipeline_cls.__name__}.from_pretrained({source}, torch_dtype={dtype}, "
+                    f"{pipeline_cls.__name__}.from_pretrained({source}, {dtype_kwarg}={dtype}, "
                     f"local_files_only={bool(snapshot_path)}, device_map={kwargs.get('device_map') or 'none'}, "
                     f"low_cpu_mem_usage={bool(kwargs.get('low_cpu_mem_usage'))})",
                     force=True,
@@ -2124,6 +2184,7 @@ class DiffusersClient:
                     gguf_file=gguf_file,
                     gguf_base_repo=gguf_base_repo,
                     log_capture=runtime_logs,
+                    model_card_hints=params.get("diffusers_model_card_hints"),
                 )
         except ComfyUIError as exc:
             error_step = (

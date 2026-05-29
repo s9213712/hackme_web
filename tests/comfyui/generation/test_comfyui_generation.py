@@ -11,7 +11,10 @@ from tests.comfyui._integration_suite import (
     test_comfyui_generate_rejects_when_controlnet_model_missing,
     test_comfyui_generate_rejects_when_workflow_node_missing,
     test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes,
+    test_comfyui_installed_gguf_inventory_marks_official_profiles,
+    test_comfyui_gguf_profiles_hide_failed_sd35_and_keep_sothmik_q8,
     test_comfyui_diffusers_mode_auto_routes_native_gguf_to_comfyui_workflow,
+    test_comfyui_diffusers_mode_rejects_failed_sd35_gguf_before_download,
     test_comfyui_diffusers_mode_rejects_unmapped_gguf_before_download,
     test_comfyui_diffusers_mode_local_native_gguf_installs_cached_file,
     test_comfyui_diffusers_mode_remote_native_gguf_requires_remote_admin,
@@ -29,4 +32,5 @@ from tests.comfyui._integration_suite import (
     test_comfyui_lora_billing_quote_adds_one_point_per_lora_per_image,
     test_comfyui_models_and_generate_routes,
     test_comfyui_wait_extends_timeout_while_prompt_is_queued,
+    test_standalone_gguf_probe_profile_config_overrides_common_defaults,
 )

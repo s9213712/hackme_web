@@ -272,6 +272,111 @@ def build_gguf_text_to_image_workflow(params, *, error_cls):
     return workflow
 
 
+def build_sd3_gguf_text_to_image_workflow(params, *, error_cls):
+    workflow, final_model, _final_clip, vae_ref, next_node_id = build_gguf_text_to_image_base(params, error_cls=error_cls)
+    model_sampling_id = str(next_node_id)
+    next_node_id += 1
+    latent_id = str(next_node_id)
+    next_node_id += 1
+    zero_id = str(next_node_id)
+    next_node_id += 1
+    late_negative_id = str(next_node_id)
+    next_node_id += 1
+    early_negative_id = str(next_node_id)
+    next_node_id += 1
+    combined_negative_id = str(next_node_id)
+    next_node_id += 1
+    negative_split = float(params.get("sd3_negative_split") or 0.1)
+    latent_width = int(params.get("sd3_native_width") or params.get("latent_width") or params["width"])
+    latent_height = int(params.get("sd3_native_height") or params.get("latent_height") or params["height"])
+    output_width = int(params.get("output_width") or params["width"])
+    output_height = int(params.get("output_height") or params["height"])
+    workflow[model_sampling_id] = {
+        "class_type": "ModelSamplingSD3",
+        "inputs": {
+            "model": final_model,
+            "shift": float(params.get("sd3_shift") or params.get("model_shift") or 3.0),
+        },
+    }
+    workflow[latent_id] = {
+        "class_type": "EmptySD3LatentImage",
+        "inputs": {
+            "width": latent_width,
+            "height": latent_height,
+            "batch_size": int(params.get("batch_size") or 1),
+        },
+    }
+    workflow[zero_id] = {
+        "class_type": "ConditioningZeroOut",
+        "inputs": {"conditioning": ["7", 0]},
+    }
+    workflow[late_negative_id] = {
+        "class_type": "ConditioningSetTimestepRange",
+        "inputs": {
+            "conditioning": [zero_id, 0],
+            "start": negative_split,
+            "end": 1.0,
+        },
+    }
+    workflow[early_negative_id] = {
+        "class_type": "ConditioningSetTimestepRange",
+        "inputs": {
+            "conditioning": ["7", 0],
+            "start": 0.0,
+            "end": negative_split,
+        },
+    }
+    workflow[combined_negative_id] = {
+        "class_type": "ConditioningCombine",
+        "inputs": {
+            "conditioning_1": [late_negative_id, 0],
+            "conditioning_2": [early_negative_id, 0],
+        },
+    }
+    workflow["3"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": int(params["seed"]),
+            "steps": int(params["steps"]),
+            "cfg": float(params["cfg"]),
+            "sampler_name": params["sampler_name"],
+            "scheduler": params["scheduler"],
+            "denoise": 1,
+            "model": [model_sampling_id, 0],
+            "positive": ["6", 0],
+            "negative": [combined_negative_id, 0],
+            "latent_image": [latent_id, 0],
+        },
+    }
+    workflow["8"] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["3", 0], "vae": vae_ref},
+    }
+    image_ref = ["8", 0]
+    if output_width != latent_width or output_height != latent_height:
+        scale_id = str(next_node_id)
+        next_node_id += 1
+        workflow[scale_id] = {
+            "class_type": "ImageScale",
+            "inputs": {
+                "image": image_ref,
+                "upscale_method": str(params.get("output_upscale_method") or "lanczos").strip() or "lanczos",
+                "width": output_width,
+                "height": output_height,
+                "crop": "disabled",
+            },
+        }
+        image_ref = [scale_id, 0]
+    workflow["9"] = {
+        "class_type": "SaveImage",
+        "inputs": {
+            "filename_prefix": params.get("filename_prefix") or "hackme_web",
+            "images": image_ref,
+        },
+    }
+    return workflow
+
+
 def build_image_to_image_workflow(params, *, error_cls):
     workflow, final_model, _final_clip, vae_ref, next_node_id = build_text_to_image_base(params)
     source_image = params.get("source_image_ref") if isinstance(params.get("source_image_ref"), dict) else None
@@ -480,6 +585,8 @@ def build_generation_workflow(params, *, error_cls):
     if params.get("comfyui_gguf_unet_name"):
         if mode != "txt2img":
             raise error_cls("ComfyUI-GGUF 快捷 workflow 目前只支援文字生圖；其他模式請使用 workflow 模板。")
+        if str(params.get("workflow_family") or "").strip() == "sd3_triple_clip_gguf":
+            return build_sd3_gguf_text_to_image_workflow(params, error_cls=error_cls)
         return build_gguf_text_to_image_workflow(params, error_cls=error_cls)
     if mode == "txt2img":
         return build_text_to_image_workflow(params, error_cls=error_cls)

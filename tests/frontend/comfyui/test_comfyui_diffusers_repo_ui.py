@@ -18,11 +18,15 @@ def test_diffusers_generation_page_accepts_repo_and_variant_selection():
     assert 'id="comfyui-diffusers-gguf-profile"' in html
     assert 'id="comfyui-diffusers-gguf-variant"' in html
     assert 'id="comfyui-diffusers-gguf-base-repo"' in html
+    assert 'id="comfyui-diffusers-gguf-profile-hint"' in html
+    assert 'id="comfyui-installed-gguf-list"' in html
     assert 'id="comfyui-diffusers-repo-status"' in html
     assert 'id="s-comfyui-allow-in-process-diffusers"' in html
     assert 'id="s-comfyui-diffusers-device-map"' in html
     assert 'id="s-comfyui-diffusers-low-cpu-mem-usage"' in html
     assert 'id="s-comfyui-diffusers-keep-downloaded-models"' in html
+    assert "Use this model" in html
+    assert "有 Diffusers 的 repo" in html
 
 
 def test_comfyui_background_refresh_failures_are_visible():
@@ -48,6 +52,11 @@ def test_diffusers_js_preflights_huggingface_repo_before_generation():
     assert "diffusers_gguf_file" in js
     assert "diffusers_gguf_profile" in js
     assert "fillComfyuiGgufProfiles" in js
+    assert "renderComfyuiGgufProfileHint" in js
+    assert "prompt_style_hint" in js
+    assert "comfyuiInstalledGgufModels" in js
+    assert "renderComfyuiInstalledGgufModels" in js
+    assert "installed_gguf_models" in js
     assert "GGUF 只允許官方已驗證 profile" in js
     assert "updateComfyuiDiffusersGgufOptions" in js
     assert "尚未開始下載" in js
@@ -56,7 +65,7 @@ def test_diffusers_js_preflights_huggingface_repo_before_generation():
 
 def test_diffusers_cache_busts_preflight_ui_assets():
     html = _read("public/index.html")
-    assert "/js/36-comfyui.js?v=20260528-comfyui-hf-cache" in html
+    assert "/js/36-comfyui.js?v=20260529-comfyui-gguf-disabled-cleanup" in html
     assert "/js/36-comfyui-workflows.js?v=20260520-embedding-empty-hide" in html
 
 

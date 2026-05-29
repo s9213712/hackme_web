@@ -12,6 +12,7 @@ from services.comfyui.client import ComfyUIError
 from services.comfyui.diffusers_client import DiffusersClient, diffusers_backend_url, repo_id_from_diffusers_url
 from services.comfyui.huggingface import build_diffusers_variant_options, detect_diffusers_supported_modes
 from services.comfyui.huggingface import inspect_huggingface_diffusers_repo
+from services.comfyui.huggingface import parse_diffusers_model_card_hints
 from services.comfyui import huggingface as huggingface_service
 from services.comfyui.settings import normalize_huggingface_repo_id
 
@@ -43,6 +44,22 @@ def test_huggingface_diffusers_metadata_groups_precision_variants_by_size():
     assert [item["value"] for item in options] == ["__default__", "fp16"]
     assert options[0]["size_bytes"] == 1200
     assert options[1]["size_bytes"] == 630
+
+
+def test_huggingface_diffusers_metadata_ignores_root_checkpoints_when_components_exist():
+    options = build_diffusers_variant_options([
+        {"rfilename": "animagine-xl-4.0.safetensors", "size": 7_000},
+        {"rfilename": "animagine-xl-4.0-opt.safetensors", "size": 7_000},
+        {"rfilename": "text_encoder/model.safetensors", "size": 100},
+        {"rfilename": "text_encoder_2/model.safetensors", "size": 200},
+        {"rfilename": "unet/diffusion_pytorch_model.safetensors", "size": 1000},
+        {"rfilename": "vae/diffusion_pytorch_model.safetensors", "size": 50},
+    ])
+
+    assert len(options) == 1
+    assert options[0]["value"] == "__default__"
+    assert options[0]["size_bytes"] == 1350
+    assert "animagine-xl-4.0.safetensors" not in options[0]["files"]
 
 
 def test_huggingface_diffusers_metadata_lists_gguf_files_as_selectable_options():
@@ -77,6 +94,53 @@ def test_huggingface_diffusers_metadata_detects_gguf_text_to_image_only():
     ) == ["txt2img"]
 
 
+def test_huggingface_diffusers_metadata_requires_diffusers_marker_for_regular_repos():
+    assert detect_diffusers_supported_modes(
+        repo_id="owner/plain-safetensors",
+        pipeline_tag="text-to-image",
+        library_name="safetensors",
+        tags=["text-to-image"],
+        siblings=[{"rfilename": "model.safetensors"}],
+    ) == []
+    assert detect_diffusers_supported_modes(
+        repo_id="owner/diffusers-model",
+        pipeline_tag="text-to-image",
+        library_name="diffusers",
+        tags=["text-to-image", "diffusers"],
+        siblings=[{"rfilename": "model_index.json"}],
+    ) == ["txt2img", "img2img"]
+
+
+def test_huggingface_diffusers_metadata_accepts_modular_model_index():
+    assert detect_diffusers_supported_modes(
+        repo_id="owner/modular-diffusers-model",
+        pipeline_tag="text-to-image",
+        library_name="diffusers",
+        tags=["text-to-image", "diffusers"],
+        siblings=[{"rfilename": "modular_model_index.json"}],
+    ) == ["txt2img", "img2img"]
+
+
+def test_huggingface_model_card_hints_parse_official_diffusers_snippet():
+    hints = parse_diffusers_model_card_hints(
+        '''
+        import torch
+        from diffusers import DiffusionPipeline
+        pipe = DiffusionPipeline.from_pretrained(
+            "circlestone-labs/Anima-Base-v1.0-Diffusers",
+            dtype=torch.bfloat16,
+            device_map="cuda",
+        )
+        ''',
+        "circlestone-labs/Anima-Base-v1.0-Diffusers",
+    )
+
+    assert hints["pipeline_loader"] == "diffusion"
+    assert hints["dtype"] == "bfloat16"
+    assert hints["dtype_kwarg"] == "dtype"
+    assert hints["device_map"] == "cuda"
+
+
 def test_huggingface_diffusers_repo_inspection_uses_short_metadata_cache(monkeypatch):
     huggingface_service._HF_REPO_INSPECT_CACHE.clear()
     calls = {"count": 0}
@@ -103,6 +167,52 @@ def test_huggingface_diffusers_repo_inspection_uses_short_metadata_cache(monkeyp
     assert second["ok"] is True
     assert second["cache"]["hit"] is True
     assert calls["count"] == 1
+
+
+def test_huggingface_diffusers_repo_inspection_returns_model_card_hints(monkeypatch, tmp_path):
+    huggingface_service._HF_REPO_INSPECT_CACHE.clear()
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        '''
+        from diffusers import DiffusionPipeline
+        pipe = DiffusionPipeline.from_pretrained(
+            "circlestone-labs/Anima-Base-v1.0-Diffusers",
+            dtype=torch.bfloat16,
+            device_map="cuda",
+        )
+        ''',
+        encoding="utf-8",
+    )
+
+    class FakeApi:
+        def model_info(self, repo_id, token=None, files_metadata=True):
+            return types.SimpleNamespace(
+                siblings=[
+                    {"rfilename": "modular_model_index.json"},
+                    {"rfilename": "transformer/diffusion_pytorch_model.safetensors", "size": 1000},
+                    {"rfilename": "vae/diffusion_pytorch_model.safetensors", "size": 200},
+                ],
+                pipeline_tag="text-to-image",
+                library_name="diffusers",
+                tags=["diffusers"],
+                cardData={},
+                config={},
+            )
+
+    fake_hf = types.ModuleType("huggingface_hub")
+    fake_hf.HfApi = lambda: FakeApi()
+    fake_hf.hf_hub_download = lambda **kwargs: str(readme)
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object() if name == "huggingface_hub" else None)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hf)
+
+    result = inspect_huggingface_diffusers_repo("circlestone-labs/Anima-Base-v1.0-Diffusers", mode="txt2img")
+
+    assert result["ok"] is True
+    assert result["supported_for_mode"] is False
+    assert result["requires_modular_pipeline"] is True
+    assert result["model_card_hints"]["dtype"] == "bfloat16"
+    assert result["model_card_hints"]["dtype_kwarg"] == "dtype"
+    assert result["model_card_hints"]["device_map"] == "cuda"
 
 
 def test_diffusers_health_allows_blank_default_repo_for_generation_page_override(tmp_path, monkeypatch):
@@ -424,6 +534,58 @@ def test_diffusers_snapshot_reports_cache_hit_when_no_download_bytes(tmp_path, m
     assert "未偵測到網路下載位元組" in loading["detail"]
 
 
+def test_diffusers_prefetch_snapshot_uses_only_selected_precision_patterns(tmp_path, monkeypatch):
+    cache_root = tmp_path / "hf-cache"
+    client = DiffusersClient(
+        model_repo="owner/model",
+        storage_root=tmp_path,
+        huggingface_cache_root=str(cache_root),
+    )
+    events = []
+    calls = []
+
+    class FakeTqdm:
+        def __init__(self, *args, **kwargs):
+            self.iterable = kwargs.get("iterable")
+
+        def update(self, n=1):
+            return None
+
+        def close(self):
+            return None
+
+    def fake_snapshot_download(**kwargs):
+        calls.append(kwargs)
+        return str(cache_root / "hub" / "models--owner--model" / "snapshots" / "abc")
+
+    fake_hf = types.ModuleType("huggingface_hub")
+    fake_hf.snapshot_download = fake_snapshot_download
+    fake_utils = types.ModuleType("huggingface_hub.utils")
+    fake_utils.tqdm = FakeTqdm
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hf)
+    monkeypatch.setitem(sys.modules, "huggingface_hub.utils", fake_utils)
+
+    snapshot_path = client._prefetch_diffusers_snapshot(
+        "owner/model",
+        variant="fp16",
+        progress_callback=events.append,
+        log_capture=None,
+    )
+
+    assert snapshot_path.endswith("snapshots/abc")
+    assert calls
+    allow_patterns = calls[0]["allow_patterns"]
+    assert "unet/*.fp16.safetensors" in allow_patterns
+    assert "text_encoder/**/*.fp16.bin" in allow_patterns
+    assert "*.fp16.safetensors" not in allow_patterns
+    assert "*.safetensors" not in allow_patterns
+    assert calls[0].get("ignore_patterns") is None
+    assert os.environ["HF_HOME"] == str(cache_root)
+    assert os.environ["HF_HUB_CACHE"] == str(cache_root / "hub")
+    assert os.environ["HUGGINGFACE_HUB_CACHE"] == str(cache_root / "hub")
+    assert events[-1]["phase"] == "loading"
+
+
 def test_diffusers_client_upload_fetch_and_discard_round_trip(tmp_path):
     client = DiffusersClient(model_repo="dhead/waiIllustriousSDXL_v150", storage_root=tmp_path)
 
@@ -479,6 +641,26 @@ def test_diffusers_download_heartbeat_uses_incomplete_cache_bytes(tmp_path, monk
     assert payload["total_bytes"] == 1000
     assert tracker["external_bytes_written"] == 123
     assert payload["current_file"] == "model.gguf"
+
+
+def test_diffusers_client_configures_root_huggingface_cache_env(tmp_path, monkeypatch):
+    cache_root = tmp_path / "hf-cache"
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising=False)
+    client = DiffusersClient(
+        model_repo="owner/model",
+        storage_root=tmp_path,
+        huggingface_cache_root=str(cache_root),
+    )
+
+    backend = client._configure_huggingface_download_backend()
+
+    assert os.environ["HF_HOME"] == str(cache_root)
+    assert os.environ["HF_HUB_CACHE"] == str(cache_root / "hub")
+    assert os.environ["HUGGINGFACE_HUB_CACHE"] == str(cache_root / "hub")
+    assert backend["cache_root"] == str(cache_root)
+    assert backend["hub_cache"] == str(cache_root / "hub")
 
 
 def test_diffusers_stream_huggingface_file_download_reports_bytes(tmp_path, monkeypatch):
@@ -639,11 +821,14 @@ def test_diffusers_snapshot_patterns_avoid_duplicate_precision_downloads(tmp_pat
     default_allow, default_ignore = client._diffusers_snapshot_patterns()
     fp16_allow, fp16_ignore = client._diffusers_snapshot_patterns("fp16")
 
-    assert "*.safetensors" in default_allow
+    assert "unet/*.safetensors" in default_allow
+    assert "vae/**/*.bin" in default_allow
+    assert "*.safetensors" not in default_allow
     assert "*.fp16.*" in default_ignore
     assert "**/*.bf16.*" in default_ignore
-    assert "*.fp16.safetensors" in fp16_allow
-    assert "**/*.fp16.bin" in fp16_allow
+    assert "unet/*.fp16.safetensors" in fp16_allow
+    assert "text_encoder_2/**/*.fp16.bin" in fp16_allow
+    assert "*.fp16.safetensors" not in fp16_allow
     assert fp16_ignore is None
 
 
