@@ -221,6 +221,11 @@ HTML_LEARNING_PORT=8000
 HTML_LEARNING_TRUSTED_HOSTS=hackme.example.com,www.hackme.example.com
 ```
 
+手動臨時測試 public IP 時，可用 `HTML_LEARNING_PUBLIC_HOST=203.121.227.18`
+或 `HTML_LEARNING_PUBLIC_HOSTS=203.121.227.18,staging.example.com`；伺服器會自動加入
+目前 `HTML_LEARNING_PORT` 的 `host:port` 變體。正式部署仍建議直接維護
+`HTML_LEARNING_TRUSTED_HOSTS` 的完整 domain 清單。
+
 Nginx proxy 應保留使用者原始 Host，讓 Flask `TRUSTED_HOSTS` 能阻擋 Host
 header injection：
 

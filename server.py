@@ -519,17 +519,57 @@ def _local_interface_hosts():
     return [value for value in values if value]
 
 
+def _normalize_host_value(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"^https?://", "", text, flags=re.IGNORECASE)
+    text = text.split("/", 1)[0].strip()
+    return text
+
+
+def _append_trusted_host_variant(hosts, value, *, port=""):
+    host = _normalize_host_value(value)
+    if not host:
+        return
+    if host not in hosts:
+        hosts.append(host)
+    if host.startswith("[") or host.count(":") > 1:
+        return
+    if ":" in host:
+        bare_host = host.rsplit(":", 1)[0]
+        if bare_host and bare_host not in hosts:
+            hosts.append(bare_host)
+        return
+    if port:
+        host_with_port = f"{host}:{port}"
+        if host_with_port not in hosts:
+            hosts.append(host_with_port)
+
+
 def _trusted_hosts_from_env():
-    hosts = _env_csv_values(
+    raw_hosts = _env_csv_values(
         "HTML_LEARNING_TRUSTED_HOSTS",
         "127.0.0.1,localhost,[::1]",
     )
+    hosts = []
+    port = str(os.environ.get("HTML_LEARNING_PORT", "") or STARTUP_PORT or "").strip()
+    for host in raw_hosts:
+        _append_trusted_host_variant(hosts, host, port=port)
     bind_host = os.environ.get("HTML_LEARNING_HOST", "").strip()
-    if bind_host and bind_host not in {"0.0.0.0", "::"} and bind_host not in hosts:
-        hosts.append(bind_host)
+    if bind_host and bind_host not in {"0.0.0.0", "::"}:
+        _append_trusted_host_variant(hosts, bind_host, port=port)
+    for env_name in (
+        "HTML_LEARNING_PUBLIC_HOSTS",
+        "HTML_LEARNING_PUBLIC_HOST",
+        "HACKME_PUBLIC_HOSTS",
+        "HACKME_PUBLIC_HOST",
+        "HACKME_DEV_PUBLIC_HOST",
+    ):
+        for public_host in _env_csv_values(env_name):
+            _append_trusted_host_variant(hosts, public_host, port=port)
     for host in _local_interface_hosts():
-        if host not in hosts:
-            hosts.append(host)
+        _append_trusted_host_variant(hosts, host, port=port)
     return hosts or None
 
 # ── CSRF double-submit secret ─────────────────────────────────────────────────

@@ -54,6 +54,14 @@ python3 server.py --doctor
 
 `--public-host` 會同時 allowlist 裸 host 與 `host:port`，避免透過
 `https://public-ip:port/` 測試時被 trusted-host guard 擋成 `400 untrusted_host`。
+如果你不用 `test_for_develop.sh`、而是手動直接啟動 `server.py`，請帶 public host env：
+
+```bash
+HTML_LEARNING_HOST=0.0.0.0 HTML_LEARNING_PORT=5001 HTML_LEARNING_PUBLIC_HOST=203.121.227.18 python3 server.py
+```
+
+`HTML_LEARNING_PUBLIC_HOST` / `HTML_LEARNING_PUBLIC_HOSTS` 會自動加入裸 host 與目前
+`HTML_LEARNING_PORT` 的 `host:port` 變體。
 
 互動模式若執行 capacity test，腳本會輸出實測結論：推薦的 workers x threads、
 worker-thread lanes、最大安全 concurrent accounts、p50/p95/p99/max 延遲、status / failure
