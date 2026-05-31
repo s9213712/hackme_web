@@ -11,6 +11,9 @@ RUN_ID="$(date +%Y%m%d_%H%M%S)"
 RUN_ROOT=""
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-5000}"
+TRUSTED_HOSTS="${HTML_LEARNING_TRUSTED_HOSTS:-}"
+PUBLIC_HOST="${HACKME_DEV_PUBLIC_HOST:-}"
+SHUTDOWN=0
 CLI_MODE=0
 SKIP_INSTALL=0
 FOREGROUND=0
@@ -138,6 +141,14 @@ Options:
   --cli                    Run non-interactively from command/env options
   --host HOST              Default: 127.0.0.1
   --port PORT              Default: 5000; prompts if occupied in interactive mode
+  --trusted-hosts LIST     Comma-separated Host allowlist exported as
+                           HTML_LEARNING_TRUSTED_HOSTS. Use this when exposing
+                           the dev server through a LAN/public IP.
+  --public-host HOST       Add HOST to trusted hosts and print it as an
+                           external HTTPS test URL. Alias-friendly for NAT IPs.
+  --shutdown               Stop prior dev server process group / child tree for
+                           --port and exit. Only terminates processes launched
+                           from hackme_web dev runtime paths or this source repo.
   --feature-mode MODE      all, defaults, bundles, or custom. Default: all
   --feature-bundles LIST   Comma-separated feature package names such as
                            ops-minimum,safe-community,creator-media,exchange-ops,ai.
@@ -557,6 +568,27 @@ normalize_runtime_options() {
   BACKTEST_PROBE_ON_STARTUP="$NORMALIZED_YES_NO"
 }
 
+append_unique_csv_value() {
+  local target_var="$1"
+  local raw_value="$2"
+  local current_value="${!target_var:-}"
+  local candidate existing trimmed
+  candidate="${raw_value#"${raw_value%%[![:space:]]*}"}"
+  candidate="${candidate%"${candidate##*[![:space:]]}"}"
+  [[ -n "$candidate" ]] || return 0
+  IFS=',' read -r -a _csv_items <<< "$current_value"
+  for existing in "${_csv_items[@]:-}"; do
+    trimmed="${existing#"${existing%%[![:space:]]*}"}"
+    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    [[ "$trimmed" == "$candidate" ]] && return 0
+  done
+  if [[ -z "$current_value" ]]; then
+    printf -v "$target_var" '%s' "$candidate"
+  else
+    printf -v "$target_var" '%s,%s' "$current_value" "$candidate"
+  fi
+}
+
 append_csv_value() {
   local target_var="$1"
   local value="$2"
@@ -586,6 +618,8 @@ print_resolved_config() {
   fi
   say "  host:                $HOST"
   say "  port:                $PORT"
+  say "  trusted_hosts:       ${TRUSTED_HOSTS:-<app default local hosts>}"
+  say "  public_host:         ${PUBLIC_HOST:-<none>}"
   say "  feature_mode:        $FEATURE_MODE"
   if [[ "$FEATURE_MODE" == "bundles" ]]; then
     say "  feature_bundles:     ${FEATURE_BUNDLES:-<none>}"
@@ -1749,6 +1783,141 @@ kill_port_processes() {
   use_next_available_port "$requested"
 }
 
+is_dev_server_pid() {
+  local pid="$1"
+  local args=""
+  [[ -n "$pid" && -r "/proc/$pid/cmdline" ]] || return 1
+  args="$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  [[ -n "$args" ]] || return 1
+  case "$args" in
+    *"/hackme_web_dev_"*"/hackme_web/"*"server:app"*|*"/hackme_web_dev_"*"/hackme_web/"*"server.py"*)
+      return 0
+      ;;
+    *"$SOURCE_ROOT/"*"server.py"*|*"$SOURCE_ROOT/"*"server:app"*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+pid_pgid() {
+  local pid="$1"
+  ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true
+}
+
+append_unique_array_value() {
+  local target_var="$1"
+  local value="$2"
+  local existing
+  [[ -n "$value" ]] || return 0
+  eval "local current=(\"\${${target_var}[@]:-}\")"
+  for existing in "${current[@]:-}"; do
+    [[ "$existing" == "$value" ]] && return 0
+  done
+  eval "$target_var+=(\"\$value\")"
+}
+
+collect_descendant_pids() {
+  local parent="$1"
+  local child
+  if ! command -v pgrep >/dev/null 2>&1; then
+    return 0
+  fi
+  while IFS= read -r child; do
+    [[ -n "$child" ]] || continue
+    printf '%s\n' "$child"
+    collect_descendant_pids "$child"
+  done < <(pgrep -P "$parent" 2>/dev/null || true)
+}
+
+group_has_live_processes() {
+  local pgid="$1"
+  [[ -n "$pgid" ]] || return 1
+  kill -0 "-$pgid" 2>/dev/null
+}
+
+shutdown_dev_server_pids() {
+  local pids="$1"
+  local targets=()
+  local groups=()
+  local pid child pgid own_pgid
+  own_pgid="$(pid_pgid $$)"
+
+  for pid in $pids; do
+    if ! is_dev_server_pid "$pid"; then
+      say "[dev-tmp] shutdown: skip non-dev pid $pid"
+      continue
+    fi
+    append_unique_array_value targets "$pid"
+    while IFS= read -r child; do
+      append_unique_array_value targets "$child"
+    done < <(collect_descendant_pids "$pid")
+    pgid="$(pid_pgid "$pid")"
+    if [[ -n "$pgid" && "$pgid" != "$own_pgid" ]]; then
+      append_unique_array_value groups "$pgid"
+    fi
+  done
+
+  if [[ "${#targets[@]}" == "0" && "${#groups[@]}" == "0" ]]; then
+    say "[dev-tmp] shutdown: no matching hackme_web dev server process found"
+    return 0
+  fi
+
+  if [[ "${#groups[@]}" != "0" ]]; then
+    say "[dev-tmp] shutdown: terminating process group(s): ${groups[*]}"
+    for pgid in "${groups[@]}"; do
+      kill -TERM "-$pgid" 2>/dev/null || true
+    done
+  fi
+  if [[ "${#targets[@]}" != "0" ]]; then
+    say "[dev-tmp] shutdown: terminating pid tree: ${targets[*]}"
+    kill -TERM "${targets[@]}" 2>/dev/null || true
+  fi
+
+  for _ in $(seq 1 40); do
+    local alive=()
+    for pgid in "${groups[@]:-}"; do
+      if group_has_live_processes "$pgid"; then
+        alive+=("group:$pgid")
+      fi
+    done
+    for pid in "${targets[@]:-}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive+=("pid:$pid")
+      fi
+    done
+    if [[ "${#alive[@]}" == "0" ]]; then
+      say "[dev-tmp] shutdown: stopped"
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  if [[ "${#groups[@]}" != "0" ]]; then
+    say "[dev-tmp] shutdown: forcing process group(s): ${groups[*]}"
+    for pgid in "${groups[@]}"; do
+      kill -KILL "-$pgid" 2>/dev/null || true
+    done
+  fi
+  if [[ "${#targets[@]}" != "0" ]]; then
+    say "[dev-tmp] shutdown: forcing pid tree: ${targets[*]}"
+    kill -KILL "${targets[@]}" 2>/dev/null || true
+  fi
+}
+
+shutdown_dev_servers_for_port() {
+  normalize_port "$PORT"
+  PORT="$NORMALIZED_PORT"
+  local pids
+  pids="$(port_pid_list "$PORT")"
+  if [[ -z "$pids" ]]; then
+    say "[dev-tmp] shutdown: no listener on $HOST:$PORT"
+    return 0
+  fi
+  show_port_processes "$PORT" "$pids"
+  shutdown_dev_server_pids "$pids"
+}
+
 resolve_occupied_port_interactively() {
   local requested="$1"
   local pids
@@ -1827,6 +1996,19 @@ while [[ $# -gt 0 ]]; do
     --port)
       PORT="${2:?missing port}"
       shift 2
+      ;;
+    --trusted-hosts)
+      TRUSTED_HOSTS="${2:?missing trusted hosts list}"
+      shift 2
+      ;;
+    --public-host|--public-ip)
+      PUBLIC_HOST="${2:?missing public host}"
+      append_unique_csv_value TRUSTED_HOSTS "$PUBLIC_HOST"
+      shift 2
+      ;;
+    --shutdown|--stop)
+      SHUTDOWN=1
+      shift
       ;;
     --feature-mode)
       FEATURE_MODE="${2:?missing feature mode}"
@@ -2036,6 +2218,12 @@ fi
 normalize_capacity_probe_mode
 load_local_capacity_defaults
 
+if [[ "$SHUTDOWN" == "1" ]]; then
+  normalize_port_conflict_action
+  shutdown_dev_servers_for_port
+  exit 0
+fi
+
 if [[ "$CLI_MODE" != "1" ]]; then
   prompt_runtime_config
 fi
@@ -2080,6 +2268,7 @@ mkdir -p \
   "$RUNTIME_ROOT/anchors" \
   "$EFFECTIVE_STORAGE_ROOT" \
   "$RUNTIME_ROOT/reports"
+touch "$LOG_CAPTURE" "$GUNICORN_ACCESS_LOG" "$GUNICORN_ERROR_LOG"
 
 resolve_python
 migrate_legacy_runtime_storage_to_cloud_drive_root
@@ -2104,6 +2293,12 @@ export HTML_LEARNING_STORAGE_DIR="$EFFECTIVE_STORAGE_ROOT"
 export HTML_LEARNING_REPORTS_DIR="$RUNTIME_ROOT/reports"
 export HTML_LEARNING_HOST="$HOST"
 export HTML_LEARNING_PORT="$PORT"
+if [[ -n "$PUBLIC_HOST" ]]; then
+  append_unique_csv_value TRUSTED_HOSTS "$PUBLIC_HOST"
+fi
+if [[ -n "$TRUSTED_HOSTS" ]]; then
+  export HTML_LEARNING_TRUSTED_HOSTS="$TRUSTED_HOSTS"
+fi
 export HTML_LEARNING_ROOT_PASSWORD="$ROOT_PASSWORD"
 export HTML_LEARNING_MANAGER_PASSWORD="$MANAGER_PASSWORD"
 export HTML_LEARNING_TEST_PASSWORD="$TEST_PASSWORD"
@@ -2822,13 +3017,27 @@ if [[ -n "$MAX_CONTENT_MB" ]]; then
 fi
 say "[dev-tmp] pid:       $SERVER_PID"
 say "[dev-tmp] runner:    $SERVER_RUNNER"
+if [[ -n "$TRUSTED_HOSTS" ]]; then
+  say "[dev-tmp] trusted:   $TRUSTED_HOSTS"
+fi
 if [[ -n "$SERVER_URL" ]]; then
   say "[dev-tmp] url:       $SERVER_URL"
+  if [[ -n "$PUBLIC_HOST" ]]; then
+    say "[dev-tmp] public:    https://$PUBLIC_HOST:$PORT"
+  fi
 else
   say "[dev-tmp] url:       startup pending; inspect logs"
 fi
 say "[dev-tmp] accounts:   root/${ROOT_PASSWORD} admin/${MANAGER_PASSWORD} test/${TEST_PASSWORD}"
-say "[dev-tmp] log:       $LOG_CAPTURE"
+if [[ "$FOREGROUND" == "1" ]]; then
+  say "[dev-tmp] log:       foreground mode uses stdout/stderr"
+elif [[ "$SERVER_RUNNER" == "gunicorn" ]]; then
+  say "[dev-tmp] log:       $LOG_CAPTURE"
+  say "[dev-tmp] access:    $GUNICORN_ACCESS_LOG"
+  say "[dev-tmp] error:     $GUNICORN_ERROR_LOG"
+else
+  say "[dev-tmp] log:       $LOG_CAPTURE"
+fi
 print_generated_dev_tokens
 
 # BTC_trade autostart: kick the prediction pipeline off in the background

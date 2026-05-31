@@ -79,6 +79,22 @@ python3 server.py --doctor
 scripts/testing/pytest_in_tmp.sh -q tests
 ```
 
+臨時用 LAN / NAT public IP 測試 dev server 時，請明確加入 public Host allowlist：
+
+```bash
+./test_for_develop.sh --host 0.0.0.0 --port 5000 --public-host 203.121.227.18
+```
+
+這會把 public host 加進 `HTML_LEARNING_TRUSTED_HOSTS` 並印出外部測試 URL；
+背景模式也會在 runtime logs 目錄產生並列出 `server_direct.out`、Gunicorn
+access log 與 error log。
+若要乾淨停止前一次由此腳本啟動、正在佔用同一 port 的 dev server 與其衍生
+process group / child tree：
+
+```bash
+./test_for_develop.sh --port 5000 --shutdown
+```
+
 若你真的要在目前工作樹直接啟動，先自己準備好 runtime 目錄，再執行：
 
 ```bash
