@@ -1080,7 +1080,8 @@ def main() -> int:
     seed_summary: dict[str, Any] = {}
     try:
         base_url = wait_for_server(port)
-        rec.add("server_start_isolated", port != 5000 and str(runtime_root).startswith("/tmp/"), f"{base_url}, runtime={runtime_root}", port=port, runtime_root=str(runtime_root), pid=server.pid)
+        runtime_isolated = port != 5000 and not runtime_root.is_relative_to(REPO_ROOT)
+        rec.add("server_start_isolated", runtime_isolated, f"{base_url}, runtime={runtime_root}", port=port, runtime_root=str(runtime_root), pid=server.pid)
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=not args.headed)
             context = browser.new_context(ignore_https_errors=True, viewport={"width": 1366, "height": 768})

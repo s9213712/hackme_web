@@ -1567,7 +1567,7 @@ async function loadTradingAssetOverview({ quiet = false } = {}) {
       return;
     }
     renderTradingAssetOverview(json.overview || {});
-    if (currentRole === "manager" || currentRole === "super_admin") {
+    if (currentUser === "root" || currentRole === "manager" || currentRole === "super_admin") {
       const adminRes = await apiFetch(API + "/admin/trading/asset-overview", {
         credentials: "same-origin",
         headers: { "X-CSRF-Token": csrf || "" }
