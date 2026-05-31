@@ -70,9 +70,6 @@ async function doLogin() {
     const me = await meRes.json();
     if (me.ok) setAuthState(me, true);
     else setAuthState({ username: user, role: "user", role_label: "一般用戶", nickname: "-" }, true);
-    if (typeof promptDriveGlobalE2eePassphraseOnLogin === "function") {
-      await promptDriveGlobalE2eePassphraseOnLogin();
-    }
     if (json.birthday_gift?.created || json.birthday_gift?.storage_quota_gift?.created) {
       const amount = Number(json.birthday_gift.amount || 1000);
       const storageGift = json.birthday_gift?.storage_quota_gift ? "，1GB 雲端硬碟 7 日已入帳" : "";

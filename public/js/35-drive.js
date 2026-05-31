@@ -60,7 +60,6 @@ const DRIVE_SHARE_FRAGMENT_STORAGE_KEY = "hackme_web.drive_share_fragments";
 const DRIVE_SHARE_COPY_RESET_MS = 1800;
 const driveE2eeSessionPassphrases = new Map();
 const driveE2eeRecentSessionPassphrases = [];
-let driveGlobalE2eePassphrase = "";
 const ATTACHMENT_FILE_SELECT_IDS = [
   "chat-attachment-existing-file-id",
   "dm-attachment-existing-file-id",
@@ -398,12 +397,6 @@ function askDriveUploadPrivacyOptions({ allowE2ee = true, title = "選擇隱私�
     });
     if (passphraseInput) passphraseInput.value = "";
     if (passphraseConfirm) passphraseConfirm.value = "";
-    if (driveGlobalE2eePassphrase && allowE2ee) {
-      const e2eeRadio = radios.find((radio) => radio.value === "e2ee" && !radio.disabled);
-      if (e2eeRadio) e2eeRadio.checked = true;
-      if (passphraseInput) passphraseInput.value = driveGlobalE2eePassphrase;
-      if (passphraseConfirm) passphraseConfirm.value = driveGlobalE2eePassphrase;
-    }
     setMsg("");
     sync();
     confirmBtn.addEventListener("click", onConfirm);
@@ -424,15 +417,11 @@ function updateDriveE2eePassphraseVisibility() {
   const field = $("drive-e2ee-passphrase-field");
   const isE2ee = driveE2eeModeSelected();
   if (field) field.style.display = isE2ee ? "" : "none";
-  if (isE2ee && driveGlobalE2eePassphrase) {
-    if ($("drive-e2ee-passphrase") && !$("drive-e2ee-passphrase").value) $("drive-e2ee-passphrase").value = driveGlobalE2eePassphrase;
-    if ($("drive-e2ee-passphrase-confirm") && !$("drive-e2ee-passphrase-confirm").value) $("drive-e2ee-passphrase-confirm").value = driveGlobalE2eePassphrase;
-  }
 }
 
 function getDriveE2eeUploadPassphrase() {
-  const passphrase = $("drive-e2ee-passphrase")?.value || driveGlobalE2eePassphrase || "";
-  const confirm = $("drive-e2ee-passphrase-confirm")?.value || driveGlobalE2eePassphrase || "";
+  const passphrase = $("drive-e2ee-passphrase")?.value || "";
+  const confirm = $("drive-e2ee-passphrase-confirm")?.value || "";
   if (!passphrase) throw new Error("請輸入 E2EE 檔案加密密碼");
   const policy = validateDriveE2eePassphraseStrength(passphrase);
   if (!policy.ok) throw new Error(policy.msg);
@@ -468,20 +457,6 @@ function driveE2eeKnownFileIds(fileId) {
 function clearDriveE2eeSessionPassphrases() {
   driveE2eeSessionPassphrases.clear();
   driveE2eeRecentSessionPassphrases.length = 0;
-  driveGlobalE2eePassphrase = "";
-}
-
-async function promptDriveGlobalE2eePassphraseOnLogin() {
-  driveGlobalE2eePassphrase = "";
-  const passphrase = window.prompt("全域 E2EE 密碼（可留空跳過，改用個別 E2EE 密碼模式）。此密碼只會保留在瀏覽器記憶體，不會送到伺服器。", "") || "";
-  if (!passphrase) return;
-  const policy = validateDriveE2eePassphraseStrength(passphrase);
-  if (!policy.ok) {
-    alert(policy.msg);
-    return promptDriveGlobalE2eePassphraseOnLogin();
-  }
-  driveGlobalE2eePassphrase = passphrase;
-  rememberDriveE2eeRecentSessionPassphrase(passphrase);
 }
 
 function hasActiveDriveUploads() {
@@ -493,7 +468,6 @@ function hasActiveDriveUploads() {
   });
 }
 
-window.promptDriveGlobalE2eePassphraseOnLogin = promptDriveGlobalE2eePassphraseOnLogin;
 window.clearDriveE2eeSessionPassphrases = clearDriveE2eeSessionPassphrases;
 window.hasActiveDriveUploads = hasActiveDriveUploads;
 
@@ -560,7 +534,6 @@ function getDriveE2eeSessionPassphraseCandidates(fileId) {
     if (!normalized || candidates.includes(normalized)) return;
     candidates.push(normalized);
   };
-  addCandidate(driveGlobalE2eePassphrase);
   addCandidate(remembered);
   driveE2eeRecentSessionPassphrases.forEach(addCandidate);
   return candidates;

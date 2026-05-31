@@ -32,6 +32,11 @@ def test_cloud_drive_preview_ui_is_wired():
     assert "function isDriveMobilePreviewViewport()" in drive_js
     assert 'window.matchMedia("(max-width: 720px)")' in drive_js
     assert "if (!options.inlinePreview && isDriveMobilePreviewViewport()) return true;" in drive_js
+    auth_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
+    assert "promptDriveGlobalE2eePassphraseOnLogin" not in auth_js
+    assert "promptDriveGlobalE2eePassphraseOnLogin" not in drive_js
+    assert "driveGlobalE2eePassphrase" not in drive_js
+    assert "全域 E2EE 密碼" not in drive_js
     assert "DRIVE_FULLSCREEN_PREVIEW_MS" in drive_js
     assert "/preview/content" in drive_js
     assert "drive-preview-archive" in drive_js
