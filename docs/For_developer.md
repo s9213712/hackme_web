@@ -247,8 +247,13 @@ platform center Playwright acceptance:
 `server.py` 不再接 `--host` / `--port` CLI 參數。若要改 bind，請使用
 `HTML_LEARNING_HOST` / `HTML_LEARNING_PORT` 或 `test_for_develop.sh --port ...`。
 臨時需要從 LAN / NAT public IP 打開 dev server 時，用 `--public-host <host>`
-把該 Host 加進 `HTML_LEARNING_TRUSTED_HOSTS`；不要用這條路徑取代 production
-的 Nginx / 正式 TLS 部署。
+把該 Host 與 `host:port` 變體加進 `HTML_LEARNING_TRUSTED_HOSTS`；不要用這條
+路徑取代 production 的 Nginx / 正式 TLS 部署。
+
+互動模式若執行 capacity test，腳本會輸出 workers、threads、backpressure
+thread capacity、max requests 與 jitter 的結論，並詢問要套用結果、重新測試、
+改用手動參數，或使用保守硬體 fallback。CLI 模式會直接套用 probe 結果，避免
+無人值守流程卡在 prompt。
 
 背景模式會在 runtime logs 目錄保留 `server_direct.out`、`gunicorn_access.log`
 與 `gunicorn_error.log`。停止舊 dev server 時用

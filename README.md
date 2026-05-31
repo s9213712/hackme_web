@@ -87,9 +87,13 @@ scripts/testing/pytest_in_tmp.sh -q tests
 ./test_for_develop.sh --host 0.0.0.0 --port 5000 --public-host 203.121.227.18
 ```
 
-這會把 public host 加進 `HTML_LEARNING_TRUSTED_HOSTS` 並印出外部測試 URL；
-背景模式也會在 runtime logs 目錄產生並列出 `server_direct.out`、Gunicorn
-access log 與 error log。
+這會把 public host 與 `host:port` 變體加進 `HTML_LEARNING_TRUSTED_HOSTS`，
+並印出外部測試 URL；背景模式也會在 runtime logs 目錄產生並列出
+`server_direct.out`、Gunicorn access log 與 error log。
+
+互動模式若執行 capacity test，腳本會先輸出 workers、threads、backpressure
+thread capacity、max requests 與 jitter 的結論，再詢問要套用本次結果、重新測試、
+改用手動參數，或放棄 probe 改採保守硬體 fallback。CLI 模式會直接套用 probe 結果。
 若要乾淨停止前一次由此腳本啟動、正在佔用同一 port 的 dev server 與其衍生
 process group / child tree：
 

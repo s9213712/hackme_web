@@ -48,6 +48,7 @@ GUNICORN_BACKLOG="${HACKME_DEV_GUNICORN_BACKLOG:-64}"
 GUNICORN_MAX_REQUESTS="${HACKME_DEV_GUNICORN_MAX_REQUESTS:-10000}"
 GUNICORN_MAX_REQUESTS_JITTER="${HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER:-1000}"
 CAPACITY_PROBE_MODE="${HACKME_DEV_CAPACITY_PROBE:-auto}"
+CAPACITY_PROBE_RAN=0
 DRY_RUN=0
 
 is_auto_capacity_value() {
@@ -573,6 +574,7 @@ append_unique_csv_value() {
   local raw_value="$2"
   local current_value="${!target_var:-}"
   local candidate existing trimmed
+  local _csv_items=()
   candidate="${raw_value#"${raw_value%%[![:space:]]*}"}"
   candidate="${candidate%"${candidate##*[![:space:]]}"}"
   [[ -n "$candidate" ]] || return 0
@@ -586,6 +588,57 @@ append_unique_csv_value() {
     printf -v "$target_var" '%s' "$candidate"
   else
     printf -v "$target_var" '%s,%s' "$current_value" "$candidate"
+  fi
+}
+
+normalize_trusted_host_value() {
+  local value="$1"
+  value="${value#http://}"
+  value="${value#https://}"
+  value="${value%%/*}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  NORMALIZED_TRUSTED_HOST_VALUE="$value"
+}
+
+append_trusted_host_variants() {
+  local raw_value="$1"
+  local value host_without_port
+  normalize_trusted_host_value "$raw_value"
+  value="$NORMALIZED_TRUSTED_HOST_VALUE"
+  [[ -n "$value" ]] || return 0
+  append_unique_csv_value TRUSTED_HOSTS "$value"
+  case "$value" in
+    \[*\]|*:*:*)
+      return 0
+      ;;
+    *:*)
+      host_without_port="${value%%:*}"
+      append_unique_csv_value TRUSTED_HOSTS "$host_without_port"
+      ;;
+    *)
+      if [[ -n "$PORT" ]]; then
+        append_unique_csv_value TRUSTED_HOSTS "$value:$PORT"
+      fi
+      ;;
+  esac
+}
+
+finalize_trusted_hosts() {
+  local original_hosts item
+  local _trusted_items=()
+  original_hosts="$TRUSTED_HOSTS"
+  TRUSTED_HOSTS=""
+  if [[ -n "$original_hosts" ]]; then
+    IFS=',' read -r -a _trusted_items <<< "$original_hosts"
+    for item in "${_trusted_items[@]:-}"; do
+      append_trusted_host_variants "$item"
+    done
+  fi
+  if [[ -n "$PUBLIC_HOST" ]]; then
+    normalize_trusted_host_value "$PUBLIC_HOST"
+    PUBLIC_HOST="$NORMALIZED_TRUSTED_HOST_VALUE"
+    append_trusted_host_variants "$PUBLIC_HOST"
   fi
 }
 
@@ -708,22 +761,137 @@ prompt_yes_no() {
   done
 }
 
-run_capacity_probe_for_defaults() {
-  local continue_after_failure=1
-  say "[dev-tmp] capacity probe: starting isolated pre-deploy probe"
-  say "[dev-tmp] capacity probe: defaults file $CAPACITY_DEFAULTS_FILE"
-  if "$PYTHON_BIN" "$SOURCE_ROOT/scripts/testing/predeploy_capacity_probe.py" \
-      --capacity-defaults-file "$CAPACITY_DEFAULTS_FILE"; then
-    load_local_capacity_defaults force
-    say "[dev-tmp] capacity probe: loaded workers=$GUNICORN_WORKERS threads=$GUNICORN_THREADS max_requests=$GUNICORN_MAX_REQUESTS jitter=$GUNICORN_MAX_REQUESTS_JITTER"
+print_capacity_probe_conclusion() {
+  local backpressure_capacity="${HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY:-auto}"
+  say "[dev-tmp] capacity probe conclusion:"
+  say "  gunicorn_workers:              $GUNICORN_WORKERS"
+  say "  gunicorn_threads_per_worker:   $GUNICORN_THREADS"
+  say "  backpressure_thread_capacity:  $backpressure_capacity"
+  say "  gunicorn_max_requests:         $GUNICORN_MAX_REQUESTS"
+  say "  gunicorn_max_requests_jitter:  $GUNICORN_MAX_REQUESTS_JITTER"
+}
+
+prompt_capacity_integer() {
+  local label="$1"
+  local default_value="$2"
+  local target_var="$3"
+  local allow_zero="${4:-0}"
+  local answer
+  while true; do
+    prompt_value "$label" "$default_value" answer
+    if [[ "$answer" =~ ^[0-9]+$ ]] && { [[ "$allow_zero" == "1" ]] || (( answer > 0 )); }; then
+      printf -v "$target_var" '%s' "$answer"
+      return 0
+    fi
+    if [[ "$allow_zero" == "1" ]]; then
+      say "Please enter 0 or a positive integer."
+    else
+      say "Please enter a positive integer."
+    fi
+  done
+}
+
+prompt_manual_capacity_settings() {
+  prompt_capacity_integer "Manual Gunicorn workers" "$GUNICORN_WORKERS" GUNICORN_WORKERS
+  prompt_capacity_integer "Manual Gunicorn threads per worker" "$GUNICORN_THREADS" GUNICORN_THREADS
+  prompt_capacity_integer "Manual backpressure thread capacity" "${HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY:-$GUNICORN_THREADS}" HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY
+  prompt_capacity_integer "Manual Gunicorn max requests" "$GUNICORN_MAX_REQUESTS" GUNICORN_MAX_REQUESTS 1
+  prompt_capacity_integer "Manual Gunicorn max requests jitter" "$GUNICORN_MAX_REQUESTS_JITTER" GUNICORN_MAX_REQUESTS_JITTER 1
+  export HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY
+  export HACKME_DEV_GUNICORN_WORKERS="$GUNICORN_WORKERS"
+  export HACKME_DEV_GUNICORN_THREADS="$GUNICORN_THREADS"
+  export HACKME_DEV_GUNICORN_MAX_REQUESTS="$GUNICORN_MAX_REQUESTS"
+  export HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER="$GUNICORN_MAX_REQUESTS_JITTER"
+  CAPACITY_PROBE_MODE="never"
+  say "[dev-tmp] capacity probe: using manual capacity/backpressure parameters"
+  print_capacity_probe_conclusion
+}
+
+reset_capacity_to_conservative_fallback() {
+  GUNICORN_WORKERS="auto"
+  GUNICORN_THREADS="auto"
+  GUNICORN_MAX_REQUESTS="10000"
+  GUNICORN_MAX_REQUESTS_JITTER="1000"
+  unset HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY
+  unset HACKME_DEV_GUNICORN_WORKERS
+  unset HACKME_DEV_GUNICORN_THREADS
+  unset HACKME_DEV_GUNICORN_MAX_REQUESTS
+  unset HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER
+  CAPACITY_PROBE_MODE="never"
+  say "[dev-tmp] capacity probe: using conservative hardware fallback; auto settings will be resolved without another probe"
+}
+
+confirm_capacity_probe_result() {
+  local choice
+  print_capacity_probe_conclusion
+  if [[ "$CLI_MODE" == "1" ]]; then
+    say "[dev-tmp] capacity probe: CLI mode applies these defaults automatically"
     return 0
   fi
-  say "[dev-tmp] capacity probe failed."
-  if [[ "$CLI_MODE" == "1" ]]; then
-    die "capacity probe failed"
+
+  say "Capacity/backpressure action:"
+  say "  1) apply    Use this probe result for Gunicorn and backpressure"
+  say "  2) retest   Run the isolated capacity probe again"
+  say "  3) manual   Enter Gunicorn and backpressure parameters manually"
+  say "  4) fallback Use conservative hardware fallback without another probe"
+  while true; do
+    printf 'Choose capacity action [1]: '
+    if ! read -r choice; then
+      die "interactive setup was interrupted"
+    fi
+    choice="${choice:-1}"
+    case "${choice,,}" in
+      1|apply|use|yes|y)
+        say "[dev-tmp] capacity probe: applying probe result"
+        return 0
+        ;;
+      2|retest|retry|rerun)
+        say "[dev-tmp] capacity probe: rerunning by user request"
+        return 1
+        ;;
+      3|manual|custom)
+        prompt_manual_capacity_settings
+        return 0
+        ;;
+      4|fallback|conservative|skip)
+        reset_capacity_to_conservative_fallback
+        return 0
+        ;;
+      *)
+        say "Please choose 1, 2, 3, or 4."
+        ;;
+    esac
+  done
+}
+
+run_capacity_probe_for_defaults() {
+  local continue_after_failure=1
+  if [[ "$CAPACITY_PROBE_RAN" == "1" ]]; then
+    say "[dev-tmp] capacity probe: already ran for this launch; reusing loaded defaults"
+    return 0
   fi
-  prompt_yes_no "Continue startup without new capacity defaults" 1 continue_after_failure
-  [[ "$continue_after_failure" == "1" ]] || die "capacity probe failed"
+  while true; do
+    CAPACITY_PROBE_RAN=1
+    say "[dev-tmp] capacity probe: starting isolated pre-deploy probe"
+    say "[dev-tmp] capacity probe: defaults file $CAPACITY_DEFAULTS_FILE"
+    if "$PYTHON_BIN" "$SOURCE_ROOT/scripts/testing/predeploy_capacity_probe.py" \
+        --capacity-defaults-file "$CAPACITY_DEFAULTS_FILE"; then
+      load_local_capacity_defaults force
+      say "[dev-tmp] capacity probe: loaded workers=$GUNICORN_WORKERS threads=$GUNICORN_THREADS max_requests=$GUNICORN_MAX_REQUESTS jitter=$GUNICORN_MAX_REQUESTS_JITTER"
+      if confirm_capacity_probe_result; then
+        return 0
+      fi
+      continue
+    fi
+    say "[dev-tmp] capacity probe failed."
+    if [[ "$CLI_MODE" == "1" ]]; then
+      die "capacity probe failed"
+    fi
+    prompt_yes_no "Continue startup without new capacity defaults" 1 continue_after_failure
+    [[ "$continue_after_failure" == "1" ]] || die "capacity probe failed"
+    CAPACITY_PROBE_MODE="never"
+    return 0
+  done
 }
 
 prompt_feature_settings() {
@@ -1560,15 +1728,28 @@ if copied or skipped_existing or skipped_special:
 PY
 }
 
+server_probe_host() {
+  case "$HOST" in
+    0.0.0.0|::|"[::]")
+      printf '%s\n' "127.0.0.1"
+      ;;
+    *)
+      printf '%s\n' "$HOST"
+      ;;
+  esac
+}
+
 wait_for_server_url() {
   command -v curl >/dev/null 2>&1 || return 1
   local url
   local scheme
+  local probe_host
+  probe_host="$(server_probe_host)"
   for _ in $(seq 1 80); do
     for scheme in https http; do
-      url="${scheme}://${HOST}:${PORT}/api/version"
+      url="${scheme}://${probe_host}:${PORT}/api/version"
       if curl -k -sS "$url" >/dev/null 2>&1; then
-        printf '%s\n' "${scheme}://${HOST}:${PORT}"
+        printf '%s\n' "${scheme}://${probe_host}:${PORT}"
         return 0
       fi
     done
@@ -2004,7 +2185,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --public-host|--public-ip)
       PUBLIC_HOST="${2:?missing public host}"
-      append_unique_csv_value TRUSTED_HOSTS "$PUBLIC_HOST"
       shift 2
       ;;
     --shutdown|--stop)
@@ -2229,6 +2409,7 @@ if [[ "$CLI_MODE" != "1" ]]; then
   prompt_runtime_config
 fi
 normalize_runtime_options
+finalize_trusted_hosts
 
 RUN_ROOT="${RUN_ROOT:-/tmp/hackme_web_dev_${RUN_ID}_$$}"
 if [[ "$DRY_RUN" == "1" ]]; then
@@ -2279,6 +2460,7 @@ else
   say "[dev-tmp] python:    python3 (reuse current environment)"
 fi
 resolve_server_port
+finalize_trusted_hosts
 if [[ "$ROOT_PASSWORD" == "root" && "$MANAGER_PASSWORD" == "admin" && "$TEST_PASSWORD" == "test" ]]; then
   DEFAULT_ACCOUNT_PASSWORDS=1
 else
@@ -2294,9 +2476,6 @@ export HTML_LEARNING_STORAGE_DIR="$EFFECTIVE_STORAGE_ROOT"
 export HTML_LEARNING_REPORTS_DIR="$RUNTIME_ROOT/reports"
 export HTML_LEARNING_HOST="$HOST"
 export HTML_LEARNING_PORT="$PORT"
-if [[ -n "$PUBLIC_HOST" ]]; then
-  append_unique_csv_value TRUSTED_HOSTS "$PUBLIC_HOST"
-fi
 if [[ -n "$TRUSTED_HOSTS" ]]; then
   export HTML_LEARNING_TRUSTED_HOSTS="$TRUSTED_HOSTS"
 fi
@@ -3024,7 +3203,17 @@ fi
 if [[ -n "$SERVER_URL" ]]; then
   say "[dev-tmp] url:       $SERVER_URL"
   if [[ -n "$PUBLIC_HOST" ]]; then
-    say "[dev-tmp] public:    https://$PUBLIC_HOST:$PORT"
+    case "$PUBLIC_HOST" in
+      \[*\]|*:*:*)
+        say "[dev-tmp] public:    https://$PUBLIC_HOST"
+        ;;
+      *:*)
+        say "[dev-tmp] public:    https://$PUBLIC_HOST"
+        ;;
+      *)
+        say "[dev-tmp] public:    https://$PUBLIC_HOST:$PORT"
+        ;;
+    esac
   fi
 else
   say "[dev-tmp] url:       startup pending; inspect logs"
