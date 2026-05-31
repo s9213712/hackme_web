@@ -46,6 +46,9 @@ def test_dev_launcher_copies_repo_to_tmp_and_bootstraps_dev_friendly_runtime():
     assert "--cloud-drive-max-size SIZE" in script
     assert "--allow-any-host" in script
     assert "HTML_LEARNING_DISABLE_TRUSTED_HOSTS=1" in script
+    assert "CAPACITY_SETTINGS_FINALIZED=0" in script
+    assert 'if [[ "$CAPACITY_SETTINGS_FINALIZED" != "1" ]]; then' in script
+    assert 'CAPACITY_SETTINGS_FINALIZED=1' in script
     assert "missing files are copied into PATH" in script
     assert 'CLOUD_DRIVE_STORAGE_ROOT="${HACKME_DEV_CLOUD_DRIVE_STORAGE_ROOT:-}"' in script
     assert 'CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB="${HACKME_DEV_CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB:-}"' in script

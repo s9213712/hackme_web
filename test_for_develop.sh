@@ -52,6 +52,7 @@ CAPACITY_PROBE_MODE="${HACKME_DEV_CAPACITY_PROBE:-auto}"
 CAPACITY_PROBE_TIER="${HACKME_DEV_CAPACITY_PROBE_TIER:-auto}"
 CAPACITY_PROBE_RAN=0
 CAPACITY_PROBE_REPORT_FILE=""
+CAPACITY_SETTINGS_FINALIZED=0
 DRY_RUN=0
 
 is_auto_capacity_value() {
@@ -1046,6 +1047,7 @@ prompt_manual_capacity_settings() {
   export HACKME_DEV_GUNICORN_MAX_REQUESTS="$GUNICORN_MAX_REQUESTS"
   export HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER="$GUNICORN_MAX_REQUESTS_JITTER"
   CAPACITY_PROBE_MODE="never"
+  CAPACITY_SETTINGS_FINALIZED=1
   say "[dev-tmp] capacity probe: using manual capacity/backpressure parameters"
   print_capacity_probe_conclusion
 }
@@ -1061,6 +1063,7 @@ reset_capacity_to_conservative_fallback() {
   unset HACKME_DEV_GUNICORN_MAX_REQUESTS
   unset HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER
   CAPACITY_PROBE_MODE="never"
+  CAPACITY_SETTINGS_FINALIZED=1
   say "[dev-tmp] capacity probe: using conservative hardware fallback; auto settings will be resolved without another probe"
 }
 
@@ -1170,6 +1173,7 @@ confirm_capacity_probe_result() {
     case "${choice,,}" in
       1|apply|use|yes|y)
         say "[dev-tmp] capacity probe: applying probe result"
+        CAPACITY_SETTINGS_FINALIZED=1
         return 0
         ;;
       2|retest|retry|rerun)
@@ -1866,12 +1870,15 @@ prompt_server_runner() {
     fi
   fi
 
-  prompt_yes_no "Customize gunicorn worker/thread settings" 0 customize
+  if [[ "$CAPACITY_SETTINGS_FINALIZED" != "1" ]]; then
+    prompt_yes_no "Customize gunicorn worker/thread settings" 0 customize
+  fi
   if [[ "$customize" == "1" ]]; then
     prompt_value "Gunicorn workers" "$GUNICORN_WORKERS" GUNICORN_WORKERS
     prompt_value "Gunicorn threads per worker" "$GUNICORN_THREADS" GUNICORN_THREADS
     prompt_value "Gunicorn timeout seconds" "$GUNICORN_TIMEOUT" GUNICORN_TIMEOUT
     prompt_value "Gunicorn backlog" "$GUNICORN_BACKLOG" GUNICORN_BACKLOG
+    CAPACITY_SETTINGS_FINALIZED=1
   fi
 }
 
