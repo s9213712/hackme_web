@@ -175,12 +175,12 @@ function internalTestTokenAllowsFeature(featureKey) {
 }
 
 function canAccessModule(moduleKey, role = currentRole) {
-  if (moduleKey === "experiments") {
-    if (currentUser === "root") return true;
-    return !!currentUser && internalTestTokenAllowsFeature("feature_experiments_enabled");
-  }
   const featureKey = `feature_${moduleKey}_enabled`;
   if (siteConfig && siteConfig[featureKey] === false) return false;
+  if (moduleKey === "experiments") {
+    if (currentUser === "root") return isFeatureEnabledForUi("feature_experiments_enabled", false);
+    return !!currentUser && internalTestTokenAllowsFeature("feature_experiments_enabled");
+  }
   const fallback = moduleKey === "accounts" ? "manager" : "user";
   return clientRoleRank(role || "user") >= clientRoleRank(getModuleMinRole(moduleKey, fallback));
 }

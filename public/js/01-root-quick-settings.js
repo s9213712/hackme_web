@@ -107,7 +107,9 @@ const ROOT_MODULE_QUICK_SETTINGS = {
     label: "實驗區",
     section: "features",
     note: "實驗區目前是純前端 Canvas 教育模擬，沒有後端重型 job、DB 或 worker。",
-    fields: [],
+    fields: [
+      { id: "s-feature-experiments-enabled", label: "開放實驗區" },
+    ],
   },
   jobs: {
     label: "任務中心",

@@ -40,13 +40,13 @@ def test_root_quick_settings_expose_service_fee_pricing_for_feature_pages():
     assert "每次消耗點數" in js
     assert "雲端容量 1GB / 7 天" in js
     assert "duration_days: 7" in js
-    assert "雲端容量 1GB / 7 天" not in js
-    assert "duration_days: 7" not in js
+    assert "雲端容量 1GB / 30 天" not in js
+    assert "duration_days: 30" not in js
     assert "saveRootModulePricing(config)" in js
     assert "/root/economy/catalog" in js
     assert "root-module-pricing-panel" in js
     assert "root-module-pricing-panel" in css
-    assert "/js/01-root-quick-settings.js?v=20260525-pc0-pricing-copy" in html
+    assert "/js/01-root-quick-settings.js?v=20260525-settings-split" in html
     assert "服務費小帳本" not in js
     assert "pc0 站內帳本即時" in js
 
@@ -71,3 +71,16 @@ def test_admin_health_playwright_ci_background_failure_is_visible():
     assert 'label: "Playwright CI"' in admin_js
     assert 'value: "unavailable"' in admin_js
     assert 'err?.message || "CI 狀態讀取失敗"' in admin_js
+
+
+def test_experiments_quick_toggle_controls_feature_visibility():
+    core_js = _read("public/js/00-core.js")
+    quick_js = _read("public/js/01-root-quick-settings.js")
+
+    assert 'if (siteConfig && siteConfig[featureKey] === false) return false;' in core_js
+    assert 'if (currentUser === "root") return isFeatureEnabledForUi("feature_experiments_enabled", false);' in core_js
+    experiments_start = quick_js.index("  experiments: {")
+    experiments_end = quick_js.index("\n  },", experiments_start)
+    experiments_block = quick_js[experiments_start:experiments_end]
+    assert 'id: "s-feature-experiments-enabled"' in experiments_block
+    assert 'label: "開放實驗區"' in experiments_block
