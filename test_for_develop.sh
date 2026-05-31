@@ -49,6 +49,7 @@ GUNICORN_MAX_REQUESTS="${HACKME_DEV_GUNICORN_MAX_REQUESTS:-10000}"
 GUNICORN_MAX_REQUESTS_JITTER="${HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER:-1000}"
 CAPACITY_PROBE_MODE="${HACKME_DEV_CAPACITY_PROBE:-auto}"
 CAPACITY_PROBE_RAN=0
+CAPACITY_PROBE_REPORT_FILE=""
 DRY_RUN=0
 
 is_auto_capacity_value() {
@@ -761,14 +762,179 @@ prompt_yes_no() {
   done
 }
 
+load_capacity_probe_report_summary() {
+  local report_path="$1"
+  local summary
+  [[ -n "$report_path" && -s "$report_path" ]] || return 1
+  if ! summary="$($PYTHON_BIN - "$report_path" <<'REPORTPY'
+import json
+import shlex
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    report = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    print("CAPACITY_REPORT_OK=0")
+    print(f"CAPACITY_REPORT_ERROR={shlex.quote(type(exc).__name__ + ': ' + str(exc))}")
+    raise SystemExit(0)
+
+recommendation = report.get("recommendation") or {}
+limits = report.get("limits") or {}
+load = report.get("load") or {}
+thresholds = report.get("thresholds") or {}
+profiles = report.get("profiles") or []
+rc1_gate = report.get("rc1_capacity_gate") or {}
+
+workers = int(recommendation.get("workers") or 0) if recommendation.get("ok") else 0
+threads = int(recommendation.get("threads") or 0) if recommendation.get("ok") else 0
+accounts = int(recommendation.get("max_passing_accounts") or 0) if recommendation.get("ok") else 0
+selected_round = None
+selected_probe = {}
+for profile_result in profiles:
+    profile = profile_result.get("profile") or {}
+    if int(profile.get("workers") or 0) != workers or int(profile.get("threads") or 0) != threads:
+        continue
+    for round_result in profile_result.get("rounds") or []:
+        if int(round_result.get("accounts") or 0) == accounts:
+            selected_round = round_result
+            selected_probe = round_result.get("probe") or {}
+            break
+    if selected_round:
+        break
+
+latency = selected_probe.get("latency_ms") or recommendation.get("observed_latency_ms") or {}
+status_counts = selected_probe.get("status_counts") or recommendation.get("observed_status_counts") or {}
+cpu = selected_probe.get("cpu") or recommendation.get("observed_cpu") or {}
+by_label = selected_probe.get("by_label_latency_ms") or {}
+slowest = sorted(by_label.items(), key=lambda item: int((item[1] or {}).get("p95") or 0), reverse=True)[:8]
+labels = sorted(by_label)
+profile_parts = []
+for profile_result in profiles:
+    profile = profile_result.get("profile") or {}
+    label = profile.get("label") or f"{profile.get('workers')}x{profile.get('threads')}"
+    round_accounts = [str(int((round_item or {}).get("accounts") or 0)) for round_item in profile_result.get("rounds") or []]
+    if round_accounts:
+        profile_parts.append(f"{label}: accounts {'/'.join(round_accounts)}")
+    else:
+        err = profile_result.get("error")
+        profile_parts.append(f"{label}: no completed rounds" + (f" ({err})" if err else ""))
+
+kind_descriptions = {
+    "normal": "login, points wallet/ledger/transfer/governance/disputes, trading dashboard/spot/bots/grid/margin, chat/community, cloud-drive upload/preview/share/albums, appeals, game score",
+    "malicious": "SQL/XSS-style chat/community probes, invalid game score, invalid trading/governance/dispute payloads, forbidden drive access, bad CSRF",
+    "heavy": "repeated drive preview/download/update, resumable upload chunks, trading backtests/export, smart album organize",
+}
+load_kinds = [str(item) for item in (load.get("kinds") or [])]
+load_description = " | ".join(f"{kind}: {kind_descriptions.get(kind, kind)}" for kind in load_kinds)
+experience = limits.get("experience") or {}
+application_limit = limits.get("application_limit") or {}
+server_instability = limits.get("server_instability") or {}
+ux_start = experience.get("degradation_starts_at") or {}
+max_before_ux = experience.get("max_accounts_before_degradation") or {}
+app_start = application_limit.get("first_observed_at") or {}
+server_start = server_instability.get("first_observed_at") or {}
+
+def scalar(value, default=""):
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return str(value)
+
+def emit(key, value):
+    print(f"{key}={shlex.quote(scalar(value))}")
+
+emit("CAPACITY_REPORT_OK", "1" if recommendation.get("ok") else "0")
+emit("CAPACITY_REPORT_ERROR", recommendation.get("msg") or "")
+emit("CAPACITY_REPORT_PATH", str(path))
+emit("CAPACITY_REPORT_WORKERS", workers or "")
+emit("CAPACITY_REPORT_THREADS", threads or "")
+emit("CAPACITY_REPORT_PROFILE", f"{workers}x{threads}" if workers and threads else "")
+emit("CAPACITY_REPORT_TOTAL_LANES", workers * threads if workers and threads else "")
+emit("CAPACITY_REPORT_BACKPRESSURE", max(4, threads) if threads else "")
+emit("CAPACITY_REPORT_MAX_SAFE_ACCOUNTS", accounts or "")
+emit("CAPACITY_REPORT_TARGET_P95_MS", recommendation.get("target_p95_ms") or thresholds.get("target_p95_ms") or "")
+emit("CAPACITY_REPORT_LAT_P50", latency.get("p50") or "")
+emit("CAPACITY_REPORT_LAT_P95", latency.get("p95") or "")
+emit("CAPACITY_REPORT_LAT_P99", latency.get("p99") or "")
+emit("CAPACITY_REPORT_LAT_MAX", latency.get("max") or "")
+emit("CAPACITY_REPORT_STATUS_COUNTS", json.dumps(status_counts, sort_keys=True, separators=(",", ":")))
+emit("CAPACITY_REPORT_HARD_FAILURES", selected_probe.get("hard_failure_count") if selected_probe else "")
+emit("CAPACITY_REPORT_APP_LIMITS", selected_probe.get("app_limit_count") if selected_probe else "")
+emit("CAPACITY_REPORT_SERVER_FAILURES", selected_probe.get("server_failure_count") if selected_probe else "")
+emit("CAPACITY_REPORT_CPU_ACTIVE_WORKERS", cpu.get("active_worker_peak") or "")
+emit("CAPACITY_REPORT_CPU_PEAK", cpu.get("total_worker_cpu_peak_percent") or "")
+emit("CAPACITY_REPORT_LOAD_PROFILE", load.get("profile") or "")
+emit("CAPACITY_REPORT_LOAD_KINDS", ",".join(load_kinds))
+emit("CAPACITY_REPORT_LOAD_DESCRIPTION", load_description)
+emit("CAPACITY_REPORT_HEAVY_REPEAT", load.get("heavy_repeat") or "")
+emit("CAPACITY_REPORT_HEAVY_UPLOAD_BYTES", load.get("heavy_upload_bytes") or "")
+emit("CAPACITY_REPORT_TESTED_PROFILES", " ; ".join(profile_parts))
+emit("CAPACITY_REPORT_TESTED_LABEL_COUNT", len(labels))
+emit("CAPACITY_REPORT_TESTED_LABELS", ", ".join(labels[:24]) + (" ..." if len(labels) > 24 else ""))
+emit("CAPACITY_REPORT_SLOWEST_LABELS", " | ".join(f"{label}:p95={(stats or {}).get('p95', '-')}ms p99={(stats or {}).get('p99', '-')}ms max={(stats or {}).get('max', '-')}ms" for label, stats in slowest))
+emit("CAPACITY_REPORT_MAX_BEFORE_UX", max_before_ux.get("accounts") or "")
+emit("CAPACITY_REPORT_UX_DEGRADATION", ux_start.get("accounts") or "not_reached")
+emit("CAPACITY_REPORT_APP_LIMIT_AT", app_start.get("accounts") or "not_reached")
+emit("CAPACITY_REPORT_SERVER_INSTABILITY", server_start.get("accounts") or server_instability.get("status") or "not_reached")
+emit("CAPACITY_REPORT_RC1_GATE", "PASS" if rc1_gate.get("pass") else "FAIL")
+emit("CAPACITY_REPORT_RC1_REASONS", ",".join(str(item) for item in (rc1_gate.get("reasons") or [])))
+REPORTPY
+  )"; then
+    return 1
+  fi
+  eval "$summary"
+  if [[ "${CAPACITY_REPORT_OK:-0}" == "1" ]]; then
+    GUNICORN_WORKERS="$CAPACITY_REPORT_WORKERS"
+    GUNICORN_THREADS="$CAPACITY_REPORT_THREADS"
+    export HACKME_DEV_GUNICORN_WORKERS="$GUNICORN_WORKERS"
+    export HACKME_DEV_GUNICORN_THREADS="$GUNICORN_THREADS"
+    if [[ -n "${CAPACITY_REPORT_BACKPRESSURE:-}" ]]; then
+      export HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY="$CAPACITY_REPORT_BACKPRESSURE"
+    fi
+  fi
+  return 0
+}
+
 print_capacity_probe_conclusion() {
   local backpressure_capacity="${HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY:-auto}"
   say "[dev-tmp] capacity probe conclusion:"
-  say "  gunicorn_workers:              $GUNICORN_WORKERS"
-  say "  gunicorn_threads_per_worker:   $GUNICORN_THREADS"
-  say "  backpressure_thread_capacity:  $backpressure_capacity"
-  say "  gunicorn_max_requests:         $GUNICORN_MAX_REQUESTS"
-  say "  gunicorn_max_requests_jitter:  $GUNICORN_MAX_REQUESTS_JITTER"
+  if [[ "${CAPACITY_REPORT_OK:-}" == "1" ]]; then
+    say "  recommendation:                 ${CAPACITY_REPORT_PROFILE} (${CAPACITY_REPORT_TOTAL_LANES} worker-thread lanes)"
+    say "  max_safe_accounts:              ${CAPACITY_REPORT_MAX_SAFE_ACCOUNTS} concurrent accounts under target p95<=${CAPACITY_REPORT_TARGET_P95_MS}ms"
+    say "  selected_round_latency:         p50=${CAPACITY_REPORT_LAT_P50}ms p95=${CAPACITY_REPORT_LAT_P95}ms p99=${CAPACITY_REPORT_LAT_P99}ms max=${CAPACITY_REPORT_LAT_MAX}ms"
+    say "  selected_round_statuses:        ${CAPACITY_REPORT_STATUS_COUNTS}"
+    say "  selected_round_failures:        hard=${CAPACITY_REPORT_HARD_FAILURES:-0} server=${CAPACITY_REPORT_SERVER_FAILURES:-0} app_limit=${CAPACITY_REPORT_APP_LIMITS:-0}"
+    say "  selected_round_cpu:             active_workers=${CAPACITY_REPORT_CPU_ACTIVE_WORKERS:-?} worker_cpu_peak=${CAPACITY_REPORT_CPU_PEAK:-?}%"
+    say "  tested_profiles:                ${CAPACITY_REPORT_TESTED_PROFILES}"
+    say "  tested_load:                    ${CAPACITY_REPORT_LOAD_PROFILE} (${CAPACITY_REPORT_LOAD_KINDS})"
+    say "  tested_operations:              ${CAPACITY_REPORT_LOAD_DESCRIPTION}"
+    say "  selected_round_labels:          ${CAPACITY_REPORT_TESTED_LABEL_COUNT} labels; ${CAPACITY_REPORT_TESTED_LABELS}"
+    if [[ -n "${CAPACITY_REPORT_SLOWEST_LABELS:-}" ]]; then
+      say "  slowest_labels:                 ${CAPACITY_REPORT_SLOWEST_LABELS}"
+    fi
+    if [[ "${CAPACITY_REPORT_UX_DEGRADATION}" == "not_reached" ]]; then
+      say "  ux_degradation_at:              not_reached (max before UX degradation: ${CAPACITY_REPORT_MAX_BEFORE_UX:-unknown})"
+    else
+      say "  ux_degradation_at:              ${CAPACITY_REPORT_UX_DEGRADATION} accounts (max before UX degradation: ${CAPACITY_REPORT_MAX_BEFORE_UX:-unknown})"
+    fi
+    say "  application_limit_at:           ${CAPACITY_REPORT_APP_LIMIT_AT}"
+    say "  server_instability_at:          ${CAPACITY_REPORT_SERVER_INSTABILITY}"
+    say "  rc1_capacity_gate:              ${CAPACITY_REPORT_RC1_GATE}${CAPACITY_REPORT_RC1_REASONS:+ reasons=$CAPACITY_REPORT_RC1_REASONS}"
+    say "  report:                         ${CAPACITY_REPORT_PATH}"
+  else
+    say "  recommendation:                 unavailable${CAPACITY_REPORT_ERROR:+ ($CAPACITY_REPORT_ERROR)}"
+    if [[ -n "${CAPACITY_REPORT_PATH:-}" ]]; then
+      say "  report:                         ${CAPACITY_REPORT_PATH}"
+    fi
+  fi
+  say "  gunicorn_workers:               $GUNICORN_WORKERS"
+  say "  gunicorn_threads_per_worker:    $GUNICORN_THREADS"
+  say "  backpressure_thread_capacity:   $backpressure_capacity"
+  say "  gunicorn_max_requests:          $GUNICORN_MAX_REQUESTS"
+  say "  gunicorn_max_requests_jitter:   $GUNICORN_MAX_REQUESTS_JITTER"
 }
 
 prompt_capacity_integer() {
@@ -866,17 +1032,23 @@ confirm_capacity_probe_result() {
 
 run_capacity_probe_for_defaults() {
   local continue_after_failure=1
+  local capacity_report
   if [[ "$CAPACITY_PROBE_RAN" == "1" ]]; then
     say "[dev-tmp] capacity probe: already ran for this launch; reusing loaded defaults"
     return 0
   fi
   while true; do
     CAPACITY_PROBE_RAN=1
+    capacity_report="${TMPDIR:-/tmp}/hackme_capacity_probe_report_${RUN_ID}_$$.json"
+    CAPACITY_PROBE_REPORT_FILE="$capacity_report"
     say "[dev-tmp] capacity probe: starting isolated pre-deploy probe"
     say "[dev-tmp] capacity probe: defaults file $CAPACITY_DEFAULTS_FILE"
+    say "[dev-tmp] capacity probe: report file $capacity_report"
     if "$PYTHON_BIN" "$SOURCE_ROOT/scripts/testing/predeploy_capacity_probe.py" \
-        --capacity-defaults-file "$CAPACITY_DEFAULTS_FILE"; then
+        --capacity-defaults-file "$CAPACITY_DEFAULTS_FILE" \
+        --output "$capacity_report"; then
       load_local_capacity_defaults force
+      load_capacity_probe_report_summary "$capacity_report" || true
       say "[dev-tmp] capacity probe: loaded workers=$GUNICORN_WORKERS threads=$GUNICORN_THREADS max_requests=$GUNICORN_MAX_REQUESTS jitter=$GUNICORN_MAX_REQUESTS_JITTER"
       if confirm_capacity_probe_result; then
         return 0

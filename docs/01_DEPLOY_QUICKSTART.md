@@ -55,9 +55,11 @@ python3 server.py --doctor
 `--public-host` 會同時 allowlist 裸 host 與 `host:port`，避免透過
 `https://public-ip:port/` 測試時被 trusted-host guard 擋成 `400 untrusted_host`。
 
-互動模式若執行 capacity test，腳本會輸出 workers、threads、backpressure
-thread capacity、max requests 與 jitter 的結論，然後詢問要套用結果、重測、
-手動輸入參數或使用保守 fallback。CLI 模式會直接套用 probe 結果。
+互動模式若執行 capacity test，腳本會輸出實測結論：推薦的 workers x threads、
+worker-thread lanes、最大安全 concurrent accounts、p50/p95/p99/max 延遲、status / failure
+counts、CPU peak、測過的 profiles / account ladder、load profile、測項分類、最慢 labels、
+UX degradation / application limit / server instability 邊界，以及 JSON report 路徑。然後
+詢問要套用結果、重測、手動輸入參數或使用保守 fallback。CLI 模式會直接套用 probe 結果。
 
 背景模式會在 runtime logs 目錄產生並列出 `server_direct.out`、Gunicorn access
 log 與 error log。若要停止前一次由腳本啟動、正在佔用同一 port 的 dev server

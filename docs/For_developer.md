@@ -250,10 +250,12 @@ platform center Playwright acceptance:
 把該 Host 與 `host:port` 變體加進 `HTML_LEARNING_TRUSTED_HOSTS`；不要用這條
 路徑取代 production 的 Nginx / 正式 TLS 部署。
 
-互動模式若執行 capacity test，腳本會輸出 workers、threads、backpressure
-thread capacity、max requests 與 jitter 的結論，並詢問要套用結果、重新測試、
-改用手動參數，或使用保守硬體 fallback。CLI 模式會直接套用 probe 結果，避免
-無人值守流程卡在 prompt。
+互動模式若執行 capacity test，腳本會輸出實測結論：推薦的 workers x threads、
+worker-thread lanes、最大安全 concurrent accounts、p50/p95/p99/max 延遲、status / failure
+counts、CPU peak、測過的 profiles / account ladder、load profile、測項分類、最慢 labels、
+UX degradation / application limit / server instability 邊界，以及 JSON report 路徑。接著再
+詢問要套用結果、重新測試、改用手動參數，或使用保守硬體 fallback。CLI 模式會直接
+套用 probe 結果，避免無人值守流程卡在 prompt。
 
 背景模式會在 runtime logs 目錄保留 `server_direct.out`、`gunicorn_access.log`
 與 `gunicorn_error.log`。停止舊 dev server 時用

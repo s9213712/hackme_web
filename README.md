@@ -91,9 +91,12 @@ scripts/testing/pytest_in_tmp.sh -q tests
 並印出外部測試 URL；背景模式也會在 runtime logs 目錄產生並列出
 `server_direct.out`、Gunicorn access log 與 error log。
 
-互動模式若執行 capacity test，腳本會先輸出 workers、threads、backpressure
-thread capacity、max requests 與 jitter 的結論，再詢問要套用本次結果、重新測試、
-改用手動參數，或放棄 probe 改採保守硬體 fallback。CLI 模式會直接套用 probe 結果。
+互動模式若執行 capacity test，腳本會先輸出實測結論：推薦的 workers x threads、
+worker-thread lanes、最大安全 concurrent accounts、p50/p95/p99/max 延遲、status / failure
+counts、CPU peak、測過的 profiles / account ladder、load profile、測項分類、最慢 labels、
+UX degradation / application limit / server instability 邊界，以及 JSON report 路徑。接著再
+詢問要套用本次結果、重新測試、改用手動參數，或放棄 probe 改採保守硬體 fallback。
+CLI 模式會直接套用 probe 結果。
 若要乾淨停止前一次由此腳本啟動、正在佔用同一 port 的 dev server 與其衍生
 process group / child tree：
 
