@@ -811,6 +811,7 @@ by_label = selected_probe.get("by_label_latency_ms") or {}
 slowest = sorted(by_label.items(), key=lambda item: int((item[1] or {}).get("p95") or 0), reverse=True)[:8]
 labels = sorted(by_label)
 profile_parts = []
+profile_errors = []
 for profile_result in profiles:
     profile = profile_result.get("profile") or {}
     label = profile.get("label") or f"{profile.get('workers')}x{profile.get('threads')}"
@@ -818,8 +819,11 @@ for profile_result in profiles:
     if round_accounts:
         profile_parts.append(f"{label}: accounts {'/'.join(round_accounts)}")
     else:
-        err = profile_result.get("error")
-        profile_parts.append(f"{label}: no completed rounds" + (f" ({err})" if err else ""))
+        err = str(profile_result.get("error") or "").strip()
+        if err:
+            compact_err = " ".join(err.split())[:240]
+            profile_errors.append(f"{label}: {compact_err}")
+        profile_parts.append(f"{label}: no completed rounds")
 
 kind_descriptions = {
     "normal": "login, points wallet/ledger/transfer/governance/disputes, trading dashboard/spot/bots/grid/margin, chat/community, cloud-drive upload/preview/share/albums, appeals, game score",
@@ -872,6 +876,7 @@ emit("CAPACITY_REPORT_LOAD_DESCRIPTION", load_description)
 emit("CAPACITY_REPORT_HEAVY_REPEAT", load.get("heavy_repeat") or "")
 emit("CAPACITY_REPORT_HEAVY_UPLOAD_BYTES", load.get("heavy_upload_bytes") or "")
 emit("CAPACITY_REPORT_TESTED_PROFILES", " ; ".join(profile_parts))
+emit("CAPACITY_REPORT_PROFILE_ERRORS", " | ".join(profile_errors))
 emit("CAPACITY_REPORT_TESTED_LABEL_COUNT", len(labels))
 emit("CAPACITY_REPORT_TESTED_LABELS", ", ".join(labels[:24]) + (" ..." if len(labels) > 24 else ""))
 emit("CAPACITY_REPORT_SLOWEST_LABELS", " | ".join(f"{label}:p95={(stats or {}).get('p95', '-')}ms p99={(stats or {}).get('p99', '-')}ms max={(stats or {}).get('max', '-')}ms" for label, stats in slowest))
@@ -926,6 +931,15 @@ print_capacity_probe_conclusion() {
     say "  report:                         ${CAPACITY_REPORT_PATH}"
   else
     say "  recommendation:                 unavailable${CAPACITY_REPORT_ERROR:+ ($CAPACITY_REPORT_ERROR)}"
+    if [[ -n "${CAPACITY_REPORT_TESTED_PROFILES:-}" ]]; then
+      say "  tested_profiles:                ${CAPACITY_REPORT_TESTED_PROFILES}"
+    fi
+    if [[ -n "${CAPACITY_REPORT_PROFILE_ERRORS:-}" ]]; then
+      say "  profile_errors:                 ${CAPACITY_REPORT_PROFILE_ERRORS}"
+    fi
+    if [[ -n "${CAPACITY_REPORT_LOAD_PROFILE:-}" ]]; then
+      say "  tested_load:                    ${CAPACITY_REPORT_LOAD_PROFILE} (${CAPACITY_REPORT_LOAD_KINDS})"
+    fi
     if [[ -n "${CAPACITY_REPORT_PATH:-}" ]]; then
       say "  report:                         ${CAPACITY_REPORT_PATH}"
     fi
@@ -990,6 +1004,40 @@ reset_capacity_to_conservative_fallback() {
 confirm_capacity_probe_result() {
   local choice
   print_capacity_probe_conclusion
+  if [[ "${CAPACITY_REPORT_OK:-0}" != "1" ]]; then
+    if [[ "$CLI_MODE" == "1" ]]; then
+      die "capacity probe produced no usable recommendation; rerun with install support or pass manual Gunicorn/backpressure settings"
+    fi
+    say "Capacity/backpressure action:"
+    say "  1) retest   Run the isolated capacity probe again"
+    say "  2) manual   Enter Gunicorn and backpressure parameters manually"
+    say "  3) fallback Use conservative hardware fallback without another probe"
+    while true; do
+      printf 'Choose capacity action [1]: '
+      if ! read -r choice; then
+        die "interactive setup was interrupted"
+      fi
+      choice="${choice:-1}"
+      case "${choice,,}" in
+        1|retest|retry|rerun)
+          say "[dev-tmp] capacity probe: rerunning by user request"
+          return 1
+          ;;
+        2|manual|custom)
+          prompt_manual_capacity_settings
+          return 0
+          ;;
+        3|fallback|conservative|skip)
+          reset_capacity_to_conservative_fallback
+          return 0
+          ;;
+        *)
+          say "Please choose 1, 2, or 3."
+          ;;
+      esac
+    done
+  fi
+
   if [[ "$CLI_MODE" == "1" ]]; then
     say "[dev-tmp] capacity probe: CLI mode applies these defaults automatically"
     return 0
@@ -1044,9 +1092,14 @@ run_capacity_probe_for_defaults() {
     say "[dev-tmp] capacity probe: starting isolated pre-deploy probe"
     say "[dev-tmp] capacity probe: defaults file $CAPACITY_DEFAULTS_FILE"
     say "[dev-tmp] capacity probe: report file $capacity_report"
+    local probe_install_args=()
+    if [[ "${HACKME_DEV_CAPACITY_PROBE_INSTALL:-1}" == "1" ]]; then
+      probe_install_args+=(--install)
+    fi
     if "$PYTHON_BIN" "$SOURCE_ROOT/scripts/testing/predeploy_capacity_probe.py" \
         --capacity-defaults-file "$CAPACITY_DEFAULTS_FILE" \
-        --output "$capacity_report"; then
+        --output "$capacity_report" \
+        "${probe_install_args[@]}"; then
       load_local_capacity_defaults force
       load_capacity_probe_report_summary "$capacity_report" || true
       say "[dev-tmp] capacity probe: loaded workers=$GUNICORN_WORKERS threads=$GUNICORN_THREADS max_requests=$GUNICORN_MAX_REQUESTS jitter=$GUNICORN_MAX_REQUESTS_JITTER"
