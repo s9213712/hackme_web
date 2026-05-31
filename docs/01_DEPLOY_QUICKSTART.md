@@ -46,6 +46,20 @@ python3 server.py --doctor
 ./test_for_develop.sh --port 50785
 ```
 
+臨時用 LAN / NAT public IP 測試開發站時，明確加入 public Host allowlist：
+
+```bash
+./test_for_develop.sh --host 0.0.0.0 --port 5000 --public-host 203.121.227.18
+```
+
+背景模式會在 runtime logs 目錄產生並列出 `server_direct.out`、Gunicorn access
+log 與 error log。若要停止前一次由腳本啟動、正在佔用同一 port 的 dev server
+與其衍生 process group / child tree：
+
+```bash
+./test_for_develop.sh --port 5000 --shutdown
+```
+
 如果你要手動啟動目前工作樹：
 
 ```bash

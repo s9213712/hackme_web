@@ -42,6 +42,7 @@ Nginx 對外，Gunicorn 只綁 127.0.0.1:8000。
 
 - 正式啟動前先跑 `python3 server.py --doctor`。
 - 開發測試優先用 `./test_for_develop.sh`，它會在 `/tmp` 建隔離副本。
+- 臨時 LAN / NAT public IP 測試可看 [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md) 的 `--public-host`、背景 log 與 `--shutdown` 用法。
 - 不要把 Flask development server 直接暴露給使用者。
 - 不要直接把 runtime、cache、pytest 產物留在 repo 工作樹。
 

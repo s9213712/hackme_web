@@ -246,6 +246,14 @@ platform center Playwright acceptance:
 
 `server.py` 不再接 `--host` / `--port` CLI 參數。若要改 bind，請使用
 `HTML_LEARNING_HOST` / `HTML_LEARNING_PORT` 或 `test_for_develop.sh --port ...`。
+臨時需要從 LAN / NAT public IP 打開 dev server 時，用 `--public-host <host>`
+把該 Host 加進 `HTML_LEARNING_TRUSTED_HOSTS`；不要用這條路徑取代 production
+的 Nginx / 正式 TLS 部署。
+
+背景模式會在 runtime logs 目錄保留 `server_direct.out`、`gunicorn_access.log`
+與 `gunicorn_error.log`。停止舊 dev server 時用
+`./test_for_develop.sh --port <port> --shutdown`，它會停止腳本啟動的 process group
+與 child tree，而不是只殺單一 listener PID。
 
 `test_for_develop.sh` 應只複製運行伺服器與開發測試必要的 source subset 到
 `/tmp`。大型 `docs/`、一次性 `reports/`、archive、cache 與 runtime 產物不應被帶進
