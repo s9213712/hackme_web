@@ -2213,15 +2213,87 @@ PY
 
 port_pids() {
   local port="$1"
+  local found=""
   if command -v lsof >/dev/null 2>&1; then
-    lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
-    return 0
+    found="$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    if [[ -n "$found" ]]; then
+      printf '%s\n' "$found"
+      return 0
+    fi
   fi
   if command -v ss >/dev/null 2>&1; then
-    ss -ltnp "sport = :$port" 2>/dev/null \
-      | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' \
-      | sort -u
-    return 0
+    found="$(ss -ltnp "sport = :$port" 2>/dev/null \
+      | grep -o 'pid=[0-9][0-9]*' \
+      | sed 's/^pid=//' \
+      | sort -u || true)"
+    if [[ -n "$found" ]]; then
+      printf '%s\n' "$found"
+      return 0
+    fi
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    found="$(python3 - "$port" <<'PY'
+import os
+import sys
+
+try:
+    port_hex = f"{int(sys.argv[1]):04X}"
+except (IndexError, ValueError):
+    raise SystemExit(0)
+
+inodes = set()
+for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+    try:
+        with open(table, "r", encoding="ascii") as handle:
+            lines = handle.readlines()[1:]
+    except OSError:
+        continue
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 10:
+            continue
+        local_address = parts[1]
+        state = parts[3]
+        inode = parts[9]
+        if state == "0A" and local_address.rsplit(":", 1)[-1].upper() == port_hex:
+            inodes.add(inode)
+
+if not inodes:
+    raise SystemExit(0)
+
+pids = set()
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    fd_dir = os.path.join("/proc", pid, "fd")
+    try:
+        fds = os.listdir(fd_dir)
+    except OSError:
+        continue
+    for fd in fds:
+        try:
+            target = os.readlink(os.path.join(fd_dir, fd))
+        except OSError:
+            continue
+        if target.startswith("socket:[") and target[8:-1] in inodes:
+            pids.add(pid)
+            break
+
+for pid in sorted(pids, key=int):
+    print(pid)
+PY
+)"
+    if [[ -n "$found" ]]; then
+      printf '%s\n' "$found"
+      return 0
+    fi
+  fi
+  if command -v pgrep >/dev/null 2>&1; then
+    found="$(pgrep -f "gunicorn .*server:app .*--bind [^ ]*:${port}\\b" 2>/dev/null || true)"
+    if [[ -n "$found" ]]; then
+      printf '%s\n' "$found"
+      return 0
+    fi
   fi
   if command -v fuser >/dev/null 2>&1; then
     fuser -n tcp "$port" 2>/dev/null \
@@ -2318,15 +2390,24 @@ kill_port_processes() {
 is_dev_server_pid() {
   local pid="$1"
   local args=""
+  local cwd=""
   [[ -n "$pid" && -r "/proc/$pid/cmdline" ]] || return 1
   args="$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
   [[ -n "$args" ]] || return 1
+  cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
   case "$args" in
     *"/hackme_web_dev_"*"/hackme_web/"*"server:app"*|*"/hackme_web_dev_"*"/hackme_web/"*"server.py"*)
       return 0
       ;;
     *"$SOURCE_ROOT/"*"server.py"*|*"$SOURCE_ROOT/"*"server:app"*)
       return 0
+      ;;
+    *"gunicorn server:app"*|*"gunicorn"*"server:app"*|*"server.py"*)
+      case "$cwd" in
+        "$SOURCE_ROOT"|"$SOURCE_ROOT"/*|/tmp/hackme_web_dev_*/hackme_web|/tmp/hackme_web_dev_*/hackme_web/*|/tmp/hackme_predeploy_capacity_*/profile_*/hackme_web|/tmp/hackme_predeploy_capacity_*/profile_*/hackme_web/*)
+          return 0
+          ;;
+      esac
       ;;
   esac
   return 1
