@@ -485,6 +485,7 @@ FORCE_HTTPS = _env_bool("FORCE_HTTPS", default=True)
 SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=True)
 SESSION_COOKIE_HTTPONLY = _env_bool("SESSION_COOKIE_HTTPONLY", default=True)
 SESSION_COOKIE_SAMESITE = _env_session_samesite()
+TRUSTED_HOSTS_DISABLED = _env_bool("HTML_LEARNING_DISABLE_TRUSTED_HOSTS", default=False)
 
 
 def _env_csv_values(name, default=""):
@@ -548,6 +549,8 @@ def _append_trusted_host_variant(hosts, value, *, port=""):
 
 
 def _trusted_hosts_from_env():
+    if TRUSTED_HOSTS_DISABLED:
+        return None
     raw_hosts = _env_csv_values(
         "HTML_LEARNING_TRUSTED_HOSTS",
         "127.0.0.1,localhost,[::1]",

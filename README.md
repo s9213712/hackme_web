@@ -90,11 +90,21 @@ scripts/testing/pytest_in_tmp.sh -q tests
 這會把 public host 與 `host:port` 變體加進 `HTML_LEARNING_TRUSTED_HOSTS`，
 並印出外部測試 URL；背景模式也會在 runtime logs 目錄產生並列出
 `server_direct.out`、Gunicorn access log 與 error log。
+開發時若只想先排除 Host allowlist 干擾，可暫時關閉 trusted-host 檢查：
+
+```bash
+./test_for_develop.sh --host 0.0.0.0 --port 5000 --allow-any-host
+```
+
+這會設定 `HTML_LEARNING_DISABLE_TRUSTED_HOSTS=1`，只建議用於臨時開發測試；
+正式部署不要關閉 trusted-host 防護。
 若手動直接啟動 `server.py`，請設定 public host env，程式會自動加入目前 port 變體：
 
 ```bash
 HTML_LEARNING_HOST=0.0.0.0 HTML_LEARNING_PORT=5001 HTML_LEARNING_PUBLIC_HOST=203.121.227.18 python3 server.py
 ```
+
+手動開發啟動也可用 `HTML_LEARNING_DISABLE_TRUSTED_HOSTS=1` 暫時關閉 Host 檢查。
 
 互動模式若執行 capacity test，腳本會先輸出實測結論：推薦的 workers x threads、
 worker-thread lanes、最大安全 concurrent accounts、p50/p95/p99/max 延遲、status / failure
@@ -136,6 +146,7 @@ python3 server.py
   必須列出實際 public Host；反向代理要保留原始 `Host` header。
 - 臨時手動測試可用 `HTML_LEARNING_PUBLIC_HOST=203.121.227.18` 或
   `HTML_LEARNING_PUBLIC_HOSTS=203.121.227.18,host.example`，伺服器會自動加入目前 port 變體。
+- `HTML_LEARNING_DISABLE_TRUSTED_HOSTS=1` 只供開發排錯使用；production 不要設定。
 - 維護旁路 token 只接受 `X-Maintenance-Bypass-Token` header，不接受
   `?maintenance_bypass_token=...` query string，避免 token 被 access log、
   browser history 或 referrer 洩漏。

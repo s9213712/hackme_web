@@ -13,6 +13,7 @@ HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-5000}"
 TRUSTED_HOSTS="${HTML_LEARNING_TRUSTED_HOSTS:-}"
 PUBLIC_HOST="${HACKME_DEV_PUBLIC_HOST:-}"
+DISABLE_TRUSTED_HOSTS="${HACKME_DEV_DISABLE_TRUSTED_HOSTS:-${HTML_LEARNING_DISABLE_TRUSTED_HOSTS:-0}}"
 SHUTDOWN=0
 CLI_MODE=0
 SKIP_INSTALL=0
@@ -149,6 +150,8 @@ Options:
                            the dev server through a LAN/public IP.
   --public-host HOST       Add HOST to trusted hosts and print it as an
                            external HTTPS test URL. Alias-friendly for NAT IPs.
+  --allow-any-host         Development escape hatch: disable Flask trusted-host
+                           checks for this launch. Do not use for production.
   --shutdown               Stop prior dev server process group / child tree for
                            --port and exit. Only terminates processes launched
                            from hackme_web dev runtime paths or this source repo.
@@ -707,7 +710,11 @@ print_resolved_config() {
   fi
   say "  host:                $HOST"
   say "  port:                $PORT"
-  say "  trusted_hosts:       ${TRUSTED_HOSTS:-<app default local hosts>}"
+  if [[ "$DISABLE_TRUSTED_HOSTS" == "1" ]]; then
+    say "  trusted_hosts:       disabled (dev only)"
+  else
+    say "  trusted_hosts:       ${TRUSTED_HOSTS:-<app default local hosts>}"
+  fi
   say "  public_host:         ${PUBLIC_HOST:-<none>}"
   say "  feature_mode:        $FEATURE_MODE"
   if [[ "$FEATURE_MODE" == "bundles" ]]; then
@@ -1890,6 +1897,7 @@ prompt_runtime_config() {
   prompt_value "Cloud drive max occupancy (MB or 10G; blank = keep app default, -1 = disk 95%)" "$CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB" CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB
   prompt_value "Host" "$HOST" HOST
   prompt_value "Port" "$PORT" PORT
+  prompt_yes_no "Disable trusted-host checks for dev convenience" "$DISABLE_TRUSTED_HOSTS" DISABLE_TRUSTED_HOSTS
   prompt_server_runner
   prompt_feature_settings
   prompt_yes_no "Enable security settings" "$SECURITY_SETTINGS_ENABLED" SECURITY_SETTINGS_ENABLED
@@ -2618,6 +2626,14 @@ while [[ $# -gt 0 ]]; do
       PUBLIC_HOST="${2:?missing public host}"
       shift 2
       ;;
+    --allow-any-host|--disable-trusted-hosts)
+      DISABLE_TRUSTED_HOSTS=1
+      shift
+      ;;
+    --enforce-trusted-hosts)
+      DISABLE_TRUSTED_HOSTS=0
+      shift
+      ;;
     --shutdown|--stop)
       SHUTDOWN=1
       shift
@@ -2850,6 +2866,8 @@ if [[ "$CLI_MODE" != "1" ]]; then
   prompt_runtime_config
 fi
 normalize_runtime_options
+normalize_yes_no_value "$DISABLE_TRUSTED_HOSTS" "disable trusted hosts"
+DISABLE_TRUSTED_HOSTS="$NORMALIZED_YES_NO"
 finalize_trusted_hosts
 
 RUN_ROOT="${RUN_ROOT:-/tmp/hackme_web_dev_${RUN_ID}_$$}"
@@ -2917,7 +2935,9 @@ export HTML_LEARNING_STORAGE_DIR="$EFFECTIVE_STORAGE_ROOT"
 export HTML_LEARNING_REPORTS_DIR="$RUNTIME_ROOT/reports"
 export HTML_LEARNING_HOST="$HOST"
 export HTML_LEARNING_PORT="$PORT"
-if [[ -n "$TRUSTED_HOSTS" ]]; then
+if [[ "$DISABLE_TRUSTED_HOSTS" == "1" ]]; then
+  export HTML_LEARNING_DISABLE_TRUSTED_HOSTS=1
+elif [[ -n "$TRUSTED_HOSTS" ]]; then
   export HTML_LEARNING_TRUSTED_HOSTS="$TRUSTED_HOSTS"
 fi
 export HTML_LEARNING_ROOT_PASSWORD="$ROOT_PASSWORD"
@@ -3639,7 +3659,9 @@ if [[ -n "$MAX_CONTENT_MB" ]]; then
 fi
 say "[dev-tmp] pid:       $SERVER_PID"
 say "[dev-tmp] runner:    $SERVER_RUNNER"
-if [[ -n "$TRUSTED_HOSTS" ]]; then
+if [[ "$DISABLE_TRUSTED_HOSTS" == "1" ]]; then
+  say "[dev-tmp] trusted:   disabled by --allow-any-host (dev only)"
+elif [[ -n "$TRUSTED_HOSTS" ]]; then
   say "[dev-tmp] trusted:   $TRUSTED_HOSTS"
 fi
 if [[ -n "$SERVER_URL" ]]; then

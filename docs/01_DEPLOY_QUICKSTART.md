@@ -63,6 +63,15 @@ HTML_LEARNING_HOST=0.0.0.0 HTML_LEARNING_PORT=5001 HTML_LEARNING_PUBLIC_HOST=203
 `HTML_LEARNING_PUBLIC_HOST` / `HTML_LEARNING_PUBLIC_HOSTS` 會自動加入裸 host 與目前
 `HTML_LEARNING_PORT` 的 `host:port` 變體。
 
+開發排錯時若只想先避免 trusted-host guard 擋住 public IP / NAT 測試，可暫時關閉：
+
+```bash
+./test_for_develop.sh --host 0.0.0.0 --port 5000 --allow-any-host
+```
+
+手動啟動則可設定 `HTML_LEARNING_DISABLE_TRUSTED_HOSTS=1`。這是 dev-only escape hatch；
+正式部署請改用 `HTML_LEARNING_TRUSTED_HOSTS` / `HTML_LEARNING_PUBLIC_HOSTS`。
+
 互動模式若執行 capacity test，腳本會輸出實測結論：推薦的 workers x threads、
 worker-thread lanes、最大安全 concurrent accounts、p50/p95/p99/max 延遲、status / failure
 counts、CPU peak、測過的 profiles / account ladder、load profile、測項分類、最慢 labels、

@@ -44,6 +44,8 @@ def test_dev_launcher_copies_repo_to_tmp_and_bootstraps_dev_friendly_runtime():
     assert "--no-capacity-probe" in script
     assert "--cloud-drive-root PATH" in script
     assert "--cloud-drive-max-size SIZE" in script
+    assert "--allow-any-host" in script
+    assert "HTML_LEARNING_DISABLE_TRUSTED_HOSTS=1" in script
     assert "missing files are copied into PATH" in script
     assert 'CLOUD_DRIVE_STORAGE_ROOT="${HACKME_DEV_CLOUD_DRIVE_STORAGE_ROOT:-}"' in script
     assert 'CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB="${HACKME_DEV_CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB:-}"' in script
@@ -100,6 +102,7 @@ def test_dev_launcher_dry_run_resolves_cloud_drive_storage_options(tmp_path):
             str(storage_root),
             "--cloud-drive-max-size",
             "1.5G",
+            "--allow-any-host",
         ],
         cwd=ROOT,
         check=False,
@@ -110,6 +113,7 @@ def test_dev_launcher_dry_run_resolves_cloud_drive_storage_options(tmp_path):
     assert result.returncode == 0, result.stderr
     assert f"cloud_drive_root:    {storage_root}" in result.stdout
     assert "cloud_drive_max_mb:  1536" in result.stdout
+    assert "trusted_hosts:       disabled (dev only)" in result.stdout
 
 
 def test_legacy_root_wrappers_are_removed():
