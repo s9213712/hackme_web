@@ -48,21 +48,24 @@ python3 -m playwright install chromium
 只有在部署者啟用對應功能時才需要：
 
 ```bash
-python3 -m pip install -r requirements-minimal.txt -r requirements-features.txt
+python3 -m pip install -r requirements-minimal.txt -r requirements-hf.txt
 ```
 
-目前包含：
+本機 Hugging Face / Diffusers 後端包含：
 
-- `Pillow`：Cloud Drive / upload security 的圖片 metadata 正規化與檢查。
 - `diffusers`、`torch`、`transformers`、`accelerate`、`safetensors`、
   `huggingface-hub`、`hf_transfer`、`gguf`：ComfyUI 的本機 Hugging Face /
   Diffusers 替代後端。
+
+連線到已啟動的外部 ComfyUI API，例如 `http://127.0.0.1:8188`，只需要
+`requirements-minimal.txt`；`websocket-client` 已在 minimal runtime 內。
 
 缺少這些 feature 套件時，基本站點仍應可啟動；對應功能需明確降級或拒絕工作，不應拖垮主 server。
 
 ### 1.4 相容舊流程
 
-既有 CI / 開發腳本仍可使用聚合檔：
+既有 CI / 開發腳本仍可使用聚合檔；此聚合檔不包含本機 HF / Diffusers
+模型 runtime：
 
 ```bash
 python3 -m pip install -r requirements.txt
@@ -72,7 +75,10 @@ python3 -m pip install -r requirements.txt
 
 - `requirements-minimal.txt`
 - `requirements-dev.txt`
-- `requirements-features.txt`
+- `requirements-comfyui.txt`
+
+若要讓 hackme_web 主程序自行載入 local Hugging Face / Diffusers 模型，請另外安裝
+`requirements-hf.txt`。
 
 ## 2. Required System Binaries
 

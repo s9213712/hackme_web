@@ -1,10 +1,14 @@
-# Full compatibility install for CI and existing setup scripts.
+# Default compatibility install for CI and existing setup scripts.
+#
+# This intentionally excludes the heavyweight local Hugging Face / Diffusers
+# backend. Install requirements-hf.txt explicitly when the server itself should
+# load local AI models instead of using an external ComfyUI API server.
 #
 # Prefer the smaller files below when you only need one layer:
 # - requirements-minimal.txt: enough to start the Flask app / bounded WSGI server.
 # - requirements-dev.txt: developer and browser-test tooling.
-# - requirements-features.txt: optional feature backends such as image inspection
-#   and local Hugging Face / Diffusers generation.
+# - requirements-comfyui.txt: external ComfyUI API integration notes/no-op layer.
+# - requirements-hf.txt: heavyweight local Hugging Face / Diffusers backend.
 
 -r requirements-minimal.txt
 -r requirements-dev.txt

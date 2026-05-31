@@ -153,11 +153,14 @@ python3 -m venv .venv
 .venv/bin/python3 -m pip install -r requirements-minimal.txt
 ```
 
-若 production 需要 local Hugging Face / Diffusers 或圖片 metadata 檢查，再額外安裝：
+若 production 需要 hackme_web 自行載入 local Hugging Face / Diffusers 模型，再額外安裝：
 
 ```bash
-.venv/bin/python3 -m pip install -r requirements-features.txt
+.venv/bin/python3 -m pip install -r requirements-hf.txt
 ```
+
+若 production 只是連線到已啟動的外部 ComfyUI API，例如 `http://127.0.0.1:8188`，
+不需要安裝 `requirements-hf.txt`。
 
 3. 安裝 env 與 tmpfiles：
 

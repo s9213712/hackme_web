@@ -52,8 +52,10 @@ ComfyUI GGUF 只能走官方建檔 profile；新增 profile、遠端實測、已
 
 - `python3 -m pip install -r requirements-minimal.txt`
   只安裝最小啟動伺服器所需套件。開發測試請再加
-  `requirements-dev.txt`，特定功能後端請再加 `requirements-features.txt`。
-  舊流程仍可用 `requirements.txt` 一次安裝全部相容依賴。
+  `requirements-dev.txt`。連線到外部 ComfyUI API 不需要額外 heavyweight
+  AI runtime；只有啟用本機 Hugging Face / Diffusers 後端時才加
+  `requirements-hf.txt`。
+  舊流程仍可用 `requirements.txt` 一次安裝主站與開發測試相容依賴。
 
 - `python3 server.py --doctor`
   檢查目前 runtime 環境是否已存在且可寫；缺目錄時會明確報錯，不會靜默補建。

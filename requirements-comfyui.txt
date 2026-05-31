@@ -1,17 +1,10 @@
-# Optional feature dependencies.
+# External ComfyUI integration dependencies.
 #
-# Install this layer only when the deployment enables the corresponding feature.
-# The base server can start without these packages, but the feature will degrade
-# or reject work with an explicit message if its dependency is missing.
-
-
-
-# ComfyUI alternative backend: local Hugging Face / Diffusers generation.
-diffusers>=0.30
-torch>=2.3
-transformers>=4.44
-accelerate>=0.33
-safetensors>=0.4
-huggingface-hub>=0.24
-hf_transfer>=0.1.8
-gguf>=0.10
+# Connecting hackme_web to an already-running ComfyUI API server, such as
+# http://127.0.0.1:8188, is covered by requirements-minimal.txt. The needed
+# websocket-client package is intentionally part of the minimal runtime because
+# the ComfyUI route module imports the external API client during app startup.
+#
+# Keep this file as a selectable deployment layer, but do not add local model
+# runtime stacks here. Local Hugging Face / Diffusers inference belongs in
+# requirements-hf.txt because it pulls torch/CUDA-scale dependencies.

@@ -1,0 +1,13 @@
+# Optional heavyweight local Hugging Face / Diffusers backend.
+#
+# Install this only when root intentionally enables the local Diffusers backend
+# inside hackme_web. It is not required when using an external ComfyUI server.
+
+diffusers>=0.30,<0.39
+torch>=2.3
+transformers>=4.44
+accelerate>=0.33
+safetensors>=0.4,<0.8
+huggingface-hub>=0.24
+hf_transfer>=0.1.8
+gguf>=0.10
