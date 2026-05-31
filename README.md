@@ -100,6 +100,12 @@ CLI 模式會直接套用 probe 結果。若 probe 沒有產生可用 recommenda
 apply 選項，而會列出各 profile 的 setup/round error 並要求重測、手動輸入或 fallback。
 capacity probe 預設允許 isolated profile 建立 venv；只有明確設定
 `HACKME_DEV_CAPACITY_PROBE_INSTALL=0` 時才禁止安裝。
+若機器資源有限，先用硬體量級 preset 限制 probe 壓力：
+`--capacity-probe-tier sbc|legacy|laptop|midrange|highend`。`sbc` 適合單板電腦 /
+小型 VM，會限制為最小讀取型 probe 並設 60 秒總時限；`legacy` 適合老桌機或低功耗 NAS，
+會限制為低衝擊讀取型 probe 並設 120 秒總時限；`laptop` 適合一般筆電，`midrange` 適合中階主機。
+`highend` 沒有 account / round 上限，會持續增加負載直到 UX degradation、application limit、
+server instability 或 hard failure 停止，可能讓主機暫時卡死或崩潰；只有在能接受這個風險時使用。
 若要乾淨停止前一次由此腳本啟動、正在佔用同一 port 的 dev server 與其衍生
 process group / child tree：
 

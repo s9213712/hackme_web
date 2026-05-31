@@ -48,6 +48,7 @@ GUNICORN_BACKLOG="${HACKME_DEV_GUNICORN_BACKLOG:-64}"
 GUNICORN_MAX_REQUESTS="${HACKME_DEV_GUNICORN_MAX_REQUESTS:-10000}"
 GUNICORN_MAX_REQUESTS_JITTER="${HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER:-1000}"
 CAPACITY_PROBE_MODE="${HACKME_DEV_CAPACITY_PROBE:-auto}"
+CAPACITY_PROBE_TIER="${HACKME_DEV_CAPACITY_PROBE_TIER:-auto}"
 CAPACITY_PROBE_RAN=0
 CAPACITY_PROBE_REPORT_FILE=""
 DRY_RUN=0
@@ -196,6 +197,12 @@ Options:
   --gunicorn-backlog N      Default: 64
   --gunicorn-max-requests N Default: 10000; 0 disables worker recycling
   --capacity-probe          Run/refresh the local capacity probe before launch
+  --capacity-probe-tier TIER
+                           Hardware-sized capacity preset: auto, sbc, legacy,
+                           laptop, midrange, or highend. sbc/legacy are safest
+                           for single-board computers, old desktops, and fragile
+                           hosts; highend is the full default search.
+  --capacity-probe-light    Alias for --capacity-probe --capacity-probe-tier legacy
   --no-capacity-probe       Do not probe when auto has no local result; use the
                            conservative hardware fallback for this run
   --capacity-defaults-file PATH
@@ -328,6 +335,33 @@ normalize_capacity_probe_mode() {
   esac
 }
 
+normalize_capacity_probe_tier() {
+  CAPACITY_PROBE_TIER="${CAPACITY_PROBE_TIER,,}"
+  case "$CAPACITY_PROBE_TIER" in
+    ""|auto|default)
+      CAPACITY_PROBE_TIER="auto"
+      ;;
+    sbc|single-board|single-board-computer|board|tiny)
+      CAPACITY_PROBE_TIER="sbc"
+      ;;
+    legacy|old|old-desktop|low-power|nas)
+      CAPACITY_PROBE_TIER="legacy"
+      ;;
+    laptop|notebook)
+      CAPACITY_PROBE_TIER="laptop"
+      ;;
+    midrange|mid-range)
+      CAPACITY_PROBE_TIER="midrange"
+      ;;
+    highend|high-end|top|top-tier|full)
+      CAPACITY_PROBE_TIER="highend"
+      ;;
+    *)
+      die "capacity probe tier must be auto, sbc, legacy, laptop, midrange, or highend: $CAPACITY_PROBE_TIER"
+      ;;
+  esac
+}
+
 normalize_cloud_drive_storage_root() {
   if [[ -z "$CLOUD_DRIVE_STORAGE_ROOT" ]]; then
     return 0
@@ -430,6 +464,7 @@ maybe_run_capacity_probe_for_gunicorn_defaults() {
   fi
 
   normalize_capacity_probe_mode
+  normalize_capacity_probe_tier
   load_local_capacity_defaults
 
   if [[ "$CAPACITY_PROBE_MODE" == "force" ]]; then
@@ -698,6 +733,10 @@ print_resolved_config() {
     say "  gunicorn:            workers=$GUNICORN_WORKERS threads=$GUNICORN_THREADS timeout=$GUNICORN_TIMEOUT backlog=$GUNICORN_BACKLOG max_requests=$GUNICORN_MAX_REQUESTS jitter=$GUNICORN_MAX_REQUESTS_JITTER"
     say "  capacity_defaults:   $CAPACITY_DEFAULTS_FILE"
     say "  capacity_probe:      $CAPACITY_PROBE_MODE"
+    say "  capacity_tier:       $CAPACITY_PROBE_TIER"
+    if [[ "$CAPACITY_PROBE_TIER" == "highend" ]]; then
+      say "  capacity_warning:    highend has no account/round ceiling and may freeze or crash the host"
+    fi
   fi
   if [[ -n "$EXTRA_ACCOUNTS" ]]; then
     say "  extra_accounts:      <configured>"
@@ -826,6 +865,7 @@ for profile_result in profiles:
         profile_parts.append(f"{label}: no completed rounds")
 
 kind_descriptions = {
+    "light": "login plus read-only me/jobs/shares/trading dashboard checks",
     "normal": "login, points wallet/ledger/transfer/governance/disputes, trading dashboard/spot/bots/grid/margin, chat/community, cloud-drive upload/preview/share/albums, appeals, game score",
     "malicious": "SQL/XSS-style chat/community probes, invalid game score, invalid trading/governance/dispute payloads, forbidden drive access, bad CSRF",
     "heavy": "repeated drive preview/download/update, resumable upload chunks, trading backtests/export, smart album organize",
@@ -860,6 +900,7 @@ emit("CAPACITY_REPORT_TOTAL_LANES", workers * threads if workers and threads els
 emit("CAPACITY_REPORT_BACKPRESSURE", max(4, threads) if threads else "")
 emit("CAPACITY_REPORT_MAX_SAFE_ACCOUNTS", accounts or "")
 emit("CAPACITY_REPORT_TARGET_P95_MS", recommendation.get("target_p95_ms") or thresholds.get("target_p95_ms") or "")
+emit("CAPACITY_REPORT_MAX_DURATION_SECONDS", thresholds.get("max_duration_seconds") or "")
 emit("CAPACITY_REPORT_LAT_P50", latency.get("p50") or "")
 emit("CAPACITY_REPORT_LAT_P95", latency.get("p95") or "")
 emit("CAPACITY_REPORT_LAT_P99", latency.get("p99") or "")
@@ -870,6 +911,8 @@ emit("CAPACITY_REPORT_APP_LIMITS", selected_probe.get("app_limit_count") if sele
 emit("CAPACITY_REPORT_SERVER_FAILURES", selected_probe.get("server_failure_count") if selected_probe else "")
 emit("CAPACITY_REPORT_CPU_ACTIVE_WORKERS", cpu.get("active_worker_peak") or "")
 emit("CAPACITY_REPORT_CPU_PEAK", cpu.get("total_worker_cpu_peak_percent") or "")
+emit("CAPACITY_REPORT_TIER", load.get("capacity_tier") or "")
+emit("CAPACITY_REPORT_TIER_DESCRIPTION", load.get("capacity_tier_description") or "")
 emit("CAPACITY_REPORT_LOAD_PROFILE", load.get("profile") or "")
 emit("CAPACITY_REPORT_LOAD_KINDS", ",".join(load_kinds))
 emit("CAPACITY_REPORT_LOAD_DESCRIPTION", load_description)
@@ -908,6 +951,12 @@ print_capacity_probe_conclusion() {
   say "[dev-tmp] capacity probe conclusion:"
   if [[ "${CAPACITY_REPORT_OK:-}" == "1" ]]; then
     say "  recommendation:                 ${CAPACITY_REPORT_PROFILE} (${CAPACITY_REPORT_TOTAL_LANES} worker-thread lanes)"
+    if [[ -n "${CAPACITY_REPORT_TIER:-}" ]]; then
+      say "  hardware_tier:                  ${CAPACITY_REPORT_TIER}${CAPACITY_REPORT_TIER_DESCRIPTION:+ - $CAPACITY_REPORT_TIER_DESCRIPTION}"
+    fi
+    if [[ -n "${CAPACITY_REPORT_MAX_DURATION_SECONDS:-}" && "${CAPACITY_REPORT_MAX_DURATION_SECONDS:-0}" != "0" ]]; then
+      say "  time_limit:                     ${CAPACITY_REPORT_MAX_DURATION_SECONDS}s"
+    fi
     say "  max_safe_accounts:              ${CAPACITY_REPORT_MAX_SAFE_ACCOUNTS} concurrent accounts under target p95<=${CAPACITY_REPORT_TARGET_P95_MS}ms"
     say "  selected_round_latency:         p50=${CAPACITY_REPORT_LAT_P50}ms p95=${CAPACITY_REPORT_LAT_P95}ms p99=${CAPACITY_REPORT_LAT_P99}ms max=${CAPACITY_REPORT_LAT_MAX}ms"
     say "  selected_round_statuses:        ${CAPACITY_REPORT_STATUS_COUNTS}"
@@ -939,6 +988,12 @@ print_capacity_probe_conclusion() {
     fi
     if [[ -n "${CAPACITY_REPORT_LOAD_PROFILE:-}" ]]; then
       say "  tested_load:                    ${CAPACITY_REPORT_LOAD_PROFILE} (${CAPACITY_REPORT_LOAD_KINDS})"
+    fi
+    if [[ -n "${CAPACITY_REPORT_TIER:-}" ]]; then
+      say "  hardware_tier:                  ${CAPACITY_REPORT_TIER}${CAPACITY_REPORT_TIER_DESCRIPTION:+ - $CAPACITY_REPORT_TIER_DESCRIPTION}"
+    fi
+    if [[ -n "${CAPACITY_REPORT_MAX_DURATION_SECONDS:-}" && "${CAPACITY_REPORT_MAX_DURATION_SECONDS:-0}" != "0" ]]; then
+      say "  time_limit:                     ${CAPACITY_REPORT_MAX_DURATION_SECONDS}s"
     fi
     if [[ -n "${CAPACITY_REPORT_PATH:-}" ]]; then
       say "  report:                         ${CAPACITY_REPORT_PATH}"
@@ -999,6 +1054,56 @@ reset_capacity_to_conservative_fallback() {
   unset HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER
   CAPACITY_PROBE_MODE="never"
   say "[dev-tmp] capacity probe: using conservative hardware fallback; auto settings will be resolved without another probe"
+}
+
+prompt_capacity_probe_tier() {
+  local answer
+  say "Capacity probe hardware tier:"
+  say "  1) sbc       Single-board computer / tiny VM; smallest smoke-size probe, 60s cap"
+  say "  2) legacy    Old desktop or low-power NAS; low-impact read-only probe, 120s cap"
+  say "  3) laptop    Ordinary laptop; small normal member workflow probe"
+  say "  4) midrange  Mid-range host; bounded normal capacity search"
+  say "  5) highend   Top-tier host; no account/round ceiling, increases load until a stop target"
+  say "  6) auto      Legacy automatic behavior"
+  while true; do
+    printf 'Choose capacity tier [2]: '
+    if ! read -r answer; then
+      die "interactive setup was interrupted"
+    fi
+    answer="${answer:-2}"
+    case "${answer,,}" in
+      1|sbc|single-board|single-board-computer|board|tiny)
+        CAPACITY_PROBE_TIER="sbc"
+        return 0
+        ;;
+      2|legacy|old|old-desktop|low-power|nas)
+        CAPACITY_PROBE_TIER="legacy"
+        return 0
+        ;;
+      3|laptop|notebook)
+        CAPACITY_PROBE_TIER="laptop"
+        return 0
+        ;;
+      4|midrange|mid-range|server|host)
+        CAPACITY_PROBE_TIER="midrange"
+        return 0
+        ;;
+      5|highend|high-end|top|top-tier|full)
+        say "WARNING: highend capacity probe has no account/round ceiling. It can freeze or crash the host while searching for the limit."
+        prompt_yes_no "Run the dangerous highend capacity probe anyway" 0 answer
+        [[ "$answer" == "1" ]] || continue
+        CAPACITY_PROBE_TIER="highend"
+        return 0
+        ;;
+      6|auto|default|legacy-auto)
+        CAPACITY_PROBE_TIER="auto"
+        return 0
+        ;;
+      *)
+        say "Please choose 1, 2, 3, 4, 5, or 6."
+        ;;
+    esac
+  done
 }
 
 confirm_capacity_probe_result() {
@@ -1093,12 +1198,21 @@ run_capacity_probe_for_defaults() {
     say "[dev-tmp] capacity probe: defaults file $CAPACITY_DEFAULTS_FILE"
     say "[dev-tmp] capacity probe: report file $capacity_report"
     local probe_install_args=()
+    local probe_tier_args=()
     if [[ "${HACKME_DEV_CAPACITY_PROBE_INSTALL:-1}" == "1" ]]; then
       probe_install_args+=(--install)
+    fi
+    if [[ -n "$CAPACITY_PROBE_TIER" && "$CAPACITY_PROBE_TIER" != "auto" ]]; then
+      probe_tier_args+=(--capacity-tier "$CAPACITY_PROBE_TIER")
+      say "[dev-tmp] capacity probe: hardware tier $CAPACITY_PROBE_TIER"
+      if [[ "$CAPACITY_PROBE_TIER" == "highend" ]]; then
+        say "[dev-tmp] WARNING: highend capacity probe has no account/round ceiling and may freeze or crash this host."
+      fi
     fi
     if "$PYTHON_BIN" "$SOURCE_ROOT/scripts/testing/predeploy_capacity_probe.py" \
         --capacity-defaults-file "$CAPACITY_DEFAULTS_FILE" \
         --output "$capacity_report" \
+        "${probe_tier_args[@]}" \
         "${probe_install_args[@]}"; then
       load_local_capacity_defaults force
       load_capacity_probe_report_summary "$capacity_report" || true
@@ -1717,17 +1831,27 @@ prompt_server_runner() {
   done
 
   normalize_capacity_probe_mode
+  normalize_capacity_probe_tier
   if [[ "$CAPACITY_PROBE_MODE" == "force" ]]; then
+    if [[ "$CAPACITY_PROBE_TIER" == "auto" ]]; then
+      prompt_capacity_probe_tier
+    fi
     run_capacity_probe_for_defaults
   elif [[ -f "$CAPACITY_DEFAULTS_FILE" ]]; then
     prompt_yes_no "Retest local capacity before launch (existing .hackme_capacity_defaults.env will be reused if no)" 0 run_capacity_probe
     if [[ "$run_capacity_probe" == "1" ]]; then
       CAPACITY_PROBE_MODE="force"
+      if [[ "$CAPACITY_PROBE_TIER" == "auto" ]]; then
+        prompt_capacity_probe_tier
+      fi
       run_capacity_probe_for_defaults
     fi
   elif gunicorn_capacity_auto_requested && [[ "$CAPACITY_PROBE_MODE" != "never" ]]; then
     prompt_yes_no "No local capacity result found. Run capacity probe for auto settings now" 1 run_capacity_probe
     if [[ "$run_capacity_probe" == "1" ]]; then
+      if [[ "$CAPACITY_PROBE_TIER" == "auto" ]]; then
+        prompt_capacity_probe_tier
+      fi
       run_capacity_probe_for_defaults
     else
       CAPACITY_PROBE_MODE="never"
@@ -2534,6 +2658,15 @@ while [[ $# -gt 0 ]]; do
       CAPACITY_PROBE_MODE=force
       shift
       ;;
+    --capacity-probe-light|--light-capacity-probe)
+      CAPACITY_PROBE_MODE=force
+      CAPACITY_PROBE_TIER=legacy
+      shift
+      ;;
+    --capacity-probe-tier|--capacity-tier)
+      CAPACITY_PROBE_TIER="${2:?missing capacity probe tier}"
+      shift 2
+      ;;
     --no-capacity-probe)
       CAPACITY_PROBE_MODE=never
       shift
@@ -2622,6 +2755,7 @@ if [[ -n "$FEATURE_BUNDLES" && -z "${HACKME_DEV_FEATURE_MODE:-}" && "$FEATURE_MO
 fi
 
 normalize_capacity_probe_mode
+normalize_capacity_probe_tier
 load_local_capacity_defaults
 
 if [[ "$SHUTDOWN" == "1" ]]; then
@@ -2740,6 +2874,7 @@ export HACKME_DEV_GUNICORN_TIMEOUT="$GUNICORN_TIMEOUT"
 export HACKME_DEV_GUNICORN_MAX_REQUESTS="$GUNICORN_MAX_REQUESTS"
 export HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER="$GUNICORN_MAX_REQUESTS_JITTER"
 export HACKME_DEV_CAPACITY_PROBE="$CAPACITY_PROBE_MODE"
+export HACKME_DEV_CAPACITY_PROBE_TIER="$CAPACITY_PROBE_TIER"
 export HACKME_DEV_CAPACITY_DEFAULTS_FILE="$CAPACITY_DEFAULTS_FILE"
 export HACKME_DEV_CLOUD_DRIVE_STORAGE_ROOT="$CLOUD_DRIVE_STORAGE_ROOT"
 export HACKME_DEV_CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB="$CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB"

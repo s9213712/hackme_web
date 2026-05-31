@@ -52,6 +52,13 @@ BASE_FLOW_LABELS = [
     "login",
 ]
 
+LIGHT_FLOW_LABELS = [
+    "me",
+    "jobs",
+    "shares",
+    "trading dashboard",
+]
+
 NORMAL_FLOW_LABELS = [
     "points wallet",
     "points wallet onboarding",
@@ -133,10 +140,65 @@ HEAVY_FLOW_LABELS = [
 ]
 
 LOAD_PROFILE_KINDS = {
+    "light": {"light"},
     "normal": {"normal"},
     "malicious": {"normal", "malicious"},
     "heavy": {"normal", "heavy"},
     "full": {"normal", "malicious", "heavy"},
+}
+
+CAPACITY_TIER_PRESETS = {
+    "sbc": {
+        "profiles": "1x1",
+        "account_counts": "1",
+        "load_profile": "light",
+        "max_rounds": 1,
+        "max_accounts": 1,
+        "ux_confirm_rounds": 0,
+        "max_duration_seconds": 60,
+        "request_timeout": 10.0,
+        "description": "single-board computer / tiny VM; smoke-size read-only probe",
+    },
+    "legacy": {
+        "profiles": "1x2",
+        "account_counts": "1,2",
+        "load_profile": "light",
+        "max_rounds": 2,
+        "max_accounts": 2,
+        "ux_confirm_rounds": 0,
+        "max_duration_seconds": 120,
+        "request_timeout": 12.0,
+        "description": "old desktop or low-power NAS; low-impact read-only probe",
+    },
+    "laptop": {
+        "profiles": "1x3,2x3",
+        "account_counts": "2,4",
+        "load_profile": "normal",
+        "max_rounds": 2,
+        "max_accounts": 4,
+        "ux_confirm_rounds": 1,
+        "description": "ordinary laptop; small normal member workflow probe",
+    },
+    "midrange": {
+        "profiles": "1x4,2x4,3x4",
+        "account_counts": "auto",
+        "load_profile": "normal",
+        "start_accounts": 4,
+        "max_rounds": 5,
+        "max_accounts": 64,
+        "ux_confirm_rounds": 2,
+        "description": "mid-range server; bounded normal capacity search",
+    },
+    "highend": {
+        "profiles": "1x6,2x6,3x6,4x6",
+        "account_counts": "auto",
+        "load_profile": "normal",
+        "start_accounts": 6,
+        "max_rounds": 0,
+        "max_accounts": 0,
+        "ux_confirm_rounds": 3,
+        "description": "high-end server; unbounded search until UX/server stop targets are reached",
+    },
 }
 
 
@@ -146,7 +208,7 @@ def active_load_kinds(args: argparse.Namespace) -> set[str]:
         values = {item.strip() for item in raw.split(",") if item.strip()}
     else:
         values = set(LOAD_PROFILE_KINDS.get(str(getattr(args, "load_profile", "normal")), {"normal"}))
-    allowed = {"normal", "malicious", "heavy"}
+    allowed = {"light", "normal", "malicious", "heavy"}
     unknown = sorted(values - allowed)
     if unknown:
         raise ValueError(f"unknown load kind(s): {', '.join(unknown)}")
@@ -160,6 +222,8 @@ def load_includes(args: argparse.Namespace, kind: str) -> bool:
 def feature_flow_labels(args: argparse.Namespace) -> list[str]:
     labels = list(BASE_FLOW_LABELS)
     kinds = active_load_kinds(args)
+    if "light" in kinds:
+        labels.extend(LIGHT_FLOW_LABELS)
     if "normal" in kinds:
         labels.extend(NORMAL_FLOW_LABELS)
     if "malicious" in kinds:
@@ -339,6 +403,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Comma-separated workers x threads profiles, e.g. 1x6,2x6,3x6,4x6. Default is CPU-aware.",
     )
     parser.add_argument(
+        "--light",
+        action="store_true",
+        help=(
+            "Alias for --capacity-tier legacy."
+        ),
+    )
+    parser.add_argument(
+        "--capacity-tier",
+        choices=["auto", *sorted(CAPACITY_TIER_PRESETS)],
+        default="auto",
+        help=(
+            "Hardware-sized probe preset. auto keeps legacy behavior; sbc, legacy, laptop, "
+            "midrange, and highend bound profiles/account counts for that class of machine."
+        ),
+    )
+    parser.add_argument(
         "--account-counts",
         default="auto",
         help="Comma-separated concurrent account counts per profile, or auto for adaptive probing without a built-in account ceiling.",
@@ -429,6 +509,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--install", action="store_true", help="Allow test_for_develop.sh to install dependencies.")
     parser.add_argument("--request-timeout", type=float, default=30.0)
     parser.add_argument("--startup-timeout", type=float, default=90.0)
+    parser.add_argument(
+        "--max-duration-seconds",
+        type=float,
+        default=0.0,
+        help="Stop starting new capacity profiles/rounds after this many seconds. 0 means no total time ceiling.",
+    )
     parser.add_argument("--cpu-sample-interval", type=float, default=0.35)
     parser.add_argument("--progress-interval", type=float, default=5.0, help="Seconds between live progress dashboard updates.")
     parser.add_argument("--progress-active-limit", type=int, default=0, help="Maximum active accounts shown per progress update. Default 0 shows all active accounts.")
@@ -1781,6 +1867,16 @@ def exercise_user(
         if not samples[-1].get("ok"):
             return samples
 
+        if kinds == {"light"}:
+            for path, label in (
+                ("/api/me?optional=1", "me"),
+                ("/api/jobs", "jobs"),
+                ("/api/shares?limit=20", "shares"),
+                ("/api/trading/dashboard", "trading dashboard"),
+            ):
+                samples.append(client.request("GET", path, expected={200}, label=label))
+            return samples
+
         if "normal" in kinds:
             _points_chain_flow(client, samples, index, run_id, peer_hot_wallet_address=peer_hot_wallet_address)
     finally:
@@ -2051,7 +2147,8 @@ def run_load_round(instance: ServerInstance, usernames: list[str], account_count
                     )
                     for idx, username in enumerate(selected)
                 ]
-                futures.append(pool.submit(exercise_root_points_chain, instance.base_url, args))
+                if active_load_kinds(args) != {"light"}:
+                    futures.append(pool.submit(exercise_root_points_chain, instance.base_url, args))
                 completed = 0
                 for future in as_completed(futures):
                     samples.extend(future.result())
@@ -2409,9 +2506,39 @@ def sync_capacity_defaults(
     }
 
 
+def apply_capacity_tier(args: argparse.Namespace) -> str:
+    tier = str(getattr(args, "capacity_tier", "auto") or "auto").strip().lower()
+    if bool(getattr(args, "light", False)) and tier == "auto":
+        tier = "legacy"
+        args.capacity_tier = tier
+    if tier == "auto":
+        return "auto"
+    preset = CAPACITY_TIER_PRESETS[tier]
+    if not str(args.profiles or "").strip():
+        args.profiles = str(preset["profiles"])
+    if str(args.account_counts or "").strip().lower() in {"", "auto", "adaptive", "probe"}:
+        args.account_counts = str(preset["account_counts"])
+    if str(args.load_profile or "normal") == "normal" and not str(args.load_kinds or "").strip():
+        args.load_profile = str(preset["load_profile"])
+    if "start_accounts" in preset:
+        args.start_accounts = min(int(args.start_accounts or preset["start_accounts"]), int(preset["start_accounts"]))
+    args.max_rounds = min(int(args.max_rounds or preset["max_rounds"]), int(preset["max_rounds"]))
+    args.max_accounts = min(int(args.max_accounts or preset["max_accounts"]), int(preset["max_accounts"]))
+    args.ux_confirm_rounds = min(int(args.ux_confirm_rounds or 0), int(preset["ux_confirm_rounds"]))
+    if "max_duration_seconds" in preset and float(args.max_duration_seconds or 0.0) <= 0:
+        args.max_duration_seconds = float(preset["max_duration_seconds"])
+    if "request_timeout" in preset:
+        args.request_timeout = min(float(args.request_timeout or preset["request_timeout"]), float(preset["request_timeout"]))
+    if str(args.load_profile) == "light" or str(args.load_kinds).strip().lower() == "light":
+        args.heavy_repeat = 1
+        args.heavy_upload_bytes = min(int(args.heavy_upload_bytes or 0), 4096)
+    return tier
+
+
 def main() -> int:
     parser = build_arg_parser()
     args = parser.parse_args()
+    capacity_tier = apply_capacity_tier(args)
     load_kinds = sorted(active_load_kinds(args))
     profiles = parse_profiles(args.profiles) if args.profiles else default_profiles()
     account_ladder_label = AccountLadder(args).label()
@@ -2426,13 +2553,34 @@ def main() -> int:
 
     results: list[dict[str, Any]] = []
     started_at = datetime.now(timezone.utc).isoformat()
+    probe_started = time.monotonic()
+    max_duration_seconds = max(0.0, float(args.max_duration_seconds or 0.0))
+    stop_reason = ""
     print(f"[capacity] temp root: {top_root}", flush=True)
     print(f"[capacity] profiles: {', '.join(profile.label for profile in profiles)}", flush=True)
+    print(
+        f"[capacity] hardware tier: {capacity_tier}"
+        + (f" ({CAPACITY_TIER_PRESETS[capacity_tier]['description']})" if capacity_tier in CAPACITY_TIER_PRESETS else ""),
+        flush=True,
+    )
+    if capacity_tier == "highend":
+        print(
+            "[capacity] WARNING: highend has no account or round ceiling; it will keep increasing "
+            "load until UX degradation, app limits, server instability, or hard failures stop it. "
+            "Use only on machines where a temporary freeze/crash is acceptable.",
+            flush=True,
+        )
+    if max_duration_seconds > 0:
+        print(f"[capacity] time limit: {max_duration_seconds:g}s", flush=True)
     print(f"[capacity] account ladder: {account_ladder_label}", flush=True)
     print(f"[capacity] load profile: {args.load_profile} ({', '.join(load_kinds)})", flush=True)
 
     try:
         for index, profile in enumerate(profiles):
+            if max_duration_seconds > 0 and time.monotonic() - probe_started >= max_duration_seconds:
+                stop_reason = f"time_limit_{max_duration_seconds:g}s"
+                print(f"[capacity] stopping before next profile: {stop_reason}", flush=True)
+                break
             port = args.port + index if args.port else free_port()
             run_root = top_root / f"profile_{profile.label}"
             instance: ServerInstance | None = None
@@ -2454,6 +2602,11 @@ def main() -> int:
 
                 ladder = AccountLadder(args)
                 while True:
+                    if max_duration_seconds > 0 and time.monotonic() - probe_started >= max_duration_seconds:
+                        stop_reason = f"time_limit_{max_duration_seconds:g}s"
+                        profile_result["stopped_reason"] = stop_reason
+                        print(f"[capacity] stopping before next round for {profile.label}: {stop_reason}", flush=True)
+                        break
                     account_count = ladder.next()
                     if account_count is None:
                         break
@@ -2575,6 +2728,8 @@ def main() -> int:
             "temp_root": str(top_root),
             "cleanup": "kept" if args.keep_run_root else "removed",
             "load": {
+                "capacity_tier": capacity_tier,
+                "capacity_tier_description": CAPACITY_TIER_PRESETS.get(capacity_tier, {}).get("description", ""),
                 "profile": args.load_profile,
                 "kinds": load_kinds,
                 "heavy_repeat": max(1, min(int(args.heavy_repeat or 1), 20)),
@@ -2587,6 +2742,7 @@ def main() -> int:
                 "ux_confirm_rounds": ux_confirm_rounds(args),
                 "hard_p95_ms": args.hard_p95_ms,
                 "hard_max_ms": args.hard_max_ms,
+                "max_duration_seconds": max_duration_seconds,
                 "close_connections": bool(args.close_connections),
                 "app_limits_disabled": not bool(args.keep_app_limits),
                 "backpressure_disabled": bool(args.disable_backpressure),
@@ -2598,6 +2754,7 @@ def main() -> int:
             "recommendation": recommendation,
             "rc1_capacity_gate": rc1_capacity_gate,
             "synced_defaults": synced_defaults,
+            "stop_reason": stop_reason,
         }
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

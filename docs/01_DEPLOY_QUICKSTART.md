@@ -63,6 +63,11 @@ UX degradation / application limit / server instability 邊界，以及 JSON rep
 若 probe 沒有產生可用 recommendation，互動模式不會提供 apply 選項，而會列出各 profile 的
 setup/round error 並要求重測、手動輸入或 fallback。capacity probe 預設允許 isolated profile
 建立 venv；只有明確設定 `HACKME_DEV_CAPACITY_PROBE_INSTALL=0` 時才禁止安裝。
+低規格機器請先用 `--capacity-probe-tier sbc|legacy|laptop|midrange|highend` 選量級：
+`sbc` 針對單板電腦 / 小型 VM，使用最小讀取型 probe 並設 60 秒總時限；`legacy`
+針對老桌機 / 低功耗 NAS，使用低衝擊讀取型 probe 並設 120 秒總時限；`laptop`
+與 `midrange` 逐步放寬帳號與 profile。`highend` 沒有 account / round 上限，會持續增加負載
+直到達到停止條件，可能讓主機卡死或崩潰，只有能接受風險時使用。
 
 背景模式會在 runtime logs 目錄產生並列出 `server_direct.out`、Gunicorn access
 log 與 error log。若要停止前一次由腳本啟動、正在佔用同一 port 的 dev server
