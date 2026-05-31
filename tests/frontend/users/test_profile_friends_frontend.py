@@ -86,6 +86,8 @@ def test_profile_friends_panel_is_wired_as_user_module():
     assert '.profile-tabs [hidden]' in css
     assert "const PROFILE_AVATAR_CROPPER_MIN_ZOOM = 0.5" in profile_js
     assert "function profileAvatarMinimumZoom(metrics)" in profile_js
+    assert "buildCroppedAvatarUpload(image, crop" in profile_js
+    assert 'form.append("avatar_client_cropped", "1")' in profile_js
     assert "profile-avatar-preview-overlay" in profile_js
     assert '.profile-friend-columns' in css
     assert '.profile-avatar-cloud-row' in css

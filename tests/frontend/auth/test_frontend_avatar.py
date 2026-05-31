@@ -19,6 +19,10 @@ def test_avatar_upload_ui_is_wired():
     assert 'id="edit-avatar-crop-zoom" min="0.5" max="6"' in index_html
     assert "async function uploadUserAvatar()" in auth_js
     assert "function selectedUserAvatarFile()" in auth_js
+    assert "async function buildCroppedAvatarUpload" in auth_js
+    assert "ctx.drawImage(" in auth_js
+    assert "canvas.width = 512" in auth_js
+    assert 'form.append("avatar_client_cropped", "1")' in auth_js
     assert "const avatarFile = selectedUserAvatarFile();" in auth_js
     assert "if (!Object.keys(payload).length && !avatarFile && !appearanceChanged && !timezoneChanged)" in auth_js
     assert "submitUserAvatarUpload({ reloadUsers: false })" in auth_js

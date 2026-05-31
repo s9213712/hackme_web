@@ -348,6 +348,72 @@ function clampAvatarValue(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function avatarCroppedUploadFilename(sourceName = "") {
+  const base = String(sourceName || "avatar")
+    .replace(/\.[^.]+$/, "")
+    .replace(/[^\w.-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80) || "avatar";
+  return `${base}_cropped.png`;
+}
+
+function normalizedAvatarCropForImage(image, crop = {}) {
+  const naturalWidth = Number(image?.naturalWidth || 0);
+  const naturalHeight = Number(image?.naturalHeight || 0);
+  if (!naturalWidth || !naturalHeight) return null;
+  const sideLimit = Math.min(naturalWidth, naturalHeight);
+  const rawWidth = Number(crop.width || 0);
+  const rawHeight = Number(crop.height || 0);
+  const side = clampAvatarValue(Math.floor(Math.min(rawWidth || sideLimit, rawHeight || sideLimit)), 1, sideLimit);
+  const x = clampAvatarValue(Math.floor(Number(crop.x || 0)), 0, Math.max(0, naturalWidth - side));
+  const y = clampAvatarValue(Math.floor(Number(crop.y || 0)), 0, Math.max(0, naturalHeight - side));
+  return { x, y, width: side, height: side };
+}
+
+function avatarCanvasToBlob(canvas, type = "image/png", quality = 0.92) {
+  return new Promise((resolve, reject) => {
+    if (!canvas || typeof canvas.toBlob !== "function") {
+      reject(new Error("此瀏覽器不支援頭像裁切輸出"));
+      return;
+    }
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("無法產生裁切後頭像"));
+    }, type, quality);
+  });
+}
+
+async function buildCroppedAvatarUpload(image, crop = {}, { sourceName = "" } = {}) {
+  if (!image || !image.complete) return null;
+  const normalizedCrop = normalizedAvatarCropForImage(image, crop);
+  if (!normalizedCrop) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext("2d", { alpha: true });
+  if (!ctx) throw new Error("此瀏覽器不支援頭像裁切輸出");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(
+    image,
+    normalizedCrop.x,
+    normalizedCrop.y,
+    normalizedCrop.width,
+    normalizedCrop.height,
+    0,
+    0,
+    canvas.width,
+    canvas.height
+  );
+  const blob = await avatarCanvasToBlob(canvas, "image/png");
+  return {
+    blob,
+    filename: avatarCroppedUploadFilename(sourceName),
+    serverCrop: { x: 0, y: 0, width: 512, height: 512 },
+  };
+}
+
+window.buildCroppedAvatarUpload = buildCroppedAvatarUpload;
+
 function setAvatarCropHidden(crop = {}) {
   setUserEditField("edit-avatar-crop-x", crop.x || 0);
   setUserEditField("edit-avatar-crop-y", crop.y || 0);
@@ -1412,9 +1478,19 @@ async function submitUserAvatarUpload({ reloadUsers = true } = {}) {
     return { ok: false, msg: "請先選擇頭像檔案" };
   }
   const crop = currentAvatarCropPayload();
+  const image = avatarCropperElements().image;
+  const cropped = avatarCropState.hasImage
+    ? await buildCroppedAvatarUpload(image, crop, { sourceName: file.name || "avatar.png" })
+    : null;
   const form = new FormData();
-  form.append("file", file);
-  form.append("crop_json", JSON.stringify(crop));
+  if (cropped) {
+    form.append("file", cropped.blob, cropped.filename);
+    form.append("crop_json", JSON.stringify(cropped.serverCrop));
+    form.append("avatar_client_cropped", "1");
+  } else {
+    form.append("file", file);
+    form.append("crop_json", JSON.stringify(crop));
+  }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await apiFetch(API + `/admin/users/${editingUserId}/avatar`, {

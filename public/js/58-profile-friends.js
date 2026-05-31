@@ -496,9 +496,19 @@ async function uploadProfileAvatar() {
   try {
     const crop = currentProfileAvatarCropPayload();
     const form = new FormData();
-    if (file) form.append("file", file);
-    else form.append("cloud_file_id", cloudFileId);
-    form.append("crop_json", JSON.stringify(crop));
+    const image = profileAvatarCropperElements().image;
+    const cropped = profileAvatarCropState.hasImage && typeof buildCroppedAvatarUpload === "function"
+      ? await buildCroppedAvatarUpload(image, crop, { sourceName: file?.name || profileAvatarCropState.cloudFileName || "avatar.png" })
+      : null;
+    if (cropped) {
+      form.append("file", cropped.blob, cropped.filename);
+      form.append("crop_json", JSON.stringify(cropped.serverCrop));
+      form.append("avatar_client_cropped", "1");
+    } else {
+      if (file) form.append("file", file);
+      else form.append("cloud_file_id", cloudFileId);
+      form.append("crop_json", JSON.stringify(crop));
+    }
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
     const res = await apiFetch(API + `/admin/users/${encodeURIComponent(currentUserId)}/avatar`, {
