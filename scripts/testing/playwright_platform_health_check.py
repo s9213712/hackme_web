@@ -119,8 +119,25 @@ def finance_db_path(runtime_root: Path) -> Path:
     return runtime_root / "database" / "finance.db"
 
 
+def ensure_desktop_auth_app(page, *, timeout: int = 30000) -> None:
+    page.set_viewport_size({"width": 1366, "height": 768})
+    wait_for_auth_app(page, timeout=timeout)
+    page.wait_for_function(
+        """() => document.body.classList.contains('app-authenticated')
+            && typeof switchModuleTab === 'function'
+            && !!document.querySelector('#notification-toggle')""",
+        timeout=timeout,
+    )
+
+
 def switch_module_and_wait(page, module: str, ready_selector: str, *, timeout: int = 15000) -> None:
+    ensure_desktop_auth_app(page, timeout=max(timeout, 30000))
     switch_module(page, module)
+    page.wait_for_function(
+        """module => document.querySelector(`#module-${module}`)?.classList.contains('active')""",
+        module,
+        timeout=timeout,
+    )
     page.wait_for_selector(f"#module-{module}.active", state="visible", timeout=timeout)
     page.wait_for_selector(ready_selector, state="visible", timeout=timeout)
 
@@ -565,6 +582,7 @@ def check_notifications(rec: Recorder, page, base_url: str, normal_user: dict[st
     after = fetch_json(page, "GET", "/api/notifications?limit=20")
     include_dismissed = fetch_json(page, "GET", "/api/notifications?limit=50&include_dismissed=1")
 
+    ensure_desktop_auth_app(page)
     page.wait_for_selector("#notification-toggle", state="visible", timeout=15000)
     page.evaluate(
         """() => {
@@ -1083,7 +1101,9 @@ def main() -> int:
             login_with_retry(page, base_url)
             rec.add("login_root", True, "authenticated root session")
             rec.guard("enable_required_features", lambda: enable_required_features(page, base_url))
+            ensure_desktop_auth_app(page)
             rec.guard("optional_comfyui_settings", lambda: apply_optional_comfyui_settings(rec, page, optional_comfyui))
+            ensure_desktop_auth_app(page)
             me = fetch_json(page, "GET", "/api/me")
             root_user_id = extract_user_id(me)
             normal_user = ensure_normal_user(page)
