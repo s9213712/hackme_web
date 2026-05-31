@@ -59,6 +59,17 @@ LIGHT_FLOW_LABELS = [
     "trading dashboard",
 ]
 
+BASIC_FLOW_LABELS = [
+    "me",
+    "jobs",
+    "shares",
+    "trading dashboard",
+    "trading markets",
+    "games catalog",
+    "storage upload text",
+    "drive preview",
+]
+
 NORMAL_FLOW_LABELS = [
     "points wallet",
     "points wallet onboarding",
@@ -141,6 +152,7 @@ HEAVY_FLOW_LABELS = [
 
 LOAD_PROFILE_KINDS = {
     "light": {"light"},
+    "basic": {"basic"},
     "normal": {"normal"},
     "malicious": {"normal", "malicious"},
     "heavy": {"normal", "heavy"},
@@ -171,13 +183,15 @@ CAPACITY_TIER_PRESETS = {
         "description": "old desktop or low-power NAS; low-impact read-only probe",
     },
     "laptop": {
-        "profiles": "1x3,2x3",
-        "account_counts": "2,4",
-        "load_profile": "normal",
+        "profiles": "1x2,2x2",
+        "account_counts": "1,2",
+        "load_profile": "basic",
         "max_rounds": 2,
-        "max_accounts": 4,
+        "max_accounts": 2,
         "ux_confirm_rounds": 1,
-        "description": "ordinary laptop; small normal member workflow probe",
+        "max_duration_seconds": 180,
+        "request_timeout": 15.0,
+        "description": "ordinary laptop; small bounded member workflow probe",
     },
     "midrange": {
         "profiles": "1x4,2x4,3x4",
@@ -208,7 +222,7 @@ def active_load_kinds(args: argparse.Namespace) -> set[str]:
         values = {item.strip() for item in raw.split(",") if item.strip()}
     else:
         values = set(LOAD_PROFILE_KINDS.get(str(getattr(args, "load_profile", "normal")), {"normal"}))
-    allowed = {"light", "normal", "malicious", "heavy"}
+    allowed = {"light", "basic", "normal", "malicious", "heavy"}
     unknown = sorted(values - allowed)
     if unknown:
         raise ValueError(f"unknown load kind(s): {', '.join(unknown)}")
@@ -224,6 +238,8 @@ def feature_flow_labels(args: argparse.Namespace) -> list[str]:
     kinds = active_load_kinds(args)
     if "light" in kinds:
         labels.extend(LIGHT_FLOW_LABELS)
+    if "basic" in kinds:
+        labels.extend(BASIC_FLOW_LABELS)
     if "normal" in kinds:
         labels.extend(NORMAL_FLOW_LABELS)
     if "malicious" in kinds:
@@ -525,7 +541,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="normal",
         help=(
             "Capacity traffic shape. normal runs regular member activity; malicious adds attack/exception probes; "
-            "heavy adds repeated upload/download/backtest work; full enables all."
+                "basic adds a small bounded member workflow; heavy adds repeated upload/download/backtest work; full enables all."
         ),
     )
     parser.add_argument(
@@ -1877,6 +1893,26 @@ def exercise_user(
                 samples.append(client.request("GET", path, expected={200}, label=label))
             return samples
 
+        if kinds == {"basic"}:
+            for path, label in (
+                ("/api/me?optional=1", "me"),
+                ("/api/jobs", "jobs"),
+                ("/api/shares?limit=20", "shares"),
+                ("/api/trading/dashboard", "trading dashboard"),
+                ("/api/trading/markets", "trading markets"),
+                ("/api/games/catalog", "games catalog"),
+            ):
+                samples.append(client.request("GET", path, expected={200}, label=label))
+            storage_id, file_id = upload_text_file(client, run_root, index, run_id, samples)
+            if file_id:
+                samples.append(client.request(
+                    "GET",
+                    f"/api/cloud-drive/files/{file_id}/preview",
+                    expected={200, 400, 403, 404},
+                    label="drive preview",
+                ))
+            return samples
+
         if "normal" in kinds:
             _points_chain_flow(client, samples, index, run_id, peer_hot_wallet_address=peer_hot_wallet_address)
     finally:
@@ -2147,7 +2183,7 @@ def run_load_round(instance: ServerInstance, usernames: list[str], account_count
                     )
                     for idx, username in enumerate(selected)
                 ]
-                if active_load_kinds(args) != {"light"}:
+                if not active_load_kinds(args).issubset({"light", "basic"}):
                     futures.append(pool.submit(exercise_root_points_chain, instance.base_url, args))
                 completed = 0
                 for future in as_completed(futures):
@@ -2700,6 +2736,16 @@ def main() -> int:
                     if cooldown > 0:
                         print(f"[capacity] cooldown {cooldown:g}s", flush=True)
                         time.sleep(cooldown)
+                if capacity_tier in {"sbc", "legacy", "laptop"} and profile_result.get("rounds"):
+                    last_reasons = set((profile_result["rounds"][-1] or {}).get("stop_reasons") or [])
+                    if last_reasons & {"hard_failures", "connection_errors", "server_busy"}:
+                        stop_reason = f"{capacity_tier}_profile_failure"
+                        print(
+                            f"[capacity] stopping remaining profiles for {capacity_tier}: "
+                            + ", ".join(sorted(last_reasons)),
+                            flush=True,
+                        )
+                        break
             except Exception as exc:
                 profile_result["error"] = f"{type(exc).__name__}: {exc}"
                 if args.verbose:

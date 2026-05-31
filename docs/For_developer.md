@@ -262,7 +262,8 @@ UX degradation / application limit / server instability 邊界，以及 JSON rep
 用 `--capacity-probe-tier sbc|legacy|laptop|midrange|highend` 依硬體等級限制 probe：
 `sbc` 針對單板電腦 / 小型 VM，限制為最小讀取型 probe 並設 60 秒總時限；`legacy`
 針對老桌機 / 低功耗 NAS，限制為低衝擊讀取型 probe 並設 120 秒總時限；`laptop`
-與 `midrange` 逐步放寬。`highend` 沒有 account / round 上限，會持續增加負載直到
+使用小型 basic member workflow 並設 180 秒總時限；`midrange` 再逐步放寬。
+`highend` 沒有 account / round 上限，會持續增加負載直到
 UX degradation、application limit、server instability 或 hard failure 停止，可能造成主機卡死或崩潰。
 
 背景模式會在 runtime logs 目錄保留 `server_direct.out`、`gunicorn_access.log`

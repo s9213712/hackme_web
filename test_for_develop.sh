@@ -866,6 +866,7 @@ for profile_result in profiles:
 
 kind_descriptions = {
     "light": "login plus read-only me/jobs/shares/trading dashboard checks",
+    "basic": "login, read-only me/jobs/shares/trading/games checks, one small text upload, and drive preview",
     "normal": "login, points wallet/ledger/transfer/governance/disputes, trading dashboard/spot/bots/grid/margin, chat/community, cloud-drive upload/preview/share/albums, appeals, game score",
     "malicious": "SQL/XSS-style chat/community probes, invalid game score, invalid trading/governance/dispute payloads, forbidden drive access, bad CSRF",
     "heavy": "repeated drive preview/download/update, resumable upload chunks, trading backtests/export, smart album organize",
@@ -1061,7 +1062,7 @@ prompt_capacity_probe_tier() {
   say "Capacity probe hardware tier:"
   say "  1) sbc       Single-board computer / tiny VM; smallest smoke-size probe, 60s cap"
   say "  2) legacy    Old desktop or low-power NAS; low-impact read-only probe, 120s cap"
-  say "  3) laptop    Ordinary laptop; small normal member workflow probe"
+  say "  3) laptop    Ordinary laptop; small bounded member workflow probe, 180s cap"
   say "  4) midrange  Mid-range host; bounded normal capacity search"
   say "  5) highend   Top-tier host; no account/round ceiling, increases load until a stop target"
   say "  6) auto      Legacy automatic behavior"
@@ -1114,9 +1115,9 @@ confirm_capacity_probe_result() {
       die "capacity probe produced no usable recommendation; rerun with install support or pass manual Gunicorn/backpressure settings"
     fi
     say "Capacity/backpressure action:"
-    say "  1) retest   Run the isolated capacity probe again"
+    say "  1) fallback Use conservative hardware fallback without another probe"
     say "  2) manual   Enter Gunicorn and backpressure parameters manually"
-    say "  3) fallback Use conservative hardware fallback without another probe"
+    say "  3) retest   Run the isolated capacity probe again"
     while true; do
       printf 'Choose capacity action [1]: '
       if ! read -r choice; then
@@ -1124,17 +1125,17 @@ confirm_capacity_probe_result() {
       fi
       choice="${choice:-1}"
       case "${choice,,}" in
-        1|retest|retry|rerun)
-          say "[dev-tmp] capacity probe: rerunning by user request"
-          return 1
+        1|fallback|conservative|skip)
+          reset_capacity_to_conservative_fallback
+          return 0
           ;;
         2|manual|custom)
           prompt_manual_capacity_settings
           return 0
           ;;
-        3|fallback|conservative|skip)
-          reset_capacity_to_conservative_fallback
-          return 0
+        3|retest|retry|rerun)
+          say "[dev-tmp] capacity probe: rerunning by user request"
+          return 1
           ;;
         *)
           say "Please choose 1, 2, or 3."
