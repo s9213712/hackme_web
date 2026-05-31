@@ -135,7 +135,7 @@ def switch_module_and_wait(page, module: str, ready_selector: str, *, timeout: i
     switch_module(page, module)
     page.wait_for_function(
         """module => document.querySelector(`#module-${module}`)?.classList.contains('active')""",
-        module,
+        arg=module,
         timeout=timeout,
     )
     page.wait_for_selector(f"#module-{module}.active", state="visible", timeout=timeout)
