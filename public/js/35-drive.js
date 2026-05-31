@@ -3487,8 +3487,23 @@ function isDriveE2eeServerPreviewError(response, payload) {
   return response?.status === 403 && msg.includes("E2EE") && msg.includes("伺服器預覽");
 }
 
+function isDriveMobilePreviewViewport() {
+  if (typeof window === "undefined") return false;
+  try {
+    if (window.matchMedia && window.matchMedia("(max-width: 720px)").matches) return true;
+  } catch (err) {
+    // Fall back to measured viewport widths below.
+  }
+  const innerWidth = Number(window.innerWidth || 0);
+  const docWidth = typeof document === "undefined" ? 0 : Number(document.documentElement?.clientWidth || 0);
+  const widths = [innerWidth, docWidth].filter((width) => Number.isFinite(width) && width > 0);
+  return widths.length > 0 && Math.min(...widths) <= 720;
+}
+
 function shouldOpenDriveFullscreen(fileId, options = {}) {
   if (options.skipRepeatCheck) return false;
+  if (options.forceFullscreen) return true;
+  if (!options.inlinePreview && isDriveMobilePreviewViewport()) return true;
   const now = Date.now();
   const repeated = lastDrivePreviewClick.fileId === String(fileId || "") && now - lastDrivePreviewClick.at <= DRIVE_FULLSCREEN_PREVIEW_MS;
   lastDrivePreviewClick = { fileId: String(fileId || ""), at: now };

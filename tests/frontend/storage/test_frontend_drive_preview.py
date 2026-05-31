@@ -26,8 +26,12 @@ def test_cloud_drive_preview_ui_is_wired():
     assert 'id="drive-preview-card"' in index_html
     assert 'id="drive-preview-panel"' in index_html
     assert 'class="drive-file-preview-layout"' in index_html
+    assert "手機點預覽會直接開小視窗" in index_html
     assert "async function previewDriveFile(fileId, options = {})" in drive_js
     assert "function shouldOpenDriveFullscreen(fileId" in drive_js
+    assert "function isDriveMobilePreviewViewport()" in drive_js
+    assert 'window.matchMedia("(max-width: 720px)")' in drive_js
+    assert "if (!options.inlinePreview && isDriveMobilePreviewViewport()) return true;" in drive_js
     assert "DRIVE_FULLSCREEN_PREVIEW_MS" in drive_js
     assert "/preview/content" in drive_js
     assert "drive-preview-archive" in drive_js
@@ -533,7 +537,7 @@ def test_album_preview_category_uses_storage_name_before_uploaded_metadata():
     drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
 
     assert 'const name = file?.display_name || file?.virtual_path || file?.original_filename_plain_for_public || file?.storage_path || "";' in drive_js
-    assert 'const canTryPreview = category === "image" || category === "metadata";' in drive_js
+    assert 'const canTryPreview = isE2ee || category === "image" || category === "metadata";' in drive_js
     assert '["image", "metadata"].includes(driveFileCategory(file))' in drive_js
     assert 'startsWith("image/")' in drive_js
 
@@ -674,7 +678,8 @@ def test_cloud_drive_e2ee_download_decrypts_in_browser():
     assert "rememberDriveE2eeRecentSessionPassphrase(passphrase);" in drive_js
     assert "const candidates = getDriveE2eeSessionPassphraseCandidates(fileId);" in drive_js
     assert "for (const passphrase of candidates)" in drive_js
-    assert "{ promptOnMiss: false }" in drive_js
+    assert "{ promptOnMiss = true }" in drive_js
+    assert "if (!promptOnMiss && !candidates.length)" in drive_js
     assert "DRIVE_E2EE_PREVIEW_NO_RECENT_PASSWORD" in drive_js
     assert "DRIVE_E2EE_PREVIEW_DECRYPT_FAILED" in drive_js
     assert "正在使用最近輸入過的 E2EE 密碼嘗試預覽" in drive_js
