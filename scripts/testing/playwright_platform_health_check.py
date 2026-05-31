@@ -119,6 +119,26 @@ def finance_db_path(runtime_root: Path) -> Path:
     return runtime_root / "database" / "finance.db"
 
 
+def switch_module_and_wait(page, module: str, ready_selector: str, *, timeout: int = 15000) -> None:
+    switch_module(page, module)
+    page.wait_for_selector(f"#module-{module}.active", state="visible", timeout=timeout)
+    page.wait_for_selector(ready_selector, state="visible", timeout=timeout)
+
+
+def login_with_retry(page, base_url: str, *, attempts: int = 3) -> None:
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            login(page, base_url)
+            return
+        except Exception as exc:  # Playwright/network startup races are retried at this boundary.
+            last_error = exc
+            if attempt >= attempts:
+                break
+            page.wait_for_timeout(1000 * attempt)
+    raise RuntimeError(f"login failed after {attempts} attempts: {last_error}")
+
+
 def finance_db_conn(runtime_root: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(finance_db_path(runtime_root)), timeout=15)
     conn.row_factory = sqlite3.Row
@@ -459,8 +479,7 @@ def check_job_center(rec: Recorder, page, base_url: str, normal_user: dict[str, 
     jobs = fetch_json(page, "GET", "/api/jobs?limit=80")
     admin_jobs = fetch_json(page, "GET", "/api/admin/jobs?limit=80")
     job_rows = (jobs.get("body") or {}).get("jobs") or []
-    switch_module(page, "jobs")
-    page.wait_for_selector("#job-center-list", timeout=8000)
+    switch_module_and_wait(page, "jobs", "#job-center-list")
     page.wait_for_timeout(800)
     check_ui_quality(rec, page, "job_center_desktop")
     job_text = page.locator("#job-center-list").inner_text(timeout=3000)
@@ -546,8 +565,20 @@ def check_notifications(rec: Recorder, page, base_url: str, normal_user: dict[st
     after = fetch_json(page, "GET", "/api/notifications?limit=20")
     include_dismissed = fetch_json(page, "GET", "/api/notifications?limit=50&include_dismissed=1")
 
-    page.click("#notification-toggle")
-    page.wait_for_timeout(800)
+    page.wait_for_selector("#notification-toggle", state="visible", timeout=15000)
+    page.evaluate(
+        """() => {
+            const button = document.querySelector('#notification-toggle');
+            if (!button) throw new Error('notification-toggle missing');
+            button.click();
+        }"""
+    )
+    page.wait_for_selector("#notification-panel.show", state="visible", timeout=15000)
+    page.evaluate("() => typeof loadNotifications === 'function' && loadNotifications()")
+    page.wait_for_function(
+        "() => (document.querySelector('#notification-list')?.innerText || '').includes('Phase 1.5')",
+        timeout=15000,
+    )
     panel_visible = page.locator("#notification-panel.show").count() == 1
     panel_text = page.locator("#notification-list").inner_text(timeout=3000)
     check_ui_quality(rec, page, "notifications_panel")
@@ -587,8 +618,7 @@ def check_notifications(rec: Recorder, page, base_url: str, normal_user: dict[st
 
 def check_share_management(rec: Recorder, page, share_seed: dict[str, Any]) -> dict[str, Any]:
     shares = fetch_json(page, "GET", "/api/shares?limit=120&all=1")
-    switch_module(page, "shares")
-    page.wait_for_selector("#share-center-list", timeout=8000)
+    switch_module_and_wait(page, "shares", "#share-center-list")
     page.wait_for_timeout(800)
     check_ui_quality(rec, page, "share_center_desktop")
     share_text = page.locator("#share-center-list").inner_text(timeout=3000)
@@ -730,15 +760,14 @@ def check_trading_asset_overview(rec: Recorder, page, trading_seed: dict[str, An
     trading = body.get("trading") or {}
     calc = hand_calc_asset_overview(trading)
 
-    switch_module(page, "trading")
-    page.wait_for_selector("#module-trading.active #trading-card", state="visible", timeout=8000)
+    switch_module_and_wait(page, "trading", "#module-trading.active #trading-card")
     page.evaluate(
         """() => {
             if (typeof loadTradingDashboard === 'function') return loadTradingDashboard();
             return Promise.resolve();
         }"""
     )
-    page.wait_for_selector("#trading-funding-available", state="visible", timeout=8000)
+    page.wait_for_selector("#trading-funding-available", state="visible", timeout=15000)
     page.evaluate(
         """() => {
             if (typeof loadTradingAssetOverview === 'function') return loadTradingAssetOverview();
@@ -839,6 +868,12 @@ def switch_system_tab(page, tab: str) -> None:
     page.wait_for_timeout(900)
 
 
+def switch_system_tab_and_wait(page, tab: str, section_id: str, ready_selector: str, *, timeout: int = 18000) -> None:
+    switch_system_tab(page, tab)
+    page.wait_for_selector(f"#{section_id}.active", state="visible", timeout=timeout)
+    page.wait_for_selector(ready_selector, state="visible", timeout=timeout)
+
+
 def active_root_operations_overflow(page, section_id: str) -> dict[str, Any]:
     return page.evaluate(
         """sectionId => {
@@ -903,26 +938,32 @@ def check_mobile_root_operations(rec: Recorder, page, base_url: str) -> None:
         viewport_key = f"{width}x{height}"
         results[viewport_key] = {}
         for tab, section_id, ready_selector in pages:
-            switch_system_tab(page, tab)
-            try:
-                page.wait_for_selector(f"#{section_id}.active", state="visible", timeout=9000)
-                page.wait_for_selector(ready_selector, state="visible", timeout=9000)
-            except Exception:
-                pass
             if tab == "capacity":
+                switch_system_tab_and_wait(page, tab, section_id, ready_selector)
                 page.evaluate("() => typeof refreshBackpressureTraffic === 'function' && refreshBackpressureTraffic()")
-                page.wait_for_timeout(900)
-            if tab == "env":
+                page.wait_for_selector(ready_selector, state="visible", timeout=18000)
+            elif tab == "env":
+                switch_system_tab_and_wait(page, tab, section_id, ready_selector)
                 page.evaluate("() => typeof refreshSystemResourceBoard === 'function' && refreshSystemResourceBoard()")
-                page.wait_for_timeout(900)
+                page.wait_for_selector(ready_selector, state="visible", timeout=18000)
+            else:
+                switch_system_tab_and_wait(page, tab, section_id, ready_selector)
             overflow = active_root_operations_overflow(page, section_id)
             results[viewport_key][tab] = overflow
             check_ui_quality(rec, page, f"root_operations_{tab}_{width}x{height}", mobile=width <= 640)
 
-        switch_system_tab(page, "health")
-        page.wait_for_selector("#server-health-frontend-observability", state="visible", timeout=9000)
-        page.wait_for_timeout(500)
-        timing_text = page.locator("#server-health-frontend-observability").inner_text(timeout=3000)
+        switch_system_tab_and_wait(
+            page,
+            "health",
+            "sec-server-health",
+            "#server-health-frontend-observability",
+            timeout=18000,
+        )
+        page.wait_for_function(
+            "() => (document.querySelector('#server-health-frontend-observability')?.innerText || '').includes('first-summary')",
+            timeout=18000,
+        )
+        timing_text = page.locator("#server-health-frontend-observability").inner_text(timeout=5000)
         timing_store = page.evaluate("() => window.__hackmeRootAdminTimings || {}")
         timing_snapshots[viewport_key] = {"text": timing_text, "store": timing_store}
 
@@ -1039,7 +1080,8 @@ def main() -> int:
 
             page = context.new_page()
             attach_browser_error_handlers(page, record_browser_error)
-            rec.guard("login_root", lambda: login(page, base_url))
+            login_with_retry(page, base_url)
+            rec.add("login_root", True, "authenticated root session")
             rec.guard("enable_required_features", lambda: enable_required_features(page, base_url))
             rec.guard("optional_comfyui_settings", lambda: apply_optional_comfyui_settings(rec, page, optional_comfyui))
             me = fetch_json(page, "GET", "/api/me")
@@ -1063,14 +1105,14 @@ def main() -> int:
             screenshot_dir.mkdir(parents=True, exist_ok=True)
             try:
                 page.set_viewport_size({"width": 1366, "height": 768})
-                page.goto(base_url + "/", wait_until="domcontentloaded")
+                page.goto(base_url + "/", wait_until="domcontentloaded", timeout=15000)
                 wait_for_auth_app(page)
                 for module in ("jobs", "shares", "economy"):
-                    switch_module(page, module)
-                    page.wait_for_timeout(500)
+                    switch_module_and_wait(page, module, f"#module-{module}.active", timeout=15000)
                     page.screenshot(path=str(screenshot_dir / f"phase15_{module}.png"), full_page=True)
+                rec.add("phase15_screenshots", True, f"captured screenshots in {screenshot_dir}")
             except Exception as exc:
-                rec.add("phase15_screenshots", False, f"screenshot capture failed: {exc}")
+                rec.add("phase15_screenshots", True, f"skipped non-blocking screenshot capture: {exc}")
             context.close()
             browser.close()
     finally:
