@@ -44,9 +44,15 @@ PROFILE_STYLE_DEFAULTS = {
     "background_tone": "standard",
 }
 DISPLAY_TIMEZONE_AUTO = "auto"
+FIXED_DISPLAY_TIMEZONES = tuple(
+    "Etc/GMT+12" if offset == -12 else "Etc/GMT-12" if offset == 12 else f"Etc/GMT{(-offset):+d}"
+    for offset in range(-12, 13)
+    if offset != 0
+)
 COMMON_DISPLAY_TIMEZONES = (
     DISPLAY_TIMEZONE_AUTO,
     "UTC",
+    *FIXED_DISPLAY_TIMEZONES,
     "Asia/Taipei",
     "Asia/Tokyo",
     "Asia/Seoul",

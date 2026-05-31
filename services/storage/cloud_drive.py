@@ -472,9 +472,15 @@ def store_cloud_upload(
             stream.seek(position)
         return None, msg
     file_id_hint = uuid.uuid4().hex
-    rel_path = f"users/{int(actor['id'])}/{file_id_hint}/{filename}"
-    target = resolve_storage_path(storage_root, rel_path, create_parent=True)
     server_encrypted = is_server_encrypted_privacy_mode(privacy_mode)
+    if is_e2ee_privacy_mode(privacy_mode):
+        stored_name = f"{uuid.uuid4().hex}.e2ee"
+    elif server_encrypted:
+        stored_name = f"{uuid.uuid4().hex}.server_encrypt"
+    else:
+        stored_name = filename
+    rel_path = f"users/{int(actor['id'])}/{file_id_hint}/{stored_name}"
+    target = resolve_storage_path(storage_root, rel_path, create_parent=True)
     if server_encrypted:
         disk_ok, _disk = storage_root_can_accept_bytes(storage_root, int(size_bytes or 0) * 2)
         if not disk_ok:
@@ -820,6 +826,55 @@ def soft_delete_cloud_file(conn, *, actor, file_id):
         return False, "只能刪除自己的檔案"
     conn.execute("UPDATE uploaded_files SET deleted_at=?, updated_at=? WHERE id=?", (_now(), _now(), file_id))
     return True, ""
+
+
+def delete_cloud_file_permanently(conn, *, actor, file_id, storage_root):
+    from services.storage.catalog import sync_user_storage_summary
+
+    ensure_cloud_drive_attachment_schema(conn)
+    ensure_storage_album_schema(conn)
+    row = _file_row(conn, file_id)
+    if not row or row["deleted_at"]:
+        return None, "找不到檔案或檔案已刪除"
+    if not _actor_owns(actor, row["owner_user_id"]):
+        return None, "只能刪除自己的檔案"
+    now = _now()
+    owner_user_id = int(row["owner_user_id"])
+    storage_path = resolve_file_storage_path(storage_root, row)
+    removed_physical = False
+    if storage_path.exists() and storage_path.is_file():
+        storage_path.unlink()
+        removed_physical = True
+        try:
+            parent = storage_path.parent
+            while parent != Path(storage_root).resolve() and not any(parent.iterdir()):
+                parent.rmdir()
+                parent = parent.parent
+        except Exception:
+            pass
+    conn.execute(
+        "UPDATE uploaded_files SET deleted_at=?, updated_at=? WHERE id=? AND owner_user_id=?",
+        (now, now, row["id"], owner_user_id),
+    )
+    conn.execute(
+        "UPDATE storage_files SET deleted_at=?, updated_at=? WHERE file_id=? AND owner_user_id=? AND deleted_at IS NULL",
+        (now, now, row["id"], owner_user_id),
+    )
+    conn.execute("UPDATE album_files SET deleted_at=? WHERE file_id=? AND deleted_at IS NULL", (now, row["id"]))
+    conn.execute("UPDATE storage_share_links SET revoked_at=? WHERE file_id=? AND revoked_at IS NULL", (now, row["id"]))
+    conn.execute("UPDATE file_access_grants SET revoked_at=? WHERE file_id=? AND revoked_at IS NULL", (now, row["id"]))
+    summary = sync_user_storage_summary(
+        conn,
+        owner_user_id,
+        actor_user_id=actor["id"],
+        source="cloud_drive_delete",
+        reason="cloud_file_permanently_deleted",
+    )
+    return {
+        "file_id": row["id"],
+        "removed_physical_file": removed_physical,
+        "storage": summary,
+    }, None
 
 
 def create_announcement_attachment_request(conn, *, actor, file_id, announcement_id=None, reason=""):

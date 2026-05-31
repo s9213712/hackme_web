@@ -1172,6 +1172,7 @@ function renderEffectiveSiteConfig() {
   };
   updateLoginModeFields();
   updateLoginAutofillPolicy();
+  updatePasswordPolicyHints();
   const root = document.documentElement;
   const mappings = {
     site_bg: "--bg",
@@ -1211,6 +1212,18 @@ function renderEffectiveSiteConfig() {
   document.body.dataset.sidebarWidth = sidebarWidthKey;
   if (typeof updateThemeQuickToggleUi === "function") updateThemeQuickToggleUi();
   if (typeof updateRecoveryModeUi === "function") updateRecoveryModeUi();
+}
+
+function updatePasswordPolicyHints() {
+  const enabled = !siteConfig || siteConfig.password_strength_policy_enabled !== false;
+  const rules = $("reg-pw-rules");
+  if (rules) {
+    rules.style.display = enabled ? "" : "none";
+  }
+  const hint = $("reg-pw-hint");
+  if (hint && !enabled) {
+    hint.textContent = "";
+  }
 }
 
 function applySiteConfig(config, options = {}) {
@@ -2145,6 +2158,10 @@ setupPwToggle("edit-user-pw-confirm", "edit-user-pw-confirm-toggle");
 installUiInteractionFeedback();
 
 $("reg-pw").addEventListener("input", function () {
+  if (siteConfig && siteConfig.password_strength_policy_enabled === false) {
+    $("reg-pw-hint").textContent = "";
+    return;
+  }
   const v = this.value;
   const hints = [];
   if (v.length < 8)                      hints.push("至少 8 字");
@@ -2398,6 +2415,7 @@ function resetAuthState() {
   try {
     localStorage.removeItem(AUTH_SESSION_HINT_STORAGE_KEY);
   } catch (err) {}
+  if (typeof clearDriveE2eeSessionPassphrases === "function") clearDriveE2eeSessionPassphrases();
   clearUserAppearanceConfig();
   currentUser = null;
   currentUserId = null;

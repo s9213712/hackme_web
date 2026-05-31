@@ -127,6 +127,30 @@ def register_public_routes(app, deps):
         except Exception:
             return current_session_ttl_seconds()
 
+    def password_strength_policy_enabled():
+        try:
+            value = (get_system_settings() or {}).get("password_strength_policy_enabled", True)
+            if isinstance(value, str):
+                return value.strip().lower() not in {"0", "false", "no", "off", ""}
+            return bool(value)
+        except Exception:
+            return True
+
+    def validate_configured_password(password):
+        if not isinstance(password, str) or not password:
+            return False, "密碼不可為空", score_password_strength(password or "")
+        if len(password) > 128:
+            return False, "密碼太長（最多 128 字元）", score_password_strength(password)
+        strength = score_password_strength(password)
+        if not password_strength_policy_enabled():
+            return True, "OK", strength
+        ok, msg = validate_password(password)
+        if not ok:
+            return False, msg, strength
+        if is_feature_enabled("feature_account_security_enabled"):
+            return enforce_password_strength(password, min_score=3)
+        return True, "OK", strength
+
     def record_login_location(conn, user_id, username, ip, ua):
         ip_hash = hashlib.sha256((ip or "-").encode("utf-8")).hexdigest()
         previous = conn.execute(
@@ -574,6 +598,7 @@ def register_public_routes(app, deps):
                 "module_community_min_role": settings.get("module_community_min_role"),
                 "module_appeals_min_role": settings.get("module_appeals_min_role"),
                 "module_accounts_min_role": settings.get("module_accounts_min_role"),
+                "password_strength_policy_enabled": bool(settings.get("password_strength_policy_enabled", True)),
                 "password_reset_mode": settings.get("password_reset_mode", "admin_review"),
                 "login_autofill_block_enabled": bool(settings.get("login_autofill_block_enabled", False)),
                 "maintenance_mode": bool(settings.get("maintenance_mode", False)),
@@ -781,16 +806,10 @@ def register_public_routes(app, deps):
         if password != password_confirm:
             return json_resp({"ok":False,"msg":"兩次輸入的密碼不一致", "field": "password_confirm"}), 400
 
-        ok, msg = validate_password(password)
+        ok, msg, strength = validate_configured_password(password)
         if not ok:
             audit("REGISTER_BAD_PW", ip, username, ua=ua, detail=msg)
-            return json_resp({"ok":False,"msg":msg, "field": "password"}), 400
-        strength = score_password_strength(password)
-        if is_feature_enabled("feature_account_security_enabled"):
-            strong_enough, msg, strength = enforce_password_strength(password, min_score=3)
-            if not strong_enough:
-                audit("REGISTER_WEAK_PW", ip, username, ua=ua, detail=msg)
-                return json_resp({"ok": False, "msg": msg, "field": "password", "password_strength": strength}), 400
+            return json_resp({"ok":False,"msg":msg, "field": "password", "password_strength": strength}), 400
 
         conn = get_db()
         try:
@@ -1095,7 +1114,7 @@ def register_public_routes(app, deps):
                 login_msg = "恭喜登入成功"
                 birthday_storage_created = bool(((birthday_gift or {}).get("storage_quota_gift") or {}).get("created"))
                 if birthday_gift and (birthday_gift.get("created") or birthday_storage_created):
-                    login_msg = f"恭喜登入成功，生日禮金 {birthday_gift.get('amount', BIRTHDAY_GIFT_POINTS)} 點與 1GB 雲端硬碟 30 日已入帳"
+                    login_msg = f"恭喜登入成功，生日禮金 {birthday_gift.get('amount', BIRTHDAY_GIFT_POINTS)} 點與 1GB 雲端硬碟 7 日已入帳"
                 elif signup_bonus and signup_bonus.get("created"):
                     login_msg = "恭喜登入成功，註冊禮已入帳官方熱錢包"
                 resp = json_resp({
@@ -1261,15 +1280,9 @@ def register_public_routes(app, deps):
                 audit("PASSWORD_RESET_ROOT_BLOCKED", ip, user="root", ua=ua, success=False, detail="offline_recovery_required_confirm")
                 return json_resp({"ok": False, "msg": "root 帳號不可透過 Web 忘記密碼流程重設，請改用離線 root recovery CLI"}), 403
             if not target_is_root:
-                ok, msg = validate_password(password)
+                ok, msg, strength = validate_configured_password(password)
                 if not ok:
-                    return json_resp({"ok": False, "msg": msg}), 400
-                if is_feature_enabled("feature_account_security_enabled"):
-                    ok, msg, strength = enforce_password_strength(password, min_score=3)
-                    if not ok:
-                        return json_resp({"ok": False, "msg": msg, "password_strength": strength}), 400
-                else:
-                    strength = score_password_strength(password)
+                    return json_resp({"ok": False, "msg": msg, "password_strength": strength}), 400
             current_row = conn.execute(
                 "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT 1",
                 (token_row["user_id"],),

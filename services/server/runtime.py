@@ -53,6 +53,7 @@ def _load_or_create_text_secret(env_name, path, *, generator):
         return env_value
     if os.path.exists(path):
         try:
+            os.chmod(path, 0o600)
             with open(path, encoding="utf-8") as f:
                 value = f.read().strip()
             if value:
@@ -72,6 +73,7 @@ def _load_or_create_binary_secret(env_name, path, *, generator):
         return env_value.encode("utf-8")
     if os.path.exists(path):
         try:
+            os.chmod(path, 0o600)
             with open(path, "rb") as f:
                 value = f.read()
             if value:

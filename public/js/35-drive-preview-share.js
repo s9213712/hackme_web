@@ -117,6 +117,7 @@ function renderAlbumGallery(albums) {
       <div class="drive-file-actions">
         ${albumShareButtonMarkup(album)}
         <button class="btn btn-primary" type="button" data-drive-action="open-album-viewer" data-album-id="${sanitize(album.id)}">預覽</button>
+        <button class="btn btn-danger" type="button" data-drive-action="delete-album" data-album-id="${sanitize(album.id)}">刪除</button>
       </div>
     </div>
   `).join("");
@@ -169,8 +170,9 @@ function closeAlbumViewer() {
 function renderAlbumPreviewTile(file) {
   const name = albumFileDisplayName(file);
   const category = driveFileCategory(file);
+  const isE2ee = typeof driveFileIsE2ee === "function" && driveFileIsE2ee(file);
   const thumbKey = file.id || file.file_id;
-  const canTryPreview = category === "image" || category === "metadata";
+  const canTryPreview = isE2ee || category === "image" || category === "metadata";
   const actionAttrs = canTryPreview
     ? `data-drive-action="album-full-preview" data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(name)}" data-album-sequence="viewer"`
     : "disabled";
@@ -178,11 +180,11 @@ function renderAlbumPreviewTile(file) {
   return `
     <button class="drive-gallery-tile drive-gallery-photo-tile${canTryPreview ? "" : " is-disabled"}" type="button" ${actionAttrs} aria-label="${sanitize(ariaLabel)}" title="${sanitize(name)}">
       <span class="drive-gallery-thumb ${canTryPreview ? "" : "drive-gallery-thumb-placeholder"}" data-album-thumb-key="${sanitize(thumbKey)}">
-        <span>${canTryPreview ? "讀取預覽" : sanitize(category)}</span>
+        <span>${canTryPreview ? (isE2ee ? "解密預覽" : "讀取預覽") : sanitize(category)}</span>
       </span>
       <span class="drive-gallery-file-info" aria-hidden="true">
         <strong>${sanitize(name)}</strong>
-        <span class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · <span data-album-category-key="${sanitize(thumbKey)}">${sanitize(category)}</span></span>
+        <span class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · <span data-album-category-key="${sanitize(thumbKey)}">${sanitize(isE2ee ? `${category} · E2EE` : category)}</span></span>
       </span>
     </button>
   `;

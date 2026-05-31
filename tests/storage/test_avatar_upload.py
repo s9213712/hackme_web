@@ -2,14 +2,16 @@ import io
 import sqlite3
 
 import pytest
+from cryptography.fernet import Fernet
 from flask import Flask, jsonify
 
 from routes.users import register_user_routes
 from services.users.member_levels import ensure_member_level_user_columns
 from services.security.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
+from services.storage.cloud_drive import encrypt_server_encrypted_chunked_stream
 
 
-def _build_app(db_path, storage_root, actor_box):
+def _build_app(db_path, storage_root, actor_box, server_file_fernet=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -46,6 +48,7 @@ def _build_app(db_path, storage_root, actor_box):
             "max_attachment_size_mb": 2,
             "upload_rate_limit_per_day": 20,
         },
+        "get_system_settings": lambda: {},
         "get_ua": lambda: "test",
         "hash_password": lambda value: "hash",
         "hash_token": lambda value: "hash",
@@ -59,6 +62,7 @@ def _build_app(db_path, storage_root, actor_box):
         "require_csrf_safe": passthrough,
         "SESSION_COOKIE_SAMESITE": "Lax",
         "SESSION_COOKIE_SECURE": False,
+        "server_file_fernet": server_file_fernet,
         "enforce_password_strength": lambda value, min_score=3: (True, "", {"score": 4}),
         "score_password_strength": lambda value: {"score": 4},
         "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
@@ -207,3 +211,64 @@ def test_user_can_select_existing_cloud_image_as_avatar(tmp_path):
     assert user["avatar_file_id"] == "cloud-avatar"
     assert file_count == 1
     assert ref["context_type"] == "avatar"
+
+
+def test_user_can_select_server_encrypted_cloud_image_as_avatar(tmp_path):
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    db_path = tmp_path / "avatar.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    plain = io.BytesIO()
+    Image.new("RGB", (24, 24), color=(90, 40, 170)).save(plain, format="JPEG")
+    payload = plain.getvalue()
+    encrypted_path = storage_root / "users" / "1" / "server-avatar.server_encrypt"
+    encrypted_path.parent.mkdir(parents=True, exist_ok=True)
+    encrypt_server_encrypted_chunked_stream(io.BytesIO(payload), encrypted_path, fernet, size_bytes=len(payload))
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO uploaded_files (
+                id, owner_user_id, storage_path, privacy_mode, risk_level, scan_status,
+                original_filename_plain_for_public, mime_type_plain_for_public,
+                size_bytes, encryption_algorithm, encryption_version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "server-avatar",
+                1,
+                "users/1/server-avatar.server_encrypt",
+                "server_encrypted",
+                "low",
+                "clean",
+                "server-avatar.jpg",
+                "image/jpeg",
+                len(payload),
+                "Fernet",
+                "server-side-chunked-v1",
+                "2026-05-18T00:00:00",
+                "2026-05-18T00:00:00",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    actor_box = {"actor": {"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"}}
+    client = _build_app(db_path, storage_root, actor_box, server_file_fernet=fernet).test_client()
+    res = client.post(
+        "/api/admin/users/1/avatar",
+        data={"cloud_file_id": "server-avatar", "crop_json": '{"x":1,"y":1,"width":20,"height":20}'},
+        content_type="multipart/form-data",
+    )
+    assert res.status_code == 200
+
+    avatar_res = client.get("/api/admin/users/1/avatar")
+    assert avatar_res.status_code == 200
+    cropped = Image.open(io.BytesIO(avatar_res.data))
+    assert cropped.size == (512, 512)

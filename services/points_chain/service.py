@@ -5607,12 +5607,12 @@ class PointsLedgerService:
             },
             {
                 "item_key": "cloud_storage_1gb_30d",
-                "item_name": "雲端容量 1GB / 30 天",
+                "item_name": "雲端容量 1GB / 7 天",
                 "category": "cloud_drive",
                 "recommended_points": 100,
                 "min_price": 50,
                 "max_price": 500,
-                "metadata": {"storage_bytes": 1024 ** 3, "duration_days": 30, "label": "雲端容量 1GB / 30 天"},
+                "metadata": {"storage_bytes": 1024 ** 3, "duration_days": 7, "label": "雲端容量 1GB / 7 天"},
                 "rationale": "容量是持續成本，保留比互動類更高的 sink。",
             },
             {

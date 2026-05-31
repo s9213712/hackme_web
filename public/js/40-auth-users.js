@@ -70,9 +70,12 @@ async function doLogin() {
     const me = await meRes.json();
     if (me.ok) setAuthState(me, true);
     else setAuthState({ username: user, role: "user", role_label: "一般用戶", nickname: "-" }, true);
+    if (typeof promptDriveGlobalE2eePassphraseOnLogin === "function") {
+      await promptDriveGlobalE2eePassphraseOnLogin();
+    }
     if (json.birthday_gift?.created || json.birthday_gift?.storage_quota_gift?.created) {
       const amount = Number(json.birthday_gift.amount || 1000);
-      const storageGift = json.birthday_gift?.storage_quota_gift ? "，1GB 雲端硬碟 30 日已入帳" : "";
+      const storageGift = json.birthday_gift?.storage_quota_gift ? "，1GB 雲端硬碟 7 日已入帳" : "";
       const message = `生日禮金 ${Number.isFinite(amount) ? amount : 1000} 點已入帳${storageGift}`;
       if (typeof showAppToast === "function") showAppToast(message, true);
       else flash($("li-msg"), message, true);
@@ -1210,6 +1213,10 @@ bindAuthRecoveryControls();
 
 async function doLogout(options = {}) {
   const immediate = !!(options && options.immediate === true);
+  if (!immediate && typeof hasActiveDriveUploads === "function" && hasActiveDriveUploads()) {
+    const ok = confirm("目前仍有檔案上傳中。瀏覽器限制導致登出後上傳無法可靠完成，確定要登出嗎？");
+    if (!ok) return;
+  }
   if (immediate) showLoginScreen();
   try {
     await fetchCsrfToken({ force: true });
@@ -1224,6 +1231,7 @@ async function doLogout(options = {}) {
     }
   } catch (_) {}
   setCsrfToken(null);
+  if (typeof clearDriveE2eeSessionPassphrases === "function") clearDriveE2eeSessionPassphrases();
   resetAuthState();
 }
 

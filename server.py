@@ -7,7 +7,7 @@ CSRF tokens, strict CSP, full security headers, rate-limit amplification.
 
 import argparse
 import gzip
-import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl, subprocess, signal, sys, platform, smtplib, ssl, urllib.parse
+import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl, subprocess, signal, sys, platform, smtplib, ssl, urllib.parse, socket
 from ipaddress import ip_address
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -502,6 +502,23 @@ def _env_csv_values(name, default=""):
     return values
 
 
+def _local_interface_hosts():
+    values = {"127.0.0.1", "localhost", "[::1]"}
+    try:
+        hostname = socket.gethostname()
+        if hostname:
+            values.add(hostname)
+            values.add(socket.getfqdn(hostname))
+            for _family, _socktype, _proto, _canonname, sockaddr in socket.getaddrinfo(hostname, None):
+                address = str(sockaddr[0] or "").split("%", 1)[0]
+                if not address:
+                    continue
+                values.add(f"[{address}]" if ":" in address else address)
+    except Exception:
+        pass
+    return [value for value in values if value]
+
+
 def _trusted_hosts_from_env():
     hosts = _env_csv_values(
         "HTML_LEARNING_TRUSTED_HOSTS",
@@ -510,6 +527,9 @@ def _trusted_hosts_from_env():
     bind_host = os.environ.get("HTML_LEARNING_HOST", "").strip()
     if bind_host and bind_host not in {"0.0.0.0", "::"} and bind_host not in hosts:
         hosts.append(bind_host)
+    for host in _local_interface_hosts():
+        if host not in hosts:
+            hosts.append(host)
     return hosts or None
 
 # ── CSRF double-submit secret ─────────────────────────────────────────────────

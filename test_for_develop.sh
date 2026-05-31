@@ -1335,7 +1335,7 @@ prompt_runtime_config() {
     prompt_value "Tmp workspace/run root" "$default_run_root" RUN_ROOT
   fi
   prompt_value "Cloud drive actual storage root (blank = runtime/storage)" "$CLOUD_DRIVE_STORAGE_ROOT" CLOUD_DRIVE_STORAGE_ROOT
-  prompt_value "Cloud drive max occupancy (MB or 10G; blank = disk 95%, -1 = disk 95%)" "$CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB" CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB
+  prompt_value "Cloud drive max occupancy (MB or 10G; blank = keep app default, -1 = disk 95%)" "$CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB" CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB
   prompt_value "Host" "$HOST" HOST
   prompt_value "Port" "$PORT" PORT
   prompt_server_runner

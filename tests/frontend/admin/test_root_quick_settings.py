@@ -38,8 +38,8 @@ def test_root_quick_settings_expose_service_fee_pricing_for_feature_pages():
         end = js.index("\n  },", start)
         assert "pricingKeys" not in js[start:end]
     assert "每次消耗點數" in js
-    assert "雲端容量 1GB / 30 天" in js
-    assert "duration_days: 30" in js
+    assert "雲端容量 1GB / 7 天" in js
+    assert "duration_days: 7" in js
     assert "雲端容量 1GB / 7 天" not in js
     assert "duration_days: 7" not in js
     assert "saveRootModulePricing(config)" in js

@@ -60,6 +60,7 @@ const DRIVE_SHARE_FRAGMENT_STORAGE_KEY = "hackme_web.drive_share_fragments";
 const DRIVE_SHARE_COPY_RESET_MS = 1800;
 const driveE2eeSessionPassphrases = new Map();
 const driveE2eeRecentSessionPassphrases = [];
+let driveGlobalE2eePassphrase = "";
 const ATTACHMENT_FILE_SELECT_IDS = [
   "chat-attachment-existing-file-id",
   "dm-attachment-existing-file-id",
@@ -374,8 +375,9 @@ function askDriveUploadPrivacyOptions({ allowE2ee = true, title = "選擇隱私�
       if (privacyMode === "e2ee") {
         const passphrase = passphraseInput?.value || "";
         const confirm = passphraseConfirm?.value || "";
-        if (!passphrase || passphrase.length < 10) {
-          setMsg("E2EE 檔案加密密碼至少 10 個字元");
+        const policy = validateDriveE2eePassphraseStrength(passphrase);
+        if (!policy.ok) {
+          setMsg(policy.msg);
           return;
         }
         if (passphrase !== confirm) {
@@ -396,6 +398,12 @@ function askDriveUploadPrivacyOptions({ allowE2ee = true, title = "選擇隱私�
     });
     if (passphraseInput) passphraseInput.value = "";
     if (passphraseConfirm) passphraseConfirm.value = "";
+    if (driveGlobalE2eePassphrase && allowE2ee) {
+      const e2eeRadio = radios.find((radio) => radio.value === "e2ee" && !radio.disabled);
+      if (e2eeRadio) e2eeRadio.checked = true;
+      if (passphraseInput) passphraseInput.value = driveGlobalE2eePassphrase;
+      if (passphraseConfirm) passphraseConfirm.value = driveGlobalE2eePassphrase;
+    }
     setMsg("");
     sync();
     confirmBtn.addEventListener("click", onConfirm);
@@ -416,13 +424,18 @@ function updateDriveE2eePassphraseVisibility() {
   const field = $("drive-e2ee-passphrase-field");
   const isE2ee = driveE2eeModeSelected();
   if (field) field.style.display = isE2ee ? "" : "none";
+  if (isE2ee && driveGlobalE2eePassphrase) {
+    if ($("drive-e2ee-passphrase") && !$("drive-e2ee-passphrase").value) $("drive-e2ee-passphrase").value = driveGlobalE2eePassphrase;
+    if ($("drive-e2ee-passphrase-confirm") && !$("drive-e2ee-passphrase-confirm").value) $("drive-e2ee-passphrase-confirm").value = driveGlobalE2eePassphrase;
+  }
 }
 
 function getDriveE2eeUploadPassphrase() {
-  const passphrase = $("drive-e2ee-passphrase")?.value || "";
-  const confirm = $("drive-e2ee-passphrase-confirm")?.value || "";
+  const passphrase = $("drive-e2ee-passphrase")?.value || driveGlobalE2eePassphrase || "";
+  const confirm = $("drive-e2ee-passphrase-confirm")?.value || driveGlobalE2eePassphrase || "";
   if (!passphrase) throw new Error("請輸入 E2EE 檔案加密密碼");
-  if (passphrase.length < 10) throw new Error("E2EE 檔案加密密碼至少 10 個字元");
+  const policy = validateDriveE2eePassphraseStrength(passphrase);
+  if (!policy.ok) throw new Error(policy.msg);
   if (passphrase !== confirm) throw new Error("兩次輸入的 E2EE 檔案加密密碼不一致");
   return passphrase;
 }
@@ -455,6 +468,61 @@ function driveE2eeKnownFileIds(fileId) {
 function clearDriveE2eeSessionPassphrases() {
   driveE2eeSessionPassphrases.clear();
   driveE2eeRecentSessionPassphrases.length = 0;
+  driveGlobalE2eePassphrase = "";
+}
+
+async function promptDriveGlobalE2eePassphraseOnLogin() {
+  driveGlobalE2eePassphrase = "";
+  const passphrase = window.prompt("全域 E2EE 密碼（可留空跳過，改用個別 E2EE 密碼模式）。此密碼只會保留在瀏覽器記憶體，不會送到伺服器。", "") || "";
+  if (!passphrase) return;
+  const policy = validateDriveE2eePassphraseStrength(passphrase);
+  if (!policy.ok) {
+    alert(policy.msg);
+    return promptDriveGlobalE2eePassphraseOnLogin();
+  }
+  driveGlobalE2eePassphrase = passphrase;
+  rememberDriveE2eeRecentSessionPassphrase(passphrase);
+}
+
+function hasActiveDriveUploads() {
+  const active = new Set(["queued", "running", "uploading", "completing", "waiting_resume"]);
+  return driveTransferRows.some((item) => {
+    const kind = String(item?.kind || "");
+    if (!["upload", "folder_upload", "resumable_upload"].includes(kind)) return false;
+    return active.has(String(item?.status || ""));
+  });
+}
+
+window.promptDriveGlobalE2eePassphraseOnLogin = promptDriveGlobalE2eePassphraseOnLogin;
+window.clearDriveE2eeSessionPassphrases = clearDriveE2eeSessionPassphrases;
+window.hasActiveDriveUploads = hasActiveDriveUploads;
+
+function validateDriveE2eePassphraseStrength(passphrase) {
+  const value = String(passphrase || "");
+  const checks = {
+    length8: value.length >= 8,
+    lower: /[a-z]/.test(value),
+    upper: /[A-Z]/.test(value),
+    digit: /\d/.test(value),
+    symbol: /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(value),
+    length12: value.length >= 12,
+  };
+  let score = 0;
+  if (checks.length8) score += 1;
+  if (checks.lower && checks.upper) score += 1;
+  if (checks.digit) score += 1;
+  if (checks.symbol) score += 1;
+  if (checks.length12 && score < 4) score += 1;
+  const missing = [];
+  if (!checks.length8) missing.push("至少 8 個字元");
+  if (!(checks.lower && checks.upper)) missing.push("同時包含大小寫英文字母");
+  if (!checks.digit) missing.push("包含數字");
+  if (!checks.symbol) missing.push("包含符號");
+  return {
+    ok: score >= 3,
+    score,
+    msg: score >= 3 ? "OK" : `E2EE 密碼強度不足（${score}/4）：${missing.join("、") || "提高密碼複雜度"}`,
+  };
 }
 
 function forgetDriveE2eeSessionPassphrase(fileId) {
@@ -492,6 +560,7 @@ function getDriveE2eeSessionPassphraseCandidates(fileId) {
     if (!normalized || candidates.includes(normalized)) return;
     candidates.push(normalized);
   };
+  addCandidate(driveGlobalE2eePassphrase);
   addCandidate(remembered);
   driveE2eeRecentSessionPassphrases.forEach(addCandidate);
   return candidates;
@@ -1775,7 +1844,7 @@ function renderDriveFiles(files) {
           <button class="btn" type="button" data-drive-action="move-cloud-to-storage" data-file-id="${sanitize(file.id)}" data-name="${sanitize(name)}">移動</button>
           ${albumButton}
           <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" data-drive-action="download" data-file-id="${sanitize(file.id)}" data-warn="${warn ? "1" : "0"}">下載</button>
-          <button class="btn btn-danger" type="button" data-drive-action="delete-cloud" data-file-id="${sanitize(file.id)}">移到垃圾桶</button>
+          <button class="btn btn-danger" type="button" data-drive-action="delete-cloud" data-file-id="${sanitize(file.id)}">永久刪除</button>
         </div>
       </div>
     `;
@@ -2650,12 +2719,12 @@ async function downloadDriveFile(fileId, likelyHighRisk) {
 }
 
 async function deleteDriveFile(fileId) {
-  if (!window.confirm("將此檔案移到垃圾桶？清空垃圾桶前仍可還原。")) return;
+  if (!window.confirm("永久刪除此雲端檔案？這會釋放容量並刪除伺服器實體檔案，無法還原。")) return;
   try {
     await storageAction(`/cloud-drive/files/${encodeURIComponent(fileId)}`, "DELETE");
     await loadDriveDashboard();
   } catch (err) {
-    alert(err.message || "移到垃圾桶失敗");
+    alert(err.message || "檔案刪除失敗");
   }
 }
 
@@ -2819,7 +2888,7 @@ async function buildDriveE2eePreview(fileId, csrf) {
     fileId,
     csrf,
     "請輸入此 E2EE 檔案的加密密碼。密碼不會送到伺服器；本次登入期間會暫存在瀏覽器記憶體。",
-    { promptOnMiss: false }
+    { promptOnMiss: true }
   );
   if (!decrypted) return null;
   const known = findKnownDriveFile(fileId) || {};

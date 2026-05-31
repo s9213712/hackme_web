@@ -8,4 +8,4 @@
 
 -r requirements-minimal.txt
 -r requirements-dev.txt
--r requirements-features.txt
+-r requirements-comfyui.txt

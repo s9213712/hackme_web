@@ -17,7 +17,7 @@ def _passthrough(fn):
     return fn
 
 
-def _build_app(db_path, *, points_service=None):
+def _build_app(db_path, *, points_service=None, settings=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -56,6 +56,7 @@ def _build_app(db_path, *, points_service=None):
             "captcha_mode": "none",
             "max_login_failures": 5,
             "block_duration_minutes": 10,
+            **(settings or {}),
         },
         "get_ua": lambda: "test-agent",
         "hash_password": lambda value: value,
@@ -137,6 +138,20 @@ def test_register_validation_returns_field_for_username(tmp_path):
     payload = response.get_json()
     assert payload["ok"] is False
     assert payload["field"] == "username"
+
+
+def test_register_can_disable_password_strength_policy(tmp_path):
+    db_path = tmp_path / "register.db"
+    _init_register_tables(db_path)
+    client = _build_app(db_path, settings={"password_strength_policy_enabled": False}).test_client()
+
+    response = client.post(
+        "/api/register",
+        json={"username": "shortpw", "password": "x", "password_confirm": "x", "nickname": "Short"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
 
 
 def test_register_awards_signup_bonus_to_official_hot_wallet(tmp_path):

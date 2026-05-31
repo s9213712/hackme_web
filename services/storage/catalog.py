@@ -709,6 +709,15 @@ def trash_storage_folder(conn, *, actor, path):
     if not file_rows and not folder_rows:
         return None, "找不到資料夾或資料夾是空的"
     now = _now()
+    album_rows = conn.execute(
+        """
+        SELECT DISTINCT a.id
+        FROM albums a
+        JOIN album_files af ON af.album_id=a.id AND af.deleted_at IS NULL
+        WHERE a.owner_user_id=? AND a.deleted_at IS NULL AND af.caption=?
+        """,
+        (owner_user_id, folder_path),
+    ).fetchall()
     conn.executemany(
         """
         UPDATE storage_files
@@ -721,10 +730,20 @@ def trash_storage_folder(conn, *, actor, path):
         "UPDATE storage_folders SET deleted_at=?, updated_at=? WHERE id=? AND owner_user_id=?",
         [(now, now, row["id"], owner_user_id) for row in folder_rows],
     )
+    if album_rows:
+        conn.executemany(
+            "UPDATE albums SET deleted_at=?, updated_at=? WHERE id=? AND owner_user_id=?",
+            [(now, now, row["id"], owner_user_id) for row in album_rows],
+        )
+        conn.executemany(
+            "UPDATE album_share_links SET revoked_at=? WHERE album_id=? AND revoked_at IS NULL",
+            [(now, row["id"]) for row in album_rows],
+        )
     return {
         "path": folder_path,
         "trashed_files": len(file_rows),
         "deleted_folders": len(folder_rows),
+        "deleted_albums": len(album_rows),
     }, None
 
 

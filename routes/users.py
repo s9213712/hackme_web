@@ -7,7 +7,13 @@ from functools import wraps
 from flask import request, send_file
 
 from services.users.member_levels import apply_member_level_change, ensure_member_level_user_columns
-from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema, resolve_file_storage_path, store_cloud_upload
+from services.storage.cloud_drive import (
+    decrypt_server_encrypted_bytes,
+    ensure_cloud_drive_attachment_schema,
+    is_server_encrypted_file,
+    resolve_file_storage_path,
+    store_cloud_upload,
+)
 from services.governance.sanction_notices import record_admin_sanction_notice
 from services.governance.violation_fines import (
     FEATURE_LABELS,
@@ -93,6 +99,30 @@ def register_user_routes(app, deps):
         if not isinstance(name, str) or "\x00" in name:
             raise ValueError("invalid SQL identifier")
         return '"' + name.replace('"', '""') + '"'
+
+    def password_strength_policy_enabled():
+        try:
+            value = (get_system_settings() or {}).get("password_strength_policy_enabled", True)
+            if isinstance(value, str):
+                return value.strip().lower() not in {"0", "false", "no", "off", ""}
+            return bool(value)
+        except Exception:
+            return True
+
+    def validate_configured_password(password):
+        if not isinstance(password, str) or not password:
+            return False, "密碼不可為空", score_password_strength(password or "")
+        if len(password) > 128:
+            return False, "密碼太長（最多 128 字元）", score_password_strength(password)
+        strength = score_password_strength(password)
+        if not password_strength_policy_enabled():
+            return True, "OK", strength
+        ok, msg = validate_password(password)
+        if not ok:
+            return False, msg, strength
+        if is_feature_enabled("feature_account_security_enabled"):
+            return enforce_password_strength(password, min_score=3)
+        return True, "OK", strength
 
     def manager_seat_limit():
         try:
@@ -418,6 +448,7 @@ def register_user_routes(app, deps):
         return summary
     get_member_level_rule = deps.get("get_member_level_rule")
     storage_root = deps.get("STORAGE_DIR", ".")
+    server_file_fernet = deps.get("server_file_fernet")
 
     def require_csrf_by_method(fn):
         safe = require_csrf_safe(fn)
@@ -640,15 +671,9 @@ def register_user_routes(app, deps):
             return msg, 403
         if request_row["status"] != "pending":
             return "此密碼重設申請已處理", 409
-        ok, msg = validate_password(new_credential)
+        ok, msg, strength = validate_configured_password(new_credential)
         if not ok:
             return msg, 400
-        if is_feature_enabled("feature_account_security_enabled"):
-            ok, msg, strength = enforce_password_strength(new_credential, min_score=3)
-            if not ok:
-                return msg, 400
-        else:
-            strength = score_password_strength(new_credential)
         current_row = conn.execute(
             "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT 1",
             (request_row["user_id"],),
@@ -1369,13 +1394,9 @@ def register_user_routes(app, deps):
         if credential_text:
             credential_text = credential_text[:128]  # 截斷防止超長密碼
             if not is_super:
-                ok, msg = validate_password(credential_text)
+                ok, msg, strength = validate_configured_password(credential_text)
                 if not ok:
-                    return json_resp({"ok":False,"msg":msg}), 400
-                if is_feature_enabled("feature_account_security_enabled"):
-                    ok, msg, strength = enforce_password_strength(credential_text, min_score=3)
-                    if not ok:
-                        return json_resp({"ok":False,"msg":msg,"password_strength":strength}), 400
+                    return json_resp({"ok":False,"msg":msg,"password_strength":strength}), 400
         else:
             return json_resp({"ok":False,"msg":"新建帳號必須指定密碼"}), 400
         strength = score_password_strength(credential_text)
@@ -1561,8 +1582,10 @@ def register_user_routes(app, deps):
                     return json_resp({"ok": False, "msg": "頭像僅支援 JPEG / PNG / GIF"}), 400
                 if file_row["scan_status"] not in {"clean", "not_required"}:
                     return json_resp({"ok": False, "msg": "雲端圖片尚未通過安全掃描"}), 400
-                if file_row["privacy_mode"] != "standard_plain":
-                    return json_resp({"ok": False, "msg": "頭像是公開識別圖片，請選擇一般雲端圖片，不可使用加密檔案"}), 400
+                if str(file_row["privacy_mode"] or "") == "e2ee":
+                    return json_resp({"ok": False, "msg": "E2EE 頭像需先在瀏覽器解密後上傳頭像衍生圖，伺服器不能直接讀取原始 E2EE 檔案"}), 400
+                if is_server_encrypted_file(file_row) and not server_file_fernet:
+                    return json_resp({"ok": False, "msg": "伺服器端加密金鑰尚未載入，無法使用此圖片作為頭像"}), 503
                 conn.execute(
                     "UPDATE users SET avatar_file_id=?, avatar_crop_json=?, updated_at=? WHERE id=?",
                     (cloud_file_id, json.dumps(crop, ensure_ascii=False), datetime.now().isoformat(), user_id),
@@ -1666,10 +1689,21 @@ def register_user_routes(app, deps):
             path = resolve_file_storage_path(storage_root, row)
             if not path.exists() or not path.is_file():
                 return json_resp({"ok": False, "msg": "頭像檔案不存在"}), 404
+            if str(row["privacy_mode"] or "") == "e2ee":
+                return json_resp({"ok": False, "msg": "此頭像來源是 E2EE 原始檔，請先以瀏覽器解密後重新上傳頭像衍生圖"}), 409
             crop = _parse_avatar_crop(row["avatar_crop_json"])
-            cropped = _avatar_crop_response(path, crop, row["mime_type_plain_for_public"])
+            avatar_source = path
+            if is_server_encrypted_file(row):
+                if not server_file_fernet:
+                    return json_resp({"ok": False, "msg": "伺服器端加密金鑰尚未載入"}), 503
+                from io import BytesIO
+                avatar_source = BytesIO(decrypt_server_encrypted_bytes(path, server_file_fernet))
+            cropped = _avatar_crop_response(avatar_source, crop, row["mime_type_plain_for_public"])
             if cropped is not None:
                 return cropped
+            if is_server_encrypted_file(row):
+                avatar_source.seek(0)
+                return send_file(avatar_source, mimetype=row["mime_type_plain_for_public"] or "application/octet-stream", download_name="avatar")
             return send_file(path, mimetype=row["mime_type_plain_for_public"] or "application/octet-stream")
         finally:
             conn.close()
@@ -1919,13 +1953,9 @@ def register_user_routes(app, deps):
                 target_is_root = normalize_text(target["username"]).lower() == "root"
                 must_follow_password_policy = not target_is_root
                 if must_follow_password_policy:
-                    ok, msg = validate_password(pw)
+                    ok, msg, strength = validate_configured_password(pw)
                     if not ok:
-                        return json_resp({"ok":False,"msg":msg}), 400
-                    if is_feature_enabled("feature_account_security_enabled"):
-                        ok, msg, strength = enforce_password_strength(pw, min_score=3)
-                        if not ok:
-                            return json_resp({"ok":False,"msg":msg,"password_strength":strength}), 400
+                        return json_resp({"ok":False,"msg":msg,"password_strength":strength}), 400
                 strength = score_password_strength(pw)
                 conn.execute(
                     "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",

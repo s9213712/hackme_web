@@ -183,8 +183,98 @@ def test_storage_upgrade_catalog_falls_back_when_points_schema_is_locked(tmp_pat
     assert res.status_code == 200
     assert body["ok"] is True
     assert [item["item_key"] for item in body["catalog"]] == ["cloud_storage_1gb_30d"]
-    assert body["catalog"][0]["duration_days"] == 30
-    assert body["catalog"][0]["label"] == "雲端容量 1GB / 30 天"
+    assert body["catalog"][0]["duration_days"] == 7
+    assert body["catalog"][0]["label"] == "雲端容量 1GB / 7 天"
+
+
+def test_encrypted_cloud_uploads_hide_physical_filenames_but_keep_display_name(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    fernet = Fernet(Fernet.generate_key())
+    client = _build_app(db_path, storage_root, actor_box, server_file_fernet=fernet).test_client()
+
+    e2ee = client.post(
+        "/api/cloud-drive/upload",
+        data={
+            "file": (io.BytesIO(b"browser ciphertext"), "secret-family-photo.jpg"),
+            "privacy_mode": "e2ee",
+            "encrypted_metadata": "client-encrypted-name-and-mime",
+            "encrypted_file_key": "client-wrapped-key",
+        },
+        content_type="multipart/form-data",
+    )
+    assert e2ee.status_code == 200
+    server_encrypted = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"server secret"), "payroll-2026.pdf"), "privacy_mode": "server_encrypted"},
+        content_type="multipart/form-data",
+    )
+    assert server_encrypted.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        e2ee_id = e2ee.get_json()["file"]["file_id"]
+        server_id = server_encrypted.get_json()["file"]["file_id"]
+        e2ee_row = conn.execute("SELECT storage_path, original_filename_plain_for_public FROM uploaded_files WHERE id=?", (e2ee_id,)).fetchone()
+        server_row = conn.execute("SELECT storage_path, original_filename_plain_for_public FROM uploaded_files WHERE id=?", (server_id,)).fetchone()
+    finally:
+        conn.close()
+
+    assert e2ee_row["original_filename_plain_for_public"] == "secret-family-photo.jpg"
+    assert server_row["original_filename_plain_for_public"] == "payroll-2026.pdf"
+    assert Path(e2ee_row["storage_path"]).name.endswith(".e2ee")
+    assert Path(server_row["storage_path"]).name.endswith(".server_encrypt")
+    assert "secret-family-photo" not in e2ee_row["storage_path"]
+    assert "payroll-2026" not in server_row["storage_path"]
+    assert (storage_root / e2ee_row["storage_path"]).exists()
+    assert (storage_root / server_row["storage_path"]).exists()
+
+
+def test_cloud_drive_delete_removes_physical_file_and_releases_quota(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"delete me"), "delete-me.txt"), "privacy_mode": "standard_plain"},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT storage_path FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+    finally:
+        conn.close()
+    stored_path = storage_root / row["storage_path"]
+    assert stored_path.exists()
+    assert client.get("/api/files/quota").get_json()["quota"]["used_bytes"] == len(b"delete me")
+
+    deleted = client.delete(f"/api/cloud-drive/files/{file_id}")
+    body = deleted.get_json()
+
+    assert deleted.status_code == 200
+    assert body["ok"] is True
+    assert body["deleted"]["removed_physical_file"] is True
+    assert not stored_path.exists()
+    assert client.get("/api/files/quota").get_json()["quota"]["used_bytes"] == 0
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT deleted_at FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+    finally:
+        conn.close()
+    assert row["deleted_at"]
 
 
 def test_dm_upload_enters_owner_drive_and_grants_counterparty_download(tmp_path):
@@ -2388,13 +2478,22 @@ def test_cloud_drive_delete_file_from_ui_api_invalidates_download(tmp_path):
     )
     assert uploaded.status_code == 200
     file_id = uploaded.get_json()["file"]["file_id"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT storage_path FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+    finally:
+        conn.close()
+    stored_path = storage_root / row["storage_path"]
+    assert stored_path.exists()
     deleted = client.delete(f"/api/cloud-drive/files/{file_id}")
     assert deleted.status_code == 200
-    assert deleted.get_json()["msg"] == "檔案已移到垃圾桶"
+    assert deleted.get_json()["msg"] == "檔案已刪除並釋放容量"
+    assert not stored_path.exists()
     assert client.get("/api/cloud-drive/files").get_json()["files"] == []
     trash = client.get("/api/storage/trash")
     assert trash.status_code == 200
-    assert trash.get_json()["files"][0]["file_id"] == file_id
+    assert all(item["file_id"] != file_id for item in trash.get_json()["files"])
     assert client.get(f"/api/cloud-drive/files/{file_id}/download").status_code == 404
 
 

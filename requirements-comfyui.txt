@@ -4,8 +4,7 @@
 # The base server can start without these packages, but the feature will degrade
 # or reject work with an explicit message if its dependency is missing.
 
-# Cloud Drive / upload security: image metadata normalization and inspection.
-Pillow>=10.0
+
 
 # ComfyUI alternative backend: local Hugging Face / Diffusers generation.
 diffusers>=0.30

@@ -2323,7 +2323,7 @@ let rootTradingMarketProviderSelectedId = null;
 const ROOT_SERVICE_FEE_PRICING_PRESETS = window.HACKME_SERVICE_FEE_PRICING_PRESETS || [
   { item_key: "post_cost_standard", item_name: "一般發文成本", category: "forum", base_price: 1, min_price: 1, max_price: 10, rationale: "低額防洗版，低於每日登入 5 點。" },
   { item_key: "post_pin_24h", item_name: "文章置頂 24 小時", category: "forum", base_price: 100, min_price: 50, max_price: 300, rationale: "曝光型功能，價格約等於 20 天每日登入。" },
-  { item_key: "cloud_storage_1gb_30d", item_name: "雲端容量 1GB / 30 天", category: "cloud_drive", base_price: 100, min_price: 50, max_price: 500, metadata: { storage_bytes: 1024 * 1024 * 1024, duration_days: 30, label: "雲端容量 1GB / 30 天" }, rationale: "容量是持續成本，保留較高 sink。" },
+  { item_key: "cloud_storage_1gb_30d", item_name: "雲端容量 1GB / 7 天", category: "cloud_drive", base_price: 100, min_price: 50, max_price: 500, metadata: { storage_bytes: 1024 * 1024 * 1024, duration_days: 7, label: "雲端容量 1GB / 7 天" }, rationale: "容量是持續成本，保留較高 sink。" },
   { item_key: "comfyui_txt2img_basic", item_name: "基礎生圖一次", category: "comfyui", base_price: 5, min_price: 1, max_price: 25, dynamic_pricing: true, rationale: "等同每日登入一次，適合低門檻試用。" },
   { item_key: "comfyui_txt2img_highres", item_name: "高解析生圖一次", category: "comfyui", base_price: 12, min_price: 5, max_price: 60, dynamic_pricing: true, rationale: "高資源消耗，約基礎生圖 2-3 倍。" },
   { item_key: "video_publish_basic", item_name: "影音發布處理費", category: "video", base_price: 2, min_price: 1, max_price: 20, rationale: "發布低價，收入重心在投幣抽成與流量分潤。" },
@@ -5601,6 +5601,7 @@ async function loadSettings() {
   if ($("s-login-violation-enabled")) $("s-login-violation-enabled").checked = !!s.login_violation_enabled;
   if ($("s-rate-limit-violation-enabled")) $("s-rate-limit-violation-enabled").checked = !!s.rate_limit_violation_enabled;
   if ($("s-root-ip-whitelist-enabled")) $("s-root-ip-whitelist-enabled").checked = !!s.root_ip_whitelist_enabled;
+  if ($("s-password-strength-policy-enabled")) $("s-password-strength-policy-enabled").checked = s.password_strength_policy_enabled !== false;
   if ($("s-root-ip-whitelist")) $("s-root-ip-whitelist").value = s.root_ip_whitelist || "";
   if ($("s-browser-only-mode-enabled")) $("s-browser-only-mode-enabled").checked = !!s.browser_only_mode_enabled;
   if ($("s-integrity-guard-enabled")) $("s-integrity-guard-enabled").checked = !!s.integrity_guard_enabled;
@@ -7876,6 +7877,7 @@ async function saveSettings() {
     login_violation_enabled: !!$("s-login-violation-enabled")?.checked,
     rate_limit_violation_enabled: !!$("s-rate-limit-violation-enabled")?.checked,
     root_ip_whitelist_enabled: !!$("s-root-ip-whitelist-enabled")?.checked,
+    password_strength_policy_enabled: $("s-password-strength-policy-enabled") ? !!$("s-password-strength-policy-enabled").checked : true,
     root_ip_whitelist: $("s-root-ip-whitelist")?.value || "",
     browser_only_mode_enabled: !!$("s-browser-only-mode-enabled")?.checked,
     integrity_guard_enabled: !!$("s-integrity-guard-enabled")?.checked,

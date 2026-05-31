@@ -29,6 +29,7 @@ from services.storage.cloud_drive import (
     can_download_file,
     can_remove_context_attachment,
     create_announcement_attachment_request,
+    delete_cloud_file_permanently,
     decrypt_server_encrypted_bytes,
     ensure_cloud_drive_attachment_schema,
     get_file_status,
@@ -4696,13 +4697,13 @@ def register_file_routes(app, deps):
         conn = get_db()
         try:
             ensure_cloud_drive_attachment_schema(conn)
-            result, msg = trash_cloud_file_to_storage(conn, actor=actor, file_id=file_id)
+            result, msg = delete_cloud_file_permanently(conn, actor=actor, file_id=file_id, storage_root=storage_root)
             if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 404
             conn.commit()
-            audit("CLOUD_DRIVE_FILE_TRASH", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={file_id}")
-            return json_resp({"ok": True, "msg": "檔案已移到垃圾桶", "trash": result})
+            audit("CLOUD_DRIVE_FILE_DELETE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={file_id}, physical={result.get('removed_physical_file')}")
+            return json_resp({"ok": True, "msg": "檔案已刪除並釋放容量", "deleted": result})
         finally:
             conn.close()
 

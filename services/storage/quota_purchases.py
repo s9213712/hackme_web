@@ -6,19 +6,19 @@ from datetime import datetime, timedelta, timezone
 STORAGE_UPGRADE_PRODUCTS = {
     "cloud_storage_1gb_30d": {
         "storage_bytes": 1024 ** 3,
-        "duration_days": 30,
-        "label": "雲端容量 1GB / 30 天",
+        "duration_days": 7,
+        "label": "雲端容量 1GB / 7 天",
     },
     "birthday_storage_1gb_30d": {
         "storage_bytes": 1024 ** 3,
-        "duration_days": 30,
-        "label": "生日禮 1GB / 30 天",
+        "duration_days": 7,
+        "label": "生日禮 1GB / 7 天",
     },
 }
 
 STORAGE_UPGRADE_PRICE_DEFAULTS = {
     "cloud_storage_1gb_30d": {
-        "item_name": "雲端容量 1GB / 30 天",
+        "item_name": "雲端容量 1GB / 7 天",
         "category": "cloud_drive",
         "currency_type": "soft",
         "base_price": 100,
@@ -28,15 +28,15 @@ STORAGE_UPGRADE_PRICE_DEFAULTS = {
         "enabled": 1,
         "metadata_json": json.dumps({
             "storage_bytes": 1024 ** 3,
-            "duration_days": 30,
-            "label": "雲端容量 1GB / 30 天",
+            "duration_days": 7,
+            "label": "雲端容量 1GB / 7 天",
         }, ensure_ascii=False, separators=(",", ":")),
     },
 }
 
 BIRTHDAY_STORAGE_GIFT_ITEM_KEY = "birthday_storage_1gb_30d"
 BIRTHDAY_STORAGE_GIFT_BYTES = 1024 ** 3
-BIRTHDAY_STORAGE_GIFT_DAYS = 30
+BIRTHDAY_STORAGE_GIFT_DAYS = 7
 
 
 def _now():

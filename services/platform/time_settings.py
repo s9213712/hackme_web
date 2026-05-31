@@ -6,8 +6,15 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DEFAULT_SERVER_TIMEZONE = "UTC"
 
+FIXED_OFFSET_TIMEZONES = tuple(
+    "Etc/GMT+12" if offset == -12 else "Etc/GMT-12" if offset == 12 else f"Etc/GMT{(-offset):+d}"
+    for offset in range(-12, 13)
+    if offset != 0
+)
+
 COMMON_SERVER_TIMEZONES = (
     "UTC",
+    *FIXED_OFFSET_TIMEZONES,
     "Asia/Taipei",
     "Asia/Tokyo",
     "Asia/Seoul",
