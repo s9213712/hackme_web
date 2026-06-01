@@ -1504,12 +1504,31 @@ def register_video_routes(app, deps):
         ordered = [mode for mode in ("direct", "prepared_hls", "realtime_proxy") if mode in set(modes or [])]
         return ordered or ["direct"]
 
+    def _default_streaming_modes_for_privacy(privacy_mode):
+        if str(privacy_mode or "").strip() == "server_encrypted":
+            return {"prepared_hls"}
+        return {"direct"}
+
     def _stored_video_streaming_modes(conn, video_id):
         try:
-            row = conn.execute("SELECT streaming_modes_json FROM videos WHERE id=?", (int(video_id),)).fetchone()
+            row = conn.execute(
+                """
+                SELECT
+                    v.streaming_modes_json,
+                    COALESCE(f.privacy_mode, 'standard_plain') AS privacy_mode
+                FROM videos v
+                LEFT JOIN uploaded_files f ON f.id = v.cloud_file_id
+                WHERE v.id=?
+                """,
+                (int(video_id),),
+            ).fetchone()
             raw = row["streaming_modes_json"] if row else ""
+            privacy_mode = row["privacy_mode"] if row else "standard_plain"
         except Exception:
             raw = ""
+            privacy_mode = "standard_plain"
+        if raw in (None, "") or not str(raw or "").strip():
+            return _default_streaming_modes_for_privacy(privacy_mode)
         return _parse_streaming_modes(raw, default_auto=False)
 
     def _apply_video_streaming_mode_policy(conn, payload, video_id):
@@ -1527,6 +1546,43 @@ def register_video_routes(app, deps):
         service_policy["recommended_mode"] = preferred
         if "prepared_hls" not in modes:
             payload["high_performance_streaming"] = False
+        direct_url = f"/api/videos/{int(video_id)}/stream"
+        if "direct" not in modes:
+            if payload.get("stream_url") == direct_url:
+                payload["stream_url"] = ""
+            if payload.get("fallback_url") == direct_url:
+                payload["fallback_url"] = ""
+            payload["direct_fallback_allowed"] = False
+            payload["direct_disabled_reason"] = "direct_stream_disabled"
+        realtime_url = payload.get("realtime_proxy_url") or str((payload.get("realtime_proxy") or {}).get("url") or "")
+        if "realtime_proxy" not in modes:
+            if payload.get("stream_url") == realtime_url:
+                payload["stream_url"] = payload.get("fallback_url") if "direct" in modes else ""
+            payload["realtime_proxy_url"] = ""
+            realtime = dict(payload.get("realtime_proxy") or {})
+            if realtime:
+                realtime["available"] = False
+                realtime["url"] = ""
+                realtime["reason"] = "realtime_proxy_disabled"
+                realtime["implementation_status"] = "disabled_by_video_policy"
+                payload["realtime_proxy"] = realtime
+        if "prepared_hls" not in modes:
+            hls_urls = {
+                str(payload.get("master_url") or ""),
+                str(payload.get("hls_url") or ""),
+                str(payload.get("hls_manifest_url") or ""),
+            }
+            if str(payload.get("stream_url") or "") in hls_urls:
+                payload["stream_url"] = payload.get("fallback_url") if "direct" in modes else ""
+            payload["master_url"] = ""
+            payload["hls_url"] = ""
+            payload["hls_js_url"] = ""
+            payload["hls_manifest_url"] = ""
+            payload["hls_available"] = False
+            payload["streaming_ready"] = False
+            payload["variants"] = []
+            payload["audio_tracks"] = []
+            payload["subtitles"] = []
         return payload
 
     def _parse_publish_request():
@@ -2189,6 +2245,13 @@ def register_video_routes(app, deps):
                 streaming_modes=streaming_modes,
             )
             file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (video["cloud_file_id"],)).fetchone()
+            if not str(data.get("streaming_modes") or "").strip():
+                privacy_mode = file_row["privacy_mode"] if file_row else "standard_plain"
+                streaming_modes = _default_streaming_modes_for_privacy(privacy_mode)
+                conn.execute(
+                    "UPDATE videos SET streaming_modes_json=?, updated_at=? WHERE id=?",
+                    (json.dumps(_streaming_modes_payload(streaming_modes), ensure_ascii=False), datetime.now().isoformat(), int(video["id"])),
+                )
             video["streaming_modes"] = _streaming_modes_payload(streaming_modes)
             stream_asset, stream_warning, stream_queued = (None, None, False)
             if "prepared_hls" in streaming_modes:
@@ -2284,8 +2347,8 @@ def register_video_routes(app, deps):
         streaming_modes = _parse_streaming_modes(raw_streaming_modes, default_auto=False)
         if privacy_mode not in {"standard_plain", "server_encrypted"}:
             return json_resp({"ok": False, "msg": "影音隱私模式不支援", "error": "unsupported_privacy_mode"}), 400
-        if not str(raw_streaming_modes or "").strip() and privacy_mode == "server_encrypted":
-            streaming_modes = {"prepared_hls"}
+        if not str(raw_streaming_modes or "").strip():
+            streaming_modes = _default_streaming_modes_for_privacy(privacy_mode)
         cover_upload = request.files.get("cover")
         conn = get_db()
         upload_job = None
@@ -2663,6 +2726,10 @@ def register_video_routes(app, deps):
                     conn.commit()
                 return _shared_video_error_response(reason)
             _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
+            modes = _stored_video_streaming_modes(conn, row["id"])
+            if "direct" not in modes:
+                conn.commit()
+                return json_resp({"ok": False, "msg": "直接串流未啟用，請使用已準備的 HLS 串流。", "error": "direct_stream_disabled"}), 403
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
             path = resolve_file_storage_path(storage_root, file_row)
             if not path.exists():
@@ -2694,6 +2761,10 @@ def register_video_routes(app, deps):
                 share_session_id=share_session_id,
                 counted_in_session=counted_in_session,
             )
+            modes = _stored_video_streaming_modes(conn, row["id"])
+            if "realtime_proxy" not in modes:
+                conn.commit()
+                return json_resp({"ok": False, "msg": "即時轉封裝未啟用，請使用已啟用的串流方式。", "error": "realtime_proxy_disabled"}), 403
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
             filename = file_row["original_filename_plain_for_public"] or row["title"] or "video.mp4"
             conn.commit()
@@ -3925,6 +3996,9 @@ def register_video_routes(app, deps):
             video = get_video(conn, video_id, actor=actor, for_stream=True)
             if not video:
                 return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            modes = _stored_video_streaming_modes(conn, video_id)
+            if "realtime_proxy" not in modes:
+                return json_resp({"ok": False, "msg": "即時轉封裝未啟用，請使用已啟用的串流方式。", "error": "realtime_proxy_disabled"}), 403
             row = _load_stream_file(conn, file_id=video["cloud_file_id"])
             filename = row["original_filename_plain_for_public"] or video["title"] or "video.mp4"
             return _realtime_proxy_file_response(row, download_name=filename)
