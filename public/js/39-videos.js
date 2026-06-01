@@ -602,6 +602,20 @@ function videoStreamDebugGroupLabel(group = {}) {
   return parts.join(" / ");
 }
 
+function videoStreamDebugGroupCpuLabel(group = {}) {
+  const count = Number(group.process_count || 0);
+  if (count <= 0) return "0 proc";
+  const cpu = videoStreamDebugBurdenMetric(group, "cpu_percent");
+  return cpu == null ? "計算中" : videoFormatDebugNumber(cpu, 1, "%");
+}
+
+function videoStreamDebugGroupRssLabel(group = {}) {
+  const count = Number(group.process_count || 0);
+  if (count <= 0) return "0 proc";
+  const rss = Number(group.rss_bytes || 0);
+  return rss > 0 ? videoFormatBytes(rss) : "0 B";
+}
+
 function videoStreamDebugRequestBurden(snapshot = {}) {
   if (!videoStreamDebugRootAllowed() || !videoStreamDebugStoredEnabled()) return;
   const videoId = Number(snapshot.video_id || videoState.current?.id || 0);
@@ -720,7 +734,8 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
   const runtime = burden.realtime_proxy_runtime || {};
   const rows = [
     ["模式", snapshot.playback_source_mode || snapshot.selected_service_mode || "-"],
-    ["Server CPU/RSS", videoStreamDebugGroupLabel(burdenGroups.server || {})],
+    ["Server CPU", videoStreamDebugGroupCpuLabel(burdenGroups.server || {})],
+    ["Server RSS", videoStreamDebugGroupRssLabel(burdenGroups.server || {})],
     ["Loadavg", Array.isArray(burden.system?.loadavg) ? burden.system.loadavg.map((n) => videoFormatDebugNumber(n, 2)).join(" / ") : "-"],
     ["Buffer Health", stats.buffer_health_sec == null ? "-" : videoFormatDebugNumber(stats.buffer_health_sec, 2, " s")],
     ["啟播延遲", stats.startup_latency_ms == null ? "-" : videoFormatDebugNumber(stats.startup_latency_ms, 0, " ms")],
@@ -742,8 +757,10 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
   }
   if (isRealtimeMode) {
     rows.splice(1, 0,
-      ["ffmpeg CPU/RSS", videoStreamDebugGroupLabel(burdenGroups.ffmpeg_all || {})],
-      ["本片 ffmpeg", videoStreamDebugGroupLabel(burdenGroups.video_ffmpeg || {})],
+      ["ffmpeg CPU", videoStreamDebugGroupCpuLabel(burdenGroups.ffmpeg_all || {})],
+      ["ffmpeg RSS", videoStreamDebugGroupRssLabel(burdenGroups.ffmpeg_all || {})],
+      ["本片 ffmpeg CPU", videoStreamDebugGroupCpuLabel(burdenGroups.video_ffmpeg || {})],
+      ["本片 ffmpeg RSS", videoStreamDebugGroupRssLabel(burdenGroups.video_ffmpeg || {})],
       ["即時槽位", runtime.limit ? `${runtime.active || 0}/${runtime.limit} (${runtime.scope || "-"})` : "-"],
       ["即時 Source API", snapshot.selected_source_api || snapshot.source_api || "-"],
       ["即時 codec 支援", snapshot.is_type_supported_result == null ? "-" : String(snapshot.is_type_supported_result)],
@@ -765,7 +782,31 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
       ["HLS 片段 bytes", stats.hls_fragment_bytes ? videoFormatBytes(stats.hls_fragment_bytes) : "-"],
     );
   }
-  const visibleRows = rows.filter(([label, value]) => {
+  const burdenRowLabels = new Set([
+    "Server CPU",
+    "Server RSS",
+    "ffmpeg CPU",
+    "ffmpeg RSS",
+    "本片 ffmpeg CPU",
+    "本片 ffmpeg RSS",
+  ]);
+  const burdenParts = [];
+  const compactRows = [];
+  rows.forEach(([label, value]) => {
+    const text = String(value ?? "").trim();
+    if (burdenRowLabels.has(label)) {
+      if (text && text !== "-") burdenParts.push(`${label}: ${text}`);
+      return;
+    }
+    compactRows.push([label, value]);
+  });
+  if (burdenParts.length) {
+    const burdenRow = ["伺服器負擔", burdenParts.join("；")];
+    const insertIndex = compactRows.findIndex(([label]) => label === "模式");
+    if (insertIndex >= 0) compactRows.splice(insertIndex + 1, 0, burdenRow);
+    else compactRows.unshift(burdenRow);
+  }
+  const visibleRows = compactRows.filter(([label, value]) => {
     if (["模式", "等待/停滯"].includes(label)) return true;
     const text = String(value ?? "").trim();
     return text && text !== "-" && !/^\d+\s+proc\s+\/\s+0(?:\.0)?%\s+\/\s+-$/i.test(text);
@@ -3136,6 +3177,121 @@ async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playback
       } catch (_) {}
       return ranges;
     };
+    const realtimeCurrentSeconds = () => Math.max(
+      Number(player.currentTime || 0),
+      Number(realtimeStartSeconds || 0)
+    );
+    const realtimeBufferedAheadSeconds = () => {
+      const current = realtimeCurrentSeconds();
+      let bufferedEnd = current;
+      sourceBufferRanges().forEach((range) => {
+        const start = Number(range[0] || 0);
+        const end = Number(range[1] || 0);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+        if (start <= current + 0.75 && end > current) bufferedEnd = Math.max(bufferedEnd, end);
+      });
+      return Math.max(0, bufferedEnd - current);
+    };
+    const waitForRealtimeBufferRoom = async () => {
+      const maxAhead = 45;
+      const resumeAhead = 25;
+      let wasThrottled = false;
+      while (
+        sessionId === videoState.playbackSessionId
+        && mediaSource.readyState === "open"
+        && sourceBuffer
+      ) {
+        await waitForSourceBufferIdle(sourceBuffer);
+        const ahead = realtimeBufferedAheadSeconds();
+        if (ahead < maxAhead) {
+          if (wasThrottled) {
+            renderVideoStreamDebugPanel({
+              realtime_state: "buffer_throttle_resume",
+              realtime_buffer_ahead_seconds: ahead,
+              mse_source_buffered_ranges: sourceBufferRanges(),
+            });
+          }
+          return;
+        }
+        wasThrottled = true;
+        renderVideoStreamDebugPanel({
+          realtime_state: "buffer_throttle_wait",
+          realtime_buffer_ahead_seconds: ahead,
+          realtime_buffer_resume_below_seconds: resumeAhead,
+          mse_source_buffered_ranges: sourceBufferRanges(),
+        });
+        while (
+          sessionId === videoState.playbackSessionId
+          && mediaSource.readyState === "open"
+          && realtimeBufferedAheadSeconds() > resumeAhead
+        ) {
+          await new Promise((resolve) => window.setTimeout(resolve, 250));
+        }
+      }
+    };
+    const trimRealtimeSourceBuffer = async (aggressive = false) => {
+      if (!sourceBuffer || mediaSource.readyState !== "open") return;
+      await waitForSourceBufferIdle(sourceBuffer);
+      const current = realtimeCurrentSeconds();
+      const keepBehind = aggressive ? 8 : 45;
+      const keepAhead = aggressive ? 90 : 240;
+      const ranges = sourceBufferRanges();
+      for (const range of ranges) {
+        const start = Number(range[0] || 0);
+        const end = Number(range[1] || 0);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+        let removeStart = null;
+        let removeEnd = null;
+        if (end < current - keepBehind) {
+          removeStart = start;
+          removeEnd = end;
+        } else if (start < current - keepBehind) {
+          removeStart = start;
+          removeEnd = current - keepBehind;
+        } else if (start > current + keepAhead) {
+          removeStart = start;
+          removeEnd = end;
+        } else if (aggressive && end > current + keepAhead && current + keepAhead > start + 0.01) {
+          removeStart = current + keepAhead;
+          removeEnd = end;
+        }
+        if (removeStart == null || removeEnd == null || removeEnd <= removeStart + 0.01) continue;
+        try {
+          sourceBuffer.remove(removeStart, removeEnd);
+          await waitForSourceBufferIdle(sourceBuffer);
+          renderVideoStreamDebugPanel({
+            realtime_state: "buffer_evicted",
+            realtime_buffer_evicted_start: removeStart,
+            realtime_buffer_evicted_end: removeEnd,
+            realtime_buffer_eviction_aggressive: aggressive,
+          });
+        } catch (_) {}
+      }
+    };
+    const appendRealtimeChunk = async (value) => {
+      await waitForRealtimeBufferRoom();
+      await trimRealtimeSourceBuffer(false);
+      await waitForSourceBufferIdle(sourceBuffer);
+      try {
+        sourceBuffer.appendBuffer(value);
+        await waitForSourceBufferIdle(sourceBuffer);
+        return;
+      } catch (err) {
+        const message = String(err?.message || err || "");
+        const full = err?.name === "QuotaExceededError" || /full|quota|appendBuffer/i.test(message);
+        if (!full) throw err;
+        renderVideoStreamDebugPanel({
+          realtime_state: "buffer_full_eviction",
+          realtime_error: message,
+          mse_source_buffered_ranges: sourceBufferRanges(),
+        });
+        await trimRealtimeSourceBuffer(true);
+        await waitForRealtimeBufferRoom();
+        await waitForSourceBufferIdle(sourceBuffer);
+        sourceBuffer.appendBuffer(value);
+        await waitForSourceBufferIdle(sourceBuffer);
+      }
+    };
     try {
       renderVideoStreamDebugPanel({
         realtime_state: "sourceopen",
@@ -3200,14 +3356,14 @@ async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playback
       }
       const reader = response.body.getReader();
       while (sessionId === videoState.playbackSessionId) {
+        await waitForRealtimeBufferRoom();
         const { done, value } = await reader.read();
         if (done) break;
         if (!value || !value.byteLength) continue;
         totalChunks += 1;
         totalBytes += value.byteLength;
         if (!firstChunkMs) firstChunkMs = Math.round(performance.now() - startMs);
-        await waitForSourceBufferIdle(sourceBuffer);
-        sourceBuffer.appendBuffer(value);
+        await appendRealtimeChunk(value);
         appendedChunks += 1;
         appendedBytes += value.byteLength;
         if (realtimeStartSeconds > 0 && appendedChunks === 1) {
@@ -3401,6 +3557,7 @@ function syncVideoSubtitleTracks(player, playback = {}) {
     if (track.isDefault || index === 0) el.default = true;
     player.appendChild(el);
   });
+  window.setTimeout(() => applyVideoSubtitleTrackSelection(playback, { silent: true }), 0);
 }
 
 function clampSubtitleShiftMs(value) {
@@ -3466,7 +3623,31 @@ function applyVideoSubtitleShift(video, playback, nextMs) {
   );
 }
 
+function applyVideoSubtitleTrackSelection(playback = {}, options = {}) {
+  const player = $("video-player");
+  const select = $("video-subtitle-track-select");
+  if (!player || !select) return;
+  const subtitles = videoPlaybackSubtitles(playback);
+  const selected = Math.max(-1, Math.min(subtitles.length - 1, Number(select.value || -1)));
+  if (String(selected) !== String(select.value || "")) select.value = String(selected);
+  Array.from(player.querySelectorAll('track[data-video-subtitle="1"]')).forEach((track, index) => {
+    if (track.track) track.track.mode = index === selected ? "showing" : "disabled";
+  });
+  if (!options.silent) {
+    setVideoPlaybackStatus(
+      selected >= 0
+        ? `字幕：${subtitles[selected]?.label || "字幕"}。`
+        : "字幕已關閉。",
+      false,
+    );
+  }
+}
+
 function bindVideoSubtitleShiftControls(video, playback = {}) {
+  const select = $("video-subtitle-track-select");
+  if (select) {
+    select.addEventListener("change", () => applyVideoSubtitleTrackSelection(playback));
+  }
   const input = $("video-subtitle-shift-seconds");
   if (!input) return;
   input.addEventListener("change", () => {
@@ -3523,7 +3704,7 @@ function renderVideoQualityControl(playback = {}) {
   const preferredName = preferred?.name || "";
   const defaultAudioIndex = Math.max(0, audioTracks.findIndex((track) => track.isDefault));
   const audioMarkup = audioTracks.length >= 2 ? `
-      <label for="video-audio-track-select">音軌</label>
+      <label for="video-audio-track-select">選擇音軌</label>
       <select id="video-audio-track-select">
         ${audioTracks.map((track, index) => `<option value="${index}"${index === defaultAudioIndex ? " selected" : ""}>${sanitize(track.label)}</option>`).join("")}
       </select>
@@ -3550,7 +3731,7 @@ function renderVideoRealtimeProxyControl(playback = {}) {
   const defaultAudioIndex = Math.max(0, audioTracks.findIndex((track) => track.isDefault));
   return `
     <div class="video-quality-control" id="video-realtime-proxy-control">
-      <label for="video-audio-track-select">音軌</label>
+      <label for="video-audio-track-select">選擇音軌</label>
       <select id="video-audio-track-select">
         ${audioTracks.map((track, index) => `<option value="${index}"${index === defaultAudioIndex ? " selected" : ""}>${sanitize(track.label)}</option>`).join("")}
       </select>
@@ -3578,13 +3759,24 @@ function renderVideoSubtitleControls(video, playback = {}) {
   if (!video || video.media_type !== "video") return "";
   const subtitles = videoPlaybackSubtitles(playback);
   const canUpload = !!video.can_edit && playback?.mode !== "e2ee_stream_v2" && playback?.mode !== "e2ee_direct";
-  const list = subtitles.length
-    ? subtitles.map((item) => `
-      <div class="drive-card-sub">
-        ${sanitize(item.label || "字幕")} · ${sanitize(item.language || "und")}
+  if (!subtitles.length && !canUpload && !video.can_edit) return "";
+  const defaultSubtitleIndex = subtitles.length
+    ? Math.max(0, subtitles.findIndex((item) => item.isDefault))
+    : -1;
+  const selector = subtitles.length
+    ? `
+      <div class="video-quality-control">
+        <label for="video-subtitle-track-select">選擇字幕</label>
+        <select id="video-subtitle-track-select">
+          <option value="-1">關閉字幕</option>
+          ${subtitles.map((item, index) => {
+            const label = `${item.label || "字幕"}${item.language ? ` · ${item.language}` : ""}`;
+            return `<option value="${index}"${index === defaultSubtitleIndex ? " selected" : ""}>${sanitize(label)}</option>`;
+          }).join("")}
+        </select>
       </div>
-    `).join("")
-    : `<div class="drive-empty">尚無字幕軌</div>`;
+    `
+    : `<div class="drive-empty">尚無字幕軌，可上傳 SRT/VTT/ASS 字幕檔。</div>`;
   const shiftControl = subtitles.length
     ? `
       <div class="video-quality-control video-subtitle-shift-control">
@@ -3605,7 +3797,7 @@ function renderVideoSubtitleControls(video, playback = {}) {
         </span>
       </summary>
       <div class="drive-collapsible-body">
-        <div id="video-subtitle-list">${list}</div>
+        ${selector}
         ${shiftControl}
         ${canUpload ? `
           <div class="video-share-manage-grid" style="margin-top:.65rem;">
@@ -4399,15 +4591,47 @@ function renderVideoDetail(video, comments = [], playback = null) {
     : (playbackSource?.mode === "realtime_proxy"
       ? renderVideoRealtimeProxyControl(playback || {})
       : (playback?.mode === "e2ee_stream_v2" ? renderVideoE2eeQualityControl(playback || {}) : ""));
-  const streamActions = video.can_edit && playback?.mode !== "e2ee_direct"
+  const hlsStatus = String(playbackStatus.status || playback?.status_text || "").toLowerCase();
+  const qualityPolicy = playback?.quality_policy || playbackStatus?.quality_policy || {};
+  const hlsProfilePolicy = playbackStatus?.premium_hls_profile_policy || playback?.premium_hls_profile_policy || {};
+  const hlsNeedsPrepare = !["ready", "processing", "queued"].includes(hlsStatus);
+  const hlsNeedsRebuild = !!(
+    playback?.rebuild_recommended
+    || playbackStatus?.rebuild_recommended
+    || qualityPolicy?.rebuild_recommended
+    || qualityPolicy?.profile_drift
+    || hlsProfilePolicy?.rebuild_recommended
+    || hlsProfilePolicy?.profile_drift
+  );
+  const canManageHls = !!video.can_edit && !!video.cloud_file_id && playback?.mode !== "e2ee_direct";
+  const primaryHlsAction = canManageHls && (hlsNeedsPrepare || hlsNeedsRebuild);
+  const streamActions = primaryHlsAction
     ? `
       <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.45rem;">
         <button class="btn btn-sm" type="button" data-video-prepare-stream="${sanitize(video.cloud_file_id || "")}">
-          ${playbackStatus.status === "ready" ? "重新建立 HLS 串流" : "準備 HLS 串流"}
+          ${hlsNeedsRebuild ? "重新建立 HLS 串流" : "準備 HLS 串流"}
         </button>
+        <span class="drive-card-sub">${hlsNeedsRebuild ? "HLS 版本或設定已有變更，建議重建。" : "目前沒有可用的 HLS 版本。"}</span>
       </div>
     `
-    : "";
+    : (canManageHls && hlsStatus === "ready" ? `
+      <details class="drive-collapsible-panel video-advanced-stream-actions">
+        <summary>
+          <span>
+            <span class="drive-card-title">進階串流維護</span>
+            <span class="drive-card-sub">HLS 正常時不需要重建</span>
+          </span>
+        </summary>
+        <div class="drive-collapsible-body">
+          <div class="drive-file-actions" style="justify-content:flex-start;">
+            <button class="btn btn-sm" type="button" data-video-prepare-stream="${sanitize(video.cloud_file_id || "")}">
+              重新建立 HLS 串流
+            </button>
+            <span class="drive-card-sub">只有字幕/音軌/畫質設定變更或播放異常時才需要使用。</span>
+          </div>
+        </div>
+      </details>
+    ` : "");
   const player = !videoPlayable
     ? `<div class="video-processing-notice" role="status">${sanitize(processingText)}</div>`
     : (video.media_type === "audio"
