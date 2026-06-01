@@ -505,6 +505,7 @@ def wait_for_auth_app(page, *, timeout: int = 30000) -> None:
 
 
 def switch_module(page, module: str) -> None:
+    wait_for_auth_app(page)
     page.evaluate(
         """module => {
             if (typeof switchModuleTab !== 'function') throw new Error('switchModuleTab missing');
@@ -512,7 +513,8 @@ def switch_module(page, module: str) -> None:
         }""",
         module,
     )
-    page.wait_for_timeout(600)
+    page.wait_for_selector(f"#module-{module}.active", state="visible", timeout=8000)
+    page.wait_for_timeout(300)
 
 
 def switch_server_tab(page, tab: str) -> None:
