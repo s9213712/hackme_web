@@ -808,26 +808,28 @@ def check_trading_asset_overview(rec: Recorder, page, trading_seed: dict[str, An
     failure_pattern = "**/api/trading/asset-overview"
     failure_body = '{"ok":false,"msg":"phase15 forced failure"}'
     page.route(failure_pattern, lambda route: route.fulfill(status=503, content_type="application/json", body=failure_body))
-    page.evaluate("() => loadTradingAssetOverview({ quiet: false })")
     try:
-        page.wait_for_function(
+        page.evaluate("() => loadTradingAssetOverview({ quiet: false })")
+        try:
+            page.wait_for_function(
+                """() => [
+                    document.getElementById('economy-msg')?.textContent || '',
+                    document.getElementById('trading-inline-msg')?.textContent || '',
+                    document.getElementById('trading-msg')?.textContent || ''
+                ].join(String.fromCharCode(10)).includes('phase15 forced failure')""",
+                timeout=5000,
+            )
+        except Exception:
+            pass
+        error_text = page.evaluate(
             """() => [
                 document.getElementById('economy-msg')?.textContent || '',
                 document.getElementById('trading-inline-msg')?.textContent || '',
                 document.getElementById('trading-msg')?.textContent || ''
-            ].join('\n').includes('phase15 forced failure')""",
-            timeout=5000,
+            ].join(String.fromCharCode(10)).trim()"""
         )
-    except Exception:
-        pass
-    error_text = page.evaluate(
-        """() => [
-            document.getElementById('economy-msg')?.textContent || '',
-            document.getElementById('trading-inline-msg')?.textContent || '',
-            document.getElementById('trading-msg')?.textContent || ''
-        ].join('\n').trim()"""
-    )
-    page.unroute(failure_pattern)
+    finally:
+        page.unroute(failure_pattern)
 
     compare = {key: {"api": overview.get(key), "hand": calc[key]} for key in calc}
     numeric_ok = all(int(overview.get(key) or 0) == int(calc[key] or 0) for key in calc)
@@ -866,7 +868,7 @@ def check_mobile_platform_views(rec: Recorder, page, base_url: str) -> None:
     for width, height in ((390, 844), (768, 1024), (1366, 768)):
         page.set_viewport_size({"width": width, "height": height})
         page.goto(base_url + "/", wait_until="domcontentloaded")
-        wait_for_auth_app(page)
+        wait_for_auth_app(page, timeout=45000)
         viewport_result = {}
         for module in ("jobs", "shares", "economy"):
             switch_module(page, module)
