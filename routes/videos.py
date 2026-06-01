@@ -89,6 +89,7 @@ from services.media.videos import (
 )
 from services.system.notifications import create_notification
 from services.governance.violation_fines import assert_user_feature_allowed
+from services.security.identity import role_rank
 from services.users.friends import follower_user_ids
 
 
@@ -136,6 +137,112 @@ def register_video_routes(app, deps):
         if not actor:
             return None, json_resp({"ok": False, "msg": "請先登入", "error": "login_required"}, 401)
         return actor, None
+
+    def _actor_value(actor, key, default=""):
+        try:
+            return actor.get(key, default)
+        except AttributeError:
+            try:
+                return actor[key]
+            except Exception:
+                return default
+
+    def _stream_debug_root_allowed(actor):
+        username = str(_actor_value(actor, "username", "") or "").strip().lower()
+        role = str(_actor_value(actor, "role", "") or "").strip()
+        return bool(username == "root" or role_rank(role) >= role_rank("super_admin"))
+
+    def _stream_debug_proc_sample(pid, cmdline=""):
+        try:
+            pid = int(pid or 0)
+        except Exception:
+            pid = 0
+        sample = {
+            "pid": pid,
+            "cmd": str(cmdline or "")[:220],
+            "rss_bytes": 0,
+            "cpu_time_seconds": 0.0,
+        }
+        if pid <= 0:
+            return sample
+        try:
+            for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.startswith("VmRSS:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        sample["rss_bytes"] = max(0, int(parts[1]) * 1024)
+                    break
+        except Exception:
+            pass
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="ignore")
+            tail = stat[stat.rfind(")") + 2 :].split()
+            ticks = os.sysconf(os.sysconf_names.get("SC_CLK_TCK", "SC_CLK_TCK")) or 100
+            if len(tail) >= 13:
+                sample["cpu_time_seconds"] = round((int(tail[11]) + int(tail[12])) / float(ticks), 6)
+        except Exception:
+            pass
+        return sample
+
+    def _stream_debug_group(processes):
+        items = list(processes or [])
+        return {
+            "process_count": len(items),
+            "rss_bytes": sum(int(item.get("rss_bytes") or 0) for item in items),
+            "cpu_time_seconds": round(sum(float(item.get("cpu_time_seconds") or 0.0) for item in items), 6),
+            "pids": [int(item.get("pid") or 0) for item in items[:16] if int(item.get("pid") or 0) > 0],
+            "samples": items[:8],
+        }
+
+    def _stream_debug_process_burden(source_path=None):
+        current_pid = os.getpid()
+        source_text = str(source_path or "")
+        server_samples = []
+        ffmpeg_samples = []
+        video_ffmpeg_samples = []
+        realtime_ffmpeg_samples = []
+        for proc_dir in Path("/proc").iterdir():
+            if not proc_dir.name.isdigit():
+                continue
+            pid = int(proc_dir.name)
+            cmdline = ""
+            try:
+                raw = (proc_dir / "cmdline").read_bytes()
+                cmdline = raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip()
+            except Exception:
+                cmdline = ""
+            if not cmdline and pid != current_pid:
+                continue
+            is_server = pid == current_pid
+            is_ffmpeg = "ffmpeg" in cmdline or "avconv" in cmdline
+            if not is_server and not is_ffmpeg:
+                continue
+            sample = _stream_debug_proc_sample(pid, cmdline)
+            if is_server:
+                server_samples.append(sample)
+            if is_ffmpeg:
+                ffmpeg_samples.append(sample)
+                if source_text and source_text in cmdline:
+                    video_ffmpeg_samples.append(sample)
+                if "frag_keyframe" in cmdline or "empty_moov" in cmdline or "default_base_moof" in cmdline:
+                    realtime_ffmpeg_samples.append(sample)
+        try:
+            loadavg = list(os.getloadavg())
+        except Exception:
+            loadavg = []
+        return {
+            "groups": {
+                "server": _stream_debug_group(server_samples),
+                "ffmpeg_all": _stream_debug_group(ffmpeg_samples),
+                "video_ffmpeg": _stream_debug_group(video_ffmpeg_samples),
+                "realtime_ffmpeg": _stream_debug_group(realtime_ffmpeg_samples),
+            },
+            "system": {
+                "pid": current_pid,
+                "cpu_count": os.cpu_count() or 0,
+                "loadavg": loadavg,
+            },
+        }
 
     def _error_response(exc):
         message = str(exc) or exc.__class__.__name__
@@ -3724,6 +3831,43 @@ def register_video_routes(app, deps):
             payload["can_prepare_stream"] = bool(video.get("can_edit")) and not is_e2ee_file(row)
             payload["prepare_stream_url"] = video.get("prepare_stream_url") or ""
             return json_resp({"ok": True, **payload})
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/stream-burden", methods=["GET"])
+    @require_csrf
+    def video_stream_burden(video_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "請先登入", "error": "login_required"}), 401
+        if not _stream_debug_root_allowed(actor):
+            return json_resp({"ok": False, "msg": "只有 root 可讀取串流伺服器負擔", "error": "forbidden"}), 403
+        conn = get_db()
+        try:
+            ensure_media_stream_schema(conn)
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            try:
+                source_path = resolve_file_storage_path(storage_root, row)
+                source_present = source_path.is_file()
+            except Exception:
+                source_path = None
+                source_present = False
+            burden = _stream_debug_process_burden(source_path)
+            return json_resp({
+                "ok": True,
+                "video_id": int(video_id),
+                "sampled_at": _now_iso(),
+                "video_source_present": bool(source_present),
+                "realtime_proxy_runtime": realtime_proxy_runtime_status(),
+                **burden,
+            })
         except PermissionError as exc:
             return _error_response(exc)
         except ValueError as exc:

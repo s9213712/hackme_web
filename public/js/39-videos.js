@@ -17,6 +17,10 @@ const videoState = {
   streamDebugSnapshot: {},
   streamDebugMetrics: {},
   streamDebugInterval: 0,
+  streamDebugBurden: null,
+  streamDebugBurdenLast: null,
+  streamDebugBurdenFetchAt: 0,
+  streamDebugBurdenInflight: false,
   manualQualitySelection: false,
   autoQualityFallbackApplied: false,
   userSeeking: false,
@@ -583,6 +587,64 @@ function videoStreamDebugObservedStats(player, snapshot = {}) {
   };
 }
 
+function videoStreamDebugBurdenMetric(group = {}, key = "cpu_percent") {
+  const value = Number(group?.[key]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function videoStreamDebugGroupLabel(group = {}) {
+  const count = Number(group.process_count || 0);
+  const cpu = videoStreamDebugBurdenMetric(group, "cpu_percent");
+  const rss = Number(group.rss_bytes || 0);
+  const parts = [`${count} proc`];
+  if (cpu != null) parts.push(videoFormatDebugNumber(cpu, 1, "%"));
+  if (rss > 0) parts.push(videoFormatBytes(rss));
+  return parts.join(" / ");
+}
+
+function videoStreamDebugRequestBurden(snapshot = {}) {
+  if (!videoStreamDebugRootAllowed() || !videoStreamDebugStoredEnabled()) return;
+  const videoId = Number(snapshot.video_id || videoState.current?.id || 0);
+  if (!videoId || videoState.streamDebugBurdenInflight) return;
+  const now = performance.now();
+  if (now - Number(videoState.streamDebugBurdenFetchAt || 0) < 1500) return;
+  videoState.streamDebugBurdenFetchAt = now;
+  videoState.streamDebugBurdenInflight = true;
+  apiFetch(API + `/videos/${encodeURIComponent(videoId)}/stream-burden`, { credentials: "same-origin" })
+    .then((res) => res.json().catch(() => ({})))
+    .then((json) => {
+      if (!json || !json.ok) return;
+      const previous = videoState.streamDebugBurdenLast || null;
+      const sampledAtMs = Date.parse(json.sampled_at || "") || Date.now();
+      const elapsed = previous ? Math.max(0.001, (sampledAtMs - Number(previous.sampled_at_ms || 0)) / 1000) : 0;
+      const groups = { ...(json.groups || {}) };
+      if (previous && elapsed > 0) {
+        Object.keys(groups).forEach((name) => {
+          const current = groups[name] || {};
+          const before = previous.groups?.[name] || {};
+          const deltaCpu = Number(current.cpu_time_seconds || 0) - Number(before.cpu_time_seconds || 0);
+          current.cpu_percent = Math.max(0, (deltaCpu / elapsed) * 100);
+          groups[name] = current;
+        });
+      }
+      const next = {
+        sampled_at: json.sampled_at || new Date(sampledAtMs).toISOString(),
+        sampled_at_ms: sampledAtMs,
+        mode: snapshot.playback_source_mode || snapshot.selected_service_mode || "",
+        groups,
+        system: json.system || {},
+        realtime_proxy_runtime: json.realtime_proxy_runtime || {},
+        video_source_present: json.video_source_present,
+      };
+      videoState.streamDebugBurden = next;
+      videoState.streamDebugBurdenLast = next;
+    })
+    .catch(() => {})
+    .finally(() => {
+      videoState.streamDebugBurdenInflight = false;
+    });
+}
+
 function videoHlsDebugFallbackStats(stats = {}, snapshot = {}) {
   const metrics = videoState.streamDebugMetrics || {};
   const entries = typeof performance?.getEntriesByType === "function"
@@ -653,8 +715,13 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
   const isHlsMode = modeText.includes("hls") || selectedText === "prepared_hls";
   const isRealtimeMode = modeText.includes("realtime_proxy") || selectedText === "realtime_proxy";
   const isDirectMode = !isHlsMode && !isRealtimeMode && (modeText.includes("direct") || selectedText === "direct");
+  const burden = snapshot.server_burden || {};
+  const burdenGroups = burden.groups || {};
+  const runtime = burden.realtime_proxy_runtime || {};
   const rows = [
     ["模式", snapshot.playback_source_mode || snapshot.selected_service_mode || "-"],
+    ["Server CPU/RSS", videoStreamDebugGroupLabel(burdenGroups.server || {})],
+    ["Loadavg", Array.isArray(burden.system?.loadavg) ? burden.system.loadavg.map((n) => videoFormatDebugNumber(n, 2)).join(" / ") : "-"],
     ["Buffer Health", stats.buffer_health_sec == null ? "-" : videoFormatDebugNumber(stats.buffer_health_sec, 2, " s")],
     ["啟播延遲", stats.startup_latency_ms == null ? "-" : videoFormatDebugNumber(stats.startup_latency_ms, 0, " ms")],
     ["解析度", snapshot.player?.video_size || stats.hls_level_resolution || "-"],
@@ -662,6 +729,9 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
     ["掉幀", stats.total_frames ? `${stats.dropped_frames}/${stats.total_frames} (${videoFormatDebugNumber(stats.dropped_frame_percent, 2, "%")})` : "-"],
     ["等待/停滯", `${stats.waiting_count || 0}/${stats.stalled_count || 0}`],
   ];
+  if (snapshot.player?.error_code) {
+    rows.splice(1, 0, ["播放錯誤", `${snapshot.player.error_code}: ${snapshot.player.error_message || "media error"}`]);
+  }
   if (isDirectMode) {
     rows.splice(1, 0,
       ["直接串流速率", videoFormatDebugMbps(stats.observed_download_rate_bps)],
@@ -672,6 +742,9 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
   }
   if (isRealtimeMode) {
     rows.splice(1, 0,
+      ["ffmpeg CPU/RSS", videoStreamDebugGroupLabel(burdenGroups.ffmpeg_all || {})],
+      ["本片 ffmpeg", videoStreamDebugGroupLabel(burdenGroups.video_ffmpeg || {})],
+      ["即時槽位", runtime.limit ? `${runtime.active || 0}/${runtime.limit} (${runtime.scope || "-"})` : "-"],
       ["即時 Source API", snapshot.selected_source_api || snapshot.source_api || "-"],
       ["即時 codec 支援", snapshot.is_type_supported_result == null ? "-" : String(snapshot.is_type_supported_result)],
       ["即時串流速率", videoFormatDebugMbps(stats.observed_download_rate_bps)],
@@ -690,10 +763,14 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
       ["HLS 片段載入", stats.hls_avg_fragment_load_ms == null ? "-" : videoFormatDebugNumber(stats.hls_avg_fragment_load_ms, 0, " ms")],
       ["HLS 片段抖動", stats.hls_segment_jitter_ms == null ? "-" : videoFormatDebugNumber(stats.hls_segment_jitter_ms, 0, " ms")],
       ["HLS 片段 bytes", stats.hls_fragment_bytes ? videoFormatBytes(stats.hls_fragment_bytes) : "-"],
-      ["Live/Edge Latency", stats.edge_latency_sec == null ? "-" : videoFormatDebugNumber(stats.edge_latency_sec, 2, " s")],
     );
   }
-  summary.innerHTML = rows.map(([label, value]) => `
+  const visibleRows = rows.filter(([label, value]) => {
+    if (["模式", "等待/停滯"].includes(label)) return true;
+    const text = String(value ?? "").trim();
+    return text && text !== "-" && !/^\d+\s+proc\s+\/\s+0(?:\.0)?%\s+\/\s+-$/i.test(text);
+  });
+  summary.innerHTML = visibleRows.map(([label, value]) => `
     <div class="video-stream-debug-metric">
       <span>${sanitize(label)}</span>
       <strong>${sanitize(String(value))}</strong>
@@ -785,8 +862,9 @@ function renderVideoStreamDebugPanel(extra = {}) {
       error_message: err?.message || "",
     } : null,
   };
+  videoStreamDebugRequestBurden(baseSnapshot);
   const stats = videoHlsDebugFallbackStats(videoStreamDebugObservedStats(player, baseSnapshot), baseSnapshot);
-  const snapshot = { ...baseSnapshot, stats };
+  const snapshot = { ...baseSnapshot, stats, server_burden: videoState.streamDebugBurden || null };
   renderVideoStreamDebugSummary(stats, snapshot);
   output.textContent = JSON.stringify(snapshot, null, 2);
 }
@@ -805,6 +883,10 @@ function bindVideoStreamDebugPlayerEvents(player) {
 function startVideoStreamDebugSession(player, video, playback, playbackSource, sessionId) {
   if (!videoStreamDebugRootAllowed()) return;
   videoStreamDebugResetMetrics(sessionId);
+  videoState.streamDebugBurden = null;
+  videoState.streamDebugBurdenLast = null;
+  videoState.streamDebugBurdenFetchAt = 0;
+  videoState.streamDebugBurdenInflight = false;
   bindVideoStreamDebugPlayerEvents(player);
   ensureVideoStreamDebugPanel(player);
   const caps = realtimeProxyMediaSourceCapabilities(playback);
@@ -3851,6 +3933,8 @@ async function attachVideoHlsJsPlayer(player, playback, sessionId) {
 }
 
 async function activateVideoPlaybackMode(video, playback, playbackSource, sessionId) {
+  videoState.currentPlaybackSource = playbackSource || {};
+  applyVideoPlaybackPreferences(video, playback || {});
   const player = $("video-player");
   if (!player) return;
   resetVideoPlaybackStatusState();
@@ -4472,6 +4556,7 @@ function renderVideoDetail(video, comments = [], playback = null) {
   `;
   if (videoPlayable) {
     bindVideoPlayerView(video.id);
+    bindVideoPlaybackPreferenceControls(video, playback || {});
     bindVideoSeekProtection($("video-player"));
     bindVideoStreamingServiceControl(video, playback || {});
     bindVideoQualityControl(playback || {});
@@ -4487,6 +4572,222 @@ function renderVideoDetail(video, comments = [], playback = null) {
   } else {
     clearVideoPlaybackAction();
   }
+}
+
+function videoPlaybackPreferenceKey(name) {
+  return `hackme_web.video_playback.${name}`;
+}
+
+function loadVideoPlaybackPreference(name, fallback = false) {
+  try {
+    const value = localStorage.getItem(videoPlaybackPreferenceKey(name));
+    if (value === null) return !!fallback;
+    return value === "1";
+  } catch (_) {
+    return !!fallback;
+  }
+}
+
+function saveVideoPlaybackPreference(name, enabled) {
+  const value = !!enabled;
+  try {
+    localStorage.setItem(videoPlaybackPreferenceKey(name), value ? "1" : "0");
+  } catch (_) {}
+  return value;
+}
+
+function videoPlaybackPreferenceState() {
+  return {
+    repeat: loadVideoPlaybackPreference("repeat", false),
+    background: loadVideoPlaybackPreference("background", false),
+  };
+}
+
+function currentVideoPlaybackSourceMode() {
+  const source = videoState.currentPlaybackSource || {};
+  const direct = String(source.mode || source.raw_mode || source.playback_source_mode || "").trim();
+  if (direct) return direct;
+  try {
+    const debug = JSON.parse($("video-stream-debug-output")?.textContent || "{}");
+    return String(debug.playback_source_mode || debug.selected_service_mode || "").trim();
+  } catch (_) {
+    return "";
+  }
+}
+
+function setVideoMediaSession(video, player, playback = {}) {
+  if (!("mediaSession" in navigator) || !player) return;
+  try {
+    const title = String(video?.title || videoState.current?.title || "影音播放");
+    const owner = String(video?.owner_username || video?.owner_display_name || "");
+    const artwork = [];
+    if (video?.cover_url) {
+      artwork.push({ src: video.cover_url, sizes: "512x512", type: "image/jpeg" });
+    }
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title,
+      artist: owner || "Hackme",
+      album: playback?.media_type === "audio" ? "音訊" : "影音",
+      artwork,
+    });
+    navigator.mediaSession.setActionHandler("play", () => player.play().catch(() => {}));
+    navigator.mediaSession.setActionHandler("pause", () => player.pause());
+    navigator.mediaSession.setActionHandler("seekbackward", (details) => {
+      const offset = Number(details?.seekOffset || 10);
+      player.currentTime = Math.max(0, Number(player.currentTime || 0) - offset);
+    });
+    navigator.mediaSession.setActionHandler("seekforward", (details) => {
+      const offset = Number(details?.seekOffset || 10);
+      const duration = Number.isFinite(player.duration) ? player.duration : 0;
+      const next = Number(player.currentTime || 0) + offset;
+      player.currentTime = duration > 0 ? Math.min(duration, next) : next;
+    });
+    navigator.mediaSession.setActionHandler("seekto", (details) => {
+      if (details && Number.isFinite(details.seekTime)) player.currentTime = details.seekTime;
+    });
+    try {
+      if (Number.isFinite(player.duration) && player.duration > 0) {
+        navigator.mediaSession.setPositionState({
+          duration: player.duration,
+          playbackRate: player.playbackRate || 1,
+          position: Math.max(0, Math.min(player.duration, Number(player.currentTime || 0))),
+        });
+      }
+    } catch (_) {}
+  } catch (_) {}
+}
+
+function syncVideoPlaybackPreferenceButtons() {
+  const state = videoPlaybackPreferenceState();
+  document.querySelectorAll("[data-video-toggle-repeat]").forEach((button) => {
+    button.classList.toggle("btn-primary", state.repeat);
+    button.setAttribute("aria-pressed", state.repeat ? "true" : "false");
+    button.textContent = state.repeat ? "重複播放：開" : "重複播放：關";
+  });
+  document.querySelectorAll("[data-video-toggle-background]").forEach((button) => {
+    button.classList.toggle("btn-primary", state.background);
+    button.setAttribute("aria-pressed", state.background ? "true" : "false");
+    button.textContent = state.background ? "背景播放：開" : "背景播放：關";
+  });
+}
+
+function applyVideoPlaybackPreferences(video, playback = {}) {
+  const player = $("video-player");
+  if (!player) return;
+  const state = videoPlaybackPreferenceState();
+  player.loop = !!state.repeat && currentVideoPlaybackSourceMode() !== "realtime_proxy";
+  player.playsInline = true;
+  player.setAttribute("playsinline", "");
+  player.setAttribute("webkit-playsinline", "");
+  if (state.background) {
+    setVideoMediaSession(video, player, playback);
+  } else if ("mediaSession" in navigator) {
+    try {
+      navigator.mediaSession.playbackState = "none";
+    } catch (_) {}
+  }
+  syncVideoPlaybackPreferenceButtons();
+}
+
+function bindVideoPlaybackPreferenceControls(video, playback = {}) {
+  const player = $("video-player");
+  if (!player || player.dataset.videoPlaybackPreferenceBound === "1") {
+    applyVideoPlaybackPreferences(video, playback);
+    return;
+  }
+  player.dataset.videoPlaybackPreferenceBound = "1";
+  let panel = $("video-playback-preferences");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "video-playback-preferences";
+    panel.className = "drive-file-actions video-playback-preferences";
+    panel.style.justifyContent = "flex-start";
+    panel.style.margin = ".55rem 0";
+    panel.innerHTML = `
+      <button class="btn" type="button" data-video-toggle-repeat aria-pressed="false">重複播放：關</button>
+      <button class="btn" type="button" data-video-toggle-background aria-pressed="false">背景播放：關</button>
+      <span class="drive-card-sub">背景播放會啟用系統媒體控制；螢幕鎖定後是否繼續播放仍取決於瀏覽器與手機系統。</span>
+    `;
+    const status = $("video-playback-status");
+    if (status && status.parentNode) {
+      status.parentNode.insertBefore(panel, status.nextSibling);
+    } else {
+      player.insertAdjacentElement("afterend", panel);
+    }
+  }
+  const repeatButton = panel.querySelector("[data-video-toggle-repeat]");
+  const backgroundButton = panel.querySelector("[data-video-toggle-background]");
+  if (repeatButton && repeatButton.dataset.bound !== "1") {
+    repeatButton.dataset.bound = "1";
+    repeatButton.addEventListener("click", () => {
+      const next = saveVideoPlaybackPreference("repeat", !loadVideoPlaybackPreference("repeat", false));
+      player.loop = next && currentVideoPlaybackSourceMode() !== "realtime_proxy";
+      syncVideoPlaybackPreferenceButtons();
+      setVideoPlaybackStatus(next ? "已開啟重複播放。" : "已關閉重複播放。", false);
+    });
+  }
+  if (backgroundButton && backgroundButton.dataset.bound !== "1") {
+    backgroundButton.dataset.bound = "1";
+    backgroundButton.addEventListener("click", () => {
+      const next = saveVideoPlaybackPreference("background", !loadVideoPlaybackPreference("background", false));
+      applyVideoPlaybackPreferences(video, playback);
+      setVideoPlaybackStatus(
+        next
+          ? "已開啟背景播放輔助；本站不會因頁面隱藏而主動停止播放。"
+          : "已關閉背景播放輔助。",
+        false
+      );
+    });
+  }
+  player.addEventListener("ended", () => {
+    if (!loadVideoPlaybackPreference("repeat", false)) return;
+    const mode = currentVideoPlaybackSourceMode();
+    if (mode === "realtime_proxy") {
+      const currentId = Number(video?.id || videoState.current?.id || 0);
+      if (!currentId || player.dataset.videoRealtimeRepeatRestarting === "1") return;
+      player.dataset.videoRealtimeRepeatRestarting = "1";
+      setVideoPlaybackStatus("重複播放：正在重新啟動即時轉封裝。", false);
+      openVideoDetail(currentId).finally(() => {
+        const nextPlayer = $("video-player");
+        if (nextPlayer) {
+          nextPlayer.dataset.videoRealtimeRepeatRestarting = "0";
+          nextPlayer.play().catch(() => {});
+        }
+      });
+      return;
+    }
+    try {
+      player.currentTime = 0;
+      player.play().catch(() => {});
+    } catch (_) {}
+  });
+  player.addEventListener("play", () => {
+    if ("mediaSession" in navigator && loadVideoPlaybackPreference("background", false)) {
+      try {
+        navigator.mediaSession.playbackState = "playing";
+      } catch (_) {}
+    }
+  });
+  player.addEventListener("pause", () => {
+    if ("mediaSession" in navigator && loadVideoPlaybackPreference("background", false)) {
+      try {
+        navigator.mediaSession.playbackState = "paused";
+      } catch (_) {}
+    }
+  });
+  player.addEventListener("timeupdate", () => {
+    if (!("mediaSession" in navigator) || !loadVideoPlaybackPreference("background", false)) return;
+    try {
+      if (Number.isFinite(player.duration) && player.duration > 0) {
+        navigator.mediaSession.setPositionState({
+          duration: player.duration,
+          playbackRate: player.playbackRate || 1,
+          position: Math.max(0, Math.min(player.duration, Number(player.currentTime || 0))),
+        });
+      }
+    } catch (_) {}
+  });
+  applyVideoPlaybackPreferences(video, playback);
 }
 
 function bindVideoPlayerView(videoId) {
