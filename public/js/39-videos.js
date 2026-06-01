@@ -652,6 +652,9 @@ function videoStreamDebugRequestBurden(snapshot = {}) {
       };
       videoState.streamDebugBurden = next;
       videoState.streamDebugBurdenLast = next;
+      if (videoStreamDebugStoredEnabled()) {
+        window.requestAnimationFrame(() => renderVideoStreamDebugPanel());
+      }
     })
     .catch(() => {})
     .finally(() => {
@@ -732,17 +735,32 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
   const burden = snapshot.server_burden || {};
   const burdenGroups = burden.groups || {};
   const runtime = burden.realtime_proxy_runtime || {};
+  const firstValue = (...values) => values.find((value) => value !== undefined && value !== null && value !== "");
+  const startupMs = firstValue(stats.startup_latency_ms, stats.startup_ms, snapshot.startup_latency_ms, snapshot.startup_ms);
+  const bufferHealthSec = firstValue(stats.buffer_health_sec, stats.realtime_buffer_ahead_seconds, snapshot.realtime_buffer_ahead_seconds);
+  const waitingCount = Number(firstValue(stats.waiting_count, stats.wait_count, snapshot.player?.waiting_count, 0) || 0);
+  const stalledCount = Number(firstValue(stats.stalled_count, stats.stall_count, snapshot.player?.stalled_count, 0) || 0);
+  const droppedFrames = Number(firstValue(stats.dropped_frames, snapshot.player?.dropped_frames, 0) || 0);
+  const totalFrames = Number(firstValue(stats.total_frames, stats.decoded_frames, snapshot.player?.total_frames, snapshot.player?.decoded_frames, 0) || 0);
+  const droppedPercent = totalFrames ? (droppedFrames / Math.max(1, totalFrames)) * 100 : Number(stats.dropped_frame_percent || 0);
+  const loadavg = Array.isArray(burden.system?.loadavg)
+    ? burden.system.loadavg
+    : (Array.isArray(burden.loadavg) ? burden.loadavg : (Array.isArray(snapshot.loadavg) ? snapshot.loadavg : []));
+  const bufferedRanges = firstValue(snapshot.mse_source_buffered_ranges, stats.mse_source_buffered_ranges);
+  const rangeLabel = (ranges) => Array.isArray(ranges) && ranges.length
+    ? ranges.slice(0, 3).map((range) => `${videoFormatDebugNumber(range?.[0] || 0, 1)}-${videoFormatDebugNumber(range?.[1] || 0, 1)}s`).join(" / ")
+    : "-";
   const rows = [
     ["模式", snapshot.playback_source_mode || snapshot.selected_service_mode || "-"],
     ["Server CPU", videoStreamDebugGroupCpuLabel(burdenGroups.server || {})],
     ["Server RSS", videoStreamDebugGroupRssLabel(burdenGroups.server || {})],
-    ["Loadavg", Array.isArray(burden.system?.loadavg) ? burden.system.loadavg.map((n) => videoFormatDebugNumber(n, 2)).join(" / ") : "-"],
-    ["Buffer Health", stats.buffer_health_sec == null ? "-" : videoFormatDebugNumber(stats.buffer_health_sec, 2, " s")],
-    ["啟播延遲", stats.startup_latency_ms == null ? "-" : videoFormatDebugNumber(stats.startup_latency_ms, 0, " ms")],
+    ["Loadavg", loadavg.length ? loadavg.map((n) => videoFormatDebugNumber(n, 2)).join(" / ") : "-"],
+    ["緩衝長度", bufferHealthSec == null ? "-" : videoFormatDebugNumber(bufferHealthSec, 2, " s")],
+    ["啟播延遲", startupMs == null ? "-" : videoFormatDebugNumber(startupMs, 0, " ms")],
     ["解析度", snapshot.player?.video_size || stats.hls_level_resolution || "-"],
     ["FPS", stats.frame_rate_fps ? videoFormatDebugNumber(stats.frame_rate_fps, 1) : "-"],
-    ["掉幀", stats.total_frames ? `${stats.dropped_frames}/${stats.total_frames} (${videoFormatDebugNumber(stats.dropped_frame_percent, 2, "%")})` : "-"],
-    ["等待/停滯", `${stats.waiting_count || 0}/${stats.stalled_count || 0}`],
+    ["掉幀", totalFrames ? `${droppedFrames}/${totalFrames} (${videoFormatDebugNumber(droppedPercent, 2, "%")})` : "-"],
+    ["等待/停滯", `${waitingCount}/${stalledCount}`],
   ];
   if (snapshot.player?.error_code) {
     rows.splice(1, 0, ["播放錯誤", `${snapshot.player.error_code}: ${snapshot.player.error_message || "media error"}`]);
@@ -757,18 +775,22 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
   }
   if (isRealtimeMode) {
     rows.splice(1, 0,
-      ["ffmpeg CPU", videoStreamDebugGroupCpuLabel(burdenGroups.ffmpeg_all || {})],
-      ["ffmpeg RSS", videoStreamDebugGroupRssLabel(burdenGroups.ffmpeg_all || {})],
+      ["ffmpeg CPU", videoStreamDebugGroupCpuLabel(burdenGroups.ffmpeg_all || burdenGroups.ffmpeg || {})],
+      ["ffmpeg RSS", videoStreamDebugGroupRssLabel(burdenGroups.ffmpeg_all || burdenGroups.ffmpeg || {})],
       ["本片 ffmpeg CPU", videoStreamDebugGroupCpuLabel(burdenGroups.video_ffmpeg || {})],
       ["本片 ffmpeg RSS", videoStreamDebugGroupRssLabel(burdenGroups.video_ffmpeg || {})],
       ["即時槽位", runtime.limit ? `${runtime.active || 0}/${runtime.limit} (${runtime.scope || "-"})` : "-"],
+      ["即時狀態", snapshot.realtime_state || stats.realtime_state || "-"],
+      ["即時 HTTP", snapshot.realtime_http_status || stats.realtime_http_status || "-"],
       ["即時 Source API", snapshot.selected_source_api || snapshot.source_api || "-"],
       ["即時 codec 支援", snapshot.is_type_supported_result == null ? "-" : String(snapshot.is_type_supported_result)],
-      ["即時串流速率", videoFormatDebugMegabitsPerSecond(stats.observed_download_rate_bitsPerSecond)],
-      ["即時首包延遲", stats.first_chunk_ms == null ? "-" : videoFormatDebugNumber(stats.first_chunk_ms, 0, " ms")],
-      ["即時 chunk 抖動", stats.chunk_jitter_ms ? videoFormatDebugNumber(stats.chunk_jitter_ms, 0, " ms") : "-"],
-      ["即時 chunks", String(stats.chunks_received || 0)],
+      ["即時串流速率", videoFormatDebugMegabitsPerSecond(firstValue(stats.observed_download_rate_bitsPerSecond, stats.observed_download_rate_bps))],
+      ["即時首包延遲", firstValue(stats.first_chunk_ms, stats.realtime_first_chunk_ms) == null ? "-" : videoFormatDebugNumber(firstValue(stats.first_chunk_ms, stats.realtime_first_chunk_ms), 0, " ms")],
+      ["即時 chunk 抖動", firstValue(stats.chunk_jitter_ms, stats.realtime_chunk_jitter_ms) ? videoFormatDebugNumber(firstValue(stats.chunk_jitter_ms, stats.realtime_chunk_jitter_ms), 0, " ms") : "-"],
+      ["即時 chunks", String(firstValue(stats.chunks_received, stats.realtime_chunks_received, 0))],
       ["即時 bytes", (stats.realtime_bytes_received || stats.bytes_received) ? videoFormatBytes(stats.realtime_bytes_received || stats.bytes_received) : "-"],
+      ["MSE 狀態", snapshot.mse_ready_state || stats.mse_ready_state || "-"],
+      ["MSE buffer", rangeLabel(bufferedRanges)],
     );
   }
   if (isHlsMode) {
@@ -789,34 +811,132 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
     "ffmpeg RSS",
     "本片 ffmpeg CPU",
     "本片 ffmpeg RSS",
+    "Loadavg",
   ]);
-  const burdenParts = [];
+  const burdenTextByLabel = {};
   const compactRows = [];
   rows.forEach(([label, value]) => {
     const text = String(value ?? "").trim();
     if (burdenRowLabels.has(label)) {
-      if (text && text !== "-") burdenParts.push(`${label}: ${text}`);
+      if (text && text !== "-" && text !== "0 proc") burdenTextByLabel[label] = text;
       return;
     }
     compactRows.push([label, value]);
   });
-  if (burdenParts.length) {
-    const burdenRow = ["伺服器負擔", burdenParts.join("；")];
-    const insertIndex = compactRows.findIndex(([label]) => label === "模式");
-    if (insertIndex >= 0) compactRows.splice(insertIndex + 1, 0, burdenRow);
-    else compactRows.unshift(burdenRow);
-  }
-  const visibleRows = compactRows.filter(([label, value]) => {
-    if (["模式", "等待/停滯"].includes(label)) return true;
+  const burdenCpuWidth = (text) => {
+    const match = String(text || "").match(/([0-9]+(?:\.[0-9]+)?)\s*%/);
+    if (!match) return 0;
+    return Math.max(2, Math.min(100, Number(match[1] || 0)));
+  };
+  const burdenCpuTone = (width) => {
+    if (width >= 80) return "#ef4444";
+    if (width >= 50) return "#f59e0b";
+    return "#22c55e";
+  };
+  const burdenMetricLine = (label, text, type = "text") => {
+    if (!text) return "";
+    const width = type === "cpu" ? burdenCpuWidth(text) : 0;
+    return `
+      <div style="display:grid;grid-template-columns:3.5rem minmax(6rem,1fr);gap:.45rem;align-items:center;margin-top:.32rem;">
+        <span style="font-size:.72rem;font-weight:800;letter-spacing:.06em;color:var(--muted);text-transform:uppercase;">${sanitize(label)}</span>
+        <span style="display:flex;align-items:center;gap:.45rem;min-width:0;">
+          ${type === "cpu" ? `<span aria-hidden="true" style="width:4.8rem;height:.42rem;border-radius:999px;background:rgba(148,163,184,.2);overflow:hidden;box-shadow:inset 0 0 0 1px rgba(148,163,184,.16);"><span style="display:block;width:${width}%;height:100%;border-radius:inherit;background:${burdenCpuTone(width)};"></span></span>` : ""}
+          <span style="font-size:.78rem;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${sanitize(text)}</span>
+        </span>
+      </div>
+    `;
+  };
+  const burdenCard = (title, cpuText, rssText) => {
+    if (!cpuText && !rssText) return "";
+    return `
+      <div style="min-width:13rem;padding:.55rem .65rem;border-radius:.8rem;background:rgba(15,23,42,.05);box-shadow:inset 0 0 0 1px rgba(148,163,184,.18);">
+        <div style="font-size:.8rem;font-weight:900;color:var(--text);">${sanitize(title)}</div>
+        ${burdenMetricLine("CPU", cpuText, "cpu")}
+        ${burdenMetricLine("RSS", rssText, "rss")}
+      </div>
+    `;
+  };
+  const burdenLoadCard = (text) => text ? `
+    <div style="min-width:10rem;padding:.55rem .65rem;border-radius:.8rem;background:rgba(15,23,42,.05);box-shadow:inset 0 0 0 1px rgba(148,163,184,.18);">
+      <div style="font-size:.8rem;font-weight:900;color:var(--text);">系統負載</div>
+      ${burdenMetricLine("AVG", text, "rss")}
+    </div>
+  ` : "";
+  const currentFfmpegCard = burdenCard("目前串流處理", burdenTextByLabel["本片 ffmpeg CPU"], burdenTextByLabel["本片 ffmpeg RSS"]);
+  const fallbackFfmpegCard = currentFfmpegCard
+    ? ""
+    : burdenCard("背景轉檔處理", burdenTextByLabel["ffmpeg CPU"], burdenTextByLabel["ffmpeg RSS"]);
+  const burdenHtml = [
+    burdenCard("網站服務", burdenTextByLabel["Server CPU"], burdenTextByLabel["Server RSS"]),
+    currentFfmpegCard || fallbackFfmpegCard,
+    burdenLoadCard(burdenTextByLabel["Loadavg"]),
+  ].filter(Boolean).join("");
+  const streamSettingLabels = new Set([
+    "模式",
+    "解析度",
+    "畫質",
+    "音軌",
+    "MediaSource available",
+    "WebKitMediaSource available",
+    "ManagedMediaSource available",
+    "selected source API",
+    "即時 Source API",
+    "mime codec string",
+    "即時 codec",
+    "isTypeSupported result",
+    "即時 codec 支援",
+    "disableRemotePlayback",
+  ]);
+  const rowTextValue = (value) => {
+    if (value && typeof value === "object" && value.html) return String(value.html || "").trim();
+    return String(value ?? "").trim();
+  };
+  const isVisibleDebugRow = ([label, value]) => {
+    if (value && typeof value === "object" && value.html) return true;
     const text = String(value ?? "").trim();
     return text && text !== "-" && !/^\d+\s+proc\s+\/\s+0(?:\.0)?%\s+\/\s+-$/i.test(text);
+  };
+  const isStreamSettingLabel = (label) => {
+    const raw = String(label || "");
+    const lower = raw.toLowerCase();
+    return streamSettingLabels.has(raw)
+      || lower.includes("source api")
+      || lower.includes("codec")
+      || lower.includes("mediasource")
+      || lower.includes("istypesupported")
+      || lower.includes("mse content");
+  };
+  const streamSettingRows = [];
+  const qualityRows = [];
+  compactRows.forEach((row) => {
+    if (!isVisibleDebugRow(row)) return;
+    if (isStreamSettingLabel(row[0])) streamSettingRows.push(row);
+    else qualityRows.push(row);
   });
-  summary.innerHTML = visibleRows.map(([label, value]) => `
+  const streamSettingHtml = streamSettingRows.map(([label, value]) => `
+    <span style="display:inline-flex;align-items:center;gap:.35rem;max-width:100%;padding:.38rem .5rem;border-radius:999px;background:rgba(59,130,246,.08);box-shadow:inset 0 0 0 1px rgba(59,130,246,.18);">
+      <b style="font-size:.72rem;color:var(--muted);">${sanitize(label)}</b>
+      <span style="font-size:.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${sanitize(rowTextValue(value))}</span>
+    </span>
+  `).join("");
+  const metricRowsHtml = (items) => items.map(([label, value]) => `
     <div class="video-stream-debug-metric">
       <span>${sanitize(label)}</span>
-      <strong>${sanitize(String(value))}</strong>
+      <strong>${sanitize(rowTextValue(value))}</strong>
     </div>
   `).join("");
+  const sectionHtml = (title, body, className = "") => body ? `
+    <section class="video-stream-debug-section ${sanitize(className)}">
+      <div class="video-stream-debug-section-title">${sanitize(title)}</div>
+      ${body}
+    </section>
+  ` : "";
+  const qualityHtml = metricRowsHtml(qualityRows);
+  summary.innerHTML = [
+    sectionHtml("伺服器負擔", burdenHtml ? `<div class="video-stream-debug-burden-grid">${burdenHtml}</div>` : "", "video-stream-debug-section-burden"),
+    sectionHtml("串流設定", streamSettingHtml ? `<div class="video-stream-debug-chip-grid">${streamSettingHtml}</div>` : "", "video-stream-debug-section-settings"),
+    sectionHtml("串流品質數據", qualityHtml ? `<div class="video-stream-debug-metric-grid">${qualityHtml}</div>` : "", "video-stream-debug-section-quality"),
+  ].filter(Boolean).join("");
 }
 
 function ensureVideoStreamDebugPanel(player = $("video-player")) {

@@ -67,6 +67,7 @@ const GAME_RUNTIME_SCRIPT_SRCS = Object.freeze([
   "/js/games/snake.js?v=20260513-game-modules",
   "/js/games/game-2048.js?v=20260513-game-modules",
   "/js/games/brick-breaker.js?v=20260513-game-modules",
+  "/js/games/rubiks-cube.js?v=20260601-rubiks-cube",
   "/js/games/bullet-hell.js?v=20260518-game-ux",
   "/js/games/stickman-shooter.js?v=20260517-level-layouts",
   "/js/games/open-world.js?v=20260518-game-ux",
@@ -271,6 +272,7 @@ function gameIcon(key) {
   if (key === "snake") return "S";
   if (key === "game_2048") return "2";
   if (key === "brick_breaker") return "▤";
+  if (key === "rubiks_cube") return "◇";
   if (key === "reversi") return "●";
   if (key === "go") return "○";
   if (key === "gomoku") return "五";
@@ -293,6 +295,7 @@ function gameSubtitle(game) {
   if (game.key === "snake") return "手機滑動 / 鍵盤皆可玩";
   if (game.key === "game_2048") return "手機滑動合併數字";
   if (game.key === "brick_breaker") return "手機按鍵控制擋板";
+  if (game.key === "rubiks_cube") return "3D 視角拖曳 / 六面轉動解題";
   if (game.key === "reversi") return "線上棋盤黑白棋 / AI 練習";
   if (game.key === "go") return "19 路線上棋盤圍棋 / 目數結算";
   if (game.key === "gomoku") return "15 路線上棋盤五子棋 / AI 練習";

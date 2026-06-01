@@ -17,6 +17,7 @@
     { key: "snake", title: "貪食蛇", subtitle: "滑動或方向鍵控制蛇吃食物" },
     { key: "game_2048", title: "2048", subtitle: "合併數字方塊，挑戰最高分" },
     { key: "brick_breaker", title: "打磚塊", subtitle: "移動擋板反彈球打掉磚塊" },
+    { key: "rubiks_cube", title: "3D 魔術方塊", subtitle: "拖曳視角、轉動六面，解開打亂方塊" },
     { key: "reversi", title: "黑白棋", subtitle: "線上棋盤 / AI 練習" },
     { key: "go", title: "圍棋", subtitle: "19 路線上棋盤，目數/眼位結算" },
     { key: "gomoku", title: "五子棋", subtitle: "15 路線上棋盤，AI 練習 / 雙人對局" },
@@ -235,6 +236,11 @@
       { id: "score-900", label: "打磚塊 900 分", target: 900, metric: "score" },
       { id: "boss-brick", label: "擊破 Boss 磚", target: 1, metric: "boss" },
       { id: "multiball", label: "啟動多球", target: 1, metric: "multiball" },
+    ],
+    rubiks_cube: [
+      { id: "solve", label: "解開一顆 3D 魔術方塊", target: 1, metric: "complete" },
+      { id: "under-40", label: "40 步內復原", target: 40, metric: "moves_under" },
+      { id: "under-3m", label: "3 分鐘內復原", target: 180000, metric: "elapsed_under" },
     ],
     reversi: [
       { id: "corner", label: "佔領角落", target: 1, metric: "corner" },

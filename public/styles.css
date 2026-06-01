@@ -14406,6 +14406,40 @@
 }
 
 .video-stream-debug-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.video-stream-debug-section {
+  min-width: 0;
+  padding: 0.62rem;
+  border: 1px solid rgba(20, 83, 45, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.video-stream-debug-section-title {
+  margin-bottom: 0.5rem;
+  color: #173c2e;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+}
+
+.video-stream-debug-burden-grid,
+.video-stream-debug-chip-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: stretch;
+}
+
+.video-stream-debug-chip-grid {
+  gap: 0.42rem;
+}
+
+.video-stream-debug-metric-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   gap: 0.5rem;
@@ -14483,6 +14517,14 @@
   }
 
   .video-stream-debug-summary {
+    gap: 0.55rem;
+  }
+
+  .video-stream-debug-section {
+    padding: 0.52rem;
+  }
+
+  .video-stream-debug-metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -14773,4 +14815,140 @@
     width: 100% !important;
     justify-items: center !important;
   }
+}
+
+.rubiks-game-shell {
+  display: grid;
+  grid-template-columns: minmax(18rem, 1fr) minmax(13rem, 0.45fr);
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.rubiks-stage {
+  min-height: 24rem;
+  display: grid;
+  place-items: center;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 22% 18%, rgba(255, 255, 255, 0.88), transparent 30%),
+    linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(17, 94, 89, 0.72));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 18px 50px rgba(15, 23, 42, 0.18);
+  overflow: hidden;
+  perspective: 900px;
+  touch-action: none;
+  cursor: grab;
+}
+
+.rubiks-stage:active {
+  cursor: grabbing;
+}
+
+.rubiks-cube-3d {
+  position: relative;
+  width: 12rem;
+  height: 12rem;
+  transform-style: preserve-3d;
+  transition: transform 0.18s ease-out;
+}
+
+.rubiks-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.32rem;
+  padding: 0.55rem;
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.88);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.14);
+  transform-style: preserve-3d;
+}
+
+.rubiks-face-F { transform: translateZ(6rem); }
+.rubiks-face-B { transform: rotateY(180deg) translateZ(6rem); }
+.rubiks-face-R { transform: rotateY(90deg) translateZ(6rem); }
+.rubiks-face-L { transform: rotateY(-90deg) translateZ(6rem); }
+.rubiks-face-U { transform: rotateX(90deg) translateZ(6rem); }
+.rubiks-face-D { transform: rotateX(-90deg) translateZ(6rem); }
+
+.rubiks-face-label {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) translateZ(0.04rem);
+  color: rgba(15, 23, 42, 0.28);
+  font-size: 2.4rem;
+  font-weight: 900;
+  pointer-events: none;
+}
+
+.rubiks-sticker {
+  display: block;
+  min-width: 0;
+  border-radius: 0.72rem;
+  background:
+    radial-gradient(circle at 28% 20%, rgba(255, 255, 255, 0.55), transparent 28%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.24), rgba(15, 23, 42, 0.16)),
+    var(--rubiks-color);
+  box-shadow: inset 0 -0.2rem 0 rgba(15, 23, 42, 0.18), 0 0.2rem 0.55rem rgba(15, 23, 42, 0.24);
+}
+
+.rubiks-side-panel {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.rubiks-chip,
+.rubiks-next-hint {
+  padding: 0.85rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(20, 83, 45, 0.12);
+}
+
+.rubiks-chip strong,
+.rubiks-next-hint {
+  color: #0f2f23;
+  font-weight: 850;
+}
+
+.rubiks-chip span {
+  display: block;
+  margin-top: 0.25rem;
+  color: #3f5f50;
+  font-size: 0.88rem;
+}
+
+.rubiks-control-grid,
+.rubiks-view-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.rubiks-control-grid .game-mini-btn {
+  min-width: 3.2rem;
+}
+
+@media (max-width: 780px) {
+  .rubiks-game-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .rubiks-stage {
+    min-height: 20rem;
+  }
+
+  .rubiks-cube-3d {
+    width: 9.4rem;
+    height: 9.4rem;
+  }
+
+  .rubiks-face-F { transform: translateZ(4.7rem); }
+  .rubiks-face-B { transform: rotateY(180deg) translateZ(4.7rem); }
+  .rubiks-face-R { transform: rotateY(90deg) translateZ(4.7rem); }
+  .rubiks-face-L { transform: rotateY(-90deg) translateZ(4.7rem); }
+  .rubiks-face-U { transform: rotateX(90deg) translateZ(4.7rem); }
+  .rubiks-face-D { transform: rotateX(-90deg) translateZ(4.7rem); }
 }
