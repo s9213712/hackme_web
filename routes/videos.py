@@ -255,6 +255,8 @@ def register_video_routes(app, deps):
         return "\n".join(lines) + ("\n" if str(text or "").endswith("\n") else "")
 
     def _send_hls_master_manifest(path, *, share_session_id=""):
+        if not Path(path).is_file():
+            return json_resp({"ok": False, "msg": "HLS 主清單實體檔案不存在", "error": "hls_master_missing"}), 404
         text = repair_hls_master_manifest_text(Path(path).read_text(encoding="utf-8"))
         text = _append_share_session_to_hls_manifest(text, share_session_id)
         response = Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
@@ -283,6 +285,8 @@ def register_video_routes(app, deps):
 
     def _send_subtitle_file(path, *, download_name):
         shift_ms = parse_subtitle_shift_ms(request.args.get("shift_ms"))
+        if not Path(path).is_file():
+            return json_resp({"ok": False, "msg": "字幕實體檔案不存在", "error": "subtitle_file_missing"}), 404
         if shift_ms:
             text = shift_webvtt_text(Path(path).read_text(encoding="utf-8", errors="replace"), shift_ms)
             return Response(
@@ -310,6 +314,8 @@ def register_video_routes(app, deps):
         return response
 
     def _send_storage_file(path, *, as_attachment=False, download_name="download.bin", mimetype=None, conditional=True, stream_mode="direct"):
+        if not Path(path).is_file():
+            return json_resp({"ok": False, "msg": "實體檔案不存在", "error": "file_missing"}), 404
         try:
             total_bytes = int(Path(path).stat().st_size)
         except Exception:

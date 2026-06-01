@@ -33,6 +33,7 @@ DEFAULT_HLS_SEGMENT_SECONDS = 4
 DEFAULT_STREAM_AUTO_PREPARE_AUDIO_MIN_BYTES = 25 * 1024 * 1024
 DEFAULT_FFMPEG_THREADS = 1
 DEFAULT_FFMPEG_TIMEOUT_SECONDS = 60 * 60
+DEFAULT_SUBTITLE_EXTRACT_TIMEOUT_SECONDS = 90
 DEFAULT_FFMPEG_PRESET = "ultrafast"
 DEFAULT_FFMPEG_MAX_VIDEO_HEIGHT = 0
 DEFAULT_HLS_QUALITY_HEIGHTS = "480,720"
@@ -340,6 +341,15 @@ def _ffmpeg_timeout_seconds():
         DEFAULT_FFMPEG_TIMEOUT_SECONDS,
         min_value=60,
         max_value=24 * 60 * 60,
+    )
+
+
+def _subtitle_extract_timeout_seconds():
+    return _bounded_env_int(
+        "HACKME_MEDIA_SUBTITLE_EXTRACT_TIMEOUT_SECONDS",
+        DEFAULT_SUBTITLE_EXTRACT_TIMEOUT_SECONDS,
+        min_value=10,
+        max_value=_ffmpeg_timeout_seconds(),
     )
 
 
@@ -831,7 +841,14 @@ def _extract_subtitles_to_webvtt(source_path, *, derivative_dir, derivative_root
             str(output_path),
         ]
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=_ffmpeg_timeout_seconds())
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=_subtitle_extract_timeout_seconds())
+        except subprocess.TimeoutExpired:
+            try:
+                output_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            errors.append(f"subtitle stream {stream_index}: extraction timed out after {_subtitle_extract_timeout_seconds()}s")
+            continue
         except Exception as exc:
             errors.append(f"subtitle stream {stream_index}: {str(exc)[:180]}")
             continue
@@ -1432,12 +1449,20 @@ def build_realtime_proxy_command(
         "zerolatency",
         "-crf",
         "23",
+        "-g",
+        "48",
+        "-keyint_min",
+        "48",
+        "-sc_threshold",
+        "0",
     ])
     if selected_audio:
         cmd.extend(["-c:a", "aac", "-b:a", realtime_proxy_audio_bitrate(), "-ac", "2"])
     cmd.extend([
         "-movflags",
         "frag_keyframe+empty_moov+default_base_moof",
+        "-flush_packets",
+        "1",
         "-f",
         "mp4",
         "pipe:1",
@@ -2682,6 +2707,7 @@ def _premium_hls_profile_policy(status=None):
 def _streaming_service_options(
     *,
     direct_available,
+    direct_reason="",
     realtime_proxy_available,
     realtime_proxy_reason="realtime_proxy_not_enabled",
     realtime_proxy_status="disabled",
@@ -2695,7 +2721,7 @@ def _streaming_service_options(
     if prepared_reason == "not_prepared":
         prepared_reason = "hls_not_prepared"
     premium_summary_suffix = " 目前資產與現行 Premium profile 不一致，建議排程重建 HLS。" if premium_profile_policy.get("profile_drift") else ""
-    direct_reason = "available" if direct_available else "server_encrypted_requires_prepared_hls"
+    direct_reason = direct_reason or ("available" if direct_available else "server_encrypted_requires_prepared_hls")
     proxy_reason = "available" if realtime_proxy_available else (realtime_proxy_reason or "realtime_proxy_not_enabled")
     return [
         {
@@ -2854,16 +2880,60 @@ def _realtime_proxy_probe_for_payload(file_row, *, storage_root=None, ffprobe_bi
         return {}
 
 
+def _source_file_available(file_row, *, storage_root=None):
+    if not storage_root:
+        return True
+    try:
+        return resolve_file_storage_path(storage_root, file_row).is_file()
+    except Exception:
+        return False
+
+
+def _storage_relative_file_available(storage_root, relative_path):
+    if not storage_root:
+        return bool(relative_path)
+    try:
+        return resolve_storage_path(storage_root, relative_path).is_file()
+    except Exception:
+        return False
+
+
 def stream_playback_payload(conn, *, file_row, video_id, storage_root=None, ffprobe_bin="ffprobe"):
     status = get_stream_status(conn, file_row=file_row, include_segments=False)
     media_type = _file_media_type(file_row)
     direct_url = f"/api/videos/{int(video_id)}/stream"
-    direct_fallback_allowed = True
+    source_file_available = _source_file_available(file_row, storage_root=storage_root)
+    direct_fallback_allowed = bool(source_file_available)
     realtime_proxy_state = realtime_proxy_availability(file_row)
-    realtime_proxy_available = bool(realtime_proxy_state.get("available"))
+    if not source_file_available:
+        realtime_proxy_state = {
+            **realtime_proxy_state,
+            "available": False,
+            "reason": "source_file_missing",
+            "implementation_status": "source_missing",
+        }
+    realtime_proxy_available = bool(source_file_available and realtime_proxy_state.get("available"))
     realtime_proxy_probe = _realtime_proxy_probe_for_payload(file_row, storage_root=storage_root, ffprobe_bin=ffprobe_bin) if realtime_proxy_available else {}
     realtime_proxy_url = f"/api/videos/{int(video_id)}/realtime-proxy" if realtime_proxy_available else ""
-    prepared_hls_available = bool(status and status.get("status") == "ready" and status.get("master_manifest_path"))
+    master_manifest_available = bool(
+        status
+        and status.get("status") == "ready"
+        and status.get("master_manifest_path")
+        and _storage_relative_file_available(storage_root, status.get("master_manifest_path"))
+    )
+    available_variants = [
+        variant for variant in (status.get("variants") if status else []) or []
+        if variant.get("name") and variant.get("playlist_path") and _storage_relative_file_available(storage_root, variant.get("playlist_path"))
+    ]
+    available_audio_tracks = [
+        track for track in (status.get("audio_tracks") if status else []) or []
+        if track.get("name") and track.get("playlist_path") and _storage_relative_file_available(storage_root, track.get("playlist_path"))
+    ]
+    available_subtitles = [
+        subtitle for subtitle in (status.get("subtitles") if status else []) or []
+        if subtitle.get("name") and subtitle.get("path") and _storage_relative_file_available(storage_root, subtitle.get("path"))
+    ]
+    prepared_hls_available = bool(master_manifest_available and available_variants)
     payload = {
         "mode": "direct",
         "media_type": media_type,
@@ -2874,7 +2944,7 @@ def stream_playback_payload(conn, *, file_row, video_id, storage_root=None, ffpr
         "master_url": "",
         "hls_js_url": HLS_JS_URL,
         "player_strategy": "direct_only",
-        "stream_warning": "目前使用直接串流。",
+            "stream_warning": "目前使用直接串流。" if direct_fallback_allowed else "原始影音實體檔案不存在，無法直接串流或即時轉封裝。",
         "status": status,
         "variants": [],
         "audio_tracks": [],
@@ -2906,6 +2976,7 @@ def stream_playback_payload(conn, *, file_row, video_id, storage_root=None, ffpr
         },
         "streaming_options": _streaming_service_options(
             direct_available=direct_fallback_allowed,
+            direct_reason="available" if direct_fallback_allowed else "source_file_missing",
             realtime_proxy_available=realtime_proxy_available,
             realtime_proxy_reason=str(realtime_proxy_state.get("reason") or ""),
             realtime_proxy_status=str(realtime_proxy_state.get("implementation_status") or ""),
@@ -2914,7 +2985,7 @@ def stream_playback_payload(conn, *, file_row, video_id, storage_root=None, ffpr
             status=status,
         ),
     }
-    if status and status.get("subtitles"):
+    if available_subtitles:
         payload["subtitles"] = [
             {
                 "name": str(item.get("name") or ""),
@@ -2924,13 +2995,13 @@ def stream_playback_payload(conn, *, file_row, video_id, storage_root=None, ffpr
                 "is_forced": bool(item.get("is_forced")),
                 "url": f"/api/videos/{int(video_id)}/hls/subtitles/{item.get('name')}.vtt",
             }
-            for item in (status.get("subtitles") or [])
+            for item in available_subtitles
             if item.get("name")
         ]
     if prepared_hls_available:
         variants = []
         audio_tracks = []
-        for variant in status.get("variants") or []:
+        for variant in available_variants:
             name = str(variant.get("name") or "").strip()
             if not name:
                 continue
@@ -2950,7 +3021,7 @@ def stream_playback_payload(conn, *, file_row, video_id, storage_root=None, ffpr
                 "source_size_bytes": _safe_int(status.get("source_size_bytes"), 0),
                 "playlist_url": f"/api/videos/{int(video_id)}/hls/{name}/playlist.m3u8",
             })
-        for track in status.get("audio_tracks") or []:
+        for track in available_audio_tracks:
             name = str(track.get("name") or "").strip()
             if not name:
                 continue

@@ -14,6 +14,7 @@ from services.platform.time_settings import COMMON_SERVER_TIMEZONES, normalize_s
 from services.server.backpressure import apply_backpressure_settings, backpressure_status
 from services.security.captcha import normalize_captcha_mode
 from services.storage.global_capacity import parse_global_capacity_limit_mb
+from services.storage.migration import sync_storage_root_contents
 from services.storage.paths import validate_storage_root
 from services.security.upload_security import (
     ensure_upload_security_schema,
@@ -52,6 +53,7 @@ def _dangerous_blocked_payload(exc):
 def register_system_admin_settings_routes(app, ctx):
     BASE_DIR = ctx["BASE_DIR"]
     CURRENT_SERVER_BIND_STATE = ctx["CURRENT_SERVER_BIND_STATE"]
+    STORAGE_DIR = ctx["STORAGE_DIR"]
 
     get_current_user_ctx = ctx["get_current_user_ctx"]
     get_db = ctx["get_db"]
@@ -483,13 +485,22 @@ def register_system_admin_settings_routes(app, ctx):
                 if size < 64 or size > 2048 or size % 8 != 0:
                     return json_resp({"ok":False,"msg":f"{key} 必須是 64-2048 且為 8 的倍數"}), 400
                 data[key] = size
+        storage_migration = None
         if "cloud_drive_storage_root" in data:
             raw_root = str(data.get("cloud_drive_storage_root") or "").strip()
             if raw_root:
                 try:
-                    data["cloud_drive_storage_root"] = str(validate_storage_root(raw_root, base_dir=BASE_DIR, create=False))
+                    data["cloud_drive_storage_root"] = str(validate_storage_root(raw_root, base_dir=BASE_DIR, create=True))
                 except ValueError as exc:
                     return json_resp({"ok":False,"msg":f"cloud_drive_storage_root 不安全或格式錯誤：{exc}"}), 400
+                try:
+                    current_root = str(validate_storage_root(STORAGE_DIR, base_dir=BASE_DIR, create=True))
+                    if os.path.realpath(current_root) != os.path.realpath(data["cloud_drive_storage_root"]):
+                        storage_migration = sync_storage_root_contents(current_root, data["cloud_drive_storage_root"])
+                except ValueError as exc:
+                    return json_resp({"ok":False,"msg":f"cloud_drive_storage_root 遷移被拒絕：{exc}"}), 400
+                except OSError as exc:
+                    return json_resp({"ok":False,"msg":f"cloud_drive_storage_root 遷移失敗，設定未寫入：{exc}"}), 500
             else:
                 data["cloud_drive_storage_root"] = ""
         if "cloud_drive_global_capacity_limit_mb" in data:
@@ -610,6 +621,7 @@ def register_system_admin_settings_routes(app, ctx):
         return json_resp({
             "ok": True,
             "msg": "系統參數已更新",
+            "storage_migration": storage_migration,
             "settings": public_settings_payload(get_system_settings()),
             "server_bind": server_bind_settings_payload(
                 get_system_settings(),

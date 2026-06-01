@@ -9,6 +9,8 @@ const videoState = {
   browseLoaded: false,
   currentHls: null,
   currentRealtimeAbortController: null,
+  currentRealtimeSeekHandler: null,
+  currentRealtimeSeekPlayer: null,
   currentObjectUrl: "",
   hlsLibraryPromise: null,
   playbackSessionId: 0,
@@ -20,6 +22,9 @@ const videoState = {
   userSeeking: false,
   lastSeekAt: 0,
   lastSeekTarget: 0,
+  realtimeSeekRestarting: false,
+  realtimeSeekSuppressUntil: 0,
+  realtimeBaseOffsetSeconds: 0,
   danmakuEnabled: true,
   danmakuDensity: "medium",
   danmakuOpacity: 0.92,
@@ -210,6 +215,16 @@ function videoUploadFormWithProgress(url, form, onProgress) {
 }
 
 function destroyCurrentVideoPlaybackArtifacts() {
+  if (videoState.currentRealtimeSeekHandler && videoState.currentRealtimeSeekPlayer) {
+    try {
+      videoState.currentRealtimeSeekPlayer.removeEventListener("seeking", videoState.currentRealtimeSeekHandler);
+    } catch (_) {
+      // ignore teardown failure
+    }
+  }
+  videoState.currentRealtimeSeekHandler = null;
+  videoState.currentRealtimeSeekPlayer = null;
+  videoState.realtimeBaseOffsetSeconds = 0;
   if (videoState.currentHls && typeof videoState.currentHls.destroy === "function") {
     try {
       videoState.currentHls.destroy();
@@ -663,7 +678,7 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
       ["即時首包延遲", stats.first_chunk_ms == null ? "-" : videoFormatDebugNumber(stats.first_chunk_ms, 0, " ms")],
       ["即時 chunk 抖動", stats.chunk_jitter_ms ? videoFormatDebugNumber(stats.chunk_jitter_ms, 0, " ms") : "-"],
       ["即時 chunks", String(stats.chunks_received || 0)],
-      ["即時 bytes", stats.realtime_bytes_received ? videoFormatBytes(stats.realtime_bytes_received) : "-"],
+      ["即時 bytes", (stats.realtime_bytes_received || stats.bytes_received) ? videoFormatBytes(stats.realtime_bytes_received || stats.bytes_received) : "-"],
     );
   }
   if (isHlsMode) {
@@ -1998,7 +2013,16 @@ function hlsMimeForVideo(mediaType = "video") {
 
 function browserSupportsNativeHls(mediaType = "video") {
   const probe = document.createElement(mediaType === "audio" ? "audio" : "video");
-  return !!(probe && typeof probe.canPlayType === "function" && probe.canPlayType(hlsMimeForVideo(mediaType)));
+  const canPlayHls = !!(probe && typeof probe.canPlayType === "function" && probe.canPlayType(hlsMimeForVideo(mediaType)));
+  if (!canPlayHls) return false;
+  const ua = String(navigator.userAgent || "");
+  const vendor = String(navigator.vendor || "");
+  const platform = String(navigator.platform || "");
+  const isIos = /\b(iPad|iPhone|iPod)\b/i.test(ua) || (platform === "MacIntel" && Number(navigator.maxTouchPoints || 0) > 1);
+  const isSafari = /Safari/i.test(ua)
+    && /Apple/i.test(vendor)
+    && !/(Chrome|Chromium|CriOS|FxiOS|Edg|OPR|Android)/i.test(ua);
+  return isIos || isSafari;
 }
 
 function selectedVideoPublishStreamingModes() {
@@ -2088,6 +2112,45 @@ function videoRealtimeProxyUrl(playback = {}, startSeconds = 0) {
   const start = Number(startSeconds || 0);
   if (Number.isFinite(start) && start > 0) url.searchParams.set("start", String(Math.max(0, Math.round(start * 1000) / 1000)));
   return `${url.pathname}${url.search}`;
+}
+
+function videoRealtimeProxyStartSeconds(src = "") {
+  try {
+    const url = new URL(String(src || ""), window.location.origin);
+    const start = Number(url.searchParams.get("start") || 0);
+    return Number.isFinite(start) && start > 0 ? start : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function videoPlaybackDurationSeconds(playback = {}) {
+  const candidates = [
+    playback?.duration_seconds,
+    playback?.duration,
+    playback?.status?.duration_seconds,
+    playback?.status?.duration,
+  ];
+  for (const value of candidates) {
+    const parsed = Number(value || 0);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 0;
+}
+
+function videoBufferedContains(player, seconds, margin = 0.5) {
+  const target = Number(seconds || 0);
+  if (!player || !Number.isFinite(target)) return false;
+  try {
+    for (let index = 0; index < player.buffered.length; index += 1) {
+      if (target >= player.buffered.start(index) - margin && target <= player.buffered.end(index) + margin) {
+        return true;
+      }
+    }
+  } catch (_) {
+    return false;
+  }
+  return false;
 }
 
 function renderVideoStreamingServiceControl(video, playback = {}, selectedMode = "") {
@@ -2859,6 +2922,7 @@ function waitForSourceBufferIdle(sourceBuffer) {
 
 async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playbackSource = {}, sessionId = 0) {
   const src = String(playbackSource?.src || "").trim();
+  const realtimeStartSeconds = Number(playbackSource?.startSeconds || videoRealtimeProxyStartSeconds(src) || 0);
   const mseType = realtimeProxyMseContentType(playback);
   const caps = realtimeProxyMediaSourceCapabilities(playback);
   if (!src) {
@@ -2899,13 +2963,20 @@ async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playback
   const controller = new AbortController();
   videoState.currentRealtimeAbortController = controller;
   videoState.currentObjectUrl = objectUrl;
+  videoState.realtimeBaseOffsetSeconds = 0;
   player.preload = "none";
   player.src = objectUrl;
+  if (realtimeStartSeconds > 0) {
+    videoState.realtimeSeekSuppressUntil = performance.now() + 2500;
+  }
   if (typeof player.load === "function") player.load();
   setVideoPlaybackStatus(playbackSource.statusText || "正在初始化 Standard 即時轉封裝...", false);
   renderVideoStreamDebugPanel({
     realtime_state: "opening",
     realtime_src: src,
+    realtime_start_seconds: realtimeStartSeconds,
+    realtime_timeline_mode: "absolute",
+    realtime_timeline_offset_seconds: 0,
     mse_supported: true,
     selected_source_api: caps.selected_source_api,
     media_source_api: caps.selected_source_api,
@@ -2918,6 +2989,49 @@ async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playback
     is_type_supported_result: caps.is_type_supported_result,
   });
 
+  const seekHandler = () => {
+    if (sessionId !== videoState.playbackSessionId) return;
+    const target = Number(player.currentTime || 0);
+    const now = performance.now();
+    if (!Number.isFinite(target) || target <= 0.25) return;
+    if (now < Number(videoState.realtimeSeekSuppressUntil || 0)) return;
+    if (videoState.realtimeSeekRestarting) return;
+    if (videoBufferedContains(player, target, 0.75)) return;
+    const nextUrl = videoRealtimeProxyUrl(playback, target);
+    if (!nextUrl) return;
+    videoState.realtimeSeekRestarting = true;
+    videoState.lastSeekAt = Date.now();
+    videoState.lastSeekTarget = target;
+    renderVideoStreamDebugPanel({
+      realtime_state: "seek_restart",
+      realtime_seek_target_seconds: target,
+      realtime_seek_url: nextUrl,
+    });
+    setVideoPlaybackStatus(`正在從 ${Math.round(target)} 秒重新啟動 Standard 即時轉封裝。`, false);
+    window.setTimeout(() => {
+      if (sessionId !== videoState.playbackSessionId) {
+        videoState.realtimeSeekRestarting = false;
+        return;
+      }
+      attachVideoRealtimeProxyMsePlayer(
+        player,
+        playback,
+        {
+          mode: "realtime_proxy",
+          src: nextUrl,
+          startSeconds: target,
+          statusText: `已跳到 ${Math.round(target)} 秒，正在重新接續 Standard 即時轉封裝。`,
+        },
+        sessionId
+      ).finally(() => {
+        videoState.realtimeSeekRestarting = false;
+      });
+    }, 0);
+  };
+  player.addEventListener("seeking", seekHandler);
+  videoState.currentRealtimeSeekHandler = seekHandler;
+  videoState.currentRealtimeSeekPlayer = player;
+
   mediaSource.addEventListener("sourceopen", async () => {
     if (sessionId !== videoState.playbackSessionId) return;
     let sourceBuffer = null;
@@ -2928,6 +3042,18 @@ async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playback
     const startMs = performance.now();
     let firstChunkMs = 0;
     let lastRenderMs = 0;
+    let realtimeSeekPlaybackStarted = realtimeStartSeconds <= 0;
+    let realtimeTimestampOffsetApplied = realtimeStartSeconds <= 0;
+    let realtimeTimestampOffsetError = "";
+    const sourceBufferRanges = () => {
+      const ranges = [];
+      try {
+        for (let index = 0; index < sourceBuffer.buffered.length; index += 1) {
+          ranges.push([sourceBuffer.buffered.start(index), sourceBuffer.buffered.end(index)]);
+        }
+      } catch (_) {}
+      return ranges;
+    };
     try {
       renderVideoStreamDebugPanel({
         realtime_state: "sourceopen",
@@ -2935,11 +3061,39 @@ async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playback
         mse_content_type: mseType,
       });
       sourceBuffer = mediaSource.addSourceBuffer(mseType);
-      sourceBuffer.mode = "segments";
+      try {
+        sourceBuffer.mode = "segments";
+      } catch (_) {
+        sourceBuffer.mode = "segments";
+      }
+      if (realtimeStartSeconds > 0) {
+        try {
+          sourceBuffer.timestampOffset = realtimeStartSeconds;
+          realtimeTimestampOffsetApplied = Math.abs(Number(sourceBuffer.timestampOffset || 0) - realtimeStartSeconds) < 0.25;
+        } catch (err) {
+          realtimeTimestampOffsetError = err?.message || "timestampOffset failed";
+        }
+        if (!realtimeTimestampOffsetApplied) {
+          throw new Error(`此瀏覽器不支援即時轉封裝絕對時間軸：${realtimeTimestampOffsetError || "timestampOffset 無法套用"}`);
+        }
+      }
+      const durationSeconds = videoPlaybackDurationSeconds(playback);
+      if (durationSeconds > 0) {
+        try {
+          mediaSource.duration = Math.max(1, durationSeconds);
+        } catch (_) {}
+      }
       renderVideoStreamDebugPanel({
         realtime_state: "fetching",
         mse_ready_state: mediaSource.readyState,
         mse_source_buffer_mode: sourceBuffer.mode,
+        mse_duration_seconds: mediaSource.duration,
+        realtime_start_seconds: realtimeStartSeconds,
+        realtime_timeline_mode: "absolute",
+        realtime_timeline_offset_seconds: 0,
+        realtime_timestamp_offset: sourceBuffer.timestampOffset,
+        realtime_timestamp_offset_applied: realtimeTimestampOffsetApplied,
+        realtime_timestamp_offset_error: realtimeTimestampOffsetError,
       });
       const response = await fetch(src, {
         credentials: "same-origin",
@@ -2974,6 +3128,42 @@ async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playback
         sourceBuffer.appendBuffer(value);
         appendedChunks += 1;
         appendedBytes += value.byteLength;
+        if (realtimeStartSeconds > 0 && appendedChunks === 1) {
+          await waitForSourceBufferIdle(sourceBuffer);
+          renderVideoStreamDebugPanel({
+            realtime_state: "seek_stream_ready",
+            realtime_start_seconds: realtimeStartSeconds,
+            realtime_timeline_mode: "absolute",
+            realtime_timeline_offset_seconds: 0,
+            realtime_timestamp_offset: sourceBuffer.timestampOffset,
+            realtime_timestamp_offset_applied: realtimeTimestampOffsetApplied,
+          });
+          videoState.realtimeSeekSuppressUntil = performance.now() + 1000;
+        }
+        if (realtimeStartSeconds > 0 && !realtimeSeekPlaybackStarted) {
+          await waitForSourceBufferIdle(sourceBuffer);
+          const ranges = sourceBufferRanges();
+          const firstRange = ranges[0] || [];
+          const firstRangeEnd = Number(firstRange[1] || 0);
+          if (Number.isFinite(firstRangeEnd) && firstRangeEnd > realtimeStartSeconds + 0.05) {
+            realtimeSeekPlaybackStarted = true;
+            videoState.realtimeSeekSuppressUntil = performance.now() + 1000;
+            try {
+              player.currentTime = Math.max(0.001, realtimeStartSeconds + 0.001);
+            } catch (_) {}
+            try {
+              await player.play();
+            } catch (_) {}
+            renderVideoStreamDebugPanel({
+              realtime_state: "seek_playing_absolute",
+              realtime_start_seconds: realtimeStartSeconds,
+              realtime_timeline_mode: "absolute",
+              realtime_timeline_offset_seconds: 0,
+              realtime_timestamp_offset: sourceBuffer.timestampOffset,
+              mse_source_buffered_ranges: ranges,
+            });
+          }
+        }
         videoStreamDebugRecordChunk({
           totalBytes,
           appendedBytes,
@@ -2993,6 +3183,7 @@ async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playback
             realtime_first_chunk_ms: firstChunkMs,
             realtime_elapsed_ms: Math.round(now - startMs),
             mse_ready_state: mediaSource.readyState,
+            mse_source_buffered_ranges: sourceBufferRanges(),
           });
         }
       }
@@ -3011,6 +3202,7 @@ async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playback
         realtime_first_chunk_ms: firstChunkMs,
         realtime_elapsed_ms: Math.round(performance.now() - startMs),
         mse_ready_state: mediaSource.readyState,
+        mse_source_buffered_ranges: sourceBufferRanges(),
       });
     } catch (err) {
       if (controller.signal.aborted || sessionId !== videoState.playbackSessionId) return;
@@ -3029,6 +3221,7 @@ async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playback
         realtime_first_chunk_ms: firstChunkMs,
         realtime_elapsed_ms: Math.round(performance.now() - startMs),
         mse_ready_state: mediaSource.readyState,
+        mse_source_buffered_ranges: sourceBufferRanges(),
       });
       setVideoPlaybackStatus(`Standard 即時轉封裝 MediaSource 播放失敗：${err?.message || "unknown"}`, true);
     }
