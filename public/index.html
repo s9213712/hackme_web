@@ -1133,6 +1133,11 @@
               <label>全用戶雲端硬碟容量上限 MB（-1 代表儲存磁碟總容量 95%）</label>
               <input type="number" id="s-cloud-drive-global-capacity-limit-mb" min="-1" step="1" placeholder="-1" />
             </div>
+            <div class="field">
+              <label>單次 HTTP 上傳 / request 上限 MB</label>
+              <input type="number" id="s-server-max-content-mb" min="128" step="1" placeholder="8192" />
+              <div class="field-help" id="server-max-content-status">啟動腳本可用 --max-content-mb 或 HTML_LEARNING_MAX_CONTENT_MB 設定；前台儲存會立即套用目前 worker。</div>
+            </div>
             <div class="admin-toolbar" style="margin-top:.55rem;">
               <button class="btn btn-primary" type="button" id="drive-root-storage-settings-save-btn">儲存儲存設定</button>
             </div>

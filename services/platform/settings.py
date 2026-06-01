@@ -57,6 +57,7 @@ DEFAULT_SETTINGS = {
     "game_invite_poll_hidden_seconds": 180,
     "server_connection_monitor_seconds": 15,
     "drive_dashboard_lazy_refresh_seconds": 10,
+    "server_max_content_mb": 8192,
     "cloud_drive_storage_root": "",
     "cloud_drive_global_capacity_limit_mb": -1,
     "cloud_drive_transfer_limits_enabled": False,

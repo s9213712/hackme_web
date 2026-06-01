@@ -202,6 +202,7 @@ async function saveDriveRootStorageSettings() {
   const payload = {
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
     cloud_drive_global_capacity_limit_mb: parseInt($("s-cloud-drive-global-capacity-limit-mb")?.value || "-1", 10),
+    server_max_content_mb: parseInt($("s-server-max-content-mb")?.value || "8192", 10),
   };
   const res = await apiFetch(API + "/admin/settings", {
     method: "PUT",

@@ -230,7 +230,8 @@ Options:
   --max-content-mb MB,
   --upload-request-max-mb MB
                            Override HTML_LEARNING_MAX_CONTENT_MB for large
-                           upload QA. Blank keeps the app default.
+                           upload QA. Blank keeps app/root setting default
+                           (8192 MB unless changed in root settings).
   --dry-run                Print resolved config and exit before copying/starting
   --run-root PATH          Use a fixed /tmp run root instead of auto-generating one
   --in-place, --no-copy    Launch from the current repo; runtime still uses run-root

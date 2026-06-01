@@ -135,6 +135,7 @@ SETTING_GROUPS = (
             "game_invite_poll_hidden_seconds",
             "server_connection_monitor_seconds",
             "drive_dashboard_lazy_refresh_seconds",
+            "server_max_content_mb",
         ),
     },
     {
@@ -482,6 +483,10 @@ SETTING_DETAILS = {
     "server_ssl_enabled": {
         "label": "Server 啟用 SSL/HTTPS",
         "description": "關閉會降為 HTTP plain。",
+    },
+    "server_max_content_mb": {
+        "label": "單次 HTTP request / 上傳上限 (MB)",
+        "description": "控制 Flask/Werkzeug MAX_CONTENT_LENGTH；啟動腳本可用 --max-content-mb 或 HTML_LEARNING_MAX_CONTENT_MB 覆寫。",
     },
     "cloud_drive_global_capacity_limit_mb": {
         "label": "全站雲端硬碟容量上限 (MB)",

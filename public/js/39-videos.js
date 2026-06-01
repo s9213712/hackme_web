@@ -13,6 +13,7 @@ const videoState = {
   hlsLibraryPromise: null,
   playbackSessionId: 0,
   streamDebugSnapshot: {},
+  streamDebugMetrics: {},
   streamDebugInterval: 0,
   manualQualitySelection: false,
   autoQualityFallbackApplied: false,
@@ -285,6 +286,406 @@ function videoPlayerBufferedRanges(player) {
   return ranges.join(", ");
 }
 
+function videoPlayerBufferHealthSeconds(player) {
+  if (!player) return null;
+  const current = Number(player.currentTime || 0);
+  try {
+    for (let i = 0; i < player.buffered.length; i += 1) {
+      const start = player.buffered.start(i);
+      const end = player.buffered.end(i);
+      if (current >= start && current <= end) return Math.max(0, end - current);
+    }
+    if (player.buffered.length > 0) return Math.max(0, player.buffered.end(0) - current);
+  } catch (_) {}
+  return null;
+}
+
+function videoPlayerEdgeLatencySeconds(player) {
+  if (!player) return null;
+  try {
+    if (!player.seekable || player.seekable.length <= 0) return null;
+    const edge = player.seekable.end(player.seekable.length - 1);
+    const duration = Number(player.duration || 0);
+    if (Number.isFinite(duration) && duration > 0 && edge >= duration - 1) return null;
+    const latency = edge - Number(player.currentTime || 0);
+    if (!Number.isFinite(latency) || latency < 0) return null;
+    return latency;
+  } catch (_) {
+    return null;
+  }
+}
+
+function videoFormatDebugNumber(value, digits = 2, suffix = "") {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  return `${n.toFixed(digits)}${suffix}`;
+}
+
+function videoFormatDebugMbps(bps) {
+  const value = Number(bps || 0);
+  if (!Number.isFinite(value) || value <= 0) return "-";
+  return `${(value / 1000 / 1000).toFixed(2)} Mbps`;
+}
+
+function videoStreamDebugResetMetrics(sessionId) {
+  videoState.streamDebugMetrics = {
+    session_id: sessionId,
+    started_at_ms: performance.now(),
+    bytes_received: 0,
+    bytes_appended: 0,
+    chunks_received: 0,
+    chunks_appended: 0,
+    hls_fragments_loaded: 0,
+    hls_fragment_bytes: 0,
+    hls_fragment_latencies_ms: [],
+    hls_fragment_load_ms: [],
+    first_chunk_ms: 0,
+    last_chunk_at_ms: 0,
+    chunk_gaps_ms: [],
+    media_events: {},
+    first_playing_ms: 0,
+    waiting_count: 0,
+    stalled_count: 0,
+    last_frame_sample_at_ms: 0,
+    last_total_frames: 0,
+    frame_rate_fps: 0,
+  };
+}
+
+function videoStreamDebugRecordMediaEvent(name) {
+  const metrics = videoState.streamDebugMetrics || {};
+  metrics.media_events = metrics.media_events || {};
+  metrics.media_events[name] = Number(metrics.media_events[name] || 0) + 1;
+  if (name === "waiting") metrics.waiting_count = Number(metrics.waiting_count || 0) + 1;
+  if (name === "stalled") metrics.stalled_count = Number(metrics.stalled_count || 0) + 1;
+  if (name === "playing" && !metrics.first_playing_ms) {
+    metrics.first_playing_ms = Math.round(performance.now() - Number(metrics.started_at_ms || performance.now()));
+  }
+  videoState.streamDebugMetrics = metrics;
+}
+
+function videoStreamDebugRecordChunk({ totalBytes = 0, appendedBytes = 0, totalChunks = 0, appendedChunks = 0, firstChunkMs = 0 } = {}) {
+  const metrics = videoState.streamDebugMetrics || {};
+  const now = performance.now();
+  if (metrics.last_chunk_at_ms) {
+    const gap = Math.max(0, now - metrics.last_chunk_at_ms);
+    metrics.chunk_gaps_ms = [...(metrics.chunk_gaps_ms || []), gap].slice(-40);
+  }
+  metrics.last_chunk_at_ms = now;
+  metrics.bytes_received = Number(totalBytes || metrics.bytes_received || 0);
+  metrics.bytes_appended = Number(appendedBytes || metrics.bytes_appended || 0);
+  metrics.chunks_received = Number(totalChunks || metrics.chunks_received || 0);
+  metrics.chunks_appended = Number(appendedChunks || metrics.chunks_appended || 0);
+  metrics.first_chunk_ms = Number(firstChunkMs || metrics.first_chunk_ms || 0);
+  videoState.streamDebugMetrics = metrics;
+}
+
+function videoStreamDebugRecordHlsFragment(data = {}) {
+  const metrics = videoState.streamDebugMetrics || {};
+  const stats = data?.stats || data?.frag?.stats || {};
+  const loaded = Number(stats.loaded || stats.total || data?.loaded || 0);
+  const trequest = Number(stats.trequest || stats.loading?.start || 0);
+  const tfirst = Number(stats.tfirst || stats.loading?.first || 0);
+  const tload = Number(stats.tload || stats.loading?.end || 0);
+  metrics.hls_fragments_loaded = Number(metrics.hls_fragments_loaded || 0) + 1;
+  metrics.hls_fragment_bytes = Number(metrics.hls_fragment_bytes || 0) + Math.max(0, loaded);
+  metrics.bytes_received = Math.max(Number(metrics.bytes_received || 0), Number(metrics.hls_fragment_bytes || 0));
+  if (trequest && tfirst && tfirst >= trequest) {
+    metrics.hls_fragment_latencies_ms = [...(metrics.hls_fragment_latencies_ms || []), tfirst - trequest].slice(-40);
+    if (!metrics.first_chunk_ms) metrics.first_chunk_ms = Math.round(tfirst - trequest);
+  }
+  if (trequest && tload && tload >= trequest) {
+    metrics.hls_fragment_load_ms = [...(metrics.hls_fragment_load_ms || []), tload - trequest].slice(-40);
+  }
+  videoState.streamDebugMetrics = metrics;
+}
+
+function videoStddev(values = []) {
+  const nums = values.map(Number).filter(Number.isFinite);
+  if (nums.length < 2) return 0;
+  const mean = nums.reduce((sum, n) => sum + n, 0) / nums.length;
+  const variance = nums.reduce((sum, n) => sum + ((n - mean) ** 2), 0) / nums.length;
+  return Math.sqrt(variance);
+}
+
+function videoPlayerQualityStats(player) {
+  if (!player) return {};
+  let total = 0;
+  let dropped = 0;
+  let corrupted = 0;
+  try {
+    const quality = typeof player.getVideoPlaybackQuality === "function" ? player.getVideoPlaybackQuality() : null;
+    total = Number(quality?.totalVideoFrames || player.webkitDecodedFrameCount || 0);
+    dropped = Number(quality?.droppedVideoFrames || player.webkitDroppedFrameCount || 0);
+    corrupted = Number(quality?.corruptedVideoFrames || 0);
+  } catch (_) {
+    total = Number(player.webkitDecodedFrameCount || 0);
+    dropped = Number(player.webkitDroppedFrameCount || 0);
+  }
+  const metrics = videoState.streamDebugMetrics || {};
+  const now = performance.now();
+  if (total > 0 && metrics.last_frame_sample_at_ms && now > metrics.last_frame_sample_at_ms) {
+    const deltaFrames = Math.max(0, total - Number(metrics.last_total_frames || 0));
+    const deltaSeconds = (now - metrics.last_frame_sample_at_ms) / 1000;
+    if (deltaSeconds > 0) metrics.frame_rate_fps = deltaFrames / deltaSeconds;
+  }
+  metrics.last_frame_sample_at_ms = now;
+  metrics.last_total_frames = total;
+  videoState.streamDebugMetrics = metrics;
+  return {
+    total_frames: total,
+    dropped_frames: dropped,
+    corrupted_frames: corrupted,
+    dropped_frame_percent: total > 0 ? (dropped / total) * 100 : 0,
+    frame_rate_fps: Number(metrics.frame_rate_fps || 0),
+  };
+}
+
+function videoHlsDebugStats() {
+  const hls = videoState.currentHls;
+  if (!hls) return {};
+  const levelIndex = Number.isFinite(Number(hls.currentLevel)) ? Number(hls.currentLevel) : -1;
+  const level = Array.isArray(hls.levels) && levelIndex >= 0 ? hls.levels[levelIndex] : null;
+  return {
+    hls_bandwidth_estimate_bps: Number(hls.bandwidthEstimate || 0),
+    hls_latency_sec: Number.isFinite(Number(hls.latency)) ? Number(hls.latency) : null,
+    hls_live_sync_position: Number.isFinite(Number(hls.liveSyncPosition)) ? Number(hls.liveSyncPosition) : null,
+    hls_current_level: levelIndex,
+    hls_load_level: Number.isFinite(Number(hls.loadLevel)) ? Number(hls.loadLevel) : null,
+    hls_next_level: Number.isFinite(Number(hls.nextLevel)) ? Number(hls.nextLevel) : null,
+    hls_level_bitrate_bps: Number(level?.bitrate || 0),
+    hls_level_resolution: level ? `${Number(level.width || 0)}x${Number(level.height || 0)}` : "",
+    hls_level_codec: level ? [level.videoCodec, level.audioCodec].filter(Boolean).join(" / ") : "",
+  };
+}
+
+function videoDebugUrlPath(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    return new URL(raw, window.location.href).pathname;
+  } catch (_) {
+    return raw.split("?", 1)[0];
+  }
+}
+
+function videoDebugResourcePrefixes(snapshot = {}) {
+  const paths = new Set();
+  [
+    snapshot.src,
+    snapshot.direct_src,
+    snapshot.realtime_src,
+    snapshot.player?.current_src,
+  ].forEach((value) => {
+    const path = videoDebugUrlPath(value);
+    if (path) paths.add(path);
+    const hlsIndex = path.indexOf("/hls/");
+    if (hlsIndex >= 0) paths.add(path.slice(0, hlsIndex + 5));
+  });
+  const id = snapshot.video_id;
+  if (id) {
+    paths.add(`/api/videos/${id}/stream`);
+    paths.add(`/api/videos/${id}/realtime-proxy`);
+    paths.add(`/api/videos/${id}/hls/`);
+  }
+  return Array.from(paths).filter(Boolean);
+}
+
+function videoResourceTimingStats(snapshot = {}) {
+  const metrics = videoState.streamDebugMetrics || {};
+  const started = Number(metrics.started_at_ms || 0);
+  const prefixes = videoDebugResourcePrefixes(snapshot);
+  if (!prefixes.length || !performance?.getEntriesByType) return {};
+  const entries = performance.getEntriesByType("resource").filter((entry) => {
+    if (started && Number(entry.startTime || 0) < started - 1000) return false;
+    const path = videoDebugUrlPath(entry.name);
+    return prefixes.some((prefix) => path === prefix || path.startsWith(prefix));
+  });
+  if (!entries.length) return {};
+  const sorted = entries.slice().sort((a, b) => Number(a.startTime || 0) - Number(b.startTime || 0));
+  const firstStart = Math.min(...sorted.map((entry) => Number(entry.startTime || 0)));
+  const lastEnd = Math.max(...sorted.map((entry) => Number(entry.responseEnd || entry.duration || 0)));
+  const totalBytes = sorted.reduce((sum, entry) => {
+    const bytes = Number(entry.transferSize || entry.encodedBodySize || entry.decodedBodySize || 0);
+    return sum + Math.max(0, bytes);
+  }, 0);
+  const latencies = sorted
+    .map((entry) => Number(entry.responseStart || 0) - Number(entry.startTime || 0))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  const endGaps = [];
+  for (let i = 1; i < sorted.length; i += 1) {
+    const previous = Number(sorted[i - 1].responseEnd || sorted[i - 1].startTime || 0);
+    const current = Number(sorted[i].startTime || 0);
+    if (current >= previous) endGaps.push(current - previous);
+  }
+  const spanMs = Math.max(0, lastEnd - firstStart);
+  return {
+    resource_request_count: sorted.length,
+    resource_total_bytes: totalBytes,
+    resource_span_ms: spanMs,
+    resource_throughput_bps: spanMs > 0 && totalBytes > 0 ? (totalBytes * 8 * 1000) / spanMs : 0,
+    resource_first_byte_ms: latencies.length ? latencies[0] : null,
+    resource_avg_latency_ms: latencies.length ? latencies.reduce((sum, n) => sum + n, 0) / latencies.length : null,
+    resource_jitter_ms: videoStddev(endGaps),
+  };
+}
+
+function videoStreamDebugObservedStats(player, snapshot = {}) {
+  const metrics = videoState.streamDebugMetrics || {};
+  const elapsedMs = Math.max(0, performance.now() - Number(metrics.started_at_ms || performance.now()));
+  const resource = videoResourceTimingStats(snapshot);
+  const realtimeBytes = Number(snapshot.realtime_bytes_received || 0);
+  const bytes = Number(realtimeBytes || metrics.bytes_received || resource.resource_total_bytes || 0);
+  const throughputBps = elapsedMs > 0 && bytes > 0 ? (bytes * 8 * 1000) / elapsedMs : 0;
+  const chunkGaps = metrics.chunk_gaps_ms || [];
+  const hlsLatencies = metrics.hls_fragment_latencies_ms || [];
+  const hlsLoadTimes = metrics.hls_fragment_load_ms || [];
+  const quality = videoPlayerQualityStats(player);
+  const hls = videoHlsDebugStats();
+  const bufferHealth = videoPlayerBufferHealthSeconds(player);
+  const edgeLatency = videoPlayerEdgeLatencySeconds(player);
+  return {
+    observed_download_rate_bps: realtimeBytes
+      ? throughputBps
+      : (Number(hls.hls_bandwidth_estimate_bps || 0) || Number(resource.resource_throughput_bps || 0) || throughputBps),
+    hls_bandwidth_estimate_bps: hls.hls_bandwidth_estimate_bps || 0,
+    buffer_health_sec: bufferHealth,
+    edge_latency_sec: edgeLatency,
+    startup_latency_ms: Number(metrics.first_playing_ms || 0) || null,
+    first_chunk_ms: Number(snapshot.realtime_first_chunk_ms || metrics.first_chunk_ms || resource.resource_first_byte_ms || 0) || null,
+    avg_request_latency_ms: resource.resource_avg_latency_ms ?? (hlsLatencies.length ? hlsLatencies.reduce((sum, n) => sum + n, 0) / hlsLatencies.length : null),
+    chunk_jitter_ms: videoStddev(chunkGaps.length ? chunkGaps : (hlsLoadTimes.length ? hlsLoadTimes : [])) || Number(resource.resource_jitter_ms || 0),
+    chunk_gap_avg_ms: chunkGaps.length ? chunkGaps.reduce((sum, n) => sum + n, 0) / chunkGaps.length : 0,
+    chunks_received: Number(snapshot.realtime_chunks_received || metrics.chunks_received || metrics.hls_fragments_loaded || resource.resource_request_count || 0),
+    bytes_received: Number(snapshot.realtime_bytes_received || metrics.bytes_received || resource.resource_total_bytes || 0),
+    resource_request_count: Number(resource.resource_request_count || 0),
+    resource_total_bytes: Number(resource.resource_total_bytes || 0),
+    waiting_count: Number(metrics.waiting_count || 0),
+    stalled_count: Number(metrics.stalled_count || 0),
+    ...quality,
+    ...hls,
+    ...resource,
+  };
+}
+
+function videoHlsDebugFallbackStats(stats = {}, snapshot = {}) {
+  const metrics = videoState.streamDebugMetrics || {};
+  const entries = typeof performance?.getEntriesByType === "function"
+    ? performance.getEntriesByType("resource")
+    : [];
+  const videoId = String(snapshot?.video_id || "");
+  const hlsEntries = entries.filter((entry) => {
+    const path = videoDebugUrlPath(entry?.name || "");
+    if (!path.includes("/hls/")) return false;
+    if (!videoId) return true;
+    return path.includes(`/api/videos/${encodeURIComponent(videoId)}/hls/`)
+      || path.includes(`/api/videos/${videoId}/hls/`);
+  });
+  const playlistEntries = hlsEntries.filter((entry) => {
+    const path = videoDebugUrlPath(entry?.name || "");
+    return path.endsWith(".m3u8");
+  });
+  const segmentEntries = hlsEntries.filter((entry) => {
+    const path = videoDebugUrlPath(entry?.name || "");
+    return !path.endsWith(".m3u8") && !path.endsWith(".vtt");
+  });
+  const segmentBytes = segmentEntries.reduce((sum, entry) => (
+    sum + Number(entry.transferSize || entry.encodedBodySize || entry.decodedBodySize || 0)
+  ), 0);
+  const segmentDurations = segmentEntries
+    .map((entry) => Number(entry.duration || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const avgSegmentMs = segmentDurations.length
+    ? segmentDurations.reduce((sum, value) => sum + value, 0) / segmentDurations.length
+    : null;
+  const jitterMs = segmentDurations.length > 1
+    ? Math.sqrt(segmentDurations.reduce((sum, value) => sum + Math.pow(value - avgSegmentMs, 2), 0) / segmentDurations.length)
+    : null;
+  const firstStart = segmentEntries.reduce((min, entry) => Math.min(min, Number(entry.startTime || Infinity)), Infinity);
+  const lastEnd = segmentEntries.reduce((max, entry) => Math.max(max, Number(entry.responseEnd || (entry.startTime || 0) + (entry.duration || 0))), 0);
+  const elapsedSec = Number.isFinite(firstStart) && lastEnd > firstStart ? (lastEnd - firstStart) / 1000 : 0;
+  const hlsEventLoads = Array.isArray(metrics.hls_fragment_load_ms) ? metrics.hls_fragment_load_ms : [];
+  const hlsEventLatencies = Array.isArray(metrics.hls_fragment_latencies_ms) ? metrics.hls_fragment_latencies_ms : [];
+  const avgEventLoadMs = hlsEventLoads.length
+    ? hlsEventLoads.reduce((sum, value) => sum + Number(value || 0), 0) / hlsEventLoads.length
+    : null;
+  const avgEventLatencyMs = hlsEventLatencies.length
+    ? hlsEventLatencies.reduce((sum, value) => sum + Number(value || 0), 0) / hlsEventLatencies.length
+    : null;
+  const eventFragments = Number(metrics.hls_fragments_loaded || stats.hls_fragments_loaded || 0);
+  const eventBytes = Number(metrics.hls_fragment_bytes || stats.hls_fragment_bytes || 0);
+  const eventBandwidth = Number(metrics.hls_bandwidth_estimate_bps || stats.hls_bandwidth_estimate_bps || 0);
+  return {
+    ...stats,
+    hls_debug_source: eventFragments ? "hls.js" : (segmentEntries.length ? "resource_timing" : "none"),
+    hls_playlist_requests: Number(stats.hls_playlist_requests || playlistEntries.length || 0),
+    hls_segment_requests: Number(stats.hls_segment_requests || segmentEntries.length || 0),
+    hls_fragments_loaded: Number(eventFragments || stats.hls_fragments_loaded || segmentEntries.length || 0),
+    hls_fragment_bytes: Number(eventBytes || stats.hls_fragment_bytes || segmentBytes || 0),
+    hls_segment_bytes: Number(stats.hls_segment_bytes || segmentBytes || 0),
+    hls_avg_fragment_load_ms: stats.hls_avg_fragment_load_ms ?? avgEventLoadMs ?? avgSegmentMs,
+    hls_avg_fragment_latency_ms: stats.hls_avg_fragment_latency_ms ?? avgEventLatencyMs ?? avgSegmentMs,
+    hls_segment_jitter_ms: stats.hls_segment_jitter_ms ?? jitterMs,
+    hls_observed_bandwidth_bps: Number(stats.hls_observed_bandwidth_bps || eventBandwidth || (elapsedSec > 0 && segmentBytes > 0 ? (segmentBytes * 8) / elapsedSec : 0)),
+  };
+}
+
+function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
+  const summary = $("video-stream-debug-summary");
+  if (!summary) return;
+  const modeText = String(snapshot.playback_source_mode || snapshot.selected_service_mode || "").trim();
+  const selectedText = String(snapshot.selected_service_mode || "").trim();
+  const isHlsMode = modeText.includes("hls") || selectedText === "prepared_hls";
+  const isRealtimeMode = modeText.includes("realtime_proxy") || selectedText === "realtime_proxy";
+  const isDirectMode = !isHlsMode && !isRealtimeMode && (modeText.includes("direct") || selectedText === "direct");
+  const rows = [
+    ["模式", snapshot.playback_source_mode || snapshot.selected_service_mode || "-"],
+    ["Buffer Health", stats.buffer_health_sec == null ? "-" : videoFormatDebugNumber(stats.buffer_health_sec, 2, " s")],
+    ["啟播延遲", stats.startup_latency_ms == null ? "-" : videoFormatDebugNumber(stats.startup_latency_ms, 0, " ms")],
+    ["解析度", snapshot.player?.video_size || stats.hls_level_resolution || "-"],
+    ["FPS", stats.frame_rate_fps ? videoFormatDebugNumber(stats.frame_rate_fps, 1) : "-"],
+    ["掉幀", stats.total_frames ? `${stats.dropped_frames}/${stats.total_frames} (${videoFormatDebugNumber(stats.dropped_frame_percent, 2, "%")})` : "-"],
+    ["等待/停滯", `${stats.waiting_count || 0}/${stats.stalled_count || 0}`],
+  ];
+  if (isDirectMode) {
+    rows.splice(1, 0,
+      ["直接串流速率", videoFormatDebugMbps(stats.observed_download_rate_bps)],
+      ["直接請求延遲", stats.avg_request_latency_ms == null ? "-" : videoFormatDebugNumber(stats.avg_request_latency_ms, 0, " ms")],
+      ["直接請求數", String(stats.resource_request_count || 0)],
+      ["直接 bytes", stats.bytes_received ? videoFormatBytes(stats.bytes_received) : "-"],
+    );
+  }
+  if (isRealtimeMode) {
+    rows.splice(1, 0,
+      ["即時 Source API", snapshot.selected_source_api || snapshot.source_api || "-"],
+      ["即時 codec 支援", snapshot.is_type_supported_result == null ? "-" : String(snapshot.is_type_supported_result)],
+      ["即時串流速率", videoFormatDebugMbps(stats.observed_download_rate_bps)],
+      ["即時首包延遲", stats.first_chunk_ms == null ? "-" : videoFormatDebugNumber(stats.first_chunk_ms, 0, " ms")],
+      ["即時 chunk 抖動", stats.chunk_jitter_ms ? videoFormatDebugNumber(stats.chunk_jitter_ms, 0, " ms") : "-"],
+      ["即時 chunks", String(stats.chunks_received || 0)],
+      ["即時 bytes", stats.realtime_bytes_received ? videoFormatBytes(stats.realtime_bytes_received) : "-"],
+    );
+  }
+  if (isHlsMode) {
+    rows.splice(1, 0,
+      ["HLS 估計頻寬", videoFormatDebugMbps(stats.hls_bandwidth_estimate_bps)],
+      ["HLS 實測頻寬", videoFormatDebugMbps(stats.hls_observed_bandwidth_bps)],
+      ["HLS 數據來源", stats.hls_debug_source || "-"],
+      ["HLS 清單/片段", `${stats.hls_playlist_requests || 0}/${stats.hls_segment_requests || stats.hls_fragments_loaded || 0}`],
+      ["HLS 片段載入", stats.hls_avg_fragment_load_ms == null ? "-" : videoFormatDebugNumber(stats.hls_avg_fragment_load_ms, 0, " ms")],
+      ["HLS 片段抖動", stats.hls_segment_jitter_ms == null ? "-" : videoFormatDebugNumber(stats.hls_segment_jitter_ms, 0, " ms")],
+      ["HLS 片段 bytes", stats.hls_fragment_bytes ? videoFormatBytes(stats.hls_fragment_bytes) : "-"],
+      ["Live/Edge Latency", stats.edge_latency_sec == null ? "-" : videoFormatDebugNumber(stats.edge_latency_sec, 2, " s")],
+    );
+  }
+  summary.innerHTML = rows.map(([label, value]) => `
+    <div class="video-stream-debug-metric">
+      <span>${sanitize(label)}</span>
+      <strong>${sanitize(String(value))}</strong>
+    </div>
+  `).join("");
+}
+
 function ensureVideoStreamDebugPanel(player = $("video-player")) {
   let wrap = $("video-stream-debug-panel");
   if (!videoStreamDebugRootAllowed()) {
@@ -301,12 +702,19 @@ function ensureVideoStreamDebugPanel(player = $("video-player")) {
         <span>root 串流診斷</span>
       </label>
       <div class="video-stream-debug-body" id="video-stream-debug-body" hidden>
-        <div class="video-stream-debug-title">串流效果與相容性</div>
-        <pre id="video-stream-debug-output"></pre>
+        <div class="video-stream-debug-title">串流數據診斷</div>
+        <div class="video-stream-debug-summary" id="video-stream-debug-summary"></div>
+        <details class="video-stream-debug-raw">
+          <summary>相容性 / 原始資料</summary>
+          <pre id="video-stream-debug-output" class="video-stream-debug-output"></pre>
+        </details>
       </div>
     `;
+    const slot = $("video-stream-debug-slot");
     const status = $("video-playback-status");
-    if (status?.parentElement) {
+    if (slot) {
+      slot.appendChild(wrap);
+    } else if (status?.parentElement) {
       status.insertAdjacentElement("afterend", wrap);
     } else if (player?.parentElement) {
       player.insertAdjacentElement("afterend", wrap);
@@ -321,8 +729,12 @@ function ensureVideoStreamDebugPanel(player = $("video-player")) {
       renderVideoStreamDebugPanel();
     });
   }
+  const slot = $("video-stream-debug-slot");
+  if (slot && wrap.parentElement !== slot) {
+    slot.appendChild(wrap);
+  }
   const status = $("video-playback-status");
-  if (status?.parentElement && wrap.previousElementSibling !== status) {
+  if (!slot && status?.parentElement && wrap.previousElementSibling !== status) {
     status.insertAdjacentElement("afterend", wrap);
   }
   wrap.hidden = false;
@@ -342,7 +754,7 @@ function renderVideoStreamDebugPanel(extra = {}) {
   const output = $("video-stream-debug-output");
   if (!output || !videoStreamDebugStoredEnabled()) return;
   const err = player?.error;
-  const snapshot = {
+  const baseSnapshot = {
     updated_at: new Date().toISOString(),
     ...videoState.streamDebugSnapshot,
     player: player ? {
@@ -358,6 +770,9 @@ function renderVideoStreamDebugPanel(extra = {}) {
       error_message: err?.message || "",
     } : null,
   };
+  const stats = videoHlsDebugFallbackStats(videoStreamDebugObservedStats(player, baseSnapshot), baseSnapshot);
+  const snapshot = { ...baseSnapshot, stats };
+  renderVideoStreamDebugSummary(stats, snapshot);
   output.textContent = JSON.stringify(snapshot, null, 2);
 }
 
@@ -365,12 +780,16 @@ function bindVideoStreamDebugPlayerEvents(player) {
   if (!player || player.dataset.streamDebugBound === "1") return;
   player.dataset.streamDebugBound = "1";
   ["loadstart", "loadedmetadata", "canplay", "playing", "waiting", "stalled", "error", "pause", "ended"].forEach((name) => {
-    player.addEventListener(name, () => renderVideoStreamDebugPanel({ last_media_event: name }));
+    player.addEventListener(name, () => {
+      videoStreamDebugRecordMediaEvent(name);
+      renderVideoStreamDebugPanel({ last_media_event: name });
+    });
   });
 }
 
 function startVideoStreamDebugSession(player, video, playback, playbackSource, sessionId) {
   if (!videoStreamDebugRootAllowed()) return;
+  videoStreamDebugResetMetrics(sessionId);
   bindVideoStreamDebugPlayerEvents(player);
   ensureVideoStreamDebugPanel(player);
   const caps = realtimeProxyMediaSourceCapabilities(playback);
@@ -1699,6 +2118,85 @@ function bindVideoStreamingServiceControl(video, playback = {}) {
   });
 }
 
+function videoPublishedStreamingModes(video, playback = {}) {
+  const raw = Array.isArray(playback?.published_streaming_modes)
+    ? playback.published_streaming_modes
+    : (Array.isArray(video?.streaming_modes) ? video.streaming_modes : []);
+  const modes = raw.map((mode) => String(mode || "").trim()).filter(Boolean);
+  return modes.length ? modes : ["direct"];
+}
+
+function renderVideoStreamingModeSettings(video, playback = {}) {
+  if (!video?.can_edit) return "";
+  const selected = new Set(videoPublishedStreamingModes(video, playback));
+  const rows = [
+    ["direct", "Basic 直接串流", "不預處理、不產生額外檔案；瀏覽器可直接播放時成本最低。"],
+    ["realtime_proxy", "Standard 即時轉封裝", "播放時即時輸出 fragmented MP4；適合原檔音訊或容器不友善但不想先轉 HLS。"],
+    ["prepared_hls", "HLS 預處理", "會產生額外串流檔案；只在你明確開啟時排程，適合高相容性播放。"],
+  ];
+  return `
+    <details class="drive-collapsible-panel video-streaming-mode-settings">
+      <summary>
+        <span>
+          <span class="drive-card-title">串流方式設定</span>
+          <span class="drive-card-sub">影片擁有者可事後增加或減少觀看者可用的串流方案。</span>
+        </span>
+      </summary>
+      <div class="drive-collapsible-body">
+        <div class="video-streaming-mode-choice-grid">
+          ${rows.map(([mode, label, help]) => `
+            <label class="video-streaming-mode-choice">
+              <input type="checkbox" name="video-streaming-mode-choice" value="${sanitize(mode)}"${selected.has(mode) ? " checked" : ""} />
+              <span>
+                <strong>${sanitize(label)}</strong>
+                <small>${sanitize(help)}</small>
+              </span>
+            </label>
+          `).join("")}
+        </div>
+        <div class="field-help">至少保留一種串流方式。關閉 HLS 不會刪除既有 HLS 產物，只是不再提供給觀看者；重新開啟時會沿用已完成產物，沒有產物才排程處理。</div>
+        <div class="drive-file-actions compact-actions" style="justify-content:flex-start;margin-top:.65rem;">
+          <button class="btn btn-sm btn-primary" type="button" data-video-streaming-modes-save="${Number(video.id || 0)}">儲存串流方式</button>
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+async function updateVideoStreamingModes(videoId) {
+  const id = Number(videoId || videoState.current?.id || 0);
+  if (!id) return;
+  const modes = Array.from(document.querySelectorAll('input[name="video-streaming-mode-choice"]:checked'))
+    .map((input) => String(input.value || "").trim())
+    .filter(Boolean);
+  if (!modes.length) {
+    videoMsg("請至少保留一種串流方式。", false);
+    return;
+  }
+  const button = document.querySelector(`[data-video-streaming-modes-save="${id}"]`);
+  if (button) button.disabled = true;
+  try {
+    const res = await apiFetch(API + `/videos/${encodeURIComponent(id)}/streaming-modes`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ streaming_modes: modes }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    const currentMode = videoSelectedServiceMode(videoState.current || { id }, json.playback || {});
+    if (!modes.includes(currentMode)) {
+      saveVideoSelectedServiceMode(videoState.current || { id }, modes.includes("direct") ? "direct" : modes[0]);
+    }
+    videoMsg(json.stream_queued ? "串流方式已更新，HLS 已排程處理。" : "串流方式已更新。", true);
+    await openVideoDetail(id);
+  } catch (err) {
+    videoMsg(err.message || "串流方式更新失敗", false);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function playbackSourceForVideo(video, playback, selectedMode = "") {
   if (playback?.mode === "e2ee_stream_v2") {
     return {
@@ -2476,6 +2974,13 @@ async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playback
         sourceBuffer.appendBuffer(value);
         appendedChunks += 1;
         appendedBytes += value.byteLength;
+        videoStreamDebugRecordChunk({
+          totalBytes,
+          appendedBytes,
+          totalChunks,
+          appendedChunks,
+          firstChunkMs,
+        });
         const now = performance.now();
         if (!lastRenderMs || now - lastRenderMs >= 500) {
           lastRenderMs = now;
@@ -3109,6 +3614,23 @@ async function attachVideoHlsJsPlayer(player, playback, sessionId) {
       applyVideoAudioTrackSelection(playback);
     });
   }
+  if (HlsCtor.Events.FRAG_LOADED) {
+    hls.on(HlsCtor.Events.FRAG_LOADED, (_event, data) => {
+      if (sessionId !== videoState.playbackSessionId) return;
+      videoStreamDebugRecordHlsFragment(data || {});
+      renderVideoStreamDebugPanel({ hls_last_event: "FRAG_LOADED" });
+    });
+  }
+  if (HlsCtor.Events.LEVEL_LOADED) {
+    hls.on(HlsCtor.Events.LEVEL_LOADED, (_event, data) => {
+      if (sessionId !== videoState.playbackSessionId) return;
+      renderVideoStreamDebugPanel({
+        hls_last_event: "LEVEL_LOADED",
+        hls_live: !!data?.details?.live,
+        hls_targetduration: data?.details?.targetduration || "",
+      });
+    });
+  }
   hls.on(HlsCtor.Events.ERROR, (_event, data) => {
     if (sessionId !== videoState.playbackSessionId) return;
     const detail = data?.details ? String(data.details) : "";
@@ -3576,10 +4098,18 @@ function renderVideoDetail(video, comments = [], playback = null) {
   videoState.subtitleShiftMs = loadVideoSubtitleShiftMs(video.id);
   showVideoWatchView();
   const videoStatus = String(video.status || "ready");
-  const videoPlayable = videoStatus === "ready";
-  const selectedServiceMode = videoSelectedServiceMode(video, playback || {});
+  let selectedServiceMode = videoSelectedServiceMode(video, playback || {});
+  const availablePlaybackModes = new Set(videoStreamingOptions(playback || {}).filter((option) => option.available).map((option) => option.mode));
+  if (videoStatus === "processing" && selectedServiceMode === "prepared_hls") {
+    if (availablePlaybackModes.has("direct")) selectedServiceMode = "direct";
+    else if (availablePlaybackModes.has("realtime_proxy")) selectedServiceMode = "realtime_proxy";
+  }
+  const processingPlayableViaLowCostMode = videoStatus === "processing" && ["direct", "realtime_proxy"].includes(selectedServiceMode) && availablePlaybackModes.has(selectedServiceMode);
+  const videoPlayable = videoStatus === "ready" || processingPlayableViaLowCostMode;
   const processingText = videoStatus === "processing"
-    ? "影音正在後台處理 HLS；你可以先做別的事，進度會顯示在任務中心，處理完成會通知上傳者。"
+    ? (processingPlayableViaLowCostMode
+      ? "HLS 正在後台處理；目前先使用已啟用的低成本串流方式播放。"
+      : "影音正在後台處理 HLS；你可以先做別的事，進度會顯示在任務中心，處理完成會通知上傳者。")
     : "影音目前不可播放。";
   const playbackSource = videoPlayable
     ? playbackSourceForVideo(video, playback, selectedServiceMode)
@@ -3683,11 +4213,13 @@ function renderVideoDetail(video, comments = [], playback = null) {
         <div class="drive-card-sub" id="video-playback-status">
           ${sanitize(playbackSource.statusText || streamStatusText || "")}
         </div>
+        <div id="video-stream-debug-slot"></div>
         ${videoPlayable ? renderVideoDanmakuControls(video) : ""}
         ${serviceControl}
         ${qualityControl}
         <div class="drive-file-actions" id="video-playback-action" style="justify-content:flex-start;margin-top:.45rem;"></div>
         ${streamActions}
+        ${renderVideoStreamingModeSettings(video, playback || {})}
         ${renderVideoSubtitleControls(video, playback || {})}
         ${shareInfo}
         <div class="drive-card-heading">
@@ -4079,6 +4611,11 @@ document.addEventListener("click", (event) => {
   const prepare = event.target.closest("[data-video-prepare-stream]");
   if (prepare) {
     prepareVideoStream(prepare.dataset.videoPrepareStream, videoState.current?.id || 0);
+    return;
+  }
+  const saveStreamingModes = event.target.closest("[data-video-streaming-modes-save]");
+  if (saveStreamingModes) {
+    updateVideoStreamingModes(saveStreamingModes.dataset.videoStreamingModesSave);
     return;
   }
   const subtitleUpload = event.target.closest("[data-video-subtitle-upload]");

@@ -8466,6 +8466,45 @@
       min-width: 5.5rem;
       max-width: 7.5rem;
     }
+    .video-streaming-mode-settings .drive-collapsible-body {
+      display: grid;
+      gap: .55rem;
+    }
+    .video-streaming-mode-choice-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+      gap: .5rem;
+    }
+    .video-streaming-mode-choice {
+      display: flex;
+      align-items: flex-start;
+      gap: .45rem;
+      min-width: 0;
+      padding: .55rem .6rem;
+      border: 1px solid color-mix(in srgb, var(--muted) 26%, transparent);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--surface) 90%, var(--accent) 10%);
+    }
+    .video-streaming-mode-choice input {
+      flex: 0 0 auto;
+      width: 1rem;
+      height: 1rem;
+      margin-top: .12rem;
+    }
+    .video-streaming-mode-choice span {
+      display: grid;
+      gap: .16rem;
+      min-width: 0;
+    }
+    .video-streaming-mode-choice strong {
+      font-size: .86rem;
+      line-height: 1.25;
+    }
+    .video-streaming-mode-choice small {
+      color: var(--muted);
+      font-size: .76rem;
+      line-height: 1.35;
+    }
     .video-audio-player {
       aspect-ratio: auto;
       min-height: 64px;
@@ -14326,6 +14365,7 @@
 }
 .video-stream-debug-panel {
   margin-top: 0.75rem;
+  width: 100%;
   border: 1px solid rgba(20, 83, 45, 0.22);
   border-radius: 14px;
   background: linear-gradient(135deg, rgba(236, 253, 245, 0.95), rgba(240, 249, 255, 0.92));
@@ -14365,9 +14405,50 @@
   letter-spacing: 0.02em;
 }
 
+.video-stream-debug-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 0.5rem;
+}
+
+.video-stream-debug-metric {
+  min-width: 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(20, 83, 45, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.64);
+}
+
+.video-stream-debug-metric span {
+  display: block;
+  color: #3f5f50;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.video-stream-debug-metric strong {
+  display: block;
+  margin-top: 0.18rem;
+  color: #0f2f23;
+  font-family: "SFMono-Regular", "Cascadia Mono", Consolas, monospace;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.video-stream-debug-raw {
+  margin-top: 0.65rem;
+}
+
+.video-stream-debug-raw summary {
+  cursor: pointer;
+  color: #14532d;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .video-stream-debug-output {
   max-height: min(44vh, 24rem);
-  margin: 0;
+  margin: 0.5rem 0 0;
   padding: 0.75rem;
   overflow: auto;
   border-radius: 10px;
@@ -14382,7 +14463,7 @@
 
 @media (min-width: 900px) {
   .video-stream-debug-panel {
-    max-width: 34rem;
+    max-width: none;
   }
 }
 
@@ -14399,6 +14480,10 @@
   .video-stream-debug-output {
     max-height: 34vh;
     font-size: 0.7rem;
+  }
+
+  .video-stream-debug-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 .profile-avatar-size-field {

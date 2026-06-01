@@ -1153,7 +1153,14 @@ def can_view_video(actor, video_row, *, for_stream=False):
     if status == "blocked":
         return bool(_actor_owns(actor, video_row["owner_user_id"]) and not for_stream)
     if status != "ready":
-        return bool(_actor_owns(actor, video_row["owner_user_id"]) and not for_stream)
+        if status == "processing" and for_stream:
+            modes = set(_normalize_video_streaming_modes(_row_get(video_row, "streaming_modes_json", "") or ["direct"]))
+            if modes.intersection({"direct", "realtime_proxy"}):
+                pass
+            else:
+                return False
+        else:
+            return bool(_actor_owns(actor, video_row["owner_user_id"]) and not for_stream)
     visibility = video_row["visibility"]
     if visibility == "public":
         if str(_row_get(video_row, "cloud_privacy_mode", "") or "").strip().lower() == "e2ee":

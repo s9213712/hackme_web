@@ -7,7 +7,7 @@ CSRF tokens, strict CSP, full security headers, rate-limit amplification.
 
 import argparse
 import gzip
-import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl, subprocess, signal, sys, platform, smtplib, ssl, urllib.parse, socket
+import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl, subprocess, signal, sys, platform, smtplib, ssl, urllib.parse, socket, tempfile
 from ipaddress import ip_address
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -421,6 +421,13 @@ if RUNTIME_BOOTSTRAP_SUPPRESSED:
     STORAGE_DIR = os.path.abspath(STORAGE_DIR)
 else:
     STORAGE_DIR = str(validate_storage_root(STORAGE_DIR, base_dir=BASE_DIR, create=not (ENTRYPOINT_DOCTOR_MODE or ENTRYPOINT_START_MODE)))
+UPLOAD_TMP_DIR = os.environ.get("HTML_LEARNING_UPLOAD_TMP_DIR", "").strip() or os.path.join(STORAGE_DIR, ".upload_tmp")
+UPLOAD_TMP_DIR = os.path.abspath(UPLOAD_TMP_DIR)
+if not ENTRYPOINT_DOCTOR_MODE:
+    os.makedirs(UPLOAD_TMP_DIR, exist_ok=True)
+for _tmp_env_key in ("TMPDIR", "TEMP", "TMP"):
+    os.environ[_tmp_env_key] = UPLOAD_TMP_DIR
+tempfile.tempdir = UPLOAD_TMP_DIR
 
 # ── Hash-chain seed (server-side only, not exposed to client) ─────────────────
 if RUNTIME_BOOTSTRAP_SUPPRESSED:
@@ -1189,7 +1196,17 @@ def ensure_runtime_finance_schema(_conn=None):
 # ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
 app.config["SECRET_KEY"] = SECRET_KEY
-MAX_UPLOAD_REQUEST_MB = _env_int("HTML_LEARNING_MAX_CONTENT_MB", 1024, minimum=128)
+
+def _configured_max_content_mb():
+    if str(os.environ.get("HTML_LEARNING_MAX_CONTENT_MB") or "").strip():
+        return _env_int("HTML_LEARNING_MAX_CONTENT_MB", 8192, minimum=128)
+    raw = _load_db_setting_value(DB_PATH, "server_max_content_mb")
+    try:
+        return max(128, int(str(raw).strip())) if raw else int(DEFAULT_SETTINGS.get("server_max_content_mb") or 8192)
+    except Exception:
+        return int(DEFAULT_SETTINGS.get("server_max_content_mb") or 8192)
+
+MAX_UPLOAD_REQUEST_MB = _configured_max_content_mb()
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_MB * 1024 * 1024
 MAX_FORM_MEMORY_KB = _env_int("HTML_LEARNING_MAX_FORM_MEMORY_KB", 512, minimum=64)
 MAX_FORM_PARTS = _env_int("HTML_LEARNING_MAX_FORM_PARTS", 1000, minimum=100)

@@ -257,7 +257,13 @@ def register_video_routes(app, deps):
     def _send_hls_master_manifest(path, *, share_session_id=""):
         text = repair_hls_master_manifest_text(Path(path).read_text(encoding="utf-8"))
         text = _append_share_session_to_hls_manifest(text, share_session_id)
-        return Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
+        response = Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
+        return _attach_stream_observability_headers(
+            response,
+            mode="hls_manifest",
+            total_bytes=len(text.encode("utf-8")),
+            content_bytes=len(text.encode("utf-8")),
+        )
 
     def _subtitle_match(asset, subtitle_name):
         clean = str(subtitle_name or "").strip()
@@ -287,7 +293,27 @@ def register_video_routes(app, deps):
             )
         return _send_storage_file(path, as_attachment=False, download_name=download_name, mimetype="text/vtt; charset=utf-8")
 
-    def _send_storage_file(path, *, as_attachment=False, download_name="download.bin", mimetype=None, conditional=True):
+    def _attach_stream_observability_headers(response, *, mode, total_bytes=0, content_bytes=0):
+        try:
+            total = max(0, int(total_bytes or 0))
+        except Exception:
+            total = 0
+        try:
+            sent = max(0, int(content_bytes or 0))
+        except Exception:
+            sent = total
+        response.headers.setdefault("Timing-Allow-Origin", "*")
+        response.headers.setdefault("X-Hackme-Streaming-Mode", str(mode or "direct"))
+        response.headers.setdefault("X-Hackme-Stream-Total-Bytes", str(total))
+        response.headers.setdefault("X-Hackme-Stream-Content-Bytes", str(sent))
+        response.headers.setdefault("Server-Timing", f'hackme_stream;desc="{str(mode or "direct")}"')
+        return response
+
+    def _send_storage_file(path, *, as_attachment=False, download_name="download.bin", mimetype=None, conditional=True, stream_mode="direct"):
+        try:
+            total_bytes = int(Path(path).stat().st_size)
+        except Exception:
+            total_bytes = 0
         offloaded = x_accel_response(
             path,
             storage_root=storage_root,
@@ -296,7 +322,7 @@ def register_video_routes(app, deps):
             mimetype=mimetype or mimetypes.guess_type(str(download_name or ""))[0] or "application/octet-stream",
         )
         if offloaded is not None:
-            return offloaded
+            return _attach_stream_observability_headers(offloaded, mode=stream_mode, total_bytes=total_bytes, content_bytes=total_bytes)
         response = send_file(
             path,
             as_attachment=as_attachment,
@@ -305,7 +331,7 @@ def register_video_routes(app, deps):
             conditional=conditional,
         )
         response.headers.setdefault("X-Hackme-Transfer-Mode", "python_send_file")
-        return response
+        return _attach_stream_observability_headers(response, mode=stream_mode, total_bytes=total_bytes, content_bytes=total_bytes)
 
     def _playback_mimetype_for_row(row, *, default="video/mp4"):
         filename = str((row["original_filename_plain_for_public"] if "original_filename_plain_for_public" in row.keys() else "") or "")
@@ -348,19 +374,21 @@ def register_video_routes(app, deps):
             response = Response(status=416)
             response.headers["Content-Range"] = f"bytes */{total}"
             response.headers["Accept-Ranges"] = "bytes"
-            return response
+            return _attach_stream_observability_headers(response, mode="direct", total_bytes=total, content_bytes=0)
         if byte_range:
             start, end = byte_range
             response = Response(raw[start:end + 1], status=206, mimetype=mimetype)
             response.headers["Content-Range"] = f"bytes {start}-{end}/{total}"
             response.headers["Content-Length"] = str(end - start + 1)
+            content_bytes = end - start + 1
         else:
             response = Response(raw, status=200, mimetype=mimetype)
             response.headers["Content-Length"] = str(total)
+            content_bytes = total
         response.headers["Accept-Ranges"] = "bytes"
         response.headers["Content-Disposition"] = build_content_disposition("inline", download_name)
         response.headers["X-Hackme-Transfer-Mode"] = "python_server_decrypt"
-        return response
+        return _attach_stream_observability_headers(response, mode="direct_server_decrypt", total_bytes=total, content_bytes=content_bytes)
 
     def _send_video_readable_file(row, path, *, download_name, mimetype):
         if not is_server_encrypted_file(row):
@@ -372,7 +400,7 @@ def register_video_routes(app, deps):
                 response = Response(status=416)
                 response.headers["Content-Range"] = f"bytes */{total}"
                 response.headers["Accept-Ranges"] = "bytes"
-                return response
+                return _attach_stream_observability_headers(response, mode="direct_server_decrypt", total_bytes=total, content_bytes=0)
             start = byte_range[0] if byte_range else None
             end = byte_range[1] if byte_range else None
             content_length = (end - start + 1) if byte_range else total
@@ -390,7 +418,7 @@ def register_video_routes(app, deps):
                 response.headers["Content-Range"] = f"bytes {start}-{end}/{total}"
             response.headers["Content-Disposition"] = build_content_disposition("inline", download_name)
             response.headers["X-Hackme-Transfer-Mode"] = "python_chunked_server_decrypt"
-            return response
+            return _attach_stream_observability_headers(response, mode="direct_server_decrypt", total_bytes=total, content_bytes=content_length)
         return _send_video_bytes(decrypt_server_encrypted_bytes(path, server_file_fernet), download_name=download_name, mimetype=mimetype)
 
     def _realtime_proxy_audio_selector_from_request():
@@ -600,7 +628,12 @@ def register_video_routes(app, deps):
         if selected_audio.get("name"):
             response.headers["X-Hackme-Audio-Track"] = str(selected_audio.get("name") or "")
         response.headers["X-Hackme-Streaming-Mode"] = "realtime_proxy"
-        return response
+        return _attach_stream_observability_headers(
+            response,
+            mode="realtime_proxy",
+            total_bytes=int(file_row["size_bytes"] if "size_bytes" in file_row.keys() else 0),
+            content_bytes=0,
+        )
 
     def _video_stream_worker_key(file_id):
         return str(file_id or "").strip()
@@ -2779,7 +2812,13 @@ def register_video_routes(app, deps):
             path = resolve_file_storage_path(storage_root, {"storage_path": match["playlist_path"]})
             conn.commit()
             text = _append_share_session_to_hls_manifest(Path(path).read_text(encoding="utf-8"), share_session_id)
-            return Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
+            response = Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
+            return _attach_stream_observability_headers(
+                response,
+                mode="hls_playlist",
+                total_bytes=len(text.encode("utf-8")),
+                content_bytes=len(text.encode("utf-8")),
+            )
         finally:
             conn.close()
 
@@ -2832,7 +2871,7 @@ def register_video_routes(app, deps):
             path = resolve_file_storage_path(storage_root, {"storage_path": rel})
             mimetype = "video/mp4" if segment.endswith(".mp4") or segment.endswith(".m4s") else "application/octet-stream"
             conn.commit()
-            return _send_storage_file(path, as_attachment=False, download_name=segment, mimetype=mimetype)
+            return _send_storage_file(path, as_attachment=False, download_name=segment, mimetype=mimetype, stream_mode="hls_segment")
         finally:
             conn.close()
 
@@ -3116,6 +3155,122 @@ def register_video_routes(app, deps):
             comments = list_video_comments(conn, actor=actor, video_id=video_id, limit=100)
             return json_resp({"ok": True, "video": video, "comments": comments})
         except PermissionError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/streaming-modes", methods=["PUT"])
+    @require_csrf
+    def video_streaming_modes_update(video_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        data = request.get_json(silent=True) or request.form or {}
+        raw_modes = data.get("streaming_modes") if hasattr(data, "get") else None
+        if raw_modes is None and hasattr(data, "get"):
+            raw_modes = data.get("modes")
+        modes = _parse_streaming_modes(raw_modes, default_auto=False)
+        if not modes:
+            modes = {"direct"}
+        conn = get_db()
+        try:
+            ensure_media_stream_schema(conn)
+            video = get_video(conn, video_id, actor=actor)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            if not video.get("can_edit"):
+                return json_resp({"ok": False, "msg": "沒有權限修改此影片串流方式", "error": "forbidden"}), 403
+            previous_modes = _stored_video_streaming_modes(conn, video_id)
+            now = datetime.now().isoformat()
+            mode_payload = _streaming_modes_payload(modes)
+            conn.execute(
+                """
+                UPDATE videos
+                SET streaming_modes_json=?, updated_at=?
+                WHERE id=? AND deleted_at IS NULL
+                """,
+                (json.dumps(mode_payload, ensure_ascii=False), now, int(video_id)),
+            )
+            stream_asset, stream_warning, stream_queued = (None, "", False)
+            file_row = None
+            if "prepared_hls" in modes and "prepared_hls" not in previous_modes:
+                file_row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+                stream_asset, stream_warning, stream_queued = _maybe_prepare_stream_asset(
+                    conn,
+                    file_row=file_row,
+                    visibility=video["visibility"],
+                    video_id=video["id"],
+                    title=video["title"],
+                )
+            conn.commit()
+            if stream_queued and file_row:
+                worker_started = _start_stream_prepare_worker(
+                    file_row["id"],
+                    video_id=video["id"],
+                    owner_user_id=video["owner_user_id"],
+                    title=video["title"],
+                )
+                if not worker_started:
+                    stream_warning = "HLS 背景處理程序啟動失敗，請稍後重新排程。"
+                    _sync_hls_platform_job(
+                        conn,
+                        file_row=file_row,
+                        video_id=video["id"],
+                        owner_user_id=video["owner_user_id"],
+                        title=video["title"],
+                        status="failed",
+                        progress_percent=100,
+                        stage="launch_failed",
+                        stage_detail=stream_warning,
+                        error_message=stream_warning,
+                    )
+                else:
+                    _sync_hls_platform_job(
+                        conn,
+                        file_row=file_row,
+                        video_id=video["id"],
+                        owner_user_id=video["owner_user_id"],
+                        title=video["title"],
+                        status="running",
+                        progress_percent=10,
+                        stage="worker_started",
+                        stage_detail="HLS 外部轉檔程序已啟動；你可以先做別的事，進度會顯示在任務中心。",
+                    )
+                conn.commit()
+            updated = get_video(conn, video_id, actor=actor)
+            playback = None
+            try:
+                row = _load_stream_file(conn, file_id=updated["cloud_file_id"])
+                playback = _playback_payload_for_file(conn, row=row, video_id=video_id)
+                playback = _apply_video_streaming_mode_policy(conn, playback, video_id)
+                playback["video_id"] = int(video_id)
+            except Exception:
+                playback = None
+            audit(
+                "VIDEO_STREAMING_MODES_UPDATE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"video_id={video_id},modes={','.join(mode_payload)}",
+            )
+            return json_resp({
+                "ok": True,
+                "video": updated,
+                "playback": playback,
+                "streaming_modes": mode_payload,
+                "stream_asset": stream_asset,
+                "stream_warning": stream_warning or "",
+                "stream_queued": bool(stream_queued),
+            })
+        except PermissionError as exc:
+            conn.rollback()
+            return _error_response(exc)
+        except ValueError as exc:
+            conn.rollback()
+            return _error_response(exc)
+        except Exception as exc:
+            conn.rollback()
             return _error_response(exc)
         finally:
             conn.close()
@@ -3665,7 +3820,7 @@ def register_video_routes(app, deps):
             if not match:
                 return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
             path = resolve_file_storage_path(storage_root, {"storage_path": match["playlist_path"]})
-            return _send_storage_file(path, as_attachment=False, download_name="playlist.m3u8", mimetype="application/vnd.apple.mpegurl")
+            return _send_storage_file(path, as_attachment=False, download_name="playlist.m3u8", mimetype="application/vnd.apple.mpegurl", stream_mode="hls_playlist")
         except PermissionError as exc:
             return _error_response(exc)
         except ValueError as exc:
@@ -3769,7 +3924,7 @@ def register_video_routes(app, deps):
                     return json_resp({"ok": False, "msg": "找不到串流片段", "error": "segment_not_found"}), 404
             path = resolve_file_storage_path(storage_root, {"storage_path": rel})
             mimetype = "video/mp4" if segment.endswith(".mp4") or segment.endswith(".m4s") else "application/octet-stream"
-            return _send_storage_file(path, as_attachment=False, download_name=segment, mimetype=mimetype)
+            return _send_storage_file(path, as_attachment=False, download_name=segment, mimetype=mimetype, stream_mode="hls_segment")
         except PermissionError as exc:
             return _error_response(exc)
         except ValueError as exc:

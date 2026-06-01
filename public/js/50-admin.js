@@ -2558,6 +2558,12 @@ async function loadSettings() {
   if ($("s-comfyui-default-height")) $("s-comfyui-default-height").value = s.comfyui_default_height || 1024;
   if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
   if ($("s-cloud-drive-global-capacity-limit-mb")) $("s-cloud-drive-global-capacity-limit-mb").value = s.cloud_drive_global_capacity_limit_mb ?? -1;
+  if ($("s-server-max-content-mb")) $("s-server-max-content-mb").value = s.server_max_content_mb ?? 8192;
+  if ($("server-max-content-status")) {
+    const currentMax = Number(s.server_max_content_current_mb || s.server_max_content_mb || 0);
+    const envText = s.server_max_content_env_override ? "；目前啟動環境有 HTML_LEARNING_MAX_CONTENT_MB 覆寫，下次重啟會以啟動值為準" : "";
+    $("server-max-content-status").textContent = `目前執行上限：${currentMax || "-"} MB${envText}`;
+  }
   if ($("s-cloud-drive-transfer-limits-enabled")) $("s-cloud-drive-transfer-limits-enabled").checked = !!s.cloud_drive_transfer_limits_enabled;
   renderCloudDriveTransferLimits(s.cloud_drive_transfer_limits_json);
   if ($("s-storage-maintenance-auto-enabled")) $("s-storage-maintenance-auto-enabled").checked = !!s.storage_maintenance_auto_enabled;
@@ -4815,6 +4821,7 @@ async function saveSettings() {
     comfyui_max_batch_size: parseInt($("s-comfyui-max-batch-size")?.value || "1"),
     comfyui_default_width: parseInt($("s-comfyui-default-width")?.value || "1024"),
     comfyui_default_height: parseInt($("s-comfyui-default-height")?.value || "1024"),
+    server_max_content_mb: parseInt($("s-server-max-content-mb")?.value || "8192"),
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
     cloud_drive_global_capacity_limit_mb: parseInt($("s-cloud-drive-global-capacity-limit-mb")?.value || "-1"),
     cloud_drive_transfer_limits_enabled: !!$("s-cloud-drive-transfer-limits-enabled")?.checked,

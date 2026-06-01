@@ -1,4 +1,5 @@
 import json
+import os
 import re
 
 from flask import request
@@ -107,6 +108,11 @@ def register_system_admin_settings_routes(app, ctx):
 
     def public_settings_payload(settings):
         payload = dict(settings or {})
+        try:
+            payload["server_max_content_current_mb"] = max(0, int(app.config.get("MAX_CONTENT_LENGTH") or 0) // (1024 * 1024))
+        except Exception:
+            payload["server_max_content_current_mb"] = 0
+        payload["server_max_content_env_override"] = bool(str(os.environ.get("HTML_LEARNING_MAX_CONTENT_MB") or "").strip())
         comfyui_account_key = str(payload.get("comfyui_account_api_key") or "").strip()
         payload["comfyui_account_api_key"] = ""
         payload["comfyui_account_api_key_configured"] = bool(comfyui_account_key)
@@ -509,6 +515,11 @@ def register_system_admin_settings_routes(app, ctx):
         backpressure_error = normalize_backpressure_updates(data)
         if backpressure_error:
             return json_resp({"ok":False,"msg":backpressure_error}), 400
+        if "server_max_content_mb" in data:
+            max_content_mb = parse_int_in_range(data.get("server_max_content_mb"), 128, 1_048_576)
+            if max_content_mb is None:
+                return json_resp({"ok":False,"msg":"server_max_content_mb 必須是 128-1048576 MB"}), 400
+            data["server_max_content_mb"] = max_content_mb
         if "max_manager_seats" in data:
             seats = parse_int_in_range(data.get("max_manager_seats"), 0, 1000)
             if seats is None:
@@ -591,6 +602,8 @@ def register_system_admin_settings_routes(app, ctx):
             raise
         if not settings:
             return json_resp({"ok":False,"msg":"沒有可寫入的設定欄位"}), 400
+        if "server_max_content_mb" in settings:
+            app.config["MAX_CONTENT_LENGTH"] = int(settings["server_max_content_mb"]) * 1024 * 1024
         backpressure_state = apply_backpressure_settings(app, get_system_settings())
 
         audit_settings_changed("SETTINGS_CHANGED", actor, before_settings, settings, scope="system_settings")
