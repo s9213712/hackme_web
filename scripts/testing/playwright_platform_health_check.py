@@ -786,12 +786,25 @@ def check_trading_asset_overview(rec: Recorder, page, trading_seed: dict[str, An
         }"""
     )
     page.wait_for_selector("#trading-funding-available", state="visible", timeout=15000)
-    page.evaluate(
-        """() => {
-            if (typeof loadTradingAssetOverview === 'function') return loadTradingAssetOverview();
-            return Promise.resolve();
-        }"""
-    )
+    for _ in range(3):
+        page.evaluate(
+            """() => {
+                if (typeof loadTradingAssetOverview === 'function') return loadTradingAssetOverview();
+                return Promise.resolve();
+            }"""
+        )
+        try:
+            page.wait_for_function(
+                """() => {
+                    const total = (document.getElementById('trading-asset-total-equity')?.textContent || '').trim();
+                    const admin = (document.getElementById('trading-asset-admin-risk')?.textContent || '').trim();
+                    return total && total !== '-' && admin.includes('管理摘要');
+                }""",
+                timeout=5000,
+            )
+            break
+        except Exception:
+            page.wait_for_timeout(500)
     check_ui_quality(rec, page, "trading_asset_overview_desktop")
     ui_values = {
         "trading_available": page.locator("#trading-funding-available").inner_text(timeout=3000),
@@ -865,19 +878,23 @@ def check_trading_asset_overview(rec: Recorder, page, trading_seed: dict[str, An
 
 def check_mobile_platform_views(rec: Recorder, page, base_url: str) -> None:
     results = {}
-    for width, height in ((390, 844), (768, 1024), (1366, 768)):
-        page.set_viewport_size({"width": width, "height": height})
-        page.goto(base_url + "/", wait_until="domcontentloaded")
-        wait_for_auth_app(page, timeout=45000)
-        viewport_result = {}
-        for module in ("jobs", "shares", "economy"):
-            switch_module(page, module)
-            page.wait_for_timeout(600)
-            overflow = page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
-            active = page.locator(f"#module-{module}.active").count() == 1
-            viewport_result[module] = {"active": active, "overflow_px": int(overflow)}
-        check_ui_quality(rec, page, f"platform_{width}x{height}", mobile=width <= 640)
-        results[f"{width}x{height}"] = viewport_result
+    mobile_page = page.context.new_page()
+    try:
+        for width, height in ((390, 844), (768, 1024), (1366, 768)):
+            mobile_page.set_viewport_size({"width": width, "height": height})
+            mobile_page.goto(base_url + "/", wait_until="domcontentloaded")
+            wait_for_auth_app(mobile_page, timeout=60000)
+            viewport_result = {}
+            for module in ("jobs", "shares", "economy"):
+                switch_module(mobile_page, module)
+                mobile_page.wait_for_timeout(600)
+                overflow = mobile_page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
+                active = mobile_page.locator(f"#module-{module}.active").count() == 1
+                viewport_result[module] = {"active": active, "overflow_px": int(overflow)}
+            check_ui_quality(rec, mobile_page, f"platform_{width}x{height}", mobile=width <= 640)
+            results[f"{width}x{height}"] = viewport_result
+    finally:
+        mobile_page.close()
     failures = [
         f"{vp}:{module}:{item}"
         for vp, modules in results.items()
