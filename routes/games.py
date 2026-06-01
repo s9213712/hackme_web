@@ -89,6 +89,7 @@ SOLO_GAME_KEYS = {
     "snake",
     "game_2048",
     "brick_breaker",
+    "rubiks_cube",
     "reversi",
     "go",
     "gomoku",
@@ -106,6 +107,7 @@ SCORE_RANKED_SOLO_GAMES = {
     "snake",
     "game_2048",
     "brick_breaker",
+    "rubiks_cube",
     "reversi",
     "go",
     "gomoku",
@@ -116,7 +118,7 @@ MULTIPLAYER_MODES_BY_GAME = {
     "fps_arena": {"coop", "pvp"},
     "stickman_shooter": {"coop"},
 }
-SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'open_world', 'racing', 'bullet_hell', 'stickman_shooter', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku', 'chinese_chess'"
+SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'open_world', 'racing', 'bullet_hell', 'stickman_shooter', 'snake', 'game_2048', 'brick_breaker', 'rubiks_cube', 'reversi', 'go', 'gomoku', 'chinese_chess'"
 WEEKLY_REWARDS = (300, 200, 100)
 DAILY_CHALLENGE_REWARD_POINTS = 25
 # New chess difficulty naming. ``experiment 0:minimax2ply`` is the
@@ -1443,6 +1445,12 @@ def register_games_routes(app, deps):
             }, {
                 "key": "brick_breaker",
                 "title": "打磚塊",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "rubiks_cube",
+                "title": "3D 魔術方塊",
                 "status": "available",
                 "supports_invites": False,
                 "supports_computer": False,
