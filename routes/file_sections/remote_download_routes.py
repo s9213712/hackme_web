@@ -195,7 +195,7 @@ def register_file_remote_download_routes(app, ctx):
             "total_bytes": None,
             "progress_percent": 0,
             "speed_bytes_per_sec": 0,
-            "msg": "已加入下載佇列",
+            "msg": "已加入下載 worker 佇列",
             "error": "",
             "file": None,
             "storage_file": None,

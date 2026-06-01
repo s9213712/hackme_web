@@ -805,18 +805,29 @@ def check_trading_asset_overview(rec: Recorder, page, trading_seed: dict[str, An
         "confidence": page_text_by_id(page, "trading-asset-confidence"),
         "admin": page_text_by_id(page, "trading-asset-admin-risk"),
     }
-    failure_ctx = page.context
-    failure_ctx.route("**/api/trading/asset-overview", lambda route: route.fulfill(status=503, content_type="application/json", body='{"ok":false,"msg":"phase15 forced failure"}'))
-    page.evaluate("() => loadTradingAssetOverview()")
-    page.wait_for_timeout(900)
+    failure_pattern = "**/api/trading/asset-overview"
+    failure_body = '{"ok":false,"msg":"phase15 forced failure"}'
+    page.route(failure_pattern, lambda route: route.fulfill(status=503, content_type="application/json", body=failure_body))
+    page.evaluate("() => loadTradingAssetOverview({ quiet: false })")
+    try:
+        page.wait_for_function(
+            """() => [
+                document.getElementById('economy-msg')?.textContent || '',
+                document.getElementById('trading-inline-msg')?.textContent || '',
+                document.getElementById('trading-msg')?.textContent || ''
+            ].join('\n').includes('phase15 forced failure')""",
+            timeout=5000,
+        )
+    except Exception:
+        pass
     error_text = page.evaluate(
         """() => [
             document.getElementById('economy-msg')?.textContent || '',
             document.getElementById('trading-inline-msg')?.textContent || '',
             document.getElementById('trading-msg')?.textContent || ''
-        ].join('\\n').trim()"""
+        ].join('\n').trim()"""
     )
-    failure_ctx.unroute("**/api/trading/asset-overview")
+    page.unroute(failure_pattern)
 
     compare = {key: {"api": overview.get(key), "hand": calc[key]} for key in calc}
     numeric_ok = all(int(overview.get(key) or 0) == int(calc[key] or 0) for key in calc)

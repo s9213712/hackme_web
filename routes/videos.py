@@ -2280,9 +2280,12 @@ def register_video_routes(app, deps):
         if sensitive:
             return sensitive
         privacy_mode = str(request.form.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
-        streaming_modes = _parse_streaming_modes(request.form.get("streaming_modes"), default_auto=False)
+        raw_streaming_modes = request.form.get("streaming_modes")
+        streaming_modes = _parse_streaming_modes(raw_streaming_modes, default_auto=False)
         if privacy_mode not in {"standard_plain", "server_encrypted"}:
             return json_resp({"ok": False, "msg": "影音隱私模式不支援", "error": "unsupported_privacy_mode"}), 400
+        if not str(raw_streaming_modes or "").strip() and privacy_mode == "server_encrypted":
+            streaming_modes = {"prepared_hls"}
         cover_upload = request.files.get("cover")
         conn = get_db()
         upload_job = None
@@ -3884,6 +3887,9 @@ def register_video_routes(app, deps):
             video = get_video(conn, video_id, actor=actor, for_stream=True)
             if not video:
                 return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            modes = _stored_video_streaming_modes(conn, video_id)
+            if "direct" not in modes:
+                return json_resp({"ok": False, "msg": "直接串流未啟用，請使用已準備的 HLS 串流。", "error": "direct_stream_disabled"}), 403
             row = conn.execute(
                 "SELECT * FROM uploaded_files WHERE id=? AND deleted_at IS NULL",
                 (video["cloud_file_id"],),

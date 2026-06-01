@@ -182,9 +182,11 @@ def test_storage_upgrade_catalog_falls_back_when_points_schema_is_locked(tmp_pat
 
     assert res.status_code == 200
     assert body["ok"] is True
-    assert [item["item_key"] for item in body["catalog"]] == ["cloud_storage_1gb_30d"]
+    assert [item["item_key"] for item in body["catalog"]] == ["cloud_storage_1gb_7d", "cloud_storage_1gb_30d"]
     assert body["catalog"][0]["duration_days"] == 7
     assert body["catalog"][0]["label"] == "雲端容量 1GB / 7 天"
+    assert body["catalog"][1]["duration_days"] == 30
+    assert body["catalog"][1]["label"] == "雲端容量 1GB / 30 天"
 
 
 def test_encrypted_cloud_uploads_hide_physical_filenames_but_keep_display_name(tmp_path):

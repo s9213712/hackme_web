@@ -20,7 +20,9 @@ def _first_env(*names):
 
 def x_accel_enabled():
     raw = _first_env("HACKME_CLOUD_DRIVE_X_ACCEL_ENABLED", "HACKME_X_ACCEL_ENABLED")
-    return str(raw or "").strip().lower() in _TRUTHY
+    if str(raw or "").strip().lower() in _TRUTHY:
+        return True
+    return bool(_first_env("HACKME_CLOUD_DRIVE_X_ACCEL_PREFIX", "HACKME_X_ACCEL_STORAGE_PREFIX"))
 
 
 def x_accel_internal_uri(path, *, storage_root):

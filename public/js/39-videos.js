@@ -340,10 +340,10 @@ function videoFormatDebugNumber(value, digits = 2, suffix = "") {
   return `${n.toFixed(digits)}${suffix}`;
 }
 
-function videoFormatDebugMbps(bps) {
-  const value = Number(bps || 0);
+function videoFormatDebugMegabitsPerSecond(bitsPerSecond) {
+  const value = Number(bitsPerSecond || 0);
   if (!Number.isFinite(value) || value <= 0) return "-";
-  return `${(value / 1000 / 1000).toFixed(2)} Mbps`;
+  return `${(value / 1000 / 1000).toFixed(2)} Mbit/s`;
 }
 
 function videoStreamDebugResetMetrics(sessionId) {
@@ -466,13 +466,13 @@ function videoHlsDebugStats() {
   const levelIndex = Number.isFinite(Number(hls.currentLevel)) ? Number(hls.currentLevel) : -1;
   const level = Array.isArray(hls.levels) && levelIndex >= 0 ? hls.levels[levelIndex] : null;
   return {
-    hls_bandwidth_estimate_bps: Number(hls.bandwidthEstimate || 0),
+    hls_bandwidth_estimate_bitsPerSecond: Number(hls.bandwidthEstimate || 0),
     hls_latency_sec: Number.isFinite(Number(hls.latency)) ? Number(hls.latency) : null,
     hls_live_sync_position: Number.isFinite(Number(hls.liveSyncPosition)) ? Number(hls.liveSyncPosition) : null,
     hls_current_level: levelIndex,
     hls_load_level: Number.isFinite(Number(hls.loadLevel)) ? Number(hls.loadLevel) : null,
     hls_next_level: Number.isFinite(Number(hls.nextLevel)) ? Number(hls.nextLevel) : null,
-    hls_level_bitrate_bps: Number(level?.bitrate || 0),
+    hls_level_bitrate_bitsPerSecond: Number(level?.bitrate || 0),
     hls_level_resolution: level ? `${Number(level.width || 0)}x${Number(level.height || 0)}` : "",
     hls_level_codec: level ? [level.videoCodec, level.audioCodec].filter(Boolean).join(" / ") : "",
   };
@@ -542,7 +542,7 @@ function videoResourceTimingStats(snapshot = {}) {
     resource_request_count: sorted.length,
     resource_total_bytes: totalBytes,
     resource_span_ms: spanMs,
-    resource_throughput_bps: spanMs > 0 && totalBytes > 0 ? (totalBytes * 8 * 1000) / spanMs : 0,
+    resource_throughput_bitsPerSecond: spanMs > 0 && totalBytes > 0 ? (totalBytes * 8 * 1000) / spanMs : 0,
     resource_first_byte_ms: latencies.length ? latencies[0] : null,
     resource_avg_latency_ms: latencies.length ? latencies.reduce((sum, n) => sum + n, 0) / latencies.length : null,
     resource_jitter_ms: videoStddev(endGaps),
@@ -555,7 +555,7 @@ function videoStreamDebugObservedStats(player, snapshot = {}) {
   const resource = videoResourceTimingStats(snapshot);
   const realtimeBytes = Number(snapshot.realtime_bytes_received || 0);
   const bytes = Number(realtimeBytes || metrics.bytes_received || resource.resource_total_bytes || 0);
-  const throughputBps = elapsedMs > 0 && bytes > 0 ? (bytes * 8 * 1000) / elapsedMs : 0;
+  const throughputBitsPerSecond = elapsedMs > 0 && bytes > 0 ? (bytes * 8 * 1000) / elapsedMs : 0;
   const chunkGaps = metrics.chunk_gaps_ms || [];
   const hlsLatencies = metrics.hls_fragment_latencies_ms || [];
   const hlsLoadTimes = metrics.hls_fragment_load_ms || [];
@@ -564,10 +564,10 @@ function videoStreamDebugObservedStats(player, snapshot = {}) {
   const bufferHealth = videoPlayerBufferHealthSeconds(player);
   const edgeLatency = videoPlayerEdgeLatencySeconds(player);
   return {
-    observed_download_rate_bps: realtimeBytes
-      ? throughputBps
-      : (Number(hls.hls_bandwidth_estimate_bps || 0) || Number(resource.resource_throughput_bps || 0) || throughputBps),
-    hls_bandwidth_estimate_bps: hls.hls_bandwidth_estimate_bps || 0,
+    observed_download_rate_bitsPerSecond: realtimeBytes
+      ? throughputBitsPerSecond
+      : (Number(hls.hls_bandwidth_estimate_bitsPerSecond || 0) || Number(resource.resource_throughput_bitsPerSecond || 0) || throughputBitsPerSecond),
+    hls_bandwidth_estimate_bitsPerSecond: hls.hls_bandwidth_estimate_bitsPerSecond || 0,
     buffer_health_sec: bufferHealth,
     edge_latency_sec: edgeLatency,
     startup_latency_ms: Number(metrics.first_playing_ms || 0) || null,
@@ -705,7 +705,7 @@ function videoHlsDebugFallbackStats(stats = {}, snapshot = {}) {
     : null;
   const eventFragments = Number(metrics.hls_fragments_loaded || stats.hls_fragments_loaded || 0);
   const eventBytes = Number(metrics.hls_fragment_bytes || stats.hls_fragment_bytes || 0);
-  const eventBandwidth = Number(metrics.hls_bandwidth_estimate_bps || stats.hls_bandwidth_estimate_bps || 0);
+  const eventBandwidth = Number(metrics.hls_bandwidth_estimate_bitsPerSecond || stats.hls_bandwidth_estimate_bitsPerSecond || 0);
   return {
     ...stats,
     hls_debug_source: eventFragments ? "hls.js" : (segmentEntries.length ? "resource_timing" : "none"),
@@ -717,7 +717,7 @@ function videoHlsDebugFallbackStats(stats = {}, snapshot = {}) {
     hls_avg_fragment_load_ms: stats.hls_avg_fragment_load_ms ?? avgEventLoadMs ?? avgSegmentMs,
     hls_avg_fragment_latency_ms: stats.hls_avg_fragment_latency_ms ?? avgEventLatencyMs ?? avgSegmentMs,
     hls_segment_jitter_ms: stats.hls_segment_jitter_ms ?? jitterMs,
-    hls_observed_bandwidth_bps: Number(stats.hls_observed_bandwidth_bps || eventBandwidth || (elapsedSec > 0 && segmentBytes > 0 ? (segmentBytes * 8) / elapsedSec : 0)),
+    hls_observed_bandwidth_bitsPerSecond: Number(stats.hls_observed_bandwidth_bitsPerSecond || eventBandwidth || (elapsedSec > 0 && segmentBytes > 0 ? (segmentBytes * 8) / elapsedSec : 0)),
   };
 }
 
@@ -749,7 +749,7 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
   }
   if (isDirectMode) {
     rows.splice(1, 0,
-      ["直接串流速率", videoFormatDebugMbps(stats.observed_download_rate_bps)],
+      ["直接串流速率", videoFormatDebugMegabitsPerSecond(stats.observed_download_rate_bitsPerSecond)],
       ["直接請求延遲", stats.avg_request_latency_ms == null ? "-" : videoFormatDebugNumber(stats.avg_request_latency_ms, 0, " ms")],
       ["直接請求數", String(stats.resource_request_count || 0)],
       ["直接 bytes", stats.bytes_received ? videoFormatBytes(stats.bytes_received) : "-"],
@@ -764,7 +764,7 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
       ["即時槽位", runtime.limit ? `${runtime.active || 0}/${runtime.limit} (${runtime.scope || "-"})` : "-"],
       ["即時 Source API", snapshot.selected_source_api || snapshot.source_api || "-"],
       ["即時 codec 支援", snapshot.is_type_supported_result == null ? "-" : String(snapshot.is_type_supported_result)],
-      ["即時串流速率", videoFormatDebugMbps(stats.observed_download_rate_bps)],
+      ["即時串流速率", videoFormatDebugMegabitsPerSecond(stats.observed_download_rate_bitsPerSecond)],
       ["即時首包延遲", stats.first_chunk_ms == null ? "-" : videoFormatDebugNumber(stats.first_chunk_ms, 0, " ms")],
       ["即時 chunk 抖動", stats.chunk_jitter_ms ? videoFormatDebugNumber(stats.chunk_jitter_ms, 0, " ms") : "-"],
       ["即時 chunks", String(stats.chunks_received || 0)],
@@ -773,8 +773,8 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
   }
   if (isHlsMode) {
     rows.splice(1, 0,
-      ["HLS 估計頻寬", videoFormatDebugMbps(stats.hls_bandwidth_estimate_bps)],
-      ["HLS 實測頻寬", videoFormatDebugMbps(stats.hls_observed_bandwidth_bps)],
+      ["HLS 估計頻寬", videoFormatDebugMegabitsPerSecond(stats.hls_bandwidth_estimate_bitsPerSecond)],
+      ["HLS 實測頻寬", videoFormatDebugMegabitsPerSecond(stats.hls_observed_bandwidth_bitsPerSecond)],
       ["HLS 數據來源", stats.hls_debug_source || "-"],
       ["HLS 清單/片段", `${stats.hls_playlist_requests || 0}/${stats.hls_segment_requests || stats.hls_fragments_loaded || 0}`],
       ["HLS 片段載入", stats.hls_avg_fragment_load_ms == null ? "-" : videoFormatDebugNumber(stats.hls_avg_fragment_load_ms, 0, " ms")],

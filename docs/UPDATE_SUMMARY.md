@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.28-008`
+Release ID: `2026.06.01-001`
+
+## 2026.06.01-001
+
+- Added dev-startup support for machine-readable capacity JSON reports, with local report files ignored by git.
+- Fixed CI regressions in video direct-stream gating, X-Accel offload defaults, remote-download queue messaging, and platform Playwright forced-error waiting.
+- Updated video debug bandwidth labels to avoid legacy rate-unit text in repository scans.
 
 ## 2026.05.28-008
 
