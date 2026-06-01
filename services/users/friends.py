@@ -2,7 +2,12 @@ from datetime import datetime
 
 from services.system.notifications import create_notification, notifications_enabled
 
-from services.users.profiles import ensure_user_profile_schema, get_or_create_profile, profile_style_for_payload
+from services.users.profiles import (
+    ensure_user_profile_schema,
+    get_or_create_profile,
+    profile_style_for_payload,
+    public_account_fields_for_payload,
+)
 
 
 FRIEND_STATUSES = {"pending", "accepted", "rejected", "blocked"}
@@ -519,6 +524,7 @@ def get_profile_payload(conn, *, target_user_id, viewer=None):
         payload["friend_code"] = profile.get("friend_code") or ""
         payload["friend_code_rotated_at"] = profile.get("friend_code_rotated_at") or ""
         payload["display_timezone"] = profile.get("display_timezone") or "auto"
+        payload["profile_public_account_fields"] = public_account_fields_for_payload(profile)
     return payload
 
 

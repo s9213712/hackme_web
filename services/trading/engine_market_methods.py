@@ -5,6 +5,7 @@ method bodies can reuse the same module-level helpers and constants without
 changing runtime behavior.
 """
 
+import json
 import os
 
 from services.trading import engine as _engine

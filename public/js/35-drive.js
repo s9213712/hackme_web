@@ -57,6 +57,7 @@ const DRIVE_E2EE_PBKDF2_ITERATIONS = 310000;
 const DRIVE_E2EE_PREVIEW_NO_RECENT_PASSWORD = "無法預覽：本次登入尚無最近輸入過的 E2EE 密碼可試。";
 const DRIVE_E2EE_PREVIEW_DECRYPT_FAILED = "無法預覽：最近輸入過的 E2EE 密碼無法解開此檔案。";
 const DRIVE_SHARE_FRAGMENT_STORAGE_KEY = "hackme_web.drive_share_fragments";
+const DRIVE_E2EE_BROWSER_SESSION_KEY_PREFIX = "hackme_web.drive_e2ee_session_passphrase.";
 const DRIVE_SHARE_COPY_RESET_MS = 1800;
 const driveE2eeSessionPassphrases = new Map();
 const driveE2eeRecentSessionPassphrases = [];
@@ -324,8 +325,87 @@ function driveE2eeModeSelected() {
   return isDriveE2eeMode($("drive-upload-privacy-mode")?.value || "");
 }
 
+function drivePasswordStrengthPolicyEnabled() {
+  const liveSetting = $("s-password-strength-policy-enabled");
+  if (liveSetting) return !!liveSetting.checked;
+  const configs = [];
+  if (typeof siteConfig !== "undefined" && siteConfig && typeof siteConfig === "object") configs.push(siteConfig);
+  if (typeof window !== "undefined") {
+    configs.push(window.siteConfig || {}, window.publicConfig || {}, window.APP_CONFIG || {});
+  }
+  for (const cfg of configs) {
+    if (cfg && Object.prototype.hasOwnProperty.call(cfg, "password_strength_policy_enabled")) {
+      return cfg.password_strength_policy_enabled !== false;
+    }
+  }
+  return true;
+}
+
+function syncDriveE2eePassphrasePolicyHints() {
+  const strict = drivePasswordStrengthPolicyEnabled();
+  const sessionHint = strict ? "依目前密碼安全政策" : "安全政策已關閉，只需非空白密碼";
+  const uploadHint = strict ? "至少 8 個字元並提高複雜度" : "安全政策已關閉，只需非空白密碼";
+  const sessionInput = $("drive-e2ee-session-passphrase");
+  const uploadInput = $("drive-upload-mode-passphrase");
+  const legacyInput = $("drive-e2ee-passphrase");
+  if (sessionInput) sessionInput.placeholder = sessionHint;
+  if (uploadInput) uploadInput.placeholder = uploadHint;
+  if (legacyInput) legacyInput.placeholder = uploadHint;
+}
+
+function driveE2eeBrowserSessionKey() {
+  return `${DRIVE_E2EE_BROWSER_SESSION_KEY_PREFIX}${currentUserId || "anon"}`;
+}
+
+function getDriveE2eeBrowserSessionPassphrase() {
+  try {
+    return sessionStorage.getItem(driveE2eeBrowserSessionKey()) || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function rememberDriveE2eeBrowserSessionPassphrase(passphrase) {
+  const normalized = String(passphrase || "");
+  if (!normalized) return;
+  try {
+    sessionStorage.setItem(driveE2eeBrowserSessionKey(), normalized);
+  } catch (_) {}
+}
+
+function clearDriveE2eeBrowserSessionPassphrase() {
+  try {
+    sessionStorage.removeItem(driveE2eeBrowserSessionKey());
+  } catch (_) {}
+}
+
+function setDriveE2eeSessionPassphraseFromUi() {
+  syncDriveE2eePassphrasePolicyHints();
+  const input = $("drive-e2ee-session-passphrase");
+  const msg = $("drive-e2ee-session-msg");
+  const passphrase = input?.value || "";
+  const policy = validateDriveE2eePassphraseStrength(passphrase);
+  if (!policy.ok) {
+    if (msg) flash(msg, policy.msg, false);
+    return;
+  }
+  rememberDriveE2eeRecentSessionPassphrase(passphrase);
+  rememberDriveE2eeBrowserSessionPassphrase(passphrase);
+  if (input) input.value = "";
+  if (msg) flash(msg, "已套用到本次瀏覽器工作階段；登出或清除後會移除。", true);
+}
+
+function clearDriveE2eeSessionPassphraseFromUi() {
+  clearDriveE2eeSessionPassphrases();
+  const input = $("drive-e2ee-session-passphrase");
+  const msg = $("drive-e2ee-session-msg");
+  if (input) input.value = "";
+  if (msg) flash(msg, "已清除本次瀏覽器 E2EE 密碼。", true);
+}
+
 function askDriveUploadPrivacyOptions({ allowE2ee = true, title = "選擇隱私模式" } = {}) {
   return new Promise((resolve) => {
+    syncDriveE2eePassphrasePolicyHints();
     const overlay = $("drive-upload-mode-overlay");
     const titleEl = $("drive-upload-mode-title");
     const e2eeChoice = $("drive-upload-mode-e2ee-choice");
@@ -349,6 +429,14 @@ function askDriveUploadPrivacyOptions({ allowE2ee = true, title = "選擇隱私�
     const sync = () => {
       const isE2ee = selectedMode() === "e2ee";
       if (e2eeFields) e2eeFields.style.display = isE2ee ? "" : "none";
+      if (isE2ee && passphraseInput && !passphraseInput.value) {
+        const remembered = getDriveE2eeBrowserSessionPassphrase();
+        if (remembered) {
+          passphraseInput.value = remembered;
+          if (passphraseConfirm) passphraseConfirm.value = remembered;
+          setMsg("已套用本次瀏覽器工作階段暫存的 E2EE 密碼。", true);
+        }
+      }
     };
     const cleanup = (value) => {
       confirmBtn.removeEventListener("click", onConfirm);
@@ -385,6 +473,7 @@ function askDriveUploadPrivacyOptions({ allowE2ee = true, title = "選擇隱私�
         }
         options.passphrase = passphrase;
         rememberDriveE2eeRecentSessionPassphrase(passphrase);
+        rememberDriveE2eeBrowserSessionPassphrase(passphrase);
       }
       cleanup(options);
     };
@@ -457,6 +546,7 @@ function driveE2eeKnownFileIds(fileId) {
 function clearDriveE2eeSessionPassphrases() {
   driveE2eeSessionPassphrases.clear();
   driveE2eeRecentSessionPassphrases.length = 0;
+  clearDriveE2eeBrowserSessionPassphrase();
 }
 
 function hasActiveDriveUploads() {
@@ -473,6 +563,13 @@ window.hasActiveDriveUploads = hasActiveDriveUploads;
 
 function validateDriveE2eePassphraseStrength(passphrase) {
   const value = String(passphrase || "");
+  if (!drivePasswordStrengthPolicyEnabled()) {
+    return {
+      ok: value.length > 0 && value.length <= 128,
+      score: value ? 4 : 0,
+      msg: value ? "OK" : "E2EE 密碼不可為空",
+    };
+  }
   const checks = {
     length8: value.length >= 8,
     lower: /[a-z]/.test(value),
@@ -535,6 +632,7 @@ function getDriveE2eeSessionPassphraseCandidates(fileId) {
     candidates.push(normalized);
   };
   addCandidate(remembered);
+  addCandidate(getDriveE2eeBrowserSessionPassphrase());
   driveE2eeRecentSessionPassphrases.forEach(addCandidate);
   return candidates;
 }
@@ -544,14 +642,16 @@ function rememberDriveE2eeSessionPassphrase(fileId, passphrase) {
   driveE2eeKnownFileIds(fileId).forEach((id) => {
     driveE2eeSessionPassphrases.set(driveE2eeSessionKey(id), passphrase);
   });
+  rememberDriveE2eeBrowserSessionPassphrase(passphrase);
   rememberDriveE2eeRecentSessionPassphrase(passphrase);
 }
 
-async function getDriveE2eeSessionPassphrase(fileId, promptText, { force = false } = {}) {
+async function getDriveE2eeSessionPassphrase(fileId, promptText, { force = false, allowPrompt = false } = {}) {
   if (!force) {
     const remembered = getRememberedDriveE2eeSessionPassphrase(fileId);
     if (remembered) return remembered;
   }
+  if (!allowPrompt) return "";
   const passphrase = await askDriveE2eePassphrase(promptText);
   return passphrase || "";
 }
@@ -1565,6 +1665,28 @@ function closeDriveShareDialog() {
   if (!anyOverlayOpen) document.body.classList.remove("modal-open");
 }
 
+async function ensureDriveE2eeShareUnlocked(fileId) {
+  const file = driveShareFileMeta(fileId) || {};
+  if (!driveFileIsE2ee(file)) return true;
+  await fetchCsrfToken();
+  const csrf = getCsrfToken() || "";
+  const e2ee = await fetchDriveE2eeKey(fileId, csrf);
+  const passphrase = await getDriveE2eeSessionPassphrase(
+    fileId,
+    "分享 E2EE 檔案前需先在瀏覽器解密確認。密碼不會送到伺服器。",
+    { allowPrompt: true }
+  );
+  if (!passphrase) return false;
+  await unwrapDriveFileKey(e2ee.encrypted_file_key, passphrase);
+  rememberDriveE2eeSessionPassphrase(fileId, passphrase);
+  return true;
+}
+
+async function openDriveShareDialogAfterDecrypt(fileId, name = "", storageFileId = "") {
+  if (!(await ensureDriveE2eeShareUnlocked(fileId))) return;
+  openDriveShareDialog(fileId, name, storageFileId);
+}
+
 async function buildDriveE2eeShareEnvelope(fileId) {
   if (!window.crypto?.subtle) {
     throw new Error("此瀏覽器不支援建立 E2EE 分享授權。");
@@ -1572,7 +1694,11 @@ async function buildDriveE2eeShareEnvelope(fileId) {
   await fetchCsrfToken();
   const csrf = getCsrfToken() || "";
   const e2ee = await fetchDriveE2eeKey(fileId, csrf);
-  const passphrase = await getDriveE2eeSessionPassphrase(fileId, "請輸入此 E2EE 檔案的原始加密密碼。密碼只在瀏覽器端使用，用來建立分享下載授權。");
+  const passphrase = await getDriveE2eeSessionPassphrase(
+    fileId,
+    "請輸入此 E2EE 檔案的原始加密密碼。密碼只在瀏覽器端使用，用來建立分享下載授權。",
+    { allowPrompt: true }
+  );
   if (!passphrase) throw new Error("E2EE 檔案需要輸入原始加密密碼才能分享。");
   const fileKey = await unwrapDriveFileKey(e2ee.encrypted_file_key, passphrase);
   rememberDriveE2eeSessionPassphrase(fileId, passphrase);
@@ -1813,7 +1939,7 @@ function renderDriveFiles(files) {
         <div class="drive-file-actions">
           <button class="btn" type="button" data-drive-action="${sanitize(primary.action)}" data-file-id="${sanitize(file.id)}">${sanitize(primary.label)}</button>
           ${videoButton}
-          <button class="btn" type="button" data-drive-action="share-cloud-file" data-file-id="${sanitize(file.id)}" data-name="${sanitize(name)}">分享</button>
+          <button class="btn" type="button" data-drive-action="share-cloud-file" data-file-id="${sanitize(file.id)}" data-name="${sanitize(name)}">${driveFileIsE2ee(file) ? "解密後分享" : "分享"}</button>
           <button class="btn" type="button" data-drive-action="move-cloud-to-storage" data-file-id="${sanitize(file.id)}" data-name="${sanitize(name)}">移動</button>
           ${albumButton}
           <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" data-drive-action="download" data-file-id="${sanitize(file.id)}" data-warn="${warn ? "1" : "0"}">下載</button>
@@ -2668,7 +2794,11 @@ async function downloadDriveFile(fileId, likelyHighRisk) {
     const keyJson = await keyRes.json().catch(() => ({}));
     if (keyJson.ok && keyJson.e2ee) {
       try {
-        const passphrase = await getDriveE2eeSessionPassphrase(fileId, "請輸入此 E2EE 檔案的加密密碼。密碼不會送到伺服器；本次登入期間會暫存在瀏覽器記憶體。");
+        const passphrase = await getDriveE2eeSessionPassphrase(
+          fileId,
+          "請輸入此 E2EE 檔案的加密密碼。密碼不會送到伺服器；本次登入期間會暫存在瀏覽器記憶體。",
+          { allowPrompt: true }
+        );
         if (!passphrase) return;
         const decrypted = await decryptDriveE2eeBlob(blob, keyJson.e2ee, passphrase);
         rememberDriveE2eeSessionPassphrase(fileId, passphrase);
@@ -2728,6 +2858,8 @@ let driveHlsLibraryPromise = null;
 let selectedAlbumId = "";
 let selectedStorageFileId = "";
 let selectedStorageFilePath = "";
+let selectedStorageFileIds = new Set();
+let selectedStorageFolderPaths = new Set();
 let currentStoragePath = "/";
 let storageFilesCache = [];
 let storageFoldersCache = [];
@@ -2777,12 +2909,6 @@ function clearDrivePreviewUrl() {
     URL.revokeObjectURL(currentDrivePreviewUrl);
     currentDrivePreviewUrl = "";
   }
-}
-
-function driveFileIsImage(file) {
-  const mime = String(file?.mime_type_plain_for_public || file?.mime_type || "").toLowerCase();
-  const name = String(file?.original_filename_plain_for_public || file?.display_name || file?.filename || "").toLowerCase();
-  return mime.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/.test(name);
 }
 
 function drivePreviewContentUrl(fileId) {
@@ -2841,7 +2967,7 @@ async function decryptDriveE2eeFileForSession(fileId, csrf, promptText, { prompt
     throw new Error(DRIVE_E2EE_PREVIEW_DECRYPT_FAILED);
   }
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const passphrase = await getDriveE2eeSessionPassphrase(fileId, promptText, { force: true });
+    const passphrase = await getDriveE2eeSessionPassphrase(fileId, promptText, { force: true, allowPrompt: true });
     if (!passphrase) return null;
     try {
       const decrypted = await decryptDriveE2eeBlob(ciphertext, e2ee, passphrase);
@@ -3393,7 +3519,13 @@ function closeDrivePreview() {
   const card = $("drive-preview-card");
   clearDrivePreviewUrl();
   if (panel) panel.innerHTML = `<div class="drive-empty">請從左側檔案清單選擇要預覽的檔案</div>`;
-  if (card) card.style.display = "";
+  if (card) {
+    card.style.display = "";
+    card.classList.remove("drive-preview-mobile-dialog");
+    card.setAttribute("aria-modal", "false");
+  }
+  const anyOverlayOpen = document.querySelector(".user-edit-overlay.show, .album-full-preview-overlay.show");
+  if (!anyOverlayOpen) document.body.classList.remove("modal-open");
   lastDrivePreviewClick = { fileId: "", at: 0 };
 }
 
@@ -3438,7 +3570,7 @@ function renderDrivePreviewMetadata(preview, fileId) {
   const panel = $("drive-preview-panel");
   const card = $("drive-preview-card");
   if (!panel || !card) return "";
-  card.style.display = "block";
+  showDrivePreviewCard();
   return `
     <div>
       <strong>${sanitize(preview.filename || "preview")}</strong>
@@ -3474,13 +3606,25 @@ function isDriveMobilePreviewViewport() {
 }
 
 function shouldOpenDriveFullscreen(fileId, options = {}) {
-  if (options.skipRepeatCheck) return false;
   if (options.forceFullscreen) return true;
-  if (!options.inlinePreview && isDriveMobilePreviewViewport()) return true;
+  if (isDriveMobilePreviewViewport() && !options.forceFullscreen) return false;
+  if (options.forceInlinePreview) return false;
+  if (options.skipRepeatCheck) return false;
   const now = Date.now();
   const repeated = lastDrivePreviewClick.fileId === String(fileId || "") && now - lastDrivePreviewClick.at <= DRIVE_FULLSCREEN_PREVIEW_MS;
   lastDrivePreviewClick = { fileId: String(fileId || ""), at: now };
   return repeated;
+}
+
+function showDrivePreviewCard() {
+  const card = $("drive-preview-card");
+  if (!card) return null;
+  const mobileDialog = isDriveMobilePreviewViewport();
+  card.style.display = "";
+  card.classList.toggle("drive-preview-mobile-dialog", mobileDialog);
+  card.setAttribute("aria-modal", mobileDialog ? "true" : "false");
+  if (mobileDialog) document.body.classList.add("modal-open");
+  return card;
 }
 
 function renderDriveArchiveEntries(entries) {
@@ -3527,8 +3671,7 @@ async function previewDriveFile(fileId, options = {}) {
     return previewAlbumFileFullscreen(fileId, options.fileName || "");
   }
   const panel = $("drive-preview-panel");
-  const card = $("drive-preview-card");
-  if (card) card.style.display = "";
+  showDrivePreviewCard();
   if (panel) panel.innerHTML = `<div class="drive-empty">讀取預覽中...</div>`;
   try {
     await fetchCsrfToken();
@@ -3589,8 +3732,7 @@ async function previewDriveFile(fileId, options = {}) {
 
 async function previewDriveE2eeFile(fileId) {
   const panel = $("drive-preview-panel");
-  const card = $("drive-preview-card");
-  if (card) card.style.display = "";
+  showDrivePreviewCard();
   if (panel) panel.innerHTML = `<div class="drive-empty">正在使用最近輸入過的 E2EE 密碼嘗試預覽...</div>`;
   try {
     await fetchCsrfToken();
@@ -3626,7 +3768,7 @@ async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
   const title = $("album-full-preview-title");
   const meta = $("album-full-preview-meta");
   const body = $("album-full-preview-body");
-  if (!overlay || !body) return previewDriveFile(fileId, { skipRepeatCheck: true, fileName });
+  if (!overlay || !body) return previewDriveFile(fileId, { skipRepeatCheck: true, forceInlinePreview: true, fileName });
   clearAlbumFullPreviewUrl();
   overlay.classList.add("show");
   overlay.setAttribute("aria-hidden", "false");
@@ -3730,8 +3872,7 @@ function stepAlbumPreview(direction) {
 
 async function editDriveTextFile(fileId) {
   const panel = $("drive-preview-panel");
-  const card = $("drive-preview-card");
-  if (card) card.style.display = "block";
+  showDrivePreviewCard();
   if (panel) panel.innerHTML = `<div class="drive-empty">讀取文字內容中...</div>`;
   try {
     await fetchCsrfToken();
@@ -4206,8 +4347,59 @@ function renderStorageBreadcrumb() {
 function setStorageSelection(id = "", path = "") {
   selectedStorageFileId = id || "";
   selectedStorageFilePath = path || "";
+  selectedStorageFileIds = new Set(selectedStorageFileId ? [selectedStorageFileId] : []);
+  selectedStorageFolderPaths = new Set();
+  updateStorageSelectionLabel();
+}
+
+function storageSelectionCount() {
+  return selectedStorageFileIds.size + selectedStorageFolderPaths.size;
+}
+
+function updateStorageSelectionLabel() {
   const label = $("storage-selection-label");
-  if (label) label.textContent = selectedStorageFileId ? `已選取：${selectedStorageFilePath || selectedStorageFileId}` : "未選取檔案";
+  if (!label) return;
+  const count = storageSelectionCount();
+  if (count > 1) {
+    label.textContent = `已選取 ${count} 個項目`;
+  } else if (selectedStorageFileId) {
+    label.textContent = `已選取：${selectedStorageFilePath || selectedStorageFileId}`;
+  } else if (selectedStorageFolderPaths.size === 1) {
+    label.textContent = `已選取資料夾：${Array.from(selectedStorageFolderPaths)[0]}`;
+  } else {
+    label.textContent = "未選取檔案";
+  }
+}
+
+function visibleStorageFiles() {
+  return (Array.isArray(storageFilesCache) ? storageFilesCache : [])
+    .filter((file) => storageDirName(file.virtual_path || file.display_name || "") === currentStoragePath);
+}
+
+function visibleStorageFolders() {
+  return (Array.isArray(storageFoldersCache) ? storageFoldersCache : [])
+    .filter((folder) => {
+      const path = normalizeStoragePath(folder.virtual_path || folder.display_name || "");
+      return path !== "/" && storageDirName(path) === currentStoragePath;
+    });
+}
+
+function renderStorageBulkToolbar() {
+  const count = storageSelectionCount();
+  const visibleCount = visibleStorageFiles().length + visibleStorageFolders().length;
+  return `
+    <div class="drive-file-row storage-browser-row storage-browser-bulk-toolbar">
+      <div>
+        <strong>批次選取</strong>
+        <div class="drive-card-sub">本層 ${visibleCount} 個項目；已選取 ${count} 個。</div>
+      </div>
+      <div class="drive-file-actions">
+        <button class="btn btn-sm" type="button" data-drive-action="select-visible-storage">全選本層</button>
+        <button class="btn btn-sm" type="button" data-drive-action="clear-storage-selection">清除選取</button>
+        <button class="btn btn-danger btn-sm" type="button" data-drive-action="trash-selected-storage"${count ? "" : " disabled"}>回收選取</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderStorageBrowser() {
@@ -4219,6 +4411,7 @@ function renderStorageBrowser() {
   if (currentStoragePath !== "/") {
     rows.push(storageParentRow());
   }
+  rows.push(renderStorageBulkToolbar());
   rows.push(...storageFolderRows(storageFoldersCache));
   rows.push(...storageFileRows(storageFilesCache));
   list.innerHTML = rows.length ? rows.join("") : `<div class="drive-empty">這個資料夾沒有檔案或資料夾</div>`;
@@ -4239,17 +4432,15 @@ function storageParentRow() {
 }
 
 function storageFolderRows(folders) {
-  return (Array.isArray(folders) ? folders : [])
-    .filter((folder) => {
-      const path = normalizeStoragePath(folder.virtual_path || folder.display_name || "");
-      return path !== "/" && storageDirName(path) === currentStoragePath;
-    })
+  return visibleStorageFolders()
     .map((folder) => {
       const name = storageBaseName(folder.virtual_path || folder.display_name || "folder");
+      const folderPath = normalizeStoragePath(folder.virtual_path || "");
+      const checked = selectedStorageFolderPaths.has(folderPath) ? " checked" : "";
       return `
         <div class="drive-file-row storage-browser-row storage-browser-folder" data-folder-path="${sanitize(folder.virtual_path || "")}">
           <div>
-            <strong>${sanitize(name)}</strong>
+            <label class="drive-inline-check"><input type="checkbox" data-storage-folder-select="${sanitize(folderPath)}"${checked} /> <strong>${sanitize(name)}</strong></label>
             <div class="drive-card-sub">資料夾 · ${folder.is_explicit ? "已建立" : "由檔案路徑產生"} · 直接 ${Number(folder.file_count || 0)} 個 · 含子資料夾 ${Number(folder.recursive_file_count || 0)} 個</div>
           </div>
           <div class="drive-file-actions">
@@ -4266,12 +4457,12 @@ function storageFolderRows(folders) {
 }
 
 function storageFileRows(files) {
-  return (Array.isArray(files) ? files : [])
-    .filter((file) => storageDirName(file.virtual_path || file.display_name || "") === currentStoragePath)
+  return visibleStorageFiles()
     .map((file) => {
       const primary = drivePrimaryAction(file);
       const e2ee = driveFileIsE2ee(file);
       const rowAction = ` data-drive-action="preview"`;
+      const checked = selectedStorageFileIds.has(String(file.id || "")) ? " checked" : "";
       const albumButton = driveFileIsImage(file)
         ? `<button class="btn" type="button" data-drive-action="add-storage-to-album" data-storage-file-id="${sanitize(file.id)}" data-name="${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}">加入相簿</button>`
         : "";
@@ -4281,13 +4472,13 @@ function storageFileRows(files) {
       return `
     <div class="drive-file-row storage-browser-row storage-browser-file"${rowAction} data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}">
       <div>
-        <strong>${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}</strong>
+        <label class="drive-inline-check"><input type="checkbox" data-storage-file-select="${sanitize(file.id)}"${checked} /> <strong>${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}</strong></label>
         <div class="drive-card-sub">檔案 · ${formatDriveBytes(file.size_bytes || 0)} · ${sanitize(driveFileCategory(file))}${e2ee ? " · 需密碼預覽" : ""} · scan=${sanitize(file.scan_status || "-")} · ${sanitize(file.virtual_path || "-")}</div>
       </div>
       <div class="drive-file-actions">
         <button class="btn" type="button" data-drive-action="${sanitize(primary.action)}" data-file-id="${sanitize(file.file_id)}">${sanitize(primary.label)}</button>
         ${videoButton}
-        <button class="btn" type="button" data-drive-action="share-cloud-file" data-file-id="${sanitize(file.file_id)}" data-storage-file-id="${sanitize(file.id)}" data-name="${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}">分享</button>
+        <button class="btn" type="button" data-drive-action="share-cloud-file" data-file-id="${sanitize(file.file_id)}" data-storage-file-id="${sanitize(file.id)}" data-name="${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}">${e2ee ? "解密後分享" : "分享"}</button>
         <button class="btn" type="button" data-drive-action="rename-storage-file" data-storage-file-id="${sanitize(file.id)}" data-path="${sanitize(file.virtual_path || "")}" data-name="${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}">重新命名</button>
         <button class="btn" type="button" data-drive-action="move-storage-file" data-storage-file-id="${sanitize(file.id)}" data-path="${sanitize(file.virtual_path || "")}">移動</button>
         <button class="btn" type="button" data-drive-action="download-storage" data-storage-file-id="${sanitize(file.id)}">下載</button>
@@ -4410,6 +4601,8 @@ function renderStorageFeatureDisabled() {
   storageFoldersCache = [];
   storageAlbumsCache = [];
   selectedStorageFileId = "";
+  selectedStorageFileIds = new Set();
+  selectedStorageFolderPaths = new Set();
   selectedAlbumId = "";
   const message = "Storage / 相簿目前未啟用。請由 root 到設定 > 功能開關，至少一起開啟「隱私分級上傳 / E2EE」與「Storage / 相簿」。";
   if ($("storage-selection-label")) $("storage-selection-label").textContent = message;
@@ -4465,6 +4658,40 @@ async function createStorageFolder() {
 
 function selectStorageFileForOrganize(id, path) {
   setStorageSelection(id, path);
+}
+
+function selectVisibleStorageItems() {
+  visibleStorageFiles().forEach((file) => selectedStorageFileIds.add(String(file.id || "")));
+  visibleStorageFolders().forEach((folder) => selectedStorageFolderPaths.add(normalizeStoragePath(folder.virtual_path || "")));
+  selectedStorageFileId = selectedStorageFileIds.size === 1 ? Array.from(selectedStorageFileIds)[0] : "";
+  selectedStorageFilePath = "";
+  updateStorageSelectionLabel();
+  renderStorageBrowser();
+}
+
+function clearStorageSelection() {
+  selectedStorageFileId = "";
+  selectedStorageFilePath = "";
+  selectedStorageFileIds = new Set();
+  selectedStorageFolderPaths = new Set();
+  updateStorageSelectionLabel();
+  renderStorageBrowser();
+}
+
+async function trashSelectedStorageItems() {
+  const fileIds = Array.from(selectedStorageFileIds).filter(Boolean);
+  const folderPaths = Array.from(selectedStorageFolderPaths).filter(Boolean);
+  const total = fileIds.length + folderPaths.length;
+  if (!total) return;
+  if (!window.confirm(`回收已選取的 ${total} 個檔案/資料夾？`)) return;
+  try {
+    for (const path of folderPaths) await storageAction("/storage/folders/trash", "DELETE", { path });
+    for (const id of fileIds) await storageAction(`/storage/files/${encodeURIComponent(id)}`, "DELETE");
+    clearStorageSelection();
+    await loadDriveDashboard();
+  } catch (err) {
+    alert(err.message || "批次回收失敗");
+  }
 }
 
 async function organizeSelectedStorageFile() {
@@ -4675,6 +4902,18 @@ function openStorageFolderUploadPicker() {
   if (input) input.click();
 }
 
+function findDuplicateDriveUploadCandidate(file, privacyMode) {
+  const mode = String(privacyMode || "standard_plain");
+  if (mode === "e2ee") return null;
+  const name = String(file?.name || "").trim().toLowerCase();
+  const size = Number(file?.size || -1);
+  if (!name || size < 0) return null;
+  return (Array.isArray(lastDriveFiles) ? lastDriveFiles : []).find((item) => {
+    const itemName = String(item?.original_filename_plain_for_public || item?.display_name || item?.filename || "").trim().toLowerCase();
+    return itemName === name && Number(item?.size_bytes || -2) === size && String(item?.privacy_mode || "standard_plain") === mode && !item?.deleted_at;
+  }) || null;
+}
+
 async function uploadStorageFile() {
   const input = $("storage-upload-file");
   const pathInput = $("storage-upload-path");
@@ -4710,6 +4949,19 @@ async function uploadStorageFile() {
     let uploadMimeType = file.type || "application/octet-stream";
     let uploadFields = {};
     const virtualPath = pathInput?.value || joinStoragePath(currentStoragePath, file.name);
+    const duplicate = findDuplicateDriveUploadCandidate(file, options.privacyMode);
+    if (duplicate?.id) {
+      updateDriveTransferRow(transferId, { phase: "deduplicated", msg: "偵測到既有雲端檔案，改用既有版本", progress_percent: 100, status: "completed" });
+      await storageAction("/storage/files/attach-existing", "POST", {
+        file_id: duplicate.id,
+        virtual_path: virtualPath,
+        display_name: file.name || storageBaseName(virtualPath),
+      });
+      input.value = "";
+      await loadDriveDashboard();
+      setTimeout(() => removeDriveTransferRow(transferId), DRIVE_TRANSFER_COMPLETED_VISIBLE_MS);
+      return;
+    }
     if (isDriveE2eeMode(options.privacyMode)) {
       updateDriveTransferRow(transferId, { phase: "encrypting", msg: "瀏覽器端加密中", progress_percent: null });
       const encrypted = await prepareDriveE2eeUpload(file, options.passphrase);
@@ -4995,7 +5247,7 @@ async function restoreStorageFile(id) {
 }
 
 async function purgeStorageFile(id) {
-  if (!window.confirm("永久移除此垃圾桶項目？由「資料夾與檔案」移入垃圾桶的檔案會永久失效。")) return;
+  if (!window.confirm("永久刪除此垃圾桶項目並釋放容量？對應的雲端硬碟檔案與實體檔案也會刪除。")) return;
   try {
     await storageAction(`/storage/files/${encodeURIComponent(id)}/purge`, "DELETE");
     await loadDriveDashboard();
@@ -5010,7 +5262,7 @@ async function restoreStorageTrash() {
 }
 
 async function purgeStorageTrash() {
-  if (!window.confirm("清空垃圾桶？由「資料夾與檔案」移入垃圾桶的檔案會永久失效。")) return;
+  if (!window.confirm("清空垃圾桶並釋放容量？垃圾桶內對應的雲端硬碟檔案與實體檔案也會刪除。")) return;
   try {
     await storageAction("/storage/trash/purge", "DELETE");
     await loadDriveDashboard();
@@ -5265,7 +5517,7 @@ document.addEventListener("click", (event) => {
     if (action === "save-text") return saveDriveTextFile(fileId);
     if (action === "download") return downloadDriveFile(fileId, warn);
     if (action === "publish-to-video") return openDriveFileInVideoPublish(fileId, name);
-    if (action === "share-cloud-file") return openDriveShareDialog(fileId, name, storageFileId);
+    if (action === "share-cloud-file") return openDriveShareDialogAfterDecrypt(fileId, name, storageFileId);
     if (action === "close-share-dialog") return closeDriveShareDialog();
     if (action === "create-share-link") return createDriveShareLink();
     if (action === "copy-drive-share-link") return copyDriveShareUrl(shareUrl, { button, requiresFragment: button.dataset.shareRequiresFragment === "1" });
@@ -5284,6 +5536,11 @@ document.addEventListener("click", (event) => {
     if (action === "download-storage") return downloadStorageFile(storageFileId);
     if (action === "rename-storage-file") return renameStorageFile(storageFileId, path, name);
     if (action === "select-storage-file") return selectStorageFileForOrganize(storageFileId, path);
+    if (action === "select-visible-storage") return selectVisibleStorageItems();
+    if (action === "clear-storage-selection") return clearStorageSelection();
+    if (action === "trash-selected-storage") return trashSelectedStorageItems();
+    if (action === "set-drive-e2ee-session-passphrase") return setDriveE2eeSessionPassphraseFromUi();
+    if (action === "clear-drive-e2ee-session-passphrase") return clearDriveE2eeSessionPassphraseFromUi();
     if (action === "move-storage-file") return moveStorageFileFromRow(storageFileId, path);
     if (action === "open-storage-folder") return openStorageFolder(path);
     if (action === "add-storage-to-album") return addStorageFileToAlbum(storageFileId, name);
@@ -5327,12 +5584,38 @@ document.addEventListener("focusin", (event) => {
   }
 });
 
+document.addEventListener("click", (event) => {
+  if (event.target?.closest?.("[data-storage-file-select], [data-storage-folder-select]")) {
+    event.stopPropagation();
+  }
+}, true);
+
 document.addEventListener("change", (event) => {
   if (event.target?.id === "drive-upload-privacy-mode") {
     updateDriveE2eePassphraseVisibility();
   }
   if (event.target?.id === "drive-share-scope") {
     updateDriveShareScopeFields();
+  }
+  const fileSelect = event.target?.closest?.("[data-storage-file-select]");
+  if (fileSelect) {
+    const id = String(fileSelect.dataset.storageFileSelect || "");
+    if (fileSelect.checked) selectedStorageFileIds.add(id);
+    else selectedStorageFileIds.delete(id);
+    selectedStorageFileId = selectedStorageFileIds.size === 1 ? Array.from(selectedStorageFileIds)[0] : "";
+    selectedStorageFilePath = "";
+    updateStorageSelectionLabel();
+    renderStorageBrowser();
+  }
+  const folderSelect = event.target?.closest?.("[data-storage-folder-select]");
+  if (folderSelect) {
+    const folderPath = normalizeStoragePath(folderSelect.dataset.storageFolderSelect || "");
+    if (folderSelect.checked) selectedStorageFolderPaths.add(folderPath);
+    else selectedStorageFolderPaths.delete(folderPath);
+    selectedStorageFileId = selectedStorageFileIds.size === 1 ? Array.from(selectedStorageFileIds)[0] : "";
+    selectedStorageFilePath = "";
+    updateStorageSelectionLabel();
+    renderStorageBrowser();
   }
 });
 

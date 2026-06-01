@@ -27,7 +27,8 @@ PROFILE_ACCENTS = {"default", "ocean", "sunrise", "forest", "mono", "violet", "r
 PROFILE_DENSITIES = {"comfortable", "compact"}
 PROFILE_BANNERS = {"none", "aurora", "neon_grid", "paper", "night_sky", "terminal"}
 PROFILE_AVATAR_FRAMES = {"none", "soft_ring", "neon", "pixel", "botanical", "crown"}
-PROFILE_AVATAR_SIZES = {"large", "xl", "hero"}
+PROFILE_AVATAR_SIZE_STEPS = {str(value) for value in range(30, 95, 5)}
+PROFILE_AVATAR_SIZES = {"large", "xl", "hero", *PROFILE_AVATAR_SIZE_STEPS}
 PROFILE_NAME_FONTS = {"system", "rounded", "serif", "mono", "display"}
 PROFILE_NAME_SIZES = {"normal", "large", "hero"}
 PROFILE_STICKERS = {"none", "sparkles", "star", "heart", "music", "game", "code", "crown"}
@@ -36,13 +37,14 @@ PROFILE_BACKGROUND_TONES = {"soft", "standard", "bold"}
 PROFILE_STYLE_DEFAULTS = {
     "banner": "none",
     "avatar_frame": "soft_ring",
-    "avatar_size": "xl",
+    "avatar_size": "55",
     "name_font": "system",
     "name_size": "large",
     "sticker": "none",
     "decoration": "minimal",
     "background_tone": "standard",
 }
+PUBLIC_ACCOUNT_PROFILE_FIELDS = {"nickname", "real_name", "birthdate", "phone"}
 DISPLAY_TIMEZONE_AUTO = "auto"
 FIXED_DISPLAY_TIMEZONES = tuple(
     "Etc/GMT+12" if offset == -12 else "Etc/GMT-12" if offset == 12 else f"Etc/GMT{(-offset):+d}"
@@ -84,6 +86,7 @@ def ensure_user_profile_schema(conn):
             profile_accent TEXT NOT NULL DEFAULT 'default',
             profile_density TEXT NOT NULL DEFAULT 'comfortable',
             profile_style_json TEXT NOT NULL DEFAULT '{}',
+            public_account_fields_json TEXT NOT NULL DEFAULT '[]',
             appearance_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -107,6 +110,8 @@ def ensure_user_profile_schema(conn):
         conn.execute("ALTER TABLE user_profiles ADD COLUMN profile_density TEXT NOT NULL DEFAULT 'comfortable'")
     if "profile_style_json" not in columns:
         conn.execute("ALTER TABLE user_profiles ADD COLUMN profile_style_json TEXT NOT NULL DEFAULT '{}'")
+    if "public_account_fields_json" not in columns:
+        conn.execute("ALTER TABLE user_profiles ADD COLUMN public_account_fields_json TEXT NOT NULL DEFAULT '[]'")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profiles_friend_code ON user_profiles(friend_code) WHERE friend_code IS NOT NULL AND friend_code<>''")
 
 
@@ -171,6 +176,26 @@ def _profile_style_from_row(profile):
 
 def profile_style_for_payload(profile):
     return _profile_style_from_row(profile)
+
+
+def sanitize_public_account_fields(value):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            value = []
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    out = []
+    for item in value:
+        key = str(item or "").strip()
+        if key in PUBLIC_ACCOUNT_PROFILE_FIELDS and key not in out:
+            out.append(key)
+    return out
+
+
+def public_account_fields_for_payload(profile):
+    return sanitize_public_account_fields((profile or {}).get("public_account_fields_json") or [])
 
 
 def _profile_style_from_update(profile, data):
@@ -401,6 +426,9 @@ def update_profile(conn, *, actor, data):
         "profile_accent": _profile_accent(data.get("profile_accent", profile.get("profile_accent"))),
         "profile_density": _profile_density(data.get("profile_density", profile.get("profile_density"))),
         "profile_style": _profile_style_from_update(profile, data),
+        "public_account_fields": sanitize_public_account_fields(
+            data.get("public_account_fields", profile.get("public_account_fields_json") or [])
+        ),
     }
     if updates["website"] and not (updates["website"].startswith("https://") or updates["website"].startswith("http://")):
         return None, "website 必須以 http:// 或 https:// 開頭"
@@ -412,7 +440,7 @@ def update_profile(conn, *, actor, data):
         UPDATE user_profiles
         SET display_name=?, bio=?, signature=?, location=?, website=?,
             profile_visibility=?, display_timezone=?, profile_template=?,
-            profile_accent=?, profile_density=?, profile_style_json=?, updated_at=?
+            profile_accent=?, profile_density=?, profile_style_json=?, public_account_fields_json=?, updated_at=?
         WHERE user_id=?
         """,
         (
@@ -427,6 +455,7 @@ def update_profile(conn, *, actor, data):
             updates["profile_accent"],
             updates["profile_density"],
             json.dumps(updates["profile_style"], ensure_ascii=False, sort_keys=True),
+            json.dumps(updates["public_account_fields"], ensure_ascii=False),
             updates["updated_at"],
             int(actor["id"]),
         ),

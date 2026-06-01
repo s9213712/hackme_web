@@ -1681,6 +1681,28 @@ def start_daily_snapshot_worker(shutdown_event=None):
     )
 
 
+def create_initial_startup_snapshot_if_due():
+    conn = get_db()
+    try:
+        ensure_snapshot_schema(conn)
+        row = conn.execute(
+            "SELECT id FROM snapshots WHERE status='ready' ORDER BY created_at ASC LIMIT 1"
+        ).fetchone()
+        conn.commit()
+        if row:
+            return {"ok": True, "created": False, "reason": "ready_snapshot_exists", "snapshot_id": row["id"]}
+    finally:
+        conn.close()
+    result = snapshot_service.create_snapshot(
+        snapshot_type="manual",
+        actor={"id": 0, "username": "system-startup", "role": "system"},
+        notes="Initial startup snapshot before normal workers start",
+    )
+    if not getattr(result, "ok", False):
+        return {"ok": False, "created": False, "error": getattr(result, "error", "startup snapshot failed")}
+    return {"ok": True, "created": True, "snapshot_id": result.snapshot_id}
+
+
 def start_storage_maintenance_worker(shutdown_event=None):
     return start_storage_maintenance_worker_helper(
         get_db=get_db,
@@ -1926,6 +1948,7 @@ if __name__ == "__main__":
         points_service=points_service,
         get_system_settings=get_system_settings,
         integrity_guard=integrity_guard,
+        create_initial_startup_snapshot_if_due=create_initial_startup_snapshot_if_due,
         start_daily_snapshot_worker=start_daily_snapshot_worker,
         start_storage_maintenance_worker=start_storage_maintenance_worker,
         start_points_chain_block_worker=start_points_chain_block_worker,

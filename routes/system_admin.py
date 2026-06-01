@@ -341,18 +341,21 @@ def register_system_admin_routes(app, deps):
 
         script_path = os.path.join(BASE_DIR, "server.py")
         python_exe = sys.executable or "python3"
-        host = CURRENT_SERVER_BIND_STATE.get("host") or "127.0.0.1"
-        if host in {"0.0.0.0", "::", ""}:
-            host = "127.0.0.1"
+        host = CURRENT_SERVER_BIND_STATE.get("host") or os.environ.get("HTML_LEARNING_HOST") or "127.0.0.1"
+        probe_host = "127.0.0.1" if host in {"0.0.0.0", "::", ""} else host
         port = int(CURRENT_SERVER_BIND_STATE.get("port") or 5000)
 
         def restart_delayed():
             time.sleep(delay_seconds)
+            env = os.environ.copy()
+            env["HTML_LEARNING_HOST"] = host
+            env["HTML_LEARNING_PORT"] = str(port)
             subprocess.Popen(
-                [python_exe, "-c", restart_launcher_code(), python_exe, script_path, BASE_DIR, str(os.getpid()), host, str(port)],
+                [python_exe, "-c", restart_launcher_code(), python_exe, script_path, BASE_DIR, str(os.getpid()), probe_host, str(port)],
                 cwd=BASE_DIR,
                 close_fds=True,
                 start_new_session=True,
+                env=env,
             )
             os._exit(0)
 
@@ -362,6 +365,7 @@ def register_system_admin_routes(app, deps):
             "pid": os.getpid(),
             "delay_seconds": delay_seconds,
             "host": host,
+            "probe_host": probe_host,
             "port": port,
             "reason": reason,
         }

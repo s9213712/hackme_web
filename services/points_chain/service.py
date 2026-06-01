@@ -5606,7 +5606,7 @@ class PointsLedgerService:
                 "rationale": "屬於曝光型功能，價格約等於 20 天每日登入。",
             },
             {
-                "item_key": "cloud_storage_1gb_30d",
+                "item_key": "cloud_storage_1gb_7d",
                 "item_name": "雲端容量 1GB / 7 天",
                 "category": "cloud_drive",
                 "recommended_points": 100,
@@ -5614,6 +5614,16 @@ class PointsLedgerService:
                 "max_price": 500,
                 "metadata": {"storage_bytes": 1024 ** 3, "duration_days": 7, "label": "雲端容量 1GB / 7 天"},
                 "rationale": "容量是持續成本，保留比互動類更高的 sink。",
+            },
+            {
+                "item_key": "cloud_storage_1gb_30d",
+                "item_name": "雲端容量 1GB / 30 天",
+                "category": "cloud_drive",
+                "recommended_points": 400,
+                "min_price": 200,
+                "max_price": 2000,
+                "metadata": {"storage_bytes": 1024 ** 3, "duration_days": 30, "label": "雲端容量 1GB / 30 天"},
+                "rationale": "30 天方案是 7 天方案 4 倍點數，換取較長有效期。",
             },
             {
                 "item_key": "comfyui_txt2img_basic",

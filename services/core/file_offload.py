@@ -7,6 +7,9 @@ from flask import Response
 from services.core.http_headers import build_content_disposition
 
 
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
 def _first_env(*names):
     for name in names:
         value = str(os.environ.get(name) or "").strip()
@@ -15,8 +18,15 @@ def _first_env(*names):
     return ""
 
 
+def x_accel_enabled():
+    raw = _first_env("HACKME_CLOUD_DRIVE_X_ACCEL_ENABLED", "HACKME_X_ACCEL_ENABLED")
+    return str(raw or "").strip().lower() in _TRUTHY
+
+
 def x_accel_internal_uri(path, *, storage_root):
     """Return an Nginx X-Accel internal URI for a storage-local file."""
+    if not x_accel_enabled():
+        return ""
     prefix = _first_env("HACKME_CLOUD_DRIVE_X_ACCEL_PREFIX", "HACKME_X_ACCEL_STORAGE_PREFIX")
     if not prefix:
         return ""

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260526-profile-process-detail" />
+  <link rel="stylesheet" href="/styles.css?v=20260531-avatar-visible-stream-debug" />
   <link rel="stylesheet" href="/experiments.css?v=20260517-plane-view-angle" />
   <link rel="stylesheet" href="/i18n-language-switcher.css?v=20260520-deep-audit" />
 </head>
@@ -418,7 +418,7 @@
       </div>
       <div class="profile-tabs" role="tablist" aria-label="個人面板分頁">
         <button class="btn btn-primary" type="button" data-profile-tab="home" aria-selected="true">我的主頁</button>
-        <button class="btn" type="button" data-profile-tab="edit" aria-selected="false">編輯資料</button>
+        <button class="btn" type="button" data-profile-tab="edit" aria-selected="false">主頁資料</button>
         <button class="btn" type="button" data-profile-tab="friends" aria-selected="false">好友</button>
       </div>
       <div id="profile-msg" class="msg" aria-live="polite"></div>
@@ -432,6 +432,7 @@
             <p id="profile-home-meta">-</p>
             <p class="profile-bio" id="profile-home-bio">尚未填寫個人簡介。</p>
             <p class="drive-card-sub" id="profile-home-signature"></p>
+            <div class="profile-public-info" id="profile-home-public-account-fields"></div>
             <div class="profile-home-actions" id="profile-home-actions"></div>
           </div>
           <div class="profile-sticker-layer" id="profile-home-stickers" aria-hidden="true"></div>
@@ -445,7 +446,10 @@
           <div><span class="drive-card-sub">我的好友代碼</span><strong id="profile-home-friend-code">-</strong></div>
         </div>
         <details class="profile-quick-customize" id="profile-quick-customize-card">
-          <summary>主頁快速設定</summary>
+          <summary>
+            <span>主頁外觀與快速設定</span>
+            <small>只影響別人看到的個人主頁，立即預覽後再儲存。</small>
+          </summary>
           <div class="settings-option-grid">
             <label class="field">
               <span>主頁模板</span>
@@ -507,13 +511,19 @@
                 <option value="crown">王冠</option>
               </select>
             </label>
-            <label class="field">
-              <span>頭像大小</span>
-              <select id="profile-edit-avatar-size">
-                <option value="large">大</option>
-                <option value="xl">加大</option>
-                <option value="hero">主視覺</option>
-              </select>
+            <label class="field profile-avatar-size-field">
+              <span class="field-label-row">
+                <span>頭像大小</span>
+                <output id="profile-edit-avatar-size-value" for="profile-edit-avatar-size">55%</output>
+              </span>
+              <input type="range" id="profile-edit-avatar-size" min="30" max="90" step="5" value="55" />
+              <div class="profile-avatar-size-presets" aria-label="頭像大小快速選擇">
+                <button class="btn btn-sm" type="button" data-profile-avatar-size="40">小</button>
+                <button class="btn btn-sm" type="button" data-profile-avatar-size="55">中</button>
+                <button class="btn btn-sm" type="button" data-profile-avatar-size="70">大</button>
+                <button class="btn btn-sm" type="button" data-profile-avatar-size="90">最大</button>
+              </div>
+              <small class="drive-card-sub">手機可拖曳或直接點大小按鈕；預覽會立刻套用到上方頭像。</small>
             </label>
             <label class="field">
               <span>名稱字形</span>
@@ -557,6 +567,7 @@
               </select>
             </label>
           </div>
+          <div class="profile-appearance-preview-signal" id="profile-appearance-preview-signal" hidden></div>
           <div class="drive-file-actions" style="justify-content:flex-start;">
             <button class="btn btn-primary" id="profile-appearance-save-btn" type="button">儲存主頁設定</button>
           </div>
@@ -564,6 +575,10 @@
       </section>
 
       <section class="profile-pane" id="profile-pane-edit">
+        <div class="profile-settings-scope-note">
+          <strong>這裡只設定公開主頁內容。</strong>
+          <span>帳號密碼、真實資料與聯絡資料請從「我的主頁」上的「帳號安全」小視窗修改；外觀在「我的主頁」下方直接調整。</span>
+        </div>
         <div class="settings-option-grid">
           <label class="field">
             <span>顯示名稱</span>
@@ -633,6 +648,16 @@
           <span>簽名</span>
           <input type="text" id="profile-edit-signature" maxlength="180" />
         </label>
+        <div class="drive-card" style="margin:.75rem 0;">
+          <div class="drive-card-title">公開到個人首頁</div>
+          <div class="drive-card-sub">只公開你勾選的帳號資料；密碼永遠不會公開。</div>
+          <div class="settings-option-grid" style="margin-top:.65rem;">
+            <label class="inline-check"><input type="checkbox" id="profile-public-account-nickname" /> 暱稱</label>
+            <label class="inline-check"><input type="checkbox" id="profile-public-account-real_name" /> 真實姓名</label>
+            <label class="inline-check"><input type="checkbox" id="profile-public-account-birthdate" /> 生日</label>
+            <label class="inline-check"><input type="checkbox" id="profile-public-account-phone" /> 電話</label>
+          </div>
+        </div>
         <div class="profile-code-row">
           <input type="text" id="profile-friend-code" readonly aria-label="好友代碼" />
           <button class="btn" id="profile-copy-code-btn" type="button">複製好友代碼</button>
@@ -640,7 +665,6 @@
         </div>
         <div class="drive-file-actions" style="justify-content:flex-start;">
           <button class="btn btn-primary" id="profile-save-btn" type="button">儲存資料</button>
-          <button class="btn" id="profile-edit-account-btn" type="button">帳號設定</button>
         </div>
       </section>
 
@@ -1194,6 +1218,28 @@
       <input type="password" id="drive-e2ee-passphrase-confirm" hidden autocomplete="new-password" />
       <div class="field-help" hidden>非 E2EE 會讓伺服器取得明文以便掃毒與預覽；E2EE 需要自己保管檔案加密密碼，忘記後站方無法救回。</div>
       <div class="drive-subpage active" id="drive-files-page" data-drive-page-panel="files" role="tabpanel" aria-labelledby="drive-files-tab">
+      <div class="drive-card drive-e2ee-session-card">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">本次瀏覽器 E2EE 密碼</div>
+            <div class="drive-card-sub">用戶主動設定；只存在本次瀏覽器工作階段，登出或清除後不保留，不會登入時跳窗。</div>
+          </div>
+        </div>
+        <div class="settings-option-grid">
+          <label class="field">
+            <span>E2EE 密碼</span>
+            <input type="password" id="drive-e2ee-session-passphrase" autocomplete="current-password" placeholder="依目前密碼安全政策" />
+          </label>
+          <div class="field">
+            <span>&nbsp;</span>
+            <div class="drive-file-actions">
+              <button class="btn btn-primary" type="button" data-drive-action="set-drive-e2ee-session-passphrase">套用到本次瀏覽器</button>
+              <button class="btn" type="button" data-drive-action="clear-drive-e2ee-session-passphrase">清除</button>
+            </div>
+          </div>
+        </div>
+        <div id="drive-e2ee-session-msg" class="msg" aria-live="polite"></div>
+      </div>
       <div class="drive-file-preview-layout">
         <div class="drive-card">
           <div class="drive-card-heading">
@@ -1410,6 +1456,15 @@
                 <div class="field-help">建議使用 16:9 圖片；不提供時影片首頁會使用影片首幀或音樂預設封面。</div>
               </div>
               <div class="field">
+                <label>串流方式（可多選）</label>
+                <select id="video-streaming-modes" multiple size="3">
+                  <option value="direct" selected>Direct 原檔播放（最低點數成本）</option>
+                  <option value="prepared_hls">預處理 HLS（最高點數，會產生衍生檔）</option>
+                  <option value="realtime_proxy">即時串流代理（即時計算成本）</option>
+                </select>
+                <div class="field-help">發布前先選服務方式；HLS 只有明確選取時才建立轉檔任務並產生額外衍生檔；Direct 不額外轉檔，即時串流不保存衍生檔。</div>
+              </div>
+              <div class="field">
                 <label>上傳隱私</label>
                 <select id="video-upload-privacy-mode">
                   <option value="standard_plain">一般檔案</option>
@@ -1419,6 +1474,7 @@
               <div class="field">
                 <label>雲端硬碟影音</label>
                 <select id="video-publish-file"></select>
+                <div id="video-publish-file-gallery" class="video-cloud-gallery" role="listbox" aria-label="雲端硬碟影音預覽選擇"></div>
                 <div class="field-help">不選直接上傳影音時，才使用既有雲端影音發布。</div>
               </div>
               <div class="field">
@@ -6655,7 +6711,10 @@
 
   <div id="user-edit-overlay" class="user-edit-overlay">
   <div class="user-edit-modal">
-    <div class="mini-title">修改帳號資料</div>
+    <div class="mini-title">帳號安全與聯絡資料</div>
+    <div class="drive-card-sub account-modal-subtitle">這個小視窗只處理敏感帳號資料與密碼；主頁內容、主頁外觀與頭像請回個人主頁操作。</div>
+    <div class="profile-account-modal-section">
+      <div class="drive-card-title">帳號狀態</div>
     <div class="field">
       <label>帳號</label>
       <div id="user-edit-username" class="readonly-field"></div>
@@ -6664,6 +6723,9 @@
       <label>目前會員等級</label>
       <div id="user-edit-member-level" class="readonly-field"></div>
     </div>
+    </div>
+    <div class="profile-account-modal-section">
+      <div class="drive-card-title">聯絡與真實資料</div>
     <div class="field">
       <label>暱稱</label>
       <input type="text" id="edit-user-nickname" placeholder="暱稱" />
@@ -6673,10 +6735,6 @@
       <input type="text" id="edit-user-realname" placeholder="真實姓名" />
     </div>
     <div class="field">
-      <label>身分證</label>
-      <input type="text" id="edit-user-idno" placeholder="身分證" />
-    </div>
-    <div class="field">
       <label>生日</label>
       <input type="date" id="edit-user-birthdate" />
     </div>
@@ -6684,226 +6742,9 @@
       <label>電話</label>
       <input type="tel" id="edit-user-phone" placeholder="09xx-xxx-xxx" />
     </div>
-    <details class="drive-collapsible-panel settings-collapse" id="edit-user-preferences-section" style="display:none;" open>
-      <summary>
-        <div>
-          <div class="drive-card-title">個人顯示設定</div>
-          <div class="drive-card-sub">只影響目前帳號看到的時間與介面顯示。</div>
-        </div>
-      </summary>
-      <div class="drive-collapsible-body">
-        <div class="settings-option-grid">
-          <div class="field">
-            <label for="edit-user-display-timezone">顯示時區</label>
-            <select id="edit-user-display-timezone">
-              <option value="auto">跟隨瀏覽器</option>
-              <option value="UTC">UTC</option>
-              <option value="Etc/GMT+12">UTC-12</option>
-              <option value="Etc/GMT+11">UTC-11</option>
-              <option value="Etc/GMT+10">UTC-10</option>
-              <option value="Etc/GMT+9">UTC-9</option>
-              <option value="Etc/GMT+8">UTC-8</option>
-              <option value="Etc/GMT+7">UTC-7</option>
-              <option value="Etc/GMT+6">UTC-6</option>
-              <option value="Etc/GMT+5">UTC-5</option>
-              <option value="Etc/GMT+4">UTC-4</option>
-              <option value="Etc/GMT+3">UTC-3</option>
-              <option value="Etc/GMT+2">UTC-2</option>
-              <option value="Etc/GMT+1">UTC-1</option>
-              <option value="Etc/GMT-1">UTC+1</option>
-              <option value="Etc/GMT-2">UTC+2</option>
-              <option value="Etc/GMT-3">UTC+3</option>
-              <option value="Etc/GMT-4">UTC+4</option>
-              <option value="Etc/GMT-5">UTC+5</option>
-              <option value="Etc/GMT-6">UTC+6</option>
-              <option value="Etc/GMT-7">UTC+7</option>
-              <option value="Etc/GMT-8">UTC+8</option>
-              <option value="Etc/GMT-9">UTC+9</option>
-              <option value="Etc/GMT-10">UTC+10</option>
-              <option value="Etc/GMT-11">UTC+11</option>
-              <option value="Etc/GMT-12">UTC+12</option>
-              <option value="Asia/Taipei">Asia/Taipei</option>
-              <option value="Asia/Tokyo">Asia/Tokyo</option>
-              <option value="Asia/Seoul">Asia/Seoul</option>
-              <option value="Asia/Hong_Kong">Asia/Hong_Kong</option>
-              <option value="Asia/Shanghai">Asia/Shanghai</option>
-              <option value="Asia/Singapore">Asia/Singapore</option>
-              <option value="America/Los_Angeles">America/Los_Angeles</option>
-              <option value="America/New_York">America/New_York</option>
-              <option value="Europe/London">Europe/London</option>
-            </select>
-            <div class="drive-card-sub">通知、聊天與各功能時間會優先使用這個設定；伺服器時區仍由 root 在系統設定管理。</div>
-          </div>
-        </div>
-      </div>
-    </details>
-    <details class="drive-collapsible-panel settings-collapse" id="edit-user-appearance-section" style="display:none;">
-      <summary>
-        <div>
-          <div class="drive-card-title">個人外觀</div>
-          <div class="drive-card-sub">所有已登入用戶都能在這裡只改自己的畫面，不會改全站預設。關閉視窗不會自動儲存。</div>
-        </div>
-      </summary>
-      <div class="drive-collapsible-body">
-        <div id="edit-user-appearance-status" class="drive-card-sub" style="margin-bottom:.65rem;"></div>
-        <div class="field">
-          <label>外觀模板</label>
-          <select id="edit-user-appearance-preset">
-            <option value="custom">維持目前設定</option>
-            <option value="midnight">Midnight</option>
-            <option value="daylight">Daylight</option>
-            <option value="sunset">Sunset</option>
-            <option value="forest">Forest</option>
-            <option value="paper">Paper</option>
-            <option value="ocean">Ocean Console</option>
-            <option value="terminal">Terminal</option>
-          </select>
-          <div class="drive-card-sub">選完會立即預覽；最後仍要按下方「儲存」才會寫入帳號。</div>
-        </div>
-        <div class="settings-option-grid settings-appearance-grid">
-          <div class="field">
-            <label for="edit-user-language-select" data-i18n="language.label">語言</label>
-            <select id="edit-user-language-select" data-language-select aria-label="語言">
-              <option value="zh-TW">繁體中文</option>
-              <option value="en">English</option>
-            </select>
-            <div class="drive-card-sub">只切換目前瀏覽器的介面語言。</div>
-          </div>
-          <div class="field">
-            <label>快速色系</label>
-            <select id="edit-user-theme-mode">
-              <option value="custom">保留自訂色盤</option>
-              <option value="dark">夜色</option>
-              <option value="light">淺色</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>字體風格</label>
-            <select id="edit-user-site-font-family">
-              <option value="system">系統預設</option>
-              <option value="rounded">圓潤人文</option>
-              <option value="serif">閱讀襯線</option>
-              <option value="mono">終端風格</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>背景風格</label>
-            <select id="edit-user-site-background-style">
-              <option value="flat">純色簡潔</option>
-              <option value="aurora">柔光漸層</option>
-              <option value="grid">科技網格</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>面板風格</label>
-            <select id="edit-user-site-panel-style">
-              <option value="glass">玻璃感</option>
-              <option value="matte">霧面</option>
-              <option value="solid">實心</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>側邊欄寬度</label>
-            <select id="edit-user-site-sidebar-width">
-              <option value="compact">精簡</option>
-              <option value="standard">標準</option>
-              <option value="wide">加寬</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>背景色</label>
-            <input type="color" id="edit-user-site-bg" />
-          </div>
-          <div class="field">
-            <label>面板色</label>
-            <input type="color" id="edit-user-site-surface" />
-          </div>
-          <div class="field">
-            <label>主色</label>
-            <input type="color" id="edit-user-site-accent" />
-          </div>
-          <div class="field">
-            <label>輔助色</label>
-            <input type="color" id="edit-user-site-accent2" />
-          </div>
-          <div class="field">
-            <label>文字色</label>
-            <input type="color" id="edit-user-site-text" />
-          </div>
-          <div class="field">
-            <label>次要文字色</label>
-            <input type="color" id="edit-user-site-muted" />
-          </div>
-          <div class="field">
-            <label>介面配置</label>
-            <select id="edit-user-site-layout-mode">
-              <option value="centered">置中版面</option>
-              <option value="wide">寬版管理台</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>介面密度</label>
-            <select id="edit-user-site-density">
-              <option value="comfortable">舒適</option>
-              <option value="compact">緊湊</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>卡片圓角</label>
-            <select id="edit-user-site-radius-px">
-              <option value="8">俐落</option>
-              <option value="12">標準</option>
-              <option value="18">柔和</option>
-              <option value="24">圓潤</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>介面字級</label>
-            <select id="edit-user-site-font-scale">
-              <option value="0.95">小一點</option>
-              <option value="1">標準</option>
-              <option value="1.08">大一點</option>
-              <option value="1.15">放大</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>寬版內容上限</label>
-            <select id="edit-user-site-content-width">
-              <option value="1180">1180 px</option>
-              <option value="1380">1380 px</option>
-              <option value="1600">1600 px</option>
-            </select>
-          </div>
-        </div>
-        <div class="drive-card-sub" style="margin-top:.7rem;">
-          若你不想再覆寫自己的畫面，可用視窗底部的「恢復全站預設」回到 root 設定的全站外觀。
-        </div>
-      </div>
-    </details>
-    <div class="field">
-      <label>頭像上傳（JPEG / PNG / GIF，會走雲端硬碟掃描與圖片去 EXIF）</label>
-      <input type="file" id="edit-user-avatar-file" accept="image/png,image/jpeg,image/gif" />
-      <div class="avatar-cropper" id="edit-avatar-cropper" hidden>
-        <div class="avatar-cropper-stage" id="edit-avatar-crop-stage" aria-label="頭像裁切輔助區">
-          <img id="edit-avatar-crop-image" alt="頭像裁切預覽" draggable="false" />
-          <div class="avatar-cropper-shade" aria-hidden="true"></div>
-          <div class="avatar-crop-box" id="edit-avatar-crop-box" aria-hidden="true">
-            <span></span>
-          </div>
-        </div>
-        <div class="avatar-cropper-tools">
-          <label for="edit-avatar-crop-zoom">縮放</label>
-          <input type="range" id="edit-avatar-crop-zoom" min="0.5" max="6" step="0.01" value="1" />
-          <button type="button" id="edit-avatar-crop-center" class="btn btn-sm">置中</button>
-        </div>
-        <div class="avatar-cropper-hint">拖曳圖片調整位置，圓形範圍會成為頭像顯示重點。</div>
-        <input type="hidden" id="edit-avatar-crop-x" value="0" />
-        <input type="hidden" id="edit-avatar-crop-y" value="0" />
-        <input type="hidden" id="edit-avatar-crop-width" value="0" />
-        <input type="hidden" id="edit-avatar-crop-height" value="0" />
-      </div>
-      <button type="button" id="edit-user-avatar-upload" class="btn">上傳頭像</button>
-      <div id="edit-user-avatar-status" style="margin-top:.35rem;font-size:.75rem;color:var(--muted);"></div>
+    <div class="drive-card-sub account-modal-routing-note">
+      頭像：到「我的主頁」點大頭貼。主頁公開欄位：到「主頁資料」。主頁外觀：在「我的主頁」下方調整。
+    </div>
     </div>
     <div class="field" id="edit-user-role-field">
       <label>角色</label>
@@ -6970,6 +6811,8 @@
       </div>
       <div class="field-hint" style="grid-column:1 / -1;">功能代碼：community_post、community_comment、chat_dm、chat_send、cloud_upload、video_publish、trading_order、service_spend、wallet_transfer。罰款不會自動扣款，會建立可申覆的積分罰單。</div>
     </div>
+    <div class="profile-account-modal-section">
+      <div class="drive-card-title">密碼安全</div>
     <div class="field" id="edit-user-current-pw-field" style="display:none;">
       <label>目前密碼</label>
       <div class="pw-wrap">
@@ -6990,6 +6833,7 @@
         <input type="password" id="edit-user-pw-confirm" placeholder="再次輸入新密碼" />
         <button class="pw-toggle" id="edit-user-pw-confirm-toggle" type="button" aria-label="顯示密碼">👁</button>
       </div>
+    </div>
     </div>
     <div id="user-edit-msg" class="msg"></div>
     <div class="edit-user-actions">
@@ -7227,7 +7071,8 @@
         <button type="button" id="profile-avatar-cloud-refresh" class="btn btn-sm">刷新</button>
         <button type="button" id="profile-avatar-cloud-use" class="btn btn-sm">使用</button>
       </div>
-      <div class="drive-card-sub">僅列出你自己的雲端硬碟中可作為公開頭像的 JPEG / PNG / GIF 圖片。</div>
+      <div id="profile-avatar-cloud-gallery" class="profile-avatar-cloud-gallery" aria-live="polite"></div>
+      <div class="drive-card-sub">列出你自己的雲端硬碟圖片；E2EE 圖片會先在瀏覽器解密，再只上傳裁切後頭像衍生圖。</div>
     </div>
     <div class="avatar-cropper" id="profile-avatar-cropper" hidden>
       <div class="avatar-cropper-stage" id="profile-avatar-crop-stage" aria-label="頭像裁切輔助區">
@@ -7392,16 +7237,16 @@
   <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
-<script src="/js/00-core.js?v=20260526-profile-quick-settings" defer></script>
+<script src="/js/00-core.js?v=20260531-modal-close-audit" defer></script>
 <script src="/js/05-i18n.js?v=20260519-vae-builtin" defer></script>
-<script src="/js/01-root-quick-settings.js?v=20260525-settings-split" defer></script>
+<script src="/js/01-root-quick-settings.js?v=20260531-quick-settings-no-full" defer></script>
 <script src="/js/10-users.js?v=20260525-governance-finish" defer></script>
 <script src="/js/20-chat.js?v=20260525-chat-emoji-insert" defer></script>
 <script src="/js/25-community.js?v=20260518-inline-media" defer></script>
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
 <script src="/js/32-notifications.js?v=20260523-dispute-reply-action" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260518-inline-media" defer></script>
-<script src="/js/35-drive.js?v=20260525-chat-attachment-dedupe" defer></script>
+<script src="/js/35-drive.js?v=20260531-e2ee-policy-live" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
 <!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
 <script src="/js/36-comfyui.js?v=20260529-comfyui-gguf-disabled-cleanup" defer></script>
@@ -7412,14 +7257,14 @@
 <script src="/js/games/chess.js?v=20260525-move-history-ply" defer></script>
 <script src="/js/38-games.js?v=20260528-games-compact-scores" defer></script>
 <script src="/js/42-experiments.js?v=20260528-experiments-bounded-motion" defer></script>
-<script src="/js/39-videos.js?v=20260525-video-thumb-direct-stream-guard" defer></script>
-<script src="/js/40-auth-users.js?v=20260525-avatar-crop-zoom" defer></script>
-<script src="/js/50-admin.js?v=20260526-process-command-detail-invariant-refresh" defer></script>
+  <script src="/js/39-videos.js?v=20260601-mobile-mse" defer></script>
+<script src="/js/40-auth-users.js?v=20260531-profile-settings-split" defer></script>
+<script src="/js/50-admin.js?v=20260531-feature-settings-live-sync" defer></script>
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260526-server-mode-prelaunch" defer></script>
 <script src="/js/55-economy.js?v=20260526-financial-settlement-network-invariant-refresh" defer></script>
 <script src="/js/56-trading.js?v=20260525-usdt-market-labels" defer></script>
 <script src="/js/57-platform-centers.js?v=20260524-trading-status-split" defer></script>
-<script src="/js/58-profile-friends.js?v=20260526-profile-quick-settings" defer></script>
+<script src="/js/58-profile-friends.js?v=20260531-avatar-visible" defer></script>
 <script src="/js/90-bootstrap.js?v=20260528-comfyui-force-refresh" defer></script>
 </body>
 </html>

@@ -5347,15 +5347,16 @@
     .profile-avatar-large {
       position: relative;
       z-index: 1;
-      width: 132px;
-      height: 132px;
-      inline-size: 132px;
-      block-size: 132px;
-      min-inline-size: 132px;
-      max-inline-size: 132px;
-      min-block-size: 132px;
-      max-block-size: 132px;
-      flex: 0 0 132px;
+      --profile-avatar-custom-size: clamp(76px, 55vw, min(90vw, 230px));
+      width: var(--profile-avatar-custom-size);
+      height: var(--profile-avatar-custom-size);
+      inline-size: var(--profile-avatar-custom-size);
+      block-size: var(--profile-avatar-custom-size);
+      min-inline-size: 76px;
+      max-inline-size: min(90vw, 230px);
+      min-block-size: 76px;
+      max-block-size: min(90vw, 230px);
+      flex: 0 0 var(--profile-avatar-custom-size);
       border-radius: 50%;
       display: grid;
       place-items: center;
@@ -5369,27 +5370,11 @@
     }
 
     .profile-avatar-large.profile-avatar-size-xl {
-      width: 158px;
-      height: 158px;
-      inline-size: 158px;
-      block-size: 158px;
-      min-inline-size: 158px;
-      max-inline-size: 158px;
-      min-block-size: 158px;
-      max-block-size: 158px;
-      flex-basis: 158px;
+      --profile-avatar-custom-size: clamp(96px, 60vw, min(90vw, 230px));
     }
 
     .profile-avatar-large.profile-avatar-size-hero {
-      width: 190px;
-      height: 190px;
-      inline-size: 190px;
-      block-size: 190px;
-      min-inline-size: 190px;
-      max-inline-size: 190px;
-      min-block-size: 190px;
-      max-block-size: 190px;
-      flex-basis: 190px;
+      --profile-avatar-custom-size: clamp(112px, 72vw, min(90vw, 230px));
     }
 
     .profile-avatar-large.profile-avatar-frame-soft_ring {
@@ -5418,15 +5403,16 @@
     }
 
     .profile-summary.profile-template-compact .profile-avatar-large {
-      width: 88px;
-      height: 88px;
-      inline-size: 88px;
-      block-size: 88px;
-      min-inline-size: 88px;
-      max-inline-size: 88px;
-      min-block-size: 88px;
-      max-block-size: 88px;
-      flex-basis: 88px;
+      --profile-avatar-compact-max: min(52vw, 160px);
+      width: min(var(--profile-avatar-custom-size), var(--profile-avatar-compact-max));
+      height: min(var(--profile-avatar-custom-size), var(--profile-avatar-compact-max));
+      inline-size: min(var(--profile-avatar-custom-size), var(--profile-avatar-compact-max));
+      block-size: min(var(--profile-avatar-custom-size), var(--profile-avatar-compact-max));
+      min-inline-size: 72px;
+      max-inline-size: var(--profile-avatar-compact-max);
+      min-block-size: 72px;
+      max-block-size: var(--profile-avatar-compact-max);
+      flex-basis: min(var(--profile-avatar-custom-size), var(--profile-avatar-compact-max));
     }
 
     .profile-avatar-upload-button {
@@ -5562,6 +5548,170 @@
       width: 100%;
     }
 
+    .profile-avatar-cloud-gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+      gap: .55rem;
+      max-height: min(42vh, 21rem);
+      overflow: auto;
+      padding: .55rem .05rem .15rem;
+    }
+
+    .profile-avatar-cloud-card {
+      display: grid;
+      grid-template-columns: 4.25rem minmax(0, 1fr);
+      gap: .55rem;
+      align-items: center;
+      width: 100%;
+      padding: .45rem;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+      transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+    }
+
+    .profile-avatar-cloud-card:hover,
+    .profile-avatar-cloud-card:focus-visible,
+    .profile-avatar-cloud-card.active {
+      border-color: color-mix(in srgb, var(--accent) 75%, var(--line));
+      box-shadow: 0 10px 24px rgba(15, 23, 42, .12);
+      transform: translateY(-1px);
+      outline: none;
+    }
+
+    .profile-avatar-cloud-thumb {
+      display: grid;
+      place-items: center;
+      width: 4.25rem;
+      aspect-ratio: 1;
+      border-radius: 16px;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+      color: var(--muted);
+      font-size: .72rem;
+      font-weight: 800;
+      letter-spacing: .05em;
+    }
+
+    .profile-avatar-cloud-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .profile-avatar-cloud-card-main {
+      min-width: 0;
+      display: grid;
+      gap: .25rem;
+    }
+
+    .profile-avatar-cloud-card-main strong,
+    .profile-avatar-cloud-card-main span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .profile-avatar-cloud-card-main span,
+    .profile-avatar-cloud-empty {
+      color: var(--muted);
+      font-size: .78rem;
+    }
+
+    @media (max-width: 560px) {
+      .profile-avatar-cloud-row {
+        grid-template-columns: 1fr;
+      }
+
+      .profile-avatar-cloud-gallery {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .video-cloud-gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+      gap: .6rem;
+      max-height: min(50vh, 28rem);
+      overflow: auto;
+      padding: .55rem .05rem .15rem;
+    }
+
+    .video-cloud-card {
+      display: grid;
+      gap: .5rem;
+      min-width: 0;
+      padding: .55rem;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+    }
+
+    .video-cloud-card:hover,
+    .video-cloud-card:focus-visible,
+    .video-cloud-card.active {
+      border-color: color-mix(in srgb, var(--accent) 75%, var(--line));
+      box-shadow: 0 10px 24px rgba(15, 23, 42, .12);
+      transform: translateY(-1px);
+      outline: none;
+    }
+
+    .video-cloud-preview {
+      display: grid;
+      place-items: center;
+      min-height: 7.2rem;
+      border-radius: 14px;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+    }
+
+    .video-cloud-media {
+      width: 100%;
+      max-width: 100%;
+      max-height: 13rem;
+      display: block;
+      background: #05060a;
+      border-radius: 12px;
+    }
+
+    audio.video-cloud-media {
+      min-height: 2.75rem;
+      background: transparent;
+    }
+
+    .video-cloud-preview-fallback {
+      color: var(--muted);
+      font-size: .9rem;
+      font-weight: 800;
+      letter-spacing: .08em;
+    }
+
+    .video-cloud-main {
+      min-width: 0;
+      display: grid;
+      gap: .25rem;
+    }
+
+    .video-cloud-main strong,
+    .video-cloud-main span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .video-cloud-main span,
+    .video-cloud-empty {
+      color: var(--muted);
+      font-size: .78rem;
+    }
+
     .profile-summary-main {
       min-width: 0;
       display: grid;
@@ -5641,6 +5791,124 @@
       font-weight: 800;
       color: var(--text);
       margin-bottom: .65rem;
+    }
+
+    .profile-quick-customize > summary small {
+      display: block;
+      margin-top: .2rem;
+      color: var(--muted);
+      font-size: .78rem;
+      font-weight: 600;
+    }
+
+    .profile-avatar-size-field {
+      gap: .52rem;
+    }
+
+    .profile-avatar-size-field .field-label-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .55rem;
+    }
+
+    #profile-edit-avatar-size-value {
+      min-width: 3.4rem;
+      padding: .18rem .45rem;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent) 20%, transparent);
+      color: var(--text);
+      text-align: center;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #profile-edit-avatar-size {
+      height: 2.25rem;
+      accent-color: var(--accent);
+      touch-action: pan-y;
+    }
+
+    .profile-avatar-size-presets {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: .35rem;
+    }
+
+    .profile-avatar-size-presets .btn {
+      min-width: 0;
+      justify-content: center;
+      padding-inline: .35rem;
+    }
+
+    .profile-appearance-preview-signal {
+      margin-top: .65rem;
+      padding: .55rem .7rem;
+      border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+      border-radius: 14px;
+      background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 17%, transparent), rgba(255,255,255,.04));
+      color: var(--text);
+      font-size: .86rem;
+      font-weight: 800;
+    }
+
+    .profile-summary.profile-appearance-previewing {
+      outline: 3px solid color-mix(in srgb, var(--accent) 56%, transparent);
+      box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 14%, transparent), 0 22px 62px rgba(0,0,0,.18);
+      transform: translateY(-1px);
+    }
+
+    .profile-summary.profile-template-creator,
+    .profile-summary.profile-template-showcase,
+    .profile-summary.profile-template-gallery,
+    .profile-summary.profile-template-neon {
+      border-width: 2px;
+      box-shadow: 0 18px 52px rgba(0,0,0,.16), inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+    }
+
+    .profile-summary.profile-bg-tone-bold {
+      filter: saturate(1.14) contrast(1.04);
+    }
+
+    .profile-summary.profile-bg-tone-bold .profile-summary-main h3,
+    .profile-summary.profile-accent-ocean .profile-summary-main h3,
+    .profile-summary.profile-accent-sunrise .profile-summary-main h3,
+    .profile-summary.profile-accent-forest .profile-summary-main h3,
+    .profile-summary.profile-accent-violet .profile-summary-main h3,
+    .profile-summary.profile-accent-ruby .profile-summary-main h3 {
+      color: color-mix(in srgb, var(--accent) 82%, var(--text));
+      text-shadow: 0 1px 18px color-mix(in srgb, var(--accent) 24%, transparent);
+    }
+
+    .profile-settings-scope-note,
+    .profile-account-modal-section {
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 12px;
+      background: rgba(255,255,255,.028);
+    }
+
+    .profile-settings-scope-note {
+      display: grid;
+      gap: .25rem;
+      padding: .75rem .85rem;
+      color: var(--muted);
+      font-size: .86rem;
+    }
+
+    .profile-settings-scope-note strong {
+      color: var(--text);
+    }
+
+    .profile-account-modal-section {
+      display: grid;
+      gap: .62rem;
+      padding: .8rem;
+      margin-top: .75rem;
+    }
+
+    .account-modal-subtitle,
+    .account-modal-routing-note {
+      margin-top: .35rem;
     }
 
     .server-env-process-command {
@@ -12344,6 +12612,36 @@
         order: 2;
       }
 
+      #module-drive .drive-preview-card.drive-preview-mobile-dialog {
+        position: fixed;
+        inset: max(.75rem, env(safe-area-inset-top)) .75rem max(.75rem, env(safe-area-inset-bottom));
+        z-index: 8990;
+        display: grid !important;
+        grid-template-rows: auto minmax(0, 1fr);
+        max-height: none;
+        overflow: hidden;
+        padding: .72rem;
+        border-radius: 16px;
+        box-shadow: 0 24px 70px rgba(0,0,0,.62);
+        background: color-mix(in srgb, var(--panel) 94%, #020617 6%);
+      }
+
+      #module-drive .drive-preview-card.drive-preview-mobile-dialog::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        background: rgba(2, 6, 23, .68);
+        backdrop-filter: blur(5px);
+      }
+
+      #module-drive .drive-preview-card.drive-preview-mobile-dialog .drive-preview-panel {
+        min-height: 0;
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+        padding-right: .15rem;
+      }
+
       #module-drive .drive-preview-panel {
         min-height: 220px;
       }
@@ -13293,3 +13591,1101 @@
         animation: none !important;
       }
     }
+.is-empty-heading {
+  display: none !important;
+}
+
+.profile-public-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+  margin: .55rem 0;
+}
+
+.profile-public-info-item {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .32rem .55rem;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 999px;
+  background: rgba(255,255,255,.06);
+}
+
+.profile-public-info-item strong {
+  font-size: .88rem;
+  font-weight: 700;
+}
+
+/* 20260531 mobile account management compact controls */
+@media (max-width: 640px) {
+  #module-users,
+  #user-edit-overlay {
+    --account-mobile-control-h: 2.25rem;
+  }
+
+  #module-users .admin-toolbar,
+  #module-users .drive-file-actions,
+  #module-users .edit-user-actions,
+  #module-users .user-actions,
+  #module-users .user-card-actions,
+  #module-users .table-actions,
+  #module-users [class*="action-row"],
+  #user-edit-overlay .edit-user-actions,
+  #user-edit-overlay .drive-file-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    gap: .35rem;
+  }
+
+  #module-users .btn,
+  #module-users button,
+  #user-edit-overlay .btn,
+  #user-edit-overlay button:not(.pw-toggle) {
+    width: auto !important;
+    min-width: 0;
+    max-width: 100%;
+    min-height: var(--account-mobile-control-h);
+    padding: .4rem .62rem;
+    border-radius: 999px;
+    font-size: .8rem;
+    line-height: 1.15;
+    white-space: nowrap;
+    flex: 0 1 auto;
+  }
+
+  #module-users .btn.btn-primary,
+  #module-users .btn.btn-danger,
+  #user-edit-overlay .btn.btn-primary,
+  #user-edit-overlay .btn.btn-danger {
+    padding-inline: .72rem;
+  }
+
+  #module-users .field,
+  #module-users label.field,
+  #user-edit-overlay .field,
+  #user-edit-overlay label.field,
+  #user-edit-overlay .profile-account-modal-section {
+    min-width: 0;
+  }
+
+  #module-users input:not([type="checkbox"]):not([type="radio"]):not([type="color"]),
+  #module-users select,
+  #module-users textarea,
+  #user-edit-overlay input:not([type="checkbox"]):not([type="radio"]):not([type="color"]),
+  #user-edit-overlay select,
+  #user-edit-overlay textarea {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    min-height: var(--account-mobile-control-h);
+    box-sizing: border-box;
+    padding: .46rem .58rem;
+    font-size: 16px;
+    line-height: 1.2;
+  }
+
+  #module-users textarea,
+  #user-edit-overlay textarea {
+    min-height: 4.4rem;
+  }
+
+  #module-users .settings-option-grid,
+  #user-edit-overlay .settings-option-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+    gap: .5rem;
+  }
+
+  #user-edit-overlay .user-edit-modal {
+    width: min(100vw - .75rem, 32rem);
+    max-height: calc(100dvh - .75rem);
+    padding: .75rem;
+    border-radius: 16px;
+    overflow: auto;
+  }
+
+  #user-edit-overlay .profile-account-modal-section {
+    gap: .45rem;
+    margin-top: .55rem;
+    padding: .62rem;
+    border-radius: 12px;
+  }
+
+  #user-edit-overlay .account-modal-subtitle,
+  #user-edit-overlay .account-modal-routing-note,
+  #user-edit-overlay .drive-card-sub {
+    font-size: .78rem;
+    line-height: 1.35;
+  }
+
+  #user-edit-overlay .pw-wrap {
+    min-width: 0;
+  }
+
+  #user-edit-overlay .pw-wrap input {
+    padding-right: 2.35rem;
+  }
+
+  #user-edit-overlay .pw-toggle {
+    width: 2rem !important;
+    min-height: 2rem;
+    padding: 0;
+    border-radius: 999px;
+    flex: 0 0 2rem;
+  }
+}
+
+/* 20260531 global mobile compact controls */
+@media (max-width: 640px) {
+  :root {
+    --mobile-control-h: 2.25rem;
+    --mobile-control-radius: 999px;
+  }
+
+  .module-section,
+  .admin-tools,
+  .drive-card,
+  .drive-collapsible-panel,
+  .settings-option-grid,
+  .user-edit-modal,
+  .modal,
+  .dialog,
+  .overlay-panel,
+  .video-modal,
+  .profile-panel {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .admin-toolbar,
+  .drive-file-actions,
+  .profile-tabs,
+  .profile-home-actions,
+  .profile-code-row,
+  .profile-friend-actions,
+  .chat-room-actions,
+  .chat-input-actions,
+  .community-actions,
+  .video-actions,
+  .trading-actions,
+  .economy-actions,
+  .edit-user-actions,
+  .settings-actions,
+  .modal-actions,
+  .dialog-actions,
+  .toolbar,
+  .action-row,
+  [class$="-actions"] {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    gap: .35rem;
+    min-width: 0;
+  }
+
+  button,
+  .btn,
+  .tab,
+  input[type="button"],
+  input[type="submit"],
+  input[type="reset"] {
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    min-height: var(--mobile-control-h);
+    padding: .4rem .64rem;
+    border-radius: var(--mobile-control-radius);
+    font-size: .8rem;
+    line-height: 1.15;
+    white-space: nowrap;
+    flex: 0 1 auto;
+  }
+
+  .btn-sm,
+  button.btn-sm,
+  .tab.btn-sm {
+    min-height: 2rem;
+    padding: .32rem .54rem;
+    font-size: .76rem;
+  }
+
+  .pw-toggle,
+  .icon-btn,
+  .theme-quick-toggle,
+  .sidebar-toggle,
+  .panel-close,
+  .modal-close,
+  .dialog-close {
+    width: 2rem;
+    min-width: 2rem;
+    max-width: 2rem;
+    min-height: 2rem;
+    padding: 0;
+    border-radius: 999px;
+    flex: 0 0 2rem;
+  }
+
+  .profile-avatar-large,
+  .profile-avatar-upload-button,
+  .profile-avatar-preview-button {
+    border-radius: 50%;
+    white-space: normal;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]),
+  select,
+  textarea {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    min-height: var(--mobile-control-h);
+    padding: .46rem .58rem;
+    font-size: 16px;
+    line-height: 1.2;
+  }
+
+  input[type="color"] {
+    width: 3.2rem;
+    min-width: 3.2rem;
+    height: var(--mobile-control-h);
+    padding: .16rem;
+  }
+
+  input[type="range"] {
+    width: 100%;
+    min-width: 0;
+  }
+
+  textarea {
+    min-height: 4.3rem;
+    resize: vertical;
+  }
+
+  .field,
+  label.field,
+  .settings-option-grid .field,
+  .drive-form-row,
+  .form-row,
+  .input-row,
+  .filter-row,
+  .search-row {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .settings-option-grid,
+  .drive-dashboard-grid,
+  .economy-wallet-grid,
+  .admin-grid,
+  .profile-stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+    gap: .5rem;
+  }
+
+  .drive-card,
+  .admin-tools,
+  .drive-collapsible-body,
+  .profile-quick-customize,
+  .profile-settings-scope-note {
+    padding: .7rem;
+  }
+
+  .drive-card-heading,
+  .section-head,
+  .compact-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: .45rem;
+  }
+
+  .drive-card-heading > *,
+  .section-head > *,
+  .compact-heading > * {
+    min-width: 0;
+  }
+
+  table,
+  .table-wrap,
+  .drive-file-list,
+  .admin-table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .user-edit-modal,
+  .drive-preview-modal,
+  .profile-avatar-modal,
+  .profile-avatar-preview-modal {
+    width: min(100vw - .75rem, 34rem);
+    max-height: calc(100dvh - .75rem);
+    padding: .75rem;
+    overflow: auto;
+  }
+
+  .profile-avatar-size-presets {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* 20260531 global popup close buttons */
+.global-modal-close-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .4rem;
+  min-width: 0;
+}
+
+.global-modal-close-row-top {
+  margin: -.15rem 0 .45rem;
+}
+
+.global-modal-close-row-bottom {
+  margin: .7rem 0 0;
+  padding-top: .55rem;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.global-modal-close-btn {
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .global-modal-close-row {
+    justify-content: flex-end;
+  }
+
+  .global-modal-close-btn {
+    min-height: 2rem;
+    padding: .32rem .58rem;
+    font-size: .76rem;
+  }
+}
+
+/* 20260531 account management mobile compact hard override */
+@media (max-width: 640px) {
+  #sec-users .admin-toolbar,
+  #admin-manager-view .admin-toolbar,
+  #admin-users-pagination,
+  .user-table .action,
+  #user-edit-overlay .edit-user-actions,
+  #admin-add-overlay .edit-user-actions {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: .28rem !important;
+  }
+
+  #sec-users .admin-toolbar .btn,
+  #sec-users .admin-toolbar button,
+  #admin-manager-view .admin-toolbar .btn,
+  #admin-users-pagination .btn,
+  .user-table .action .btn,
+  .user-table .action button,
+  #user-edit-overlay .edit-user-actions .btn,
+  #user-edit-overlay .edit-user-actions button:not(.pw-toggle),
+  #admin-add-overlay .edit-user-actions .btn,
+  #admin-add-overlay .edit-user-actions button:not(.pw-toggle) {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: max-content !important;
+    min-height: 1.9rem !important;
+    padding: .28rem .5rem !important;
+    border-radius: 999px !important;
+    font-size: .72rem !important;
+    line-height: 1.1 !important;
+    white-space: nowrap !important;
+    flex: 0 1 auto !important;
+  }
+
+  .user-table .action select,
+  .user-table .action span select {
+    width: auto !important;
+    min-width: 5.6rem !important;
+    max-width: 7.2rem !important;
+    min-height: 1.9rem !important;
+    padding: .25rem .42rem !important;
+    border-radius: 999px !important;
+    font-size: .72rem !important;
+    flex: 0 1 auto !important;
+  }
+
+  .user-table .action span {
+    display: inline-flex !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    gap: .25rem !important;
+    max-width: 100% !important;
+  }
+
+  #sec-users #admin-user-search {
+    width: min(100%, 12rem) !important;
+    max-width: 12rem !important;
+    flex: 1 1 9rem !important;
+  }
+
+  #sec-users #admin-users-page-size {
+    width: auto !important;
+    max-width: 6.4rem !important;
+    flex: 0 0 auto !important;
+  }
+
+  #sec-users .table-scroll-wrap {
+    margin-inline: -.35rem;
+    padding-inline: .35rem;
+  }
+
+  #sec-users .user-table th,
+  #sec-users .user-table td {
+    padding: .35rem .32rem !important;
+  }
+
+  #sec-users .user-table .action-edit-user,
+  #sec-users .user-table .action-remove-user {
+    font-weight: 700 !important;
+  }
+}
+
+/* 20260531 full-site mobile visual audit fixes */
+@media (max-width: 640px) {
+  .module-section :is(
+    .admin-toolbar,
+    .drive-file-actions,
+    .edit-user-actions,
+    .modal-actions,
+    .dialog-actions,
+    .app-dialog-actions,
+    .community-tools-tabs,
+    .community-review-tabs,
+    .video-discover-controls,
+    .video-sort-tabs,
+    .experiment-controls,
+    .experiment-tabs,
+    [class$="-actions"],
+    [class$="-controls"],
+    [class$="-tabs"]
+  ),
+  .user-edit-modal :is(.edit-user-actions, .modal-actions, .dialog-actions, [class$="-actions"]),
+  .app-dialog-card :is(.app-dialog-actions, .modal-actions, .dialog-actions, [class$="-actions"]) {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: .32rem !important;
+  }
+
+  .module-section :is(
+    .admin-toolbar,
+    .drive-file-actions,
+    .edit-user-actions,
+    .modal-actions,
+    .dialog-actions,
+    .app-dialog-actions,
+    .community-tools-tabs,
+    .community-review-tabs,
+    .video-discover-controls,
+    .video-sort-tabs,
+    .experiment-controls,
+    .experiment-tabs,
+    [class$="-actions"],
+    [class$="-controls"],
+    [class$="-tabs"]
+  ) :is(.btn, button, input[type="button"], input[type="submit"], input[type="reset"]),
+  .user-edit-modal :is(.edit-user-actions, .modal-actions, .dialog-actions, [class$="-actions"]) :is(.btn, button, input[type="button"], input[type="submit"], input[type="reset"]),
+  .app-dialog-card :is(.app-dialog-actions, .modal-actions, .dialog-actions, [class$="-actions"]) :is(.btn, button, input[type="button"], input[type="submit"], input[type="reset"]),
+  #video-search-submit,
+  #community-tools-toggle-btn,
+  #community-review-tab-btn,
+  #experiment-pause-toggle,
+  .experiment-tab {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: max-content !important;
+    min-height: 1.9rem !important;
+    padding: .28rem .52rem !important;
+    border-radius: 999px !important;
+    font-size: .74rem !important;
+    line-height: 1.12 !important;
+    white-space: nowrap !important;
+    flex: 0 1 auto !important;
+  }
+
+  #profile-home-avatar {
+    width: 5.5rem !important;
+    height: 5.5rem !important;
+    min-width: 5.5rem !important;
+    min-height: 5.5rem !important;
+    max-width: 5.5rem !important;
+    max-height: 5.5rem !important;
+  }
+
+  .global-modal-close-row {
+    position: sticky;
+    z-index: 3;
+    background: color-mix(in srgb, var(--card) 92%, transparent);
+  }
+
+  .global-modal-close-row-top {
+    top: 0;
+    margin-top: -.25rem;
+    padding-top: .15rem;
+  }
+
+  .global-modal-close-row-bottom {
+    bottom: 0;
+    padding-bottom: .15rem;
+  }
+}
+
+/* 20260531 settings buttons must stay compact on mobile */
+@media (max-width: 640px) {
+  .module-section :is(
+    .card > .btn,
+    .auth-recovery-panel .btn,
+    .settings-option-grid .field > .btn,
+    .form-section > .btn,
+    .field > .btn,
+    [data-settings-save-action]
+  ),
+  .root-module-settings-modal :is(
+    .card > .btn,
+    .settings-option-grid .field > .btn,
+    .form-section > .btn,
+    .field > .btn,
+    [data-settings-save-action],
+    #root-module-settings-save
+  ),
+  .settings-feature-bundle-toolbar :is(.btn, button),
+  .settings-feature-group-actions :is(.btn, button) {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: max-content !important;
+    min-height: 1.9rem !important;
+    padding: .28rem .52rem !important;
+    border-radius: 999px !important;
+    font-size: .74rem !important;
+    line-height: 1.12 !important;
+    white-space: nowrap !important;
+    flex: 0 1 auto !important;
+  }
+
+  .module-section :is(.settings-option-grid .field, .form-section, .card),
+  .root-module-settings-modal :is(.settings-option-grid .field, .form-section, .card) {
+    align-items: flex-start;
+  }
+}
+
+/* 20260531 auth mobile buttons stay compact too */
+@media (max-width: 640px) {
+  #auth-card :is(#li-btn, #reg-btn, #recovery-toggle, #reset-request-btn, #verify-request-btn, #reset-confirm-btn, #verify-confirm-btn),
+  #login-card :is(#li-btn, #reg-btn, #recovery-toggle),
+  #auth-view :is(#li-btn, #reg-btn, #recovery-toggle),
+  #login-screen :is(#li-btn, #reg-btn, #recovery-toggle) {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: max-content !important;
+    min-height: 1.95rem !important;
+    padding: .32rem .62rem !important;
+    border-radius: 999px !important;
+    font-size: .78rem !important;
+    line-height: 1.12 !important;
+    white-space: nowrap !important;
+    flex: 0 1 auto !important;
+  }
+
+  #auth-card :is(#li-btn, #reg-btn, #recovery-toggle, #li-pw-toggle, #reg-pw-toggle, #reg-pw-confirm-toggle),
+  #auth-view :is(#li-btn, #reg-btn, #recovery-toggle, #li-pw-toggle, #reg-pw-toggle, #reg-pw-confirm-toggle),
+  #login-screen :is(#li-btn, #reg-btn, #recovery-toggle, #li-pw-toggle, #reg-pw-toggle, #reg-pw-confirm-toggle) {
+    min-width: 2.75rem !important;
+    min-height: 2.75rem !important;
+  }
+
+  #auth-card :is(#li-pw-toggle, #reg-pw-toggle, #reg-pw-confirm-toggle),
+  #auth-view :is(#li-pw-toggle, #reg-pw-toggle, #reg-pw-confirm-toggle),
+  #login-screen :is(#li-pw-toggle, #reg-pw-toggle, #reg-pw-confirm-toggle) {
+    width: 2.75rem !important;
+    max-width: 2.75rem !important;
+    padding: 0 !important;
+    flex: 0 0 2.75rem !important;
+  }
+}
+
+/* 20260531 drive file row icon-only actions */
+#module-drive .drive-file-row > .drive-file-actions,
+#module-drive .storage-trash-inline .drive-file-actions,
+#module-drive .album-list .drive-file-actions,
+#module-drive #storage-trash-list .drive-file-actions,
+#module-drive #storage-album-list .drive-file-actions {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: .26rem !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  padding-bottom: .08rem !important;
+  scrollbar-width: thin;
+}
+
+#module-drive .drive-file-row > .drive-file-actions :is(.btn, button)[data-drive-action],
+#module-drive .storage-trash-inline .drive-file-actions :is(.btn, button)[data-drive-action],
+#module-drive .album-list .drive-file-actions :is(.btn, button)[data-drive-action],
+#module-drive #storage-trash-list .drive-file-actions :is(.btn, button)[data-drive-action],
+#module-drive #storage-album-list .drive-file-actions :is(.btn, button)[data-drive-action] {
+  width: 2rem !important;
+  min-width: 2rem !important;
+  max-width: 2rem !important;
+  height: 2rem !important;
+  min-height: 2rem !important;
+  padding: 0 !important;
+  border-radius: .7rem !important;
+  display: inline-grid !important;
+  place-items: center !important;
+  flex: 0 0 2rem !important;
+  font-size: 0 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+#module-drive .drive-file-actions :is(.btn, button)[data-drive-action]::before {
+  content: "•";
+  font-size: .98rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+#module-drive .drive-file-actions [data-drive-action="preview"]::before,
+#module-drive .drive-file-actions [data-drive-action="preview-cloud-file"]::before,
+#module-drive .drive-file-actions [data-drive-action="open-album"]::before {
+  content: "◎";
+}
+
+#module-drive .drive-file-actions [data-drive-action="download"]::before,
+#module-drive .drive-file-actions [data-drive-action="download-storage"]::before {
+  content: "↓";
+}
+
+#module-drive .drive-file-actions [data-drive-action="share-cloud-file"]::before,
+#module-drive .drive-file-actions [data-drive-action="share-storage-folder"]::before {
+  content: "↗";
+}
+
+#module-drive .drive-file-actions [data-drive-action="rename-storage-file"]::before,
+#module-drive .drive-file-actions [data-drive-action="rename-storage-folder"]::before {
+  content: "✎";
+}
+
+#module-drive .drive-file-actions [data-drive-action="move-storage-file"]::before,
+#module-drive .drive-file-actions [data-drive-action="move-cloud-to-storage"]::before,
+#module-drive .drive-file-actions [data-drive-action="select-storage-folder"]::before,
+#module-drive .drive-file-actions [data-drive-action="select-storage-file"]::before {
+  content: "⇄";
+}
+
+#module-drive .drive-file-actions [data-drive-action="trash-storage"]::before,
+#module-drive .drive-file-actions [data-drive-action="trash-storage-folder"]::before,
+#module-drive .drive-file-actions [data-drive-action="trash-selected-storage"]::before {
+  content: "⌫";
+}
+
+#module-drive .drive-file-actions [data-drive-action="delete-cloud"]::before,
+#module-drive .drive-file-actions [data-drive-action="delete-album"]::before,
+#module-drive .drive-file-actions [data-drive-action="purge-storage"]::before,
+#module-drive .drive-file-actions [data-drive-action="purge-storage-trash"]::before,
+#module-drive .drive-file-actions [data-drive-action="close-preview"]::before {
+  content: "×";
+}
+
+#module-drive .drive-file-actions [data-drive-action="restore-storage"]::before,
+#module-drive .drive-file-actions [data-drive-action="restore-storage-trash"]::before {
+  content: "↺";
+}
+
+#module-drive .drive-file-actions [data-drive-action="add-storage-to-album"]::before {
+  content: "+";
+}
+
+#module-drive .drive-file-actions [data-drive-action="publish-to-video"]::before {
+  content: "▶";
+}
+
+#module-drive .drive-file-actions [data-drive-action="open-share-center"]::before {
+  content: "⚙";
+}
+.video-stream-debug-panel {
+  margin-top: 0.75rem;
+  border: 1px solid rgba(20, 83, 45, 0.22);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(236, 253, 245, 0.95), rgba(240, 249, 255, 0.92));
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  color: #10231a;
+  overflow: hidden;
+}
+
+.video-stream-debug-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 0.8rem;
+  min-height: 0;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.video-stream-debug-toggle input {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: 0 0 auto;
+  accent-color: #047857;
+}
+
+.video-stream-debug-body {
+  border-top: 1px solid rgba(20, 83, 45, 0.14);
+  padding: 0.7rem 0.8rem 0.8rem;
+}
+
+.video-stream-debug-title {
+  margin-bottom: 0.45rem;
+  color: #14532d;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.video-stream-debug-output {
+  max-height: min(44vh, 24rem);
+  margin: 0;
+  padding: 0.75rem;
+  overflow: auto;
+  border-radius: 10px;
+  background: rgba(8, 15, 12, 0.92);
+  color: #bbf7d0;
+  font-family: "SFMono-Regular", "Cascadia Mono", Consolas, monospace;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (min-width: 900px) {
+  .video-stream-debug-panel {
+    max-width: 34rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .video-stream-debug-toggle {
+    padding: 0.55rem 0.65rem;
+    font-size: 0.82rem;
+  }
+
+  .video-stream-debug-body {
+    padding: 0.6rem;
+  }
+
+  .video-stream-debug-output {
+    max-height: 34vh;
+    font-size: 0.7rem;
+  }
+}
+.profile-avatar-size-field {
+  min-width: 0;
+}
+
+.profile-avatar-size-field .field-label-row,
+.profile-avatar-size-field label,
+.profile-avatar-size-field .field-hint {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.profile-avatar-size-field input[type="range"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.profile-avatar-size-field output,
+#profile-edit-avatar-size-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.25rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.1);
+  color: #0f766e;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.profile-avatar-size-presets {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  min-width: 0;
+  margin-top: 0.45rem;
+}
+
+.profile-avatar-size-presets .btn,
+.profile-avatar-size-presets button {
+  flex: 0 1 auto;
+  width: auto !important;
+  min-width: 2.75rem;
+  max-width: 100%;
+  min-height: 2rem;
+  padding: 0.35rem 0.62rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.profile-avatar-size-presets .btn.is-active,
+.profile-avatar-size-presets button.is-active {
+  border-color: rgba(15, 118, 110, 0.55);
+  background: #0f766e;
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(15, 118, 110, 0.18);
+}
+
+@media (min-width: 780px) {
+  .profile-avatar-size-field {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.45rem;
+  }
+
+  .profile-avatar-size-presets {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .profile-avatar-size-presets .btn,
+  .profile-avatar-size-presets button {
+    min-width: 2.4rem;
+    padding-inline: 0.5rem;
+    font-size: 0.74rem;
+  }
+}
+
+/* Profile avatar size controls: final override for desktop/mobile layout stability. */
+.profile-avatar-size-field {
+  min-width: 0 !important;
+  overflow: visible !important;
+}
+
+.profile-avatar-size-field .field-label-row,
+.profile-avatar-size-field .field-label,
+.profile-avatar-size-field .field-hint,
+.profile-avatar-size-field label {
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
+}
+
+.profile-avatar-size-field input[type="range"] {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+.profile-avatar-size-field output,
+#profile-edit-avatar-size-value {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: auto !important;
+  min-width: 3.25rem !important;
+  max-width: max-content !important;
+  padding: 0.15rem 0.45rem !important;
+  border-radius: 999px !important;
+  line-height: 1.2 !important;
+  white-space: nowrap !important;
+  position: static !important;
+  transform: none !important;
+}
+
+.profile-avatar-size-field .profile-avatar-size-presets {
+  display: flex !important;
+  flex-flow: row wrap !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 0.4rem !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  margin-top: 0.45rem !important;
+  position: static !important;
+  transform: none !important;
+}
+
+.profile-avatar-size-field .profile-avatar-size-presets .btn,
+.profile-avatar-size-field .profile-avatar-size-presets button,
+.profile-avatar-size-presets .btn[data-profile-avatar-size],
+.profile-avatar-size-presets button[data-profile-avatar-size] {
+  display: inline-flex !important;
+  flex: 0 0 auto !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: auto !important;
+  min-width: 2.75rem !important;
+  max-width: 100% !important;
+  min-height: 2rem !important;
+  padding: 0.35rem 0.62rem !important;
+  border-radius: 999px !important;
+  font-size: 0.78rem !important;
+  line-height: 1.1 !important;
+  white-space: nowrap !important;
+  position: static !important;
+  transform: none !important;
+}
+
+.profile-avatar-size-presets .btn.is-active,
+.profile-avatar-size-presets button.is-active {
+  border-color: rgba(15, 118, 110, 0.55) !important;
+  background: #0f766e !important;
+  color: #fff !important;
+  box-shadow: 0 6px 14px rgba(15, 118, 110, 0.18) !important;
+}
+
+@media (max-width: 520px) {
+  .profile-avatar-size-field .profile-avatar-size-presets .btn,
+  .profile-avatar-size-field .profile-avatar-size-presets button,
+  .profile-avatar-size-presets .btn[data-profile-avatar-size],
+  .profile-avatar-size-presets button[data-profile-avatar-size] {
+    min-width: 2.4rem !important;
+    padding-inline: 0.5rem !important;
+    font-size: 0.74rem !important;
+  }
+}
+/* Profile homepage avatar sizing must affect the visible card, not only hidden edit controls. */
+#profile-pane-home .profile-summary {
+  grid-template-columns: max-content minmax(0, 1fr) !important;
+  align-items: center !important;
+  column-gap: clamp(1rem, 3vw, 2.4rem) !important;
+}
+
+#profile-pane-home #profile-home-avatar.profile-avatar-large {
+  width: var(--profile-avatar-custom-size, 55px) !important;
+  height: var(--profile-avatar-custom-size, 55px) !important;
+  inline-size: var(--profile-avatar-custom-size, 55px) !important;
+  block-size: var(--profile-avatar-custom-size, 55px) !important;
+  min-width: var(--profile-avatar-custom-size, 55px) !important;
+  min-height: var(--profile-avatar-custom-size, 55px) !important;
+  min-inline-size: var(--profile-avatar-custom-size, 55px) !important;
+  min-block-size: var(--profile-avatar-custom-size, 55px) !important;
+  max-width: var(--profile-avatar-custom-size, 55px) !important;
+  max-height: var(--profile-avatar-custom-size, 55px) !important;
+  max-inline-size: var(--profile-avatar-custom-size, 55px) !important;
+  max-block-size: var(--profile-avatar-custom-size, 55px) !important;
+  flex-basis: var(--profile-avatar-custom-size, 55px) !important;
+}
+
+#profile-pane-home #profile-home-avatar.profile-avatar-large .user-avatar-img,
+#profile-pane-home #profile-home-avatar.profile-avatar-large .user-avatar-fallback {
+  width: 100% !important;
+  height: 100% !important;
+  inline-size: 100% !important;
+  block-size: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+}
+
+#profile-pane-home .profile-summary-main {
+  min-width: 0 !important;
+  grid-column: auto !important;
+}
+
+#profile-pane-home .profile-summary-main h3,
+#profile-pane-home .profile-summary-main p {
+  overflow-wrap: anywhere !important;
+}
+
+@media (max-width: 720px) {
+  #profile-pane-home .profile-summary {
+    grid-template-columns: minmax(0, 1fr) !important;
+    justify-items: center !important;
+    text-align: center !important;
+  }
+
+  #profile-pane-home .profile-summary-main {
+    width: 100% !important;
+    justify-items: center !important;
+  }
+}
+
+/* Final override: visible profile avatar size and layout must not be overridden by template classes. */
+#profile-pane-home .profile-summary {
+  grid-template-columns: max-content minmax(0, 1fr) !important;
+  align-items: center !important;
+  column-gap: clamp(1rem, 3vw, 2.4rem) !important;
+}
+
+#profile-pane-home #profile-home-avatar.profile-avatar-large {
+  width: var(--profile-avatar-custom-size, 55px) !important;
+  height: var(--profile-avatar-custom-size, 55px) !important;
+  inline-size: var(--profile-avatar-custom-size, 55px) !important;
+  block-size: var(--profile-avatar-custom-size, 55px) !important;
+  min-width: var(--profile-avatar-custom-size, 55px) !important;
+  min-height: var(--profile-avatar-custom-size, 55px) !important;
+  min-inline-size: var(--profile-avatar-custom-size, 55px) !important;
+  min-block-size: var(--profile-avatar-custom-size, 55px) !important;
+  max-width: var(--profile-avatar-custom-size, 55px) !important;
+  max-height: var(--profile-avatar-custom-size, 55px) !important;
+  max-inline-size: var(--profile-avatar-custom-size, 55px) !important;
+  max-block-size: var(--profile-avatar-custom-size, 55px) !important;
+  flex-basis: var(--profile-avatar-custom-size, 55px) !important;
+}
+
+#profile-pane-home #profile-home-avatar.profile-avatar-large .user-avatar-img,
+#profile-pane-home #profile-home-avatar.profile-avatar-large .user-avatar-fallback {
+  width: 100% !important;
+  height: 100% !important;
+  inline-size: 100% !important;
+  block-size: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+}
+
+#profile-pane-home .profile-summary-main {
+  min-width: 0 !important;
+  grid-column: auto !important;
+}
+
+#profile-pane-home .profile-summary-main h3,
+#profile-pane-home .profile-summary-main p {
+  overflow-wrap: anywhere !important;
+}
+
+@media (max-width: 720px) {
+  #profile-pane-home .profile-summary {
+    grid-template-columns: minmax(0, 1fr) !important;
+    justify-items: center !important;
+    text-align: center !important;
+  }
+
+  #profile-pane-home .profile-summary-main {
+    width: 100% !important;
+    justify-items: center !important;
+  }
+}

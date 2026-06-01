@@ -29,6 +29,7 @@ def create_uploaded_file_record(
     encryption_version=None,
     nonce=None,
     client_scan_report=None,
+    system_asset_type=None,
     user=None,
     scan_now=False,
 ):
@@ -44,6 +45,7 @@ def create_uploaded_file_record(
     is_e2ee = is_e2ee_privacy_mode(decision.privacy_mode)
     if is_e2ee and not encrypted_file_key:
         raise ValueError("encrypted_file_key is required for e2ee uploads")
+    asset_type = str(system_asset_type or "").strip().lower()[:40] or None
     conn.execute(
         """
         INSERT INTO uploaded_files (
@@ -51,8 +53,8 @@ def create_uploaded_file_record(
             original_filename_encrypted, original_filename_plain_for_public,
             mime_type_encrypted, mime_type_plain_for_public, size_bytes,
             ciphertext_sha256, plaintext_sha256, encryption_algorithm, encryption_version,
-            nonce, client_scan_report_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            nonce, client_scan_report_json, system_asset_type, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -72,6 +74,7 @@ def create_uploaded_file_record(
             encryption_version,
             nonce,
             json.dumps(client_scan_report, ensure_ascii=False) if isinstance(client_scan_report, dict) else None,
+            asset_type,
             now,
             now,
         ),
@@ -85,7 +88,7 @@ def create_uploaded_file_record(
             """,
             (uuid.uuid4().hex, file_id, int(owner_user_id), encrypted_file_key, wrapped_by, 1, now),
         )
-    result = {"file_id": file_id, **decision.as_dict()}
+    result = {"file_id": file_id, **decision.as_dict(), "system_asset_type": asset_type or ""}
     if scan_now and decision.allowed and decision.scan_status == "pending":
         scan_result = scan_uploaded_file(
             conn,

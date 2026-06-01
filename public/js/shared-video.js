@@ -210,6 +210,7 @@
   }
   let sharedHls = null;
   let sharedHlsLoadPromise = null;
+  let sharedRealtimeAbortController = null;
   let sharedManualQualitySelection = false;
   let sharedAutoQualityFallbackApplied = false;
   let sharedUserSeeking = false;
@@ -340,6 +341,10 @@
     });
   }
   function destroySharedPlaybackArtifacts() {
+    if (sharedRealtimeAbortController) {
+      try { sharedRealtimeAbortController.abort(); } catch (_) {}
+      sharedRealtimeAbortController = null;
+    }
     if (sharedE2eeStreamCleanup) {
       try { sharedE2eeStreamCleanup(); } catch (_) {}
       sharedE2eeStreamCleanup = null;
@@ -348,6 +353,96 @@
       try { sharedHls.destroy(); } catch (_) {}
     }
     sharedHls = null;
+  }
+
+  function sharedRealtimeMseContentType(playback={}) {
+    return String(playback?.realtime_proxy?.mse_content_type || 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"').trim();
+  }
+
+  function sharedRealtimeSourceApi() {
+    return window.ManagedMediaSource || window.MediaSource || window.WebKitMediaSource;
+  }
+
+  function sharedSupportsRealtimeMse(playback={}) {
+    const SourceApi = sharedRealtimeSourceApi();
+    const mime = sharedRealtimeMseContentType(playback);
+    return !!(
+      SourceApi
+      && typeof SourceApi.isTypeSupported === "function"
+      && SourceApi.isTypeSupported(mime)
+    );
+  }
+
+  function waitSharedSourceBufferIdle(sourceBuffer) {
+    if (!sourceBuffer || !sourceBuffer.updating) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        sourceBuffer.removeEventListener("updateend", onEnd);
+        sourceBuffer.removeEventListener("error", onErr);
+      };
+      const onEnd = () => {
+        cleanup();
+        resolve();
+      };
+      const onErr = () => {
+        cleanup();
+        reject(new Error("MediaSource 更新失敗"));
+      };
+      sourceBuffer.addEventListener("updateend", onEnd, { once: true });
+      sourceBuffer.addEventListener("error", onErr, { once: true });
+    });
+  }
+
+  async function attachSharedRealtimeProxyMse(player, playback={}, url="") {
+    if (!url) {
+      setMsg("Standard 即時轉封裝目前沒有可播放來源。", true);
+      return;
+    }
+    if (!sharedSupportsRealtimeMse(playback)) {
+      setMsg("此裝置不支援即時轉封裝播放，需使用 HLS 預處理版本。", true);
+      return;
+    }
+    destroySharedPlaybackArtifacts();
+    const MediaSourceCtor = sharedRealtimeSourceApi();
+    if (window.ManagedMediaSource && MediaSourceCtor === window.ManagedMediaSource && "disableRemotePlayback" in player) {
+      player.disableRemotePlayback = true;
+    }
+    const mediaSource = new MediaSourceCtor();
+    const objectUrl = URL.createObjectURL(mediaSource);
+    const controller = new AbortController();
+    sharedRealtimeAbortController = controller;
+    player.preload = "none";
+    player.src = objectUrl;
+    if (typeof player.load === "function") player.load();
+    setMsg("正在初始化 Standard 即時轉封裝...");
+    mediaSource.addEventListener("sourceopen", async () => {
+      try {
+        const sourceBuffer = mediaSource.addSourceBuffer(sharedRealtimeMseContentType(playback));
+        sourceBuffer.mode = "segments";
+        const response = await fetch(url, { credentials: "same-origin", signal: controller.signal });
+        if (!response.ok || !response.body || typeof response.body.getReader !== "function") {
+          throw new Error(`HTTP ${response.status || "stream"}`);
+        }
+        const reader = response.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value || !value.byteLength) continue;
+          await waitSharedSourceBufferIdle(sourceBuffer);
+          sourceBuffer.appendBuffer(value);
+        }
+        await waitSharedSourceBufferIdle(sourceBuffer);
+        if (mediaSource.readyState === "open") {
+          try { mediaSource.endOfStream(); } catch (_) {}
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        if (mediaSource.readyState === "open") {
+          try { mediaSource.endOfStream("decode"); } catch (_) {}
+        }
+        setMsg(`Standard 即時轉封裝 MediaSource 播放失敗：${err?.message || "unknown"}`, true);
+      }
+    }, { once: true });
   }
   function renderSharedQualityControl(playback={}) {
     const host = $("quality-host");
@@ -455,9 +550,9 @@
       const wasPaused = player.paused;
       const nextUrl = sharedRealtimeProxyUrl(playback, resumeAt);
       if (!nextUrl) return;
-      player.src = nextUrl;
-      if (typeof player.load === "function") player.load();
-      if (!wasPaused && typeof player.play === "function") player.play().catch(() => {});
+      attachSharedRealtimeProxyMse(player, playback, nextUrl).then(() => {
+        if (!wasPaused && typeof player.play === "function") player.play().catch(() => {});
+      });
       setMsg(`音軌：${tracks[selected]?.label || "音軌"}。`);
       return;
     }
@@ -1067,7 +1162,7 @@
         setMsg(playback?.realtime_proxy?.reason || "Standard 即時轉封裝目前不可用。", true);
         return;
       }
-      player.src = url;
+      await attachSharedRealtimeProxyMse(player, playback, url);
       setMsg("目前使用 Standard 即時轉封裝；伺服器會即時轉出瀏覽器較好播放的音訊。");
       return;
     }

@@ -8,9 +8,12 @@ const videoState = {
   viewRecordedFor: new Set(),
   browseLoaded: false,
   currentHls: null,
+  currentRealtimeAbortController: null,
   currentObjectUrl: "",
   hlsLibraryPromise: null,
   playbackSessionId: 0,
+  streamDebugSnapshot: {},
+  streamDebugInterval: 0,
   manualQualitySelection: false,
   autoQualityFallbackApplied: false,
   userSeeking: false,
@@ -34,6 +37,7 @@ const videoUploadLiveJobs = new Map();
 const VIDEO_SHARE_FRAGMENT_STORAGE_KEY = "hackme_web.video_share_fragments";
 const VIDEO_HLS_JS_URL = "/js/hls.light.min.js?v=20260505-hlsjs";
 const VIDEO_E2EE_STREAM_V2_WORKER_URL = "/js/e2ee-stream-v2-worker.js?v=20260505-e2eev2";
+const VIDEO_STREAM_DEBUG_STORAGE_KEY = "hackme_web.video_stream_debug";
 const VIDEO_E2EE_STREAM_V2_CHUNK_SIZE = 512 * 1024;
 const VIDEO_E2EE_STREAM_V2_MAX_RETRIES = 2;
 const VIDEO_E2EE_STREAM_V2_CACHE_LIMIT = 16;
@@ -213,6 +217,14 @@ function destroyCurrentVideoPlaybackArtifacts() {
     }
   }
   videoState.currentHls = null;
+  if (videoState.currentRealtimeAbortController) {
+    try {
+      videoState.currentRealtimeAbortController.abort();
+    } catch (_) {
+      // ignore abort failure
+    }
+  }
+  videoState.currentRealtimeAbortController = null;
   if (videoState.currentObjectUrl) {
     try {
       URL.revokeObjectURL(videoState.currentObjectUrl);
@@ -234,6 +246,169 @@ function resetVideoPlaybackStatusState() {
   const status = $("video-playback-status");
   if (!status) return;
   delete status.dataset.state;
+}
+
+function videoStreamDebugRootAllowed() {
+  try {
+    const user = typeof currentUser !== "undefined" ? currentUser : window.currentUser;
+    if (user === "root") return true;
+    if (typeof user === "string") return user.toLowerCase() === "root";
+    return !!(user && (user.username === "root" || user.role === "root" || user.is_root === true));
+  } catch (_) {
+    return false;
+  }
+}
+
+function videoStreamDebugStoredEnabled() {
+  if (!videoStreamDebugRootAllowed()) return false;
+  try {
+    return localStorage.getItem(VIDEO_STREAM_DEBUG_STORAGE_KEY) === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
+function setVideoStreamDebugStoredEnabled(enabled) {
+  try {
+    if (enabled) localStorage.setItem(VIDEO_STREAM_DEBUG_STORAGE_KEY, "1");
+    else localStorage.removeItem(VIDEO_STREAM_DEBUG_STORAGE_KEY);
+  } catch (_) {}
+}
+
+function videoPlayerBufferedRanges(player) {
+  const ranges = [];
+  try {
+    for (let i = 0; i < player.buffered.length; i += 1) {
+      ranges.push(`${player.buffered.start(i).toFixed(2)}-${player.buffered.end(i).toFixed(2)}`);
+    }
+  } catch (_) {}
+  return ranges.join(", ");
+}
+
+function ensureVideoStreamDebugPanel(player = $("video-player")) {
+  let wrap = $("video-stream-debug-panel");
+  if (!videoStreamDebugRootAllowed()) {
+    if (wrap) wrap.hidden = true;
+    return null;
+  }
+  if (!wrap) {
+    wrap = document.createElement("section");
+    wrap.id = "video-stream-debug-panel";
+    wrap.className = "video-stream-debug-panel";
+    wrap.innerHTML = `
+      <label class="video-stream-debug-toggle">
+        <input type="checkbox" id="video-stream-debug-toggle" />
+        <span>root 串流診斷</span>
+      </label>
+      <div class="video-stream-debug-body" id="video-stream-debug-body" hidden>
+        <div class="video-stream-debug-title">串流效果與相容性</div>
+        <pre id="video-stream-debug-output"></pre>
+      </div>
+    `;
+    const status = $("video-playback-status");
+    if (status?.parentElement) {
+      status.insertAdjacentElement("afterend", wrap);
+    } else if (player?.parentElement) {
+      player.insertAdjacentElement("afterend", wrap);
+    } else {
+      document.body.appendChild(wrap);
+    }
+    $("video-stream-debug-toggle")?.addEventListener("change", (event) => {
+      const checked = !!event.target.checked;
+      setVideoStreamDebugStoredEnabled(checked);
+      const body = $("video-stream-debug-body");
+      if (body) body.hidden = !checked;
+      renderVideoStreamDebugPanel();
+    });
+  }
+  const status = $("video-playback-status");
+  if (status?.parentElement && wrap.previousElementSibling !== status) {
+    status.insertAdjacentElement("afterend", wrap);
+  }
+  wrap.hidden = false;
+  const toggle = $("video-stream-debug-toggle");
+  const enabled = videoStreamDebugStoredEnabled();
+  if (toggle) toggle.checked = enabled;
+  const body = $("video-stream-debug-body");
+  if (body) body.hidden = !enabled;
+  return wrap;
+}
+
+function renderVideoStreamDebugPanel(extra = {}) {
+  if (!videoStreamDebugRootAllowed()) return;
+  const player = $("video-player");
+  ensureVideoStreamDebugPanel(player);
+  Object.assign(videoState.streamDebugSnapshot, extra || {});
+  const output = $("video-stream-debug-output");
+  if (!output || !videoStreamDebugStoredEnabled()) return;
+  const err = player?.error;
+  const snapshot = {
+    updated_at: new Date().toISOString(),
+    ...videoState.streamDebugSnapshot,
+    player: player ? {
+      current_src: player.currentSrc || player.src || "",
+      network_state: player.networkState,
+      ready_state: player.readyState,
+      paused: player.paused,
+      current_time: Number(player.currentTime || 0).toFixed(3),
+      duration: Number.isFinite(Number(player.duration)) ? Number(player.duration).toFixed(3) : String(player.duration || ""),
+      buffered: videoPlayerBufferedRanges(player),
+      video_size: player.videoWidth || player.videoHeight ? `${player.videoWidth}x${player.videoHeight}` : "",
+      error_code: err?.code || "",
+      error_message: err?.message || "",
+    } : null,
+  };
+  output.textContent = JSON.stringify(snapshot, null, 2);
+}
+
+function bindVideoStreamDebugPlayerEvents(player) {
+  if (!player || player.dataset.streamDebugBound === "1") return;
+  player.dataset.streamDebugBound = "1";
+  ["loadstart", "loadedmetadata", "canplay", "playing", "waiting", "stalled", "error", "pause", "ended"].forEach((name) => {
+    player.addEventListener(name, () => renderVideoStreamDebugPanel({ last_media_event: name }));
+  });
+}
+
+function startVideoStreamDebugSession(player, video, playback, playbackSource, sessionId) {
+  if (!videoStreamDebugRootAllowed()) return;
+  bindVideoStreamDebugPlayerEvents(player);
+  ensureVideoStreamDebugPanel(player);
+  const caps = realtimeProxyMediaSourceCapabilities(playback);
+  const MediaSourceCtor = caps.source_api;
+  const mseType = caps.mime_codec_string;
+  const mseSupported = caps.is_type_supported_result;
+  videoState.streamDebugSnapshot = {
+    video_id: video?.id || "",
+    title: video?.title || "",
+    selected_service_mode: videoSelectedServiceMode(video, playback || {}),
+    playback_payload_mode: playback?.mode || "",
+    playback_source_mode: playbackSource?.mode || "",
+    source_mode: playback?.source_mode || "",
+    src: playbackSource?.src || playbackSource?.masterUrl || "",
+    player_strategy: playback?.player_strategy || "",
+    realtime_available: playback?.realtime_proxy?.available,
+    realtime_reason: playback?.realtime_proxy?.reason || "",
+    realtime_output_container: playback?.realtime_proxy?.output_container || "",
+    realtime_mse_content_type: mseType,
+    realtime_mse_supported: mseSupported,
+    selected_source_api: caps.selected_source_api,
+    media_source_api: caps.selected_source_api,
+    media_source_available: caps.media_source_available,
+    webkit_media_source_available: caps.webkit_media_source_available,
+    managed_media_source_available: caps.managed_media_source_available,
+    source_api_available: Boolean(MediaSourceCtor),
+    mime_codec_string: caps.mime_codec_string,
+    is_type_supported_result: caps.is_type_supported_result,
+    disable_remote_playback: Boolean(player?.disableRemotePlayback),
+    user_agent: navigator.userAgent,
+    session_id: sessionId,
+  };
+  renderVideoStreamDebugPanel();
+  window.clearInterval(videoState.streamDebugInterval);
+  videoState.streamDebugInterval = window.setInterval(() => {
+    if (sessionId !== videoState.playbackSessionId) return;
+    renderVideoStreamDebugPanel();
+  }, 1000);
 }
 
 function loadVideoHlsLibrary() {
@@ -301,7 +476,7 @@ function forgetRememberedVideoShareFragment(shareUrl) {
 
 function videoSelectedDriveFile() {
   const target = String($("video-publish-file")?.value || "");
-  return videoPublishDriveFiles.find((file) => String(file?.id || "") === target) || null;
+  return videoPublishDriveFiles.find((file) => String(file?.id || file?.file_id || "") === target) || null;
 }
 
 function videoShareBytesToBase64(bytes) {
@@ -595,7 +770,8 @@ async function prepareVideoE2eeShareArtifacts(fileId) {
     const e2ee = await fetchDriveE2eeKey(fileId, csrf);
     const passphrase = await getDriveE2eeSessionPassphrase(
       fileId,
-      "請輸入此 E2EE 影音原始加密密碼。密碼只會在瀏覽器端使用，用來建立分享授權與 Streaming v2 分段。"
+      "請輸入此 E2EE 影音原始加密密碼。密碼只會在瀏覽器端使用，用來建立分享授權與 Streaming v2 分段。",
+      { allowPrompt: true }
     );
     if (!passphrase) {
       throw new Error("E2EE 影音分享需要先輸入原始加密密碼。");
@@ -797,11 +973,65 @@ async function buildVideoE2eeShareEnvelope(fileId) {
 }
 
 function videoDisplayName(file) {
-  return file.original_filename_plain_for_public || file.display_name || file.id || "影音檔";
+  const displayName = String(file?.display_name || file?.storage_display_name || "").trim();
+  const virtualPath = String(file?.virtual_path || file?.storage_virtual_path || "").trim();
+  const virtualName = virtualPath.split("/").filter(Boolean).pop() || "";
+  const originalName = String(file?.original_filename_plain_for_public || file?.filename || "").trim();
+  return displayName || virtualName || originalName || file?.id || file?.file_id || "影音檔";
 }
 
 function videoTitleFromFilename(name = "") {
   return String(name || "影音檔").replace(/\.[^.]+$/, "").trim() || "影音檔";
+}
+
+function videoPublishFileId(file) {
+  return String(file?.id || file?.file_id || "");
+}
+
+function videoPublishFileById(fileId) {
+  const target = String(fileId || "");
+  return videoPublishDriveFiles.find((file) => videoPublishFileId(file) === target) || null;
+}
+
+function videoPublishSizeText(file) {
+  if (typeof formatDriveBytes === "function") return formatDriveBytes(file?.size_bytes || 0);
+  const bytes = Number(file?.size_bytes || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${Math.round(bytes)} B`;
+}
+
+function videoPublishPrivacyLabel(file) {
+  const mode = String(file?.privacy_mode || "standard_plain");
+  if (mode === "e2ee") return "E2EE，發布後由瀏覽器端處理";
+  if (mode === "server_encrypted") return "伺服器端加密，可解密預覽";
+  return "一般影音";
+}
+
+function videoPublishMediaKind(file) {
+  const name = videoDisplayName(file).toLowerCase();
+  const mime = videoMime(file);
+  if (mime.startsWith("audio/") || [".mp3", ".m4a", ".aac", ".flac", ".wav", ".weba", ".opus", ".oga", ".ogg"].some((ext) => name.endsWith(ext))) return "audio";
+  return "video";
+}
+
+function videoPublishPreviewUrl(file) {
+  if (String(file?.privacy_mode || "") === "e2ee") return "";
+  const id = videoPublishFileId(file);
+  return id ? `${API}/cloud-drive/files/${encodeURIComponent(id)}/preview/content` : "";
+}
+
+function syncVideoPublishDriveGallerySelection(fileId) {
+  const selectedId = String(fileId || "");
+  const gallery = $("video-publish-file-gallery");
+  if (!gallery) return;
+  gallery.querySelectorAll("[data-video-publish-cloud-id]").forEach((card) => {
+    const active = String(card.dataset.videoPublishCloudId || "") === selectedId;
+    card.classList.toggle("active", active);
+    card.setAttribute("aria-selected", active ? "true" : "false");
+  });
 }
 
 function applyVideoPublishDriveSelection(fileId, title = "") {
@@ -812,11 +1042,12 @@ function applyVideoPublishDriveSelection(fileId, title = "") {
   const matched = options.find((option) => String(option.value || "") === target);
   if (!matched) return false;
   select.value = target;
+  syncVideoPublishDriveGallerySelection(target);
   const uploadInput = $("video-upload-file");
   if (uploadInput) uploadInput.value = "";
   const titleInput = $("video-publish-title");
   if (titleInput && !titleInput.value.trim()) {
-    titleInput.value = videoTitleFromFilename(title || matched.textContent || "");
+    titleInput.value = videoTitleFromFilename(title || videoDisplayName(videoPublishFileById(target)) || matched.textContent || "");
   }
   return true;
 }
@@ -831,6 +1062,42 @@ function isCloudMediaFile(file) {
   return mime.startsWith("video/")
     || mime.startsWith("audio/")
     || [".mp4", ".m4v", ".mov", ".webm", ".ogv", ".avi", ".mkv", ".mp3", ".m4a", ".aac", ".flac", ".wav", ".weba", ".opus", ".oga", ".ogg"].some((ext) => name.endsWith(ext));
+}
+
+function renderVideoPublishDriveGallery(files = []) {
+  const gallery = $("video-publish-file-gallery");
+  if (!gallery) return;
+  if (!files.length) {
+    gallery.innerHTML = `<div class="drive-empty video-cloud-empty">雲端硬碟目前沒有可發布的影音檔</div>`;
+    return;
+  }
+  const selectedId = String($("video-publish-file")?.value || "");
+  gallery.innerHTML = files.map((file) => {
+    const id = videoPublishFileId(file);
+    const name = videoDisplayName(file);
+    const mime = videoMime(file);
+    const mediaKind = videoPublishMediaKind(file);
+    const previewUrl = videoPublishPreviewUrl(file);
+    const active = id && id === selectedId;
+    let preview = `<div class="video-cloud-preview-fallback">${mediaKind === "audio" ? "音訊" : "影片"}</div>`;
+    if (previewUrl && mediaKind === "audio") {
+      preview = `<audio class="video-cloud-media" preload="none" controls src="${sanitize(previewUrl)}"></audio>`;
+    } else if (previewUrl) {
+      preview = `<video class="video-cloud-media" preload="none" controls playsinline src="${sanitize(previewUrl)}"></video>`;
+    } else if (String(file?.privacy_mode || "") === "e2ee") {
+      preview = `<div class="video-cloud-preview-fallback">E2EE</div>`;
+    }
+    return `
+      <div class="video-cloud-card${active ? " active" : ""}" data-video-publish-cloud-id="${sanitize(id)}" role="option" tabindex="0" aria-selected="${active ? "true" : "false"}">
+        <div class="video-cloud-preview">${preview}</div>
+        <div class="video-cloud-main">
+          <strong>${sanitize(name)}</strong>
+          <span>${sanitize(videoPublishSizeText(file))} · ${sanitize(videoPublishPrivacyLabel(file))}${mime ? ` · ${sanitize(mime)}` : ""}</span>
+        </div>
+        <button class="btn btn-sm" type="button" data-video-publish-cloud-select="${sanitize(id)}">使用此影音</button>
+      </div>
+    `;
+  }).join("");
 }
 
 function formatVideoCount(value, unit = "") {
@@ -962,6 +1229,8 @@ async function loadVideoPublishFiles() {
   const select = $("video-publish-file");
   if (!select) return;
   select.innerHTML = `<option value="">讀取影音檔...</option>`;
+  const gallery = $("video-publish-file-gallery");
+  if (gallery) gallery.innerHTML = `<div class="drive-empty video-cloud-empty">讀取雲端影音中...</div>`;
   try {
     const res = await apiFetch(API + "/cloud-drive/files", { credentials: "same-origin" });
     const json = await res.json().catch(() => ({}));
@@ -969,8 +1238,9 @@ async function loadVideoPublishFiles() {
     const files = (json.files || []).filter(isCloudMediaFile);
     videoPublishDriveFiles = files;
     select.innerHTML = files.length
-      ? files.map((file) => `<option value="${sanitize(file.id)}">${sanitize(videoDisplayName(file))}</option>`).join("")
+      ? files.map((file) => `<option value="${sanitize(videoPublishFileId(file))}">${sanitize(videoDisplayName(file))}</option>`).join("")
       : `<option value="">雲端硬碟目前沒有可發布的影音檔</option>`;
+    renderVideoPublishDriveGallery(files);
     if (videoPendingPublishSelection?.fileId) {
       const applied = applyVideoPublishDriveSelection(videoPendingPublishSelection.fileId, videoPendingPublishSelection.title);
       if (applied) setVideoPublishPanelVisible(true, { focus: false });
@@ -978,6 +1248,7 @@ async function loadVideoPublishFiles() {
   } catch (err) {
     videoPublishDriveFiles = [];
     select.innerHTML = `<option value="">影音檔讀取失敗</option>`;
+    if (gallery) gallery.innerHTML = `<div class="drive-empty video-cloud-empty">影音檔讀取失敗</div>`;
     videoMsg(err.message || "影音檔讀取失敗", false);
   }
 }
@@ -1022,6 +1293,7 @@ async function publishVideoFromDrive() {
   const coverFile = $("video-cover-file")?.files?.[0] || null;
   const sharePassword = ($("video-share-password")?.value || "").trim();
   const selectedFile = directFile ? null : videoSelectedDriveFile();
+  const streamingModes = selectedVideoPublishStreamingModes();
   const payload = {
     cloud_file_id: $("video-publish-file")?.value || "",
     title: ($("video-publish-title")?.value || "").trim(),
@@ -1032,6 +1304,7 @@ async function publishVideoFromDrive() {
       ? getShareExpiryPickerValue("video-share-expires-at")
       : ($("video-share-expires-at")?.value || "").trim(),
     share_max_views: ($("video-share-max-views")?.value || "").trim(),
+    streaming_modes: streamingModes,
   };
   if (!directFile && !payload.cloud_file_id) return videoMsg("請選擇要直接上傳的影音檔，或選擇雲端硬碟中的影音檔", false);
   if (!payload.title && !directFile) return videoMsg("請輸入影音標題", false);
@@ -1059,8 +1332,8 @@ async function publishVideoFromDrive() {
       liveUploadJobId = videoUploadLiveJobId();
       const uploadPrivacyMode = $("video-upload-privacy-mode")?.value || "standard_plain";
       const uploadDoneStatus = uploadPrivacyMode === "server_encrypted"
-        ? "上傳完成，伺服器端加密與掃描中；HLS 會在後台轉檔，進度可到任務中心查看"
-        : "上傳完成，伺服器儲存與掃描中；HLS 會在後台轉檔，進度可到任務中心查看";
+        ? "上傳完成，伺服器端加密與掃描中；若有選 HLS 才會在後台轉檔"
+        : "上傳完成，伺服器儲存與掃描中；若有選 HLS 才會在後台轉檔";
       updateVideoUploadLiveJob(liveUploadJobId, {
         title: `影音上傳：${directFile.name}`,
         progress_percent: 1,
@@ -1077,8 +1350,9 @@ async function publishVideoFromDrive() {
       form.append("share_expires_at", payload.share_expires_at);
       form.append("share_max_views", payload.share_max_views);
       form.append("privacy_mode", uploadPrivacyMode);
+      form.append("streaming_modes", JSON.stringify(streamingModes));
       if (coverFile) form.append("cover", coverFile);
-      videoMsg("影音檔上傳中。上傳完成後若需要 HLS 轉檔，你可以先做別的事；進度會顯示在任務中心，完成後會通知上傳者。", true);
+      videoMsg("影音檔上傳中。上傳完成後會直接以你選的串流方式發布；只有選 HLS 才會建立背景轉檔任務。", true);
       setVideoUploadProgress({ visible: true, percent: 0, loaded: 0, total: directFile.size, status: `準備上傳 ${directFile.name}` });
       const upload = await videoUploadFormWithProgress(API + "/videos/upload", form, (event) => {
         if (event.lengthComputable) {
@@ -1120,6 +1394,7 @@ async function publishVideoFromDrive() {
       form.append("share_expires_at", payload.share_expires_at);
       form.append("share_max_views", payload.share_max_views);
       if (payload.share_wrapped_file_key_envelope) form.append("share_wrapped_file_key_envelope", payload.share_wrapped_file_key_envelope);
+      form.append("streaming_modes", JSON.stringify(streamingModes));
       form.append("cover", coverFile);
       videoMsg("影音封面上傳中，請稍候...", true);
       setVideoUploadProgress({ visible: true, percent: 0, loaded: 0, total: coverFile.size, status: `準備上傳封面 ${coverFile.name}` });
@@ -1203,6 +1478,12 @@ async function publishVideoFromDrive() {
       videoMsg("影音已發布，HLS 正在後台轉檔；你可以先做別的事，進度會顯示在任務中心，完成後會通知上傳者。", true);
     } else {
       videoMsg("影音已發布", true);
+    }
+    if (json.video?.id) {
+      const preferredMode = streamingModes.includes("prepared_hls")
+        ? "prepared_hls"
+        : (streamingModes.includes("realtime_proxy") ? "realtime_proxy" : "direct");
+      saveVideoSelectedServiceMode(json.video, preferredMode);
     }
     setVideoPublishPanelVisible(false, { focus: false });
     await loadVideoPublishFiles();
@@ -1299,6 +1580,24 @@ function hlsMimeForVideo(mediaType = "video") {
 function browserSupportsNativeHls(mediaType = "video") {
   const probe = document.createElement(mediaType === "audio" ? "audio" : "video");
   return !!(probe && typeof probe.canPlayType === "function" && probe.canPlayType(hlsMimeForVideo(mediaType)));
+}
+
+function selectedVideoPublishStreamingModes() {
+  const select = $("video-streaming-modes");
+  const modes = select ? Array.from(select.selectedOptions || []).map((option) => String(option.value || "")).filter(Boolean) : [];
+  return modes.length ? modes : ["direct"];
+}
+
+async function applyVideoPublishStreamingChoices(video, json, modes) {
+  const selected = new Set(Array.isArray(modes) ? modes : []);
+  if (!selected.has("prepared_hls")) return;
+  const fileId = json?.file?.file_id || video?.cloud_file_id || json?.video?.cloud_file_id || "";
+  if (!fileId) return;
+  try {
+    await prepareVideoStream(fileId);
+  } catch (err) {
+    videoMsg(`影音已發布，但 HLS 串流建立失敗：${err.message || "請稍後重試"}`, false);
+  }
 }
 
 function videoStreamingOptions(playback = {}) {
@@ -1828,7 +2127,7 @@ async function decryptVideoE2eePlaybackBlob(video, playback, csrf) {
     }
   }
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const passphrase = await getDriveE2eeSessionPassphrase(fileId, promptText, { force: true });
+    const passphrase = await getDriveE2eeSessionPassphrase(fileId, promptText, { force: true, allowPrompt: true });
     if (!passphrase) return null;
     try {
       const decrypted = await decryptDriveE2eeBlob(ciphertext, e2ee, passphrase);
@@ -1862,7 +2161,7 @@ async function resolveVideoE2eePlaybackKey(video, playback) {
   const passphrase = await getDriveE2eeSessionPassphrase(
     fileId,
     "請輸入此 E2EE 影音的原始加密密碼。公開影音與 strict E2EE Streaming v2 都只在瀏覽器端解密，伺服器無法看到明文。",
-    { force: true }
+    { force: true, allowPrompt: true }
   );
   if (!passphrase) throw new Error("E2EE 影音播放需要原始加密密碼。");
   const fileKey = await unwrapDriveFileKey(e2ee.encrypted_file_key, passphrase);
@@ -2000,6 +2299,235 @@ function fallbackVideoPlayerToDirect(player, playback, message, bad = false) {
     if (typeof player.load === "function") player.load();
   }
   setVideoPlaybackStatus(message || "HLS 初始化失敗，已改用直接串流。", bad);
+}
+
+function realtimeProxyMseContentType(playback = {}) {
+  return String(playback?.realtime_proxy?.mse_content_type || 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"').trim();
+}
+
+function realtimeProxyMediaSourceCtor() {
+  return window.ManagedMediaSource || window.MediaSource || window.WebKitMediaSource;
+}
+
+function realtimeProxyMediaSourceName() {
+  if (window.ManagedMediaSource) return "ManagedMediaSource";
+  if (window.MediaSource) return "MediaSource";
+  if (window.WebKitMediaSource) return "WebKitMediaSource";
+  return "";
+}
+
+function realtimeProxyMediaSourceCapabilities(playback = {}) {
+  const SourceApi = realtimeProxyMediaSourceCtor();
+  const mime = realtimeProxyMseContentType(playback);
+  const supported = !!(
+    SourceApi
+    && typeof SourceApi.isTypeSupported === "function"
+    && SourceApi.isTypeSupported(mime)
+  );
+  return {
+    source_api: SourceApi,
+    selected_source_api: realtimeProxyMediaSourceName(),
+    media_source_available: Boolean(window.MediaSource),
+    webkit_media_source_available: Boolean(window.WebKitMediaSource),
+    managed_media_source_available: Boolean(window.ManagedMediaSource),
+    mime_codec_string: mime,
+    is_type_supported_result: supported,
+  };
+}
+
+function browserSupportsRealtimeMse(playback = {}) {
+  return realtimeProxyMediaSourceCapabilities(playback).is_type_supported_result;
+}
+
+function waitForSourceBufferIdle(sourceBuffer) {
+  if (!sourceBuffer || !sourceBuffer.updating) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      sourceBuffer.removeEventListener("updateend", onEnd);
+      sourceBuffer.removeEventListener("error", onErr);
+    };
+    const onEnd = () => {
+      cleanup();
+      resolve();
+    };
+    const onErr = () => {
+      cleanup();
+      reject(new Error("MediaSource 更新失敗"));
+    };
+    sourceBuffer.addEventListener("updateend", onEnd, { once: true });
+    sourceBuffer.addEventListener("error", onErr, { once: true });
+  });
+}
+
+async function attachVideoRealtimeProxyMsePlayer(player, playback = {}, playbackSource = {}, sessionId = 0) {
+  const src = String(playbackSource?.src || "").trim();
+  const mseType = realtimeProxyMseContentType(playback);
+  const caps = realtimeProxyMediaSourceCapabilities(playback);
+  if (!src) {
+    renderVideoStreamDebugPanel({
+      realtime_state: "missing_source",
+      realtime_error: "missing src",
+      mse_content_type: mseType,
+      mime_codec_string: caps.mime_codec_string,
+      selected_source_api: caps.selected_source_api,
+    });
+    setVideoPlaybackStatus(playbackSource?.statusText || "Standard 即時轉封裝目前沒有可播放來源。", true);
+    return;
+  }
+  if (!caps.is_type_supported_result) {
+    renderVideoStreamDebugPanel({
+      realtime_state: "mse_not_supported",
+      realtime_error: "source api or codec is not supported",
+      mse_supported: false,
+      mse_content_type: mseType,
+      mime_codec_string: caps.mime_codec_string,
+      selected_source_api: caps.selected_source_api,
+      media_source_available: caps.media_source_available,
+      webkit_media_source_available: caps.webkit_media_source_available,
+      managed_media_source_available: caps.managed_media_source_available,
+      is_type_supported_result: caps.is_type_supported_result,
+      disable_remote_playback: Boolean(player?.disableRemotePlayback),
+    });
+    setVideoPlaybackStatus("此裝置不支援即時轉封裝播放，需使用 HLS 預處理版本。", true);
+    return;
+  }
+  destroyCurrentVideoPlaybackArtifacts();
+  const MediaSourceCtor = caps.source_api;
+  if (window.ManagedMediaSource && MediaSourceCtor === window.ManagedMediaSource && "disableRemotePlayback" in player) {
+    player.disableRemotePlayback = true;
+  }
+  const mediaSource = new MediaSourceCtor();
+  const objectUrl = URL.createObjectURL(mediaSource);
+  const controller = new AbortController();
+  videoState.currentRealtimeAbortController = controller;
+  videoState.currentObjectUrl = objectUrl;
+  player.preload = "none";
+  player.src = objectUrl;
+  if (typeof player.load === "function") player.load();
+  setVideoPlaybackStatus(playbackSource.statusText || "正在初始化 Standard 即時轉封裝...", false);
+  renderVideoStreamDebugPanel({
+    realtime_state: "opening",
+    realtime_src: src,
+    mse_supported: true,
+    selected_source_api: caps.selected_source_api,
+    media_source_api: caps.selected_source_api,
+    media_source_available: caps.media_source_available,
+    webkit_media_source_available: caps.webkit_media_source_available,
+    managed_media_source_available: caps.managed_media_source_available,
+    disable_remote_playback: Boolean(player.disableRemotePlayback),
+    mse_content_type: mseType,
+    mime_codec_string: caps.mime_codec_string,
+    is_type_supported_result: caps.is_type_supported_result,
+  });
+
+  mediaSource.addEventListener("sourceopen", async () => {
+    if (sessionId !== videoState.playbackSessionId) return;
+    let sourceBuffer = null;
+    let totalBytes = 0;
+    let appendedBytes = 0;
+    let totalChunks = 0;
+    let appendedChunks = 0;
+    const startMs = performance.now();
+    let firstChunkMs = 0;
+    let lastRenderMs = 0;
+    try {
+      renderVideoStreamDebugPanel({
+        realtime_state: "sourceopen",
+        mse_ready_state: mediaSource.readyState,
+        mse_content_type: mseType,
+      });
+      sourceBuffer = mediaSource.addSourceBuffer(mseType);
+      sourceBuffer.mode = "segments";
+      renderVideoStreamDebugPanel({
+        realtime_state: "fetching",
+        mse_ready_state: mediaSource.readyState,
+        mse_source_buffer_mode: sourceBuffer.mode,
+      });
+      const response = await fetch(src, {
+        credentials: "same-origin",
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body || typeof response.body.getReader !== "function") {
+        throw new Error(`HTTP ${response.status || "stream"}`);
+      }
+      const headerType = response.headers.get("X-Hackme-MSE-Content-Type") || "";
+      const requestId = response.headers.get("X-Request-Id") || response.headers.get("X-Hackme-Request-Id") || "";
+      renderVideoStreamDebugPanel({
+        realtime_state: "connected",
+        realtime_http_status: response.status,
+        realtime_content_length: response.headers.get("Content-Length") || "",
+        realtime_content_type: response.headers.get("Content-Type") || "",
+        realtime_header_mse_content_type: headerType,
+        realtime_request_id: requestId,
+        mse_ready_state: mediaSource.readyState,
+      });
+      if (headerType && headerType !== mseType) {
+        setVideoPlaybackStatus(`Standard 即時轉封裝已連線：${headerType}`, false);
+      }
+      const reader = response.body.getReader();
+      while (sessionId === videoState.playbackSessionId) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || !value.byteLength) continue;
+        totalChunks += 1;
+        totalBytes += value.byteLength;
+        if (!firstChunkMs) firstChunkMs = Math.round(performance.now() - startMs);
+        await waitForSourceBufferIdle(sourceBuffer);
+        sourceBuffer.appendBuffer(value);
+        appendedChunks += 1;
+        appendedBytes += value.byteLength;
+        const now = performance.now();
+        if (!lastRenderMs || now - lastRenderMs >= 500) {
+          lastRenderMs = now;
+          renderVideoStreamDebugPanel({
+            realtime_state: "receiving",
+            realtime_bytes_received: totalBytes,
+            realtime_bytes_appended: appendedBytes,
+            realtime_chunks_received: totalChunks,
+            realtime_chunks_appended: appendedChunks,
+            realtime_first_chunk_ms: firstChunkMs,
+            realtime_elapsed_ms: Math.round(now - startMs),
+            mse_ready_state: mediaSource.readyState,
+          });
+        }
+      }
+      await waitForSourceBufferIdle(sourceBuffer);
+      if (mediaSource.readyState === "open") {
+        try {
+          mediaSource.endOfStream();
+        } catch (_) {}
+      }
+      renderVideoStreamDebugPanel({
+        realtime_state: "ended",
+        realtime_bytes_received: totalBytes,
+        realtime_bytes_appended: appendedBytes,
+        realtime_chunks_received: totalChunks,
+        realtime_chunks_appended: appendedChunks,
+        realtime_first_chunk_ms: firstChunkMs,
+        realtime_elapsed_ms: Math.round(performance.now() - startMs),
+        mse_ready_state: mediaSource.readyState,
+      });
+    } catch (err) {
+      if (controller.signal.aborted || sessionId !== videoState.playbackSessionId) return;
+      if (mediaSource.readyState === "open") {
+        try {
+          mediaSource.endOfStream("decode");
+        } catch (_) {}
+      }
+      renderVideoStreamDebugPanel({
+        realtime_state: "error",
+        realtime_error: err?.message || "unknown",
+        realtime_bytes_received: totalBytes,
+        realtime_bytes_appended: appendedBytes,
+        realtime_chunks_received: totalChunks,
+        realtime_chunks_appended: appendedChunks,
+        realtime_first_chunk_ms: firstChunkMs,
+        realtime_elapsed_ms: Math.round(performance.now() - startMs),
+        mse_ready_state: mediaSource.readyState,
+      });
+      setVideoPlaybackStatus(`Standard 即時轉封裝 MediaSource 播放失敗：${err?.message || "unknown"}`, true);
+    }
+  }, { once: true });
 }
 
 function videoPlaybackQualityOptions(playback = {}) {
@@ -2463,12 +2991,18 @@ function applyVideoAudioTrackSelection(playback = {}) {
     const player = $("video-player");
     if (!player) return;
     const resumeAt = videoPlaybackResumeTime(player);
-    const wasPaused = player.paused;
     const nextUrl = videoRealtimeProxyUrl(playback, resumeAt);
     if (!nextUrl) return;
-    player.src = nextUrl;
-    if (typeof player.load === "function") player.load();
-    if (!wasPaused && typeof player.play === "function") player.play().catch(() => {});
+    attachVideoRealtimeProxyMsePlayer(
+      player,
+      playback,
+      {
+        mode: "realtime_proxy",
+        src: nextUrl,
+        statusText: `音軌：${tracks[selected]?.label || "音軌"}。`,
+      },
+      videoState.playbackSessionId
+    );
     setVideoPlaybackStatus(`音軌：${tracks[selected]?.label || "音軌"}。`, false);
     return;
   }
@@ -2605,6 +3139,7 @@ async function activateVideoPlaybackMode(video, playback, playbackSource, sessio
   const player = $("video-player");
   if (!player) return;
   resetVideoPlaybackStatusState();
+  startVideoStreamDebugSession(player, video, playback, playbackSource, sessionId);
   syncVideoSubtitleTracks(player, playback || {});
   if (playback?.mode === "e2ee_stream_v2") {
     clearVideoPlaybackAction();
@@ -2632,6 +3167,10 @@ async function activateVideoPlaybackMode(video, playback, playbackSource, sessio
     await attachVideoHlsJsPlayer(player, playback, sessionId);
     return;
   }
+  if (playbackSource?.mode === "realtime_proxy") {
+    await attachVideoRealtimeProxyMsePlayer(player, playback, playbackSource, sessionId);
+    return;
+  }
   destroyCurrentVideoPlaybackArtifacts();
   if (playbackSource?.mode === "hls_native") {
     const stalledHandler = () => {
@@ -2649,6 +3188,39 @@ async function activateVideoPlaybackMode(video, playback, playbackSource, sessio
       if (!fallbackVideoPlaybackToLowerQuality(playback, "原生 HLS 播放錯誤") && playback?.fallback_url) {
         fallbackVideoPlayerToDirect(player, playback, "HLS 播放失敗，已改用直接串流。", true);
       }
+    }, { once: true });
+  }
+  const src = String(playbackSource?.src || "").trim();
+  if (!src) {
+    renderVideoStreamDebugPanel({
+      direct_state: "missing_source",
+      direct_mode: playbackSource?.mode || "",
+    });
+    setVideoPlaybackStatus(playbackSource?.statusText || "目前沒有可播放來源。", true);
+    return;
+  }
+  player.preload = playbackSource?.mode === "realtime_proxy" ? "none" : "metadata";
+  player.src = src;
+  if (typeof player.load === "function") player.load();
+  setVideoPlaybackStatus(playbackSource?.statusText || "", false);
+  renderVideoStreamDebugPanel({
+    direct_state: "attached",
+    direct_mode: playbackSource?.mode || "",
+    direct_src: src,
+    direct_preload: player.preload,
+  });
+  if (playbackSource?.mode === "direct" || playbackSource?.mode === "realtime_proxy") {
+    player.addEventListener("error", () => {
+      if (sessionId !== videoState.playbackSessionId) return;
+      const code = Number(player.error?.code || 0);
+      const modeLabel = playbackSource.mode === "realtime_proxy" ? "Standard 即時轉封裝" : "Basic 直接串流";
+      renderVideoStreamDebugPanel({
+        direct_state: "error",
+        direct_mode: playbackSource?.mode || "",
+        direct_error_code: code || "unknown",
+        direct_error_message: player.error?.message || "",
+      });
+      setVideoPlaybackStatus(`${modeLabel} 已連到來源但瀏覽器回報無法解碼或載入。錯誤碼：${code || "unknown"}。`, true);
     }, { once: true });
   }
 }
@@ -3554,7 +4126,23 @@ document.addEventListener("click", (event) => {
     setVideoPublishPanelVisible(false, { focus: false });
     return;
   }
+  const cloudSelectButton = event.target.closest("[data-video-publish-cloud-select]");
+  if (cloudSelectButton) {
+    applyVideoPublishDriveSelection(cloudSelectButton.dataset.videoPublishCloudSelect || "");
+    return;
+  }
+  const cloudCard = event.target.closest("[data-video-publish-cloud-id]");
+  if (cloudCard && !event.target.closest("video,audio,button,input,select,textarea,a")) {
+    applyVideoPublishDriveSelection(cloudCard.dataset.videoPublishCloudId || "");
+    return;
+  }
   if (event.target.closest("#video-publish-btn")) {
     publishVideoFromDrive();
+  }
+});
+
+document.addEventListener("change", (event) => {
+  if (event.target?.id === "video-publish-file") {
+    applyVideoPublishDriveSelection(event.target.value || "");
   }
 });

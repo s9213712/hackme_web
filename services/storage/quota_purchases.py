@@ -3,13 +3,22 @@ import json
 from datetime import datetime, timedelta, timezone
 
 
+STORAGE_UPGRADE_PRODUCT_ALIASES = {
+    "birthday_storage_1gb_30d": "birthday_storage_1gb_7d",
+}
+
 STORAGE_UPGRADE_PRODUCTS = {
-    "cloud_storage_1gb_30d": {
+    "cloud_storage_1gb_7d": {
         "storage_bytes": 1024 ** 3,
         "duration_days": 7,
         "label": "雲端容量 1GB / 7 天",
     },
-    "birthday_storage_1gb_30d": {
+    "cloud_storage_1gb_30d": {
+        "storage_bytes": 1024 ** 3,
+        "duration_days": 30,
+        "label": "雲端容量 1GB / 30 天",
+    },
+    "birthday_storage_1gb_7d": {
         "storage_bytes": 1024 ** 3,
         "duration_days": 7,
         "label": "生日禮 1GB / 7 天",
@@ -17,7 +26,7 @@ STORAGE_UPGRADE_PRODUCTS = {
 }
 
 STORAGE_UPGRADE_PRICE_DEFAULTS = {
-    "cloud_storage_1gb_30d": {
+    "cloud_storage_1gb_7d": {
         "item_name": "雲端容量 1GB / 7 天",
         "category": "cloud_drive",
         "currency_type": "soft",
@@ -32,9 +41,24 @@ STORAGE_UPGRADE_PRICE_DEFAULTS = {
             "label": "雲端容量 1GB / 7 天",
         }, ensure_ascii=False, separators=(",", ":")),
     },
+    "cloud_storage_1gb_30d": {
+        "item_name": "雲端容量 1GB / 30 天",
+        "category": "cloud_drive",
+        "currency_type": "soft",
+        "base_price": 400,
+        "dynamic_pricing": 0,
+        "min_price": 200,
+        "max_price": 2000,
+        "enabled": 1,
+        "metadata_json": json.dumps({
+            "storage_bytes": 1024 ** 3,
+            "duration_days": 30,
+            "label": "雲端容量 1GB / 30 天",
+        }, ensure_ascii=False, separators=(",", ":")),
+    },
 }
 
-BIRTHDAY_STORAGE_GIFT_ITEM_KEY = "birthday_storage_1gb_30d"
+BIRTHDAY_STORAGE_GIFT_ITEM_KEY = "birthday_storage_1gb_7d"
 BIRTHDAY_STORAGE_GIFT_BYTES = 1024 ** 3
 BIRTHDAY_STORAGE_GIFT_DAYS = 7
 
@@ -72,8 +96,13 @@ def ensure_storage_quota_purchase_schema(conn):
     )
 
 
+def normalize_storage_upgrade_product_key(item_key):
+    key = str(item_key or "").strip()
+    return STORAGE_UPGRADE_PRODUCT_ALIASES.get(key, key)
+
+
 def storage_upgrade_product(item_key):
-    return STORAGE_UPGRADE_PRODUCTS.get(str(item_key or "").strip())
+    return STORAGE_UPGRADE_PRODUCTS.get(normalize_storage_upgrade_product_key(item_key))
 
 
 def _metadata_from_item(item):
@@ -107,13 +136,20 @@ def storage_upgrade_product_from_catalog_item(item):
 
 
 def storage_upgrade_product_from_catalog(conn, item_key):
-    try:
-        row = conn.execute(
-            "SELECT * FROM economy_price_catalog WHERE item_key=? AND category='cloud_drive' AND enabled=1",
-            (str(item_key or "").strip(),),
-        ).fetchone()
-    except Exception:
-        row = None
+    requested_key = str(item_key or "").strip()
+    canonical_key = normalize_storage_upgrade_product_key(requested_key)
+    lookup_keys = [canonical_key] + ([requested_key] if requested_key and requested_key != canonical_key else [])
+    row = None
+    for lookup_key in lookup_keys:
+        try:
+            row = conn.execute(
+                "SELECT * FROM economy_price_catalog WHERE item_key=? AND category='cloud_drive' AND enabled=1",
+                (lookup_key,),
+            ).fetchone()
+        except Exception:
+            row = None
+        if row:
+            break
     return storage_upgrade_product_from_catalog_item(dict(row)) if row else storage_upgrade_product(item_key)
 
 
@@ -164,7 +200,27 @@ def list_storage_upgrade_price_catalog(conn):
 
 
 def ensure_storage_upgrade_price_catalog(conn):
+    ensure_storage_quota_purchase_schema(conn)
     now = _iso(_now())
+    for legacy_key, canonical_key in STORAGE_UPGRADE_PRODUCT_ALIASES.items():
+        conn.execute(
+            """
+            UPDATE economy_price_catalog
+            SET item_key=?, updated_at=?
+            WHERE item_key=?
+              AND category='cloud_drive'
+              AND NOT EXISTS (SELECT 1 FROM economy_price_catalog WHERE item_key=? AND category='cloud_drive')
+            """,
+            (canonical_key, now, legacy_key, canonical_key),
+        )
+        conn.execute(
+            "UPDATE economy_price_catalog SET enabled=0, updated_at=? WHERE item_key=? AND category='cloud_drive'",
+            (now, legacy_key),
+        )
+        conn.execute(
+            "UPDATE storage_quota_purchases SET item_key=? WHERE item_key=?",
+            (canonical_key, legacy_key),
+        )
     for item_key, item in STORAGE_UPGRADE_PRICE_DEFAULTS.items():
         conn.execute(
             """
@@ -226,7 +282,7 @@ def record_storage_quota_purchase(conn, *, user_id, item_key, quantity, points_s
         (
             purchase_id,
             int(user_id),
-            str(item_key),
+            normalize_storage_upgrade_product_key(item_key),
             quantity,
             purchased_bytes,
             int(points_spent or 0),

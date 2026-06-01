@@ -959,29 +959,50 @@ def check_video_share_journey(rec: Recorder, page) -> dict[str, Any]:
                 shared_master_url = (shared_playback.get("body") or {}).get("master_url") or ""
                 if shared_master_url:
                     shared_master = fetch_text(page, shared_master_url)
+        playback_body = playback.get("body") or {}
+        shared_playback_body = shared_playback.get("body") or {}
+        playback_mode = str(playback_body.get("mode") or playback_body.get("recommended_mode") or "").strip()
+        shared_playback_mode = str(shared_playback_body.get("mode") or shared_playback_body.get("recommended_mode") or "").strip()
         hls_master_ok = (
             playback["status"] == 200
-            and (playback.get("body") or {}).get("mode") == "hls"
+            and playback_mode == "hls"
             and master["status"] == 200
             and 'CODECS="h264"' not in master.get("text", "")
             and "avc1." in master.get("text", "")
+        )
+        direct_or_realtime_ok = (
+            playback["status"] == 200
+            and playback_mode in {"direct", "realtime"}
+            and bool(playback_body.get("stream_url"))
+            and not playback_body.get("master_url")
         )
         shared_hls_ok = (
             not share_url
             or (
                 shared_playback["status"] == 200
-                and (shared_playback.get("body") or {}).get("mode") == "hls"
-                and (shared_playback.get("body") or {}).get("hls_js_url") == "/js/hls.light.min.js?v=20260505-hlsjs"
+                and shared_playback_mode == "hls"
+                and shared_playback_body.get("hls_js_url") == "/js/hls.light.min.js?v=20260505-hlsjs"
                 and shared_master["status"] == 200
                 and 'CODECS="h264"' not in shared_master.get("text", "")
                 and "avc1." in shared_master.get("text", "")
             )
         )
-        ok = bool(progress_seen) and bool(upload_success) and videos["status"] == 200 and hls_master_ok and shared_hls_ok
+        shared_direct_or_realtime_ok = (
+            not share_url
+            or (
+                shared_playback["status"] == 200
+                and shared_playback_mode in {"direct", "realtime"}
+                and bool(shared_playback_body.get("stream_url"))
+                and not shared_playback_body.get("master_url")
+            )
+        )
+        playback_ok = hls_master_ok or direct_or_realtime_ok
+        shared_playback_ok = shared_hls_ok or shared_direct_or_realtime_ok
+        ok = bool(progress_seen) and bool(upload_success) and videos["status"] == 200 and playback_ok and shared_playback_ok
         rec.add(
             "video_upload_share_flow",
             ok,
-            f"ui_progress={progress_seen}, progress={progress_percent}, list={videos['status']}, hls={hls_master_ok}, shared_hls={shared_hls_ok}",
+            f"ui_progress={progress_seen}, progress={progress_percent}, list={videos['status']}, mode={playback_mode or 'unknown'}, shared_mode={shared_playback_mode or 'none'}",
             progress_seen=progress_seen,
             progress_status=progress_status,
             progress_percent=progress_percent,
@@ -1116,8 +1137,19 @@ def check_launch_security_journey(rec: Recorder, page) -> None:
     requirements = fetch_json(page, "GET", "/api/root/server-mode/requirements")
     production_status = fetch_json(page, "GET", "/api/root/production-report/status")
     doc = fetch_json(page, "GET", "/api/root/launch-check/doc?path=docs/server_mode_v2/03_production_gate_playbook.md")
-    switch_server_tab(page, "launch-check")
-    page.wait_for_selector("#launch-check-list", timeout=10000)
+    switch_server_tab(page, "server-mode")
+    page.evaluate(
+        """() => {
+            const select = document.getElementById('server-mode-select');
+            if (select) {
+                select.value = 'production';
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            if (typeof updateServerModeLaunchCheckVisibility === 'function') updateServerModeLaunchCheckVisibility();
+            if (typeof loadLaunchCheck === 'function') loadLaunchCheck();
+        }"""
+    )
+    page.wait_for_selector("#launch-check-list:visible", timeout=10000)
     check_ui_quality(rec, page, "launch_check_desktop")
     switch_server_tab(page, "health")
     check_ui_quality(rec, page, "security_health_desktop")

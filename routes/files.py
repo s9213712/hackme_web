@@ -3154,6 +3154,7 @@ def register_file_routes(app, deps):
             SELECT f.*
             FROM uploaded_files f
             WHERE f.owner_user_id=? AND f.deleted_at IS NULL
+              AND COALESCE(f.system_asset_type, '')<>'avatar'
               AND NOT EXISTS (
                   SELECT 1 FROM storage_files sf
                   WHERE sf.file_id=f.id AND sf.deleted_at IS NULL
@@ -3490,7 +3491,7 @@ def register_file_routes(app, deps):
             return err
         conn = get_db()
         try:
-            result, msg = purge_storage_trash(conn, actor=actor)
+            result, msg = purge_storage_trash(conn, actor=actor, storage_root=storage_root)
             if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 400
@@ -3546,7 +3547,7 @@ def register_file_routes(app, deps):
             return err
         conn = get_db()
         try:
-            result, msg = purge_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+            result, msg = purge_storage_file(conn, actor=actor, storage_file_id=storage_file_id, storage_root=storage_root)
             if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 404
@@ -4245,7 +4246,16 @@ def register_file_routes(app, deps):
         path = resolve_file_storage_path(storage_root, row)
         if not path.exists():
             return json_resp({"ok": False, "msg": "實體檔案不存在", "error": "file_missing"}), 404
+        cleanup_path = None
         try:
+            if is_server_encrypted_file(row):
+                handle = tempfile.NamedTemporaryFile(prefix="cloud-drive-realtime-plain-", delete=False)
+                try:
+                    cleanup_path = handle.name
+                finally:
+                    handle.close()
+                write_decrypted_server_encrypted_file(path, cleanup_path, server_file_fernet)
+                path = Path(cleanup_path)
             stream_info = open_realtime_proxy_stream(
                 path,
                 audio_track=_cloud_drive_realtime_proxy_audio_selector(),
@@ -4254,6 +4264,11 @@ def register_file_routes(app, deps):
                 ffprobe_bin=ffprobe_bin,
             )
         except RuntimeError as exc:
+            if cleanup_path:
+                try:
+                    os.unlink(cleanup_path)
+                except Exception:
+                    pass
             if str(exc).startswith("realtime_proxy_busy:"):
                 return _cloud_drive_realtime_proxy_error(
                     "即時轉封裝目前已達併發上限，請稍後再試或使用預處理 HLS。",
@@ -4262,12 +4277,40 @@ def register_file_routes(app, deps):
                 )
             return _cloud_drive_realtime_proxy_error(str(exc), status=500)
         except ValueError as exc:
+            if cleanup_path:
+                try:
+                    os.unlink(cleanup_path)
+                except Exception:
+                    pass
             return _cloud_drive_realtime_proxy_error(str(exc), error="invalid_realtime_proxy_request", status=400)
         except FileNotFoundError:
+            if cleanup_path:
+                try:
+                    os.unlink(cleanup_path)
+                except Exception:
+                    pass
             return _cloud_drive_realtime_proxy_error("找不到 ffmpeg / ffprobe，無法啟動即時轉封裝。", error="ffmpeg_missing", status=503)
+        except Exception as exc:
+            if cleanup_path:
+                try:
+                    os.unlink(cleanup_path)
+                except Exception:
+                    pass
+            return _cloud_drive_realtime_proxy_error(str(exc), error="realtime_proxy_prepare_failed", status=500)
+
+        def _stream_chunks_with_cleanup():
+            try:
+                yield from stream_info["chunks"]
+            finally:
+                if cleanup_path:
+                    try:
+                        os.unlink(cleanup_path)
+                    except Exception:
+                        pass
+
         filename = row["original_filename_plain_for_public"] or "video.mp4"
         response = Response(
-            stream_with_context(stream_info["chunks"]),
+            stream_with_context(_stream_chunks_with_cleanup()),
             status=200,
             mimetype=stream_info.get("mimetype") or "video/mp4",
             direct_passthrough=True,
@@ -4276,7 +4319,7 @@ def register_file_routes(app, deps):
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Accel-Buffering"] = "no"
         response.headers["Accept-Ranges"] = "none"
-        response.headers["X-Hackme-Transfer-Mode"] = "python_realtime_proxy"
+        response.headers["X-Hackme-Transfer-Mode"] = "python_realtime_proxy_server_decrypt" if is_server_encrypted_file(row) else "python_realtime_proxy"
         selected_audio = stream_info.get("audio_track") or {}
         if selected_audio.get("name"):
             response.headers["X-Hackme-Audio-Track"] = str(selected_audio.get("name") or "")
@@ -4701,6 +4744,8 @@ def register_file_routes(app, deps):
             if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 404
+            media_cleanup = _cleanup_media_derivatives_for_file_ids(conn, [result.get("file_id")])
+            result["media_cleanup"] = media_cleanup
             conn.commit()
             audit("CLOUD_DRIVE_FILE_DELETE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={file_id}, physical={result.get('removed_physical_file')}")
             return json_resp({"ok": True, "msg": "檔案已刪除並釋放容量", "deleted": result})

@@ -110,6 +110,7 @@ def create_uploaded_file_record(
     encryption_version=None,
     nonce=None,
     client_scan_report=None,
+    system_asset_type=None,
     user=None,
     scan_now=False,
 ):
@@ -135,6 +136,7 @@ def create_uploaded_file_record(
         encryption_version=encryption_version,
         nonce=nonce,
         client_scan_report=client_scan_report,
+        system_asset_type=system_asset_type,
         user=user,
         scan_now=scan_now,
     )

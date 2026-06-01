@@ -8,9 +8,11 @@ from flask import request, send_file
 
 from services.users.member_levels import apply_member_level_change, ensure_member_level_user_columns
 from services.storage.cloud_drive import (
+    delete_avatar_file_if_unreferenced,
     decrypt_server_encrypted_bytes,
     ensure_cloud_drive_attachment_schema,
     is_server_encrypted_file,
+    mark_avatar_file_asset,
     resolve_file_storage_path,
     store_cloud_upload,
 )
@@ -717,6 +719,75 @@ def register_user_routes(app, deps):
         if "updated_at" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN updated_at TEXT")
 
+    PUBLIC_PROFILE_ACCOUNT_FIELDS = {"nickname", "real_name", "birthdate", "phone"}
+
+    def _profile_public_account_field_keys(conn, user_id):
+        ensure_user_profile_schema(conn)
+        row = conn.execute(
+            "SELECT public_account_fields_json FROM user_profiles WHERE user_id=?",
+            (int(user_id),),
+        ).fetchone()
+        raw = row["public_account_fields_json"] if row else "[]"
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            parsed = []
+        if not isinstance(parsed, list):
+            parsed = []
+        out = []
+        for item in parsed:
+            key = str(item or "").strip()
+            if key in PUBLIC_PROFILE_ACCOUNT_FIELDS and key not in out:
+                out.append(key)
+        return out
+
+    def _profile_payload_allows_public_account_fields(payload, viewer):
+        if not payload:
+            return False
+        owner = viewer and int(viewer.get("id") or -1) == int(payload.get("id") or -2)
+        if owner:
+            return True
+        privileged = viewer and (viewer.get("username") == "root" or viewer.get("role") in {"manager", "super_admin"})
+        if privileged:
+            return True
+        visibility = payload.get("profile_visibility") or "public"
+        if visibility == "public":
+            return True
+        if visibility == "members" and viewer:
+            return True
+        if visibility == "friends" and payload.get("friend_status") == "accepted":
+            return True
+        return False
+
+    def _enrich_profile_public_account_fields(conn, payload, viewer):
+        if not payload:
+            return payload
+        keys = _profile_public_account_field_keys(conn, payload.get("id"))
+        owner = viewer and int(viewer.get("id") or -1) == int(payload.get("id") or -2)
+        if owner:
+            payload["profile_public_account_fields"] = keys
+        payload["public_account_fields"] = {}
+        if not keys or not _profile_payload_allows_public_account_fields(payload, viewer):
+            return payload
+        row = conn.execute(
+            "SELECT nickname, real_name, birthdate, phone FROM users WHERE id=?",
+            (int(payload.get("id")),),
+        ).fetchone()
+        if not row:
+            return payload
+        values = {
+            "nickname": decrypt_field(row["nickname"]),
+            "real_name": decrypt_field(row["real_name"]),
+            "birthdate": decrypt_field(row["birthdate"]),
+            "phone": decrypt_field(row["phone"]),
+        }
+        payload["public_account_fields"] = {
+            key: values.get(key) or ""
+            for key in keys
+            if values.get(key)
+        }
+        return payload
+
     @app.route("/api/users/me/profile", methods=["GET", "PUT"], strict_slashes=False)
     @require_csrf_by_method
     def api_me_profile():
@@ -736,8 +807,10 @@ def register_user_routes(app, deps):
                 audit("USER_PROFILE_UPDATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                       detail=f"user_id={actor['id']}")
                 payload = get_profile_payload(conn, target_user_id=actor["id"], viewer=actor) or profile
+                payload = _enrich_profile_public_account_fields(conn, payload, actor)
                 return json_resp({"ok":True,"profile":payload,"msg":"個人資料已更新"})
             payload = get_profile_payload(conn, target_user_id=actor["id"], viewer=actor)
+            payload = _enrich_profile_public_account_fields(conn, payload, actor)
             if not payload:
                 return json_resp({"ok":False,"msg":"找不到個人資料"}), 404
             conn.commit()
@@ -754,6 +827,7 @@ def register_user_routes(app, deps):
         conn = get_db()
         try:
             payload = get_profile_payload(conn, target_user_id=user_id, viewer=actor)
+            payload = _enrich_profile_public_account_fields(conn, payload, actor)
             if not payload:
                 return json_resp({"ok":False,"msg":"找不到使用者"}), 404
             conn.commit()
@@ -1495,11 +1569,13 @@ def register_user_routes(app, deps):
             if value < 0:
                 continue
             crop[key] = min(value, 10000)
-        return crop if {"x", "y", "width", "height"} <= set(crop) else {}
+        if not {"x", "y", "width", "height"} <= set(crop):
+            return {}
+        if crop.get("width", 0) <= 0 or crop.get("height", 0) <= 0:
+            return {}
+        return crop
 
     def _avatar_crop_response(path, crop, mimetype):
-        if not crop:
-            return None
         try:
             from io import BytesIO
             from PIL import Image, ImageOps
@@ -1514,6 +1590,14 @@ def register_user_routes(app, deps):
                 image_width, image_height = clean.size
                 if image_width <= 0 or image_height <= 0:
                     return None
+                if not crop:
+                    side = min(image_width, image_height)
+                    crop = {
+                        "x": max(0, (image_width - side) // 2),
+                        "y": max(0, (image_height - side) // 2),
+                        "width": side,
+                        "height": side,
+                    }
                 x = max(0, min(int(crop.get("x", 0) or 0), image_width - 1))
                 y = max(0, min(int(crop.get("y", 0) or 0), image_height - 1))
                 crop_width = max(0, min(int(crop.get("width", 0) or 0), image_width - x))
@@ -1564,9 +1648,10 @@ def register_user_routes(app, deps):
             ensure_member_level_user_columns(conn)
             ensure_avatar_user_columns(conn)
             ensure_cloud_drive_attachment_schema(conn)
-            target = conn.execute("SELECT id, username, role, member_level, effective_level, sanction_status FROM users WHERE id=?", (user_id,)).fetchone()
+            target = conn.execute("SELECT id, username, role, member_level, effective_level, sanction_status, avatar_file_id FROM users WHERE id=?", (user_id,)).fetchone()
             if not target:
                 return json_resp({"ok": False, "msg": "找不到帳號"}), 404
+            previous_avatar_file_id = str(target["avatar_file_id"] or "").strip()
             crop = _parse_avatar_crop(request.form.get("crop_json"))
             if cloud_file_id:
                 file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=? AND deleted_at IS NULL", (cloud_file_id,)).fetchone()
@@ -1586,6 +1671,7 @@ def register_user_routes(app, deps):
                     return json_resp({"ok": False, "msg": "E2EE 頭像需先在瀏覽器解密後上傳頭像衍生圖，伺服器不能直接讀取原始 E2EE 檔案"}), 400
                 if is_server_encrypted_file(file_row) and not server_file_fernet:
                     return json_resp({"ok": False, "msg": "伺服器端加密金鑰尚未載入，無法使用此圖片作為頭像"}), 503
+                mark_avatar_file_asset(conn, file_id=cloud_file_id, owner_user_id=user_id)
                 conn.execute(
                     "UPDATE users SET avatar_file_id=?, avatar_crop_json=?, updated_at=? WHERE id=?",
                     (cloud_file_id, json.dumps(crop, ensure_ascii=False), datetime.now().isoformat(), user_id),
@@ -1606,9 +1692,13 @@ def register_user_routes(app, deps):
                         json.dumps({"public_avatar": True, "crop": crop, "source": "cloud_drive"}, ensure_ascii=False),
                     ),
                 )
+                old_avatar_cleanup = (
+                    delete_avatar_file_if_unreferenced(conn, actor=dict(target), file_id=previous_avatar_file_id, storage_root=storage_root)
+                    if previous_avatar_file_id and previous_avatar_file_id != cloud_file_id else {"deleted": False, "reason": "same_or_empty"}
+                )
                 conn.commit()
                 audit("USER_AVATAR_CLOUD_SELECT", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"target_id={user_id},file_id={cloud_file_id}")
-                return json_resp({"ok": True, "avatar_file_id": cloud_file_id, "avatar_crop": crop, "file": dict(file_row)})
+                return json_resp({"ok": True, "avatar_file_id": cloud_file_id, "avatar_crop": crop, "file": dict(file_row), "old_avatar_cleanup": old_avatar_cleanup})
             mimetype = (getattr(file_storage, "mimetype", "") or "").lower()
             if mimetype not in {"image/jpeg", "image/png", "image/gif"}:
                 return json_resp({"ok": False, "msg": "頭像僅支援 JPEG / PNG / GIF"}), 400
@@ -1626,6 +1716,8 @@ def register_user_routes(app, deps):
                 file_storage=file_storage,
                 privacy_mode="standard_plain",
                 scan_now=True,
+                system_asset_type="avatar",
+                quota_exempt=True,
             )
             if msg:
                 conn.rollback()
@@ -1653,9 +1745,13 @@ def register_user_routes(app, deps):
                     json.dumps({"public_avatar": True, "crop": crop}, ensure_ascii=False),
                 ),
             )
+            old_avatar_cleanup = (
+                delete_avatar_file_if_unreferenced(conn, actor=dict(target), file_id=previous_avatar_file_id, storage_root=storage_root)
+                if previous_avatar_file_id and previous_avatar_file_id != result["file_id"] else {"deleted": False, "reason": "same_or_empty"}
+            )
             conn.commit()
             audit("USER_AVATAR_UPLOAD", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"target_id={user_id},file_id={result['file_id']}")
-            return json_resp({"ok": True, "avatar_file_id": result["file_id"], "avatar_crop": crop, "file": result})
+            return json_resp({"ok": True, "avatar_file_id": result["file_id"], "avatar_crop": crop, "file": result, "old_avatar_cleanup": old_avatar_cleanup})
         finally:
             conn.close()
 

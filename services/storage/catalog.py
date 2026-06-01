@@ -4,6 +4,10 @@ import secrets
 import sqlite3
 import uuid
 from datetime import datetime
+from pathlib import Path
+
+from services.security.upload_schema import ensure_upload_security_schema
+from services.storage.paths import resolve_storage_path
 
 ALBUM_SHARE_PASSWORD_ITERATIONS = 200_000
 MAX_ALBUM_SHARE_PASSWORD_LENGTH = 256
@@ -15,6 +19,7 @@ def _now():
 
 
 def ensure_storage_album_schema(conn):
+    ensure_upload_security_schema(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS user_storage (
@@ -291,10 +296,97 @@ def _recalculate_storage_usage(conn, user_id):
         FROM storage_files sf
         JOIN uploaded_files f ON f.id=sf.file_id
         WHERE sf.owner_user_id=? AND sf.deleted_at IS NULL AND f.deleted_at IS NULL
+              AND COALESCE(f.system_asset_type, '')<>'avatar'
         """,
         (int(user_id),),
     ).fetchone()
     return int(row["used_bytes"] or 0), int(row["file_count"] or 0)
+
+
+def _remove_empty_storage_parents(path, storage_root):
+    root = Path(storage_root).resolve()
+    parent = Path(path).resolve().parent
+    while parent != root and root in parent.parents:
+        try:
+            if any(parent.iterdir()):
+                break
+            parent.rmdir()
+        except Exception:
+            break
+        parent = parent.parent
+
+
+def _remove_uploaded_file_blob(storage_root, storage_path):
+    if not storage_root or not storage_path:
+        return False
+    path = resolve_storage_path(storage_root, storage_path, create_parent=False)
+    if not path.exists():
+        return False
+    if not path.is_file():
+        return False
+    path.unlink()
+    _remove_empty_storage_parents(path, storage_root)
+    return True
+
+
+def _storage_table_exists(conn, table_name):
+    return bool(conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (str(table_name or ""),),
+    ).fetchone())
+
+
+def _purge_unreferenced_uploaded_files(conn, *, owner_user_id, file_ids, storage_root=None, now=None):
+    now = now or _now()
+    purged_file_ids = []
+    removed_physical_files = 0
+    for file_id in sorted({str(item or "").strip() for item in (file_ids or []) if str(item or "").strip()}):
+        still_referenced = conn.execute(
+            """
+            SELECT 1 FROM storage_files
+            WHERE owner_user_id=? AND file_id=? AND deleted_at IS NULL
+            LIMIT 1
+            """,
+            (int(owner_user_id), file_id),
+        ).fetchone()
+        if still_referenced:
+            continue
+        file_row = conn.execute(
+            "SELECT id, storage_path, deleted_at FROM uploaded_files WHERE id=? AND owner_user_id=?",
+            (file_id, int(owner_user_id)),
+        ).fetchone()
+        if not file_row or file_row["deleted_at"]:
+            continue
+        if _remove_uploaded_file_blob(storage_root, file_row["storage_path"]):
+            removed_physical_files += 1
+        updated = conn.execute(
+            """
+            UPDATE uploaded_files
+            SET deleted_at=?, updated_at=?
+            WHERE id=? AND owner_user_id=? AND deleted_at IS NULL
+            """,
+            (now, now, file_id, int(owner_user_id)),
+        ).rowcount
+        if updated:
+            purged_file_ids.append(file_id)
+    if purged_file_ids:
+        conn.executemany(
+            "UPDATE album_files SET deleted_at=? WHERE file_id=? AND deleted_at IS NULL",
+            [(now, file_id) for file_id in purged_file_ids],
+        )
+        conn.executemany(
+            "UPDATE storage_share_links SET revoked_at=? WHERE file_id=? AND revoked_at IS NULL",
+            [(now, file_id) for file_id in purged_file_ids],
+        )
+        if _storage_table_exists(conn, "file_access_grants"):
+            conn.executemany(
+                "UPDATE file_access_grants SET revoked_at=? WHERE file_id=? AND revoked_at IS NULL",
+                [(now, file_id) for file_id in purged_file_ids],
+            )
+    return {
+        "purged_file_ids": purged_file_ids,
+        "removed_physical_files": removed_physical_files,
+    }
 
 
 def sync_user_storage_summary(conn, user_id, *, actor_user_id=None, source="system", reason="sync"):
@@ -339,6 +431,10 @@ def create_storage_file_entry(conn, *, actor, file_row, virtual_path=None, displ
     owner_user_id = int(file_row["owner_user_id"])
     if owner_user_id != int(actor["id"]):
         return None, "只能加入自己的檔案到 storage"
+    file_keys = set(file_row.keys()) if hasattr(file_row, "keys") else set()
+    asset_type = file_row["system_asset_type"] if "system_asset_type" in file_keys else ""
+    if str(asset_type or "").strip().lower() == "avatar":
+        return None, "頭貼檔案由個人主頁管理，不加入雲端硬碟列表"
     display_name = str(display_name or file_row["original_filename_plain_for_public"] or "download.bin").strip()[:160]
     try:
         normalized_path = normalize_virtual_path(virtual_path, display_name)
@@ -405,11 +501,12 @@ def get_storage_file(conn, *, actor, storage_file_id):
     ensure_storage_album_schema(conn)
     row = conn.execute(
         """
-        SELECT sf.*, f.size_bytes, f.privacy_mode, f.risk_level, f.scan_status,
+        SELECT sf.*, f.storage_path, f.size_bytes, f.privacy_mode, f.risk_level, f.scan_status,
+               f.system_asset_type,
                f.original_filename_plain_for_public, f.deleted_at AS file_deleted_at
         FROM storage_files sf
         JOIN uploaded_files f ON f.id=sf.file_id
-        WHERE sf.id=?
+        WHERE sf.id=? AND COALESCE(f.system_asset_type, '')<>'avatar'
         """,
         (storage_file_id,),
     ).fetchone()
@@ -429,10 +526,10 @@ def list_storage_files(conn, *, actor, include_trashed=False, limit=100, offset=
     rows = conn.execute(
         f"""
         SELECT sf.*, f.size_bytes, f.privacy_mode, f.risk_level, f.scan_status,
-               f.original_filename_plain_for_public
+               f.system_asset_type, f.original_filename_plain_for_public
         FROM storage_files sf
         JOIN uploaded_files f ON f.id=sf.file_id
-        WHERE {where}
+        WHERE {where} AND COALESCE(f.system_asset_type, '')<>'avatar'
         ORDER BY sf.virtual_path ASC
         LIMIT ? OFFSET ?
         """,
@@ -805,11 +902,11 @@ def list_storage_trash(conn, *, actor, limit=100, offset=0):
     rows = conn.execute(
         """
         SELECT sf.*, f.size_bytes, f.privacy_mode, f.risk_level, f.scan_status,
-               f.original_filename_plain_for_public
+               f.system_asset_type, f.original_filename_plain_for_public
         FROM storage_files sf
         JOIN uploaded_files f ON f.id=sf.file_id
         WHERE sf.owner_user_id=? AND sf.deleted_at IS NULL AND f.deleted_at IS NULL
-              AND sf.is_trashed=1
+              AND sf.is_trashed=1 AND COALESCE(f.system_asset_type, '')<>'avatar'
         ORDER BY sf.trashed_at DESC, sf.updated_at DESC
         LIMIT ? OFFSET ?
         """,
@@ -866,7 +963,7 @@ def restore_storage_file(conn, *, actor, storage_file_id):
     return get_storage_file(conn, actor=actor, storage_file_id=storage_file_id), None
 
 
-def purge_storage_file(conn, *, actor, storage_file_id):
+def purge_storage_file(conn, *, actor, storage_file_id, storage_root=None):
     ensure_storage_album_schema(conn)
     row = get_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
     if not row or row.get("deleted_at") or row.get("file_deleted_at"):
@@ -880,17 +977,13 @@ def purge_storage_file(conn, *, actor, storage_file_id):
         """,
         (now, now, storage_file_id, int(actor["id"])),
     )
-    purged_file_ids = []
-    if row.get("trash_source") == "cloud_drive_delete":
-        conn.execute(
-            """
-            UPDATE uploaded_files
-            SET deleted_at=?
-            WHERE id=? AND owner_user_id=? AND deleted_at IS NULL
-            """,
-            (now, row["file_id"], int(actor["id"])),
-        )
-        purged_file_ids.append(row["file_id"])
+    purge_result = _purge_unreferenced_uploaded_files(
+        conn,
+        owner_user_id=int(actor["id"]),
+        file_ids=[row["file_id"]],
+        storage_root=storage_root,
+        now=now,
+    )
     summary = sync_user_storage_summary(
         conn,
         actor["id"],
@@ -898,7 +991,13 @@ def purge_storage_file(conn, *, actor, storage_file_id):
         source="trash",
         reason="storage_file_purged",
     )
-    return {"id": storage_file_id, "file_id": row["file_id"], "purged_file_ids": purged_file_ids, "storage": summary}, None
+    return {
+        "id": storage_file_id,
+        "file_id": row["file_id"],
+        "purged_file_ids": purge_result["purged_file_ids"],
+        "removed_physical_files": purge_result["removed_physical_files"],
+        "storage": summary,
+    }, None
 
 
 def restore_storage_trash(conn, *, actor):
@@ -906,8 +1005,11 @@ def restore_storage_trash(conn, *, actor):
     now = _now()
     rows = conn.execute(
         """
-        SELECT id FROM storage_files
-        WHERE owner_user_id=? AND deleted_at IS NULL AND is_trashed=1
+        SELECT sf.id
+        FROM storage_files sf
+        JOIN uploaded_files f ON f.id=sf.file_id
+        WHERE sf.owner_user_id=? AND sf.deleted_at IS NULL AND sf.is_trashed=1
+              AND f.deleted_at IS NULL AND COALESCE(f.system_asset_type, '')<>'avatar'
         """,
         (int(actor["id"]),),
     ).fetchall()
@@ -923,17 +1025,20 @@ def restore_storage_trash(conn, *, actor):
     return {"restored": len(rows)}, None
 
 
-def purge_storage_trash(conn, *, actor):
+def purge_storage_trash(conn, *, actor, storage_root=None):
     ensure_storage_album_schema(conn)
     now = _now()
     rows = conn.execute(
         """
-        SELECT id, file_id, trash_source FROM storage_files
-        WHERE owner_user_id=? AND deleted_at IS NULL AND is_trashed=1
+        SELECT sf.id, sf.file_id, sf.trash_source
+        FROM storage_files sf
+        JOIN uploaded_files f ON f.id=sf.file_id
+        WHERE sf.owner_user_id=? AND sf.deleted_at IS NULL AND sf.is_trashed=1
+              AND f.deleted_at IS NULL AND COALESCE(f.system_asset_type, '')<>'avatar'
         """,
         (int(actor["id"]),),
     ).fetchall()
-    cloud_file_ids = []
+    purge_result = {"purged_file_ids": [], "removed_physical_files": 0}
     if rows:
         conn.executemany(
             """
@@ -943,16 +1048,13 @@ def purge_storage_trash(conn, *, actor):
             """,
             [(now, now, row["id"], int(actor["id"])) for row in rows],
         )
-        cloud_file_ids = [row["file_id"] for row in rows if row["trash_source"] == "cloud_drive_delete"]
-        if cloud_file_ids:
-            conn.executemany(
-                """
-                UPDATE uploaded_files
-                SET deleted_at=?
-                WHERE id=? AND owner_user_id=? AND deleted_at IS NULL
-                """,
-                [(now, file_id, int(actor["id"])) for file_id in cloud_file_ids],
-            )
+        purge_result = _purge_unreferenced_uploaded_files(
+            conn,
+            owner_user_id=int(actor["id"]),
+            file_ids=[row["file_id"] for row in rows],
+            storage_root=storage_root,
+            now=now,
+        )
     summary = sync_user_storage_summary(
         conn,
         actor["id"],
@@ -960,7 +1062,12 @@ def purge_storage_trash(conn, *, actor):
         source="trash",
         reason="storage_trash_purged",
     )
-    return {"purged": len(rows), "purged_file_ids": cloud_file_ids, "storage": summary}, None
+    return {
+        "purged": len(rows),
+        "purged_file_ids": purge_result["purged_file_ids"],
+        "removed_physical_files": purge_result["removed_physical_files"],
+        "storage": summary,
+    }, None
 
 def _hash_share_token(token):
     return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()

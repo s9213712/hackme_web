@@ -24,6 +24,7 @@ ROOT_PASSWORD="${ROOT_PASSWORD:-root}"
 MANAGER_PASSWORD="${MANAGER_PASSWORD:-admin}"
 TEST_PASSWORD="${TEST_PASSWORD:-test}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+REQUIREMENTS_FILE="${HACKME_DEV_REQUIREMENTS_FILE:-requirements.txt}"
 FEATURE_MODE="${HACKME_DEV_FEATURE_MODE:-all}"
 FEATURE_LIST="${HACKME_DEV_FEATURES:-}"
 FEATURE_BUNDLES="${HACKME_DEV_FEATURE_BUNDLES:-${HACKME_DEV_FEATURE_PACKAGES:-}}"
@@ -240,6 +241,9 @@ Options:
   --tmp-runtime            With --in-place, keep runtime under --run-root
   --copy                   Force the default /tmp copied source workspace
   --skip-install           Reuse runtime/venv or current Python environment
+  --requirements-file PATH  Install this requirements file from the copied runtime.
+                           Choices: requirements-minimal.txt, requirements-dev.txt,
+                           requirements-comfyui.txt, requirements-hf.txt, requirements.txt.
   --foreground             Run in the foreground instead of nohup background mode
   --root-password VALUE    Default: root
   --manager-password VALUE Default: admin
@@ -753,6 +757,7 @@ print_resolved_config() {
   fi
   say "  port_conflict:       $PORT_CONFLICT_ACTION"
   say "  skip_install:        $SKIP_INSTALL"
+  say "  requirements_file:  ${REQUIREMENTS_FILE:-<skip install>}"
   say "  foreground:          $FOREGROUND"
   say "  btc_trade_autostart: $BTC_TRADE_AUTOSTART"
   say "  backtest_probe:      $BACKTEST_PROBE_ON_STARTUP"
@@ -771,6 +776,56 @@ prompt_value() {
     answer="$default_value"
   fi
   printf -v "$target_var" '%s' "$answer"
+}
+
+requirements_file_description() {
+  case "${1:-}" in
+    requirements-minimal.txt) echo "minimal Flask/runtime only; safest for low-resource smoke" ;;
+    requirements-dev.txt) echo "developer/browser-test tooling only; combine manually when needed" ;;
+    requirements-comfyui.txt) echo "external ComfyUI API integration notes/no-op layer" ;;
+    requirements-hf.txt) echo "heavy local Hugging Face/Diffusers backend" ;;
+    requirements.txt) echo "default compatibility bundle: minimal + dev + comfyui" ;;
+    *) echo "custom requirements file" ;;
+  esac
+}
+
+prompt_requirements_file() {
+  local answer
+  say "Dependency requirements file:"
+  say "  1) requirements.txt         $(requirements_file_description requirements.txt)"
+  say "  2) requirements-minimal.txt $(requirements_file_description requirements-minimal.txt)"
+  say "  3) requirements-dev.txt     $(requirements_file_description requirements-dev.txt)"
+  say "  4) requirements-comfyui.txt $(requirements_file_description requirements-comfyui.txt)"
+  say "  5) requirements-hf.txt      $(requirements_file_description requirements-hf.txt)"
+  while true; do
+    printf 'Choose requirements file [%s]: ' "$REQUIREMENTS_FILE"
+    if ! read -r answer; then
+      die "interactive setup was interrupted"
+    fi
+    answer="${answer:-$REQUIREMENTS_FILE}"
+    case "${answer,,}" in
+      1|default|compat|requirements.txt) REQUIREMENTS_FILE="requirements.txt"; return 0 ;;
+      2|minimal|requirements-minimal.txt) REQUIREMENTS_FILE="requirements-minimal.txt"; return 0 ;;
+      3|dev|requirements-dev.txt) REQUIREMENTS_FILE="requirements-dev.txt"; return 0 ;;
+      4|comfyui|requirements-comfyui.txt) REQUIREMENTS_FILE="requirements-comfyui.txt"; return 0 ;;
+      5|hf|huggingface|requirements-hf.txt) REQUIREMENTS_FILE="requirements-hf.txt"; return 0 ;;
+      requirements*.txt) REQUIREMENTS_FILE="$answer"; return 0 ;;
+      *) say "Please choose 1-5 or a requirements*.txt file." ;;
+    esac
+  done
+}
+
+print_requirements_feature_guidance() {
+  if [[ "$SKIP_INSTALL" == "1" ]]; then
+    say "Feature selection: --skip-install leaves dependencies unchanged, so all feature bundles are shown."
+    return 0
+  fi
+  say "Feature selection dependency baseline: $REQUIREMENTS_FILE - $(requirements_file_description "$REQUIREMENTS_FILE")"
+  case "$REQUIREMENTS_FILE" in
+    requirements-minimal.txt) say "  Heavy optional features such as local HF/Diffusers should stay disabled unless installed separately." ;;
+    requirements-hf.txt) say "  HF/Diffusers features are available; external ComfyUI still uses its own server endpoint." ;;
+    requirements-dev.txt) say "  Dev tooling only is not a complete runtime install; enable feature bundles only if runtime deps already exist." ;;
+  esac
 }
 
 prompt_yes_no() {
@@ -1906,6 +1961,11 @@ prompt_runtime_config() {
   prompt_value "Port" "$PORT" PORT
   prompt_yes_no "Disable trusted-host checks for dev convenience" "$DISABLE_TRUSTED_HOSTS" DISABLE_TRUSTED_HOSTS
   prompt_server_runner
+  prompt_yes_no "Skip dependency install / reuse existing environment" "$SKIP_INSTALL" SKIP_INSTALL
+  if [[ "$SKIP_INSTALL" != "1" ]]; then
+    prompt_requirements_file
+  fi
+  print_requirements_feature_guidance
   prompt_feature_settings
   prompt_yes_no "Enable security settings" "$SECURITY_SETTINGS_ENABLED" SECURITY_SETTINGS_ENABLED
   prompt_server_mode
@@ -1916,7 +1976,6 @@ prompt_runtime_config() {
     prompt_value "Password for generated token account (blank = keep existing or auto-generate new account)" "$DEV_TOKEN_PASSWORD" DEV_TOKEN_PASSWORD
     prompt_value "Role for generated token account (user/manager/super_admin)" "$DEV_TOKEN_ROLE" DEV_TOKEN_ROLE
   fi
-  prompt_yes_no "Skip dependency install / reuse existing environment" "$SKIP_INSTALL" SKIP_INSTALL
   prompt_yes_no "Run server in foreground" "$FOREGROUND" FOREGROUND
   prompt_yes_no "Start BTC_trade background job after boot" "$BTC_TRADE_AUTOSTART" BTC_TRADE_AUTOSTART
 
@@ -2035,8 +2094,11 @@ resolve_python() {
   if [[ ! -x "$PYTHON_BIN" ]]; then
     die "failed to create tmp venv at $venv_dir"
   fi
+  local requirements_path="$COPY_ROOT/$REQUIREMENTS_FILE"
+  [[ -f "$requirements_path" ]] || die "requirements file not found in copied runtime: $REQUIREMENTS_FILE"
+  say "[dev-tmp] installing dependencies from $REQUIREMENTS_FILE - $(requirements_file_description "$REQUIREMENTS_FILE")"
   PIP_DISABLE_PIP_VERSION_CHECK=1 "$PYTHON_BIN" -m pip install --upgrade pip
-  PIP_DISABLE_PIP_VERSION_CHECK=1 "$PYTHON_BIN" -m pip install -r "$COPY_ROOT/requirements.txt"
+  PIP_DISABLE_PIP_VERSION_CHECK=1 "$PYTHON_BIN" -m pip install -r "$requirements_path"
 }
 
 migrate_legacy_runtime_storage_to_cloud_drive_root() {
@@ -2825,6 +2887,10 @@ while [[ $# -gt 0 ]]; do
     --skip-install)
       SKIP_INSTALL=1
       shift
+      ;;
+    --requirements-file)
+      REQUIREMENTS_FILE="${2:?missing requirements file}"
+      shift 2
       ;;
     --foreground)
       FOREGROUND=1

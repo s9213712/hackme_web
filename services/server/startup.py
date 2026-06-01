@@ -649,6 +649,7 @@ def run_server_main(
     start_trading_liquidation_worker,
     start_trading_bot_worker,
     start_trading_background_worker=None,
+    create_initial_startup_snapshot_if_due=None,
     get_runtime_server_mode=None,
     ensure_local_tls_files,
     cert_file,
@@ -698,6 +699,19 @@ def run_server_main(
         reseal_audit_chain_if_required_on_startup()
     except Exception as exc:
         audit("AUDIT_CHAIN_STARTUP_RESEAL_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
+    if create_initial_startup_snapshot_if_due is not None:
+        try:
+            startup_snapshot = create_initial_startup_snapshot_if_due()
+            if startup_snapshot and startup_snapshot.get("created"):
+                audit(
+                    "INITIAL_STARTUP_SNAPSHOT_CREATED",
+                    "0.0.0.0",
+                    user="system",
+                    success=True,
+                    detail=f"snapshot_id={startup_snapshot.get('snapshot_id')}",
+                )
+        except Exception as exc:
+            audit("INITIAL_STARTUP_SNAPSHOT_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
     try:
         recovery = server_mode_service.recover_superweak_on_startup(
             actor={"id": 0, "username": "system-startup", "role": "system"}

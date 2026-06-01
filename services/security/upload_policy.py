@@ -279,7 +279,9 @@ def update_cloud_drive_security_policy(conn, data, scope="default"):
 def _sum_uploaded_file_bytes(conn, owner_user_id):
     row = conn.execute(
         "SELECT COALESCE(SUM(size_bytes), 0) AS used_bytes, COUNT(*) AS file_count "
-        "FROM uploaded_files WHERE owner_user_id=? AND deleted_at IS NULL",
+        "FROM uploaded_files "
+        "WHERE owner_user_id=? AND deleted_at IS NULL "
+        "AND COALESCE(system_asset_type, '')<>'avatar'",
         (int(owner_user_id),),
     ).fetchone()
     return int(row["used_bytes"] or 0), int(row["file_count"] or 0)
@@ -290,7 +292,9 @@ def _count_grouped(conn, owner_user_id, field):
         raise ValueError("unsupported usage grouping")
     rows = conn.execute(
         f"SELECT {field} AS name, COUNT(*) AS count, COALESCE(SUM(size_bytes), 0) AS bytes "
-        "FROM uploaded_files WHERE owner_user_id=? AND deleted_at IS NULL GROUP BY "
+        "FROM uploaded_files "
+        "WHERE owner_user_id=? AND deleted_at IS NULL "
+        "AND COALESCE(system_asset_type, '')<>'avatar' GROUP BY "
         f"{field}",
         (int(owner_user_id),),
     ).fetchall()

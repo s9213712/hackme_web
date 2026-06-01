@@ -143,6 +143,34 @@ def test_user_can_upload_avatar_and_crop_metadata(tmp_path):
     assert cropped.size == (512, 512)
 
 
+def test_avatar_get_center_crops_static_image_without_crop_metadata(tmp_path):
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    db_path = tmp_path / "avatar.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"}}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 20), color=(100, 50, 30)).save(buf, format="JPEG")
+    buf.seek(0)
+
+    res = client.post(
+        "/api/admin/users/1/avatar",
+        data={"file": (buf, "avatar.jpg", "image/jpeg")},
+        content_type="multipart/form-data",
+    )
+    assert res.status_code == 200
+
+    avatar_res = client.get("/api/admin/users/1/avatar")
+    assert avatar_res.status_code == 200
+    cropped = Image.open(io.BytesIO(avatar_res.data))
+    assert cropped.size == (512, 512)
+
+
 def test_user_can_select_existing_cloud_image_as_avatar(tmp_path):
     pytest.importorskip("PIL")
     from PIL import Image

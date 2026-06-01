@@ -2323,7 +2323,8 @@ let rootTradingMarketProviderSelectedId = null;
 const ROOT_SERVICE_FEE_PRICING_PRESETS = window.HACKME_SERVICE_FEE_PRICING_PRESETS || [
   { item_key: "post_cost_standard", item_name: "一般發文成本", category: "forum", base_price: 1, min_price: 1, max_price: 10, rationale: "低額防洗版，低於每日登入 5 點。" },
   { item_key: "post_pin_24h", item_name: "文章置頂 24 小時", category: "forum", base_price: 100, min_price: 50, max_price: 300, rationale: "曝光型功能，價格約等於 20 天每日登入。" },
-  { item_key: "cloud_storage_1gb_30d", item_name: "雲端容量 1GB / 7 天", category: "cloud_drive", base_price: 100, min_price: 50, max_price: 500, metadata: { storage_bytes: 1024 * 1024 * 1024, duration_days: 7, label: "雲端容量 1GB / 7 天" }, rationale: "容量是持續成本，保留較高 sink。" },
+  { item_key: "cloud_storage_1gb_7d", item_name: "雲端容量 1GB / 7 天", category: "cloud_drive", base_price: 100, min_price: 50, max_price: 500, metadata: { storage_bytes: 1024 * 1024 * 1024, duration_days: 7, label: "雲端容量 1GB / 7 天" }, rationale: "容量是持續成本，保留較高 sink。" },
+  { item_key: "cloud_storage_1gb_30d", item_name: "雲端容量 1GB / 30 天", category: "cloud_drive", base_price: 400, min_price: 200, max_price: 2000, metadata: { storage_bytes: 1024 * 1024 * 1024, duration_days: 30, label: "雲端容量 1GB / 30 天" }, rationale: "30 天方案是 7 天方案 4 倍點數，換取較長有效期。" },
   { item_key: "comfyui_txt2img_basic", item_name: "基礎生圖一次", category: "comfyui", base_price: 5, min_price: 1, max_price: 25, dynamic_pricing: true, rationale: "等同每日登入一次，適合低門檻試用。" },
   { item_key: "comfyui_txt2img_highres", item_name: "高解析生圖一次", category: "comfyui", base_price: 12, min_price: 5, max_price: 60, dynamic_pricing: true, rationale: "高資源消耗，約基礎生圖 2-3 倍。" },
   { item_key: "video_publish_basic", item_name: "影音發布處理費", category: "video", base_price: 2, min_price: 1, max_price: 20, rationale: "發布低價，收入重心在投幣抽成與流量分潤。" },
@@ -5984,8 +5985,8 @@ const FEATURE_SETTING_GROUPS = [
   },
   {
     key: "heavy",
-    title: "重型與實驗模組",
-    subtitle: "遊戲、ComfyUI、實驗區與大型 UI / 個人化模組。",
+    title: "可選重型與實驗模組",
+    subtitle: "遊戲、ComfyUI、實驗區與大型 UI / 個人化模組；不屬於最低維運。",
     features: [
       "feature_games_enabled",
       "feature_experiments_enabled",
@@ -8035,6 +8036,11 @@ async function saveSettings() {
     const activeSystemTab = currentSystemTab;
     const activeSettingsSection = currentSettingsSection;
     applySiteConfig(payload);
+    if (typeof updateAuthUI === "function") {
+      try {
+        await updateAuthUI();
+      } catch (_) {}
+    }
     if (typeof stopTradingModuleTimers === "function" && typeof startTradingModuleTimers === "function") {
       stopTradingModuleTimers();
       startTradingModuleTimers();
@@ -8867,21 +8873,6 @@ async function resetServer() {
 
 async function refreshIntegrityGuard() {
   await loadIntegrityGuard();
-}
-
-async function rescanIntegrityGuard() {
-  if (!confirm("重新掃描會比對目前檔案與已核准 manifest，異常不會自動核准。")) return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const res = await apiFetch(API + "/root/integrity/scan", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify({})
-  });
-  const json = await res.json().catch(() => ({}));
-  alert(json.msg || (json.ok ? "掃描完成" : "掃描失敗"));
-  if (json.ok) await loadIntegrityGuard();
 }
 
 async function exportIntegrityGuard() {

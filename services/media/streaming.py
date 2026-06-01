@@ -344,7 +344,7 @@ def _ffmpeg_timeout_seconds():
 
 
 def realtime_proxy_enabled():
-    return _env_bool("HACKME_MEDIA_REALTIME_PROXY_ENABLED", False)
+    return _env_bool("HACKME_MEDIA_REALTIME_PROXY_ENABLED", True)
 
 
 def realtime_proxy_max_concurrent():
@@ -710,6 +710,8 @@ def _parse_probe_metadata(payload):
     bitrate = _safe_int((fmt or {}).get("bit_rate") or (video_stream or {}).get("bit_rate") or (audio_stream or {}).get("bit_rate"), 0)
     width = _safe_int((video_stream or {}).get("width"), 0)
     height = _safe_int((video_stream or {}).get("height"), 0)
+    profile = (video_stream or audio_stream or {}).get("profile") or ""
+    level = _safe_int((video_stream or {}).get("level"), 0)
     codec = (video_stream or audio_stream or {}).get("codec_name") or ""
     codec_tag = (video_stream or audio_stream or {}).get("codec_tag_string") or ""
     audio_codec = (audio_stream or {}).get("codec_name") or ""
@@ -754,6 +756,8 @@ def _parse_probe_metadata(payload):
         "bitrate": bitrate,
         "width": width,
         "height": height,
+        "profile": str(profile),
+        "level": level,
         "codec": str(codec),
         "codec_tag": str(codec_tag),
         "audio_codec": str(audio_codec),
@@ -1132,6 +1136,27 @@ def hls_codec_string(*, width=0, height=0, codec=""):
     return "avc1.64001f,mp4a.40.2"
 
 
+def _h264_avc1_codec_string(metadata):
+    profile = str((metadata or {}).get("profile") or "").strip().lower()
+    level = _safe_int((metadata or {}).get("level"), 31)
+    if "high" in profile:
+        profile_hex = "64"
+    elif "main" in profile:
+        profile_hex = "4d"
+    else:
+        profile_hex = "42"
+    if level <= 0:
+        level = 31
+    return f"avc1.{profile_hex}00{max(1, min(level, 255)):02x}"
+
+
+def realtime_proxy_mse_content_type(metadata):
+    # Realtime proxy deliberately transcodes to a mobile-friendly fMP4 stream.
+    # Do not advertise the source codec here: the source may be HEVC, AV1, Opus,
+    # or a MOV-specific tag that mobile MSE cannot decode reliably.
+    return 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'
+
+
 def repair_hls_master_manifest_text(text):
     repaired = []
     for raw_line in str(text or "").splitlines():
@@ -1331,13 +1356,6 @@ def realtime_proxy_availability(file_row):
             "media_type": media_type,
             "implementation_status": "ready",
         }
-    if is_server_encrypted_file(file_row):
-        return {
-            "available": False,
-            "reason": "server_encrypted_requires_prepared_hls",
-            "media_type": media_type,
-            "implementation_status": "ready",
-        }
     if media_type != "video":
         return {
             "available": False,
@@ -1401,7 +1419,19 @@ def build_realtime_proxy_command(
         "-sn",
         "-dn",
         "-c:v",
-        "copy",
+        "libx264",
+        "-threads",
+        str(_ffmpeg_thread_count()),
+        "-preset",
+        _ffmpeg_preset(),
+        "-profile:v",
+        "baseline",
+        "-pix_fmt",
+        "yuv420p",
+        "-tune",
+        "zerolatency",
+        "-crf",
+        "23",
     ])
     if selected_audio:
         cmd.extend(["-c:a", "aac", "-b:a", realtime_proxy_audio_bitrate(), "-ac", "2"])
@@ -1419,6 +1449,7 @@ def build_realtime_proxy_command(
         "audio_tracks": _realtime_proxy_audio_track_rows(metadata),
         "start_seconds": start,
         "mimetype": "video/mp4",
+        "mse_content_type": realtime_proxy_mse_content_type(metadata),
     }
 
 
@@ -2804,13 +2835,33 @@ def _realtime_proxy_audio_tracks_for_payload(file_row, *, storage_root=None, ffp
         return []
 
 
+def _realtime_proxy_probe_for_payload(file_row, *, storage_root=None, ffprobe_bin="ffprobe"):
+    if not storage_root:
+        return {}
+    try:
+        path = resolve_file_storage_path(storage_root, file_row)
+    except Exception:
+        return {}
+    if not path.exists():
+        return {}
+    try:
+        metadata = _parse_probe_metadata(_run_probe(path, ffprobe_bin=ffprobe_bin))
+        return {
+            "audio_tracks": _realtime_proxy_audio_track_rows(metadata),
+            "mse_content_type": realtime_proxy_mse_content_type(metadata),
+        }
+    except Exception:
+        return {}
+
+
 def stream_playback_payload(conn, *, file_row, video_id, storage_root=None, ffprobe_bin="ffprobe"):
     status = get_stream_status(conn, file_row=file_row, include_segments=False)
     media_type = _file_media_type(file_row)
     direct_url = f"/api/videos/{int(video_id)}/stream"
-    direct_fallback_allowed = not is_server_encrypted_file(file_row)
+    direct_fallback_allowed = True
     realtime_proxy_state = realtime_proxy_availability(file_row)
     realtime_proxy_available = bool(realtime_proxy_state.get("available"))
+    realtime_proxy_probe = _realtime_proxy_probe_for_payload(file_row, storage_root=storage_root, ffprobe_bin=ffprobe_bin) if realtime_proxy_available else {}
     realtime_proxy_url = f"/api/videos/{int(video_id)}/realtime-proxy" if realtime_proxy_available else ""
     prepared_hls_available = bool(status and status.get("status") == "ready" and status.get("master_manifest_path"))
     payload = {
@@ -2823,7 +2874,7 @@ def stream_playback_payload(conn, *, file_row, video_id, storage_root=None, ffpr
         "master_url": "",
         "hls_js_url": HLS_JS_URL,
         "player_strategy": "direct_only",
-        "stream_warning": "目前使用直接串流。" if direct_fallback_allowed else "伺服端加密影音不提供主程序直接解密串流，請等待 HLS 處理完成。",
+        "stream_warning": "目前使用直接串流。",
         "status": status,
         "variants": [],
         "audio_tracks": [],
@@ -2833,8 +2884,8 @@ def stream_playback_payload(conn, *, file_row, video_id, storage_root=None, ffpr
         "service_policy": {
             "version": "2026.05.28-002",
             "customer_selectable_modes": ["direct", "realtime_proxy", "prepared_hls"],
-            "default_mode": "prepared_hls" if (prepared_hls_available or not direct_fallback_allowed) else "direct",
-            "recommended_mode": "prepared_hls" if prepared_hls_available else ("direct" if direct_fallback_allowed else "prepared_hls"),
+            "default_mode": "direct",
+            "recommended_mode": "direct",
             "multi_track_recommended_mode": "prepared_hls",
             "fee_model": "basic_standard_premium",
             "fee_difference_reason": "服務費差異來自檔案流量、每位觀看者即時 CPU、預處理 worker CPU、衍生檔儲存與快取清理成本。",
@@ -2849,7 +2900,8 @@ def stream_playback_payload(conn, *, file_row, video_id, storage_root=None, ffpr
             "selected_audio_query_param": "audio",
             "start_seconds_query_param": "start",
             "output_container": "fragmented_mp4",
-            "video_strategy": "copy_when_possible",
+            "mse_content_type": str(realtime_proxy_probe.get("mse_content_type") or 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'),
+            "video_strategy": "mobile_h264_baseline_transcode",
             "audio_strategy": "selected_track_to_aac_stereo",
         },
         "streaming_options": _streaming_service_options(
@@ -2963,7 +3015,7 @@ def stream_playback_payload(conn, *, file_row, video_id, storage_root=None, ffpr
                 "playlist_url": "",
                 "source": "realtime_proxy_probe",
             }
-            for track in _realtime_proxy_audio_tracks_for_payload(file_row, storage_root=storage_root, ffprobe_bin=ffprobe_bin)
+            for track in (realtime_proxy_probe.get("audio_tracks") or [])
             if track.get("name")
         ]
     return payload

@@ -106,9 +106,19 @@ def _default_password_policy_disabled():
 
 
 def _relax_default_password_gate_for_dev_defaults():
-    if _env_bool("HACKME_DEV_SECURITY_ENABLED", False):
+    if _env_bool("HACKME_DEV_SECURITY_ENABLED", False) or _env_bool("HTML_LEARNING_SECURITY_ENABLED", False):
         return False
-    return _env_bool("HACKME_DEV_DEFAULT_ACCOUNT_PASSWORDS", False)
+    mode = (
+        os.environ.get("HACKME_DEV_SERVER_MODE")
+        or os.environ.get("HTML_LEARNING_SERVER_MODE")
+        or os.environ.get("SERVER_MODE")
+        or "dev_ready"
+    )
+    if str(mode).strip().lower() in {"dev_ready", "internal_test", "test", "superweak"}:
+        return True
+    return _env_bool("HACKME_DEV_DEFAULT_ACCOUNT_PASSWORDS", False) or _env_bool(
+        "HTML_LEARNING_ALLOW_DEFAULT_PASSWORDS", False
+    )
 
 
 def _mark_default_account_password(conn, user_id, now):

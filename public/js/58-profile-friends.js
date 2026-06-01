@@ -6,6 +6,7 @@ let currentProfileViewedUserId = null;
 let currentProfileIsViewingSelf = true;
 let profileFriendsLoaded = false;
 let profileQuickCustomizeOpen = false;
+let profileAppearancePreviewTimer = 0;
 const targetOptionCache = new Map();
 const PROFILE_AVATAR_CROPPER_MIN_ZOOM = 0.5;
 const PROFILE_AVATAR_CROPPER_MAX_ZOOM = 6;
@@ -26,7 +27,7 @@ const PROFILE_STYLE_DEFAULTS = {
   banner: "none",
   background_tone: "standard",
   avatar_frame: "soft_ring",
-  avatar_size: "xl",
+  avatar_size: "55",
   name_font: "system",
   name_size: "large",
   sticker: "none",
@@ -36,7 +37,7 @@ const PROFILE_STYLE_ALLOWED = {
   banner: ["none", "aurora", "neon_grid", "paper", "night_sky", "terminal"],
   background_tone: ["soft", "standard", "bold"],
   avatar_frame: ["none", "soft_ring", "neon", "pixel", "botanical", "crown"],
-  avatar_size: ["large", "xl", "hero"],
+  avatar_size: ["30", "35", "40", "45", "50", "55", "60", "65", "70", "75", "80", "85", "90", "large", "xl", "hero"],
   name_font: ["system", "rounded", "serif", "mono", "display"],
   name_size: ["normal", "large", "hero"],
   sticker: ["none", "sparkles", "star", "heart", "music", "game", "code", "crown"],
@@ -50,6 +51,13 @@ const PROFILE_STICKER_SYMBOLS = {
   game: "GAME",
   code: "</>",
   crown: "♛",
+};
+const PROFILE_PUBLIC_ACCOUNT_FIELDS = ["nickname", "real_name", "birthdate", "phone"];
+const PROFILE_PUBLIC_ACCOUNT_FIELD_LABELS = {
+  nickname: "暱稱",
+  real_name: "真實姓名",
+  birthdate: "生日",
+  phone: "電話",
 };
 let profileAvatarCloudFiles = [];
 let profileAvatarCloudFilesLoadedAt = 0;
@@ -121,6 +129,7 @@ function profileAvatarCropperElements() {
     center: $("profile-avatar-crop-center"),
     file: $("profile-avatar-file"),
     cloudSelect: $("profile-avatar-cloud-file"),
+    cloudGallery: $("profile-avatar-cloud-gallery"),
     cloudRefresh: $("profile-avatar-cloud-refresh"),
     cloudUse: $("profile-avatar-cloud-use"),
   };
@@ -317,7 +326,11 @@ function loadProfileAvatarObjectUrl(nextUrl, cloudFile = null) {
 }
 
 function profileAvatarCloudFileName(file) {
-  return String(file?.display_name || file?.original_filename_plain_for_public || file?.filename || file?.file_id || file?.id || "雲端圖片");
+  const displayName = String(file?.display_name || file?.storage_display_name || "").trim();
+  const virtualPath = String(file?.virtual_path || file?.storage_virtual_path || "").trim();
+  const virtualName = virtualPath.split("/").filter(Boolean).pop() || "";
+  const originalName = String(file?.original_filename_plain_for_public || file?.filename || "").trim();
+  return String(displayName || virtualName || originalName || file?.file_id || file?.id || "雲端圖片");
 }
 
 function profileAvatarCloudFileIsUsable(file) {
@@ -325,11 +338,10 @@ function profileAvatarCloudFileIsUsable(file) {
   const name = profileAvatarCloudFileName(file).toLowerCase();
   const privacyMode = String(file?.privacy_mode || "standard_plain");
   const scanStatus = String(file?.scan_status || "");
-  return (
-    privacyMode === "standard_plain"
-    && ["clean", "not_required"].includes(scanStatus)
-    && (["image/jpeg", "image/png", "image/gif"].includes(mime) || /\.(png|jpe?g|gif)$/.test(name))
-  );
+  const imageLike = ["image/jpeg", "image/png", "image/gif"].includes(mime) || /\.(png|jpe?g|gif)$/.test(name);
+  if (!imageLike) return false;
+  if (privacyMode === "e2ee") return ["skipped_e2ee", "unknown_encrypted", "not_required", ""].includes(scanStatus);
+  return ["standard_plain", "server_encrypted"].includes(privacyMode) && ["clean", "not_required"].includes(scanStatus);
 }
 
 function profileAvatarCloudSizeText(file) {
@@ -341,23 +353,72 @@ function profileAvatarCloudSizeText(file) {
   return `${Math.round(bytes)} B`;
 }
 
+function profileAvatarCloudPrivacyLabel(file) {
+  const mode = String(file?.privacy_mode || "standard_plain");
+  if (mode === "e2ee") return "E2EE 圖片，點選後在瀏覽器解密";
+  if (mode === "server_encrypted") return "伺服器加密圖片";
+  return "一般圖片";
+}
+
+function profileAvatarCloudPreviewUrl(file) {
+  if (String(file?.privacy_mode || "") === "e2ee") return "";
+  const id = String(file?.id || file?.file_id || "");
+  return id ? `${API}/cloud-drive/files/${encodeURIComponent(id)}/preview/content` : "";
+}
+
+function selectProfileAvatarCloudFile(fileId, { loadPreview = false } = {}) {
+  const selectedId = String(fileId || "");
+  const { cloudSelect, cloudGallery } = profileAvatarCropperElements();
+  if (cloudSelect && cloudSelect.value !== selectedId) cloudSelect.value = selectedId;
+  if (cloudGallery) {
+    cloudGallery.querySelectorAll("[data-profile-cloud-avatar-id]").forEach((card) => {
+      const active = String(card.dataset.profileCloudAvatarId || "") === selectedId;
+      card.classList.toggle("active", active);
+      card.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  }
+  if (loadPreview) useSelectedProfileCloudAvatar();
+}
+
 function renderProfileAvatarCloudOptions() {
-  const { cloudSelect } = profileAvatarCropperElements();
-  if (!cloudSelect) return;
+  const { cloudSelect, cloudGallery } = profileAvatarCropperElements();
+  if (!cloudSelect && !cloudGallery) return;
   const usable = profileAvatarCloudFiles.filter(profileAvatarCloudFileIsUsable);
   if (!usable.length) {
-    cloudSelect.innerHTML = `<option value="">目前沒有可用的雲端圖片</option>`;
+    if (cloudSelect) cloudSelect.innerHTML = `<option value="">目前沒有可用的雲端圖片</option>`;
+    if (cloudGallery) cloudGallery.innerHTML = `<div class="drive-empty profile-avatar-cloud-empty">目前沒有可用的雲端圖片</div>`;
     return;
   }
-  cloudSelect.innerHTML = `<option value="">請選擇雲端圖片</option>` + usable.map((file) => {
+  const selectedId = String(cloudSelect?.value || "");
+  if (cloudSelect) cloudSelect.innerHTML = `<option value="">請選擇雲端圖片</option>` + usable.map((file) => {
     const id = String(file.id || file.file_id || "");
     const name = `${profileAvatarCloudFileName(file)} · ${profileAvatarCloudSizeText(file)}`;
     return `<option value="${sanitize(id)}">${sanitize(name)}</option>`;
   }).join("");
+  if (cloudGallery) {
+    cloudGallery.innerHTML = usable.map((file) => {
+      const id = String(file.id || file.file_id || "");
+      const name = profileAvatarCloudFileName(file);
+      const previewUrl = profileAvatarCloudPreviewUrl(file);
+      const active = id && id === selectedId;
+      const thumb = previewUrl
+        ? `<img src="${sanitize(previewUrl)}" alt="${sanitize(name)} 預覽" loading="lazy" />`
+        : `<span class="profile-avatar-cloud-thumb-fallback">E2EE</span>`;
+      return `
+        <button class="profile-avatar-cloud-card${active ? " active" : ""}" type="button" data-profile-cloud-avatar-id="${sanitize(id)}" aria-pressed="${active ? "true" : "false"}" title="使用 ${sanitize(name)} 作為頭像來源">
+          <span class="profile-avatar-cloud-thumb">${thumb}</span>
+          <span class="profile-avatar-cloud-card-main">
+            <strong>${sanitize(name)}</strong>
+            <span>${sanitize(profileAvatarCloudSizeText(file))} · ${sanitize(profileAvatarCloudPrivacyLabel(file))}</span>
+          </span>
+        </button>
+      `;
+    }).join("");
+  }
 }
 
 async function loadProfileAvatarCloudFiles({ force = false } = {}) {
-  const { cloudSelect } = profileAvatarCropperElements();
+  const { cloudSelect, cloudGallery } = profileAvatarCropperElements();
   if (!currentUserId) return [];
   const fresh = profileAvatarCloudFilesLoadedAt && Date.now() - profileAvatarCloudFilesLoadedAt < 30000;
   if (!force && fresh) {
@@ -365,6 +426,7 @@ async function loadProfileAvatarCloudFiles({ force = false } = {}) {
     return profileAvatarCloudFiles;
   }
   if (cloudSelect) cloudSelect.innerHTML = `<option value="">讀取雲端圖片中...</option>`;
+  if (cloudGallery) cloudGallery.innerHTML = `<div class="drive-empty profile-avatar-cloud-empty">讀取雲端圖片中...</div>`;
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
@@ -382,6 +444,7 @@ async function loadProfileAvatarCloudFiles({ force = false } = {}) {
     profileAvatarCloudFiles = [];
     profileAvatarCloudFilesLoadedAt = 0;
     if (cloudSelect) cloudSelect.innerHTML = `<option value="">雲端圖片讀取失敗</option>`;
+    if (cloudGallery) cloudGallery.innerHTML = `<div class="drive-empty profile-avatar-cloud-empty">雲端圖片讀取失敗</div>`;
     profileAvatarSetMsg(err.message || "雲端圖片讀取失敗", true);
     return [];
   }
@@ -402,15 +465,30 @@ async function useSelectedProfileCloudAvatar() {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
-    const res = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(selectedId)}/preview/content`, {
-      credentials: "same-origin",
-      headers: { "X-CSRF-Token": csrf || "" },
-    });
-    if (!res.ok) {
-      const json = await res.json().catch(() => ({}));
-      throw new Error(json.msg || `HTTP ${res.status}`);
+    let blob = null;
+    if (String(cloudFile.privacy_mode || "") === "e2ee") {
+      if (typeof decryptDriveE2eeFileForSession !== "function") {
+        throw new Error("此頁面尚未載入 E2EE 瀏覽器解密模組，請重新整理後再試");
+      }
+      const decrypted = await decryptDriveE2eeFileForSession(
+        selectedId,
+        csrf,
+        "請輸入此 E2EE 圖片的加密密碼。密碼只在瀏覽器端用來解密頭像來源。",
+        { promptOnMiss: true }
+      );
+      if (!decrypted?.blob) return;
+      blob = decrypted.blob;
+    } else {
+      const res = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(selectedId)}/preview/content`, {
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf || "" },
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json.msg || `HTTP ${res.status}`);
+      }
+      blob = await res.blob();
     }
-    const blob = await res.blob();
     const mime = String(blob.type || cloudFile.mime_type_plain_for_public || "").toLowerCase();
     if (!/^image\/(png|jpe?g|gif)$/i.test(mime)) throw new Error("雲端檔案不是可用的頭像圖片");
     if (file) file.value = "";
@@ -487,6 +565,10 @@ async function uploadProfileAvatar() {
     profileAvatarSetMsg("請先選擇頭像圖片，或從雲端硬碟選一張圖片", true);
     return;
   }
+  if ((file || cloudFileId) && !profileAvatarCropState.hasImage) {
+    profileAvatarSetMsg("請等待頭像裁切預覽載入完成後再上傳", true);
+    return;
+  }
   const button = $("profile-avatar-upload-btn");
   const previousText = button ? button.textContent : "";
   if (button) {
@@ -500,6 +582,9 @@ async function uploadProfileAvatar() {
     const cropped = profileAvatarCropState.hasImage && typeof buildCroppedAvatarUpload === "function"
       ? await buildCroppedAvatarUpload(image, crop, { sourceName: file?.name || profileAvatarCropState.cloudFileName || "avatar.png" })
       : null;
+    if (!cropped) {
+      throw new Error("無法產生裁切後頭像，請重新選擇圖片");
+    }
     if (cropped) {
       form.append("file", cropped.blob, cropped.filename);
       form.append("crop_json", JSON.stringify(cropped.serverCrop));
@@ -621,6 +706,33 @@ function profileChoice(value, allowed, fallback) {
   return Array.isArray(allowed) && allowed.includes(normalized) ? normalized : fallback;
 }
 
+function profileAvatarSizeValue(value) {
+  const legacy = {
+    large: "45",
+    xl: "55",
+    hero: "70",
+  };
+  const raw = String(value || "").trim().toLowerCase();
+  const mapped = legacy[raw] || raw || PROFILE_STYLE_DEFAULTS.avatar_size;
+  const numeric = Math.round((Number(mapped) || Number(PROFILE_STYLE_DEFAULTS.avatar_size)) / 5) * 5;
+  return String(Math.max(30, Math.min(90, numeric)));
+}
+
+function updateProfileAvatarSizeControl(value) {
+  const normalized = profileAvatarSizeValue(value);
+  const input = $("profile-edit-avatar-size");
+  const output = $("profile-edit-avatar-size-value");
+  if (input) input.value = normalized;
+  if (output) output.textContent = `${normalized}px`;
+  document.querySelectorAll("[data-profile-avatar-size]").forEach((button) => {
+    button.classList.toggle("btn-primary", profileAvatarSizeValue(button.dataset.profileAvatarSize) === normalized);
+    button.setAttribute("aria-pressed", profileAvatarSizeValue(button.dataset.profileAvatarSize) === normalized ? "true" : "false");
+  });
+  if (typeof window.applyLiveProfileAvatarSize === "function") {
+    window.applyLiveProfileAvatarSize(normalized, { dispatch: false });
+  }
+}
+
 function profileStyleFromProfile(profile = {}) {
   const raw = profile?.profile_style && typeof profile.profile_style === "object" ? profile.profile_style : {};
   const style = {};
@@ -633,7 +745,8 @@ function profileStyleFromProfile(profile = {}) {
 function collectProfileStyleFromForm() {
   const style = {};
   Object.entries(PROFILE_STYLE_FIELD_MAP).forEach(([id, key]) => {
-    style[key] = profileChoice($(id)?.value, PROFILE_STYLE_ALLOWED[key], PROFILE_STYLE_DEFAULTS[key]);
+    const raw = id === "profile-edit-avatar-size" ? profileAvatarSizeValue($(id)?.value) : $(id)?.value;
+    style[key] = profileChoice(raw, PROFILE_STYLE_ALLOWED[key], PROFILE_STYLE_DEFAULTS[key]);
   });
   return style;
 }
@@ -651,9 +764,25 @@ function draftProfileFromAppearanceForm() {
 
 function previewProfileAppearanceFromForm() {
   if (!currentProfileIsViewingSelf) return;
-  renderProfileHome(draftProfileFromAppearanceForm());
+  const draft = draftProfileFromAppearanceForm();
+  renderProfileHome(draft);
   const quick = $("profile-quick-customize-card");
   if (quick) quick.open = true;
+  updateProfileAvatarSizeControl(draft.profile_style?.avatar_size);
+  const signal = $("profile-appearance-preview-signal");
+  if (signal) {
+    const style = draft.profile_style || {};
+    signal.hidden = false;
+    signal.textContent = `預覽中：頭像 ${profileAvatarSizeValue(style.avatar_size)}px · ${draft.profile_template || "classic"} · ${draft.profile_accent || "default"} · ${style.banner || "none"}`;
+  }
+  const summary = $("profile-pane-home")?.querySelector(".profile-summary");
+  if (summary) {
+    summary.classList.add("profile-appearance-previewing");
+    window.clearTimeout(profileAppearancePreviewTimer);
+    profileAppearancePreviewTimer = window.setTimeout(() => {
+      summary.classList.remove("profile-appearance-previewing");
+    }, 1200);
+  }
   profileQuickCustomizeOpen = true;
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
 }
@@ -728,7 +857,15 @@ function applyProfilePresentation(profile) {
       ...PROFILE_STYLE_ALLOWED.avatar_frame.map((key) => `profile-avatar-frame-${key}`),
       ...PROFILE_STYLE_ALLOWED.avatar_size.map((key) => `profile-avatar-size-${key}`)
     );
-    avatar.classList.add(`profile-avatar-frame-${style.avatar_frame}`, `profile-avatar-size-${style.avatar_size}`);
+    const size = profileAvatarSizeValue(style.avatar_size);
+    avatar.classList.add(`profile-avatar-frame-${style.avatar_frame}`);
+    avatar.dataset.avatarSize = size;
+    avatar.style.setProperty("--profile-avatar-custom-size", `${size}px`);
+    avatar.style.setProperty("--profile-avatar-size", `${size}px`);
+    avatar.style.width = `${size}px`;
+    avatar.style.height = `${size}px`;
+    avatar.style.minWidth = `${size}px`;
+    avatar.style.minHeight = `${size}px`;
   }
   const name = $("profile-home-name");
   if (name) {
@@ -763,6 +900,7 @@ function renderProfileHome(profile) {
   if (bio) bio.textContent = profile?.bio || "尚未填寫個人簡介。";
   const signature = $("profile-home-signature");
   if (signature) signature.textContent = profile?.signature || "";
+  renderProfileHomePublicAccountFields(profile);
   const status = $("profile-home-friend-status");
   if (status) status.textContent = profileFriendStatusLabel(profile?.friend_status || "self");
   const visibility = $("profile-home-visibility");
@@ -780,8 +918,9 @@ function renderProfileHome(profile) {
     const targetId = Number(profile?.id || 0);
     if (!targetId || currentProfileIsViewingSelf) {
       actionRow.innerHTML = `
-        <button class="btn btn-primary" type="button" data-profile-customize-self>快速設定</button>
-        <button class="btn" type="button" data-profile-edit-self>編輯資料</button>
+        <button class="btn btn-primary" type="button" data-profile-edit-self>編輯主頁資料</button>
+        <button class="btn" type="button" data-profile-customize-self>調整主頁外觀</button>
+        <button class="btn" type="button" data-profile-account-settings-self>帳號安全</button>
       `;
     } else {
       const actions = [];
@@ -793,6 +932,36 @@ function renderProfileHome(profile) {
       actionRow.innerHTML = actions.length ? actions.join("") : `<span class="drive-card-sub">目前沒有可執行的互動操作</span>`;
     }
   }
+}
+
+function renderProfileHomePublicAccountFields(profile) {
+  const host = $("profile-home-public-account-fields");
+  if (!host) return;
+  const fields = profile?.public_account_fields && typeof profile.public_account_fields === "object"
+    ? profile.public_account_fields
+    : {};
+  const rows = PROFILE_PUBLIC_ACCOUNT_FIELDS
+    .filter((key) => String(fields[key] || "").trim())
+    .map((key) => `
+      <div class="profile-public-info-item">
+        <span class="drive-card-sub">${sanitize(PROFILE_PUBLIC_ACCOUNT_FIELD_LABELS[key] || key)}</span>
+        <strong>${sanitize(fields[key])}</strong>
+      </div>
+    `);
+  host.innerHTML = rows.length ? rows.join("") : "";
+  host.style.display = rows.length ? "" : "none";
+}
+
+function profilePublicAccountFieldsFromForm() {
+  return PROFILE_PUBLIC_ACCOUNT_FIELDS.filter((key) => !!$(`profile-public-account-${key}`)?.checked);
+}
+
+function setProfilePublicAccountFields(keys) {
+  const selected = new Set(Array.isArray(keys) ? keys : []);
+  PROFILE_PUBLIC_ACCOUNT_FIELDS.forEach((key) => {
+    const el = $(`profile-public-account-${key}`);
+    if (el) el.checked = selected.has(key);
+  });
 }
 
 function fillProfileEdit(profile) {
@@ -811,7 +980,7 @@ function fillProfileEdit(profile) {
     "profile-edit-banner": style.banner,
     "profile-edit-background-tone": style.background_tone,
     "profile-edit-avatar-frame": style.avatar_frame,
-    "profile-edit-avatar-size": style.avatar_size,
+    "profile-edit-avatar-size": profileAvatarSizeValue(style.avatar_size),
     "profile-edit-name-font": style.name_font,
     "profile-edit-name-size": style.name_size,
     "profile-edit-sticker": style.sticker,
@@ -822,9 +991,11 @@ function fillProfileEdit(profile) {
     const el = $(id);
     if (el) el.value = value;
   });
+  updateProfileAvatarSizeControl(style.avatar_size);
   if (typeof setUserDisplayTimezone === "function") {
     setUserDisplayTimezone(profile?.display_timezone || "auto");
   }
+  setProfilePublicAccountFields(profile?.profile_public_account_fields || []);
 }
 
 async function loadMyProfile({ quiet = false } = {}) {
@@ -872,6 +1043,7 @@ async function saveMyProfile() {
     profile_accent: $("profile-edit-accent")?.value || "default",
     profile_density: $("profile-edit-density")?.value || "comfortable",
     profile_style: collectProfileStyleFromForm(),
+    public_account_fields: profilePublicAccountFieldsFromForm(),
   };
   try {
     const json = await profileReadJson(API + "/users/me/profile", {
@@ -885,6 +1057,11 @@ async function saveMyProfile() {
     }
     renderProfileHome(profilePanelCache);
     fillProfileEdit(profilePanelCache);
+    const signal = $("profile-appearance-preview-signal");
+    if (signal) {
+      signal.hidden = false;
+      signal.textContent = "已儲存，外觀設定已套用到公開主頁。";
+    }
     profileSetMsg(json.msg || "個人資料已更新");
   } catch (err) {
     profileSetMsg(err.message || "個人資料更新失敗", true);
@@ -1285,6 +1462,16 @@ function bindProfileAvatarUploaderControls() {
   if (els.cloudUse) {
     els.cloudUse.addEventListener("click", useSelectedProfileCloudAvatar);
   }
+  if (els.cloudSelect) {
+    els.cloudSelect.addEventListener("change", () => selectProfileAvatarCloudFile(els.cloudSelect.value));
+  }
+  if (els.cloudGallery) {
+    els.cloudGallery.addEventListener("click", (event) => {
+      const card = event.target.closest("[data-profile-cloud-avatar-id]");
+      if (!card) return;
+      selectProfileAvatarCloudFile(card.dataset.profileCloudAvatarId || "", { loadPreview: true });
+    });
+  }
   if (els.stage) {
     els.stage.addEventListener("pointerdown", handleProfileAvatarPointerStart);
     els.stage.addEventListener("pointermove", handleProfileAvatarPointerMove);
@@ -1360,9 +1547,11 @@ function bindProfileFriendsControls() {
     el.addEventListener("change", previewProfileAppearanceFromForm);
     el.addEventListener("input", previewProfileAppearanceFromForm);
   });
-  const account = $("profile-edit-account-btn");
-  if (account) account.addEventListener("click", () => {
-    if (currentUserId && typeof editUser === "function") editUser(currentUserId);
+  document.querySelectorAll("[data-profile-avatar-size]").forEach((button) => {
+    button.addEventListener("click", () => {
+      updateProfileAvatarSizeControl(button.dataset.profileAvatarSize);
+      previewProfileAppearanceFromForm();
+    });
   });
   const addByCode = $("profile-add-code-btn");
   if (addByCode) addByCode.addEventListener("click", addProfileFriendByCode);
@@ -1404,6 +1593,11 @@ function bindProfileFriendsControls() {
     const editSelf = event.target.closest("[data-profile-edit-self]");
     if (editSelf) {
       switchProfileTab("edit");
+      return;
+    }
+    const accountSettingsSelf = event.target.closest("[data-profile-account-settings-self]");
+    if (accountSettingsSelf) {
+      if (currentUserId && typeof editUser === "function") editUser(currentUserId);
       return;
     }
     const customizeSelf = event.target.closest("[data-profile-customize-self]");
@@ -1501,3 +1695,109 @@ function bindTargetUserOptionInputs() {
     input.addEventListener("input", () => loadTargetUserOptions(context));
   });
 }
+(() => {
+  const MIN_PROFILE_AVATAR_SIZE = 30;
+  const MAX_PROFILE_AVATAR_SIZE = 90;
+  const DEFAULT_PROFILE_AVATAR_SIZE = 55;
+
+  function profileAvatarSizeInput() {
+    return document.getElementById("profile-edit-avatar-size");
+  }
+
+  function normalizeLiveProfileAvatarSize(value) {
+    const numeric = Number.parseInt(String(value || ""), 10);
+    if (!Number.isFinite(numeric)) return DEFAULT_PROFILE_AVATAR_SIZE;
+    return Math.min(MAX_PROFILE_AVATAR_SIZE, Math.max(MIN_PROFILE_AVATAR_SIZE, numeric));
+  }
+
+  function setProfileAvatarSizeOutput(size) {
+    const output = document.getElementById("profile-edit-avatar-size-value");
+    if (!output) return;
+    output.value = `${size}px`;
+    output.textContent = `${size}px`;
+  }
+
+  function profileAvatarPreviewTargets() {
+    const selectors = [
+      "#profile-appearance-preview .profile-avatar",
+      "#profile-appearance-preview .profile-avatar-large",
+      "#profile-edit-preview .profile-avatar",
+      "#profile-edit-preview .profile-avatar-large",
+      ".profile-appearance-preview .profile-avatar",
+      ".profile-appearance-preview .profile-avatar-large",
+      ".profile-editor-preview .profile-avatar",
+      ".profile-editor-preview .profile-avatar-large",
+      "#profile-home-avatar",
+      "#profile-home-avatar .user-avatar-img",
+      "#profile-home-avatar .user-avatar-fallback",
+      "#profile-pane-home .profile-avatar-large",
+      ".profile-summary .profile-avatar-large",
+      "[data-profile-preview-avatar]",
+    ];
+    return Array.from(document.querySelectorAll(selectors.join(",")));
+  }
+
+  function markProfileAvatarPreset(size) {
+    document.querySelectorAll("[data-profile-avatar-size]").forEach((button) => {
+      const active = normalizeLiveProfileAvatarSize(button.dataset.profileAvatarSize) === size;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  }
+
+  function applyLiveProfileAvatarSize(value, options = {}) {
+    const size = normalizeLiveProfileAvatarSize(value);
+    const input = profileAvatarSizeInput();
+    if (input && String(input.value) !== String(size)) {
+      input.value = String(size);
+    }
+    document.documentElement.style.setProperty("--profile-avatar-live-size", `${size}px`);
+    setProfileAvatarSizeOutput(size);
+    markProfileAvatarPreset(size);
+    profileAvatarPreviewTargets().forEach((avatar) => {
+      avatar.style.setProperty("--profile-avatar-size", `${size}px`);
+      avatar.style.width = `${size}px`;
+      avatar.style.height = `${size}px`;
+      avatar.style.minWidth = `${size}px`;
+      avatar.style.minHeight = `${size}px`;
+      avatar.dataset.avatarSize = String(size);
+    });
+    const signal = document.getElementById("profile-appearance-preview-signal");
+    if (signal) {
+      signal.dataset.changed = String(Date.now());
+    }
+    if (input && options.dispatch !== false) {
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    return size;
+  }
+
+  document.addEventListener("input", (event) => {
+    if (event.target && event.target.id === "profile-edit-avatar-size") {
+      applyLiveProfileAvatarSize(event.target.value, { dispatch: false });
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    const button = event.target?.closest?.("[data-profile-avatar-size]");
+    if (!button) return;
+    event.preventDefault();
+    const size = applyLiveProfileAvatarSize(button.dataset.profileAvatarSize);
+    const input = profileAvatarSizeInput();
+    if (input) input.dispatchEvent(new Event("input", { bubbles: true }));
+    markProfileAvatarPreset(size);
+  });
+
+  document.addEventListener("submit", (event) => {
+    const input = profileAvatarSizeInput();
+    if (!input || !event.target?.contains?.(input)) return;
+    applyLiveProfileAvatarSize(input.value, { dispatch: false });
+  }, true);
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const input = profileAvatarSizeInput();
+    if (input) applyLiveProfileAvatarSize(input.value, { dispatch: false });
+  });
+
+  window.applyLiveProfileAvatarSize = applyLiveProfileAvatarSize;
+})();

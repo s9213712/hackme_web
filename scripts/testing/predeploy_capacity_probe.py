@@ -623,6 +623,7 @@ class Client:
         data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         expected: set[int] | None = None,
+        acceptable_business_errors: dict[int, tuple[str, ...]] | None = None,
         label: str = "",
     ) -> dict[str, Any]:
         request_label = label or f"{method} {path}"
@@ -648,14 +649,25 @@ class Client:
             except Exception:
                 body = {"text": response.text[:500]}
             status = int(response.status_code)
+            ok = status in (expected or {200})
+            accepted_business_error = ""
+            if not ok and acceptable_business_errors:
+                message = str((body or {}).get("msg") or (body or {}).get("error") or "")
+                for fragment in acceptable_business_errors.get(status, ()):
+                    if fragment and fragment in message:
+                        ok = True
+                        accepted_business_error = message
+                        break
             result = {
                 "label": request_label,
                 "user": self.username,
                 "status": status,
-                "ok": status in (expected or {200}),
+                "ok": ok,
                 "elapsed_ms": elapsed_ms,
                 "body": body,
             }
+            if accepted_business_error:
+                result["accepted_business_error"] = accepted_business_error
         except Exception as exc:
             result = {
                 "label": request_label,
@@ -1313,6 +1325,9 @@ def _points_chain_flow(
                 "memo": f"capacity transfer {run_id} {index}",
             },
             expected={200, 202},
+            acceptable_business_errors={
+                403: ("temporarily frozen pending governance review",),
+            },
             label="points transfer normal",
         )
         _append_request(
@@ -1778,9 +1793,9 @@ def exercise_root_points_chain(base_url: str, args: argparse.Namespace) -> list[
     samples: list[dict[str, Any]] = [client.login()]
     if not samples[-1].get("ok"):
         return samples
-    _append_request(samples, client, "GET", "/api/root/points/report", expected={200}, label="root points report")
-    _append_request(samples, client, "GET", "/api/root/points/chain/verify", expected={200}, label="root points chain verify")
-    _append_request(samples, client, "POST", "/api/root/points/chain/seal", json_body={"limit": 50}, expected={200}, label="root points chain seal")
+    _append_request(samples, client, "GET", "/api/root/points/report", expected={200, 202}, label="root points report")
+    _append_request(samples, client, "GET", "/api/root/points/chain/verify", expected={200, 202}, label="root points chain verify")
+    _append_request(samples, client, "POST", "/api/root/points/chain/seal", json_body={"limit": 50}, expected={200, 202}, label="root points chain seal")
     _append_request(samples, client, "GET", "/api/root/points/chain/recovery", expected={200}, label="root points recovery status")
     _append_request(
         samples,
@@ -1788,7 +1803,7 @@ def exercise_root_points_chain(base_url: str, args: argparse.Namespace) -> list[
         "POST",
         "/api/root/points/chain/recovery/auto-handle",
         json_body={"confirm": "AUTO HANDLE POINTSCHAIN"},
-        expected={200, 409},
+        expected={200, 202, 409},
         label="root points emergency auto-handle",
     )
     _append_request(

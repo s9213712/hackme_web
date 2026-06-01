@@ -98,7 +98,8 @@ DEFAULT_RULES = (
 DEFAULT_PRICE_CATALOG = (
     ("post_cost_standard", "一般發文成本", "forum", "soft", 1, 0, 1, 10, 1, {"description": "防止洗版的基本回收"}),
     ("post_pin_24h", "文章置頂 24 小時", "forum", "soft", 100, 0, 50, 300, 1, {}),
-    ("cloud_storage_1gb_30d", "雲端容量 1GB / 7 天", "cloud_drive", "soft", 100, 0, 50, 500, 1, {"storage_bytes": 1024 ** 3, "duration_days": 7, "label": "雲端容量 1GB / 7 天"}),
+    ("cloud_storage_1gb_7d", "雲端容量 1GB / 7 天", "cloud_drive", "soft", 100, 0, 50, 500, 1, {"storage_bytes": 1024 ** 3, "duration_days": 7, "label": "雲端容量 1GB / 7 天"}),
+    ("cloud_storage_1gb_30d", "雲端容量 1GB / 30 天", "cloud_drive", "soft", 400, 0, 200, 2000, 1, {"storage_bytes": 1024 ** 3, "duration_days": 30, "label": "雲端容量 1GB / 30 天"}),
     ("comfyui_txt2img_basic", "基礎生圖一次", "comfyui", "soft", 5, 1, 1, 25, 1, {}),
     ("comfyui_txt2img_highres", "高解析生圖一次", "comfyui", INTERNAL_CURRENCY, 12, 1, 5, 60, 1, {}),
     ("comfyui_batch_10", "批次生圖 10 張", "comfyui", INTERNAL_CURRENCY, 45, 1, 20, 200, 1, {}),

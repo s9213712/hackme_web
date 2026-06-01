@@ -36,6 +36,10 @@ AUTH_FAST_LANE_PATHS = {
     "/api/site-config",
 }
 
+CSRF_EDGE_GUARD_PATHS = {
+    "/api/csrf-token",
+}
+
 BACKPRESSURE_FAST_LANE_PREFIXES = (
     "/livez",
     "/readyz",
@@ -87,7 +91,6 @@ HEAVY_CONTAINS = (
 )
 
 AUTH_EDGE_GUARD_PATHS = {
-    "/api/csrf-token",
     "/api/login",
     "/api/register",
     "/api/captcha/challenge",
@@ -170,11 +173,13 @@ def _edge_guard_window_seconds() -> int:
 
 def _edge_guard_limit(label: str) -> int:
     defaults = {
+        "csrf": 600,
         "auth": 40,
         "management": 90,
         "upload": 24,
     }
     env_names = {
+        "csrf": "HACKME_EDGE_CSRF_BURST_LIMIT",
         "auth": "HACKME_EDGE_AUTH_BURST_LIMIT",
         "management": "HACKME_EDGE_MANAGEMENT_BURST_LIMIT",
         "upload": "HACKME_EDGE_UPLOAD_BURST_LIMIT",
@@ -445,6 +450,8 @@ def edge_guard_label_for_path(path: str, method: str = "GET") -> str | None:
     method = (method or "GET").upper()
     if is_health_fast_lane_path(path):
         return None
+    if path in CSRF_EDGE_GUARD_PATHS:
+        return "csrf"
     if path in AUTH_EDGE_GUARD_PATHS or any(path == prefix or path.startswith(prefix) for prefix in AUTH_EDGE_GUARD_PREFIXES):
         return "auth"
     if path in UPLOAD_EDGE_GUARD_PATHS or any(path == prefix or path.startswith(prefix) for prefix in UPLOAD_EDGE_GUARD_PREFIXES):

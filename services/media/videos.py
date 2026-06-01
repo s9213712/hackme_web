@@ -183,6 +183,7 @@ def ensure_video_schema(conn):
             owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             cloud_file_id TEXT NOT NULL UNIQUE REFERENCES uploaded_files(id) ON DELETE CASCADE,
             cover_file_id TEXT REFERENCES uploaded_files(id) ON DELETE SET NULL,
+            streaming_modes_json TEXT NOT NULL DEFAULT '["direct"]',
             title TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
             visibility TEXT NOT NULL DEFAULT 'public',
@@ -314,6 +315,7 @@ def ensure_video_schema(conn):
         "boost_expires_at": "TEXT",
         "boost_last_at": "TEXT",
         "share_count": "INTEGER NOT NULL DEFAULT 0",
+        "streaming_modes_json": "TEXT NOT NULL DEFAULT '[\"direct\"]'",
     })
     _ensure_columns(conn, "video_tips", {
         "net_points": "INTEGER NOT NULL DEFAULT 0",
@@ -356,6 +358,22 @@ def ensure_video_schema(conn):
         _ensure_columns(conn, "users", {"avatar_file_id": "TEXT"})
 
 
+def _normalize_video_streaming_modes(modes):
+    allowed = {"direct", "realtime_proxy", "prepared_hls"}
+    if isinstance(modes, str):
+        try:
+            parsed = json.loads(modes)
+        except Exception:
+            parsed = [part.strip() for part in modes.split(",")]
+    else:
+        parsed = modes
+    if isinstance(parsed, str):
+        parsed = [parsed]
+    selected = [str(item or "").strip() for item in (parsed or []) if str(item or "").strip() in allowed]
+    ordered = [mode for mode in ("direct", "realtime_proxy", "prepared_hls") if mode in set(selected)]
+    return ordered or ["direct"]
+
+
 def serialize_video(row, *, actor=None, liked=False):
     data = _as_dict(row)
     if not data:
@@ -390,7 +408,8 @@ def serialize_video(row, *, actor=None, liked=False):
     data["cover_url"] = f"/api/videos/{data['id']}/cover" if data.get("cover_file_id") else ""
     data["media_type"] = _cloud_file_media_type(data)
     privacy_mode = str(data.get("cloud_privacy_mode") or "standard_plain").strip().lower()
-    data["direct_stream_allowed"] = privacy_mode in {"", "standard_plain"}
+    data["streaming_modes"] = _normalize_video_streaming_modes(data.get("streaming_modes_json") or ["direct"])
+    data["direct_stream_allowed"] = privacy_mode in {"", "standard_plain", "server_encrypted"}
     return data
 
 
@@ -1048,6 +1067,7 @@ def publish_video(
     share_wrapped_file_key_envelope=None,
     share_expires_at=None,
     share_max_views=0,
+    streaming_modes=None,
 ):
     ensure_video_schema(conn)
     if not actor:
@@ -1058,6 +1078,7 @@ def publish_video(
     if normalized_visibility == "public" and is_e2ee_file(file_row):
         raise ValueError("E2EE 影音不能以公開列表直連播放；請改用持連結可看並建立瀏覽器端分享授權")
     now = utc_now()
+    streaming_modes_json = json.dumps(_normalize_video_streaming_modes(streaming_modes), ensure_ascii=False)
     existing = conn.execute("SELECT * FROM videos WHERE cloud_file_id=?", (file_row["id"],)).fetchone()
     if existing:
         cover_sql = ", cover_file_id=?" if cover_row or cover_file_id == "" else ""
@@ -1065,6 +1086,7 @@ def publish_video(
             normalize_title(title),
             normalize_description(description),
             normalized_visibility,
+            streaming_modes_json,
             now,
         ]
         if cover_sql:
@@ -1073,7 +1095,7 @@ def publish_video(
         conn.execute(
             f"""
             UPDATE videos
-            SET title=?, description=?, visibility=?, status='ready', updated_at=?, deleted_at=NULL{cover_sql}
+            SET title=?, description=?, visibility=?, streaming_modes_json=?, status='ready', updated_at=?, deleted_at=NULL{cover_sql}
             WHERE id=?
             """,
             tuple(params),
@@ -1084,8 +1106,8 @@ def publish_video(
             """
             INSERT INTO videos (
                 video_uuid, owner_user_id, cloud_file_id, cover_file_id, title, description,
-                visibility, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)
+                visibility, streaming_modes_json, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)
             """,
             (
                 uuid.uuid4().hex,
@@ -1095,6 +1117,7 @@ def publish_video(
                 normalize_title(title),
                 normalize_description(description),
                 normalized_visibility,
+                streaming_modes_json,
                 now,
                 now,
             ),

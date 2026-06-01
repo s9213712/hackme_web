@@ -3,7 +3,8 @@
 const ROOT_SERVICE_FEE_QUICK_PRESETS = [
   { item_key: "post_cost_standard", item_name: "一般發文成本", category: "forum", base_price: 1, min_price: 1, max_price: 10, rationale: "低額防洗版，低於每日登入 5 點。" },
   { item_key: "post_pin_24h", item_name: "文章置頂 24 小時", category: "forum", base_price: 100, min_price: 50, max_price: 300, rationale: "曝光型功能，價格約等於 20 天每日登入。" },
-  { item_key: "cloud_storage_1gb_30d", item_name: "雲端容量 1GB / 7 天", category: "cloud_drive", base_price: 100, min_price: 50, max_price: 500, metadata: { storage_bytes: 1024 * 1024 * 1024, duration_days: 7, label: "雲端容量 1GB / 7 天" }, rationale: "容量是持續成本，保留較高 sink。" },
+  { item_key: "cloud_storage_1gb_7d", item_name: "雲端容量 1GB / 7 天", category: "cloud_drive", base_price: 100, min_price: 50, max_price: 500, metadata: { storage_bytes: 1024 * 1024 * 1024, duration_days: 7, label: "雲端容量 1GB / 7 天" }, rationale: "容量是持續成本，保留較高 sink。" },
+  { item_key: "cloud_storage_1gb_30d", item_name: "雲端容量 1GB / 30 天", category: "cloud_drive", base_price: 400, min_price: 200, max_price: 2000, metadata: { storage_bytes: 1024 * 1024 * 1024, duration_days: 30, label: "雲端容量 1GB / 30 天" }, rationale: "30 天方案是 7 天方案 4 倍點數，換取較長有效期。" },
   { item_key: "comfyui_txt2img_basic", item_name: "ComfyUI 基礎生圖一次", category: "comfyui", base_price: 5, min_price: 1, max_price: 25, dynamic_pricing: true, rationale: "等同每日登入一次，適合低門檻試用。" },
   { item_key: "comfyui_txt2img_highres", item_name: "ComfyUI 高解析生圖一次", category: "comfyui", base_price: 12, min_price: 5, max_price: 60, dynamic_pricing: true, rationale: "高資源消耗，約基礎生圖 2-3 倍。" },
   { item_key: "comfyui_batch_10", item_name: "ComfyUI 批次生圖 10 張", category: "comfyui", base_price: 45, min_price: 20, max_price: 200, dynamic_pricing: true, rationale: "批次任務佔用較久，保留折扣但高於單次。" },
@@ -60,7 +61,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   drive: {
     label: "雲端硬碟",
     section: "drive",
-    pricingKeys: ["cloud_storage_1gb_30d"],
+    pricingKeys: ["cloud_storage_1gb_7d", "cloud_storage_1gb_30d"],
     fields: [
       { id: "s-feature-privacy-uploads-enabled", label: "開放雲端硬碟 / E2EE" },
       { id: "s-feature-storage-albums-enabled", label: "開放相簿" },
@@ -74,7 +75,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   albums: {
     label: "相簿",
     section: "drive",
-    pricingKeys: ["cloud_storage_1gb_30d"],
+    pricingKeys: ["cloud_storage_1gb_7d", "cloud_storage_1gb_30d"],
     fields: [
       { id: "s-feature-storage-albums-enabled", label: "開放相簿" },
       { id: "s-feature-privacy-uploads-enabled", label: "開放雲端硬碟 / E2EE" },
@@ -114,7 +115,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   jobs: {
     label: "任務中心",
     section: "system",
-    note: "任務中心目前主要顯示後台任務狀態，沒有獨立功能開關；可從這裡快速調整通知靜音或前往完整設定。",
+    note: "任務中心目前主要顯示後台任務狀態，這裡只保留當頁常用 root 快速設定。",
     fields: [
       { id: "s-notification-muted-types", label: "靜音通知類型" },
     ],
@@ -122,7 +123,7 @@ const ROOT_MODULE_QUICK_SETTINGS = {
   shares: {
     label: "分享管理",
     section: "drive",
-    pricingKeys: ["cloud_storage_1gb_30d", "video_publish_basic"],
+    pricingKeys: ["cloud_storage_1gb_7d", "cloud_storage_1gb_30d", "video_publish_basic"],
     fields: [
       { id: "s-feature-privacy-uploads-enabled", label: "開放檔案分享來源" },
       { id: "s-feature-storage-albums-enabled", label: "開放相簿分享來源" },
@@ -308,14 +309,12 @@ function ensureRootModuleSettingsModal() {
       </div>
       <div id="root-module-settings-msg" class="msg"></div>
       <div class="edit-user-actions">
-        <button type="button" id="root-module-settings-full" class="btn">完整設定</button>
         <button type="button" id="root-module-settings-save" class="btn btn-primary">儲存</button>
       </div>
     </div>
   `;
   document.body.appendChild(overlay);
   $("root-module-settings-close")?.addEventListener("click", closeRootModuleSettings);
-  $("root-module-settings-full")?.addEventListener("click", () => openRootModuleFullSettings());
   $("root-module-settings-save")?.addEventListener("click", saveRootModuleSettings);
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay) closeRootModuleSettings();
@@ -501,7 +500,7 @@ function renderRootModuleSettingsFields(tab) {
   note.textContent = config.note || "只顯示此頁最常用的 root 設定；完整低頻設定仍保留在安全中心。";
   fieldsWrap.innerHTML = renderedFields.length
     ? renderedFields.join("")
-    : `<div class="drive-empty">此頁目前沒有專用快速設定，請使用完整設定。</div>`;
+    : `<div class="drive-empty">此頁目前沒有專用快速設定。</div>`;
   renderRootModulePricingFields(tab);
   fieldsWrap.querySelectorAll("input, select, textarea").forEach((el) => {
     el.addEventListener("input", updateRootModuleConditionalFields);
@@ -625,22 +624,6 @@ async function saveRootModuleSettings() {
   } finally {
     if (saveBtn) saveBtn.disabled = false;
   }
-}
-
-function openRootModuleFullSettings(tab = $("root-module-settings-overlay")?.dataset.moduleTab || currentModuleTab) {
-  const config = rootModuleQuickConfig(tab);
-  closeRootModuleSettings();
-  if (config?.section === "trading") {
-    if (typeof switchModuleTab === "function") switchModuleTab("trading");
-    if (typeof openTradingSettingsPage === "function") openTradingSettingsPage();
-    return;
-  }
-  if (config?.section && typeof switchSettingsSection === "function") {
-    switchSettingsSection(config.section);
-    return;
-  }
-  if (typeof switchModuleTab === "function") switchModuleTab("system");
-  if (typeof switchSystemTab === "function") switchSystemTab("settings");
 }
 
 if (document.readyState === "loading") {

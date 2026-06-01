@@ -10,6 +10,7 @@ from services.storage.paths import resolve_storage_path
 from services.storage.storage_albums import ensure_storage_album_schema
 from services.security.upload_security import (
     create_uploaded_file_record,
+    ensure_upload_security_schema,
     get_cloud_drive_security_policy,
     get_user_cloud_drive_usage,
     is_e2ee_privacy_mode,
@@ -20,7 +21,7 @@ from services.security.upload_security import (
 )
 
 
-CONTEXT_TYPES = {"dm", "group_chat", "chat_message", "forum_thread", "forum_post", "forum_comment", "announcement"}
+CONTEXT_TYPES = {"dm", "group_chat", "chat_message", "forum_thread", "forum_post", "forum_comment", "announcement", "avatar"}
 ANNOUNCEMENT_REQUEST_STATUSES = {"pending", "approved", "rejected"}
 DEFAULT_SERVER_ENCRYPTED_INLINE_MAX_BYTES = 64 * 1024 * 1024
 DEFAULT_SERVER_ENCRYPTED_CHUNK_BYTES = 4 * 1024 * 1024
@@ -65,6 +66,7 @@ def _server_encrypted_size_error(size_bytes, *, operation="upload"):
 
 
 def ensure_cloud_drive_attachment_schema(conn):
+    ensure_upload_security_schema(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS cloud_file_refs (
@@ -118,6 +120,21 @@ def ensure_cloud_drive_attachment_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_file_access_grants_file ON file_access_grants(file_id, revoked_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_file_access_grants_user_context ON file_access_grants(granted_to_user_id, context_type, context_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_announcement_attachment_requests_status ON announcement_attachment_requests(status, created_at)")
+    try:
+        conn.execute(
+            """
+            UPDATE uploaded_files
+            SET system_asset_type='avatar'
+            WHERE COALESCE(system_asset_type, '')=''
+              AND id IN (
+                  SELECT file_id
+                  FROM cloud_file_refs
+                  WHERE context_type='avatar'
+              )
+            """
+        )
+    except Exception:
+        pass
 
 
 def _now():
@@ -317,6 +334,55 @@ def _actor_owns(actor, owner_user_id):
         return False
 
 
+def mark_avatar_file_asset(conn, *, file_id, owner_user_id=None):
+    file_id = str(file_id or "").strip()
+    if not file_id:
+        return False
+    ensure_upload_security_schema(conn)
+    params = [_now(), file_id]
+    owner_clause = ""
+    if owner_user_id is not None:
+        owner_clause = " AND owner_user_id=?"
+        params.append(int(owner_user_id))
+    return bool(conn.execute(
+        f"""
+        UPDATE uploaded_files
+        SET system_asset_type='avatar', updated_at=?
+        WHERE id=? AND deleted_at IS NULL{owner_clause}
+        """,
+        tuple(params),
+    ).rowcount)
+
+
+def _file_is_current_avatar(conn, file_id):
+    try:
+        return bool(conn.execute(
+            "SELECT 1 FROM users WHERE avatar_file_id=? LIMIT 1",
+            (str(file_id or "").strip(),),
+        ).fetchone())
+    except Exception:
+        return False
+
+
+def _file_is_avatar_asset(conn, file_id):
+    file_id = str(file_id or "").strip()
+    if not file_id:
+        return False
+    try:
+        row = conn.execute("SELECT system_asset_type FROM uploaded_files WHERE id=? LIMIT 1", (file_id,)).fetchone()
+        if row and str(row["system_asset_type"] or "").strip().lower() == "avatar":
+            return True
+    except Exception:
+        pass
+    try:
+        return bool(conn.execute(
+            "SELECT 1 FROM cloud_file_refs WHERE file_id=? AND context_type='avatar' LIMIT 1",
+            (file_id,),
+        ).fetchone())
+    except Exception:
+        return False
+
+
 def can_remove_context_attachment(actor, ref_row):
     if not actor or not ref_row:
         return False
@@ -378,10 +444,37 @@ def list_cloud_files(conn, actor, *, limit=50, offset=0):
     ensure_storage_album_schema(conn)
     rows = conn.execute(
         """
-        SELECT f.*, COUNT(r.id) AS ref_count
+        SELECT f.*, COUNT(r.id) AS ref_count,
+               (
+                   SELECT sf.display_name
+                   FROM storage_files sf
+                   WHERE sf.file_id=f.id
+                         AND sf.owner_user_id=f.owner_user_id
+                         AND sf.deleted_at IS NULL
+                         AND COALESCE(sf.is_trashed, 0)=0
+                   ORDER BY sf.updated_at DESC, sf.created_at DESC
+                   LIMIT 1
+               ) AS storage_display_name,
+               (
+                   SELECT sf.virtual_path
+                   FROM storage_files sf
+                   WHERE sf.file_id=f.id
+                         AND sf.owner_user_id=f.owner_user_id
+                         AND sf.deleted_at IS NULL
+                         AND COALESCE(sf.is_trashed, 0)=0
+                   ORDER BY sf.updated_at DESC, sf.created_at DESC
+                   LIMIT 1
+               ) AS storage_virtual_path
         FROM uploaded_files f
         LEFT JOIN cloud_file_refs r ON r.file_id=f.id
         WHERE f.owner_user_id=? AND f.deleted_at IS NULL
+              AND COALESCE(f.system_asset_type, '')<>'avatar'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM cloud_file_refs avatar_refs
+                  WHERE avatar_refs.file_id=f.id
+                        AND avatar_refs.context_type='avatar'
+              )
               AND NOT EXISTS (
                   SELECT 1
                   FROM storage_files sf
@@ -402,6 +495,16 @@ def list_cloud_files(conn, actor, *, limit=50, offset=0):
 
 def serialize_file_row(row):
     data = dict(row)
+    storage_display_name = str(data.pop("storage_display_name", "") or "").strip()
+    storage_virtual_path = str(data.pop("storage_virtual_path", "") or "").strip()
+    if storage_virtual_path:
+        data["virtual_path"] = storage_virtual_path
+    if storage_display_name:
+        data["display_name"] = storage_display_name
+    elif storage_virtual_path:
+        virtual_name = storage_virtual_path.rstrip("/").rsplit("/", 1)[-1].strip()
+        if virtual_name:
+            data["display_name"] = virtual_name
     for key in ("size_bytes", "owner_user_id"):
         if key in data and data[key] is not None:
             data[key] = int(data[key])
@@ -451,6 +554,8 @@ def store_cloud_upload(
     nonce=None,
     client_scan_report=None,
     scan_now=True,
+    system_asset_type=None,
+    quota_exempt=False,
     server_file_fernet=None,
 ):
     ensure_cloud_drive_attachment_schema(conn)
@@ -466,11 +571,20 @@ def store_cloud_upload(
         size_bytes = len(data)
         from io import BytesIO
         stream = BytesIO(data)
-    ok, msg = _check_quota(conn, actor, member_rule, size_bytes, storage_root=storage_root)
-    if not ok:
-        if position is not None and hasattr(stream, "seek"):
-            stream.seek(position)
-        return None, msg
+    asset_type = str(system_asset_type or "").strip().lower()[:40]
+    quota_exempt = bool(quota_exempt or asset_type == "avatar")
+    if quota_exempt:
+        disk_ok, _disk = storage_root_can_accept_bytes(storage_root, size_bytes)
+        if not disk_ok:
+            if position is not None and hasattr(stream, "seek"):
+                stream.seek(position)
+            return None, "Host 磁碟可用空間不足，請先清理檔案或擴充儲存空間"
+    else:
+        ok, msg = _check_quota(conn, actor, member_rule, size_bytes, storage_root=storage_root)
+        if not ok:
+            if position is not None and hasattr(stream, "seek"):
+                stream.seek(position)
+            return None, msg
     file_id_hint = uuid.uuid4().hex
     server_encrypted = is_server_encrypted_privacy_mode(privacy_mode)
     if is_e2ee_privacy_mode(privacy_mode):
@@ -525,6 +639,7 @@ def store_cloud_upload(
             encryption_version=SERVER_ENCRYPTED_CHUNKED_VERSION if server_encrypted else encryption_version,
             nonce=nonce,
             client_scan_report=client_scan_report,
+            system_asset_type=asset_type or None,
             user=actor,
             scan_now=False,
         )
@@ -563,6 +678,8 @@ def store_cloud_upload(
                 "chunk_size": encrypted["chunk_size"],
             }
         result["size_bytes"] = int(size_bytes or 0)
+        result["quota_exempt"] = quota_exempt
+        result["system_asset_type"] = asset_type
         return result, None
     finally:
         if plaintext_temp_path is not None:
@@ -838,6 +955,8 @@ def delete_cloud_file_permanently(conn, *, actor, file_id, storage_root):
         return None, "找不到檔案或檔案已刪除"
     if not _actor_owns(actor, row["owner_user_id"]):
         return None, "只能刪除自己的檔案"
+    if _file_is_current_avatar(conn, row["id"]):
+        return None, "頭貼檔案由個人主頁管理；更換頭貼後系統會自動清除舊檔"
     now = _now()
     owner_user_id = int(row["owner_user_id"])
     storage_path = resolve_file_storage_path(storage_root, row)
@@ -875,6 +994,24 @@ def delete_cloud_file_permanently(conn, *, actor, file_id, storage_root):
         "removed_physical_file": removed_physical,
         "storage": summary,
     }, None
+
+
+def delete_avatar_file_if_unreferenced(conn, *, actor, file_id, storage_root):
+    file_id = str(file_id or "").strip()
+    if not file_id:
+        return {"deleted": False, "reason": "empty_file_id"}
+    ensure_cloud_drive_attachment_schema(conn)
+    row = _file_row(conn, file_id)
+    if not row or row["deleted_at"]:
+        return {"deleted": False, "reason": "missing_or_deleted", "file_id": file_id}
+    if _file_is_current_avatar(conn, file_id):
+        return {"deleted": False, "reason": "still_current_avatar", "file_id": file_id}
+    if not _file_is_avatar_asset(conn, file_id):
+        return {"deleted": False, "reason": "not_avatar_asset", "file_id": file_id}
+    result, msg = delete_cloud_file_permanently(conn, actor=actor, file_id=file_id, storage_root=storage_root)
+    if msg:
+        return {"deleted": False, "reason": msg, "file_id": file_id}
+    return {"deleted": True, "file_id": file_id, "result": result}
 
 
 def create_announcement_attachment_request(conn, *, actor, file_id, announcement_id=None, reason=""):

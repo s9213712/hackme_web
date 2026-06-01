@@ -15,7 +15,7 @@
 
 3. Medium: cloud storage capacity preset text/duration had to be aligned to 7 days.
    - Fix: root quick settings, root catalog fallback, service recommendation, schema/default catalog and frontend tests now use `雲端容量 1GB / 7 天` with `duration_days: 7`.
-   - Evidence: live :5000 catalog returned `cloud_storage_1gb_30d` with `duration_days: 7`; targeted share probe created a 7-day future share that dashboard marked active and public metadata/preview/download all returned 200.
+   - Evidence: live :5000 catalog returned `cloud_storage_1gb_7d` with `duration_days: 7`; targeted share probe created a 7-day future share that dashboard marked active and public metadata/preview/download all returned 200.
 
 4. Test harness issue: background interest fixture set legacy daily interest but left new APR fields at 0.
    - Fix: the Playwright trading background probe now sets both APR fields to match the test daily rate.

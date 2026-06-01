@@ -306,6 +306,7 @@ def _ensure_upload_security_schema_uncached(conn):
             encryption_version TEXT,
             nonce TEXT,
             client_scan_report_json TEXT,
+            system_asset_type TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT,
             deleted_at TEXT
@@ -417,6 +418,7 @@ def _ensure_upload_security_schema_uncached(conn):
     _ensure_cloud_drive_policy_columns(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_owner ON uploaded_files(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_risk ON uploaded_files(risk_level, scan_status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_system_asset ON uploaded_files(system_asset_type)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_encrypted_file_keys_file_recipient ON encrypted_file_keys(file_id, recipient_user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_file_scan_results_file ON file_scan_results(file_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_file_access_logs_file ON file_access_logs(file_id, created_at)")
@@ -447,6 +449,7 @@ def _ensure_uploaded_files_columns(conn):
         "encryption_version": "TEXT",
         "nonce": "TEXT",
         "client_scan_report_json": "TEXT",
+        "system_asset_type": "TEXT",
         "created_at": "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00'",
         "updated_at": "TEXT",
         "deleted_at": "TEXT",
@@ -454,6 +457,49 @@ def _ensure_uploaded_files_columns(conn):
     for column, definition in definitions.items():
         if column not in columns:
             conn.execute(f"ALTER TABLE uploaded_files ADD COLUMN {column} {definition}")
+    _mark_existing_avatar_files(conn)
+
+
+def _table_exists(conn, table):
+    try:
+        return bool(conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (str(table or ""),),
+        ).fetchone())
+    except Exception:
+        return False
+
+
+def _mark_existing_avatar_files(conn):
+    try:
+        if _table_exists(conn, "users") and "avatar_file_id" in _table_columns(conn, "users"):
+            conn.execute(
+                """
+                UPDATE uploaded_files
+                SET system_asset_type='avatar'
+                WHERE COALESCE(system_asset_type, '')=''
+                  AND id IN (
+                      SELECT avatar_file_id
+                      FROM users
+                      WHERE avatar_file_id IS NOT NULL AND avatar_file_id<>''
+                  )
+                """
+            )
+        if _table_exists(conn, "cloud_file_refs"):
+            conn.execute(
+                """
+                UPDATE uploaded_files
+                SET system_asset_type='avatar'
+                WHERE COALESCE(system_asset_type, '')=''
+                  AND id IN (
+                      SELECT file_id
+                      FROM cloud_file_refs
+                      WHERE context_type='avatar'
+                  )
+                """
+            )
+    except Exception:
+        pass
 
 
 def _ensure_encrypted_file_keys_columns(conn):

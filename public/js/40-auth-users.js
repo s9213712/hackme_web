@@ -651,7 +651,7 @@ function bindAvatarCropperUi() {
 }
 
 function userAppearanceEditorVisible() {
-  return !!currentUser && editingUserIsSelf;
+  return !!currentUser && editingUserIsSelf && !!$("edit-user-appearance-section");
 }
 
 function userAppearanceFeatureEnabled() {
@@ -1003,7 +1003,7 @@ async function loadCaptchaChallenge() {
 
 async function forceDefaultPasswordChange() {
   if (!currentUserId) return;
-  forcedPasswordChangeMode = true;
+  setForcedPasswordChangeState(true);
   await editUser(currentUserId);
   setUserEditMsg("此預設帳號初次登入必須先變更密碼。請輸入目前密碼與新密碼，變更完成後請用新密碼重新登入。", false);
   const cancelBtn = $("user-edit-cancel");
@@ -1479,9 +1479,17 @@ async function submitUserAvatarUpload({ reloadUsers = true } = {}) {
   }
   const crop = currentAvatarCropPayload();
   const image = avatarCropperElements().image;
+  if (file && !avatarCropState.hasImage) {
+    setUserEditMsg("請等待頭像裁切預覽載入完成後再上傳", false);
+    return { ok: false, msg: "請等待頭像裁切預覽載入完成後再上傳" };
+  }
   const cropped = avatarCropState.hasImage
     ? await buildCroppedAvatarUpload(image, crop, { sourceName: file.name || "avatar.png" })
     : null;
+  if (avatarCropState.hasImage && !cropped) {
+    setUserEditMsg("無法產生裁切後頭像，請重新選擇圖片", false);
+    return { ok: false, msg: "無法產生裁切後頭像" };
+  }
   const form = new FormData();
   if (cropped) {
     form.append("file", cropped.blob, cropped.filename);
@@ -1524,7 +1532,8 @@ async function submitEditUser() {
   const payload = {};
   const nickname = $("edit-user-nickname")?.value.trim() || "";
   const realName = $("edit-user-realname")?.value.trim() || "";
-  const idNo = $("edit-user-idno")?.value.trim() || "";
+  const idNoField = $("edit-user-idno");
+  const idNo = idNoField ? idNoField.value.trim() : (editingUserOriginal.id_number || "");
   const birthdate = $("edit-user-birthdate")?.value || "";
   const phone = $("edit-user-phone")?.value.trim() || "";
   const role = $("edit-user-role")?.value || "";
@@ -1541,12 +1550,13 @@ async function submitEditUser() {
   const nextPasswordValue = $("edit-user-pw")?.value || "";
   const passwordConfirm = $("edit-user-pw-confirm")?.value || "";
   const avatarFile = selectedUserAvatarFile();
-  const displayTimezone = selectedUserDisplayTimezone();
-  const appearanceChanged = editingUserIsSelf && (
+  const timezoneEditor = $("edit-user-display-timezone");
+  const displayTimezone = timezoneEditor ? selectedUserDisplayTimezone() : (editingUserOriginal.display_timezone || "auto");
+  const appearanceChanged = userAppearanceEditorVisible() && editingUserIsSelf && (
     userAppearanceResetPending ||
     userAppearanceSignature(collectUserAppearanceSettingsFromEditor()) !== userAppearanceSignature(editingUserOriginalAppearance)
   );
-  const timezoneChanged = editingUserIsSelf && displayTimezone !== (
+  const timezoneChanged = !!timezoneEditor && editingUserIsSelf && displayTimezone !== (
     typeof normalizeUserDisplayTimezone === "function"
       ? normalizeUserDisplayTimezone(editingUserOriginal.display_timezone || "auto")
       : (editingUserOriginal.display_timezone || "auto")
@@ -1554,7 +1564,7 @@ async function submitEditUser() {
 
   if (nickname !== editingUserOriginal.nickname) payload.nickname = nickname;
   if (realName !== editingUserOriginal.real_name) payload.real_name = realName;
-  if (idNo !== editingUserOriginal.id_number) payload.id_number = idNo;
+  if (idNoField && idNo !== editingUserOriginal.id_number) payload.id_number = idNo;
   if (birthdate !== editingUserOriginal.birthdate) payload.birthdate = birthdate;
   if (phone !== editingUserOriginal.phone) payload.phone = phone;
   if (!editingUserIsSelf && canManageUsers && role !== editingUserOriginal.role) payload.role = role;
@@ -1628,8 +1638,7 @@ async function submitEditUser() {
       return;
     }
     if (forcedPasswordChangeMode) {
-      forcedPasswordChangeMode = false;
-      currentMustChangePassword = false;
+      setForcedPasswordChangeState(false);
       alert("密碼已更新，請使用新密碼重新登入。");
       resetAuthState();
       return;

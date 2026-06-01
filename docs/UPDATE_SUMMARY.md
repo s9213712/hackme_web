@@ -1776,7 +1776,7 @@ Release ID: `2026.05.28-008`
 - The default Cloud Drive purchase plan is now `1GB / 7 days` instead of
   `1GB / 30 days`.
 - Existing databases are normalized on startup so the legacy
-  `cloud_storage_1gb_30d` catalog row keeps the same key but gets the new
+  `cloud_storage_1gb_7d` catalog row keeps the same key but gets the new
   `item_name`, `duration_days`, and label, avoiding mixed `30 天 / 7 天`
   displays between fresh and old runtimes.
 

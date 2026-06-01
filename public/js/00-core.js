@@ -6,7 +6,7 @@ const CSRF_STORAGE_KEY = "hackme_web.csrf_token";
 const CSRF_BROADCAST_CHANNEL = "hackme_web.csrf";
 let csrfBroadcast = null;
 let currentUser = null;
-let currentUserId = null;
+var currentUserId = null;
 let currentUserAvatarFileId = "";
 let currentRole = "user";
 let currentRoleLabel = "user";
@@ -15,6 +15,17 @@ let currentAllowedFeatures = [];
 const USER_DISPLAY_TIMEZONE_STORAGE_KEY = "hackme_display_timezone";
 let currentMustChangePassword = false;
 let forcedPasswordChangeMode = false;
+function setForcedPasswordChangeState(enabled) {
+  const active = !!enabled;
+  forcedPasswordChangeMode = active;
+  currentMustChangePassword = active;
+  try {
+    document.body?.toggleAttribute("data-forced-password-change", active);
+  } catch (_) {}
+  const cancelBtn = typeof $ === "function" ? $("user-edit-cancel") : null;
+  if (cancelBtn) cancelBtn.style.display = active ? "none" : "";
+}
+
 let canManageUsers = false;
 let currentModuleTab = "chat";
 let currentServerTab = "overview";
@@ -174,11 +185,32 @@ function internalTestTokenAllowsFeature(featureKey) {
   return currentAllowedFeatures.includes(normalized);
 }
 
+const MODULE_FEATURE_KEYS = Object.freeze({
+  chat: "feature_chat_enabled",
+  announcements: "feature_community_enabled",
+  community: "feature_community_enabled",
+  appeals: "feature_appeals_enabled",
+  accounts: "feature_accounts_enabled",
+  privacy_uploads: "feature_privacy_uploads_enabled",
+  albums: "feature_storage_albums_enabled",
+  videos: "feature_videos_enabled",
+  games: "feature_games_enabled",
+  experiments: "feature_experiments_enabled",
+  comfyui: "feature_comfyui_enabled",
+  economy: "feature_economy_enabled",
+  trading: "feature_trading_enabled",
+});
+
+function moduleFeatureEnabledForUi(moduleKey) {
+  const featureKey = MODULE_FEATURE_KEYS[moduleKey] || "";
+  if (!featureKey) return true;
+  return isFeatureEnabledForUi(featureKey, false);
+}
+
 function canAccessModule(moduleKey, role = currentRole) {
-  const featureKey = `feature_${moduleKey}_enabled`;
-  if (siteConfig && siteConfig[featureKey] === false) return false;
+  if (!moduleFeatureEnabledForUi(moduleKey)) return false;
   if (moduleKey === "experiments") {
-    if (currentUser === "root") return isFeatureEnabledForUi("feature_experiments_enabled", false);
+    if (currentUser === "root") return true;
     return !!currentUser && internalTestTokenAllowsFeature("feature_experiments_enabled");
   }
   const fallback = moduleKey === "accounts" ? "manager" : "user";
@@ -186,6 +218,62 @@ function canAccessModule(moduleKey, role = currentRole) {
 }
 
 function $(id) { return document.getElementById(id); }
+window.$ = $;
+
+const EMPTY_HEADING_SELECTOR = [
+  "h1",
+  "h2",
+  "h3",
+  ".mini-title",
+  ".drive-card-title",
+  ".experiment-title",
+  ".experiment-panel-title",
+  ".health-section-title",
+  ".server-env-panel-title",
+  ".economy-supply-title",
+  ".comfyui-root-summary-title",
+].join(",");
+
+function syncEmptyHeadingVisibility(root = document) {
+  const scope = root && root.querySelectorAll ? root : document;
+  const nodes = [];
+  if (scope.matches?.(EMPTY_HEADING_SELECTOR)) nodes.push(scope);
+  nodes.push(...scope.querySelectorAll(EMPTY_HEADING_SELECTOR));
+  nodes.forEach((node) => {
+    const empty = !(node.textContent || "").trim();
+    node.classList.toggle("is-empty-heading", empty);
+    node.toggleAttribute("aria-hidden", empty);
+  });
+}
+
+function startEmptyHeadingVisibilityObserver() {
+  if (window.__hackmeEmptyHeadingVisibilityObserverStarted) return;
+  window.__hackmeEmptyHeadingVisibilityObserverStarted = true;
+  const run = () => syncEmptyHeadingVisibility(document);
+  const start = () => {
+    run();
+    const observer = new MutationObserver((mutations) => {
+      const roots = new Set();
+      mutations.forEach((mutation) => {
+        const target = mutation.target?.nodeType === Node.ELEMENT_NODE
+          ? mutation.target
+          : mutation.target?.parentElement;
+        if (!target) return;
+        if (target.matches?.(EMPTY_HEADING_SELECTOR)) {
+          roots.add(target);
+        } else if (target.querySelector?.(EMPTY_HEADING_SELECTOR)) {
+          roots.add(target);
+        }
+      });
+      roots.forEach((target) => syncEmptyHeadingVisibility(target));
+    });
+    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+  };
+  if (document.body) start();
+  else document.addEventListener("DOMContentLoaded", start, { once: true });
+}
+
+startEmptyHeadingVisibilityObserver();
 
 const ACCOUNT_SCOPE_STORAGE_KEY = "hackme_web.account.active_scope";
 
@@ -252,8 +340,9 @@ const SIDEBAR_MENU_CONFIG = [
     group: "社交",
     submenu: [
       { label: "我的主頁", action: "profile:home" },
-      { label: "主頁快速設定", action: "profile:appearance" },
-      { label: "編輯資料", action: "profile:edit" },
+      { label: "主頁資料", action: "profile:edit" },
+      { label: "主頁外觀", action: "profile:appearance" },
+      { label: "帳號安全", action: "profile:account" },
       { label: "好友", action: "profile:friends" },
     ],
   },
@@ -403,6 +492,20 @@ function canShowSidebarSubitem(sub) {
   return true;
 }
 
+function isSidebarEntryVisible(node) {
+  return !!node && !node.hidden && node.style.display !== "none";
+}
+
+function sidebarGroupHasVisibleEntries(group) {
+  if (!group) return false;
+  let node = group.nextElementSibling;
+  while (node && !node.classList.contains("sidebar-group")) {
+    if (node.classList.contains("tab") && isSidebarEntryVisible(node)) return true;
+    node = node.nextElementSibling;
+  }
+  return false;
+}
+
 function decorateSidebarMenu() {
   SIDEBAR_MENU_CONFIG.forEach((item) => {
     const button = $(item.tabId);
@@ -469,7 +572,6 @@ function collapseSidebarAfterMobileNavigation() {
 
 function syncSidebarMenuVisibility() {
   decorateSidebarMenu();
-  const visibleGroups = new Set();
   const configuredTabIds = new Set(SIDEBAR_MENU_CONFIG.map((item) => item.tabId));
   document.querySelectorAll("#module-main-tabs > .tab[id^='tab-module-']").forEach((button) => {
     if (!configuredTabIds.has(button.id)) button.style.display = "none";
@@ -486,11 +588,10 @@ function syncSidebarMenuVisibility() {
         subButton.style.display = visible && canShowSidebarSubitem(sub) ? "" : "none";
       });
     }
-    if (visible && item.group) visibleGroups.add(item.group);
   });
   document.querySelectorAll("[data-sidebar-group]").forEach((group) => {
     if (!group.classList.contains("sidebar-group")) return;
-    group.style.display = visibleGroups.has(group.dataset.sidebarGroup || "") ? "" : "none";
+    group.style.display = sidebarGroupHasVisibleEntries(group) ? "" : "none";
   });
   updateSidebarIdentity();
   updateSidebarActiveState();
@@ -638,6 +739,10 @@ function runSidebarAction(action) {
   }
   if (scope === "profile" && value && typeof switchModuleTab === "function") {
     switchModuleTab("profile");
+    if (value === "account") {
+      if (currentUserId && typeof editUser === "function") editUser(currentUserId);
+      return;
+    }
     if (typeof switchProfileTab === "function") switchProfileTab(value);
     return;
   }
@@ -2424,10 +2529,9 @@ function resetAuthState() {
   currentRoleLabel = "user";
   currentAuthScope = "";
   currentAllowedFeatures = [];
-  currentMustChangePassword = false;
+  setForcedPasswordChangeState(false);
   inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
   inactivitySuspendReasons.clear();
-  forcedPasswordChangeMode = false;
   canManageUsers = false;
   syncActiveAccountStorageScope(previousAccountScope);
   users = [];
@@ -2507,3 +2611,163 @@ function resetAuthState() {
   const tb = $("user-table")?.querySelector("tbody");
   if (tb) tb.innerHTML = "";
 }
+
+// Global modal close affordance: every popup should have close controls near top and bottom.
+(function setupGlobalModalCloseAffordance() {
+  const MODAL_TARGET_SELECTOR = [
+    "#chat-room-create-panel",
+    "#chat-room-join-panel",
+    "#drive-upload-mode-overlay",
+    "#game-multiplayer-invite-modal",
+    ".user-edit-modal",
+    ".app-dialog-card",
+    ".comfyui-mask-editor-modal",
+    ".comfyui-image-picker-modal",
+    ".share-center-events-modal",
+    ".profile-avatar-preview-modal",
+    ".root-module-settings-modal",
+    ".chess-action-dialog-modal",
+    ".game-multiplayer-invite-modal",
+    ".drive-preview-mobile-dialog",
+    "[role='dialog']",
+  ].join(",");
+  const CLOSE_CONTROL_SELECTOR = [
+    "[data-drive-action^='close']",
+    "[data-drive-action*='close-']",
+    "[data-share-events-close]",
+    "[data-modal-close]",
+    "[data-dialog-close]",
+    "#app-dialog-cancel",
+    "button[id$='-close-btn']",
+    "button[id$='-cancel-btn']",
+    "button[id$='-close']",
+    "button[id$='-cancel']",
+    "button.modal-close",
+    "button.dialog-close",
+  ].join(",");
+
+  function modalCloseContent(candidate) {
+    if (!candidate || candidate.nodeType !== 1) return null;
+    if (candidate.matches?.(".user-edit-overlay, .app-dialog-overlay, .chat-room-dialog, .game-multiplayer-invite-overlay")) {
+      return candidate.querySelector(".user-edit-modal, .app-dialog-card, [role='dialog']:not(.user-edit-overlay):not(.app-dialog-overlay)");
+    }
+    if (candidate.querySelector?.(":scope > .user-edit-modal")) return candidate.querySelector(":scope > .user-edit-modal");
+    return candidate;
+  }
+
+  function elementVisible(el) {
+    if (!el || el.hidden) return false;
+    const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    return !style || (style.display !== "none" && style.visibility !== "hidden");
+  }
+
+  function isCloseControl(el) {
+    return !!el && el.matches?.(CLOSE_CONTROL_SELECTOR) && !el.dataset.globalModalClose;
+  }
+
+  function existingCloseControls(modal) {
+    return Array.from(modal.querySelectorAll(CLOSE_CONTROL_SELECTOR)).filter((el) => isCloseControl(el) && elementVisible(el));
+  }
+
+  function modalHasGlobalCloseRow(modal, position) {
+    return !!modal.querySelector(`:scope > .global-modal-close-row-${position}`);
+  }
+
+  function modalTopHasClose(modal) {
+    return modalHasGlobalCloseRow(modal, "top");
+  }
+
+  function modalBottomHasClose(modal) {
+    return modalHasGlobalCloseRow(modal, "bottom");
+  }
+
+  function modalCloseBlocked(modal) {
+    const userEdit = modal.closest?.("#user-edit-overlay");
+    if (!userEdit) return false;
+    const cancel = document.getElementById("user-edit-cancel");
+    return !!cancel && !elementVisible(cancel);
+  }
+
+  function fallbackCloseModal(modal) {
+    if (modalCloseBlocked(modal)) return;
+    const overlay = modal.closest?.(".user-edit-overlay, .app-dialog-overlay, .album-full-preview-overlay, .root-module-settings-overlay, [aria-modal='true']");
+    if (overlay && overlay !== modal) {
+      overlay.classList.remove("show", "active", "open");
+      overlay.setAttribute("aria-hidden", "true");
+      if (overlay.hasAttribute("hidden")) overlay.hidden = true;
+    } else {
+      modal.classList.remove("show", "active", "open");
+      modal.setAttribute("aria-hidden", "true");
+      if (modal.hasAttribute("hidden")) modal.hidden = true;
+    }
+    if (!document.querySelector(".user-edit-overlay.show, .album-full-preview-overlay.show, .app-dialog-overlay.show")) {
+      document.body?.classList?.remove("modal-open");
+    }
+  }
+
+  function closeModalFromButton(button) {
+    const modal = button.closest("#chat-room-create-panel, #chat-room-join-panel, #drive-upload-mode-overlay, #game-multiplayer-invite-modal, .user-edit-modal, .app-dialog-card, .comfyui-mask-editor-modal, .comfyui-image-picker-modal, .share-center-events-modal, .profile-avatar-preview-modal, .root-module-settings-modal, .chess-action-dialog-modal, .game-multiplayer-invite-modal, .drive-preview-mobile-dialog, [role='dialog']");
+    if (!modal) return;
+    if (modalCloseBlocked(modal)) return;
+    const existing = existingCloseControls(modal)[0];
+    if (existing) {
+      existing.click();
+      return;
+    }
+    const escapeEvent = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    modal.dispatchEvent(escapeEvent);
+    document.dispatchEvent(escapeEvent);
+    setTimeout(() => {
+      const stillOpen = modal.closest(".show") || (!modal.hidden && elementVisible(modal));
+      if (stillOpen) fallbackCloseModal(modal);
+    }, 0);
+  }
+
+  function createCloseRow(position) {
+    const row = document.createElement("div");
+    row.className = `global-modal-close-row global-modal-close-row-${position}`;
+    row.dataset.globalModalClose = position;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn btn-sm global-modal-close-btn";
+    button.dataset.globalModalClose = position;
+    button.textContent = "關閉";
+    button.addEventListener("click", () => closeModalFromButton(button));
+    row.appendChild(button);
+    return row;
+  }
+
+  function enhanceModal(candidate) {
+    const modal = modalCloseContent(candidate);
+    if (!modal || modal.dataset.globalModalCloseReady === "1") return;
+    if (modal.matches?.(".user-edit-overlay, .app-dialog-overlay")) return;
+    modal.dataset.globalModalCloseReady = "1";
+    if (!modalTopHasClose(modal)) {
+      modal.insertBefore(createCloseRow("top"), modal.firstChild);
+    }
+    if (!modalBottomHasClose(modal)) {
+      modal.appendChild(createCloseRow("bottom"));
+    }
+  }
+
+  function enhanceAllModals(root = document) {
+    if (!root?.querySelectorAll) return;
+    root.querySelectorAll(MODAL_TARGET_SELECTOR).forEach(enhanceModal);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => enhanceAllModals(document), { once: true });
+  } else {
+    enhanceAllModals(document);
+  }
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      mutation.addedNodes.forEach((node) => {
+        if (node.nodeType !== 1) return;
+        if (node.matches?.(MODAL_TARGET_SELECTOR)) enhanceModal(node);
+        enhanceAllModals(node);
+      });
+    }
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+})();
