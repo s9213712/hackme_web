@@ -4,6 +4,7 @@ set -Eeuo pipefail
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_GIT_REPO_DIR="$SOURCE_ROOT"
 CAPACITY_DEFAULTS_FILE="${HACKME_DEV_CAPACITY_DEFAULTS_FILE:-$SOURCE_ROOT/.hackme_capacity_defaults.env}"
+CAPACITY_REPORT_DEFAULTS_FILE="${HACKME_DEV_CAPACITY_REPORT_FILE:-$SOURCE_ROOT/.hackme_capacity_report.json}"
 CLOUD_DRIVE_STORAGE_ROOT="${HACKME_DEV_CLOUD_DRIVE_STORAGE_ROOT:-}"
 CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB="${HACKME_DEV_CLOUD_DRIVE_GLOBAL_CAPACITY_LIMIT_MB:-}"
 MAX_CONTENT_MB="${HACKME_DEV_MAX_CONTENT_MB:-${HTML_LEARNING_MAX_CONTENT_MB:-}}"
@@ -53,6 +54,7 @@ CAPACITY_PROBE_MODE="${HACKME_DEV_CAPACITY_PROBE:-auto}"
 CAPACITY_PROBE_TIER="${HACKME_DEV_CAPACITY_PROBE_TIER:-auto}"
 CAPACITY_PROBE_RAN=0
 CAPACITY_PROBE_REPORT_FILE=""
+CAPACITY_REPORT_DEFAULTS_LOADED=0
 CAPACITY_SETTINGS_FINALIZED=0
 DRY_RUN=0
 
@@ -115,6 +117,17 @@ load_local_capacity_defaults() {
         ;;
     esac
   done < "$CAPACITY_DEFAULTS_FILE"
+}
+
+load_local_capacity_report_defaults() {
+  [[ "$CAPACITY_REPORT_DEFAULTS_LOADED" == "1" ]] && return 0
+  [[ "${HACKME_DEV_USE_CAPACITY_DEFAULTS:-1}" != "0" ]] || return 1
+  [[ -n "$CAPACITY_REPORT_DEFAULTS_FILE" && -s "$CAPACITY_REPORT_DEFAULTS_FILE" ]] || return 1
+  load_capacity_probe_report_summary "$CAPACITY_REPORT_DEFAULTS_FILE" || return 1
+  [[ "${CAPACITY_REPORT_OK:-0}" == "1" ]] || return 1
+  CAPACITY_REPORT_DEFAULTS_LOADED=1
+  say "[dev-tmp] capacity report: loaded $CAPACITY_REPORT_PROFILE from $CAPACITY_REPORT_DEFAULTS_FILE"
+  return 0
 }
 
 usage() {
@@ -212,6 +225,9 @@ Options:
                            conservative hardware fallback for this run
   --capacity-defaults-file PATH
                            Default: .hackme_capacity_defaults.env in repo root
+  --capacity-report-file PATH
+                           JSON capacity report to read before the env defaults.
+                           Default: .hackme_capacity_report.json in repo root
   --cloud-drive-root PATH,
   --cloud-drive-storage-root PATH
                            Use PATH as the actual cloud-drive file storage
@@ -474,7 +490,7 @@ maybe_run_capacity_probe_for_gunicorn_defaults() {
 
   normalize_capacity_probe_mode
   normalize_capacity_probe_tier
-  load_local_capacity_defaults
+  load_local_capacity_report_defaults || load_local_capacity_defaults
 
   if [[ "$CAPACITY_PROBE_MODE" == "force" ]]; then
     if [[ "$DRY_RUN" == "1" ]]; then
@@ -745,6 +761,7 @@ print_resolved_config() {
   if [[ "$SERVER_RUNNER" == "gunicorn" ]]; then
     say "  gunicorn:            workers=$GUNICORN_WORKERS threads=$GUNICORN_THREADS timeout=$GUNICORN_TIMEOUT backlog=$GUNICORN_BACKLOG max_requests=$GUNICORN_MAX_REQUESTS jitter=$GUNICORN_MAX_REQUESTS_JITTER"
     say "  capacity_defaults:   $CAPACITY_DEFAULTS_FILE"
+    say "  capacity_report:     $CAPACITY_REPORT_DEFAULTS_FILE"
     say "  capacity_probe:      $CAPACITY_PROBE_MODE"
     say "  capacity_tier:       $CAPACITY_PROBE_TIER"
     if [[ "$CAPACITY_PROBE_TIER" == "highend" ]]; then
@@ -960,9 +977,12 @@ emit("CAPACITY_REPORT_ERROR", recommendation.get("msg") or "")
 emit("CAPACITY_REPORT_PATH", str(path))
 emit("CAPACITY_REPORT_WORKERS", workers or "")
 emit("CAPACITY_REPORT_THREADS", threads or "")
+suggested_env = recommendation.get("suggested_env") or {}
+emit("CAPACITY_REPORT_MAX_REQUESTS", suggested_env.get("HACKME_DEV_GUNICORN_MAX_REQUESTS") or "")
+emit("CAPACITY_REPORT_MAX_REQUESTS_JITTER", suggested_env.get("HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER") or "")
 emit("CAPACITY_REPORT_PROFILE", f"{workers}x{threads}" if workers and threads else "")
 emit("CAPACITY_REPORT_TOTAL_LANES", workers * threads if workers and threads else "")
-emit("CAPACITY_REPORT_BACKPRESSURE", max(4, threads) if threads else "")
+emit("CAPACITY_REPORT_BACKPRESSURE", suggested_env.get("HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY") or (max(4, threads) if threads else ""))
 emit("CAPACITY_REPORT_MAX_SAFE_ACCOUNTS", accounts or "")
 emit("CAPACITY_REPORT_TARGET_P95_MS", recommendation.get("target_p95_ms") or thresholds.get("target_p95_ms") or "")
 emit("CAPACITY_REPORT_MAX_DURATION_SECONDS", thresholds.get("max_duration_seconds") or "")
@@ -1004,6 +1024,14 @@ REPORTPY
     GUNICORN_THREADS="$CAPACITY_REPORT_THREADS"
     export HACKME_DEV_GUNICORN_WORKERS="$GUNICORN_WORKERS"
     export HACKME_DEV_GUNICORN_THREADS="$GUNICORN_THREADS"
+    if [[ -n "${CAPACITY_REPORT_MAX_REQUESTS:-}" ]]; then
+      GUNICORN_MAX_REQUESTS="$CAPACITY_REPORT_MAX_REQUESTS"
+      export HACKME_DEV_GUNICORN_MAX_REQUESTS="$GUNICORN_MAX_REQUESTS"
+    fi
+    if [[ -n "${CAPACITY_REPORT_MAX_REQUESTS_JITTER:-}" ]]; then
+      GUNICORN_MAX_REQUESTS_JITTER="$CAPACITY_REPORT_MAX_REQUESTS_JITTER"
+      export HACKME_DEV_GUNICORN_MAX_REQUESTS_JITTER="$GUNICORN_MAX_REQUESTS_JITTER"
+    fi
     if [[ -n "${CAPACITY_REPORT_BACKPRESSURE:-}" ]]; then
       export HTML_LEARNING_BACKPRESSURE_THREAD_CAPACITY="$CAPACITY_REPORT_BACKPRESSURE"
     fi
@@ -1284,6 +1312,11 @@ run_capacity_probe_for_defaults() {
         "${probe_install_args[@]}"; then
       load_local_capacity_defaults force
       load_capacity_probe_report_summary "$capacity_report" || true
+      if [[ -n "$CAPACITY_REPORT_DEFAULTS_FILE" ]]; then
+        mkdir -p "$(dirname "$CAPACITY_REPORT_DEFAULTS_FILE")"
+        cp "$capacity_report" "$CAPACITY_REPORT_DEFAULTS_FILE"
+        say "[dev-tmp] capacity probe: saved report defaults $CAPACITY_REPORT_DEFAULTS_FILE"
+      fi
       say "[dev-tmp] capacity probe: loaded workers=$GUNICORN_WORKERS threads=$GUNICORN_THREADS max_requests=$GUNICORN_MAX_REQUESTS jitter=$GUNICORN_MAX_REQUESTS_JITTER"
       if confirm_capacity_probe_result; then
         return 0
@@ -2843,6 +2876,10 @@ while [[ $# -gt 0 ]]; do
       CAPACITY_DEFAULTS_FILE="${2:?missing capacity defaults file}"
       shift 2
       ;;
+    --capacity-report-file)
+      CAPACITY_REPORT_DEFAULTS_FILE="${2:?missing capacity report file}"
+      shift 2
+      ;;
     --cloud-drive-root|--cloud-drive-storage-root)
       CLOUD_DRIVE_STORAGE_ROOT="${2:?missing cloud drive storage root}"
       shift 2
@@ -2928,7 +2965,7 @@ fi
 
 normalize_capacity_probe_mode
 normalize_capacity_probe_tier
-load_local_capacity_defaults
+load_local_capacity_report_defaults || load_local_capacity_defaults
 
 if [[ "$SHUTDOWN" == "1" ]]; then
   normalize_port_conflict_action
