@@ -764,6 +764,10 @@ def check_auth_registration_journey(rec: Recorder, browser, base_url: str, root_
         )
         return {"username": username, "password": password, "user_id": int(target["id"])}
     finally:
+        try:
+            login(root_page, base_url)
+        except Exception:
+            pass
         ctx.close()
 
 
