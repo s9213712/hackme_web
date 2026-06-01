@@ -784,7 +784,7 @@ function renderVideoStreamDebugSummary(stats = {}, snapshot = {}) {
       ["即時 HTTP", snapshot.realtime_http_status || stats.realtime_http_status || "-"],
       ["即時 Source API", snapshot.selected_source_api || snapshot.source_api || "-"],
       ["即時 codec 支援", snapshot.is_type_supported_result == null ? "-" : String(snapshot.is_type_supported_result)],
-      ["即時串流速率", videoFormatDebugMegabitsPerSecond(firstValue(stats.observed_download_rate_bitsPerSecond, stats.observed_download_rate_bps))],
+      ["即時串流速率", videoFormatDebugMegabitsPerSecond(stats.observed_download_rate_bitsPerSecond)],
       ["即時首包延遲", firstValue(stats.first_chunk_ms, stats.realtime_first_chunk_ms) == null ? "-" : videoFormatDebugNumber(firstValue(stats.first_chunk_ms, stats.realtime_first_chunk_ms), 0, " ms")],
       ["即時 chunk 抖動", firstValue(stats.chunk_jitter_ms, stats.realtime_chunk_jitter_ms) ? videoFormatDebugNumber(firstValue(stats.chunk_jitter_ms, stats.realtime_chunk_jitter_ms), 0, " ms") : "-"],
       ["即時 chunks", String(firstValue(stats.chunks_received, stats.realtime_chunks_received, 0))],
